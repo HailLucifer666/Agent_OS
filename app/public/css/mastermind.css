@@ -1,0 +1,299 @@
+/* mastermind.css — AI Agent Mastermind room chrome. Scoped with .mastermind-* */
+
+.mastermind-room {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- Header card: icon + title + subtitle + actions ---- */
+.mastermind-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+}
+
+.mastermind-head-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.mastermind-avatar {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-md);
+  background: rgba(139, 92, 246, 0.16);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-mastermind);
+}
+
+.mastermind-avatar svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mastermind-title {
+  font-family: var(--font-sans);
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+
+.mastermind-title .accent {
+  color: var(--accent-mastermind);
+}
+
+.mastermind-subtitle {
+  font-size: 13px;
+  color: var(--text-dim);
+  max-width: 560px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.mastermind-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.mastermind-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-raised-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  white-space: nowrap;
+}
+
+.mastermind-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.mastermind-btn-primary {
+  background: rgba(139, 92, 246, 0.14);
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #cbb8fc;
+}
+
+.mastermind-btn-primary:hover {
+  background: rgba(139, 92, 246, 0.22);
+}
+
+.mastermind-history-wrap {
+  position: relative;
+}
+
+.mastermind-history-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 240px;
+  background: var(--bg-raised-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 8px;
+  z-index: 20;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.mastermind-history-panel.hidden {
+  display: none;
+}
+
+.mastermind-history-item {
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.mastermind-history-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ---- In the room: seat pills ---- */
+.mastermind-room-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.mastermind-seats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.mastermind-seat {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--seat-color, var(--border-soft));
+  background: color-mix(in srgb, var(--seat-color, var(--border-soft)) 10%, var(--bg-raised));
+  font-size: 13px;
+  color: var(--text);
+}
+
+.mastermind-seat-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--seat-color, var(--text-faint));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #0d0b12;
+  flex: none;
+}
+
+/* ---- Composer ---- */
+.mastermind-composer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.mastermind-input {
+  flex: 1;
+  padding: 12px 16px;
+  background: var(--bg-raised-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.mastermind-input::placeholder {
+  color: var(--text-faint);
+}
+
+.mastermind-input:focus {
+  border-color: var(--accent-mastermind);
+}
+
+.mastermind-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 18px;
+  background: var(--accent-mastermind);
+  border: none;
+  border-radius: var(--radius-md);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter var(--dur-fast) var(--ease);
+  white-space: nowrap;
+}
+
+.mastermind-send:hover {
+  filter: brightness(1.1);
+}
+
+.mastermind-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mastermind-caption {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin: 0 0 18px;
+}
+
+/* ---- Transcript ---- */
+.mastermind-transcript {
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 2px 8px;
+}
+
+.mastermind-empty {
+  margin: auto;
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+
+.mastermind-empty-title {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+}
+
+.mastermind-empty-examples {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-style: italic;
+  margin: 0;
+}
+
+.mastermind-bubble {
+  max-width: 640px;
+  align-self: flex-end;
+  background: rgba(139, 92, 246, 0.14);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 13.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.mastermind-bubble-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.mastermind-system-note {
+  align-self: flex-start;
+  max-width: 640px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 8px 14px;
+  border-left: 2px solid var(--border-soft);
+}

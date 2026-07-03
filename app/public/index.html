@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agentic OS</title>
+<link rel="stylesheet" href="/css/tokens.css" />
+<link rel="stylesheet" href="/css/shell.css" />
+<link rel="stylesheet" href="/css/mission-control.css" />
+<link rel="stylesheet" href="/css/agent-monitor.css" />
+<link rel="stylesheet" href="/css/goals.css" />
+<link rel="stylesheet" href="/css/kanban.css" />
+<link rel="stylesheet" href="/css/agent-chat.css" />
+<link rel="stylesheet" href="/css/mastermind.css" />
+<link rel="stylesheet" href="/css/paperclip.css" />
+<link rel="stylesheet" href="/css/free-claude.css" />
+<link rel="stylesheet" href="/css/pipeline.css" />
+<link rel="stylesheet" href="/css/memory.css" />
+<link rel="stylesheet" href="/css/game-studio.css" />
+<link rel="stylesheet" href="/css/music-studio.css" />
+<link rel="stylesheet" href="/css/video-studio.css" />
+<link rel="stylesheet" href="/css/thumbnail-studio.css" />
+<link rel="stylesheet" href="/css/radar.css" />
+</head>
+<body>
+<div class="app-shell">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main-area">
+    <header class="view-header" id="view-header"></header>
+    <div id="view-mount"></div>
+  </main>
+</div>
+
+<div class="palette-overlay" id="palette-overlay" hidden>
+  <div class="palette-box">
+    <input class="palette-input" id="palette-input" type="text" placeholder="Type a command or surface name..." autocomplete="off" />
+    <div class="palette-list" id="palette-list"></div>
+  </div>
+</div>
+
+<script src="/js/sidebar-config.js"></script>
+<script src="/js/shell.js"></script>
+<script src="/js/palette.js"></script>
+<script src="/js/router.js"></script>
+</body>
+</html>
