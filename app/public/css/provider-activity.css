@@ -1,0 +1,164 @@
+/* provider-activity.css — Provider Activity surface.
+   Dark Obsidian+gold theme; rides on tokens.css for palette, fonts, radii, motion. */
+
+.pa-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* ============================== stats strip ============================== */
+
+.pa-stats-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.pa-stat {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.pa-stat:hover {
+  border-color: var(--gold-soft);
+}
+.pa-stat-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.pa-stat-value {
+  font-size: 22px;
+  color: var(--gold);
+  line-height: 1.1;
+}
+
+/* ============================== tables ============================== */
+
+.pa-tables {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.pa-table {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+}
+.pa-table-head {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.pa-row {
+  display: grid;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--border-soft);
+  transition: background var(--dur-fast) var(--ease);
+}
+.pa-row:last-child {
+  border-bottom: none;
+}
+.pa-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* providers: provider / calls / tokens / failures / last latency */
+.pa-providers .pa-row,
+.pa-providers .pa-row-header {
+  grid-template-columns: 1.4fr 1fr 1.2fr 1fr 1fr;
+  gap: 10px;
+}
+
+/* recent: time / provider / model / source / status / latency / tokens */
+.pa-recent .pa-row,
+.pa-recent .pa-row-header {
+  grid-template-columns: 70px 1.2fr 1.4fr 1fr 50px 80px 80px;
+  gap: 10px;
+}
+
+.pa-row-header {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 8px;
+}
+.pa-row-header:hover {
+  background: transparent;
+}
+
+/* ============================== cells ============================== */
+
+.pa-provider-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pa-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 5px currentColor;
+}
+.pa-model,
+.pa-source,
+.pa-ts {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.pa-ts {
+  color: var(--text-faint);
+}
+.pa-status {
+  text-align: center;
+}
+.pa-ok {
+  color: var(--status-ok);
+  font-weight: 600;
+}
+.pa-fail {
+  color: var(--status-warn);
+  font-weight: 600;
+  cursor: help;
+}
+.pa-failures {
+  color: var(--status-warn);
+}
+.pa-empty {
+  padding: 18px 4px;
+  font-size: 13px;
+}
+
+/* ============================== responsive ============================== */
+
+@media (max-width: 1200px) {
+  .pa-stats-strip { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 900px) {
+  .pa-stats-strip { grid-template-columns: 1fr; }
+  .pa-providers .pa-row,
+  .pa-providers .pa-row-header { grid-template-columns: 1fr 1fr; }
+  .pa-recent .pa-row,
+  .pa-recent .pa-row-header { grid-template-columns: 60px 1fr 50px 70px; }
+  .pa-recent .pa-row > :nth-child(4),
+  .pa-recent .pa-row-header > :nth-child(4) { display: none; } /* source */
+}

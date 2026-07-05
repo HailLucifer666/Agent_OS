@@ -35,6 +35,7 @@ const SIDEBAR_GROUPS = [
     items: [
       { route: 'mission-control', label: 'Mission Control', icon: SIDEBAR_ICONS.grid },
       { route: 'agent-monitor', label: 'Agent Monitor', icon: SIDEBAR_ICONS.monitor },
+      { route: 'provider-activity', label: 'Provider Activity', icon: SIDEBAR_ICONS.monitor },
     ],
   },
   {
@@ -78,6 +79,7 @@ const SIDEBAR_GROUPS = [
 const ROUTE_META = {
   'mission-control': { numeral: 'I.', section: 'MISSION CONTROL', title: 'Mission Control', subtitle: 'Status of every agent, every memory, every signal.' },
   'agent-monitor': { numeral: 'II.', section: 'WORKSPACE · AGENT MONITOR', title: 'Agent Monitor', subtitle: 'Live Claude Code, Codex, and OpenCode sessions on this machine — via abtop.' },
+  'provider-activity': { numeral: 'II.', section: 'WORKSPACE · ACTIVITY', title: 'Provider Activity', subtitle: 'Live log of every free-provider API call — tokens, latency, success rate.' },
   'paperclip': { numeral: 'III.', section: 'AGENT ORCHESTRATION · PAPERCLIP', title: 'Paperclip', subtitle: 'Idea intake agent. Classifies and routes into the Pipeline.' },
   'mastermind': { numeral: 'VI.', section: 'AGENT ORCHESTRATION · ROOM', title: 'AI Agent Mastermind', subtitle: 'Bring every agent into one room and tag who answers.' },
   'pipeline': { numeral: 'IX.', section: 'SELF · PIPELINE', title: 'From Inbox to Shipped', subtitle: 'Capture an idea, agents classify, route + plan it, you approve once, a PM + subagents build it. Lives in your vault.' },

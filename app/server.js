@@ -12,6 +12,8 @@ const kanban = require('./lib/kanban');
 const pipeline = require('./lib/pipeline');
 const builds = require('./lib/builds');
 const probes = require('./lib/probes');
+const freeModels = require('./lib/free-models');
+const activityLog = require('./lib/activity-log');
 const ollama = require('./lib/providers/ollama');
 const openrouter = require('./lib/providers/openrouter');
 const claudeCli = require('./lib/providers/claude-cli');
@@ -664,6 +666,14 @@ app.get('/api/jobs/:id', (req, res) => {
   res.json({ job, queuePosition: orchestrator.queuePosition(job.id) });
 });
 
+app.get('/api/activity/recent', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  res.json({ calls: activityLog.getRecent(limit) });
+});
+app.get('/api/activity/stats', (req, res) => {
+  res.json(activityLog.getStats());
+});
+
 // SPA fallback — anything not /api or a static file goes to index.html
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/vault')) return next();
@@ -712,6 +722,11 @@ const SEATS = [
   { id: 'codex', label: 'Codex', kind: 'openrouter', envModel: 'SEAT_CODEX_MODEL', defaultModel: 'openai/gpt-5-mini' },
   { id: 'glm', label: 'GLM', kind: 'openrouter', envModel: 'SEAT_GLM_MODEL', defaultModel: 'z-ai/glm-4.6' },
   { id: 'openclaw', label: 'OpenClaw', kind: 'unwired' },
+  { id: 'groq', label: 'Groq', kind: 'groq' },
+  { id: 'openrouter-free', label: 'OpenRouter Free', kind: 'openrouter-free' },
+  { id: 'cerebras', label: 'Cerebras', kind: 'cerebras' },
+  { id: 'mistral', label: 'Mistral', kind: 'mistral' },
+  { id: 'cloudflare', label: 'Cloudflare AI', kind: 'cloudflare' },
 ];
 
 function seatAlias(text) {
@@ -768,19 +783,23 @@ wss.on('connection', (ws) => {
       } else if (agent === 'claude') {
         full = await runClaudeCli(messages, convId, onToken, controller.signal);
       } else if (agent === 'zcode') {
-        full = await zcode.chat(messages, { model, onToken, signal: controller.signal });
+        full = await zcode.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
       } else if (agent === 'nim') {
-        full = await nim.chat(messages, { model, onToken, signal: controller.signal });
+        full = await nim.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
       } else {
-        send({ type: 'error', reqId, message: `${agent} is not wired yet — honest by design` });
-        return;
+        // Try the free-provider fleet (groq, openrouter-free, cerebras, mistral, cloudflare)
+        const fleetEntry = freeModels.findById(agent);
+        if (fleetEntry && fleetEntry.kind === 'openai-compat') {
+          full = await fleetEntry.provider.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
+        } else {
+          send({ type: 'error', reqId, message: `${agent} is not wired yet — honest by design` });
+          return;
+        }
       }
 
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
       const label = agent === 'hermes' ? 'Hermes'
-        : agent === 'zcode' ? 'ZCode'
-        : agent === 'nim' ? 'NIM'
-        : 'Claude';
+        : (freeModels.findById(agent)?.label || (agent === 'claude' ? 'Claude' : agent));
       const saved = appendExchange(convId, label, lastUser ? lastUser.content : '', full);
       send({ type: 'done', reqId, full, saved });
     } catch (err) {
@@ -837,6 +856,16 @@ wss.on('connection', (ws) => {
           return null;
         }
         full = await openrouter.chat(seatMessages, { model: useModel, onToken, signal: controller.signal });
+      } else if (freeModels.findById(seat.kind) && freeModels.findById(seat.kind).kind === 'openai-compat') {
+        const entry = freeModels.findById(seat.kind);
+        if (!entry.provider.isAvailable()) {
+          send({ type: 'seat-skip', reqId, seat: seat.id, reason: `${entry.apiKeyEnv} missing — add it to app/.env` });
+          return null;
+        }
+        full = await entry.provider.chat(seatMessages, { onToken, signal: controller.signal, source: 'mastermind' });
+      } else {
+        send({ type: 'seat-skip', reqId, seat: seat.id, reason: `${seat.label} is not wired yet — honest by design` });
+        return null;
       }
       send({ type: 'seat-done', reqId, seat: seat.id, full });
       return full;

@@ -3,6 +3,7 @@
 const VIEW_LOADERS = {
   'mission-control': () => import('/js/views/mission-control.js'),
   'agent-monitor': () => import('/js/views/agent-monitor.js'),
+  'provider-activity': () => import('/js/views/provider-activity.js'),
   'goals': () => import('/js/views/goals.js'),
   'kanban': () => import('/js/views/kanban.js'),
   'claude': () => import('/js/views/claude.js'),

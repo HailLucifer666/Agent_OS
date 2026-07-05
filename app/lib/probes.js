@@ -1,6 +1,7 @@
 // probes.js — honest status probes for agent tiles. No faking green.
 const http = require('http');
 const { spawnSync } = require('child_process');
+const { FREE_PROVIDERS } = require('./free-models');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const PROBE_TIMEOUT_MS = 800;
@@ -78,9 +79,10 @@ async function getStatus() {
   const nim = {
     id: 'nim',
     label: 'NIM',
+    trial: true,
     status: nimKey ? 'ONLINE' : 'OFFLINE',
     detail: nimKey
-      ? `nvidia nim · ${process.env.NIM_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct'}`
+      ? `TRIAL · nvidia nim · ${process.env.NIM_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct'}`
       : 'no NIM_API_KEY',
   };
   const freeClaude = claudeCliVersion
@@ -92,15 +94,37 @@ async function getStatus() {
       detail: anthropicKey ? 'key present · builder not wired' : 'no key configured',
     };
 
+  // Free-provider fleet: iterate the OpenAI-compat providers from FREE_PROVIDERS.
+  // groq, openrouter-free, cerebras, mistral, cloudflare (zcode/nim handled above).
+  const fleetAgents = FREE_PROVIDERS.filter((p) => p.kind === 'openai-compat')
+    .filter((p) => p.id !== 'zcode' && p.id !== 'nim')
+    .map((p) => ({
+      id: p.id,
+      label: p.label,
+      status: p.provider.isAvailable() ? 'ONLINE' : 'OFFLINE',
+      detail: p.provider.isAvailable()
+        ? `${p.trial ? 'TRIAL · ' : ''}${p.freeTier} · ${p.provider.getModel()}`
+        : `no ${p.apiKeyEnv}`,
+    }));
+
   const latencies = [ollama.ok ? ollama.latency : null].filter((v) => v !== null);
   const p50 = latencies.length ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length / 2)] : null;
 
   return {
     ollama,
-    keys: { openrouter: openrouterKey, anthropic: anthropicKey, zcode: zcodeKey, nim: nimKey },
+    keys: {
+      openrouter: openrouterKey,
+      anthropic: anthropicKey,
+      zcode: zcodeKey,
+      nim: nimKey,
+      groq: hasKey('GROQ_API_KEY'),
+      cerebras: hasKey('CEREBRAS_API_KEY'),
+      mistral: hasKey('MISTRAL_API_KEY'),
+      cloudflare: hasKey('CLOUDFLARE_API_TOKEN'),
+    },
     heartbeat: { ticks: heartbeatTicks, intervalMs: 4000 },
     latency: { p50 },
-    agents: [claude, openclaw, hermes, zcode, nim, freeClaude],
+    agents: [claude, openclaw, hermes, zcode, nim, freeClaude, ...fleetAgents],
   };
 }
 

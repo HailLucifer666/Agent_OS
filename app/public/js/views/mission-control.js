@@ -79,16 +79,26 @@ export async function render(mount) {
       const byId = Object.fromEntries(data.agents.map((a) => [a.id, a]));
 
       const tiles = document.getElementById('mc-tiles');
-      tiles.innerHTML = [
-        tileTemplate({ label: 'CLAUDE', status: tileStatus(byId.claude.status), value: '…', detail: byId.claude.detail }),
-        tileTemplate({ label: 'OPENCLAW', status: tileStatus(byId.openclaw.status), value: '…', detail: byId.openclaw.detail }),
-        tileTemplate({ label: 'HERMES', status: tileStatus(byId.hermes.status), value: '…', detail: byId.hermes.detail }),
-        tileTemplate({ label: 'ZCODE', status: tileStatus(byId.zcode.status), value: '…', detail: byId.zcode.detail }),
-        tileTemplate({ label: 'NIM', status: tileStatus(byId.nim.status), value: '…', detail: byId.nim.detail }),
+      // HEARTBEAT and LATENCY are static (sourced from data.heartbeat / data.latency, not agents).
+      const staticTiles = [
         tileTemplate({ label: 'HEARTBEAT', status: 'ok', value: data.heartbeat.ticks, detail: `poll ticks &middot; ${data.heartbeat.intervalMs / 1000}s` }),
         tileTemplate({ label: 'LATENCY', status: data.latency.p50 !== null ? 'ok' : 'offline', value: data.latency.p50 !== null ? `${data.latency.p50}ms` : '—', detail: 'combined p50' }),
-        tileTemplate({ label: 'FREE CLAUDE', status: tileStatus(byId['free-claude'].status), value: '…', detail: byId['free-claude'].detail }),
-      ].join('');
+      ];
+      // One tile per agent. The fleet is growing — drive the grid from data.agents.
+      const agentTiles = data.agents.map((a) => {
+        // Server already embeds 'TRIAL ·' in detail for trial providers; surface a marker if missing.
+        const isTrial = /trial/i.test(a.detail || '');
+        const detail = isTrial && !/TRIAL/i.test(a.detail)
+          ? `${a.detail} &middot; TRIAL`
+          : a.detail;
+        return tileTemplate({
+          label: a.label.toUpperCase(),
+          status: tileStatus(a.status),
+          value: '…',
+          detail,
+        });
+      });
+      tiles.innerHTML = [...agentTiles, ...staticTiles].join('');
 
       const cards = document.getElementById('mc-agent-cards');
       cards.innerHTML = ['claude', 'openclaw', 'hermes'].map((id) => agentCard(id, byId[id])).join('');
