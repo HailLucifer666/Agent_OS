@@ -82,17 +82,18 @@ async function refreshStatusPill() {
     const res = await fetch('/api/status');
     const data = await res.json();
     lastStatus = data;
-    const anyDegraded = data.agents.some((a) => a.status !== 'OFFLINE');
+    const anyOnline = data.agents.some((a) => a.status === 'ONLINE');
+    const anyDegraded = data.agents.some((a) => a.status === 'DEGRADED');
     const allOffline = data.agents.every((a) => a.status === 'OFFLINE');
     pill.classList.remove('all-ok', 'degraded');
     if (allOffline) {
       label.textContent = 'ALL OFFLINE';
-    } else if (anyDegraded) {
-      pill.classList.add('degraded');
-      label.textContent = 'DEGRADED';
-    } else {
+    } else if (anyOnline && !anyDegraded) {
       pill.classList.add('all-ok');
       label.textContent = 'ALL SYSTEMS';
+    } else {
+      pill.classList.add('degraded');
+      label.textContent = 'DEGRADED';
     }
   } catch {
     label.textContent = 'ALL SYSTEMS';
