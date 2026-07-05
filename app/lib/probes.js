@@ -56,12 +56,6 @@ async function getStatus() {
       status: anthropicKey ? 'DEGRADED' : 'OFFLINE',
       detail: anthropicKey ? 'key present · CLI missing' : 'no ANTHROPIC_API_KEY',
     };
-  const openclaw = {
-    id: 'openclaw',
-    label: 'OpenClaw',
-    status: 'OFFLINE',
-    detail: 'gateway not configured',
-  };
   const hermes = {
     id: 'hermes',
     label: 'Hermes',
@@ -124,7 +118,7 @@ async function getStatus() {
     },
     heartbeat: { ticks: heartbeatTicks, intervalMs: 4000 },
     latency: { p50 },
-    agents: [claude, openclaw, hermes, zcode, nim, freeClaude, ...fleetAgents],
+    agents: [claude, hermes, zcode, nim, freeClaude, ...fleetAgents],
   };
 }
 

@@ -1,0 +1,171 @@
+/* quota-tracker.css — Quota Tracker surface.
+   Dark Obsidian+gold theme; rides on tokens.css for palette, fonts, radii, motion. */
+
+.qt-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Top disclaimer — these are estimates, not ground truth. */
+.qt-disclaimer {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-left: 2px solid var(--gold);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  max-width: 760px;
+}
+
+/* ============================== grid + cards ============================== */
+
+.qt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.qt-card {
+  position: relative;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 18px 18px 16px;
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.qt-card:hover {
+  border-color: var(--gold-soft);
+  transform: translateY(-1px);
+}
+
+/* Corner "ESTIMATED" watermark — keeps the honesty visible on every card. */
+.qt-estimate-badge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: none;
+}
+
+/* ============================== card head ============================== */
+
+.qt-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+.qt-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px currentColor;
+}
+.qt-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+/* TRIAL badge — amber, sits after the provider name. */
+.qt-trial-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  color: var(--status-degraded);
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 4px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+
+/* ============================== usage line ============================== */
+
+.qt-card-usage {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  line-height: 1.4;
+}
+
+/* ============================== progress bar ============================== */
+
+.qt-bar {
+  position: relative;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.qt-bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 4px;
+  transition: width var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.25);
+}
+.qt-bar-unknown {
+  opacity: 0.35;
+}
+
+.qt-pct {
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: right;
+}
+
+/* Unlimited case — replaces the bar. */
+.qt-unlimited {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--status-ok);
+  padding: 2px 0 4px;
+  letter-spacing: 0.02em;
+}
+
+/* ============================== note ============================== */
+
+.qt-card-note {
+  margin-top: 12px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+
+/* ============================== empty / loading ============================== */
+
+.qt-empty {
+  grid-column: 1 / -1;
+  padding: 40px 0;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ============================== responsive ============================== */
+
+@media (max-width: 640px) {
+  .qt-grid {
+    grid-template-columns: 1fr;
+  }
+}

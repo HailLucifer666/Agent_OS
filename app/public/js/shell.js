@@ -25,7 +25,7 @@ function renderSidebar(activeRoute) {
       <div class="footer-avatar script">N</div>
       <div class="footer-text mono">
         <div class="label">WIRED</div>
-        <div>claude &middot; openclaw &middot; hermes</div>
+        <div>claude &middot; hermes &middot; free fleet</div>
         <div>obsidian vault</div>
       </div>
     </div>

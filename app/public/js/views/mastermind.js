@@ -6,10 +6,8 @@ const SEATS = [
   { id: 'claude', name: 'Claude', initial: 'C', color: 'var(--accent-claude)' },
   { id: 'hermes', name: 'Hermes', initial: 'H', color: 'var(--accent-hermes)' },
   { id: 'gemini', name: 'Gemini', initial: 'G', color: '#e08a3c' },
-  { id: 'codex', name: 'Codex', initial: 'X', color: 'var(--accent-codex)' },
-  { id: 'openclaw', name: 'OpenClaw', initial: 'O', color: 'var(--accent-openclaw)' },
-  { id: 'glm', name: 'GLM 5.2', initial: 'G', color: 'var(--accent-codex)' },
-  { id: 'free-claude', name: 'Free Claude Code', initial: 'F', color: 'var(--accent-codex)' },
+  { id: 'glm', name: 'GLM 5.2', initial: 'G', color: 'var(--accent-goals-purple)' },
+  { id: 'free-claude', name: 'Free Claude Code', initial: 'F', color: 'var(--accent-goals-yellow)' },
 ];
 
 const HISTORY_PLACEHOLDERS = [
@@ -45,7 +43,7 @@ function emptyState() {
   return `
     <div class="mastermind-empty" id="mastermind-empty">
       <p class="mastermind-empty-title">Drop a question and watch them go.</p>
-      <p class="mastermind-empty-examples">"What should I build next in my Agent OS?" &middot; "@codex how would you structure this?"</p>
+      <p class="mastermind-empty-examples">"What should I build next in my Agent OS?" &middot; "@gemini how would you structure this?"</p>
     </div>
   `;
 }
@@ -80,7 +78,7 @@ export async function render(mount) {
           <input type="text" class="mastermind-input" id="mastermind-input" placeholder="Message the room... (tag @claude / @gemini to ask one)" />
           <button type="button" class="mastermind-send" id="mastermind-send">Send</button>
         </div>
-        <p class="mastermind-caption">7 agents in the room &middot; they reply in turn, riff off each other, and read your vault for context &middot; tag @one to ask them</p>
+        <p class="mastermind-caption">5 agents in the room &middot; they reply in turn, riff off each other, and read your vault for context &middot; tag @one to ask them</p>
       </div>
 
       <div class="mastermind-transcript" id="mastermind-transcript">

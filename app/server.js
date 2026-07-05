@@ -674,6 +674,12 @@ app.get('/api/activity/stats', (req, res) => {
   res.json(activityLog.getStats());
 });
 
+// ---- quota tracking (usage-based estimation against known free-tier caps) ----
+const quotas = require('./lib/quota');
+app.get('/api/quotas', (req, res) => {
+  res.json({ quotas: quotas.getAllQuotas() });
+});
+
 // SPA fallback — anything not /api or a static file goes to index.html
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/vault')) return next();
@@ -721,7 +727,6 @@ const SEATS = [
   { id: 'gemini', label: 'Gemini', kind: 'openrouter', envModel: 'SEAT_GEMINI_MODEL', defaultModel: 'google/gemini-2.5-flash' },
   { id: 'codex', label: 'Codex', kind: 'openrouter', envModel: 'SEAT_CODEX_MODEL', defaultModel: 'openai/gpt-5-mini' },
   { id: 'glm', label: 'GLM', kind: 'openrouter', envModel: 'SEAT_GLM_MODEL', defaultModel: 'z-ai/glm-4.6' },
-  { id: 'openclaw', label: 'OpenClaw', kind: 'unwired' },
   { id: 'groq', label: 'Groq', kind: 'groq' },
   { id: 'openrouter-free', label: 'OpenRouter Free', kind: 'openrouter-free' },
   { id: 'cerebras', label: 'Cerebras', kind: 'cerebras' },
@@ -811,11 +816,6 @@ wss.on('connection', (ws) => {
 
   async function runSeat(seat, reqId, convId, transcriptMessages, controller) {
     send({ type: 'seat-start', reqId, seat: seat.id, label: seat.label });
-
-    if (seat.kind === 'unwired') {
-      send({ type: 'seat-skip', reqId, seat: seat.id, reason: 'gateway not configured' });
-      return null;
-    }
 
     const preamble = roomPreamble(seat.label);
     const seatMessages = transcriptMessages.map((m, i) =>

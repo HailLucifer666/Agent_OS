@@ -2,8 +2,8 @@
 
 const AGENT_CARD_META = {
   claude: { name: 'Claude', avatarBg: 'var(--accent-claude)', tint: 'var(--accent-claude)', icon: '+', desc: 'Direct streaming line to Claude Code. Full tool use, MCPs, plugins.' },
-  openclaw: { name: 'OpenClaw', avatarBg: 'var(--accent-openclaw)', tint: 'var(--accent-openclaw)', icon: '▰▱', desc: 'Local agent gateway. Chat one-shot or open the control room.' },
   hermes: { name: 'Hermes', avatarBg: 'var(--accent-hermes)', tint: 'var(--accent-hermes)', icon: '✟', desc: 'Nous Research agent. Tool calls, kanban, skills, plugins.' },
+  groq: { name: 'Groq', avatarBg: 'var(--accent-groq)', tint: 'var(--accent-groq)', icon: '⚡', desc: 'Fastest free LPU inference. Llama 3.3 70B. ~30 RPM.' },
 };
 
 // Map server status strings (ONLINE/DEGRADED/OFFLINE) onto tile dot classes (ok/degraded/offline).
@@ -66,12 +66,6 @@ export async function render(mount) {
     </div>
   `;
 
-  mount.querySelectorAll('.mc-agent-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      window.location.hash = `#/${card.dataset.route}`;
-    });
-  });
-
   async function load() {
     try {
       const res = await fetch('/api/status');
@@ -101,7 +95,7 @@ export async function render(mount) {
       tiles.innerHTML = [...agentTiles, ...staticTiles].join('');
 
       const cards = document.getElementById('mc-agent-cards');
-      cards.innerHTML = ['claude', 'openclaw', 'hermes'].map((id) => agentCard(id, byId[id])).join('');
+      cards.innerHTML = ['claude', 'hermes', 'groq'].map((id) => agentCard(id, byId[id])).join('');
       cards.querySelectorAll('.mc-agent-card').forEach((card) => {
         card.addEventListener('click', () => {
           window.location.hash = `#/${card.dataset.route}`;

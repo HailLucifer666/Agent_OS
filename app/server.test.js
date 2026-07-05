@@ -60,7 +60,9 @@ describe('server smoke', () => {
     assert.equal(res.status, 200);
     const json = res.json();
     assert.ok(Array.isArray(json.agents), 'agents should be an array');
-    assert.ok(json.agents.length >= 4, `expected >= 4 agents, got ${json.agents.length}`);
+    // Post-OpenClaw fleet: claude, hermes, free-claude, zcode, nim, groq,
+    // openrouter-free, cerebras, mistral, cloudflare = 10 agents.
+    assert.ok(json.agents.length >= 10, `expected >= 10 agents, got ${json.agents.length}`);
     for (const a of json.agents) {
       assert.ok(a.id, 'agent missing id');
       assert.ok(a.status, 'agent missing status');

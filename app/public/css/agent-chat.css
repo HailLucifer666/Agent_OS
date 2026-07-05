@@ -1,4 +1,4 @@
-/* agent-chat.css — shared styles for Claude/Hermes/OpenClaw/Antigravity/Codex/Kimi chat surfaces.
+/* agent-chat.css — shared styles for the agent chat surfaces (Claude, Hermes, free fleet).
    Accent color is supplied per-instance via the --chat-accent custom property on .chat-surface. */
 
 .chat-surface {

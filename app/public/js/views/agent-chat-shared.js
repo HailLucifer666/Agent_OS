@@ -1,5 +1,5 @@
 // agent-chat-shared.js — shared render logic for all "agent chat" surfaces
-// (Claude, Hermes, OpenClaw, Antigravity, Codex, Kimi Code).
+// (Claude, Hermes, and the wider fleet providers).
 // Unwired agents: local chat bubble + honest "Phase 2 wiring" note, no live calls.
 // Wired agents (config.wired): real streaming via ws.js, message history, vault auto-save.
 
@@ -17,10 +17,6 @@ function avatarGlyph(id) {
   const glyphs = {
     claude: '+',
     hermes: '&#9775;',
-    openclaw: '&#9632;',
-    antigravity: '&#9650;',
-    codex: '&#10022;',
-    kimi: '&#9670;',
   };
   return glyphs[id] || id.charAt(0).toUpperCase();
 }
