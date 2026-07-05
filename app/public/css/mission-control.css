@@ -2,7 +2,7 @@
 
 .mc-tiles {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 14px;
   margin-bottom: 40px;
 }
@@ -153,11 +153,12 @@
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.25);
 }
-.mc-agent-badge .dot { width: 6px; height: 6px; border-radius: 50%; }
-.mc-agent-badge.offline { color: var(--text-faint); }
-.mc-agent-badge.offline .dot { background: var(--text-faint); }
+.mc-agent-badge.online { color: var(--status-ok); }
+.mc-agent-badge.online .dot { background: var(--status-ok); box-shadow: 0 0 6px var(--status-ok); }
 .mc-agent-badge.degraded { color: var(--status-degraded); }
 .mc-agent-badge.degraded .dot { background: var(--status-degraded); box-shadow: 0 0 6px var(--status-degraded); }
+.mc-agent-badge.offline { color: var(--text-faint); }
+.mc-agent-badge.offline .dot { background: var(--text-faint); }
 
 .mc-agent-name {
   font-size: 20px;
@@ -238,7 +239,7 @@
 }
 
 @media (max-width: 1200px) {
-  .mc-tiles { grid-template-columns: repeat(3, 1fr); }
+  .mc-tiles { grid-template-columns: repeat(4, 1fr); }
 }
 @media (max-width: 900px) {
   .mc-tiles { grid-template-columns: repeat(2, 1fr); }

@@ -44,6 +44,8 @@ async function getStatus() {
   const ollama = await pingOllama();
   const openrouterKey = hasKey('OPENROUTER_API_KEY');
   const anthropicKey = hasKey('ANTHROPIC_API_KEY');
+  const zcodeKey = hasKey('ZCODE_API_KEY');
+  const nimKey = hasKey('NIM_API_KEY');
 
   const claude = claudeCliVersion
     ? { id: 'claude', label: 'Claude', status: 'ONLINE', detail: `claude cli ${claudeCliVersion} · wired` }
@@ -65,6 +67,22 @@ async function getStatus() {
     status: ollama.ok ? 'ONLINE' : 'OFFLINE',
     detail: ollama.ok ? `ollama up · ${ollama.latency}ms · ${DEFAULT_CHAT_MODEL}` : 'ollama unreachable :11434',
   };
+  const zcode = {
+    id: 'zcode',
+    label: 'ZCode',
+    status: zcodeKey ? 'ONLINE' : 'OFFLINE',
+    detail: zcodeKey
+      ? `z.ai glm · ${process.env.ZCODE_MODEL || 'glm-4.6'}`
+      : 'no ZCODE_API_KEY',
+  };
+  const nim = {
+    id: 'nim',
+    label: 'NIM',
+    status: nimKey ? 'ONLINE' : 'OFFLINE',
+    detail: nimKey
+      ? `nvidia nim · ${process.env.NIM_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct'}`
+      : 'no NIM_API_KEY',
+  };
   const freeClaude = claudeCliVersion
     ? { id: 'free-claude', label: 'Free Claude Code', status: 'DEGRADED', detail: 'cli ready · builder lands next' }
     : {
@@ -79,10 +97,10 @@ async function getStatus() {
 
   return {
     ollama,
-    keys: { openrouter: openrouterKey, anthropic: anthropicKey },
+    keys: { openrouter: openrouterKey, anthropic: anthropicKey, zcode: zcodeKey, nim: nimKey },
     heartbeat: { ticks: heartbeatTicks, intervalMs: 4000 },
     latency: { p50 },
-    agents: [claude, openclaw, hermes, freeClaude],
+    agents: [claude, openclaw, hermes, zcode, nim, freeClaude],
   };
 }
 

@@ -1,9 +1,9 @@
 // orchestrator.js — job runner for the orchestration spine (Pipeline Execute, Kanban agents).
-// Queues agent jobs and runs them through the Claude Code CLI provider, one at a time by
-// default (CLI spawns are heavy). Honest-inert: coarse REAL stages only, verbatim errors,
+// Queues agent jobs and runs them through the reasoning engine (ZCode → NIM → Claude CLI),
+// one at a time by default. Honest-inert: coarse REAL stages only, verbatim errors,
 // jobs found mid-run after a restart are marked failed — no fake resume.
 const path = require('path');
-const claudeCli = require('./providers/claude-cli');
+const reasoning = require('./reasoning');
 const vault = require('./vault');
 
 const CONCURRENCY = Number(process.env.ORCHESTRATOR_CONCURRENCY) || 1;
@@ -86,7 +86,7 @@ async function pump() {
   emit(job);
 
   try {
-    const raw = await claudeCli.chat([{ role: 'user', content: prompt }], {});
+    const raw = await reasoning.chat([{ role: 'user', content: prompt }], {});
     job.stage = 'writing-artifact';
     emit(job);
     const result = await run(raw, job);

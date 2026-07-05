@@ -15,6 +15,9 @@ const probes = require('./lib/probes');
 const ollama = require('./lib/providers/ollama');
 const openrouter = require('./lib/providers/openrouter');
 const claudeCli = require('./lib/providers/claude-cli');
+const reasoning = require('./lib/reasoning');
+const zcode = require('./lib/providers/zcode');
+const nim = require('./lib/providers/nim');
 const openaiImages = require('./lib/providers/openai-images');
 const suno = require('./lib/providers/suno');
 const heygen = require('./lib/providers/heygen');
@@ -26,11 +29,45 @@ const PORT = process.env.PORT || 4477;
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+function requireEnv(name) {
+  const v = process.env[name];
+  if (!v || !v.trim()) {
+    console.warn(`[startup] ${name} not set — related features will be disabled`);
+    return false;
+  }
+  return true;
+}
+
+const _CRITICAL_ENV = ['ANTHROPIC_API_KEY'];
+const haveCritical = _CRITICAL_ENV.map(requireEnv).every(Boolean);
+
+if (!haveCritical) {
+  // Default: honest-inert — warn and start degraded so the dashboard still loads
+  // and the status tiles can show you exactly what's offline.
+  console.warn('[startup] starting without full provider keys — some surfaces will show degraded');
+  // Opt-in fail-fast: set FAIL_FAST=1 in .env to refuse boot instead. Useful for
+  // headless / orchestrated runs where a silent degraded boot would mask a misconfig.
+  if (process.env.FAIL_FAST && process.env.FAIL_FAST.trim() && process.env.FAIL_FAST !== '0') {
+    console.error(`[startup] FAIL_FAST=1 set and missing critical env: ${_CRITICAL_ENV.join(', ')}`);
+    console.error('[startup] aborting boot — set the missing keys or unset FAIL_FAST to start degraded.');
+    process.exit(1);
+  }
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  console.log(`[startup] port=${PORT} anthropic=${Boolean(process.env.ANTHROPIC_API_KEY)} openrouter=${Boolean(process.env.OPENROUTER_API_KEY)} ollama=${Boolean(process.env.OLLAMA_URL)} engines=${reasoning.describeEngines()}`);
+}
 
 // ---- static ----
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/vault/builds', express.static(vault.vaultPath('builds')));
+
+// ---- health ----
+app.get('/health', (req, res) => {
+  res.json({ ok: true, uptime: process.uptime() });
+});
 
 // ---- status ----
 app.get('/api/status', async (req, res) => {
@@ -164,7 +201,7 @@ app.get('/api/models', async (req, res) => {
   }
 });
 
-// ---- game studio: commission a single-file HTML game via Claude Code CLI ----
+// ---- game studio: commission a single-file HTML game via the reasoning engine ----
 const GAME_BUILD_PREAMBLE = [
   'You are the Game Agent. Build a complete, playable, self-contained single-file HTML game.',
   'Rules: all CSS and JS inline in one document; no external libraries, fonts, images, or network requests;',
@@ -177,7 +214,7 @@ app.post('/api/games/build', async (req, res) => {
   const { prompt } = req.body || {};
   if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'prompt required' });
   try {
-    const raw = await claudeCli.chat(
+    const raw = await reasoning.chat(
       [{ role: 'user', content: GAME_BUILD_PREAMBLE + prompt.trim() }],
       {}
     );
@@ -317,7 +354,7 @@ app.get('/api/music/tracks', (req, res) => {
   res.json({ tracks });
 });
 
-// ---- video studio: script (Claude CLI, real today) + assets (HeyGen/ElevenLabs/MiniMax/Grok) ----
+// ---- video studio: script (reasoning engine, real today) + assets (HeyGen/ElevenLabs/MiniMax/Grok) ----
 const VIDEO_SCRIPT_PREAMBLE = [
   'You are the Video Director\'s script writer. Research the topic below from your own knowledge',
   '(no web browsing available) and write a spoken video script for a video of the given length.',
@@ -330,7 +367,7 @@ app.post('/api/video/script', async (req, res) => {
   if (!brief || !brief.trim()) return res.status(400).json({ error: 'brief required' });
   try {
     const lengthNote = lengthSeconds ? ` The script should run about ${lengthSeconds} seconds when spoken aloud.` : '';
-    const script = await claudeCli.chat(
+    const script = await reasoning.chat(
       [{ role: 'user', content: VIDEO_SCRIPT_PREAMBLE + brief.trim() + lengthNote }],
       {}
     );
@@ -668,6 +705,8 @@ function appendExchange(convId, agentLabel, userText, replyText) {
 const SEATS = [
   { id: 'claude', label: 'Claude', kind: 'claude-cli' },
   { id: 'hermes', label: 'Hermes', kind: 'ollama' },
+  { id: 'zcode', label: 'ZCode', kind: 'zcode' },
+  { id: 'nim', label: 'NIM', kind: 'nim' },
   { id: 'free-claude', label: 'Free Claude Code', kind: 'claude-cli-free' },
   { id: 'gemini', label: 'Gemini', kind: 'openrouter', envModel: 'SEAT_GEMINI_MODEL', defaultModel: 'google/gemini-2.5-flash' },
   { id: 'codex', label: 'Codex', kind: 'openrouter', envModel: 'SEAT_CODEX_MODEL', defaultModel: 'openai/gpt-5-mini' },
@@ -728,13 +767,20 @@ wss.on('connection', (ws) => {
         full = await runOllama(messages, model, onToken, controller.signal);
       } else if (agent === 'claude') {
         full = await runClaudeCli(messages, convId, onToken, controller.signal);
+      } else if (agent === 'zcode') {
+        full = await zcode.chat(messages, { model, onToken, signal: controller.signal });
+      } else if (agent === 'nim') {
+        full = await nim.chat(messages, { model, onToken, signal: controller.signal });
       } else {
         send({ type: 'error', reqId, message: `${agent} is not wired yet — honest by design` });
         return;
       }
 
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-      const label = agent === 'hermes' ? 'Hermes' : 'Claude';
+      const label = agent === 'hermes' ? 'Hermes'
+        : agent === 'zcode' ? 'ZCode'
+        : agent === 'nim' ? 'NIM'
+        : 'Claude';
       const saved = appendExchange(convId, label, lastUser ? lastUser.content : '', full);
       send({ type: 'done', reqId, full, saved });
     } catch (err) {
@@ -765,6 +811,18 @@ wss.on('connection', (ws) => {
     try {
       if (seat.kind === 'ollama') {
         full = await runOllama(seatMessages, null, onToken, controller.signal);
+      } else if (seat.kind === 'zcode') {
+        if (!zcode.isAvailable()) {
+          send({ type: 'seat-skip', reqId, seat: seat.id, reason: 'ZCODE_API_KEY missing — add it to app/.env' });
+          return null;
+        }
+        full = await zcode.chat(seatMessages, { onToken, signal: controller.signal });
+      } else if (seat.kind === 'nim') {
+        if (!nim.isAvailable()) {
+          send({ type: 'seat-skip', reqId, seat: seat.id, reason: 'NIM_API_KEY missing — add it to app/.env' });
+          return null;
+        }
+        full = await nim.chat(seatMessages, { onToken, signal: controller.signal });
       } else if (seat.kind === 'claude-cli') {
         full = await runClaudeCli(seatMessages, `${convId}:${seat.id}`, onToken, controller.signal);
       } else if (seat.kind === 'claude-cli-free') {

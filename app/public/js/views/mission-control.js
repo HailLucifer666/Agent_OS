@@ -6,6 +6,11 @@ const AGENT_CARD_META = {
   hermes: { name: 'Hermes', avatarBg: 'var(--accent-hermes)', tint: 'var(--accent-hermes)', icon: '✟', desc: 'Nous Research agent. Tool calls, kanban, skills, plugins.' },
 };
 
+// Map server status strings (ONLINE/DEGRADED/OFFLINE) onto tile dot classes (ok/degraded/offline).
+function tileStatus(s) {
+  return s === 'ONLINE' ? 'ok' : s === 'OFFLINE' ? 'offline' : 'degraded';
+}
+
 function tileTemplate({ label, icon, status, value, detail }) {
   const dotClass = status === 'ok' ? 'ok' : status === 'degraded' ? 'degraded' : 'offline';
   return `
@@ -22,7 +27,7 @@ function tileTemplate({ label, icon, status, value, detail }) {
 
 function agentCard(id, agentStatus) {
   const meta = AGENT_CARD_META[id];
-  const badgeClass = agentStatus.status === 'OFFLINE' ? 'offline' : 'degraded';
+  const badgeClass = agentStatus.status === 'ONLINE' ? 'online' : agentStatus.status === 'OFFLINE' ? 'offline' : 'degraded';
   return `
     <div class="mc-agent-card fade-in" style="background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent); --card-tint:${meta.tint}" data-route="${id}">
       <div class="mc-agent-card-top">
@@ -75,12 +80,14 @@ export async function render(mount) {
 
       const tiles = document.getElementById('mc-tiles');
       tiles.innerHTML = [
-        tileTemplate({ label: 'CLAUDE', status: byId.claude.status === 'OFFLINE' ? 'offline' : 'degraded', value: '…', detail: byId.claude.detail }),
-        tileTemplate({ label: 'OPENCLAW', status: byId.openclaw.status === 'OFFLINE' ? 'offline' : 'degraded', value: '…', detail: byId.openclaw.detail }),
-        tileTemplate({ label: 'HERMES', status: byId.hermes.status === 'OFFLINE' ? 'offline' : 'degraded', value: '…', detail: byId.hermes.detail }),
+        tileTemplate({ label: 'CLAUDE', status: tileStatus(byId.claude.status), value: '…', detail: byId.claude.detail }),
+        tileTemplate({ label: 'OPENCLAW', status: tileStatus(byId.openclaw.status), value: '…', detail: byId.openclaw.detail }),
+        tileTemplate({ label: 'HERMES', status: tileStatus(byId.hermes.status), value: '…', detail: byId.hermes.detail }),
+        tileTemplate({ label: 'ZCODE', status: tileStatus(byId.zcode.status), value: '…', detail: byId.zcode.detail }),
+        tileTemplate({ label: 'NIM', status: tileStatus(byId.nim.status), value: '…', detail: byId.nim.detail }),
         tileTemplate({ label: 'HEARTBEAT', status: 'ok', value: data.heartbeat.ticks, detail: `poll ticks &middot; ${data.heartbeat.intervalMs / 1000}s` }),
         tileTemplate({ label: 'LATENCY', status: data.latency.p50 !== null ? 'ok' : 'offline', value: data.latency.p50 !== null ? `${data.latency.p50}ms` : '—', detail: 'combined p50' }),
-        tileTemplate({ label: 'FREE CLAUDE', status: byId['free-claude'].status === 'OFFLINE' ? 'offline' : 'degraded', value: '…', detail: byId['free-claude'].detail }),
+        tileTemplate({ label: 'FREE CLAUDE', status: tileStatus(byId['free-claude'].status), value: '…', detail: byId['free-claude'].detail }),
       ].join('');
 
       const cards = document.getElementById('mc-agent-cards');
