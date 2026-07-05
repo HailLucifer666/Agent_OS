@@ -70,7 +70,11 @@ function enqueue({ kind, cardId, prompt, run }) {
   jobs.set(job.id, job);
   queue.push({ job, prompt, run });
   emit(job);
-  pump();
+  // Defer pump() to the next microtask so enqueue() always returns a job in the
+  // 'queued' state, regardless of how fast the reasoning engine resolves. Without
+  // this, a synchronously-resolving stub (or a near-instant provider) would let
+  // pump() run its state mutations up to the first `await` before enqueue returns.
+  queueMicrotask(() => { pump(); });
   return job;
 }
 

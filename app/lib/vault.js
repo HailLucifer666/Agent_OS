@@ -2,14 +2,18 @@
 const fs = require('fs');
 const path = require('path');
 
-const VAULT_ROOT = path.join(__dirname, '..', 'vault');
+// Read live each call so tests (and future backup/versioning tooling) can
+// point VAULT_ROOT at an isolated dir without require-order coupling.
+function vaultRoot() {
+  return process.env.VAULT_ROOT || path.join(__dirname, '..', 'vault');
+}
 
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
 function vaultPath(...segments) {
-  return path.join(VAULT_ROOT, ...segments);
+  return path.join(vaultRoot(), ...segments);
 }
 
 function readText(relPath, fallback = '') {
@@ -54,10 +58,11 @@ function listFiles(relDir, ext) {
   }
 }
 
-// Extract [[wiki-links]] from markdown text.
+// Extract [[wiki-links]] from markdown text. Supports Obsidian forms:
+// [[Page]], [[Page|alias]], [[Page#section]], [[Page#section|alias]].
 function extractLinks(text) {
   const links = [];
-  const re = /\[\[([^\]|#]+)(?:\|[^\]]+)?\]\]/g;
+  const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]+)?\]\]/g;
   let m;
   while ((m = re.exec(text)) !== null) {
     links.push(m[1].trim());
@@ -66,7 +71,7 @@ function extractLinks(text) {
 }
 
 module.exports = {
-  VAULT_ROOT,
+  vaultRoot,
   ensureDir,
   vaultPath,
   readText,
