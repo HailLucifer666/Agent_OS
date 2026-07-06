@@ -223,6 +223,21 @@
   background: color-mix(in srgb, var(--accent-video) 14%, transparent);
 }
 
+/* Render button: same shape as generate-assets, solid fill to mark the final step. */
+.video-render-btn {
+  margin-left: 10px;
+  background: var(--accent-video);
+  color: #1a0e0e;
+  border-color: var(--accent-video);
+}
+.video-render-btn:hover {
+  background: color-mix(in srgb, var(--accent-video) 82%, white);
+}
+.video-render-btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 .video-phase2-note {
   margin-top: 14px;
   padding: 12px 14px;

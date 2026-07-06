@@ -27,6 +27,8 @@ const elevenlabs = require('./lib/providers/elevenlabs');
 const minimaxVideo = require('./lib/providers/minimax-video');
 const grokVideo = require('./lib/providers/grok-video');
 const edgeTts = require('./lib/providers/edge-tts');
+const videoRender = require('./lib/video-render');
+const radarFeeds = require('./lib/radar-feeds');
 
 const PORT = process.env.PORT || 4477;
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
@@ -428,11 +430,27 @@ app.post('/api/video/assets', async (req, res) => {
     brollEngine,
     createdAt: new Date().toISOString(),
     assets: saved,
-    note: 'Assets generated — combined render (Edit + Render) lands next.',
+    note: 'Assets generated — use POST /api/video/render to combine into final.mp4 via ffmpeg.',
   };
   vault.writeJSON(path.join('builds', 'video', slug, 'meta.json'), meta);
 
   res.json({ saved, errors, slug });
+});
+
+// Combine a video set's saved narrator + b-roll assets into final.mp4 via ffmpeg.
+// Honest-inert: rejects with a clear message if ffmpeg is missing or assets are incomplete.
+app.post('/api/video/render', async (req, res) => {
+  try {
+    if (!videoRender.isFfmpegAvailable()) {
+      res.status(503).json({ error: 'ffmpeg not found — set FFMPEG_PATH or install ffmpeg on PATH.' });
+      return;
+    }
+    const { slug } = req.body || {};
+    const result = await videoRender.render(slug);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/video/library', (req, res) => {
@@ -450,6 +468,18 @@ app.get('/api/video/voices', async (req, res) => {
     res.json({ voices, mode });
   } catch (err) {
     res.status(500).json({ error: err.message, mode });
+  }
+});
+
+// ---- Radar: free RSS feed aggregation (no API keys, no X/Grok required) ----
+// Honest-inert: returns empty signals + a note when RADAR_FEEDS is unset.
+app.get('/api/radar/signals', async (req, res) => {
+  try {
+    const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 12));
+    const result = await radarFeeds.fetchSignals(limit);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ signals: [], note: `Radar error: ${err.message}`, fedCount: 0, failCount: 0 });
   }
 });
 
