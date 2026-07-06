@@ -49,6 +49,11 @@ function isLoopback(req) {
 }
 
 const app = express();
+// requestId must run BEFORE the body parser so JSON-parse errors still get an id.
+app.use((req, res, next) => {
+  req.id = crypto.randomUUID();
+  next();
+});
 app.use(express.json({ limit: '1mb' }));
 
 // ---- Rate limiting (zero-dep token-bucket) ----
@@ -66,14 +71,10 @@ const expensiveLimit = createLimiter({
   scope: 'expensive',
 });
 
-// ---- Request ID + structured access logging ----
-// Every request gets a uuid on req.id (used by logger + error middleware so a
-// user-reported error maps to one log line). requestLogger emits one JSON line
-// per request on response finish (skips /health to avoid liveness-probe noise).
-app.use((req, res, next) => {
-  req.id = crypto.randomUUID();
-  next();
-});
+// ---- Structured access logging ----
+// requestLogger emits one JSON line per request on response finish (skips /health
+// to avoid liveness-probe noise). requestId is assigned earlier, before the body
+// parser, so even JSON-parse errors carry an id.
 app.use(requestLogger());
 
 function requireEnv(name) {
@@ -797,6 +798,35 @@ app.post('/api/tts/synthesize', async (req, res) => {
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/vault')) return next();
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ---- Centralized error middleware (H5) ----
+// Catches errors from routes that don't try/catch (several sync routes in goals/
+// kanban/pipeline currently propagate unguarded). Logs full stack server-side with
+// the requestId so a user-reported error maps to one log line; returns a generic
+// message to the client — never leaks stack traces or raw err.message.
+// Note: routes that already catch and return specific { error } JSON are more useful
+// as-is; this is the safety net for the ones that don't.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const requestId = req.id || 'unknown';
+  // JSON parse errors from express.json are surfaced as 400 with a clean message.
+  if (err && err.type === 'entity.parse.failed') {
+    log.warn('malformed JSON body', { requestId, path: req.path, body: err.message });
+    return res.status(400).json({ error: 'Malformed JSON in request body.', requestId });
+  }
+  if (err && err.type === 'entity.too.large') {
+    log.warn('oversized body', { requestId, path: req.path, limit: err.limit });
+    return res.status(413).json({ error: 'Request body too large.', requestId });
+  }
+  log.error('unhandled route error', {
+    requestId,
+    method: req.method,
+    path: req.path,
+    error: err && err.message ? err.message : String(err),
+    stack: err && err.stack ? err.stack.split('\n').slice(0, 6).join('\n') : undefined,
+  });
+  res.status(500).json({ error: 'Internal server error.', requestId });
 });
 
 const server = app.listen(PORT, BIND, () => {
