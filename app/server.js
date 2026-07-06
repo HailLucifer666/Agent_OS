@@ -29,6 +29,7 @@ const grokVideo = require('./lib/providers/grok-video');
 const edgeTts = require('./lib/providers/edge-tts');
 const videoRender = require('./lib/video-render');
 const radarFeeds = require('./lib/radar-feeds');
+const { createLimiter } = require('./lib/rate-limit');
 
 const PORT = process.env.PORT || 4477;
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
@@ -43,6 +44,21 @@ function isLoopback(req) {
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+
+// ---- Rate limiting (zero-dep token-bucket) ----
+// Global tier: generous cap across all API routes. Expensive tier: tight cap on
+// routes that shell out or call LLMs (applied per-route below). Override limits
+// via env if a workflow genuinely needs more headroom.
+const globalLimit = createLimiter({
+  windowMs: 60_000,
+  max: Number(process.env.RATE_LIMIT_GLOBAL) || 240,
+  scope: 'global-api',
+});
+const expensiveLimit = createLimiter({
+  windowMs: 60_000,
+  max: Number(process.env.RATE_LIMIT_EXPENSIVE) || 8,
+  scope: 'expensive',
+});
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -78,6 +94,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/vault/builds', express.static(vault.vaultPath('builds')));
 
 // ---- health ----
+// Global rate limit applies to all /api/* (not /health — keep it free for liveness probes).
+app.use('/api', globalLimit);
 app.get('/health', (req, res) => {
   res.json({ ok: true, uptime: process.uptime() });
 });
@@ -223,7 +241,7 @@ const GAME_BUILD_PREAMBLE = [
   'Game request: ',
 ].join(' ');
 
-app.post('/api/games/build', async (req, res) => {
+app.post('/api/games/build', expensiveLimit, async (req, res) => {
   const { prompt } = req.body || {};
   if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'prompt required' });
   try {
@@ -280,7 +298,7 @@ function decodeBase64Image(dataUrl) {
 }
 
 // ---- thumbnail studio: OpenAI image generation/edit ----
-app.post('/api/thumbnail/generate', async (req, res) => {
+app.post('/api/thumbnail/generate', expensiveLimit, async (req, res) => {
   const { instructions, files, versions, redesignFromScratch, preventGrid, varyEach } = req.body || {};
   const n = Math.min(Math.max(Number(versions) || 1, 1), 4);
   const promptParts = [instructions && instructions.trim() ? instructions.trim() : 'A high-CTR YouTube thumbnail.'];
@@ -323,7 +341,7 @@ app.post('/api/thumbnail/generate', async (req, res) => {
 });
 
 // ---- music studio: Suno via sunoapi.org ----
-app.post('/api/music/generate', async (req, res) => {
+app.post('/api/music/generate', expensiveLimit, async (req, res) => {
   const { prompt, style, title, instrumental } = req.body || {};
   if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'prompt required' });
   try {
@@ -390,7 +408,7 @@ app.post('/api/video/script', async (req, res) => {
   }
 });
 
-app.post('/api/video/assets', async (req, res) => {
+app.post('/api/video/assets', expensiveLimit, async (req, res) => {
   const { script, narratorMode, avatarId, voiceId, brollEngine, brollPrompt, lengthSeconds } = req.body || {};
   if (!script || !script.trim()) return res.status(400).json({ error: 'script required' });
 
@@ -447,7 +465,7 @@ app.post('/api/video/assets', async (req, res) => {
 
 // Combine a video set's saved narrator + b-roll assets into final.mp4 via ffmpeg.
 // Honest-inert: rejects with a clear message if ffmpeg is missing or assets are incomplete.
-app.post('/api/video/render', async (req, res) => {
+app.post('/api/video/render', expensiveLimit, async (req, res) => {
   try {
     if (!videoRender.isFfmpegAvailable()) {
       res.status(503).json({ error: 'ffmpeg not found — set FFMPEG_PATH or install ffmpeg on PATH.' });
@@ -561,7 +579,7 @@ function saveDeliverable(raw, sourceText) {
   return { path: `/vault/builds/pipeline/${name}`, title, name };
 }
 
-app.post('/api/pipeline/:id/execute', (req, res) => {
+app.post('/api/pipeline/:id/execute', expensiveLimit, (req, res) => {
   const found = pipeline.findCard(req.params.id);
   if (!found) return res.status(404).json({ error: 'card not found' });
   if (found.stage !== 'execute') return res.status(400).json({ error: 'card is not in the Execute stage' });
@@ -598,7 +616,7 @@ const PLANNER_PREAMBLE = [
   'Goal: ',
 ].join(' ');
 
-app.post('/api/kanban/assemble', async (req, res) => {
+app.post('/api/kanban/assemble', expensiveLimit, async (req, res) => {
   const { goal } = req.body || {};
   if (!goal || !goal.trim()) return res.status(400).json({ error: 'goal required' });
   const job = orchestrator.enqueue({
@@ -627,7 +645,7 @@ const BUILDER_PREAMBLE = [
   'raw file content, no commentary, no fences around the whole output.\nTask: ',
 ].join(' ');
 
-app.post('/api/kanban/cards/:id/build', (req, res) => {
+app.post('/api/kanban/cards/:id/build', expensiveLimit, (req, res) => {
   const card = kanban.findCard(req.params.id);
   if (!card) return res.status(404).json({ error: 'card not found' });
   const existing = card.jobId ? orchestrator.getJob(card.jobId) : null;
@@ -656,7 +674,7 @@ const REVIEWER_PREAMBLE = [
   '{"verdict": "approve" or "reject", "notes": "1-2 sentences explaining why"}\n',
 ].join(' ');
 
-app.post('/api/kanban/cards/:id/review', async (req, res) => {
+app.post('/api/kanban/cards/:id/review', expensiveLimit, async (req, res) => {
   const card = kanban.findCard(req.params.id);
   if (!card) return res.status(404).json({ error: 'card not found' });
   if (!card.artifact) return res.status(400).json({ error: 'card has no built artifact to review yet' });
