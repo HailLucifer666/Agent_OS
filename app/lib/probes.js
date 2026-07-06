@@ -2,6 +2,7 @@
 const http = require('http');
 const { spawnSync } = require('child_process');
 const { FREE_PROVIDERS } = require('./free-models');
+const edgeTtsProvider = require('./providers/edge-tts');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const PROBE_TIMEOUT_MS = 800;
@@ -101,6 +102,13 @@ async function getStatus() {
         : `no ${p.apiKeyEnv}`,
     }));
 
+  // edge-tts is kind 'tts' (not openai-compat), so it isn't covered by the fleet
+  // loop above. Probe the local Python service directly and append its status.
+  const ttsOk = await edgeTtsProvider.isAvailable();
+  const ttsStatus = ttsOk
+    ? { id: 'edge-tts', label: 'Edge TTS', status: 'ONLINE', detail: '322 Microsoft Neural voices · UNOFFICIAL' }
+    : { id: 'edge-tts', label: 'Edge TTS', status: 'OFFLINE', detail: 'service not running · pip install edge-tts' };
+
   const latencies = [ollama.ok ? ollama.latency : null].filter((v) => v !== null);
   const p50 = latencies.length ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length / 2)] : null;
 
@@ -118,7 +126,7 @@ async function getStatus() {
     },
     heartbeat: { ticks: heartbeatTicks, intervalMs: 4000 },
     latency: { p50 },
-    agents: [claude, hermes, zcode, nim, freeClaude, ...fleetAgents],
+    agents: [claude, hermes, zcode, nim, freeClaude, ...fleetAgents, ttsStatus],
   };
 }
 

@@ -13,3 +13,5 @@ app/.env
 # session/tooling junk
 .claude/
 Thumbs.db
+__pycache__/
+*.pyc

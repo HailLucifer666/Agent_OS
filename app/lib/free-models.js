@@ -26,6 +26,7 @@ const cloudflare = require('./providers/cloudflare');
 const openrouterFree = require('./providers/openrouter-free');
 const zcode = require('./providers/zcode');
 const nim = require('./providers/nim');
+const edgeTtsProvider = require('./providers/edge-tts');
 
 const FREE_PROVIDERS = [
   {
@@ -100,10 +101,21 @@ const FREE_PROVIDERS = [
     kind: 'openai-compat',
     provider: nim,
     apiKeyEnv: 'NIM_API_KEY',
-    accentVar: '#76b900',        // NVIDIA green
+    accentVar: '#76b900',        // Nvidia green
     freeTier: '~1,000 credits on signup · 40 RPM',
     trial: true,                 // finite credits, not perpetual
     notes: 'NVIDIA NIM. Llama / Nemotron / DeepSeek-R1. TRIAL — credits are finite.',
+  },
+  {
+    id: 'edge-tts',
+    label: 'Edge TTS',
+    kind: 'tts',
+    provider: edgeTtsProvider,
+    apiKeyEnv: null,  // no key — local Python service
+    accentVar: '#4a9eff',
+    freeTier: 'Unlimited · 322 Microsoft Neural voices',
+    trial: false,
+    notes: 'UNOFFICIAL · free Microsoft Neural TTS via edge-tts. Personal use only.',
   },
 ];
 
@@ -112,8 +124,15 @@ function findById(id) {
   return FREE_PROVIDERS.find((p) => p.id === id) || null;
 }
 
+// SYNC helper: filters by API-key presence. Providers with no apiKeyEnv (local
+// services like edge-tts whose availability is only knowable via async health
+// check) are excluded — call provider.isAvailable() directly for those.
 function availableProviders() {
-  return FREE_PROVIDERS.filter((p) => p.provider && typeof p.provider.isAvailable === 'function' && p.provider.isAvailable());
+  return FREE_PROVIDERS.filter((p) =>
+    p.apiKeyEnv && typeof p.apiKeyEnv === 'string'
+    && p.provider && typeof p.provider.isAvailable === 'function'
+    && p.provider.isAvailable()
+  );
 }
 
 module.exports = { FREE_PROVIDERS, findById, availableProviders };

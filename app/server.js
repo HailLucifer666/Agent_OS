@@ -26,6 +26,7 @@ const heygen = require('./lib/providers/heygen');
 const elevenlabs = require('./lib/providers/elevenlabs');
 const minimaxVideo = require('./lib/providers/minimax-video');
 const grokVideo = require('./lib/providers/grok-video');
+const edgeTts = require('./lib/providers/edge-tts');
 
 const PORT = process.env.PORT || 4477;
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
@@ -680,6 +681,38 @@ app.get('/api/quotas', (req, res) => {
   res.json({ quotas: quotas.getAllQuotas() });
 });
 
+// ---- text-to-speech (edge-tts, free Microsoft Neural) ----
+app.get('/api/tts/voices', async (req, res) => {
+  try {
+    const available = await edgeTts.isAvailable();
+    if (!available) return res.status(503).json({ error: 'edge-tts service not running', voices: [] });
+    const voices = await edgeTts.listVoices();
+    res.json({ voices, count: voices.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message, voices: [] });
+  }
+});
+
+app.post('/api/tts/synthesize', async (req, res) => {
+  const { text, voice, format, rate, pitch } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
+  try {
+    const available = await edgeTts.isAvailable();
+    if (!available) return res.status(503).json({ error: 'edge-tts service not running — start with: python app/services/edge-tts-server.py' });
+    const buf = await edgeTts.synthesize({ text: text.trim(), voice, format, rate, pitch });
+    // Save to vault for history
+    const base = (text.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30) || 'tts');
+    const fs = require('fs');
+    let name = `${base}.mp3`;
+    for (let i = 2; fs.existsSync(vault.vaultPath('builds', 'tts', name)); i += 1) name = `${base}-${i}.mp3`;
+    vault.ensureDir(vault.vaultPath('builds', 'tts'));
+    fs.writeFileSync(vault.vaultPath('builds', 'tts', name), buf);
+    res.json({ ok: true, path: `/vault/builds/tts/${name}`, voice: voice || 'en-US-AriaNeural', bytes: buf.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // SPA fallback — anything not /api or a static file goes to index.html
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/vault')) return next();
@@ -689,6 +722,75 @@ app.get('*', (req, res, next) => {
 const server = app.listen(PORT, () => {
   console.log(`Agentic OS running at http://localhost:${PORT}`);
 });
+
+// ---- edge-tts Python service autostart ----
+// Detects python + edge-tts, spawns the local TTS service so Voice Studio works
+// out of the box. Set EDGE_TTS_AUTOSTART=false to disable (e.g. if you run it
+// manually or don't have Python). Honest: if not installed, the provider stays
+// OFFLINE and we log a one-time hint — never a crash.
+let edgeTtsChild = null;
+const TTS_PORT = process.env.EDGE_TTS_PORT || '5050';
+const TTS_SCRIPT = path.join(__dirname, 'services', 'edge-tts-server.py');
+
+(async function autostartEdgeTts() {
+  if (process.env.EDGE_TTS_AUTOSTART === 'false') return;
+  if (process.env.NODE_ENV === 'test') return;
+  const { spawnSync } = require('child_process');
+  // Detect python (try "python" then "python3")
+  let pyBin = null;
+  for (const bin of ['python', 'python3']) {
+    try {
+      const r = spawnSync(bin, ['--version'], { shell: true, encoding: 'utf8', timeout: 3000 });
+      if (r.status === 0) { pyBin = bin; break; }
+    } catch { /* try next */ }
+  }
+  if (!pyBin) {
+    console.log('[edge-tts] python not found — TTS service not started (Voice Studio will show OFFLINE)');
+    return;
+  }
+  // Detect edge-tts module. NOTE: shell:false is required here — shell:true
+  // mangles the -c "import edge_tts" quoting on Windows (Python sees bare 'import').
+  try {
+    const r = spawnSync(pyBin, ['-c', 'import edge_tts'], { encoding: 'utf8', timeout: 5000 });
+    if (r.status !== 0) {
+      console.log(`[edge-tts] module not installed — run: ${pyBin} -m pip install edge-tts`);
+      return;
+    }
+  } catch {
+    console.log('[edge-tts] could not verify module — TTS service not started');
+    return;
+  }
+  // Spawn the service
+  try {
+    edgeTtsChild = require('child_process').spawn(pyBin, [TTS_SCRIPT], {
+      shell: false,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, EDGE_TTS_PORT: TTS_PORT },
+    });
+    edgeTtsChild.on('error', () => { edgeTtsChild = null; });
+    console.log(`[edge-tts] service started on port ${TTS_PORT} (python=${pyBin}) — UNOFFICIAL, personal use`);
+  } catch {
+    edgeTtsChild = null;
+    console.log('[edge-tts] failed to spawn service — Voice Studio will show OFFLINE');
+  }
+})();
+
+// Graceful shutdown: kill the spawned TTS service if we started one.
+function shutdownEdgeTts() {
+  if (edgeTtsChild && !edgeTtsChild.killed) {
+    try {
+      if (process.platform === 'win32' && edgeTtsChild.pid) {
+        require('child_process').execFile('taskkill', ['/PID', String(edgeTtsChild.pid), '/T', '/F']);
+      } else {
+        edgeTtsChild.kill('SIGTERM');
+      }
+    } catch { /* best-effort */ }
+    edgeTtsChild = null;
+  }
+}
+process.on('SIGINT', () => { shutdownEdgeTts(); process.exit(0); });
+process.on('SIGTERM', () => { shutdownEdgeTts(); process.exit(0); });
 
 // ---- ws chat / mastermind protocol (Phase 2) ----
 

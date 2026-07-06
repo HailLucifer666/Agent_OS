@@ -61,6 +61,10 @@ const PROVIDER_QUOTAS = {
     unlimited: true,
     note: 'Local. Bounded by your hardware, no provider cap.',
   },
+  'edge-tts': {
+    unlimited: true,
+    note: 'UNOFFICIAL · Microsoft Neural via edge-tts. No key, no account. Personal/hobby use only — commercial use violates MS ToS.',
+  },
 };
 
 function todayKey() {

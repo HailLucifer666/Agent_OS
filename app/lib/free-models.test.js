@@ -8,8 +8,8 @@ const assert = require('node:assert/strict');
 const { FREE_PROVIDERS, findById, availableProviders } = require('./free-models');
 
 describe('free-models.js registry', () => {
-  test('FREE_PROVIDERS has exactly 7 entries', () => {
-    assert.equal(FREE_PROVIDERS.length, 7, `expected 7 providers, got ${FREE_PROVIDERS.length}`);
+  test('FREE_PROVIDERS has exactly 8 entries', () => {
+    assert.equal(FREE_PROVIDERS.length, 8, `expected 8 providers, got ${FREE_PROVIDERS.length}`);
   });
 
   test('every entry has all required fields with correct types', () => {
@@ -63,7 +63,9 @@ describe('free-models.js registry', () => {
   });
 
   test('availableProviders() returns empty array when no API keys are set', () => {
-    // Test environment has no provider keys configured.
+    // availableProviders() is a SYNC helper that filters by API-key presence.
+    // edge-tts has apiKeyEnv: null (local Python service, no key) so it is
+    // excluded; all other providers have no keys set in the test env.
     const available = availableProviders();
     assert.ok(Array.isArray(available));
     assert.equal(available.length, 0, `expected 0 available, got ${available.length}`);

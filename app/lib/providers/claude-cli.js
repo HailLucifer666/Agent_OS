@@ -5,6 +5,13 @@ const { spawn, execFile } = require('child_process');
 const APP_DIR = path.join(__dirname, '..', '..');
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
 
+// Resolve the Claude Code CLI binary without a shell wrapper.
+// On Windows 'claude' is an npm-generated .cmd shim. Spawning with
+// { shell: true } re-invokes cmd.exe, which mangles multi-arg JSON strings
+// (e.g. --model "foo bar"). We spawn the .cmd shim directly without a shell
+// so args reach Claude verbatim. Requires Node 18.20+ / 20.12+ / 22+ which
+// permit spawning .cmd/.bat without shell when given the full shim name.
+
 // convId -> claude CLI session_id, so --resume keeps history server-side.
 const sessions = new Map();
 
@@ -42,7 +49,12 @@ async function chat(messages, opts = {}) {
   const promptText = lastUserMessage ? lastUserMessage.content : '';
 
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', args, { shell: true, cwd: APP_DIR, windowsHide: true });
+    // Windows: spawn the .cmd shim WITHOUT shell:true — shell:true re-invokes
+    // cmd.exe and mangles multi-arg JSON/quoted strings. Spawning the .cmd
+    // directly (shell:false) passes args verbatim.
+    const isWin = process.platform === 'win32';
+    const bin = isWin ? 'claude.cmd' : 'claude';
+    const child = spawn(bin, args, { cwd: APP_DIR, windowsHide: true, shell: false });
 
     let settled = false;
     let stdoutBuf = '';

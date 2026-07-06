@@ -24,6 +24,7 @@ const VIEW_LOADERS = {
   'music-studio': () => import('/js/views/music-studio.js'),
   'video-studio': () => import('/js/views/video-studio.js'),
   'thumbnail-studio': () => import('/js/views/thumbnail-studio.js'),
+  'voice-studio': () => import('/js/views/voice-studio.js'),
   'radar': () => import('/js/views/radar.js'),
   'paperclip': () => import('/js/views/paperclip.js'),
 };

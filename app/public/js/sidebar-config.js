@@ -73,6 +73,7 @@ const SIDEBAR_GROUPS = [
       { route: 'video-studio', label: 'Video Studio', icon: SIDEBAR_ICONS.video },
       { route: 'game-studio', label: 'Game Studio', icon: SIDEBAR_ICONS.game },
       { route: 'thumbnail-studio', label: 'Thumbnail Studio', icon: SIDEBAR_ICONS.thumbnail },
+      { route: 'voice-studio', label: 'Voice Studio', icon: SIDEBAR_ICONS.music },
     ],
   },
 ];
@@ -104,6 +105,7 @@ const ROUTE_META = {
   'video-studio': { numeral: 'XII.', section: 'STUDIO · VIDEO', title: 'Video Studio', subtitle: 'The Video Director — research, script, avatar + b-roll, edit.' },
   'game-studio': { numeral: 'XIII.', section: 'STUDIO · GAME', title: 'Game Studio', subtitle: 'Commission the Game Agent. Single-file playable games.' },
   'thumbnail-studio': { numeral: 'XIII.', section: 'STUDIO · THUMBNAIL', title: 'Thumbnail Studio', subtitle: 'Generate and iterate thumbnail concepts from reference images.' },
+  'voice-studio': { numeral: 'XVI.', section: 'STUDIO · VOICE', title: 'Voice Studio', subtitle: 'Free Microsoft Neural TTS — 322 voices, 74 languages. UNOFFICIAL.' },
 };
 
 // Flat list of all routes for the palette + router default.

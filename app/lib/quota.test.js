@@ -13,7 +13,7 @@ process.env.VAULT_ROOT = TMP;
 const quota = require('./quota');
 const activityLog = require('./activity-log');
 
-// All 8 providers that should be tracked.
+// All 9 providers that should be tracked (edge-tts added for Voice Studio).
 const ALL_PROVIDERS = [
   'groq',
   'openrouter-free',
@@ -22,6 +22,7 @@ const ALL_PROVIDERS = [
   'cloudflare',
   'zcode',
   'nim',
+  'edge-tts',
   'ollama',
 ];
 
@@ -35,14 +36,14 @@ describe('quota.js', () => {
     delete process.env.VAULT_ROOT;
   });
 
-  test('PROVIDER_QUOTAS has entries for all 8 providers', () => {
+  test('PROVIDER_QUOTAS has entries for all 9 providers', () => {
     for (const id of ALL_PROVIDERS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(quota.PROVIDER_QUOTAS, id),
         `PROVIDER_QUOTAS missing entry for ${id}`,
       );
     }
-    assert.equal(Object.keys(quota.PROVIDER_QUOTAS).length, 8);
+    assert.equal(Object.keys(quota.PROVIDER_QUOTAS).length, 9);
   });
 
   test('getQuotaStatus("groq") initial state — full cap, nothing used', () => {
@@ -99,14 +100,20 @@ describe('quota.js', () => {
     assert.equal(s.unit, 'tokens');
   });
 
+  test('getQuotaStatus("edge-tts") — local Python service, unlimited, not a trial', () => {
+    const s = quota.getQuotaStatus('edge-tts');
+    assert.equal(s.unlimited, true);
+    assert.equal(s.trial, false);
+  });
+
   test('getQuotaStatus("nonexistent") returns null', () => {
     assert.equal(quota.getQuotaStatus('nonexistent'), null);
   });
 
-  test('getAllQuotas() returns an entry for each of the 8 providers', () => {
+  test('getAllQuotas() returns an entry for each of the 9 providers', () => {
     const all = quota.getAllQuotas();
     assert.ok(Array.isArray(all));
-    assert.equal(all.length, 8, `expected 8 entries, got ${all.length}`);
+    assert.equal(all.length, 9, `expected 9 entries, got ${all.length}`);
     const ids = all.map((q) => q.provider).sort();
     assert.deepEqual(ids, [...ALL_PROVIDERS].sort());
   });
