@@ -832,6 +832,9 @@ app.use((err, req, res, next) => {
 const server = app.listen(PORT, BIND, () => {
   log.info('listening', { url: `http://localhost:${PORT}`, bind: BIND });
 });
+// wss is created later (after the ws protocol helpers); keep a ref so the
+// graceful-shutdown drain can close it. Assigned where WebSocketServer is built.
+let wssRef = null;
 
 // ---- edge-tts Python service autostart ----
 // Detects python + edge-tts, spawns the local TTS service so Voice Studio works
@@ -899,8 +902,47 @@ function shutdownEdgeTts() {
     edgeTtsChild = null;
   }
 }
-process.on('SIGINT', () => { shutdownEdgeTts(); process.exit(0); });
-process.on('SIGTERM', () => { shutdownEdgeTts(); process.exit(0); });
+// Graceful shutdown (H6): drain in-flight HTTP + WS, then kill the TTS child.
+// A 5s hard timeout guarantees a hung connection can't block shutdown forever.
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return; // second Ctrl+C → force exit immediately
+  shuttingDown = true;
+  log.info('shutdown signal received', { signal });
+
+  // Hard-timeout fallback: if drain hangs, exit anyway after 5s.
+  const forceTimer = setTimeout(() => {
+    log.warn('shutdown drain timed out, forcing exit', { signal });
+    shutdownEdgeTts();
+    process.exit(1);
+  }, 5000);
+  forceTimer.unref();
+
+  // 1. Stop accepting new WS connections; close existing ones (code 1001 = going away).
+  try {
+    if (wssRef) wssRef.close();
+  } catch { /* best-effort */ }
+  // 2. Stop accepting new HTTP connections; let in-flight finish.
+  server.close(() => {
+    log.info('http server closed, draining complete', { signal });
+    shutdownEdgeTts();
+    clearTimeout(forceTimer);
+    process.exit(0);
+  });
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Catch lifecycle/process errors that would otherwise crash silently, log them,
+// and drain gracefully rather than aborting mid-request.
+process.on('uncaughtException', (err) => {
+  log.error('uncaughtException', { error: err.message, stack: err.stack });
+  gracefulShutdown('uncaughtException');
+});
+process.on('unhandledRejection', (reason) => {
+  log.error('unhandledRejection', { reason: reason && reason.message ? reason.message : String(reason) });
+  gracefulShutdown('unhandledRejection');
+});
 
 // ---- ws chat / mastermind protocol (Phase 2) ----
 
@@ -960,6 +1002,7 @@ function roomPreamble(seatLabel) {
 }
 
 const wss = new WebSocketServer({ server, path: '/ws' });
+wssRef = wss; // hand the ref to the graceful-shutdown drain (declared near app.listen)
 
 // Job updates fan out to every connected client (pipeline view listens for these).
 orchestrator.setBroadcast((msg) => {
