@@ -33,6 +33,14 @@ const radarFeeds = require('./lib/radar-feeds');
 const PORT = process.env.PORT || 4477;
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
 
+// Loopback check for the kill-* endpoints (H2): even if someone sets BIND=0.0.0.0,
+// process-killing routes stay local-only. Accepts IPv4/IPv6 loopback forms.
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
+function isLoopback(req) {
+  const ip = req.ip || (req.socket && req.socket.remoteAddress) || '';
+  return LOOPBACK.has(ip);
+}
+
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
@@ -492,6 +500,7 @@ app.get('/api/monitor/snapshot', (req, res) => {
 });
 
 app.post('/api/monitor/kill-session', async (req, res) => {
+  if (!isLoopback(req)) return res.status(403).json({ error: 'kill-session is loopback-only.' });
   const { pid, agentCli } = req.body || {};
   if (!pid || !agentCli) return res.status(400).json({ error: 'pid and agentCli required' });
   try {
@@ -503,6 +512,7 @@ app.post('/api/monitor/kill-session', async (req, res) => {
 });
 
 app.post('/api/monitor/kill-port', async (req, res) => {
+  if (!isLoopback(req)) return res.status(403).json({ error: 'kill-port is loopback-only.' });
   const { pid, port } = req.body || {};
   if (!pid || !port) return res.status(400).json({ error: 'pid and port required' });
   try {
