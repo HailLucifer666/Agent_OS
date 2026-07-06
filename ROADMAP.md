@@ -14,6 +14,7 @@ This document captures the sprint history and what is intentionally deferred, so
 | 6 | `sprint-6-close-phase-2-gaps` | Close documented "Phase 2" UI gaps | ✅ Shipped (5 commits) — see below |
 | 7 | `main` (direct) | Land sprints 1–6 to main, then harden | ✅ Shipped (8 commits) — see below |
 | 8 | `sprint-8-free-claude-builder` | Wire Free Claude Code Agent Factory + Chat & Workspace | ✅ Shipped (see below) |
+| 9 | `sprint-9-radar-improvements` | Free-only Radar improvements: dedup, keyword scoring, Draft this button | ✅ Shipped (see below) |
 
 ### Sprint 6 — Close Phase 2 gaps
 
@@ -54,6 +55,16 @@ Fast-forward merged sprint-6 to `main` (11 commits, zero conflicts). Then harden
 | Phase 2 placeholders removed | Build button now triggers real builds. Chat tab streams live. Gallery auto-refreshes after builds. |
 
 102 tests green. No new npm dependencies.
+
+### Sprint 9 — Free-only Radar improvements
+
+| Workstream | Outcome |
+|------------|---------|
+| Signal dedup | Cross-posted articles appearing in multiple feeds are now deduplicated by normalized title. Keeps first occurrence (earliest date wins). |
+| Keyword relevance boost | Optional `RADAR_KEYWORDS` env var boosts signal scores when configured topics appear in title/body (+5 per keyword, max +20). Zero API cost. |
+| Draft this button | "Draft this" on each signal card copies a formatted draft (title, body, source, link) to clipboard with visual confirmation. Zero dependencies. |
+
+111 tests green. No new npm dependencies.
 
 ## Intentionally deferred
 
