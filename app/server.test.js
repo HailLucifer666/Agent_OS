@@ -4,7 +4,7 @@
 // (these routes only read local vault state / run probes that catch their own
 // failures). Lives in app/ (not lib/) because it tests server.js directly.
 
-const { test, describe, after } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { tempVaultDir, rmrf } = require('./lib/test-helpers');
@@ -17,10 +17,11 @@ process.env.NODE_ENV = 'test';
 // Random free port — avoids colliding with a dev server already on 4477.
 process.env.PORT = '0';
 
-// server.js exports the http.Server instance (from app.listen).
+// server.js exports the http.Server instance (from app.listen). It binds
+// asynchronously (especially with an explicit host), so we resolve the assigned
+// port in a before() hook that awaits the 'listening' event.
 const server = require('./server');
-const PORT = server.address().port;
-const BASE = `http://localhost:${PORT}`;
+let BASE = '';
 
 // Minimal GET helper — returns status, raw body, and a json() parser.
 function get(path) {
@@ -34,6 +35,17 @@ function get(path) {
 }
 
 describe('server smoke', () => {
+  before(async () => {
+    if (!server.listening) {
+      await new Promise((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+        setTimeout(() => reject(new Error('server did not start listening within 2s')), 2000);
+      });
+    }
+    BASE = `http://localhost:${server.address().port}`;
+  });
+
   after(async () => {
     server.close();
     rmrf(TMP);

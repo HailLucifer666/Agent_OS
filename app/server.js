@@ -30,8 +30,14 @@ const edgeTts = require('./lib/providers/edge-tts');
 const videoRender = require('./lib/video-render');
 const radarFeeds = require('./lib/radar-feeds');
 const { createLimiter } = require('./lib/rate-limit');
+const { log, requestLogger } = require('./lib/logger');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 4477;
+// Bind to loopback by default so the dashboard (and the process-killing monitor
+// endpoints) are unreachable from the LAN. Override with BIND=0.0.0.0 only if you
+// deliberately want network exposure — the kill-* routes still gate to loopback (H2).
+const BIND = process.env.BIND || '127.0.0.1';
 const MODEL_RE = /^[a-zA-Z0-9._/-]+$/;
 
 // Loopback check for the kill-* endpoints (H2): even if someone sets BIND=0.0.0.0,
@@ -60,10 +66,20 @@ const expensiveLimit = createLimiter({
   scope: 'expensive',
 });
 
+// ---- Request ID + structured access logging ----
+// Every request gets a uuid on req.id (used by logger + error middleware so a
+// user-reported error maps to one log line). requestLogger emits one JSON line
+// per request on response finish (skips /health to avoid liveness-probe noise).
+app.use((req, res, next) => {
+  req.id = crypto.randomUUID();
+  next();
+});
+app.use(requestLogger());
+
 function requireEnv(name) {
   const v = process.env[name];
   if (!v || !v.trim()) {
-    console.warn(`[startup] ${name} not set — related features will be disabled`);
+    log.warn('missing env var', { name, note: 'related features will be disabled' });
     return false;
   }
   return true;
@@ -75,18 +91,24 @@ const haveCritical = _CRITICAL_ENV.map(requireEnv).every(Boolean);
 if (!haveCritical) {
   // Default: honest-inert — warn and start degraded so the dashboard still loads
   // and the status tiles can show you exactly what's offline.
-  console.warn('[startup] starting without full provider keys — some surfaces will show degraded');
+  log.warn('starting without full provider keys', { note: 'some surfaces will show degraded' });
   // Opt-in fail-fast: set FAIL_FAST=1 in .env to refuse boot instead. Useful for
   // headless / orchestrated runs where a silent degraded boot would mask a misconfig.
   if (process.env.FAIL_FAST && process.env.FAIL_FAST.trim() && process.env.FAIL_FAST !== '0') {
-    console.error(`[startup] FAIL_FAST=1 set and missing critical env: ${_CRITICAL_ENV.join(', ')}`);
-    console.error('[startup] aborting boot — set the missing keys or unset FAIL_FAST to start degraded.');
+    log.error('FAIL_FAST abort', { missing: _CRITICAL_ENV, note: 'set the missing keys or unset FAIL_FAST to start degraded' });
     process.exit(1);
   }
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  console.log(`[startup] port=${PORT} anthropic=${Boolean(process.env.ANTHROPIC_API_KEY)} openrouter=${Boolean(process.env.OPENROUTER_API_KEY)} ollama=${Boolean(process.env.OLLAMA_URL)} engines=${reasoning.describeEngines()}`);
+  log.info('startup', {
+    port: PORT,
+    bind: BIND,
+    anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+    openrouter: Boolean(process.env.OPENROUTER_API_KEY),
+    ollama: Boolean(process.env.OLLAMA_URL),
+    engines: reasoning.describeEngines(),
+  });
 }
 
 // ---- static ----
@@ -777,12 +799,8 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Bind to loopback by default so the dashboard (and the process-killing monitor
-// endpoints) are unreachable from the LAN. Override with BIND=0.0.0.0 only if you
-// deliberately want network exposure — the kill-* routes still gate to loopback (H2).
-const BIND = process.env.BIND || '127.0.0.1';
 const server = app.listen(PORT, BIND, () => {
-  console.log(`Agentic OS running at http://localhost:${PORT} (bound to ${BIND})`);
+  log.info('listening', { url: `http://localhost:${PORT}`, bind: BIND });
 });
 
 // ---- edge-tts Python service autostart ----
@@ -807,7 +825,7 @@ const TTS_SCRIPT = path.join(__dirname, 'services', 'edge-tts-server.py');
     } catch { /* try next */ }
   }
   if (!pyBin) {
-    console.log('[edge-tts] python not found — TTS service not started (Voice Studio will show OFFLINE)');
+    log.warn('edge-tts python not found', { note: 'TTS service not started — Voice Studio will show OFFLINE' });
     return;
   }
   // Detect edge-tts module. NOTE: shell:false is required here — shell:true
@@ -815,11 +833,11 @@ const TTS_SCRIPT = path.join(__dirname, 'services', 'edge-tts-server.py');
   try {
     const r = spawnSync(pyBin, ['-c', 'import edge_tts'], { encoding: 'utf8', timeout: 5000 });
     if (r.status !== 0) {
-      console.log(`[edge-tts] module not installed — run: ${pyBin} -m pip install edge-tts`);
+      log.warn('edge-tts module not installed', { hint: `${pyBin} -m pip install edge-tts` });
       return;
     }
   } catch {
-    console.log('[edge-tts] could not verify module — TTS service not started');
+    log.warn('edge-tts module check failed', { note: 'TTS service not started' });
     return;
   }
   // Spawn the service
@@ -831,10 +849,10 @@ const TTS_SCRIPT = path.join(__dirname, 'services', 'edge-tts-server.py');
       env: { ...process.env, EDGE_TTS_PORT: TTS_PORT },
     });
     edgeTtsChild.on('error', () => { edgeTtsChild = null; });
-    console.log(`[edge-tts] service started on port ${TTS_PORT} (python=${pyBin}) — UNOFFICIAL, personal use`);
+    log.info('edge-tts service started', { port: TTS_PORT, python: pyBin, note: 'UNOFFICIAL, personal use' });
   } catch {
     edgeTtsChild = null;
-    console.log('[edge-tts] failed to spawn service — Voice Studio will show OFFLINE');
+    log.warn('edge-tts spawn failed', { note: 'Voice Studio will show OFFLINE' });
   }
 })();
 
