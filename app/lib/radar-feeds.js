@@ -20,6 +20,11 @@ function getEnvFeeds() {
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function getEnvKeywords() {
+  const raw = process.env.RADAR_KEYWORDS || '';
+  return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
 /** Fetch a URL as text with a timeout. Rejects on network/HTTP error. */
 function fetchText(url, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
@@ -91,6 +96,17 @@ function sourceName(feedUrl, channelBlock) {
   return hostMatch ? hostMatch[1].replace(/^www\./, '') : feedUrl;
 }
 
+/** Deduplicate signals by normalized title (lowercased, whitespace-collapsed). */
+function dedupSignals(signals) {
+  const seen = new Set();
+  return signals.filter((s) => {
+    const key = s.title.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Convert raw XML block to a signal object matching radar.js's renderSignalCard. */
 function toItem(block, feedUrl) {
   // RSS uses <title>, <link>, <description>, <pubDate>, <category>, <author>.
@@ -122,6 +138,17 @@ function toItem(block, feedUrl) {
     else score = 25;
   }
   score = Math.min(95, score + Math.min(20, Math.floor(body.length / 200)));
+
+  // Keyword relevance boost: each matching keyword adds +5 (max +20).
+  const keywords = getEnvKeywords();
+  if (keywords.length) {
+    const haystack = `${title} ${body}`.toLowerCase();
+    let kwBonus = 0;
+    for (const kw of keywords) {
+      if (haystack.includes(kw)) kwBonus += 5;
+    }
+    score = Math.min(95, score + Math.min(20, kwBonus));
+  }
 
   return {
     title: stripHtml(title) || '(untitled)',
@@ -182,6 +209,10 @@ async function fetchSignals(limit = DEFAULT_LIMIT) {
     if (b.isoDate) return 1;
     return 0;
   });
+
+  // Dedup by normalized title (lowercased, whitespace-collapsed).
+  all = dedupSignals(all);
+
   const signals = all.slice(0, limit);
 
   let note;
@@ -190,7 +221,8 @@ async function fetchSignals(limit = DEFAULT_LIMIT) {
       ? `All ${failCount} feed(s) failed to load. Check RADAR_FEEDS URLs.`
       : 'Feeds loaded but no items extracted.';
   } else {
-    note = `${signals.length} signal(s) from ${fedCount} feed(s)${failCount ? `, ${failCount} failed` : ''}. Score is an approximate recency heuristic, not a relevance model.`;
+    const kwCount = getEnvKeywords().length;
+    note = `${signals.length} signal(s) from ${fedCount} feed(s)${failCount ? `, ${failCount} failed` : ''}. Score is an approximate recency heuristic, not a relevance model.${kwCount ? ` Keyword boost active (${kwCount} keywords).` : ''}`;
   }
 
   if (failures.length) {
@@ -201,4 +233,4 @@ async function fetchSignals(limit = DEFAULT_LIMIT) {
   return { signals, note, fedCount, failCount };
 }
 
-module.exports = { fetchSignals, getEnvFeeds };
+module.exports = { fetchSignals, getEnvFeeds, getEnvKeywords, toItem, dedupSignals };

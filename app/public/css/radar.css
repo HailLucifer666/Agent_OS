@@ -314,6 +314,13 @@
   background: color-mix(in srgb, var(--status-ok) 14%, transparent);
 }
 
+.radar-draft-btn.copied {
+  color: var(--status-ok);
+  border-color: var(--status-ok);
+  background: color-mix(in srgb, var(--status-ok) 14%, transparent);
+  pointer-events: none;
+}
+
 @media (max-width: 1000px) {
   .radar-columns {
     grid-template-columns: 1fr;
