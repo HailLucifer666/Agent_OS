@@ -749,8 +749,12 @@ app.get('*', (req, res, next) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Agentic OS running at http://localhost:${PORT}`);
+// Bind to loopback by default so the dashboard (and the process-killing monitor
+// endpoints) are unreachable from the LAN. Override with BIND=0.0.0.0 only if you
+// deliberately want network exposure — the kill-* routes still gate to loopback (H2).
+const BIND = process.env.BIND || '127.0.0.1';
+const server = app.listen(PORT, BIND, () => {
+  console.log(`Agentic OS running at http://localhost:${PORT} (bound to ${BIND})`);
 });
 
 // ---- edge-tts Python service autostart ----
