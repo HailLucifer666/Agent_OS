@@ -320,6 +320,31 @@ app.post('/api/games/build', expensiveLimit, async (req, res) => {
   }
 });
 
+// ---- free claude code: agent factory build via the reasoning engine ----
+const FREE_CLAUDE_BUILD_PREAMBLE = [
+  'You are the Agent Factory builder. Build a complete, self-contained single-file HTML page/app.',
+  'Rules: all CSS and JS inline in one document; no external libraries, fonts, images, or network requests;',
+  'dark aesthetic with clean typography; fully interactive and functional; include a <title>.',
+  'Output ONLY the raw HTML document starting with <!DOCTYPE html> — no markdown fences, no commentary.',
+  'Build request: ',
+].join(' ');
+
+app.post('/api/free-claude/build', expensiveLimit, async (req, res) => {
+  const { prompt } = req.body || {};
+  if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'prompt required' });
+  try {
+    const raw = await reasoning.chat(
+      [{ role: 'user', content: FREE_CLAUDE_BUILD_PREAMBLE + prompt.trim() }],
+      {}
+    );
+    const artifact = saveDeliverable(raw, prompt.trim(), 'free-claude');
+    const build = builds.listBuilds('free-claude').find((b) => b.name === artifact.name) || null;
+    res.json({ build });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- shared helpers for the studios below ----
 const fs = require('fs');
 const ALLOWED_IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -600,7 +625,7 @@ const DELIVERABLE_PREAMBLE = [
   'commentary, no markdown fences around the whole output. Idea: ',
 ].join(' ');
 
-function saveDeliverable(raw, sourceText) {
+function saveDeliverable(raw, sourceText, kind = 'pipeline') {
   let content = raw.trim();
   const fence = content.match(/^```[a-z]*\s*\n([\s\S]*?)\n```\s*$/);
   if (fence) content = fence[1].trim();
@@ -619,11 +644,11 @@ function saveDeliverable(raw, sourceText) {
   const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'deliverable';
   const fs = require('fs');
   let name = `${base}.${ext}`;
-  for (let i = 2; fs.existsSync(vault.vaultPath('builds', 'pipeline', name)); i += 1) {
+  for (let i = 2; fs.existsSync(vault.vaultPath('builds', kind, name)); i += 1) {
     name = `${base}-${i}.${ext}`;
   }
-  vault.writeText(path.join('builds', 'pipeline', name), content);
-  return { path: `/vault/builds/pipeline/${name}`, title, name };
+  vault.writeText(path.join('builds', kind, name), content);
+  return { path: `/vault/builds/${kind}/${name}`, title, name };
 }
 
 app.post('/api/pipeline/:id/execute', expensiveLimit, (req, res) => {
@@ -640,7 +665,7 @@ app.post('/api/pipeline/:id/execute', expensiveLimit, (req, res) => {
     cardId: card.id,
     prompt: DELIVERABLE_PREAMBLE + card.text,
     run: async (raw, j) => {
-      const artifact = saveDeliverable(raw, card.text);
+      const artifact = saveDeliverable(raw, card.text, 'pipeline');
       pipeline.moveCard(card.id, 'shipped', { progress: 100, jobId: j.id, artifact });
       return { artifact };
     },
@@ -705,7 +730,7 @@ app.post('/api/kanban/cards/:id/build', expensiveLimit, (req, res) => {
     prompt: BUILDER_PREAMBLE + `${card.title}\n${card.detail || ''}`,
     run: async (raw, j) => {
       const slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
-      const artifact = saveDeliverable(raw, `${slug}-${j.id}`);
+      const artifact = saveDeliverable(raw, `${slug}-${j.id}`, 'kanban');
       kanban.patchCard(card.id, { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact });
       return { artifact };
     },
@@ -1066,6 +1091,10 @@ wss.on('connection', (ws) => {
         full = await runOllama(messages, model, onToken, controller.signal);
       } else if (agent === 'claude') {
         full = await runClaudeCli(messages, convId, onToken, controller.signal);
+      } else if (agent === 'free-claude-code') {
+        const freeModel = process.env.FREE_CLAUDE_MODEL || 'haiku';
+        const useModel = MODEL_RE.test(freeModel) ? freeModel : 'haiku';
+        full = await runClaudeCli(messages, convId, onToken, controller.signal, useModel);
       } else if (agent === 'zcode') {
         full = await zcode.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
       } else if (agent === 'nim') {
@@ -1083,6 +1112,7 @@ wss.on('connection', (ws) => {
 
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
       const label = agent === 'hermes' ? 'Hermes'
+        : agent === 'free-claude-code' ? 'Free Claude Code'
         : (freeModels.findById(agent)?.label || (agent === 'claude' ? 'Claude' : agent));
       const saved = appendExchange(convId, label, lastUser ? lastUser.content : '', full);
       send({ type: 'done', reqId, full, saved });
