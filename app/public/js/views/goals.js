@@ -1,5 +1,7 @@
 // goals.js — Goals surface: stat tiles, add-goal row, filter chips, goal list. Full CRUD against /api/goals.
 
+import { attachMic } from './speech-to-text.js';
+
 const CATEGORIES = ['General', 'Work', 'Personal', 'Learning', 'Health'];
 
 let state = {
@@ -163,6 +165,10 @@ export async function render(mount) {
   document.getElementById('goals-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addGoal();
   });
+
+  // Voice drafting into the goal input. Button is disabled in the template; attachMic
+  // re-enables it only when the browser exposes SpeechRecognition (honest-disable otherwise).
+  attachMic(document.querySelector('.goals-mic-btn'), document.getElementById('goals-input'));
 
   document.getElementById('goals-chips').addEventListener('click', (e) => {
     const chip = e.target.closest('.goals-chip');

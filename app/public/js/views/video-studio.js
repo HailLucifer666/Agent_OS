@@ -2,8 +2,10 @@
 // "Write the script" calls POST /api/video/script (Claude CLI, genuinely live, no key
 // needed). "Generate Avatar + B-roll" calls POST /api/video/assets, which orchestrates
 // HeyGen/ElevenLabs + MiniMax/Grok (all key-gated, honest-inert without keys).
-// Combined multi-asset rendering ("Edit + Render") is out of scope for this pass —
-// assets are saved individually and listed in Workspace.
+// Combined multi-asset rendering ("Edit + Render") composes saved assets via ffmpeg on
+// POST /api/video/render — see Workstream D of Sprint 6.
+
+import { attachMic } from './speech-to-text.js';
 
 const STEPS = [
   { key: 'brief', label: 'Brief', icon: '&#10022;' },
@@ -91,6 +93,9 @@ export async function render(mount) {
               <textarea class="video-brief-textarea" id="video-script-textarea" rows="8"></textarea>
               <button type="button" class="video-write-script-btn" id="video-generate-assets-btn">
                 <span class="video-write-script-icon">&#127916;</span> Generate Avatar + B-roll
+              </button>
+              <button type="button" class="video-write-script-btn video-render-btn" id="video-render-btn" hidden>
+                <span class="video-write-script-icon">&#9986;</span> Render final video
               </button>
               <div class="video-asset-status" id="video-asset-status" hidden>
                 <div class="video-asset-status-row"><span id="video-avatar-status-label">Avatar</span> <span id="video-avatar-status-value" class="mono">pending&hellip;</span></div>
@@ -187,10 +192,14 @@ export async function render(mount) {
   // Brief textarea + write script
   const briefTextarea = mount.querySelector('#video-brief-textarea');
   const writeScriptBtn = mount.querySelector('#video-write-script-btn');
+  // Voice drafting into the brief textarea (honest-disable if browser lacks SpeechRecognition).
+  attachMic(mount.querySelector('.video-mic-btn'), briefTextarea);
   const phase2Note = mount.querySelector('#video-phase2-note');
   const scriptBlock = mount.querySelector('#video-script-block');
   const scriptTextarea = mount.querySelector('#video-script-textarea');
   const generateAssetsBtn = mount.querySelector('#video-generate-assets-btn');
+  const renderBtn = mount.querySelector('#video-render-btn');
+  let lastSlug = null;
   const assetStatus = mount.querySelector('#video-asset-status');
   const avatarStatusValue = mount.querySelector('#video-avatar-status-value');
   const brollStatusValue = mount.querySelector('#video-broll-status-value');
@@ -335,7 +344,15 @@ export async function render(mount) {
       avatarStatusValue.textContent = avatarSaved ? 'done' : `error — ${avatarErr ? avatarErr.message : 'unknown'}`;
       brollStatusValue.textContent = brollSaved ? 'done' : `error — ${brollErr ? brollErr.message : 'unknown'}`;
 
-      setNote(assetsNote, 'Assets generated — combined render (Edit + Render) lands next.');
+      lastSlug = data.slug || null;
+      if (lastSlug && (avatarSaved || brollSaved)) {
+        setNote(assetsNote, 'Assets generated — ready to render. Click "Render final video" to combine via ffmpeg.');
+        renderBtn.hidden = false;
+        renderBtn.disabled = false;
+      } else {
+        setNote(assetsNote, 'Assets generated, but none saved — nothing to render yet.');
+        renderBtn.hidden = true;
+      }
       await loadWorkspace();
     } catch (err) {
       setNote(assetsNote, err.message);
@@ -347,6 +364,44 @@ export async function render(mount) {
     }
   }
   generateAssetsBtn.addEventListener('click', triggerGenerateAssets);
+
+  let rendering = false;
+  async function triggerRender() {
+    if (rendering || !lastSlug) return;
+    rendering = true;
+    renderBtn.disabled = true;
+    const originalLabel = renderBtn.innerHTML;
+    renderBtn.innerHTML = '<span class="video-write-script-icon">&#9203;</span> Rendering…';
+    setNote(assetsNote, 'Rendering via ffmpeg — combining narrator + b-roll into final.mp4…');
+    try {
+      const res = await fetch('/api/video/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: lastSlug }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `render failed (${res.status})`);
+      activeStepIndex = 3;
+      refreshStepper();
+      setNote(assetsNote, `Rendered (${data.mode}) → `);
+      // Append a clickable link to the final mp4 after the note text.
+      const link = document.createElement('a');
+      link.href = data.finalPath;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'final.mp4';
+      link.style.cssText = 'color: var(--accent-video, #e05252); text-decoration: underline;';
+      assetsNote.appendChild(link);
+      await loadWorkspace();
+    } catch (err) {
+      setNote(assetsNote, err.message);
+    } finally {
+      rendering = false;
+      renderBtn.disabled = false;
+      renderBtn.innerHTML = originalLabel;
+    }
+  }
+  renderBtn.addEventListener('click', triggerRender);
 
   async function loadWorkspace() {
     try {

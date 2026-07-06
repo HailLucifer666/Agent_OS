@@ -1,5 +1,7 @@
 // free-claude.js — Free Claude Code surface: Agent Factory (voice/text build UI) + Chat & Workspace placeholder.
 
+import { attachMic } from './speech-to-text.js';
+
 const CHIPS = [
   'build me a neon galaxy game',
   'make a rainbow particle fountain I can click',
@@ -152,12 +154,11 @@ function wireFactory(mount) {
     });
   });
 
-  let tooltipTimer;
-  mic.addEventListener('click', () => {
-    micTooltip.hidden = false;
-    clearTimeout(tooltipTimer);
-    tooltipTimer = setTimeout(() => { micTooltip.hidden = true; }, 2200);
-  });
+  // Voice drafting into the build-idea input. Hides the old "Phase 2" tooltip permanently —
+  // the helper sets an honest tooltip (supported browser: "Listening…"; unsupported: disabled w/ reason).
+  micTooltip.hidden = true;
+  micTooltip.textContent = '';
+  attachMic(mic, input);
 
   let noteTimer;
   buildBtn.addEventListener('click', () => {

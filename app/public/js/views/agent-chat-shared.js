@@ -4,6 +4,7 @@
 // Wired agents (config.wired): real streaming via ws.js, message history, vault auto-save.
 
 import { chatStream } from '../ws.js';
+import { attachMic } from './speech-to-text.js';
 
 const DEFAULT_PROFILES = ['default', 'julian', 'local', 'blank-slate', 'north-mini', 'glm-5-2', 'ollama-glm-512', 'game-dev', 'seo-lead', 'grok-build', 'qwen-3-7', 'kimi-k2-7', 'content-editor'];
 
@@ -90,7 +91,7 @@ export async function renderAgentChat(mount, config) {
           </div>
 
           <div class="chat-composer">
-            <button type="button" class="chat-mic-btn" aria-label="Voice input" title="Voice input (not wired yet)">&#127908;</button>
+            <button type="button" class="chat-mic-btn" aria-label="Voice input" title="Voice input — click to dictate (drafts into the box; you send).">&#127908;</button>
             <input type="text" class="chat-input" id="chat-input-${id}" placeholder="Message ${escapeHtml(name)}... (&#8984;+Enter)" />
             <button type="button" class="chat-send-btn" id="chat-send-${id}">Send</button>
           </div>
@@ -134,6 +135,9 @@ export async function renderAgentChat(mount, config) {
   const input = surface.querySelector(`#chat-input-${id}`);
   const sendBtn = surface.querySelector(`#chat-send-${id}`);
   const transcript = surface.querySelector(`#chat-transcript-${id}`);
+
+  // Voice drafting into the composer input (Web Speech API; honest-disable if unsupported).
+  const detachMic = attachMic(surface.querySelector('.chat-mic-btn'), input);
 
   function isAtBottom() {
     return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 24;
@@ -184,6 +188,7 @@ export async function renderAgentChat(mount, config) {
 
     return () => {
       input.removeEventListener('keydown', onKeydownUnwired);
+      detachMic();
     };
   }
 
@@ -304,5 +309,6 @@ export async function renderAgentChat(mount, config) {
   return () => {
     input.removeEventListener('keydown', onKeydownWired);
     if (activeStream) activeStream.stop();
+    detachMic();
   };
 }
