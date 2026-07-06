@@ -275,13 +275,13 @@ gantt
     dateFormat YYYY-MM-DD
     axisFormat %b
     section Shipped
-    Sprint 1 — Runnable core          :done, s1, 2026-06-20, 4d
-    Sprint 2 — ZCode + NIM reasoning  :done, s2, after s1, 3d
-    Sprint 3 — node:test safety net   :done, s3, after s2, 3d
-    Sprint 4 — Free fleet + quota     :done, s4, after s3, 4d
-    Sprint 5 — Edge TTS (322 voices)  :done, s5, after s4, 2d
-    Sprint 6 — Close Phase 2 gaps     :done, s6, after s5, 3d
-    Sprint 7 — Land + harden          :done, s7, after s6, 2d
+    Sprint 1 Runnable core          :done, s1, 2026-06-20, 4d
+    Sprint 2 ZCode + NIM reasoning  :done, s2, after s1, 3d
+    Sprint 3 node-test safety net   :done, s3, after s2, 3d
+    Sprint 4 Free fleet + quota     :done, s4, after s3, 4d
+    Sprint 5 Edge TTS 322 voices    :done, s5, after s4, 2d
+    Sprint 6 Close Phase 2 gaps     :done, s6, after s5, 3d
+    Sprint 7 Land + harden          :done, s7, after s6, 2d
 ```
 
 | Sprint | Scope |
