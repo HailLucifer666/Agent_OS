@@ -13,6 +13,7 @@ This document captures the sprint history and what is intentionally deferred, so
 | 5 | (same) | Free Microsoft Neural TTS via edge-tts (322 voices) | ✅ Shipped (`7de3a6d`) |
 | 6 | `sprint-6-close-phase-2-gaps` | Close documented "Phase 2" UI gaps | ✅ Shipped (5 commits) — see below |
 | 7 | `main` (direct) | Land sprints 1–6 to main, then harden | ✅ Shipped (8 commits) — see below |
+| 8 | `sprint-8-free-claude-builder` | Wire Free Claude Code Agent Factory + Chat & Workspace | ✅ Shipped (see below) |
 
 ### Sprint 6 — Close Phase 2 gaps
 
@@ -43,6 +44,17 @@ Fast-forward merged sprint-6 to `main` (11 commits, zero conflicts). Then harden
 
 98 tests green throughout. No new npm dependencies — deliberate minimalism (3 prod deps, 0 dev deps).
 
+### Sprint 8 — Wire Free Claude Code
+
+| Workstream | Outcome |
+|------------|---------|
+| Agent Factory build | `POST /api/free-claude/build` endpoint via reasoning engine chain (ZCode → NIM → Claude CLI). Builds save single-file HTML to `vault/builds/free-claude/`. Same pattern as Game Studio. |
+| Chat & Workspace | WebSocket agent `free-claude-code` wired to Claude CLI (defaults to `FREE_CLAUDE_MODEL` or haiku). Real streaming, vault auto-save, stop support. |
+| `saveDeliverable()` refactor | Extracted `kind` parameter so builds save to the correct `vault/builds/{kind}/` subfolder instead of hard-coded `pipeline/`. |
+| Phase 2 placeholders removed | Build button now triggers real builds. Chat tab streams live. Gallery auto-refreshes after builds. |
+
+102 tests green. No new npm dependencies.
+
 ## Intentionally deferred
 
 These are out of scope by design, not oversights:
@@ -59,7 +71,6 @@ Gathered from the `.kilo` gap audit and code comments — not committed, ranked 
 
 - **Radar X/Grok live API wiring** — Sprint 6 closed the gap with a free RSS MVP; the original vision was paid X/Grok APIs for higher-signal sourcing.
 - **Video Studio: Create + Avatar tabs** — currently "coming in Phase 2" placeholders.
-- **Free Claude Code: full builder wiring** — the Agent Factory UI exists; the Claude Code CLI plumbing into that specific view is incomplete.
 - **Omi device sync** — Memory surface is vault-wired already; physical Omi recorder sync is a device-integration feature.
 - **Session picker for Claude Code `--resume`** — the flag works; there's no UI to choose which past session to resume.
 - **Hermes Goal Mode / profiles / Jarvis / MCP tabs** — listed placeholders.

@@ -406,6 +406,78 @@
   gap: 10px;
 }
 
+.fcc-mic-sm {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--status-ok);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.fcc-mic-sm:hover {
+  background: rgba(74, 222, 128, 0.25);
+}
+
+.fcc-build-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.fcc-build-note-error {
+  color: var(--status-error, #ef4444);
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.fcc-chat-msg-assistant {
+  align-self: flex-start;
+  background: var(--bg-raised-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fcc-chat-msg-streaming::after {
+  content: '\25ae';
+  animation: fcc-blink 0.6s steps(2) infinite;
+  color: var(--status-ok);
+  margin-left: 2px;
+}
+
+@keyframes fcc-blink {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.fcc-chat-msg-error {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.fcc-chat-empty .fcc-kbd-row {
+  margin-top: 12px;
+}
+
+.fcc-chat-empty .fcc-kbd-row kbd {
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-raised-2);
+  font-size: 11px;
+}
+
 @media (max-width: 900px) {
   .fcc-columns {
     grid-template-columns: 1fr;

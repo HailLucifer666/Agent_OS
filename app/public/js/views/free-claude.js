@@ -1,6 +1,9 @@
-// free-claude.js — Free Claude Code surface: Agent Factory (voice/text build UI) + Chat & Workspace placeholder.
+// free-claude.js — Free Claude Code surface: Agent Factory (voice/text build UI) + Chat & Workspace.
+// Build button POSTs to /api/free-claude/build (reasoning engine chain).
+// Chat tab streams via WebSocket agent 'free-claude-code' (Claude CLI).
 
 import { attachMic } from './speech-to-text.js';
+import { chatStream } from '../ws.js';
 
 const CHIPS = [
   'build me a neon galaxy game',
@@ -22,13 +25,12 @@ function factoryTemplate() {
         </div>
 
         <div class="fcc-toggles">
-          <button type="button" class="fcc-toggle active" data-toggle="ondevice">&#9889; On-device</button>
-          <button type="button" class="fcc-toggle" data-toggle="n2">&#10022; N2 smarter</button>
+          <button type="button" class="fcc-toggle active" data-toggle="ondevice">&#9889; Fast (on-device)</button>
+          <button type="button" class="fcc-toggle" data-toggle="n2">&#10022; N2 (NIM)</button>
         </div>
 
         <div class="fcc-mic-wrap">
           <button type="button" class="fcc-mic" id="fcc-mic" aria-label="Voice input">&#127908;</button>
-          <div class="fcc-mic-tooltip" id="fcc-mic-tooltip" hidden>Voice input lands in Phase 2</div>
         </div>
         <div class="fcc-mic-helper">Tap the mic and say what to build &mdash; or type it.</div>
 
@@ -36,7 +38,7 @@ function factoryTemplate() {
           <input type="text" class="fcc-input" id="fcc-input" placeholder="...or type: build me a neon galaxy game" />
           <button type="button" class="fcc-build-btn" id="fcc-build-btn">&#128295; Build</button>
         </div>
-        <div class="fcc-build-note" id="fcc-build-note" hidden>Live building lands in Phase 2 &mdash; Claude Code CLI wiring required.</div>
+        <div class="fcc-build-note" id="fcc-build-note" hidden></div>
 
         <div class="fcc-chips">
           ${CHIPS.map((c) => `<button type="button" class="fcc-chip">${c}</button>`).join('')}
@@ -60,7 +62,6 @@ function factoryTemplate() {
             <div class="fcc-empty-icon">&#128295;</div>
             <div class="fcc-empty-title">Say or type an idea on the left &mdash; it builds here, live, for $0.</div>
             <div class="fcc-empty-sub">&#9655; or tap a build in the gallery below to play it</div>
-            <div class="fcc-empty-footnote text-faint">Previews stay paused until you start one &mdash; keeps things cool.</div>
           </div>
         </div>
       </div>
@@ -71,13 +72,18 @@ function factoryTemplate() {
 function chatTemplate() {
   return `
     <div class="fcc-panel fcc-chat fade-in">
-      <div class="fcc-chat-empty">
-        <div class="fcc-empty-icon">&#128172;</div>
-        <div class="fcc-empty-title">Workspace coming in Phase 2</div>
-        <div class="fcc-empty-sub text-faint">Chat with Free Claude Code and manage files in one place.</div>
+      <div class="fcc-chat-transcript" id="fcc-chat-transcript">
+        <div class="fcc-chat-empty">
+          <div class="fcc-empty-icon">&#128172;</div>
+          <div class="fcc-empty-title">Chat with Free Claude Code</div>
+          <div class="fcc-empty-sub text-faint">Ask questions, refine ideas, get help. Every exchange auto-saves.</div>
+          <div class="fcc-kbd-row">
+            <kbd class="mono">&#8984;+Enter</kbd> send &middot; <kbd class="mono">Esc</kbd> stop
+          </div>
+        </div>
       </div>
-      <div class="fcc-chat-transcript" id="fcc-chat-transcript"></div>
       <div class="fcc-chat-composer">
+        <button type="button" class="fcc-mic-sm" id="fcc-chat-mic" aria-label="Voice input">&#127908;</button>
         <input type="text" class="fcc-input" id="fcc-chat-input" placeholder="Message Free Claude Code..." />
         <button type="button" class="fcc-build-btn" id="fcc-chat-send">Send</button>
       </div>
@@ -105,7 +111,7 @@ async function loadBuilds(mount) {
     const builds = data.builds || [];
     countEl.textContent = builds.length;
     if (builds.length === 0) {
-      list.innerHTML = `<div class="fcc-builds-empty text-faint">No builds yet &mdash; this list populates as Phase 2 wiring lands.</div>`;
+      list.innerHTML = `<div class="fcc-builds-empty text-faint">No builds yet &mdash; describe something above and Build it.</div>`;
       return;
     }
     list.innerHTML = builds.map(buildItemTemplate).join('');
@@ -133,12 +139,18 @@ function selectBuild(mount, { title, path }) {
   }
 }
 
+function setNote(mount, text, isError = false) {
+  const note = mount.querySelector('#fcc-build-note');
+  if (!note) return;
+  note.hidden = !text;
+  note.textContent = text || '';
+  note.classList.toggle('fcc-build-note-error', isError);
+}
+
 function wireFactory(mount) {
   const input = mount.querySelector('#fcc-input');
   const buildBtn = mount.querySelector('#fcc-build-btn');
-  const buildNote = mount.querySelector('#fcc-build-note');
   const mic = mount.querySelector('#fcc-mic');
-  const micTooltip = mount.querySelector('#fcc-mic-tooltip');
 
   mount.querySelectorAll('.fcc-toggle').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -154,17 +166,42 @@ function wireFactory(mount) {
     });
   });
 
-  // Voice drafting into the build-idea input. Hides the old "Phase 2" tooltip permanently —
-  // the helper sets an honest tooltip (supported browser: "Listening…"; unsupported: disabled w/ reason).
-  micTooltip.hidden = true;
-  micTooltip.textContent = '';
   attachMic(mic, input);
 
-  let noteTimer;
-  buildBtn.addEventListener('click', () => {
-    buildNote.hidden = false;
-    clearTimeout(noteTimer);
-    noteTimer = setTimeout(() => { buildNote.hidden = true; }, 4000);
+  let building = false;
+  async function buildNow() {
+    const prompt = input.value.trim();
+    if (!prompt || building) return;
+    building = true;
+    buildBtn.disabled = true;
+    setNote(mount, 'Building\u2026 the agent is writing your app. This can take a minute or two.');
+    try {
+      const res = await fetch('/api/free-claude/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `build failed (${res.status})`);
+      input.value = '';
+      setNote(mount, 'Built \u2726');
+      await loadBuilds(mount);
+      if (data.build && data.build.path) selectBuild(mount, { title: data.build.title || data.build.name, path: data.build.path });
+      setTimeout(() => setNote(mount, ''), 3000);
+    } catch (err) {
+      setNote(mount, `Build failed: ${err.message}`, true);
+    } finally {
+      building = false;
+      buildBtn.disabled = false;
+    }
+  }
+
+  buildBtn.addEventListener('click', buildNow);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      buildNow();
+    }
   });
 
   loadBuilds(mount);
@@ -174,19 +211,119 @@ function wireChat(mount) {
   const input = mount.querySelector('#fcc-chat-input');
   const sendBtn = mount.querySelector('#fcc-chat-send');
   const transcript = mount.querySelector('#fcc-chat-transcript');
+  const micBtn = mount.querySelector('#fcc-chat-mic');
 
-  sendBtn.addEventListener('click', () => {
+  const detachMic = attachMic(micBtn, input);
+
+  const convId = crypto.randomUUID();
+  const messages = [];
+  let activeStream = null;
+  let hasSavedOnce = false;
+
+  function clearEmpty() {
+    const empty = transcript.querySelector('.fcc-chat-empty');
+    if (empty) empty.remove();
+  }
+
+  function isAtBottom() {
+    return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 24;
+  }
+
+  function addNote(text) {
+    const note = document.createElement('div');
+    note.className = 'fcc-chat-msg fcc-chat-msg-system';
+    note.textContent = text;
+    transcript.appendChild(note);
+  }
+
+  function addErrorNote(text) {
+    const note = document.createElement('div');
+    note.className = 'fcc-chat-msg fcc-chat-msg-system fcc-chat-msg-error';
+    note.textContent = text;
+    transcript.appendChild(note);
+  }
+
+  function setStreaming(streaming) {
+    sendBtn.disabled = streaming;
+  }
+
+  function sendMessage() {
     const text = input.value.trim();
-    if (!text) return;
-    transcript.insertAdjacentHTML('beforeend', `<div class="fcc-chat-msg fcc-chat-msg-user">${text}</div>`);
-    transcript.insertAdjacentHTML('beforeend', `<div class="fcc-chat-msg fcc-chat-msg-system text-faint">Live agent wiring lands in Phase 2 &mdash; this is a UI preview.</div>`);
+    if (!text || activeStream) return;
+
+    clearEmpty();
+
+    const userBubble = document.createElement('div');
+    userBubble.className = 'fcc-chat-msg fcc-chat-msg-user';
+    userBubble.textContent = text;
+    transcript.appendChild(userBubble);
+
+    messages.push({ role: 'user', content: text });
     input.value = '';
-    transcript.scrollTop = transcript.scrollHeight;
-  });
+
+    const assistantBubble = document.createElement('div');
+    assistantBubble.className = 'fcc-chat-msg fcc-chat-msg-assistant fcc-chat-msg-streaming';
+    transcript.appendChild(assistantBubble);
+
+    const shouldScroll = isAtBottom();
+    if (shouldScroll) transcript.scrollTop = transcript.scrollHeight;
+
+    setStreaming(true);
+
+    activeStream = chatStream({
+      agent: 'free-claude-code',
+      convId,
+      messages,
+      onToken: (token) => {
+        assistantBubble.appendChild(document.createTextNode(token));
+        if (isAtBottom()) transcript.scrollTop = transcript.scrollHeight;
+      },
+      onDone: (msg) => {
+        assistantBubble.classList.remove('fcc-chat-msg-streaming');
+        messages.push({ role: 'assistant', content: msg.full });
+        activeStream = null;
+        setStreaming(false);
+        if (!hasSavedOnce && msg.saved) {
+          hasSavedOnce = true;
+          addNote(`saved \u00b7 ${msg.saved}`);
+        }
+        if (isAtBottom()) transcript.scrollTop = transcript.scrollHeight;
+      },
+      onError: (message) => {
+        assistantBubble.classList.remove('fcc-chat-msg-streaming');
+        activeStream = null;
+        setStreaming(false);
+        addErrorNote(message);
+      },
+    });
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
 
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendBtn.click();
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      sendMessage();
+    } else if (e.key === 'Escape') {
+      if (activeStream) {
+        activeStream.stop();
+        activeStream = null;
+        setStreaming(false);
+        const streamingBubble = transcript.querySelector('.fcc-chat-msg-streaming');
+        if (streamingBubble) {
+          streamingBubble.classList.remove('fcc-chat-msg-streaming');
+          streamingBubble.appendChild(document.createTextNode(' \u00b7 stopped'));
+        }
+      } else {
+        input.blur();
+      }
+    }
   });
+
+  return () => {
+    detachMic();
+    if (activeStream) activeStream.stop();
+  };
 }
 
 export async function render(mount) {
@@ -199,15 +336,20 @@ export async function render(mount) {
   `;
 
   const content = mount.querySelector('#fcc-tab-content');
+  let chatCleanup = null;
 
   function showTab(tab) {
+    if (chatCleanup) {
+      try { chatCleanup(); } catch { /* ignore */ }
+      chatCleanup = null;
+    }
     mount.querySelectorAll('.fcc-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     if (tab === 'factory') {
       content.innerHTML = factoryTemplate();
       wireFactory(content);
     } else {
       content.innerHTML = chatTemplate();
-      wireChat(content);
+      chatCleanup = wireChat(content);
     }
   }
 
