@@ -1,10 +1,28 @@
 // mission-control.js — exemplar surface: status tiles, agent cards, embedded panels.
 
+// One card per chat-capable agent. Drives from data.agents so the grid grows with the fleet.
+// `edge-tts` is a TTS service (Voice Studio), not a chat agent — exclude it from control-room cards.
+const NON_CHAT_AGENTS = new Set(['edge-tts']);
+
 const AGENT_CARD_META = {
-  claude: { name: 'Claude', avatarBg: 'var(--accent-claude)', tint: 'var(--accent-claude)', icon: '+', desc: 'Direct streaming line to Claude Code. Full tool use, MCPs, plugins.' },
-  hermes: { name: 'Hermes', avatarBg: 'var(--accent-hermes)', tint: 'var(--accent-hermes)', icon: '✟', desc: 'Nous Research agent. Tool calls, kanban, skills, plugins.' },
-  groq: { name: 'Groq', avatarBg: 'var(--accent-groq)', tint: 'var(--accent-groq)', icon: '⚡', desc: 'Fastest free LPU inference. Llama 3.3 70B. ~30 RPM.' },
+  claude:          { name: 'Claude',          tint: 'var(--accent-claude)',          icon: '+', desc: 'Direct streaming line to Claude Code. Full tool use, MCPs, plugins.' },
+  hermes:          { name: 'Hermes',          tint: 'var(--accent-hermes)',          icon: '✟', desc: 'Nous Research agent. Tool calls, kanban, skills, plugins.' },
+  groq:            { name: 'Groq',            tint: 'var(--accent-groq)',            icon: '⚡', desc: 'Fastest free LPU inference. Llama 3.3 70B. ~30 RPM.' },
+  'openrouter-free': { name: 'OpenRouter Free', tint: 'var(--accent-openrouter-free)', icon: '⇄', desc: 'Free auto-router across open models. ~50 req/day.' },
+  cerebras:        { name: 'Cerebras',        tint: 'var(--accent-cerebras)',        icon: '◈', desc: 'Wafer-scale inference. Llama 3.1 8B. ~1M tok/day.' },
+  mistral:         { name: 'Mistral',         tint: 'var(--accent-mistral)',         icon: '✦', desc: 'Mistral Small. ~1 req/sec free tier.' },
+  cloudflare:      { name: 'Cloudflare AI',   tint: 'var(--accent-cloudflare)',      icon: '☂', desc: 'Workers AI. Llama 3.3 70B. 10k Neurons/day.' },
+  zcode:           { name: 'ZCode',           tint: 'var(--accent-zcode)',           icon: 'Z', desc: 'Z.AI GLM-4.6. Primary reasoning engine for the orchestrator.' },
+  nim:             { name: 'NVIDIA NIM',      tint: 'var(--accent-nim)',             icon: 'N', desc: 'Nemotron-70B. Reasoning fallback after ZCode.' },
+  'free-claude':   { name: 'Free Claude Code', tint: 'var(--accent-claude)',         icon: '⚙', desc: 'Claude Code CLI as a builder. Agent Factory + game builds.' },
 };
+
+// Fallback for future agents not yet in AGENT_CARD_META — never block a card from rendering.
+function metaFor(id, label) {
+  const m = AGENT_CARD_META[id];
+  if (m) return { name: m.name, tint: m.tint, icon: m.icon, desc: m.desc };
+  return { name: label || id, tint: 'var(--text-faint)', icon: '•', desc: 'Agent — open to interact.' };
+}
 
 // Map server status strings (ONLINE/DEGRADED/OFFLINE) onto tile dot classes (ok/degraded/offline).
 function tileStatus(s) {
@@ -26,12 +44,12 @@ function tileTemplate({ label, icon, status, value, detail }) {
 }
 
 function agentCard(id, agentStatus) {
-  const meta = AGENT_CARD_META[id];
+  const meta = metaFor(id, agentStatus.label);
   const badgeClass = agentStatus.status === 'ONLINE' ? 'online' : agentStatus.status === 'OFFLINE' ? 'offline' : 'degraded';
   return `
     <div class="mc-agent-card fade-in" style="background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent); --card-tint:${meta.tint}" data-route="${id}">
       <div class="mc-agent-card-top">
-        <div class="mc-agent-avatar" style="background:${meta.avatarBg}">${meta.icon}</div>
+        <div class="mc-agent-avatar" style="background:${meta.tint}">${meta.icon}</div>
         <span class="mc-agent-badge ${badgeClass}"><span class="dot"></span>${agentStatus.status}</span>
       </div>
       <div class="mc-agent-name">${meta.name} <span class="text-faint" style="font-size:14px">&#8599;</span></div>
@@ -70,7 +88,6 @@ export async function render(mount) {
     try {
       const res = await fetch('/api/status');
       const data = await res.json();
-      const byId = Object.fromEntries(data.agents.map((a) => [a.id, a]));
 
       const tiles = document.getElementById('mc-tiles');
       // HEARTBEAT and LATENCY are static (sourced from data.heartbeat / data.latency, not agents).
@@ -95,7 +112,10 @@ export async function render(mount) {
       tiles.innerHTML = [...agentTiles, ...staticTiles].join('');
 
       const cards = document.getElementById('mc-agent-cards');
-      cards.innerHTML = ['claude', 'hermes', 'groq'].map((id) => agentCard(id, byId[id])).join('');
+      cards.innerHTML = data.agents
+        .filter((a) => !NON_CHAT_AGENTS.has(a.id))
+        .map((a) => agentCard(a.id, a))
+        .join('');
       cards.querySelectorAll('.mc-agent-card').forEach((card) => {
         card.addEventListener('click', () => {
           window.location.hash = `#/${card.dataset.route}`;
