@@ -15,3 +15,9 @@ app/.env
 Thumbs.db
 __pycache__/
 *.pyc
+
+# knowledge-graph build artifacts (regenerated locally via /graphify)
+graphify-out/
+
+# editor/planner scratch
+.kilo/
