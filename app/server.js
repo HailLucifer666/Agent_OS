@@ -77,6 +77,30 @@ const expensiveLimit = createLimiter({
 // parser, so even JSON-parse errors carry an id.
 app.use(requestLogger());
 
+// ---- Explicit CORS posture (H7) ----
+// The SPA is same-origin so it needs no CORS headers, but /api/* may be called
+// from other localhost dev tools or a browser extension. Default allowlist is
+// the dashboard's own localhost origin; extend with ALLOWED_ORIGINS (comma-sep).
+// Binding to 127.0.0.1 (H1) makes cross-network abuse impractical — this is an
+// explicit-intent posture, not a primary defense.
+const ALLOWED_ORIGINS = new Set([
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+  ...(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+]);
+app.use('/api', (req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 function requireEnv(name) {
   const v = process.env[name];
   if (!v || !v.trim()) {
