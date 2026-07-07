@@ -147,6 +147,49 @@ Nine dedicated chat surfaces, all streaming over `/ws` with vault auto-save:
 | **The Radar** | Free RSS signal aggregation (configure feeds via `RADAR_FEEDS`). Server-side fetch to avoid CORS. X/Grok paid APIs are a future enhancement. |
 | **Free Claude Code** | Agent Factory UI for $0 local builds. *UI-ready; Claude Code CLI wiring into this view is in progress.* |
 
+### 🎤 Voice Control — hands-free dashboard + computer access (Phase 1 + Phase 2)
+
+#### Phase 1: Browser push-to-talk (included, always on)
+**Hold Space** (or click the mic pill in the header) to speak a command. Your browser's native speech recognition (works in Chrome, Edge, Safari) sends audio to a local Ollama model, which interprets the utterance and executes tools — no voice transcription sent to the cloud.
+
+**What you can do:**
+- **Dashboard:** navigate to a surface, create/list/toggle/delete goals, capture a pipeline idea, list/advance/execute cards, build/assemble kanban items, ask an agent, check session status, kill a session by PID.
+- **Computer:** open a folder in File Explorer, list a folder's contents, read a text file, compose an email (drafts the text; opens your mail client or Gmail compose — you click Send, nothing is auto-sent).
+
+**Safety first:** dangerous actions (delete a goal, execute a card, assemble/build a kanban item, kill a session) require an explicit spoken confirmation — say "yes" when prompted. Confirmations expire after 30 seconds.
+
+**Configuration:**
+- Requires a local Ollama model running with JSON tool-calling capability (e.g., `qwen3`, `llama3.1-8B`).
+- Spoken replies use the same edge-tts service as Voice Studio; falls back to the browser's speech synthesis if edge-tts isn't running.
+- Filesystem access is sandboxed to folders you specify in `VOICE_ALLOWED_DIRS` (defaults to your home directory).
+- See `app/.env.example` for all tuning: `VOICE_ENABLED`, `VOICE_OLLAMA_MODEL`, `VOICE_TTS_VOICE`, `VOICE_CONFIRM_TTL_MS`, `VOICE_EMAIL_MODE`.
+
+**Honest degradation:** The mic pill shows `VOICE OFFLINE` if Ollama is unreachable. Tool errors surface plainly — no silent failures.
+
+#### Phase 2: Fully-local speech-to-speech (optional, off by default)
+Run a local speech-to-speech pipeline with **no browser tab open** — a true open-mic hands-free loop. The pipeline (Silero VAD + faster-whisper STT + Kokoro TTS) runs as a managed child process and uses the dashboard as its reasoning backend via an OpenAI-shaped `/voice/v1/chat/completions` endpoint. Same 20-tool agent brain as Phase 1; same danger confirmations.
+
+**To enable Phase 2:**
+1. Run `powershell -ExecutionPolicy Bypass -File app/services/setup-s2s.ps1` — installs the pipeline venv, downloads models (~2 GB first run), detects CUDA/CPU, verifies espeak-ng, lists audio devices.
+2. Set `S2S_AUTOSTART=true` in `app/.env` (off by default — it's heavier and more experimental than Phase 1).
+3. Server restarts automatically; watch `/api/voice/status` dashboard tile for `s2s` process state.
+
+**What Phase 2 adds:** hands-free without a browser tab, no Web Speech API dependency, true open-mic listening. **Known validation gap:** end-to-end live testing with a real installed pipeline and microphone has not been performed in this dev environment; see `app/services/README.md` section "Unverified in this environment" for the specific checklist items and how to verify them on a live install.
+
+**Honest caveats:** The upstream `speech-to-speech` Python project is untested on Windows; multi-GB model downloads; open-mic has no additional auth once enabled (stay on `127.0.0.1` loopback only). Phase 2 is experimental and opt-in.
+
+#### Phase 3: Voice HUD observability view (included, ready to use)
+A dedicated, same-tab live view of voice activity — what was heard, what tools ran with their arguments and results, agent replies, and pending confirmations — all in one causally-ordered feed. Accessible via the sidebar under Workspace (next to Mission Control and Agent Monitor).
+
+**What it shows:**
+- Merged chronological log of all voice events from the current browser tab since page load: utterances, tool calls (arguments + success/error), agent replies, and active confirmations.
+- Health panel: voice brain (Ollama) reachability, S2S child status (if enabled), TTS status, plus a mute toggle.
+- Interactive Confirm/Cancel banner for pending danger-tier confirmations, using the same underlying WebSocket mechanism as Phase 1 and Phase 2.
+
+**Scope (intentional):** This view shows activity only from the current browser tab, starting when the page loaded. It has no cross-tab history, no persistence across reload, and no access to activity that happened before the page opened. This is a deliberate investigation-backed choice, not a limitation to apologize for — the UI states this plainly.
+
+**Under the hood:** Pure client-side. The backend `/api/voice/status` endpoint is unchanged; the view consumes it for health status. A small extension to the existing Phase 1 `voice-control.js` module adds an in-memory event history and subscription API so this view (and future consumers) can observe voice activity. Zero changes to any server-side voice code (brain, tools, WebSocket protocol, or S2S transport).
+
 ### 🎬 Studio — generation surfaces
 
 | Surface | Engine | Status |
@@ -178,7 +221,7 @@ The reasoning engine (used by the orchestrator) resolves in priority order: **ZC
 | **Cloudflare AI** | chat | Llama 3.3 70B fp8 | 10,000 Neurons/day | Chat seat, Mastermind seat | ✅ |
 | **OpenRouter Free** | chat | `openrouter/free` router | ~50 req/day | Chat seat, Mastermind seat | ✅ |
 | **Edge TTS** | tts | 322 Microsoft Neural voices | Unlimited | Voice Studio, video narration | ⚠️ unofficial |
-| **Ollama** | chat | any local model | unlimited | Hermes seat | ✅ local |
+| **Ollama** | chat | any local model | unlimited | Hermes seat, Voice Control (Phase 1) | ✅ local |
 | **Claude Code CLI** | chat | claude (binary) | Anthropic key | Claude seat, reasoning fallback | ✅ |
 | OpenAI Images | media | `gpt-image-1` | paid | Thumbnail Studio | 🔧 key-gated |
 | Suno | media | Suno API | paid | Music Studio | 🔧 key-gated |
@@ -267,7 +310,7 @@ More captures in [`Dashboard Assets/built/`](Dashboard%20Assets/built/) — goal
 
 ## Roadmap
 
-Seven sprints shipped. Linear history on `main`. 98 tests green throughout, zero new dependencies added in any sprint.
+Eleven sprints shipped. Linear history on `main`. 240 tests green throughout, zero new dependencies added in any sprint.
 
 ```mermaid
 gantt
@@ -282,6 +325,11 @@ gantt
     Sprint 5 Edge TTS 322 voices    :done, s5, after s4, 2d
     Sprint 6 Close Phase 2 gaps     :done, s6, after s5, 3d
     Sprint 7 Land + harden          :done, s7, after s6, 2d
+    Sprint 8 Free Claude builder    :done, s8, after s7, 2d
+    Sprint 9 Radar improvements     :done, s9, after s8, 2d
+    Sprint 10 Voice Phase 1         :done, s10, after s9, 3d
+    Sprint 11 Voice Phase 2         :done, s11, after s10, 2d
+    Sprint 12 Voice Phase 3         :done, s12, after s11, 1d
 ```
 
 | Sprint | Scope |
@@ -293,6 +341,11 @@ gantt
 | **5** | Free Microsoft Neural TTS via edge-tts (322 voices, unofficial) |
 | **6** | Close Phase 2 gaps: full-fleet Mission Control cards, Web Speech voice input, Video Studio ffmpeg render, Radar RSS MVP. *(Memory Galaxy was already wired — verified, no change needed.)* |
 | **7** | Land sprints 1–6 to `main`, then harden: loopback bind, loopback-only kill endpoints, zero-dep rate limiter, structured JSON logger + requestId, centralized error middleware, graceful shutdown, explicit CORS, this README + ROADMAP |
+| **8** | Wire Free Claude Code Agent Factory + Chat & Workspace |
+| **9** | Free-only Radar improvements: dedup, keyword scoring, Draft this button |
+| **10** | Voice Control Phase 1: hands-free push-to-talk, Ollama JSON agent, 20-tool catalog, confirmation gating on danger actions, pre-ship security audit |
+| **11** | Voice Control Phase 2: fully-local speech-to-speech pipeline (Silero VAD + faster-whisper + Kokoro TTS) as optional child process, browser-free open-mic, confirmation fix + transport-agnostic brain, security review, test growth |
+| **12** | Voice Control Phase 3: Voice HUD observability view, merged chronological log, health panel, confirmation banner, same-tab-only scope, zero server changes |
 
 Full history with per-commit detail in [`ROADMAP.md`](ROADMAP.md).
 

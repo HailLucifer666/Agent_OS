@@ -134,7 +134,9 @@ function start() {
   started = true;
   pollMs = Number(process.env.AGENT_MONITOR_POLL_MS) || 5000;
   pollTick();
-  intervalHandle = setInterval(pollTick, pollMs);
+  // unref() so this interval never keeps a process (e.g. a `node --test` subprocess that
+  // requires server.js, which calls start() unconditionally at module load) alive on its own.
+  intervalHandle = setInterval(pollTick, pollMs).unref();
 }
 
 function getState() {

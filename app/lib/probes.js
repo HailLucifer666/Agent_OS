@@ -3,13 +3,16 @@ const http = require('http');
 const { spawnSync } = require('child_process');
 const { FREE_PROVIDERS } = require('./free-models');
 const edgeTtsProvider = require('./providers/edge-tts');
+const modelRegistry = require('./models/registry');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const PROBE_TIMEOUT_MS = 800;
 const DEFAULT_CHAT_MODEL = process.env.OLLAMA_MODEL || 'qwen3:latest';
 
 let heartbeatTicks = 0;
-setInterval(() => { heartbeatTicks += 1; }, 4000);
+// unref() so this interval never keeps the process (or a `node --test` subprocess
+// that merely requires this module) alive on its own.
+setInterval(() => { heartbeatTicks += 1; }, 4000).unref();
 
 // Detect claude CLI once at module load; cache the result.
 function detectClaudeCli() {
@@ -112,8 +115,12 @@ async function getStatus() {
   const latencies = [ollama.ok ? ollama.latency : null].filter((v) => v !== null);
   const p50 = latencies.length ? latencies.sort((a, b) => a - b)[Math.floor(latencies.length / 2)] : null;
 
+  // Voice-brain fallback chain (Phase A): honest-inert if the probe itself throws.
+  const models = await modelRegistry.getStatus().catch((err) => ({ error: err.message }));
+
   return {
     ollama,
+    models,
     keys: {
       openrouter: openrouterKey,
       anthropic: anthropicKey,

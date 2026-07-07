@@ -7,6 +7,7 @@ let backoffMs = 500;
 const BACKOFF_MAX_MS = 8000;
 const sendQueue = [];
 const handlers = new Map(); // reqId -> handler callbacks
+const broadcastHandlers = new Map(); // msg.type -> Set<fn>, for reqId-less server broadcasts
 let reqCounter = 0;
 
 function nextReqId() {
@@ -50,7 +51,13 @@ function connect() {
       return;
     }
     const handler = handlers.get(msg.reqId);
-    if (handler) handler(msg);
+    if (handler) {
+      handler(msg);
+      return;
+    }
+    // No reqId handler matched (or no reqId at all) — dispatch as a broadcast by msg.type.
+    const listeners = broadcastHandlers.get(msg.type);
+    if (listeners) listeners.forEach((fn) => fn(msg));
   });
 
   socket.addEventListener('close', () => {
@@ -123,4 +130,51 @@ export function roomStream({ convId, text, mention, onSeatStart, onToken, onSeat
   sendMessage({ type: 'room', reqId, convId, text, mention });
 
   return { stop: () => stopRequest(reqId) };
+}
+
+// Register a listener for server broadcasts (messages with no matching reqId handler,
+// dispatched by msg.type — e.g. `voice-ui`, `job-update`). Returns nothing; pair with offBroadcast.
+export function onBroadcast(type, fn) {
+  connect();
+  if (!broadcastHandlers.has(type)) broadcastHandlers.set(type, new Set());
+  broadcastHandlers.get(type).add(fn);
+}
+
+export function offBroadcast(type, fn) {
+  const listeners = broadcastHandlers.get(type);
+  if (!listeners) return;
+  listeners.delete(fn);
+  if (listeners.size === 0) broadcastHandlers.delete(type);
+}
+
+// voiceStream — one push-to-talk turn: send a single voice-utterance (or voice-confirm-reply)
+// and route the server's per-turn replies (voice-status/voice-action/voice-confirm/voice-say/voice-done)
+// back through the matching callback. Mirrors chatStream/roomStream's reqId lifecycle exactly.
+export function voiceStream({ text, mode = 'browser', reqId: existingReqId, confirmId, accept,
+  onStatus, onAction, onConfirm, onSay, onDone }) {
+  connect();
+  const reqId = existingReqId || nextReqId();
+
+  handlers.set(reqId, (msg) => {
+    if (msg.type === 'voice-status') {
+      if (onStatus) onStatus(msg);
+    } else if (msg.type === 'voice-action') {
+      if (onAction) onAction(msg);
+    } else if (msg.type === 'voice-confirm') {
+      if (onConfirm) onConfirm(msg);
+    } else if (msg.type === 'voice-say') {
+      if (onSay) onSay(msg);
+    } else if (msg.type === 'voice-done') {
+      handlers.delete(reqId);
+      if (onDone) onDone(msg);
+    }
+  });
+
+  if (confirmId) {
+    sendMessage({ type: 'voice-confirm-reply', reqId, confirmId, accept: !!accept });
+  } else {
+    sendMessage({ type: 'voice-utterance', reqId, text, mode });
+  }
+
+  return { reqId, stop: () => stopRequest(reqId) };
 }

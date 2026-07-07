@@ -32,6 +32,15 @@ const radarFeeds = require('./lib/radar-feeds');
 const { createLimiter } = require('./lib/rate-limit');
 const { log, requestLogger } = require('./lib/logger');
 const crypto = require('crypto');
+const modelRegistry = require('./lib/models/registry');
+const voiceAgent = require('./lib/voice/voice-agent');
+const voiceTts = require('./lib/voice/tts');
+const confirm = require('./lib/voice/confirm');
+const voiceToolsDashboard = require('./lib/voice/tools-dashboard');
+const { createS2sCompletionsRouter } = require('./lib/voice/s2s-completions');
+const s2sChild = require('./lib/voice/s2s-child');
+const pcChild = require('./lib/voice/pc-child');
+const browserAgent = require('./lib/voice/browser-agent');
 
 const PORT = process.env.PORT || 4477;
 // Bind to loopback by default so the dashboard (and the process-killing monitor
@@ -104,7 +113,7 @@ app.use('/api', (req, res, next) => {
 function requireEnv(name) {
   const v = process.env[name];
   if (!v || !v.trim()) {
-    log.warn('missing env var', { name, note: 'related features will be disabled' });
+    log.debug('missing env var', { name, note: 'related features will be disabled' });
     return false;
   }
   return true;
@@ -116,7 +125,7 @@ const haveCritical = _CRITICAL_ENV.map(requireEnv).every(Boolean);
 if (!haveCritical) {
   // Default: honest-inert — warn and start degraded so the dashboard still loads
   // and the status tiles can show you exactly what's offline.
-  log.warn('starting without full provider keys', { note: 'some surfaces will show degraded' });
+  log.warn('starting degraded', { missing: _CRITICAL_ENV, note: 'some surfaces will be limited' });
   // Opt-in fail-fast: set FAIL_FAST=1 in .env to refuse boot instead. Useful for
   // headless / orchestrated runs where a silent degraded boot would mask a misconfig.
   if (process.env.FAIL_FAST && process.env.FAIL_FAST.trim() && process.env.FAIL_FAST !== '0') {
@@ -126,18 +135,22 @@ if (!haveCritical) {
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  log.info('startup', {
-    port: PORT,
+  log.info('ready', {
+    url: `http://localhost:${PORT}`,
     bind: BIND,
-    anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
-    openrouter: Boolean(process.env.OPENROUTER_API_KEY),
-    ollama: Boolean(process.env.OLLAMA_URL),
     engines: reasoning.describeEngines(),
   });
 }
 
+// ---- env bootstrap (served before static so it's always fresh) ----
+app.get('/js/env.js', (req, res) => {
+  res.type('application/javascript').set('Cache-Control', 'no-store')
+    .send(`window.__ENV_BRAND_NAME__=${JSON.stringify(process.env.BRAND_NAME || 'NOVA')};`);
+});
+
 // ---- static ----
-app.use(express.static(path.join(__dirname, 'public')));
+// Dev server: no caching so the browser always picks up JS/CSS changes.
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, maxAge: 0, lastModified: false }));
 app.use('/vault/builds', express.static(vault.vaultPath('builds')));
 
 // ---- health ----
@@ -615,128 +628,43 @@ app.post('/api/monitor/kill-port', async (req, res) => {
 
 // ---- orchestration spine: Pipeline Execute via the job runner ----
 const orchestrator = require('./lib/orchestrator');
-
-const DELIVERABLE_PREAMBLE = [
-  'You are the Pipeline build agent. Take the captured idea below and produce the single',
-  'most useful self-contained deliverable for it: EITHER a complete single-file HTML page/app',
-  '(all CSS/JS inline, no external resources, starting with <!DOCTYPE html>) OR a thorough',
-  'markdown document (plan, spec, draft, or write-up, starting with a # title line).',
-  'Choose whichever genuinely fits the idea. Output ONLY the raw file content — no',
-  'commentary, no markdown fences around the whole output. Idea: ',
-].join(' ');
-
-function saveDeliverable(raw, sourceText, kind = 'pipeline') {
-  let content = raw.trim();
-  const fence = content.match(/^```[a-z]*\s*\n([\s\S]*?)\n```\s*$/);
-  if (fence) content = fence[1].trim();
-  if (!content) throw new Error('build agent returned empty output — try again');
-
-  const isHtml = /<!DOCTYPE html/i.test(content);
-  if (isHtml) {
-    const docStart = content.search(/<!DOCTYPE html/i);
-    if (docStart > 0) content = content.slice(docStart);
-  }
-  const ext = isHtml ? 'html' : 'md';
-  const titleMatch = isHtml
-    ? content.match(/<title>([^<]{1,60})<\/title>/i)
-    : content.match(/^#\s+(.{1,60})/m);
-  const title = titleMatch ? titleMatch[1].trim() : sourceText.slice(0, 60);
-  const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'deliverable';
-  const fs = require('fs');
-  let name = `${base}.${ext}`;
-  for (let i = 2; fs.existsSync(vault.vaultPath('builds', kind, name)); i += 1) {
-    name = `${base}-${i}.${ext}`;
-  }
-  vault.writeText(path.join('builds', kind, name), content);
-  return { path: `/vault/builds/${kind}/${name}`, title, name };
-}
+const agentActions = require('./lib/agent-actions');
+const { saveDeliverable, extractJsonBlock } = agentActions;
 
 app.post('/api/pipeline/:id/execute', expensiveLimit, (req, res) => {
-  const found = pipeline.findCard(req.params.id);
-  if (!found) return res.status(404).json({ error: 'card not found' });
-  if (found.stage !== 'execute') return res.status(400).json({ error: 'card is not in the Execute stage' });
-  const existing = found.card.jobId ? orchestrator.getJob(found.card.jobId) : null;
-  if (existing && (existing.status === 'queued' || existing.status === 'running')) {
-    return res.status(409).json({ error: 'a build is already in progress for this card' });
+  try {
+    const result = agentActions.executePipelineCard(req.params.id);
+    res.json(result);
+  } catch (err) {
+    const status = err.message === 'card not found' ? 404
+      : err.message === 'a build is already in progress for this card' ? 409
+      : 400;
+    res.status(status).json({ error: err.message });
   }
-  const card = found.card;
-  const job = orchestrator.enqueue({
-    kind: 'pipeline-execute',
-    cardId: card.id,
-    prompt: DELIVERABLE_PREAMBLE + card.text,
-    run: async (raw, j) => {
-      const artifact = saveDeliverable(raw, card.text, 'pipeline');
-      pipeline.moveCard(card.id, 'shipped', { progress: 100, jobId: j.id, artifact });
-      return { artifact };
-    },
-  });
-  pipeline.moveCard(card.id, 'execute', { jobId: job.id, progress: 25 });
-  res.json({ job, board: pipeline.listAll() });
 });
 
 // ---- orchestration spine: Kanban planner/builder/reviewer agents ----
-function extractJsonBlock(raw) {
-  const fence = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
-  const text = fence ? fence[1] : raw;
-  return JSON.parse(text.trim());
-}
-
-const PLANNER_PREAMBLE = [
-  'You are the Kanban Planner agent. Break the goal below into 3-6 concrete, independently',
-  'buildable tasks. Respond with ONLY a JSON array, no commentary, no markdown fence:',
-  '[{"title": "short task title", "detail": "1-3 sentences describing exactly what to build"}]',
-  'Goal: ',
-].join(' ');
 
 app.post('/api/kanban/assemble', expensiveLimit, async (req, res) => {
   const { goal } = req.body || {};
-  if (!goal || !goal.trim()) return res.status(400).json({ error: 'goal required' });
-  const job = orchestrator.enqueue({
-    kind: 'kanban-plan',
-    cardId: null,
-    prompt: PLANNER_PREAMBLE + goal.trim(),
-    run: async (raw) => {
-      let tasks;
-      try {
-        tasks = extractJsonBlock(raw);
-      } catch {
-        throw new Error('planner did not return valid JSON — try rephrasing the goal');
-      }
-      if (!Array.isArray(tasks) || !tasks.length) throw new Error('planner returned no tasks');
-      const created = kanban.addCards(tasks, 'backlog');
-      return { artifact: { cards: created } };
-    },
-  });
-  res.json({ job });
+  try {
+    const result = agentActions.assembleKanbanPlan(goal);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
-const BUILDER_PREAMBLE = [
-  'You are the Kanban Builder agent. Build the single most useful self-contained deliverable',
-  'for this task: EITHER a complete single-file HTML page/app (all CSS/JS inline, starting',
-  'with <!DOCTYPE html>) OR a markdown document (starting with a # title). Output ONLY the',
-  'raw file content, no commentary, no fences around the whole output.\nTask: ',
-].join(' ');
-
 app.post('/api/kanban/cards/:id/build', expensiveLimit, (req, res) => {
-  const card = kanban.findCard(req.params.id);
-  if (!card) return res.status(404).json({ error: 'card not found' });
-  const existing = card.jobId ? orchestrator.getJob(card.jobId) : null;
-  if (existing && (existing.status === 'queued' || existing.status === 'running')) {
-    return res.status(409).json({ error: 'a build is already in progress for this card' });
+  try {
+    const result = agentActions.buildKanbanCard(req.params.id);
+    res.json(result);
+  } catch (err) {
+    const status = err.message === 'card not found' ? 404
+      : err.message === 'a build is already in progress for this card' ? 409
+      : 400;
+    res.status(status).json({ error: err.message });
   }
-  const job = orchestrator.enqueue({
-    kind: 'kanban-build',
-    cardId: card.id,
-    prompt: BUILDER_PREAMBLE + `${card.title}\n${card.detail || ''}`,
-    run: async (raw, j) => {
-      const slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
-      const artifact = saveDeliverable(raw, `${slug}-${j.id}`, 'kanban');
-      kanban.patchCard(card.id, { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact });
-      return { artifact };
-    },
-  });
-  kanban.patchCard(card.id, { lane: 'building', jobId: job.id });
-  res.json({ job, board: kanban.listBoard() });
 });
 
 const REVIEWER_PREAMBLE = [
@@ -843,6 +771,130 @@ app.post('/api/tts/synthesize', async (req, res) => {
   }
 });
 
+// ---- voice (Phase 1: browser push-to-talk + Ollama brain) ----
+app.get('/api/voice/status', async (req, res) => {
+  try {
+    const [voiceOk, edgeTtsStatus] = await Promise.all([
+      voiceAgent.isAvailable(),
+      edgeTts.getStatus(),
+    ]);
+    const s2sStatus = s2sChild.getS2sStatus();
+    const pcStatus = pcChild.getStatus();
+    const browserStatus = browserAgent.getStatus();
+    res.json({
+      enabled: process.env.VOICE_ENABLED !== 'false',
+      backend: 'chain',
+      lastModelUsed: voiceAgent.getLastModelUsed(),
+      ttsOk: edgeTtsStatus.ok,
+      voiceOk,
+      edgeTts: { status: edgeTtsStatus.ok ? 'ONLINE' : 'OFFLINE', voices: edgeTtsStatus.voices },
+      s2s: { status: s2sStatus.state, hint: s2sStatus.hint, ringBuffer: s2sStatus.ringBuffer },
+      pc: { status: pcStatus.state, hint: pcStatus.hint, queueDepth: pcStatus.queueDepth },
+      browser: { status: browserStatus.state, hint: browserStatus.hint, cdpUrl: browserStatus.cdpUrl, pageCount: browserStatus.pageCount },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, enabled: false });
+  }
+});
+
+// ---- PC Automation (Phase C) ----
+app.get('/api/pc/status', (req, res) => {
+  const status = pcChild.getStatus();
+  res.json(status);
+});
+
+app.post('/api/pc/start', (req, res) => {
+  // Only allow from loopback (like kill endpoints)
+  const ip = req.ip || req.connection.remoteAddress;
+  if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+    return res.status(403).json({ error: 'Loopback only.' });
+  }
+  pcChild.startPcChild();
+  res.json({ started: true });
+});
+
+app.post('/api/pc/stop', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+    return res.status(403).json({ error: 'Loopback only.' });
+  }
+  pcChild.shutdownPcChild();
+  browserAgent.disconnect();
+  res.json({ stopped: true });
+});
+
+// ---- Browser Automation (Phase D) ----
+app.get('/api/browser/status', (req, res) => {
+  res.json(browserAgent.getStatus());
+});
+
+app.post('/api/browser/connect', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+    return res.status(403).json({ error: 'Loopback only.' });
+  }
+  const url = req.body?.url || process.env.BROWSER_CDP_URL;
+  if (!url) return res.status(400).json({ error: 'BROWSER_CDP_URL not set and no url in body.' });
+  browserAgent.connect(url).then((ok) => {
+    res.json({ connected: ok });
+  }).catch((err) => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+app.post('/api/browser/disconnect', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+    return res.status(403).json({ error: 'Loopback only.' });
+  }
+  browserAgent.disconnect();
+  res.json({ disconnected: true });
+});
+
+// ---- model fallback chain (Phase A) ----
+app.get('/api/models/status', async (req, res) => {
+  try {
+    res.json(await modelRegistry.getStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/models/refresh', async (req, res) => {
+  if (!isLoopback(req)) return res.status(403).json({ error: 'models/refresh is loopback-only.' });
+  try {
+    await modelRegistry.refresh(true);
+    res.json(await modelRegistry.getStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Global rate limit only (not the expensive tier) — this endpoint doesn't call an LLM,
+// only edge-tts, and per-turn voice replies would starve against an 8/min cap.
+app.post('/api/tts/speak', async (req, res) => {
+  const { text, voice } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
+  try {
+    const buf = await voiceTts.speak(text, { voice });
+    if (!buf) return res.status(503).json({ error: 'edge-tts service not running' });
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- voice (Phase 2: browser-free voice via local speech-to-speech pipeline) ----
+// Mounted OUTSIDE /api (literal path /voice/v1/chat/completions) because this is the OpenAI-
+// chat-completions-shaped endpoint the huggingface/speech-to-speech child process (started by
+// s2s-child.js, gated on S2S_AUTOSTART) is pointed at via --responses_api_base_url. It still
+// gets JSON body parsing (express.json() is app-level, registered before any /api scoping) and
+// the global rate-limit tier (applied explicitly below, since globalLimit is otherwise only
+// wired under /api) — never the 8/min expensive tier, matching /api/tts/speak's reasoning:
+// this fields per-turn conversational traffic, not LLM-orchestration calls.
+app.post('/voice/v1/chat/completions', globalLimit, createS2sCompletionsRouter({ voiceAgent, isLoopback, confirm }));
+
 // SPA fallback — anything not /api or a static file goes to index.html
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/vault')) return next();
@@ -879,7 +931,7 @@ app.use((err, req, res, next) => {
 });
 
 const server = app.listen(PORT, BIND, () => {
-  log.info('listening', { url: `http://localhost:${PORT}`, bind: BIND });
+  // listening confirmation is in the "ready" startup log above
 });
 // wss is created later (after the ws protocol helpers); keep a ref so the
 // graceful-shutdown drain can close it. Assigned where WebSocketServer is built.
@@ -931,12 +983,36 @@ const TTS_SCRIPT = path.join(__dirname, 'services', 'edge-tts-server.py');
       env: { ...process.env, EDGE_TTS_PORT: TTS_PORT },
     });
     edgeTtsChild.on('error', () => { edgeTtsChild = null; });
-    log.info('edge-tts service started', { port: TTS_PORT, python: pyBin, note: 'UNOFFICIAL, personal use' });
+    log.debug('edge-tts started', { port: TTS_PORT });
   } catch {
     edgeTtsChild = null;
     log.warn('edge-tts spawn failed', { note: 'Voice Studio will show OFFLINE' });
   }
 })();
+
+// ---- speech-to-speech (S2S) child process autostart (Phase 2) ----
+// Off by default: S2S_AUTOSTART must be explicitly 'true' — absence of the var (or any other
+// value) must resolve to NOT starting. This is stricter than edge-tts's autostart (which
+// defaults ON, gated only by an opt-out): the s2s pipeline is untested-on-Windows upstream,
+// has multi-GB first-run downloads, and opens a live mic with no additional auth, so it needs
+// deliberate opt-in rather than an opt-out default. Lifecycle itself lives in s2s-child.js
+// (kept require()-able/side-effect-free at require time); only the actual start invocation is
+// gated here.
+if (process.env.S2S_AUTOSTART === 'true' && process.env.NODE_ENV !== 'test') {
+  s2sChild.startS2s({ port: PORT });
+}
+
+// Phase C: PC automation child process (ps-automation.ps1). Opt-in via PC_AUTOMATION=true.
+// Side-effect-free require — pc-child.js never spawns at require time.
+if (process.env.PC_AUTOMATION === 'true' && process.env.NODE_ENV !== 'test') {
+  pcChild.startPcChild();
+}
+
+// Phase D: Browser automation via playwright-core + Chrome CDP. Opt-in via BROWSER_CDP_URL.
+// Connects to an already-running Chrome instance (setup-chrome-debug.ps1).
+if (process.env.BROWSER_CDP_URL && process.env.NODE_ENV !== 'test') {
+  browserAgent.connect(process.env.BROWSER_CDP_URL).catch(() => {});
+}
 
 // Graceful shutdown: kill the spawned TTS service if we started one.
 function shutdownEdgeTts() {
@@ -963,6 +1039,9 @@ function gracefulShutdown(signal) {
   const forceTimer = setTimeout(() => {
     log.warn('shutdown drain timed out, forcing exit', { signal });
     shutdownEdgeTts();
+    s2sChild.shutdownS2s();
+    pcChild.shutdownPcChild();
+    browserAgent.disconnect();
     process.exit(1);
   }, 5000);
   forceTimer.unref();
@@ -975,6 +1054,9 @@ function gracefulShutdown(signal) {
   server.close(() => {
     log.info('http server closed, draining complete', { signal });
     shutdownEdgeTts();
+    s2sChild.shutdownS2s();
+    pcChild.shutdownPcChild();
+    browserAgent.disconnect();
     clearTimeout(forceTimer);
     process.exit(0);
   });
@@ -1050,20 +1132,102 @@ function roomPreamble(seatLabel) {
   return `You are seat ${seatLabel} in a multi-agent room called Mastermind, alongside other AI agents. Reply directly and keep it under ~150 words.\n\n`;
 }
 
-const wss = new WebSocketServer({ server, path: '/ws' });
+// dispatchAgentPrompt(seatId, prompt) — non-streaming, non-WS provider dispatch for a single
+// prompt/reply exchange, reusing the same SEATS table and per-kind branches as handleChat/
+// runSeat below (extracted so voice's ask_agent tool doesn't duplicate the provider-routing
+// logic — see voice/tools-dashboard.js's setAskAgentDispatch wiring). Throws on an unknown/
+// unavailable seat; callers (ask_agent) catch and turn that into an honest { ok:false }.
+async function dispatchAgentPrompt(seatId, prompt) {
+  const seat = SEATS.find((s) => s.id === seatId);
+  if (!seat) throw new Error(`Unknown agent seat "${seatId}".`);
+  const messages = [{ role: 'user', content: prompt }];
+
+  if (seat.kind === 'ollama') {
+    const models = await ollama.listModels().catch(() => []);
+    const validModel = models.includes(process.env.OLLAMA_MODEL) ? process.env.OLLAMA_MODEL : undefined;
+    return ollama.chat(messages, { model: validModel });
+  }
+  if (seat.kind === 'claude-cli') {
+    return claudeCli.chat(messages, { convId: `voice:${seatId}:${Date.now()}` });
+  }
+  if (seat.kind === 'claude-cli-free') {
+    const freeModel = process.env.FREE_CLAUDE_MODEL || 'haiku';
+    const useModel = MODEL_RE.test(freeModel) ? freeModel : 'haiku';
+    return claudeCli.chat(messages, { convId: `voice:${seatId}:${Date.now()}`, model: useModel });
+  }
+  if (seat.kind === 'zcode') {
+    if (!zcode.isAvailable()) throw new Error('ZCode is not configured (missing ZCODE_API_KEY).');
+    return zcode.chat(messages, {});
+  }
+  if (seat.kind === 'nim') {
+    if (!nim.isAvailable()) throw new Error('NIM is not configured (missing NIM_API_KEY).');
+    return nim.chat(messages, {});
+  }
+  if (seat.kind === 'openrouter') {
+    const envModel = process.env[seat.envModel];
+    const useModel = envModel && envModel.trim() ? envModel.trim() : seat.defaultModel;
+    if (!process.env.OPENROUTER_API_KEY) throw new Error(`${seat.label} is not configured (missing OPENROUTER_API_KEY).`);
+    return openrouter.chat(messages, { model: useModel });
+  }
+  const fleetEntry = freeModels.findById(seat.kind);
+  if (fleetEntry && fleetEntry.kind === 'openai-compat') {
+    if (!fleetEntry.provider.isAvailable()) throw new Error(`${seat.label} is not configured (missing ${fleetEntry.apiKeyEnv}).`);
+    return fleetEntry.provider.chat(messages, { source: 'voice' });
+  }
+  throw new Error(`${seat.label} is not wired yet — honest by design.`);
+}
+
+// Wire the voice ask_agent tool to the same provider-dispatch logic handleChat/runSeat use,
+// without voice/tools-dashboard.js importing server.js (would be a circular require).
+voiceToolsDashboard.setAskAgentDispatch(dispatchAgentPrompt);
+
+// Security review fix: the /ws upgrade handshake previously had no Origin check. Browsers
+// don't apply CORS/SOP to WebSocket connections, so binding to 127.0.0.1 alone does NOT stop
+// a hostile page open in the same local browser from doing `new WebSocket('ws://127.0.0.1:PORT/ws')`
+// and driving voice-utterance / chat / room messages — cross-site WebSocket hijacking (CSWSH).
+// Reuse the same ALLOWED_ORIGINS allowlist already enforced for /api: reject a connection that
+// presents a foreign Origin header. Non-browser tools (curl, wscat, this repo's own tests) don't
+// send an Origin header at all — those are allowed only when they also connect from loopback,
+// matching the existing isLoopback-gated posture used for the kill-* endpoints.
+function verifyWsClient(info, callback) {
+  const origin = info.origin;
+  if (origin) {
+    if (ALLOWED_ORIGINS.has(origin)) return callback(true);
+    log.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
+    return callback(false, 403, 'Forbidden');
+  }
+  if (isLoopback(info.req)) return callback(true);
+  log.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
+  return callback(false, 403, 'Forbidden');
+}
+
+const wss = new WebSocketServer({ server, path: '/ws', verifyClient: verifyWsClient });
 wssRef = wss; // hand the ref to the graceful-shutdown drain (declared near app.listen)
 
-// Job updates fan out to every connected client (pipeline view listens for these).
-orchestrator.setBroadcast((msg) => {
+// Shared helper: sends msg to every currently-open WS client. Used for job-update
+// broadcasts (orchestrator) and voice-ui side effects (voice WS handling) alike —
+// one implementation, so both stay consumable via the client's onBroadcast registry.
+function broadcastAll(msg) {
   const payload = JSON.stringify(msg);
   wss.clients.forEach((client) => {
     if (client.readyState === 1) client.send(payload);
   });
-});
+}
+
+// Activity feed helper — broadcasts an {type:'activity', ...} message for the client-side activity bus.
+function emitActivity(kind, detail) {
+  broadcastAll({ type: 'activity', kind, detail, at: Date.now() });
+}
+
+// Job updates fan out to every connected client (pipeline view listens for these).
+orchestrator.setBroadcast(broadcastAll);
 
 wss.on('connection', (ws) => {
   // reqId -> AbortController, so 'stop' / socket close can cancel in-flight work.
   const inFlight = new Map();
+  // Scopes voice confirmIds to this connection (security review fix) — a confirm created
+  // by one WS connection cannot be accepted/rejected from a different one.
+  const connectionId = crypto.randomUUID();
 
   function send(msg) {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -1099,6 +1263,18 @@ wss.on('connection', (ws) => {
         full = await zcode.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
       } else if (agent === 'nim') {
         full = await nim.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
+      } else if (agent === 'chain') {
+        // Unified agents surface — routes through the model fallback chain.
+        const chain = require('./lib/models/chain');
+        const { content } = await chain.complete({
+          messages, kind: model || 'text', signal: controller.signal,
+        });
+        // Simulate streaming by sending the whole response as tokens
+        for (let i = 0; i < content.length; i++) {
+          if (controller.signal.aborted) break;
+          onToken(content[i]);
+        }
+        full = content;
       } else {
         // Try the free-provider fleet (groq, openrouter-free, cerebras, mistral, cloudflare)
         const fleetEntry = freeModels.findById(agent);
@@ -1111,7 +1287,8 @@ wss.on('connection', (ws) => {
       }
 
       const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-      const label = agent === 'hermes' ? 'Hermes'
+      const label = agent === 'chain' ? 'Chain'
+        : agent === 'hermes' ? 'Hermes'
         : agent === 'free-claude-code' ? 'Free Claude Code'
         : (freeModels.findById(agent)?.label || (agent === 'claude' ? 'Claude' : agent));
       const saved = appendExchange(convId, label, lastUser ? lastUser.content : '', full);
@@ -1214,6 +1391,120 @@ wss.on('connection', (ws) => {
     }
   }
 
+  // reqId -> last ~6 exchanges for that connection's voice turns. A voice-confirm-reply
+  // continues the SAME reqId's turn (the client re-sends the original reqId), so history
+  // stays scoped per ongoing utterance exchange, not globally per connection.
+  const voiceHistory = new Map();
+
+  function pushVoiceHistory(reqId, role, content) {
+    const hist = voiceHistory.get(reqId) || [];
+    hist.push({ role, content });
+    voiceHistory.set(reqId, hist.slice(-6));
+    return voiceHistory.get(reqId);
+  }
+
+  // Emits voice-action for an executed tool result, or voice-confirm if it was danger-gated.
+  function emitVoiceActionResult(reqId, result) {
+    if (result.confirmPending) {
+      send({ type: 'voice-confirm', reqId, confirmId: result.confirmId, summary: result.summary });
+      emitActivity('confirm', { tool: result.tool, summary: result.summary });
+    } else {
+      send({ type: 'voice-action', reqId, tool: result.tool, args: result.args, ok: result.ok, summary: result.summary });
+      emitActivity('tool', { tool: result.tool, ok: result.ok, summary: result.summary });
+      if (result.uiActions && result.uiActions.length) {
+        for (const action of result.uiActions) {
+          broadcastAll({ type: 'voice-ui', ...action });
+        }
+      }
+    }
+  }
+
+  // Speaks `text` (via voice/tts.js, honest-null when edge-tts is down) and closes the turn.
+  async function finishVoiceTurn(reqId, text) {
+    const audioBuf = await voiceTts.speak(text).catch(() => null);
+    send({ type: 'voice-say', reqId, text, audioB64: audioBuf ? audioBuf.toString('base64') : null });
+    send({ type: 'voice-done', reqId });
+  }
+
+  async function handleVoiceUtterance(msg) {
+    const { reqId, text } = msg;
+    if (process.env.VOICE_ENABLED === 'false') {
+      send({ type: 'voice-status', reqId, state: 'error', detail: 'Voice control is disabled on this server.' });
+      send({ type: 'voice-done', reqId });
+      return;
+    }
+    const controller = new AbortController();
+    inFlight.set(reqId, controller);
+    send({ type: 'voice-status', reqId, state: 'thinking' });
+
+    try {
+      const history = pushVoiceHistory(reqId, 'user', text);
+      const ctx = { dashboard: {}, history, connectionId };
+      const result = await voiceAgent.handleUtterance({
+        text,
+        ctx,
+        signal: controller.signal,
+        onAction: (actionResult) => emitVoiceActionResult(reqId, actionResult),
+      });
+
+      if (result.aborted) return;
+      pushVoiceHistory(reqId, 'assistant', result.say);
+
+      if (result.confirmPending) {
+        // Turn ends here — the spoken confirm prompt already went out via voice-confirm
+        // (emitVoiceActionResult). No voice-say/voice-done until the user resolves it.
+        return;
+      }
+
+      await finishVoiceTurn(reqId, result.say);
+    } catch (err) {
+      const detail = err.chainExhausted ? 'No model backend is reachable right now.' : err.message;
+      send({ type: 'voice-status', reqId, state: 'error', detail });
+      send({ type: 'voice-done', reqId });
+    } finally {
+      inFlight.delete(reqId);
+    }
+  }
+
+  async function handleVoiceConfirmReply(msg) {
+    const { reqId, confirmId, accept } = msg;
+    if (process.env.VOICE_ENABLED === 'false') {
+      send({ type: 'voice-status', reqId, state: 'error', detail: 'Voice control is disabled on this server.' });
+      send({ type: 'voice-done', reqId });
+      return;
+    }
+    const controller = new AbortController();
+    inFlight.set(reqId, controller);
+
+    try {
+      if (!accept) {
+        confirm.reject(confirmId, connectionId);
+        await finishVoiceTurn(reqId, 'Cancelled.');
+        return;
+      }
+
+      // connectionId must match the connection that created this confirm (security review
+      // fix) — accept() returns null for an unknown id, an expired one, OR one that belongs
+      // to a different connection, so a hijacked/foreign socket can't ride someone else's confirm.
+      const action = confirm.accept(confirmId, connectionId);
+      if (!action) {
+        await finishVoiceTurn(reqId, "That confirmation is no longer valid — it may have expired.");
+        return;
+      }
+
+      send({ type: 'voice-status', reqId, state: 'thinking' });
+      const result = await voiceAgent.executeConfirmedAction(action, { ctx: { connectionId } });
+      emitVoiceActionResult(reqId, result);
+      const say = result.ok ? result.summary : `That didn't work: ${result.summary}`;
+      await finishVoiceTurn(reqId, say);
+    } catch (err) {
+      send({ type: 'voice-status', reqId, state: 'error', detail: err.message });
+      send({ type: 'voice-done', reqId });
+    } finally {
+      inFlight.delete(reqId);
+    }
+  }
+
   ws.on('message', (raw) => {
     let msg;
     try {
@@ -1226,6 +1517,10 @@ wss.on('connection', (ws) => {
       handleChat(msg);
     } else if (msg.type === 'room') {
       handleRoom(msg);
+    } else if (msg.type === 'voice-utterance') {
+      handleVoiceUtterance(msg);
+    } else if (msg.type === 'voice-confirm-reply') {
+      handleVoiceConfirmReply(msg);
     } else if (msg.type === 'stop') {
       const controller = inFlight.get(msg.reqId);
       if (controller) controller.abort();
@@ -1235,6 +1530,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     for (const controller of inFlight.values()) controller.abort();
     inFlight.clear();
+    voiceHistory.clear();
   });
 });
 

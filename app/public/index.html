@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Agentic OS</title>
+<title>NOVA</title>
 <link rel="stylesheet" href="/css/tokens.css" />
 <link rel="stylesheet" href="/css/shell.css" />
 <link rel="stylesheet" href="/css/mission-control.css" />
@@ -24,6 +24,9 @@
 <link rel="stylesheet" href="/css/provider-activity.css" />
 <link rel="stylesheet" href="/css/quota-tracker.css" />
 <link rel="stylesheet" href="/css/voice-studio.css" />
+<link rel="stylesheet" href="/css/voice-pill.css" />
+<link rel="stylesheet" href="/css/voice-hud.css" />
+<link rel="stylesheet" href="/css/command-deck.css" />
 </head>
 <body>
 <div class="app-shell">
@@ -41,9 +44,17 @@
   </div>
 </div>
 
+<script src="/js/env.js"></script>
+<script src="/js/brand.js"></script>
+<script src="/js/jarvis-core.js"></script>
 <script src="/js/sidebar-config.js"></script>
 <script src="/js/shell.js"></script>
 <script src="/js/palette.js"></script>
 <script src="/js/router.js"></script>
+<script src="/js/voice-control.js"></script>
+<script>
+  // Set document title from brand
+  if (window.BRAND_NAME) document.title = window.BRAND_NAME;
+</script>
 </body>
 </html>

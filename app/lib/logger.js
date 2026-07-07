@@ -32,15 +32,28 @@ const log = {
   error: (msg, fields) => emit('error', msg, fields),
 };
 
+/** Extensions that are always static assets — suppress their 304 noise. */
+const STATIC_EXT = new Set([
+  '.css', '.js', '.woff', '.woff2', '.ttf', '.eot', '.svg', '.png', '.jpg',
+  '.jpeg', '.gif', '.ico', '.webp', '.map', '.webmanifest', '.html',
+]);
+
 /**
  * Express middleware: one structured access-log line per request.
- * Skips /health (liveness probe noise). Relies on res.on('finish').
+ * Skips /health, favicon, and successful static asset GETs (2xx on known extensions).
+ * Only API calls, errors, and slow requests are logged.
+ * Relies on res.on('finish').
  */
 function requestLogger() {
+  const path = require('path');
   return (req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
       if (req.path === '/health') return;
+      if (req.path === '/favicon.ico') return;
+      const ext = path.extname(req.path);
+      // Skip all successful static asset GETs — they're noise in dev
+      if (req.method === 'GET' && STATIC_EXT.has(ext) && res.statusCode < 400) return;
       const ms = Date.now() - start;
       const fields = {
         method: req.method,

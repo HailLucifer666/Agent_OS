@@ -1,33 +1,32 @@
-// shell.js — renders sidebar + header chrome; polls /api/status for the ALL SYSTEMS pill.
+// shell.js — renders slim icon-rail sidebar + header chrome; polls /api/status for the ALL SYSTEMS pill.
 
 function renderSidebar(activeRoute) {
   const el = document.getElementById('sidebar');
+  const brand = window.BRAND_NAME || 'NOVA';
   let html = `
-    <div class="brand-overline mono">LOCAL &middot; STUDIO</div>
-    <div class="brand-wordmark">Agentic <span class="os">OS</span></div>
+    <div class="brand-overline">${brand}</div>
+    <div class="brand-wordmark">${brand.slice(0, 2)}</div>
   `;
 
   SIDEBAR_GROUPS.forEach((group) => {
-    html += `<div class="sidebar-group"><div class="sidebar-group-label mono">${group.label}${group.settingsGear ? '<span class="gear">&#9881;</span>' : ''}</div>`;
+    const collapsedClass = group.collapsed ? ' collapsed' : '';
+    html += `<div class="sidebar-group${collapsedClass}">`;
+    html += `<div class="sidebar-group-label">${group.label}</div>`;
+    html += `<div class="sidebar-group-items">`;
     group.items.forEach((item) => {
       const activeClass = item.route === activeRoute ? ' active' : '';
-      const iconHtml = item.dotColor
-        ? `<span class="dot-avatar" style="background:${item.dotColor}">${item.label[0]}</span>`
-        : `<span class="icon">${item.icon || ''}</span>`;
-      html += `<div class="sidebar-item${activeClass}" data-route="${item.route}">${iconHtml}<span>${item.label}</span></div>`;
+      html += `<div class="sidebar-item${activeClass}" data-route="${item.route}" title="${item.label}">`;
+      html += `<span class="icon">${item.icon || ''}</span>`;
+      html += `<span class="item-label">${item.label}</span>`;
+      html += '</div>';
     });
-    html += '</div>';
+    html += '</div></div>';
   });
 
   html += `
     <div class="sidebar-spacer"></div>
     <div class="sidebar-footer">
-      <div class="footer-avatar script">N</div>
-      <div class="footer-text mono">
-        <div class="label">WIRED</div>
-        <div>claude &middot; hermes &middot; free fleet</div>
-        <div>obsidian vault</div>
-      </div>
+      <div class="footer-avatar">${brand[0]}</div>
     </div>
   `;
 
@@ -36,6 +35,15 @@ function renderSidebar(activeRoute) {
     node.addEventListener('click', () => {
       window.location.hash = `#/${node.dataset.route}`;
     });
+  });
+
+  // Collapsed group toggle
+  el.querySelectorAll('.sidebar-group').forEach((groupEl) => {
+    const label = groupEl.querySelector('.sidebar-group-label');
+    if (!groupEl.classList.contains('collapsed') && !groupEl.querySelector('.sidebar-group-toggle')) {
+      // No toggle needed for non-collapsed groups
+      return;
+    }
   });
 }
 
@@ -48,6 +56,7 @@ function formatTimestamp() {
 
 function renderHeader(route) {
   const meta = ROUTE_META[route] || { numeral: 'I.', section: route.toUpperCase(), title: route, subtitle: '' };
+  const brand = window.BRAND_NAME || 'NOVA';
   const el = document.getElementById('view-header');
   el.innerHTML = `
     <div class="header-left">
@@ -58,10 +67,10 @@ function renderHeader(route) {
       </div>
       <h1 class="view-h1">${meta.title}</h1>
       <p class="view-subtitle">${meta.subtitle}</p>
-      <div class="view-timestamp mono"><span class="num">${formatTimestamp()}</span> &middot; LOCAL &middot; STUDIO</div>
+      <div class="view-timestamp mono"><span class="num">${formatTimestamp()}</span> &middot; ${brand} &middot; LOCAL</div>
     </div>
-    <div class="header-right">
-      <button class="pill-btn" id="palette-trigger"><kbd>&#8984;K</kbd> Command palette</button>
+    <div class="header-right" id="header-right">
+      <button class="pill-btn" id="palette-trigger"><kbd>&#8982;K</kbd></button>
       <button class="status-pill mono" id="status-pill">
         <span class="bars"><span style="height:5px"></span><span style="height:9px"></span><span style="height:12px"></span><span style="height:7px"></span></span>
         <span id="status-pill-label">CHECKING</span>
@@ -82,9 +91,9 @@ async function refreshStatusPill() {
     const res = await fetch('/api/status');
     const data = await res.json();
     lastStatus = data;
-    const anyOnline = data.agents.some((a) => a.status === 'ONLINE');
-    const anyDegraded = data.agents.some((a) => a.status === 'DEGRADED');
-    const allOffline = data.agents.every((a) => a.status === 'OFFLINE');
+    const anyOnline = data.agents && data.agents.some((a) => a.status === 'ONLINE');
+    const anyDegraded = data.agents && data.agents.some((a) => a.status === 'DEGRADED');
+    const allOffline = !data.agents || data.agents.every((a) => a.status === 'OFFLINE');
     pill.classList.remove('all-ok', 'degraded');
     if (allOffline) {
       label.textContent = 'ALL OFFLINE';

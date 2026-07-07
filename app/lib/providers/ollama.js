@@ -56,11 +56,13 @@ function createThinkFilter() {
 }
 
 async function chat(messages, opts = {}) {
-  const { model, onToken, signal } = opts;
+  const { model, onToken, signal, keepAlive } = opts;
+  const body = { model: model || DEFAULT_MODEL, messages, stream: true };
+  if (keepAlive) body.keep_alive = keepAlive;
   const res = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: model || DEFAULT_MODEL, messages, stream: true }),
+    body: JSON.stringify(body),
     signal,
   });
 

@@ -1,23 +1,18 @@
 // router.js — hash-based SPA router. Each route maps to a view module exposing render(mountEl).
+// Default route: command-deck. Legacy seat views redirect to 'agents'.
 
 const VIEW_LOADERS = {
+  'command-deck': () => import('/js/views/command-deck.js'),
+  'agents': () => import('/js/views/agents.js'),
+  'settings': () => import('/js/views/settings.js'),
   'mission-control': () => import('/js/views/mission-control.js'),
   'agent-monitor': () => import('/js/views/agent-monitor.js'),
+  'voice-hud': () => import('/js/views/voice-hud.js'),
   'provider-activity': () => import('/js/views/provider-activity.js'),
   'quota-tracker': () => import('/js/views/quota-tracker.js'),
   'goals': () => import('/js/views/goals.js'),
   'kanban': () => import('/js/views/kanban.js'),
-  'claude': () => import('/js/views/claude.js'),
-  'hermes': () => import('/js/views/hermes.js'),
-  'zcode': () => import('/js/views/zcode.js'),
-  'nim': () => import('/js/views/nim.js'),
-  'groq': () => import('/js/views/groq.js'),
-  'cerebras': () => import('/js/views/cerebras.js'),
-  'mistral': () => import('/js/views/mistral.js'),
-  'cloudflare': () => import('/js/views/cloudflare.js'),
-  'openrouter-free': () => import('/js/views/openrouter-free.js'),
   'mastermind': () => import('/js/views/mastermind.js'),
-  'free-claude': () => import('/js/views/free-claude.js'),
   'pipeline': () => import('/js/views/pipeline.js'),
   'memory': () => import('/js/views/memory.js'),
   'game-studio': () => import('/js/views/game-studio.js'),
@@ -31,9 +26,21 @@ const VIEW_LOADERS = {
 
 let currentCleanup = null;
 
+function resolveRoute(hash) {
+  // Legacy seat redirects
+  if (LEGACY_REDIRECTS[hash]) return LEGACY_REDIRECTS[hash];
+  if (ALL_ROUTES.includes(hash)) return hash;
+  return 'command-deck';
+}
+
 async function loadRoute() {
-  const hash = window.location.hash.replace(/^#\/?/, '') || 'mission-control';
-  const route = ALL_ROUTES.includes(hash) ? hash : 'mission-control';
+  const hash = window.location.hash.replace(/^#\/?/, '') || 'command-deck';
+  const route = resolveRoute(hash);
+
+  // If redirected, update the hash silently
+  if (route !== hash) {
+    history.replaceState(null, '', `#/${route}`);
+  }
 
   if (typeof currentCleanup === 'function') {
     try { currentCleanup(); } catch { /* ignore */ }
@@ -43,6 +50,7 @@ async function loadRoute() {
   renderShell(route);
 
   const mount = document.getElementById('view-mount');
+  mount.classList.add('view-entering');
   mount.innerHTML = '<div class="text-faint mono" style="padding:40px 0;">Loading&hellip;</div>';
 
   const loader = VIEW_LOADERS[route];
@@ -60,6 +68,9 @@ async function loadRoute() {
     console.error('Failed to load view', route, err);
     mount.innerHTML = `<div class="text-faint">Failed to load this surface: ${err.message}</div>`;
   }
+
+  // Fade in after mount completes
+  requestAnimationFrame(() => mount.classList.remove('view-entering'));
 }
 
 window.addEventListener('hashchange', loadRoute);
