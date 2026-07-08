@@ -1,14 +1,18 @@
 // chain.js — walks the ranked model list from registry.js, calling the matching provider's
-// EXISTING chat() (reuses lib/providers/nim.js, nim2.js, ollama.js — no reimplemented HTTP),
-// with a per-lane cooldown so a rate-limited model is skipped for a while instead of failing
-// every subsequent turn. Throws only when every lane is exhausted (err.chainExhausted = true);
-// callers must catch that and degrade honestly — this module never retries forever on its own.
+// EXISTING chat() (reuses lib/providers/nim.js, nim2.js, groq.js, mistral.js, ollama.js — no
+// reimplemented HTTP), with a per-lane cooldown so a rate-limited model is skipped for a while
+// instead of failing every subsequent turn. Throws only when every lane is exhausted
+// (err.chainExhausted = true); callers must catch that and degrade honestly — this module
+// never retries forever on its own.
 const registry = require('./registry');
+const zcode = require('../providers/zcode');
 const nim = require('../providers/nim');
 const nim2 = require('../providers/nim2');
+const groq = require('../providers/groq');
+const mistral = require('../providers/mistral');
 const ollama = require('../providers/ollama');
 
-const LANES = { nim, nim2 };
+const LANES = { zcode, nim, nim2, groq, mistral };
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
 
@@ -27,14 +31,18 @@ function nimLanesAvailable() {
 }
 
 // Expands a ranked registry entry into concrete (lane, model) attempts. A 'nim' entry fans
-// out to every configured NIM key (key rotation); 'ollama' entries are a single attempt.
+// out to every configured NIM key (key rotation); 'groq', 'mistral', and 'ollama' entries
+// are single attempts (one lane per provider).
 function expand(entries) {
   const out = [];
   for (const e of entries) {
     if (e.provider === 'nim') {
       for (const lane of nimLanesAvailable()) out.push({ lane, model: e.model });
-    } else {
+    } else if (e.provider === 'ollama') {
       out.push({ lane: 'ollama', model: e.model });
+    } else {
+      // groq, mistral, or any future openai-compat lane
+      out.push({ lane: e.provider, model: e.model });
     }
   }
   return out;
@@ -53,17 +61,23 @@ function toOllamaVisionMessages(messages) {
   });
 }
 
-// complete({ messages, kind, signal, onAttempt }) -> { content, provider, model }
-// kind: 'text' | 'json' | 'vision' (json shares the text chain; JSON discipline lives in
-// the prompt, not in provider selection).
-async function complete({ messages, kind = 'text', signal, onAttempt } = {}) {
-  const ranked = await registry.chainFor(kind === 'vision' ? 'vision' : 'text');
+// complete({ messages, kind, brain, signal, onAttempt }) -> { content, provider, model }
+// kind:  'text' | 'json' | 'vision' (json shares the text chain; JSON discipline lives in
+//        the prompt, not in provider selection).
+// brain: 'voice' | 'build' | 'simple' | 'text' | 'vision' — selects the preference list.
+//        Defaults to 'text' for backward compatibility. When set, overrides kind-based routing.
+async function complete({ messages, kind = 'text', brain, signal, onAttempt } = {}) {
+  // brain takes priority if explicitly set; otherwise fall back to kind-based routing.
+  const effectiveKind = brain || (kind === 'vision' ? 'vision' : 'text');
+  const ranked = await registry.chainFor(effectiveKind);
   const attempts = expand(ranked);
   const errors = [];
 
   for (const { lane, model } of attempts) {
     if (signal && signal.aborted) throw new Error('aborted');
     if (isCooling(lane, model)) continue;
+    // Skip lanes whose provider isn't configured (e.g. GROQ_API_KEY not set).
+    if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
     if (onAttempt) onAttempt({ provider: lane, model });
     try {
       let content;

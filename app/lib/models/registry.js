@@ -1,33 +1,83 @@
 // registry.js — probes configured model providers and produces ranked, alive-only
-// model lists for 'text' and 'vision' kinds. Read by lib/models/chain.js and by
-// GET /api/models/status. Never throws; an unreachable provider just comes back empty
-// (honest-inert, same posture as the rest of the voice stack).
+// model lists for brain types ('voice', 'build', 'simple', 'text', 'vision'). Read by
+// lib/models/chain.js and by GET /api/models/status. Never throws; an unreachable provider
+// just comes back empty (honest-inert, same posture as the rest of the voice stack).
 const ollama = require('../providers/ollama');
+const groq = require('../providers/groq');
+const mistral = require('../providers/mistral');
 
 const NIM_URL = process.env.NIM_API_URL || 'https://integrate.api.nvidia.com/v1';
+const GROQ_URL = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1';
+const MISTRAL_URL = process.env.MISTRAL_API_URL || 'https://api.mistral.ai/v1';
 
 function nimKeys() {
   return [process.env.NIM_API_KEY, process.env.NIM_API_KEY_2].filter((k) => k && k.trim());
 }
 
-// Static preference tables, ranked best-first. `provider: 'nim'` entries are expanded by
-// chain.js into one attempt per configured NIM key (key rotation) — the model catalog is
-// identical across both keys, so registry.js only needs to track it once.
-// Env overrides: CHAIN_TEXT / CHAIN_VISION as comma lists of "provider:model".
+// ---------------------------------------------------------------------------
+// Static preference tables, ranked best-first. `provider: 'nim'` entries are expanded
+// by chain.js into one attempt per configured NIM key (key rotation).
+//
+// Brain types (from BRAIN-MAP.md, locked 2026-07-08):
+//   voice  — Groq 70b → Mistral Large → Ollama qwen3:8b
+//   build  — Mistral Large → NIM GLM-5.2 → Ollama ornith:9b
+//   simple — Ollama qwen3:8b only
+//   vision — NIM MiniMax-M3 → Ollama qwen2.5vl:7b
+//
+// Legacy text/vision chains kept as fallbacks for generic chain.complete() calls.
+//
+// Env overrides: CHAIN_VOICE / CHAIN_BUILD / CHAIN_SIMPLE / CHAIN_TEXT /
+//   CHAIN_VISION as comma lists of "provider:model".
+// ---------------------------------------------------------------------------
+
+// 🎙️ Voice brain — speed is everything
+const PREF_VOICE = [
+  { provider: 'groq',   model: 'llama-3.3-70b-versatile' },
+  { provider: 'mistral', model: 'mistral-large-2512' },
+  { provider: 'ollama',  model: 'qwen3:8b' },
+];
+
+// 🏗️ Build brain — quality over speed
+const PREF_BUILD = [
+  { provider: 'mistral', model: 'mistral-large-2512' },
+  { provider: 'zcode',   model: 'glm-5.2' },
+  { provider: 'ollama',  model: 'ornith:9b' },
+];
+
+// ✉️ Simple tasks — local only
+const PREF_SIMPLE = [
+  { provider: 'ollama', model: 'qwen3:8b' },
+];
+
+// Legacy generic text chain (fallback if no brain specified)
 const PREF_TEXT = [
-  { provider: 'nim', model: 'z-ai/glm-5.2' },
-  { provider: 'nim', model: 'deepseek-ai/deepseek-v4-pro' },
-  { provider: 'nim', model: 'moonshotai/kimi-k2.6' },
+  { provider: 'nim', model: 'deepseek-ai/deepseek-r1' },
+  { provider: 'nim', model: 'meta/llama-3.1-405b-instruct' },
   { provider: 'ollama', model: 'kimi-k2.5:cloud' },
   { provider: 'ollama', model: 'qwen3:14b' },
   { provider: 'ollama', model: 'qwen3:8b' },
 ];
+
+// 👁️ Vision brain
 const PREF_VISION = [
-  { provider: 'nim', model: 'minimaxai/minimax-m3' },
+  { provider: 'ollama', model: 'qwen3.5:latest' },
   { provider: 'ollama', model: 'qwen2.5vl:7b' },
 ];
 
-let cache = { at: 0, nimModels: [], ollamaModels: [], probing: null };
+// Map brain type to its preference table and env override variable
+const BRAIN_TABLES = {
+  voice:  { prefs: PREF_VOICE,  env: 'CHAIN_VOICE' },
+  build:  { prefs: PREF_BUILD,  env: 'CHAIN_BUILD' },
+  simple: { prefs: PREF_SIMPLE, env: 'CHAIN_SIMPLE' },
+  text:   { prefs: PREF_TEXT,   env: 'CHAIN_TEXT' },
+  vision: { prefs: PREF_VISION, env: 'CHAIN_VISION' },
+};
+
+// ---------------------------------------------------------------------------
+// Provider probing
+// ---------------------------------------------------------------------------
+
+let cache = { at: 0, nimModels: [], ollamaModels: [], groqAlive: false, mistralAlive: false, probing: null };
 const TTL_MS = Number(process.env.MODEL_REGISTRY_TTL_MS) || 5 * 60 * 1000;
 
 async function probeNim() {
@@ -54,6 +104,32 @@ async function probeOllama() {
   }
 }
 
+async function probeGroq() {
+  if (!groq.isAvailable()) return false;
+  try {
+    const res = await fetch(`${GROQ_URL}/models`, {
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function probeMistral() {
+  if (!mistral.isAvailable()) return false;
+  try {
+    const res = await fetch(`${MISTRAL_URL}/models`, {
+      headers: { Authorization: `Bearer ${process.env.MISTRAL_API_KEY}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Coalesces concurrent refreshes into one in-flight probe so N simultaneous callers
 // (e.g. /api/models/status hit right as a voice turn also needs the chain) never fire
 // N redundant probe round-trips.
@@ -62,12 +138,18 @@ async function refresh(force = false) {
   if (!force && now - cache.at < TTL_MS) return cache;
   if (cache.probing) return cache.probing;
   cache.probing = (async () => {
-    const [nimModels, ollamaModels] = await Promise.all([probeNim(), probeOllama()]);
-    cache = { at: Date.now(), nimModels, ollamaModels, probing: null };
+    const [nimModels, ollamaModels, groqAlive, mistralAlive] = await Promise.all([
+      probeNim(), probeOllama(), probeGroq(), probeMistral(),
+    ]);
+    cache = { at: Date.now(), nimModels, ollamaModels, groqAlive, mistralAlive, probing: null };
     return cache;
   })();
   return cache.probing;
 }
+
+// ---------------------------------------------------------------------------
+// Override parsing
+// ---------------------------------------------------------------------------
 
 function parseOverride(env) {
   return (env || '')
@@ -81,22 +163,49 @@ function parseOverride(env) {
     .filter(Boolean);
 }
 
-// Ranked, alive-only chain for a kind. Never throws; empty array = nothing alive.
-async function chainFor(kind /* 'text' | 'vision' */) {
-  const c = await refresh();
-  const override = parseOverride(kind === 'vision' ? process.env.CHAIN_VISION : process.env.CHAIN_TEXT);
-  const prefs = override.length ? override : (kind === 'vision' ? PREF_VISION : PREF_TEXT);
-  return prefs.filter((p) =>
-    p.provider === 'nim' ? c.nimModels.includes(p.model) && nimKeys().length > 0 : c.ollamaModels.includes(p.model)
-  );
+// ---------------------------------------------------------------------------
+// chainFor — ranked, alive-only chain for a brain type or legacy kind.
+// ---------------------------------------------------------------------------
+
+function isProviderAlive(provider, model, c) {
+  switch (provider) {
+    case 'nim':    return c.nimModels.includes(model) && nimKeys().length > 0;
+    case 'groq':   return c.groqAlive;
+    case 'mistral': return c.mistralAlive;
+    case 'ollama': return c.ollamaModels.includes(model);
+    case 'zcode':  return !!process.env.ZCODE_API_KEY;
+    default:       return false;
+  }
 }
+
+// Ranked, alive-only chain for a brain type. Never throws; empty array = nothing alive.
+// Supported kinds: 'voice' | 'build' | 'simple' | 'text' | 'vision'
+async function chainFor(kind) {
+  const c = await refresh();
+  const table = BRAIN_TABLES[kind] || BRAIN_TABLES.text;
+  const override = parseOverride(process.env[table.env]);
+  const prefs = override.length ? override : table.prefs;
+  return prefs.filter((p) => isProviderAlive(p.provider, p.model, c));
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
 
 async function getStatus() {
   const c = await refresh();
   return {
-    nim: { configured: nimKeys().length, aliveModels: c.nimModels.length },
-    ollama: { aliveModels: c.ollamaModels.length, models: c.ollamaModels },
-    chains: { text: await chainFor('text'), vision: await chainFor('vision') },
+    nim:     { configured: nimKeys().length, aliveModels: c.nimModels.length },
+    ollama:  { aliveModels: c.ollamaModels.length, models: c.ollamaModels },
+    groq:    { alive: c.groqAlive },
+    mistral: { alive: c.mistralAlive },
+    chains: {
+      voice:  await chainFor('voice'),
+      build:  await chainFor('build'),
+      simple: await chainFor('simple'),
+      text:   await chainFor('text'),
+      vision: await chainFor('vision'),
+    },
     probedAt: c.at,
   };
 }
@@ -105,5 +214,5 @@ module.exports = {
   chainFor,
   getStatus,
   refresh,
-  _internal: { PREF_TEXT, PREF_VISION, parseOverride },
+  _internal: { PREF_TEXT, PREF_VISION, PREF_VOICE, PREF_BUILD, PREF_SIMPLE, BRAIN_TABLES, parseOverride },
 };

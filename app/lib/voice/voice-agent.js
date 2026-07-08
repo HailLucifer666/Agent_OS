@@ -25,6 +25,7 @@ const dashboardTools = require('./tools-dashboard');
 const computerTools = require('./tools-computer');
 const pcTools = require('./tools-pc');
 const browserTools = require('./tools-browser');
+const projectTools = require('./tools-project');
 
 const MAX_ITERATIONS = Number(process.env.VOICE_MAX_TOOL_ITERATIONS) || 4;
 const MAX_SAY_CHARS = 400; // hard backstop; tts.js does the real sentence-boundary truncation to ~350
@@ -40,7 +41,7 @@ function getLastModelUsed() {
 
 // Merge both catalogs into one lookup by tool name -> { name, description, params, danger, fn }.
 const TOOL_REGISTRY = new Map();
-for (const t of [...dashboardTools.TOOLS, ...computerTools.TOOLS, ...pcTools.TOOLS, ...browserTools.TOOLS]) {
+for (const t of [...dashboardTools.TOOLS, ...computerTools.TOOLS, ...pcTools.TOOLS, ...browserTools.TOOLS, ...projectTools.TOOLS]) {
   TOOL_REGISTRY.set(t.name, t);
 }
 
@@ -54,7 +55,9 @@ for (const t of [...dashboardTools.TOOLS, ...computerTools.TOOLS, ...pcTools.TOO
 // across repeated trials. Do not weaken or remove this paragraph without re-running the spike.
 const PERSONA = `You are the voice brain of Agent OS, a local dashboard. You interpret one spoken utterance at a time and decide what to do using ONLY the tools listed below. You are terse: your spoken reply ("say") is at most two short sentences. You never invent tools.
 
-DANGER TOOLS RULE (safety-critical, read carefully): each tool below is marked "danger": true or "danger": false. For a danger:true tool, you may ONLY put it in "actions" if the utterance itself clearly and specifically names the target (an exact goal/card/file/session described in THIS utterance, or an explicit direct confirmation like "yes, delete it" replying to a question YOU just asked in this same turn). If the utterance is vague about WHAT to act on (words like "it", "that", "this", "the thing") and nothing concrete is named anywhere else in this turn, that is NOT authorization: you MUST put "actions": [] and instead ask a short clarifying question in "say". Never put a danger:true tool call in "actions" as a placeholder while you ask a clarifying question — asking a question and queuing the dangerous action in the same turn is always wrong. When genuinely unsure, prefer actions: [] and ask.`;
+DANGER TOOLS RULE (safety-critical, read carefully): each tool below is marked "danger": true or "danger": false. For a danger:true tool, you may ONLY put it in "actions" if the utterance itself clearly and specifically names the target (an exact goal/card/file/session described in THIS utterance, or an explicit direct confirmation like "yes, delete it" replying to a question YOU just asked in this same turn). If the utterance is vague about WHAT to act on (words like "it", "that", "this", "the thing") and nothing concrete is named anywhere else in this turn, that is NOT authorization: you MUST put "actions": [] and instead ask a short clarifying question in "say". Never put a danger:true tool call in "actions" as a placeholder while you ask a clarifying question — asking a question and queuing the dangerous action in the same turn is always wrong. When genuinely unsure, prefer actions: [] and ask.
+
+PROJECT INTAKE RULE: when the user asks you to build/make/create something open-ended (a game, a landing page, an app), do NOT start immediately. Ask exactly ONE focused clarifying question per turn (respond with say and empty actions). When you have enough detail (2-3 answers is usually enough), restate the plan in one sentence and ask for an explicit go-ahead. Call start_project ONLY after the user clearly says to proceed in a later turn, with the full accumulated spec as description. Never call start_project on the same turn you first proposed the plan.`;
 
 const OUTPUT_CONTRACT = `Respond with ONLY a single JSON object, no markdown fence, no commentary, matching exactly:
 {"say": "<= 2 short spoken sentences", "actions": [{"tool": "<tool name>", "args": {}}], "needs_result": false}
@@ -67,7 +70,7 @@ function toolCatalogJson() {
   );
 }
 
-function buildPrompt({ text, ctx, history, toolResults }) {
+function buildPrompt({ text, ctx, history, toolResults, corrective, originalSay }) {
   const parts = [
     PERSONA,
     '',
@@ -80,6 +83,9 @@ function buildPrompt({ text, ctx, history, toolResults }) {
     for (const h of history) {
       parts.push(`${h.role === 'user' ? 'User' : 'You'}: ${h.content}`);
     }
+  }
+  if (corrective) {
+    parts.push('', 'CORRECTIVE PASS: your previous spoken reply (' + JSON.stringify(originalSay) + ') was WRONG because the tool calls in that same turn FAILED. Look at TOOL RESULTS, admit what actually happened in exactly one short sentence, and do NOT call any tools again.');
   }
   parts.push('', OUTPUT_CONTRACT, '', `USER SAID: "${text}"`);
   if (toolResults) {
@@ -130,6 +136,7 @@ async function callModel(prompt, { signal } = {}) {
   const { content, provider, model } = await chain.complete({
     messages: [{ role: 'user', content: prompt }],
     kind: 'json',
+    brain: 'voice',  // voice brain: Groq 70b → Mistral Large → Ollama qwen3:8b
     signal,
   });
   lastModelUsed = `${provider}:${model}`;
@@ -238,6 +245,7 @@ async function handleUtterance({ text, ctx = {}, signal, onAction } = {}) {
   let iterations = 0;
   let finalSay = '';
   let confirmPending = null;
+  let didRetry = false;
 
   for (;;) {
     if (signal && signal.aborted) {
@@ -249,6 +257,7 @@ async function handleUtterance({ text, ctx = {}, signal, onAction } = {}) {
     const parsed = await callAndParse(prompt, { signal });
     finalSay = parsed.say;
 
+    executedActions.length = 0;
     for (const action of parsed.actions) {
       if (signal && signal.aborted) {
         return { say: finalSay, actions: executedActions, aborted: true };
@@ -267,6 +276,20 @@ async function handleUtterance({ text, ctx = {}, signal, onAction } = {}) {
     if (iterations >= MAX_ITERATIONS) break;
 
     toolResults = executedActions.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary, result: a.raw && a.raw.result }));
+  }
+
+  if (!didRetry && iterations === 1 && executedActions.some((a) => a && a.ok === false)) {
+    didRetry = true;
+    const correctivePrompt = buildPrompt({
+      text,
+      ctx,
+      history: ctx.history,
+      toolResults: executedActions.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
+      corrective: true,
+      originalSay: finalSay,
+    });
+    const corrective = await callAndParse(correctivePrompt, { signal });
+    finalSay = corrective.say;
   }
 
   return { say: finalSay, actions: executedActions, confirmPending: confirmPending || null };

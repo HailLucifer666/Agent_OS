@@ -55,6 +55,39 @@ function navigate({ route }) {
   }
 }
 
+// ---- open_artifact ----
+
+async function open_artifact({ path, title }) {
+  try {
+    if (!path || !String(path).trim()) {
+      return fail('An artifact path is required.');
+    }
+    const rawPath = String(path).trim();
+    let targetUrl = rawPath;
+    if (rawPath.startsWith('/vault/') || rawPath.startsWith('vault/')) {
+      const port = process.env.PORT || 4477;
+      const normalized = rawPath.startsWith('/') ? rawPath : '/' + rawPath;
+      targetUrl = `http://localhost:${port}${normalized}`;
+    }
+    const platform = process.platform;
+    let cmd;
+    if (platform === 'win32') {
+      cmd = ['cmd', '/c', 'start', '', targetUrl];
+    } else if (platform === 'darwin') {
+      cmd = ['open', targetUrl];
+    } else {
+      cmd = ['xdg-open', targetUrl];
+    }
+    const { spawnSync } = require('child_process');
+    const result = spawnSync(cmd[0], cmd.slice(1), { shell: platform === 'win32', detached: true, stdio: 'ignore' });
+    if (result.error) throw result.error;
+    const display = title || rawPath;
+    return ok({ opened: true, url: targetUrl, display }, [{ action: 'navigate', route: 'pipeline' }]);
+  } catch (err) {
+    return fail(`Could not open artifact: ${err.message}`);
+  }
+}
+
 // ---- status / jobs ----
 
 async function read_status() {
@@ -286,6 +319,7 @@ async function kill_session({ pid, agentCli }) {
 // to build the compact JSON-schema block in its prompt. ----
 const TOOLS = [
   { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
+  { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
   { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },
   { name: 'job_status', description: 'Check the status of an orchestrator job (most recent if jobId omitted).', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
   { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
@@ -310,7 +344,7 @@ module.exports = {
   TOOLS,
   setAskAgentDispatch,
   // exported individually for direct unit testing
-  navigate, read_status, job_status,
+  navigate, open_artifact, read_status, job_status,
   create_goal, list_goals, toggle_goal, delete_goal,
   capture_idea, pipeline_status, pipeline_advance, pipeline_execute,
   kanban_status, kanban_add_card, kanban_move_card, kanban_assemble, kanban_build_card,

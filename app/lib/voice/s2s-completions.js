@@ -69,6 +69,7 @@ const ACCEPT_RE = /^(yes|yeah|do it|confirm|go ahead)\b/i;
 function createS2sCompletionsRouter({ voiceAgent, isLoopback, confirm }) {
   const connectionId = 's2s-' + crypto.randomUUID();
   let pendingConfirmId = null;
+  const connHistory = new Map();
 
   return async function postChatCompletions(req, res) {
     if (!isLoopback(req)) {
@@ -97,8 +98,12 @@ function createS2sCompletionsRouter({ voiceAgent, isLoopback, confirm }) {
         pendingConfirmId = null;
         const action = confirm.accept(confirmId, connectionId);
         if (action) {
-          const result = await voiceAgent.executeConfirmedAction(action, { ctx: { connectionId } });
+          const result = await voiceAgent.executeConfirmedAction(action, { ctx: { connectionId, history: connHistory.get(connectionId) || [] } });
           const say = result.ok ? result.summary : `That didn't work: ${result.summary}`;
+          let history = connHistory.get(connectionId) || [];
+          history.push({ role: 'user', content: userText });
+          history.push({ role: 'assistant', content: say });
+          connHistory.set(connectionId, history.slice(-6));
           return res.json(buildCompletion(say, body.model));
         }
         // Expired/already-consumed — fall through and treat this utterance normally.
@@ -106,7 +111,13 @@ function createS2sCompletionsRouter({ voiceAgent, isLoopback, confirm }) {
         pendingConfirmId = null;
       }
 
-      const result = await voiceAgent.handleUtterance({ text: userText, ctx: { mode: 's2s', connectionId } });
+      const result = await voiceAgent.handleUtterance({ text: userText, ctx: { mode: 's2s', connectionId, history: connHistory.get(connectionId) || [] } });
+      if (result && result.say) {
+        let history = connHistory.get(connectionId) || [];
+        history.push({ role: 'user', content: userText });
+        history.push({ role: 'assistant', content: result.say });
+        connHistory.set(connectionId, history.slice(-6));
+      }
       if (result && result.confirmPending && result.confirmPending.confirmId) {
         pendingConfirmId = result.confirmPending.confirmId;
       }

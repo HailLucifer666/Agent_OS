@@ -13,7 +13,7 @@
     listening:        { r: 79, g: 216, b: 255, a: 1 },
     thinking:         { r: 164, g: 143, b: 255, a: 1 },
     acting:           { r: 67, g: 229, b: 160, a: 1 },
-    speaking:         { r: 79, g: 216, b: 255, a: 1 },
+    speaking:         { r: 122, g: 132, b: 255, a: 1 },
     error:            { r: 255, g: 95, b: 102, a: 1 },
     'confirm-pending': { r: 234, g: 179, b: 8, a: 1 },
     degraded:         { r: 79, g: 216, b: 255, a: 0.25 },

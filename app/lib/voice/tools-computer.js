@@ -59,7 +59,8 @@ function resolveSandboxed(raw) {
     if (!raw || !String(raw).trim()) return { ok: false, reason: 'A path is required.' };
     if (isUncPath(raw)) return { ok: false, reason: 'Network (UNC) paths are not allowed.' };
 
-    const resolved = path.resolve(String(raw));
+    const expanded = String(raw).replace(/%USERPROFILE%/gi, os.homedir());
+    const resolved = path.resolve(expanded);
     if (hasReservedDeviceName(resolved)) {
       return { ok: false, reason: 'That path name is reserved by Windows and cannot be used.' };
     }

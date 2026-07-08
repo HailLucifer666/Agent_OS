@@ -22,7 +22,7 @@ function listAll() {
   return board;
 }
 
-function capture(text) {
+function capture(text, origin = 'dashboard') {
   const id = `pipe-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const card = {
     id,
@@ -31,6 +31,7 @@ function capture(text) {
     progress: 0,
     tags: [],
     created: new Date().toISOString(),
+    origin,
   };
   vault.writeJSON(path.join(stageDir('capture'), `${id}.json`), card);
   return card;

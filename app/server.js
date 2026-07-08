@@ -41,6 +41,7 @@ const { createS2sCompletionsRouter } = require('./lib/voice/s2s-completions');
 const s2sChild = require('./lib/voice/s2s-child');
 const pcChild = require('./lib/voice/pc-child');
 const browserAgent = require('./lib/voice/browser-agent');
+const voiceIntake = require('./lib/voice/intake');
 
 const PORT = process.env.PORT || 4477;
 // Bind to loopback by default so the dashboard (and the process-killing monitor
@@ -1221,6 +1222,8 @@ function emitActivity(kind, detail) {
 
 // Job updates fan out to every connected client (pipeline view listens for these).
 orchestrator.setBroadcast(broadcastAll);
+const checkpointAnnouncer = require('./lib/voice/checkpoint-announcer');
+orchestrator.onJobUpdate(checkpointAnnouncer.attach(broadcastAll));
 
 wss.on('connection', (ws) => {
   // reqId -> AbortController, so 'stop' / socket close can cancel in-flight work.
@@ -1265,9 +1268,10 @@ wss.on('connection', (ws) => {
         full = await nim.chat(messages, { model, onToken, signal: controller.signal, source: 'chat' });
       } else if (agent === 'chain') {
         // Unified agents surface — routes through the model fallback chain.
+        // Uses 'build' brain: Mistral Large → NIM GLM-5.2 → Ollama ornith:9b.
         const chain = require('./lib/models/chain');
         const { content } = await chain.complete({
-          messages, kind: model || 'text', signal: controller.signal,
+          messages, kind: model || 'text', brain: 'build', signal: controller.signal,
         });
         // Simulate streaming by sending the whole response as tokens
         for (let i = 0; i < content.length; i++) {
@@ -1391,18 +1395,6 @@ wss.on('connection', (ws) => {
     }
   }
 
-  // reqId -> last ~6 exchanges for that connection's voice turns. A voice-confirm-reply
-  // continues the SAME reqId's turn (the client re-sends the original reqId), so history
-  // stays scoped per ongoing utterance exchange, not globally per connection.
-  const voiceHistory = new Map();
-
-  function pushVoiceHistory(reqId, role, content) {
-    const hist = voiceHistory.get(reqId) || [];
-    hist.push({ role, content });
-    voiceHistory.set(reqId, hist.slice(-6));
-    return voiceHistory.get(reqId);
-  }
-
   // Emits voice-action for an executed tool result, or voice-confirm if it was danger-gated.
   function emitVoiceActionResult(reqId, result) {
     if (result.confirmPending) {
@@ -1438,8 +1430,8 @@ wss.on('connection', (ws) => {
     send({ type: 'voice-status', reqId, state: 'thinking' });
 
     try {
-      const history = pushVoiceHistory(reqId, 'user', text);
-      const ctx = { dashboard: {}, history, connectionId };
+      const priorTurns = voiceIntake.get(connectionId);
+      const ctx = { dashboard: {}, history: priorTurns, connectionId };
       const result = await voiceAgent.handleUtterance({
         text,
         ctx,
@@ -1448,7 +1440,11 @@ wss.on('connection', (ws) => {
       });
 
       if (result.aborted) return;
-      pushVoiceHistory(reqId, 'assistant', result.say);
+      voiceIntake.append(connectionId, 'user', text);
+      voiceIntake.append(connectionId, 'assistant', result.say);
+      if (result.actions && result.actions.some((a) => a && a.clearIntake)) {
+        voiceIntake.clear(connectionId);
+      }
 
       if (result.confirmPending) {
         // Turn ends here — the spoken confirm prompt already went out via voice-confirm
@@ -1530,7 +1526,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     for (const controller of inFlight.values()) controller.abort();
     inFlight.clear();
-    voiceHistory.clear();
+    voiceIntake.clear(connectionId);
   });
 });
 

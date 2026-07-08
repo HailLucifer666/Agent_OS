@@ -650,6 +650,31 @@
     // 'refresh-view' and 'voice-log' are Phase 3 HUD concerns; Phase 1 ignores them here.
   }
 
+  // ---------- broadcast: checkpoint voice-say ----------
+
+  let pendingCheckpoint = null; // 1-deep queue
+
+  function handleCheckpoint(msg) {
+    notifyEvent('checkpoint', { jobId: msg.jobId, cardId: msg.cardId, stage: msg.stage, artifact: msg.artifact, text: msg.text });
+    const st = getState();
+    if (st === STATES.IDLE || st === STATES.HANDS_FREE) {
+      playCheckpoint(msg);
+    } else {
+      pendingCheckpoint = msg;
+    }
+  }
+
+  function playCheckpoint(msg) {
+    speak(msg.text, msg.audioB64, () => {
+      if (msg.stage === 'done' && msg.artifact && msg.artifact.path) {
+        setTimeout(() => {
+          location.hash = '#/pipeline';
+        }, 800);
+      }
+    });
+  }
+
+
   // ---------- pill DOM + visuals ----------
 
   const ICONS = {
@@ -804,6 +829,13 @@
     if ((newState === STATES.IDLE || newState === STATES.HANDS_FREE) &&
         hfProcessing) {
       hfProcessing = false;
+      // Drain any queued checkpoint before resuming listening
+      if (pendingCheckpoint) {
+        const m = pendingCheckpoint;
+        pendingCheckpoint = null;
+        playCheckpoint(m);
+        return;
+      }
       // Small delay to let any TTS audio fully drain
       setTimeout(() => {
         if (handsFreeActive && !hfProcessing && !hfRecog &&
@@ -820,6 +852,7 @@
 
   window.voiceControl = {
     getState,
+    speak,
     subscribe,
     // Phase 3 (Voice HUD) additive API — event/history read path + confirm banner actions.
     getHistory,
@@ -844,6 +877,9 @@
     }
 
     window.voiceControl._ws.onBroadcast('voice-ui', handleVoiceUiBroadcast);
+    window.voiceControl._ws.onBroadcast('voice-say', (msg) => {
+      if (msg && msg.checkpoint) handleCheckpoint(msg);
+    });
 
     renderPill();
 

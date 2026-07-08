@@ -19,6 +19,9 @@ function setBroadcast(fn) {
   broadcast = fn;
 }
 
+const jobListeners = new Set();
+function onJobUpdate(fn) { jobListeners.add(fn); return () => jobListeners.delete(fn); }
+
 function persist() {
   try {
     vault.writeJSON(JOBS_FILE, { jobs: [...jobs.values()].slice(-MAX_PERSISTED) });
@@ -49,6 +52,9 @@ function emit(job) {
     } catch {
       // a broken socket must never take down the runner
     }
+  }
+  for (const fn of jobListeners) {
+    try { fn(job); } catch { /* listener must not kill pump */ }
   }
 }
 
@@ -87,6 +93,12 @@ async function pump() {
   const { job, prompt, run } = next;
   job.status = 'running';
   job.stage = 'generating';
+  try {
+    const entry = reasoning.getReasoningProvider();
+    job.provider = entry ? entry.id : null;
+  } catch {
+    job.provider = null;
+  }
   emit(job);
 
   try {
@@ -121,4 +133,4 @@ function queuePosition(jobId) {
   return queue.findIndex((q) => q.job.id === jobId) + 1; // 0 = not queued
 }
 
-module.exports = { enqueue, getJob, listJobs, queuePosition, setBroadcast };
+module.exports = { enqueue, getJob, listJobs, queuePosition, setBroadcast, onJobUpdate };
