@@ -1,0 +1,53 @@
+'use strict';
+
+// MYTHOS Phase 0 config schema
+// Keys: type, default, min?, max?, enum?, bool?, required?
+// validate() in index.js reads this to coerce + validate raw env
+
+const SCHEMA = {
+  // MYTHOS entity
+  MYTHOS_NAME:              { type: 'string', default: 'MYTHOS' },
+  MYTHOS_PORT:              { type: 'number', default: 4478, min: 1024, max: 65535 },
+  MYTHOS_BIND:              { type: 'string', default: '127.0.0.1' },
+  MYTHOS_VAULT_ROOT:        { type: 'string', default: './vault' },
+  MYTHOS_TICK_MS:           { type: 'number', default: 1000, min: 100, max: 60000 },
+  MYTHOS_IDLE_SALIENCE:     { type: 'number', default: 0.3, min: 0, max: 1 },
+  MYTHOS_DRY_RUN:           { type: 'bool',  default: false },
+
+  // Logging
+  LOG_LEVEL:                 { type: 'string', default: 'info', enum: ['debug', 'info', 'warn', 'error'] },
+
+  // NOVA passthrough (brain providers)
+  OLLAMA_URL:               { type: 'string', default: 'http://localhost:11434' },
+  GROQ_API_KEY:             { type: 'string', default: '' },
+  MISTRAL_API_KEY:          { type: 'string', default: '' },
+  NIM_API_KEY:              { type: 'string', default: '' },
+  ZCODE_API_KEY:            { type: 'string', default: '' },
+
+  // Brain
+  REFLECT_EVERY:            { type: 'number', default: 60, min: 1 },
+  CONSOLIDATE_EVERY:        { type: 'number', default: 300, min: 1 },
+  EPISODIC_RETENTION_DAYS:  { type: 'number', default: 30, min: 1 },
+  CHAIN_COOLDOWN_MS:        { type: 'number', default: 60000, min: 1000 },
+  MODEL_REGISTRY_TTL_MS:    { type: 'number', default: 300000, min: 10000 },
+
+  // Autonomy
+  AUTONOMOUS_MAX_TIER:      { type: 'number', default: 2, min: 0, max: 4 },
+  GOAL_TOKEN_BUDGET:        { type: 'number', default: 20000, min: 0 },
+  GOAL_ACTION_BUDGET:       { type: 'number', default: 25, min: 0 },
+  MAX_ACTIVE_GOALS:         { type: 'number', default: 5, min: 1, max: 20 },
+  CURIOSITY_MIN_INTERVAL_MS: { type: 'number', default: 600000, min: 0 },
+
+  // Immune
+  STALL_MS:                 { type: 'number', default: 5000, min: 1000 },
+  WATCHDOG_MS:              { type: 'number', default: 2000, min: 500 },
+  BREAKER_FAIL_THRESHOLD:   { type: 'number', default: 3, min: 1 },
+  BREAKER_WINDOW_MS:        { type: 'number', default: 30000, min: 1000 },
+  BREAKER_RESET_MS:         { type: 'number', default: 15000, min: 1000 },
+
+  // Bus
+  BUS_HISTORY_SIZE:          { type: 'number', default: 500, min: 10 },
+  BUS_STORM_MAX:            { type: 'number', default: 400, min: 10 },
+};
+
+module.exports = { SCHEMA };

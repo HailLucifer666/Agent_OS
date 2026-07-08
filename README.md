@@ -41,6 +41,7 @@ Agentic OS runs entirely on your machine — no cloud, no account, no telemetry.
 - [What's left](#whats-left)
 - [Tech stack & layout](#tech-stack--layout)
 - [Documentation](#documentation)
+- [MYTHOS — Autonomous Entity](#mythos--autonomous-entity)
 - [License](#license)
 
 ---
@@ -402,6 +403,16 @@ the-agent-operating-system/
 ├── ROADMAP.md                 # full sprint history
 └── Start Agent OS.bat         # Windows launcher
 ```
+
+---
+
+## MYTHOS — Autonomous Entity
+
+MYTHOS is the next evolution of Agent OS — from request→respond agent dashboard to continuous autonomous entity with an OODA cognitive loop, layered persistent memory, tiered autonomy with audit trails, and a self-healing immune system.
+
+> **Builder entry point:** [`MYTHOS-ARCHITECTURE.md`](MYTHOS-ARCHITECTURE.md) — complete 16-section handoff spec with code snippets, migration map, and phase 0-10 build plan.
+
+Phase 0 foundation is live in [`mythos/`](mythos/) — boots clean, 26 tests green, zero new dependencies. Build phase-by-phase from the architecture spec.
 
 ---
 
