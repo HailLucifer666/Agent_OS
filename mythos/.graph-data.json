@@ -1,0 +1,1938 @@
+{
+  "nodes": [
+    {
+      "id": "pkg_json",
+      "label": "package.json",
+      "color": {
+        "background": "#4E79A7",
+        "border": "#3A5F8A",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#4E79A7"
+        }
+      },
+      "size": 10,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "MYTHOS package.json v0.1.0 — Autonomous Entity runtime (evolved from NOVA)",
+      "community": 0,
+      "community_name": "MYTHOS Core Config",
+      "source_file": "package.json",
+      "file_type": "config",
+      "degree": 0
+    },
+    {
+      "id": "env_example",
+      "label": ".env.example",
+      "color": {
+        "background": "#4E79A7",
+        "border": "#3A5F8A",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#4E79A7"
+        }
+      },
+      "size": 10,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Environment variable template for MYTHOS configuration",
+      "community": 0,
+      "community_name": "MYTHOS Core Config",
+      "source_file": ".env.example",
+      "file_type": "config",
+      "degree": 0
+    },
+    {
+      "id": "mythos_architecture",
+      "label": "MYTHOS-ARCHITECTURE.md",
+      "color": {
+        "background": "#4E79A7",
+        "border": "#3A5F8A",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#4E79A7"
+        }
+      },
+      "size": 10,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "MYTHOS system architecture documentation",
+      "community": 0,
+      "community_name": "MYTHOS Core Config",
+      "source_file": "MYTHOS-ARCHITECTURE.md",
+      "file_type": "docs",
+      "degree": 0
+    },
+    {
+      "id": "roadmap_md",
+      "label": "ROADMAP.md",
+      "color": {
+        "background": "#4E79A7",
+        "border": "#3A5F8A",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#4E79A7"
+        }
+      },
+      "size": 10,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "MYTHOS development roadmap",
+      "community": 0,
+      "community_name": "MYTHOS Core Config",
+      "source_file": "ROADMAP.md",
+      "file_type": "docs",
+      "degree": 0
+    },
+    {
+      "id": "bus_index",
+      "label": "bus/index.js",
+      "color": {
+        "background": "#F28E2B",
+        "border": "#C6711F",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#F28E2B"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Event Bus — publish/subscribe event system with middleware, causal depth guard, storm protection, history",
+      "community": 1,
+      "community_name": "Event Bus",
+      "source_file": "src/core/bus/index.js",
+      "file_type": "code",
+      "degree": 8
+    },
+    {
+      "id": "bus_event",
+      "label": "bus/event.js",
+      "color": {
+        "background": "#F28E2B",
+        "border": "#C6711F",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#F28E2B"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Event factory — creates typed events with causal chain tracking (traceId, causeId, depth)",
+      "community": 1,
+      "community_name": "Event Bus",
+      "source_file": "src/core/bus/event.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "config_index",
+      "label": "config/index.js",
+      "color": {
+        "background": "#E15759",
+        "border": "#B94042",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#E15759"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Config Layer — loads env vars, validates against schema, returns frozen config object",
+      "community": 2,
+      "community_name": "Config Layer",
+      "source_file": "src/core/config/index.js",
+      "file_type": "code",
+      "degree": 3
+    },
+    {
+      "id": "config_schema",
+      "label": "config/schema.js",
+      "color": {
+        "background": "#E15759",
+        "border": "#B94042",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#E15759"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Config Schema — defines all MYTHOS config keys (types, defaults, min/max, enums)",
+      "community": 2,
+      "community_name": "Config Layer",
+      "source_file": "src/core/config/schema.js",
+      "file_type": "code",
+      "degree": 1
+    },
+    {
+      "id": "lifecycle_index",
+      "label": "lifecycle/index.js",
+      "color": {
+        "background": "#76B7B2",
+        "border": "#5A938E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#76B7B2"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Lifecycle Manager — 14-step boot sequence with FAIL-FAST/DEGRADED policies + graceful shutdown",
+      "community": 3,
+      "community_name": "Lifecycle",
+      "source_file": "src/core/lifecycle/index.js",
+      "file_type": "code",
+      "degree": 3
+    },
+    {
+      "id": "logger",
+      "label": "logger.js",
+      "color": {
+        "background": "#59A14F",
+        "border": "#437D3B",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#59A14F"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Structured JSON logger — one JSON line per entry to stdout/stderr. Levels: debug, info, warn, error",
+      "community": 4,
+      "community_name": "Logger",
+      "source_file": "src/core/logger.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "memory_index",
+      "label": "memory/index.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Memory Facade — wires all memory stores together (episodic, semantic, skills, audit, checkpoints, working)",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/index.js",
+      "file_type": "code",
+      "degree": 9
+    },
+    {
+      "id": "memory_fs_store",
+      "label": "memory/fs-store.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "FsStore — base filesystem abstraction for vault: read/write JSON, JSONL append, prune old files",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/fs-store.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "memory_episodic",
+      "label": "memory/episodic.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Episodic Memory — daily JSONL files with lexical scoring, recall, prune, tail for crash recovery",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/episodic.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "memory_semantic",
+      "label": "memory/semantic.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Semantic Memory — markdown files with parseable sidecar. Keyword-based recall, confidence pruning",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/semantic.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "memory_skills",
+      "label": "memory/skills.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Skills Store — procedural memory with tool/step/successCriteria. Recall by keyword, use tracking",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/skills.js",
+      "file_type": "code",
+      "degree": 3
+    },
+    {
+      "id": "memory_working",
+      "label": "memory/working.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Working Memory — tick state, perception queue, context map, spend tracking, snapshot for checkpoints",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/working.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "memory_audit_writer",
+      "label": "memory/audit-writer.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Audit Writer — writes action/tool audit trails with sensitive-key redaction, query by goal/tool/decision",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/audit-writer.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "memory_checkpoints",
+      "label": "memory/checkpoints.js",
+      "color": {
+        "background": "#EDC948",
+        "border": "#C9A62E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#EDC948"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Checkpoint Store — atomic save/load/clear of latest tick snapshot for crash recovery",
+      "community": 5,
+      "community_name": "Memory",
+      "source_file": "src/core/memory/checkpoints.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "brain_index",
+      "label": "brain/index.js",
+      "color": {
+        "background": "#B07AA1",
+        "border": "#8D6080",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#B07AA1"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Brain — unified think() interface. Uses chain.complete, parses JSON with repair, records spend via spend.js",
+      "community": 6,
+      "community_name": "Brain",
+      "source_file": "src/core/brain/index.js",
+      "file_type": "code",
+      "degree": 5
+    },
+    {
+      "id": "brain_registry",
+      "label": "brain/registry.js",
+      "color": {
+        "background": "#B07AA1",
+        "border": "#8D6080",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#B07AA1"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Brain Registry — probes configured providers, produces ranked alive-only model chains per lane",
+      "community": 6,
+      "community_name": "Brain",
+      "source_file": "src/core/brain/registry.js",
+      "file_type": "code",
+      "degree": 7
+    },
+    {
+      "id": "brain_chain",
+      "label": "brain/chain.js",
+      "color": {
+        "background": "#B07AA1",
+        "border": "#8D6080",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#B07AA1"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Brain Chain — walks ranked model list with per-lane cooldown, failover, key rotation. Requires all providers",
+      "community": 6,
+      "community_name": "Brain",
+      "source_file": "src/core/brain/chain.js",
+      "file_type": "code",
+      "degree": 9
+    },
+    {
+      "id": "brain_spend",
+      "label": "brain/spend.js",
+      "color": {
+        "background": "#B07AA1",
+        "border": "#8D6080",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#B07AA1"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Brain Spend — in-memory ring buffer token tracking. Estimates ~4 chars/token, per-provider and daily aggregates",
+      "community": 6,
+      "community_name": "Brain",
+      "source_file": "src/core/brain/spend.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "brain_lanes_default",
+      "label": "brain/lanes.default.js",
+      "color": {
+        "background": "#B07AA1",
+        "border": "#8D6080",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#B07AA1"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Brain Lane Tables — 6 lane preference tables (voice, build, simple, text, vision, embed), ranked best-first",
+      "community": 6,
+      "community_name": "Brain",
+      "source_file": "src/core/brain/lanes.default.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "cortex_index",
+      "label": "cortex/index.js",
+      "color": {
+        "background": "#FF9DA7",
+        "border": "#D97D87",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF9DA7"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Cortex — OODA cognitive loop orchestrator (Observe, Orient, Decide, Act, Reflect). Reentrancy guard",
+      "community": 7,
+      "community_name": "Cortex",
+      "source_file": "src/core/cortex/index.js",
+      "file_type": "code",
+      "degree": 4
+    },
+    {
+      "id": "cortex_ooda",
+      "label": "cortex/ooda.js",
+      "color": {
+        "background": "#FF9DA7",
+        "border": "#D97D87",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF9DA7"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "OODA Stages — pure stateless helpers: orient (salience ranking + goal boost), reflect/consolidate tick counters",
+      "community": 7,
+      "community_name": "Cortex",
+      "source_file": "src/core/cortex/ooda.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "goals_index",
+      "label": "goals/index.js",
+      "color": {
+        "background": "#9C755F",
+        "border": "#7A5D4A",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#9C755F"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Goal System — CRUD, arbiter (drive weight + priority + urgency + budget), planner (procedural recall + brain), budget enforcement",
+      "community": 8,
+      "community_name": "Goals",
+      "source_file": "src/core/goals/index.js",
+      "file_type": "code",
+      "degree": 4
+    },
+    {
+      "id": "sensors_timer",
+      "label": "sensors/timer.js",
+      "color": {
+        "background": "#BAB0AC",
+        "border": "#968E8B",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#BAB0AC"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Timer Sensor — periodic sensor.timer event emitter. Generation tracking prevents stale timers",
+      "community": 9,
+      "community_name": "Sensors",
+      "source_file": "src/core/sensors/timer.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "quota",
+      "label": "quota.js",
+      "color": {
+        "background": "#76EEC6",
+        "border": "#5ABF9E",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#76EEC6"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Quota Tracker — free-tier quota tracking per provider (groq, mistral, nim, zcode, ollama). Daily caps, resets",
+      "community": 10,
+      "community_name": "Quota",
+      "source_file": "src/core/quota.js",
+      "file_type": "code",
+      "degree": 1
+    },
+    {
+      "id": "provider_zcode",
+      "label": "providers/zcode.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Z.AI / ZCode provider (OpenAI-compatible) — base URL api.z.ai/api/paas/v4, model glm-4.6",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/zcode.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "provider_nim",
+      "label": "providers/nim.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "NVIDIA NIM provider (OpenAI-compatible) — first key lane, alwaysMaxTokens, model nemotron-70b",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/nim.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "provider_nim2",
+      "label": "providers/nim2.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "NVIDIA NIM provider (2nd key lane) — rotation partner for nim.js, uses NIM_API_KEY_2",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/nim2.js",
+      "file_type": "code",
+      "degree": 2
+    },
+    {
+      "id": "provider_groq",
+      "label": "providers/groq.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Groq LPU provider (OpenAI-compatible) — fastest LPU inference, ~30 RPM, model llama-3.3-70b-versatile",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/groq.js",
+      "file_type": "code",
+      "degree": 3
+    },
+    {
+      "id": "provider_mistral",
+      "label": "providers/mistral.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Mistral La Plateforme provider (OpenAI-compatible) — free Experiment mode, model mistral-small-latest",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/mistral.js",
+      "file_type": "code",
+      "degree": 3
+    },
+    {
+      "id": "provider_ollama",
+      "label": "providers/ollama.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Ollama provider — local chat streaming with think-tag filtering, vision message translation, model listing",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/ollama.js",
+      "file_type": "code",
+      "degree": 3
+    },
+    {
+      "id": "provider_claude_cli",
+      "label": "providers/claude-cli.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "Claude Code CLI provider — child_process streaming via claude CLI, session resume support",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/claude-cli.js",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "provider_openai_compat",
+      "label": "providers/openai-compat.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "OpenAI-Compatible Provider Factory — generic SSE streaming. Powers zcode, nim, nim2, groq, mistral",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/openai-compat.js",
+      "file_type": "code",
+      "degree": 6
+    },
+    {
+      "id": "provider_openrouter",
+      "label": "providers/openrouter.js",
+      "color": {
+        "background": "#FF6F61",
+        "border": "#D45549",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#FF6F61"
+        }
+      },
+      "size": 15,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "OpenRouter provider — multi-model routing via openrouter.ai API, SSE streaming",
+      "community": 11,
+      "community_name": "Providers",
+      "source_file": "providers/openrouter.js",
+      "file_type": "code",
+      "degree": 1
+    },
+    {
+      "id": "main",
+      "label": "main.js",
+      "color": {
+        "background": "#4E79A7",
+        "border": "#3A5F8A",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#4E79A7"
+        }
+      },
+      "size": 20,
+      "font": {
+        "size": 12,
+        "color": "#ffffff"
+      },
+      "title": "MYTHOS Entry Point — Phase 0 boot: config, logger, bus, vault dirs, lifecycle, idle heartbeat",
+      "community": 0,
+      "community_name": "MYTHOS Core Config",
+      "source_file": "src/main.js",
+      "file_type": "code",
+      "degree": 5
+    },
+    {
+      "id": "test_boot",
+      "label": "test/boot.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Boot test — spawns main.js, verifies ALIVE log and SIGINT exit 0",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/boot.test.js",
+      "file_type": "test",
+      "degree": 1
+    },
+    {
+      "id": "test_brain",
+      "label": "test/brain.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Brain tests — lanes.default, spend, chain internals, registry parseOverride, brain/index think, tryParseWithRepair, quota, openai-compat",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/brain.test.js",
+      "file_type": "test",
+      "degree": 9
+    },
+    {
+      "id": "test_bus",
+      "label": "test/bus.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Bus tests — subscribe, wildcard, middleware, causal chain, depth cap, history, stats, error isolation",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/bus.test.js",
+      "file_type": "test",
+      "degree": 1
+    },
+    {
+      "id": "test_config",
+      "label": "test/config.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Config tests — valid env, overrides, boolean coercion, validation errors, min/max, frozen config",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/config.test.js",
+      "file_type": "test",
+      "degree": 1
+    },
+    {
+      "id": "test_cortex_goals",
+      "label": "test/cortex-goals.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Cortex+Goals tests — timer sensor, ooda orient/reflect, cortex tick, goals CRUD/arbiter/planner/budget",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/cortex-goals.test.js",
+      "file_type": "test",
+      "degree": 5
+    },
+    {
+      "id": "test_helpers",
+      "label": "test/helpers.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Test helpers — tempVaultDir, cleanupVaultDir, fakeBus with spy helpers",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/helpers.js",
+      "file_type": "test",
+      "degree": 1
+    },
+    {
+      "id": "test_lifecycle",
+      "label": "test/lifecycle.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Lifecycle tests — boot steps, lifecycle events, fail-fast, degraded, shutdown state",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/lifecycle.test.js",
+      "file_type": "test",
+      "degree": 3
+    },
+    {
+      "id": "test_memory",
+      "label": "test/memory.test.js",
+      "color": {
+        "background": "#88CCEE",
+        "border": "#6AA8C7",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#88CCEE"
+        }
+      },
+      "size": 12,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Memory tests — fs-store, episodic, semantic, skills, working memory, audit writer, checkpoints, memory facade",
+      "community": 12,
+      "community_name": "Tests",
+      "source_file": "test/memory.test.js",
+      "file_type": "test",
+      "degree": 9
+    },
+    {
+      "id": "vault_audit",
+      "label": "vault/Audit/.gitkeep",
+      "color": {
+        "background": "#CCBB44",
+        "border": "#A89837",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#CCBB44"
+        }
+      },
+      "size": 8,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Audit vault directory — stores daily JSONL audit trails",
+      "community": 13,
+      "community_name": "Vault",
+      "source_file": "vault/Audit/.gitkeep",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "vault_checkpoints",
+      "label": "vault/Checkpoints/.gitkeep",
+      "color": {
+        "background": "#CCBB44",
+        "border": "#A89837",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#CCBB44"
+        }
+      },
+      "size": 8,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Checkpoints vault directory — stores tick snapshots for crash recovery",
+      "community": 13,
+      "community_name": "Vault",
+      "source_file": "vault/Checkpoints/.gitkeep",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "vault_episodic",
+      "label": "vault/Episodic/.gitkeep",
+      "color": {
+        "background": "#CCBB44",
+        "border": "#A89837",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#CCBB44"
+        }
+      },
+      "size": 8,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Episodic vault directory — stores daily JSONL episode files",
+      "community": 13,
+      "community_name": "Vault",
+      "source_file": "vault/Episodic/.gitkeep",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "vault_identity",
+      "label": "vault/Identity/.gitkeep",
+      "color": {
+        "background": "#CCBB44",
+        "border": "#A89837",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#CCBB44"
+        }
+      },
+      "size": 8,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Identity vault directory — entity identity storage",
+      "community": 13,
+      "community_name": "Vault",
+      "source_file": "vault/Identity/.gitkeep",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "vault_semantic",
+      "label": "vault/Semantic/.gitkeep",
+      "color": {
+        "background": "#CCBB44",
+        "border": "#A89837",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#CCBB44"
+        }
+      },
+      "size": 8,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Semantic vault directory — stores markdown knowledge files with sidecars",
+      "community": 13,
+      "community_name": "Vault",
+      "source_file": "vault/Semantic/.gitkeep",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "vault_skills",
+      "label": "vault/Skills/.gitkeep",
+      "color": {
+        "background": "#CCBB44",
+        "border": "#A89837",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#CCBB44"
+        }
+      },
+      "size": 8,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Skills vault directory — stores procedural skill markdown files",
+      "community": 13,
+      "community_name": "Vault",
+      "source_file": "vault/Skills/.gitkeep",
+      "file_type": "code",
+      "degree": 0
+    },
+    {
+      "id": "fable_roadmap",
+      "label": "Mythos Fable Roadmap.txt",
+      "color": {
+        "background": "#DDCC77",
+        "border": "#B8A861",
+        "highlight": {
+          "background": "#ffffff",
+          "border": "#DDCC77"
+        }
+      },
+      "size": 10,
+      "font": {
+        "size": 0,
+        "color": "#ffffff"
+      },
+      "title": "Mythos Fable Roadmap — narrative/fable-style roadmap document",
+      "community": 14,
+      "community_name": "Fable Roadmap",
+      "source_file": "Mythos Fable Roadmap.txt",
+      "file_type": "docs",
+      "degree": 0
+    }
+  ],
+  "edges": [
+    {
+      "from": "main",
+      "to": "config_index",
+      "color": {
+        "color": "#4E79A7"
+      },
+      "width": 2,
+      "title": "require('./core/config') — loads config at boot"
+    },
+    {
+      "from": "main",
+      "to": "bus_index",
+      "color": {
+        "color": "#4E79A7"
+      },
+      "width": 2,
+      "title": "require('./core/bus') — creates event bus at boot"
+    },
+    {
+      "from": "main",
+      "to": "logger",
+      "color": {
+        "color": "#4E79A7"
+      },
+      "width": 2,
+      "title": "require('./core/logger') — creates structured logger at boot"
+    },
+    {
+      "from": "main",
+      "to": "lifecycle_index",
+      "color": {
+        "color": "#4E79A7"
+      },
+      "width": 2,
+      "title": "require('./core/lifecycle') — creates lifecycle manager at boot"
+    },
+    {
+      "from": "bus_index",
+      "to": "bus_event",
+      "color": {
+        "color": "#F28E2B"
+      },
+      "width": 2,
+      "title": "require('./event') — uses createEvent for publish/emit"
+    },
+    {
+      "from": "config_index",
+      "to": "config_schema",
+      "color": {
+        "color": "#E15759"
+      },
+      "width": 2,
+      "title": "require('./schema') — imports SCHEMA for validation"
+    },
+    {
+      "from": "lifecycle_index",
+      "to": "bus_event",
+      "color": {
+        "color": "#76B7B2"
+      },
+      "width": 1.5,
+      "title": "require('../bus/event') — creates lifecycle events via createEvent"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_fs_store",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./fs-store') — base filesystem layer"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_episodic",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./episodic') — episodic memory store"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_semantic",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./semantic') — semantic memory store"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_skills",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./skills') — skills procedural memory"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_working",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./working') — working memory"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_audit_writer",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./audit-writer') — audit trail writer"
+    },
+    {
+      "from": "memory_index",
+      "to": "memory_checkpoints",
+      "color": {
+        "color": "#EDC948"
+      },
+      "width": 2,
+      "title": "require('./checkpoints') — checkpoint store"
+    },
+    {
+      "from": "brain_index",
+      "to": "brain_registry",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 2,
+      "title": "require('./registry') — lazy-loaded for probe()"
+    },
+    {
+      "from": "brain_index",
+      "to": "brain_chain",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 2,
+      "title": "require('./chain') — lazy-loaded for think()"
+    },
+    {
+      "from": "brain_index",
+      "to": "brain_spend",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 2,
+      "title": "require('./spend') — lazy-loaded for spend recording"
+    },
+    {
+      "from": "brain_chain",
+      "to": "brain_registry",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 2,
+      "title": "require('./registry') — gets ranked chain via registry.chainFor()"
+    },
+    {
+      "from": "brain_chain",
+      "to": "provider_zcode",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/zcode') — zcode lane in chain"
+    },
+    {
+      "from": "brain_chain",
+      "to": "provider_nim",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/nim') — nim first-key lane"
+    },
+    {
+      "from": "brain_chain",
+      "to": "provider_nim2",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/nim2') — nim second-key lane (rotation)"
+    },
+    {
+      "from": "brain_chain",
+      "to": "provider_groq",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/groq') — groq lane in chain"
+    },
+    {
+      "from": "brain_chain",
+      "to": "provider_mistral",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/mistral') — mistral lane in chain"
+    },
+    {
+      "from": "brain_chain",
+      "to": "provider_ollama",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/ollama') — ollama lane in chain (vision + text)"
+    },
+    {
+      "from": "brain_registry",
+      "to": "provider_ollama",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/ollama') — probeOllama via ollama.listModels()"
+    },
+    {
+      "from": "brain_registry",
+      "to": "provider_groq",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/groq') — probeGroq via groq.isAvailable()"
+    },
+    {
+      "from": "brain_registry",
+      "to": "provider_mistral",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 1.5,
+      "title": "require('../../../providers/mistral') — probeMistral via mistral.isAvailable()"
+    },
+    {
+      "from": "brain_registry",
+      "to": "brain_lanes_default",
+      "color": {
+        "color": "#B07AA1"
+      },
+      "width": 2,
+      "title": "require('./lanes.default') — imports BRAIN_TABLES for chainFor()"
+    },
+    {
+      "from": "cortex_index",
+      "to": "cortex_ooda",
+      "color": {
+        "color": "#FF9DA7"
+      },
+      "width": 2,
+      "title": "require('./ooda') — OODA stage functions (orient, shouldReflect, shouldConsolidate)"
+    },
+    {
+      "from": "cortex_index",
+      "to": "memory_index",
+      "color": {
+        "color": "#FF9DA7"
+      },
+      "width": 1.5,
+      "title": "conceptual — cortex uses memory.working, memory.episodic, memory.consolidate"
+    },
+    {
+      "from": "cortex_index",
+      "to": "goals_index",
+      "color": {
+        "color": "#FF9DA7"
+      },
+      "width": 1.5,
+      "title": "conceptual — cortex uses goals.arbitrate(), goals.plan(), goals.debitBudget()"
+    },
+    {
+      "from": "goals_index",
+      "to": "memory_skills",
+      "color": {
+        "color": "#9C755F"
+      },
+      "width": 1.5,
+      "title": "conceptual — planner recalls skills via memory.skills.recall()"
+    },
+    {
+      "from": "goals_index",
+      "to": "brain_index",
+      "color": {
+        "color": "#9C755F"
+      },
+      "width": 1.5,
+      "title": "conceptual — planner uses brain.think() when no skill match"
+    },
+    {
+      "from": "provider_zcode",
+      "to": "provider_openai_compat",
+      "color": {
+        "color": "#FF6F61"
+      },
+      "width": 2,
+      "title": "require('./openai-compat') — factory for zcode provider"
+    },
+    {
+      "from": "provider_nim",
+      "to": "provider_openai_compat",
+      "color": {
+        "color": "#FF6F61"
+      },
+      "width": 2,
+      "title": "require('./openai-compat') — factory for nim provider"
+    },
+    {
+      "from": "provider_nim2",
+      "to": "provider_openai_compat",
+      "color": {
+        "color": "#FF6F61"
+      },
+      "width": 2,
+      "title": "require('./openai-compat') — factory for nim2 provider"
+    },
+    {
+      "from": "provider_groq",
+      "to": "provider_openai_compat",
+      "color": {
+        "color": "#FF6F61"
+      },
+      "width": 2,
+      "title": "require('./openai-compat') — factory for groq provider"
+    },
+    {
+      "from": "provider_mistral",
+      "to": "provider_openai_compat",
+      "color": {
+        "color": "#FF6F61"
+      },
+      "width": 2,
+      "title": "require('./openai-compat') — factory for mistral provider"
+    },
+    {
+      "from": "sensors_timer",
+      "to": "bus_index",
+      "color": {
+        "color": "#BAB0AC"
+      },
+      "width": 1.5,
+      "title": "conceptual — timer emits sensor.timer events via bus.emit()"
+    },
+    {
+      "from": "test_boot",
+      "to": "main",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "test spawns src/main.js as child process"
+    },
+    {
+      "from": "test_brain",
+      "to": "brain_lanes_default",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/brain/lanes.default')"
+    },
+    {
+      "from": "test_brain",
+      "to": "brain_spend",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/brain/spend')"
+    },
+    {
+      "from": "test_brain",
+      "to": "brain_chain",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/brain/chain')"
+    },
+    {
+      "from": "test_brain",
+      "to": "brain_registry",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/brain/registry')"
+    },
+    {
+      "from": "test_brain",
+      "to": "brain_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/brain/index')"
+    },
+    {
+      "from": "test_brain",
+      "to": "quota",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/quota')"
+    },
+    {
+      "from": "test_brain",
+      "to": "provider_openai_compat",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../providers/openai-compat')"
+    },
+    {
+      "from": "test_brain",
+      "to": "provider_ollama",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../providers/ollama')"
+    },
+    {
+      "from": "test_brain",
+      "to": "provider_openrouter",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../providers/openrouter')"
+    },
+    {
+      "from": "test_bus",
+      "to": "bus_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/bus')"
+    },
+    {
+      "from": "test_config",
+      "to": "config_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/config')"
+    },
+    {
+      "from": "test_cortex_goals",
+      "to": "sensors_timer",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/sensors/timer')"
+    },
+    {
+      "from": "test_cortex_goals",
+      "to": "cortex_ooda",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/cortex/ooda')"
+    },
+    {
+      "from": "test_cortex_goals",
+      "to": "cortex_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/cortex')"
+    },
+    {
+      "from": "test_cortex_goals",
+      "to": "goals_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/goals')"
+    },
+    {
+      "from": "test_cortex_goals",
+      "to": "bus_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/bus') via fakeBus helper"
+    },
+    {
+      "from": "test_helpers",
+      "to": "bus_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/bus') via fakeBus helper"
+    },
+    {
+      "from": "test_lifecycle",
+      "to": "bus_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/bus')"
+    },
+    {
+      "from": "test_lifecycle",
+      "to": "lifecycle_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/lifecycle')"
+    },
+    {
+      "from": "test_lifecycle",
+      "to": "logger",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/logger')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_fs_store",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/fs-store')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_episodic",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/episodic')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_semantic",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/semantic')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_skills",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/skills')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_working",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/working')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_audit_writer",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/audit-writer')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_checkpoints",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory/checkpoints')"
+    },
+    {
+      "from": "test_memory",
+      "to": "memory_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/memory')"
+    },
+    {
+      "from": "test_memory",
+      "to": "bus_index",
+      "color": {
+        "color": "#88CCEE"
+      },
+      "width": 1,
+      "title": "require('../src/core/bus') via fakeBus helper"
+    }
+  ],
+  "communities": [
+    {
+      "cid": 0,
+      "label": "MYTHOS Core Config",
+      "color": "#4E79A7",
+      "count": 5
+    },
+    {
+      "cid": 1,
+      "label": "Event Bus",
+      "color": "#F28E2B",
+      "count": 2
+    },
+    {
+      "cid": 2,
+      "label": "Config Layer",
+      "color": "#E15759",
+      "count": 2
+    },
+    {
+      "cid": 3,
+      "label": "Lifecycle",
+      "color": "#76B7B2",
+      "count": 1
+    },
+    {
+      "cid": 4,
+      "label": "Logger",
+      "color": "#59A14F",
+      "count": 1
+    },
+    {
+      "cid": 5,
+      "label": "Memory",
+      "color": "#EDC948",
+      "count": 8
+    },
+    {
+      "cid": 6,
+      "label": "Brain",
+      "color": "#B07AA1",
+      "count": 5
+    },
+    {
+      "cid": 7,
+      "label": "Cortex",
+      "color": "#FF9DA7",
+      "count": 2
+    },
+    {
+      "cid": 8,
+      "label": "Goals",
+      "color": "#9C755F",
+      "count": 1
+    },
+    {
+      "cid": 9,
+      "label": "Sensors",
+      "color": "#BAB0AC",
+      "count": 1
+    },
+    {
+      "cid": 10,
+      "label": "Quota",
+      "color": "#76EEC6",
+      "count": 1
+    },
+    {
+      "cid": 11,
+      "label": "Providers",
+      "color": "#FF6F61",
+      "count": 9
+    },
+    {
+      "cid": 12,
+      "label": "Tests",
+      "color": "#88CCEE",
+      "count": 8
+    },
+    {
+      "cid": 13,
+      "label": "Vault",
+      "color": "#CCBB44",
+      "count": 6
+    },
+    {
+      "cid": 14,
+      "label": "Fable Roadmap",
+      "color": "#DDCC77",
+      "count": 1
+    }
+  ]
+}
