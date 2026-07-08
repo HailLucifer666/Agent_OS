@@ -9,6 +9,20 @@
 
 ---
 
+## ⚠️ MANDATORY — Update This File On Every Phase Push
+
+**This ROADMAP.md and graphify-out/graph.html MUST be updated and pushed with every
+phase gate commit. No phase is done until both files are synced.**
+
+**Procedure:**
+1. Flip the phase deliverables from ⬚ to ✅
+2. Update the Progress table (test count, commit SHA)
+3. Append the new commit to the Commit Log table
+4. Regenerate `graphify-out/graph.html` with new nodes/edges for the phase
+5. `git add -f graphify-out/graph.html mythos/ROADMAP.md && git commit && git push`
+
+---
+
 ## Progress
 
 | Phase | Status | Tests | Commit |

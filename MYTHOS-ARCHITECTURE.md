@@ -5,6 +5,27 @@
 
 ---
 
+## ⚠️ MANDATORY SYNC FILES — UPDATE ON EVERY PUSH
+
+The following files **MUST** be updated and committed alongside every phase gate push.
+No phase is considered complete until both files reflect the current state.
+
+| File | Action | Location |
+|---|---|---|
+| `mythos/ROADMAP.md` | Mark phase ✅ Done, update test count, append commit SHA to log | `mythos/ROADMAP.md` |
+| `graphify-out/graph.html` | Regenerate with new MYTHOS nodes/edges for completed phase | `graphify-out/graphify-out/graph.html` |
+
+**Procedure for every phase completion:**
+1. Run `npm test` — must be green
+2. Update `mythos/ROADMAP.md`: flip phase status to ✅ Done, update test count in Progress table, add commit to Commit Log
+3. Regenerate `graphify-out/graph.html`: add new module nodes + dependency edges for the phase (use `mythos/.graph-data.json` as source, merge into existing NOVA data with community ID offset +50)
+4. `git add -f graphify-out/graph.html mythos/ROADMAP.md`
+5. Commit and push together
+
+**Skipping this step blocks the phase gate.**
+
+---
+
 ## §1 Vision & Entity Principles
 
 NOVA is a request→respond agent dashboard: the user asks, the system answers. MYTHOS evolves NOVA 100× into a **continuous autonomous entity** — an always-on cognitive loop that perceives, reasons, acts, and self-heals without a human in the loop for every decision.
