@@ -52,6 +52,12 @@ const SCHEMA = {
   // Bus
   BUS_HISTORY_SIZE:          { type: 'number', default: 500, min: 10 },
   BUS_STORM_MAX:            { type: 'number', default: 400, min: 10 },
+
+  // Effectors & Sensors (Phase 7)
+  MYTHOS_BUILD_CONCURRENCY:  { type: 'number', default: 1, min: 1, max: 8 },
+  MYTHOS_JOBS_MAX_PERSISTED: { type: 'number', default: 100, min: 10 },
+  MYTHOS_WATCH_DIRS:         { type: 'string', default: '' },
+  MYTHOS_FILE_DEBOUNCE_MS:   { type: 'number', default: 500, min: 50 },
 };
 
 module.exports = { SCHEMA };

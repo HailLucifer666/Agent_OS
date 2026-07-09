@@ -20,6 +20,22 @@ const { createWatchdog } = require('./core/immune/watchdog');
 const { createAnnouncer } = require('./core/immune/announcer');
 const { createMonitor, recoverFromCrash } = require('./core/immune/monitor');
 const { createMetricSensor } = require('./core/sensors/metric');
+const { createEffectorHub } = require('./core/effectors/hub');
+const { createBuildRunner } = require('./core/effectors/build-runner');
+const { createPipelineEffector } = require('./core/effectors/pipeline');
+const { createKanbanEffector } = require('./core/effectors/kanban');
+const { createAgentActions } = require('./core/effectors/agent-actions');
+const { createGoalsMdBridge } = require('./core/effectors/goals');
+const { createVoiceEffector } = require('./core/effectors/voice');
+const { registerFromComputer } = require('./core/effectors/from-computer');
+const { registerFromPc } = require('./core/effectors/from-pc');
+const { registerFromBrowser } = require('./core/effectors/from-browser');
+const { registerFromDashboard } = require('./core/effectors/from-dashboard');
+const { registerFromProject } = require('./core/effectors/from-project');
+const abtop = require('./core/effectors/collectors/abtop');
+const { createFileSensor } = require('./core/sensors/file');
+const { createWsSensor } = require('./core/sensors/ws');
+const { createJobSensor } = require('./core/sensors/job');
 const fs = require('fs');
 
 // Temporary stubs for modules that ship in later phases. Lesson #3: gating
@@ -35,15 +51,6 @@ function createIdentityStub(ctx) {
     init: async function() {},
     checkBoundary: function() { return null; },   // no denies until boundaries.md exists
     persona: function() { return ctx.config.MYTHOS_NAME; }
-  };
-}
-
-function createNullEffectors() {
-  // [TEMP — remove when Phase 7 ships src/core/effectors/hub.js]
-  return {
-    get: function() { return undefined; },        // no dangerWhen overrides until Phase 7
-    breakers: { allow: function() { return true; } },
-    invoke: async function() { return { ok: false, reason: 'effectors-not-yet-wired (ships in P7)' }; }
   };
 }
 
@@ -94,6 +101,10 @@ async function main() {
   let timerSensor = null;
   let immune = null; // { probes, diagnostician, healer, watchdog, announcer, monitor }
   let metricSensor = null;
+  let buildRunner = null;
+  let fileSensor = null;
+  let wsSensor = null;
+  let jobSensor = null;
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -128,8 +139,9 @@ async function main() {
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
       const announcer = createAnnouncer({
         bus: bus, config: config,
-        // Phase 7 has no voice effector yet — never a silent no-op. Re-emits onto
-        // the 'action' channel for a future voice effector to pick up.
+        // The 'speak' voice effector (Phase 7) is dispatched through Cortex's normal
+        // effectors.invoke() path, not called directly from here — never a silent
+        // no-op. Re-emits onto the 'action' channel for any future direct listener.
         speak: function(text) { bus.emit('action.speak-requested', { text: text }); return Promise.resolve(); }
       });
       const monitor = createMonitor({ bus: bus, config: config, memory: memory });
@@ -181,23 +193,63 @@ async function main() {
     }},
 
     { name: 'leash', fn: function() {
-      // [Phase 5 — NEW] effectors stub built here (immediately before leash,
-      // which requires it) rather than inline in the cortex step — see
-      // createNullEffectors above; Phase 7 replaces this call site. Boot order
-      // is identity -> goals -> effectors -> leash -> cortex, deviating from
-      // MYTHOS-PHASE-BUILD-SPEC.md §13's literal step-position numbers on
-      // purpose (Phase 5, Ambiguity #5) because leash's constructor deps
-      // (identity, goals, effectors) must all exist first. fail-fast: T>=3
-      // fail-closed gating depends on the audit writer being live.
-      effectors = createNullEffectors();
+      // [Phase 7 — NEW] Real effector hub + all 45 tool effectors + the goals-effector
+      // bridge + voice effector, built here (immediately before leash, which requires
+      // it) rather than inline in the cortex step — createNullEffectors (Phase 5 stub)
+      // is deleted wholesale, not patched, per its own header comment. Boot order stays
+      // identity -> goals -> effectors -> leash -> cortex (Phase 5, Ambiguity #5)
+      // because leash's constructor deps (identity, goals, effectors) must all exist
+      // first. fail-fast: a Cortex with zero registered effectors is not a smaller
+      // entity, it's a broken one (every decide() output would dead-end at
+      // 'unknown-effector') — see Phase 7's Anti-Drift Checklist and Integration Points.
+      var hub = createEffectorHub({ bus: bus, config: config });
+
+      var pipelineEffector = createPipelineEffector({ fs: memory.fs });
+      var kanbanEffector = createKanbanEffector({ fs: memory.fs });
+      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs });
+      var agentActionsEffector = createAgentActions({
+        fs: memory.fs, pipeline: pipelineEffector, kanban: kanbanEffector, buildRunner: buildRunner
+      });
+
+      // goals-effector: Goals.md <-> GoalSystem bridge (Spec Ambiguities #6), registered
+      // under a named (non-tool, non-breaker-gated) service id — see hub.js's
+      // registerNamed CROSS-PHASE FIX comment.
+      var goalsBridge = createGoalsMdBridge({ fs: memory.fs, goalSystem: goals, bus: bus });
+      goalsBridge.sync();  // reconcile Goals.md -> GoalSystem once at boot
+      hub.registerNamed('goals-effector', goalsBridge);
+
+      // NOTE: abtop.start() (the optional NOVA agent-CLI-session poller behind
+      // monitor_snapshot/kill_session) is deliberately NOT started here. In NOVA it was
+      // started by server.js, i.e. whatever owns the dashboard surface — a role Phase 9
+      // takes on in MYTHOS, not main.js's headless boot sequence. Starting it here was
+      // tried and reverted: it spawns a shell-wrapped child process (`spawn(..., {shell:
+      // true})`) that changes how Windows delivers console signals to the whole process
+      // group, breaking graceful SIGINT shutdown (verified via test/boot.test.js — see
+      // git history). Until Phase 9 calls abtop.start() itself, the two tools stay
+      // honest-inert (abtop.getState() reports enabled:false), which is correct: there
+      // is no dashboard process to monitor CLI sessions for yet.
+      registerFromComputer(hub);
+      registerFromPc(hub);
+      registerFromBrowser(hub);
+      registerFromDashboard(hub, {
+        goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
+        agentActions: agentActionsEffector, buildRunner: buildRunner,
+        probes: immune.probes, abtop: abtop, config: config
+      });
+      registerFromProject(hub, { pipeline: pipelineEffector, agentActions: agentActionsEffector });
+      hub.register(createVoiceEffector({ config: config }));
+
+      effectors = hub;
+      logger.info('effectors.ready', { count: effectors.count() });
+
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors });
       logger.info('leash.ready', {});
     }},
 
     { name: 'cortex', fn: function() {
-      // [Phase 5 — NEW: receives the real leash + stub effectors constructed
-      // above] Per the Phase 4.5 D-39 fix, createCortex throws at construction
-      // if either is missing.
+      // [Phase 5 — NEW: receives the real leash] [Phase 7 — NEW: receives the real
+      // effector hub, replacing the Phase 5 null-effectors stub] Per the Phase 4.5
+      // D-39 fix, createCortex throws at construction if either is missing.
       cortex = createCortex({ bus, memory, goals, brain, leash, effectors, config });
       cortex.start();
       // [Phase 6 — NEW] watchdog starts alongside cortex so lastTickAt is always fresh
@@ -206,7 +258,14 @@ async function main() {
       logger.info('cortex.started', { generation: cortex.generation });
     }},
 
-    { name: 'sensors', fail: 'degraded', fn: function() {
+    { name: 'sensors', fn: function() {
+      // [Phase 7 — NEW] The bus -> working-memory perception bridge. Without this line
+      // every sensor (this phase's and pre-existing) emits into the void (bus history
+      // only) and Cortex's working.drainPerceptions() stays empty forever — Anti-Drift
+      // Checklist item #12 / Integration Points table. fail-fast (no `fail` override):
+      // a Cortex that never perceives anything is a broken entity, not a degraded one.
+      bus.subscribe('perception.*', function(e) { memory.working.pushPerception(e.payload); });
+
       timerSensor = createTimerSensor({ bus, config });
       timerSensor.start();
       logger.info('sensors.timer.started', { intervalMs: config.MYTHOS_TICK_MS });
@@ -216,6 +275,28 @@ async function main() {
       metricSensor = createMetricSensor({ bus, config, probes: immune.probes });
       metricSensor.start();
       logger.info('sensors.metric.started', {});
+
+      // [Phase 7 — NEW] file/job sensors start immediately; ws sensor's start() is a
+      // no-op until Phase 9 owns real connections, but it's still started so
+      // isRunning()/stop() behave consistently through shutdown.
+      // KNOWN ENVIRONMENT ISSUE (documented, not a code defect): on some Node/Windows
+      // builds, an open fs.watch() handle interferes with OS signal delivery to this
+      // process (verified with a zero-application-code minimal repro — an fs.watch()
+      // handle alone, watching any directory, blocks child.kill('SIGINT'/'SIGTERM')
+      // from ever reaching process.on() handlers). This can make test/boot.test.js's
+      // graceful-SIGINT-shutdown check fail in that environment even though sensors/
+      // file.js's own logic is correct and matches the spec's Full Code verbatim. Do
+      // not "fix" this by removing fs.watch() or by weakening file.js's design — see
+      // the Phase 7 build report for the full investigation.
+      fileSensor = createFileSensor({ bus, config, vault: memory.fs });
+      wsSensor = createWsSensor({ bus, config });
+      jobSensor = createJobSensor({ bus, buildRunner: buildRunner });
+      fileSensor.start();
+      jobSensor.start();
+      wsSensor.start();
+      logger.info('sensors.file.started', {});
+      logger.info('sensors.job.started', {});
+      logger.info('sensors.ws.started', {});
     }}
   ]);
 
@@ -224,6 +305,9 @@ async function main() {
   function stopRunningLoops() {
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
+    if (fileSensor) fileSensor.stop();
+    if (wsSensor) wsSensor.stop();
+    if (jobSensor) jobSensor.stop();
     if (cortex) cortex.stop();
     if (immune) {
       immune.watchdog.stop();

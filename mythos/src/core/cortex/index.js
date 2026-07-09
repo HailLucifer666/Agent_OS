@@ -68,7 +68,16 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       }
 
       // -- DECIDE --
-      var decision = decide(ranked, goals, working, brain, memory, config);
+      // BUG FIX (Phase 7, found via the spec-mandated real-instance integration test —
+      // see test/integration-cortex-effectors.test.js, lesson #4/D-38-class seam bug):
+      // decide() is `async` (it awaits goals.plan() internally) but was called here
+      // without `await`, so `decision` was always the pending Promise object itself —
+      // truthy, so the `if (!decision) return;` guard never tripped, but `decision.tool`/
+      // `decision.args` were undefined by the time act() read them, so every real
+      // decision silently dispatched as `effectors.invoke(undefined, undefined, ...)` ->
+      // 'unknown-effector'. This is why Phase 7 effectors would never actually have
+      // fired even though the hub itself was wired correctly.
+      var decision = await decide(ranked, goals, working, brain, memory, config);
       if (!decision) return;
 
       // -- ACT --
