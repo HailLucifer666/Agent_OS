@@ -109,7 +109,7 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | Phase 4.5 Remediation | ✅ Done — 13/13 criticals closed | 174 | `3c75c26` | 0 / 0 / 0 |
 | P5 Leash | ✅ Done | 184 | `a837afd` | 0 / 0 / 1 |
 | P6 Immune | ✅ Done | 234 | `1c0735b` | 0 / 0 / 0 |
-| P7 Sensors & Effectors | ✅ Done, ⚠️ one environment-blocked pre-existing test | 272/273 (1 skip) | *pending commit* | 0 / 0 / 1 |
+| P7 Sensors & Effectors | ✅ Done, ⚠️ one environment-blocked pre-existing test | 272 (270 pass / 1 skip / 1 fail) | `532106d` | 0 / 0 / 1 |
 | P8 Identity | ⬚ Pending | — | — | — |
 | P9 UI v2 & Cutover | ⬚ Pending | — | — | — |
 | P10 Chaos Drills | ⬚ Pending | — | — | — |
@@ -752,4 +752,4 @@ are Phase 4.5 items precisely because P10 depends on them.
 | `3c75c26` | Phase 4.5 | Spec-conformance remediation, 13/13 criticals closed (174 tests) |
 | `a837afd` | P5 | Leash: tiers/confirm/audit-writer/index + main.js wiring (184 tests) |
 | `1c0735b` | P6 | Immune: breakers/watchdog/diagnostician/healer/probes/announcer/monitor + metric sensor + main.js wiring (234 tests) |
-| *pending commit* | P7 | Sensors & Effectors: effector hub/adapter/build-runner/goals-bridge/voice/45 NOVA tool catalogs (CA) + file/ws/job sensors + main.js wiring (272 tests, 1 pre-existing env-blocked) |
+| `532106d` | P7 | Sensors & Effectors: effector hub/adapter/build-runner/goals-bridge/voice/45 NOVA tool catalogs (CA) + file/ws/job sensors + main.js wiring (272 tests, 270 passing, 1 pre-existing env-blocked) |
