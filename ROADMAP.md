@@ -110,32 +110,47 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P5 Leash | ✅ Done | 184 | `a837afd` | 0 / 0 / 1 |
 | P6 Immune | ✅ Done | 234 | `1c0735b` | 0 / 0 / 0 |
 | P7 Sensors & Effectors | ✅ Done, ⚠️ one environment-blocked pre-existing test | 272 (270 pass / 1 skip / 1 fail) | `532106d` | 0 / 0 / 1 |
-| P8 Identity | ⬚ Pending | — | — | — |
+| P8 Identity | ✅ Done | 293 (291 pass / 1 skip / 1 fail) | `6898d92` | 0 / 0 / 0 |
 | P9 UI v2 & Cutover | ⬚ Pending | — | — | — |
 | P10 Chaos Drills | ⬚ Pending | — | — | — |
 
-**Current**: 272 tests (234 pre-existing + 38 new in P7), 270 passing / 1 skipped / 1
-failing. 63 src files (+`effectors/{adapter,hub,build-runner,goals,voice,routes,
+**Current**: 293 tests (272 pre-existing + 21 new in P8), 291 passing / 1 skipped / 1
+failing. 64 src files (+`core/identity/index.js`), `effectors/{adapter,hub,build-runner,goals,voice,routes,
 from-computer,from-pc,from-browser,from-dashboard,from-project,pipeline,kanban,
 agent-actions,collectors/abtop}.js`, `sensors/{file,ws,job}.js`), `adapters/{pc-child,
-browser-agent}/index.js`, 10 provider files (+`edge-tts.js`), 17 test files. 0 CRITICAL
-/ 20 MAJOR / 24 MINOR drift items open across P0–P4 (P5 fixed one self-introduced bug
-pre-merge — see Phase 5 section — and surfaced one new MINOR item, D-55, in P1's
-`memory/audit-writer.js`, since fixed opportunistically — see Known Deviations). P6
-fixed three bugs in the architecture doc's own given code before they ever shipped
-(breaker backoff formula, missing `bus` injection, watchdog double-restart) — see
-Phase 6 section — and introduced no new drift. P7 found and fixed a real, pre-existing
-production bug in P3's `cortex/index.js` (a missing `await` on `decide()` meant every
-real action dispatch since Phase 3 silently resolved `unknown-effector` — caught by
-the mandated real-instance integration test) and a real bug in the spec's own given
+browser-agent}/index.js`, 10 provider files (+`edge-tts.js`), 20 test files
+(+`identity.test.js`, `identity-boundaries-contract.test.js`,
+`identity-leash-integration.test.js`). 0 CRITICAL / 20 MAJOR / 24 MINOR drift items
+open across P0–P4 (P5 fixed one self-introduced bug pre-merge — see Phase 5 section —
+and surfaced one new MINOR item, D-55, in P1's `memory/audit-writer.js`, since fixed
+opportunistically — see Known Deviations). P6 fixed three bugs in the architecture
+doc's own given code before they ever shipped (breaker backoff formula, missing `bus`
+injection, watchdog double-restart) — see Phase 6 section — and introduced no new
+drift. P7 found and fixed a real, pre-existing production bug in P3's
+`cortex/index.js` (a missing `await` on `decide()` meant every real action dispatch
+since Phase 3 silently resolved `unknown-effector` — caught by the mandated
+real-instance integration test) and a real bug in the spec's own given
 `effectors/goals.js` `addGoal()` (pre-populated the bridge map before `writeBack()`,
 defeating `writeBack()`'s own "append unmapped goal" logic) — see Phase 7 section. P7
 introduced one new MINOR item: `test/boot.test.js` fails in this specific Node
 v26.1.0/Windows sandbox because an active `fs.watch()` handle (used by the new,
 spec-mandated `sensors/file.js`) blocks OS signal delivery to the process — verified
 as an environment/libuv defect with a zero-application-code minimal reproduction, not
-a defect in MYTHOS code; see Phase 7 section for the full investigation. P7 is done;
-P8 (Identity) is now unblocked.
+a defect in MYTHOS code; see Phase 7 section for the full investigation. P8 shipped
+`src/core/identity/index.js` (new) and rewrote the Phase-4.5 placeholder
+`src/core/memory/identity.js` (D-15) into the real header-sectioned self.md store;
+patched `brain/index.js` (optional persona injection) and `leash/index.js` (mandatory
+`getMaxAutonomousTier()` check, tier ceiling now
+`Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier())` —
+most-restrictive-wins); wired the real module into `main.js`'s `identity` boot step,
+deleting `createIdentityStub()` wholesale. One resolved spec-vs-reality drift item:
+`memory/identity.js`'s `stats()` returns the bare `{count}` shape (matching
+`semantic.js`/`skills.js`'s real D-20 convention), not the spec's illustrative
+`{count,bytes,lastWrite}` — 0 CRITICAL / 0 MAJOR / 0 MINOR drift introduced by P8. The
+1 fail/1 skip carried into P8's total are the same pre-existing, environment-blocked
+P7 items (`test/boot.test.js`'s SIGINT check and `test/sensors-file.test.js`'s
+isolated positive path) — neither is a P8 regression. P8 is done; P9 (UI v2 &
+Cutover) is now unblocked.
 
 ---
 
@@ -620,9 +635,10 @@ this one case to T3.
 
 ---
 
-## Phase 8 — Identity ⬚
+## Phase 8 — Identity ✅ Done (2026-07-10)
 
-**Scope**: identity module, vault/Identity/{self,boundaries}.md.
+**Scope**: identity module, identity memory store (D-15), vault/Identity/{self,boundaries}.md,
+brain/leash patches, main.js boot-step rewiring.
 
 **Full build spec**: [MYTHOS-PHASE-BUILD-SPEC.md § Phase 8 — Identity](MYTHOS-PHASE-BUILD-SPEC.md#phase-8--identity) —
 resolves the module-vs-store split (this phase's `identity/index.js` is the
@@ -633,16 +649,95 @@ both read live, never cached — most-restrictive wins).
 
 | Deliverable | Status |
 |---|---|
-| src/core/identity/index.js | ⬚ |
-| vault/Identity/self.md (seed) | ⬚ |
-| vault/Identity/boundaries.md (seed) | ⬚ |
+| src/core/identity/index.js (checkBoundary/persona/learn/getMaxAutonomousTier) | ✅ |
+| src/core/memory/identity.js — rewritten wholesale from the Phase-4.5 placeholder into the real header-sectioned self.md store (closes D-15) | ✅ |
+| src/core/memory/index.js — already wired `identity` store (no change needed, verified) | ✅ |
+| vault/Identity/self.md (seed) | ✅ |
+| vault/Identity/boundaries.md (seed) | ✅ |
+| src/core/brain/index.js — optional `identity` param, `identity.persona()` used for system-prompt injection when present | ✅ |
+| src/core/leash/index.js — mandatory `getMaxAutonomousTier()` constructor check; `maxTier = Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier())` | ✅ |
+| src/main.js — `createIdentityStub()` deleted wholesale; `'identity'` boot step constructs the real module and re-wires `brain` with identity | ✅ |
+| test/identity.test.js, test/identity-boundaries-contract.test.js, test/identity-leash-integration.test.js (21 new tests) | ✅ |
+| test/leash.test.js — `noopIdentity()` updated with `getMaxAutonomousTier()`; all pre-existing P5 leash tests still pass | ✅ |
+| test/brain.test.js — persona-injection-with/without-identity regression added | ✅ |
+| test/memory.test.js — pre-P8 placeholder-API `identity` tests updated to the real store's `write(text, opts)` signature | ✅ |
 
-**Gate**: loaded at boot, edit changes tier ceiling, MYTHOS_NAME override,
-entity has no write path to boundaries (contract test)
+**Gate**: loaded at boot ✅, edit changes tier ceiling ✅ (real-instance
+`identity-leash-integration.test.js`, 4 scenarios), MYTHOS_NAME override ✅ (self.md
+persona wins over config), entity has no write path to boundaries ✅ (contract test:
+static source grep + no-suspicious-method-name + behavioral guarded-fs-spy, all 3
+pass) — 293/293 tests exercised, 291 pass / 1 skip / 1 fail (the 1 fail/1 skip are
+the same pre-existing, environment-blocked P7 items, not a P8 regression).
+
+**Verified deltas from the spec's illustrative pseudocode** (documented, not silently
+papered over — same convention as Ambiguities #2–#6):
+1. `memory/identity.js` already existed as a Phase-4.5 placeholder (flat, no header
+   sections, `stats()` returning bare `{count}`, `consolidate()` a no-op) — replaced
+   wholesale per its own header comment ("Full persona/boundaries/preference-learning
+   logic ships in Phase 8"). Its 8 pre-existing placeholder-shaped tests in
+   `test/memory.test.js` used the old `write({text, source, confidence})` object-arg
+   API; updated to the real store's `write(text, opts)` two-arg signature so the full
+   suite passes.
+2. **`stats()` shape** (Anti-Drift item 11): the spec's own Full Code literally
+   returns `{count, bytes, lastWrite}`, but the real house convention (verified
+   against `semantic.js:152-154`/`skills.js:162-165`) is bare `{count}` — matched the
+   real convention, not the spec's illustrative text, and added a unit test asserting
+   the exact key set.
+3. `brain/index.js` and `leash/index.js`'s real code matched the spec's documented
+   "before" diffs verbatim (P5's real 6-dependency `createLeash(deps)` signature,
+   not the spec's illustrative 4-param stub) — both patches applied cleanly as spec'd.
+4. `test/leash.test.js`'s `noopIdentity()` helper needed `getMaxAutonomousTier()`
+   added (returns `4`, the highest `AUTONOMOUS_MAX_TIER` any existing P5 leash test
+   exercises) once Leash's constructor started mandating it — confirmed all
+   pre-existing P5 leash tests still pass with `Math.min(config.AUTONOMOUS_MAX_TIER, 4)`
+   never changing an observed outcome.
+5. The spec's own `identity-leash-integration.test.js` Full Code called
+   `createLeash({bus, config, identity, auditWriter})`, omitting the real leash's
+   mandatory `goals`/`effectors` deps — fixed `buildStack()` to pass trivial fakes
+   (`{get: () => null}` / `{get: () => undefined}`), matching `test/leash.test.js`'s
+   own `noopEffectors()` pattern. All 4 integration scenarios (deny-list block,
+   boundaries-more-restrictive, config-more-restrictive, at-ceiling-auto-allow) verified
+   against the real `tiers.js` table (`create_goal`=1, `launch_app`=2).
+6. `main.js`'s real boot sequence constructs `brain` early (inside the `'memory'`
+   step, `createBrain({config, bus})`, no identity) because `memory` itself takes
+   `brain` as a constructor dependency for its `consolidate()` distillation path —
+   pre-existing architecture, not restructured. Since `identity` needs `memory.fs`/
+   `memory.identity` to exist first, and Brain's `identity` param is optional/cosmetic
+   (Ambiguity #5, not a safety gate), the surgical fix was to cheaply reconstruct
+   `brain` a second time inside the `'identity'` boot step
+   (`brain = createBrain({config, bus, identity})`, reassigning the closure `let`) once
+   `identity.init()` resolves — a stateless factory call, nothing held open on the
+   discarded instance. `memory`'s own internal `brain` reference (captured by value
+   at `createMemory()` construction) is unaffected and keeps working exactly as
+   before; every step *after* `'identity'` (`goals`, `leash`, `cortex`) sees the
+   identity-wired `brain`. The pre-existing `'leash'` boot step already called
+   `createLeash({bus, config, identity, auditWriter: memory.audit, goals, effectors})`
+   with the real 6-param shape by reference — no change needed there.
+
+**Anti-Drift Checklist**: all 11 items verified — `checkBoundary`/`persona`/`learn`
+copied character-for-character; `grep -n "boundaries" src/core/identity/index.js`
+shows only `loadBoundaries`/`BOUNDARIES_PATH`/`fs.readText` lines; `memory/identity.js`
+has zero references to "boundaries" anywhere, including comments (caught and fixed —
+see below); `createLeash` throws at construction if identity lacks `checkBoundary` or
+`getMaxAutonomousTier`; `createBrain`'s `identity` stays optional; `config.AUTONOMOUS_MAX_TIER`
+read via the exact key, fail-safe default is `1` only; `consolidate()` archives via
+append, never deletes; both factories accept `{bus, config, ...}` and emit
+`health.anomaly` on their respective failure paths; `main.js` constructs
+identity-dependent modules after `identity.init()` resolves; no
+`writeBoundaries`/`saveBoundaries`/`setBoundaries` method exists anywhere.
+
+**One self-caught bug, fixed before merge**: the spec's own Full Code for
+`memory/identity.js` includes a header comment mentioning "the human-only
+boundaries.md" — literal prose the spec itself gives — which would have failed this
+same phase's own contract test (`test/identity-boundaries-contract.test.js`'s "no
+reference to boundaries.md at all" check, which is intentionally comment-blind — it
+regexes the whole file, not just code). Caught by running the new contract test
+against the spec's literal wording before merge; reworded the comment to describe the
+same boundary without the trigger string.
 
 **Note**: this is the Identity *module* (self/boundaries logic + tier-ceiling
-enforcement), distinct from the Identity *memory store* that was supposed to ship
-in P1 and is missing (D-15) — do not conflate the two when scoping this phase.
+enforcement), distinct from the Identity *memory store* (D-15) — both shipped
+together in this phase since the module cannot function without the store.
 
 ---
 
@@ -704,7 +799,7 @@ are Phase 4.5 items precisely because P10 depends on them.
 | R1 | Idle-loop Brain cost | Idle-skip (P3) + spend events/cap (P2) | ✅ P2, P3 |
 | R2 | Memory growth | Decay + archive (P1), consolidate cadence | ⚠️ P1 — decay/consolidate exist but are broken (D-17, D-18) |
 | R3 | Autonomy safety | Audit + spend cap + MYTHOS_DRY_RUN + tier gates | ✅ P5 |
-| R4 | Identity drift | Human-editable boundaries as tier ceiling | ⏳ P8 |
+| R4 | Identity drift | Human-editable boundaries as tier ceiling | ✅ P8 |
 | R5 | SPOF | Checkpoint every N ticks + restore (P6/P1) + drill (P10) | ⚠️ P1, P6, P10 — checkpoint restore is not wired into WorkingMemory init (D-23) |
 | R6 | Port conflict | MYTHOS_PORT 4478 (NOVA stays 4477) + separate vault root | ✅ P0 |
 | R7 | Stale copy | Git clone verified @ `a0433b5`, future `git pull` | ✅ Step 0 |
@@ -753,3 +848,4 @@ are Phase 4.5 items precisely because P10 depends on them.
 | `a837afd` | P5 | Leash: tiers/confirm/audit-writer/index + main.js wiring (184 tests) |
 | `1c0735b` | P6 | Immune: breakers/watchdog/diagnostician/healer/probes/announcer/monitor + metric sensor + main.js wiring (234 tests) |
 | `532106d` | P7 | Sensors & Effectors: effector hub/adapter/build-runner/goals-bridge/voice/45 NOVA tool catalogs (CA) + file/ws/job sensors + main.js wiring (272 tests, 270 passing, 1 pre-existing env-blocked) |
+| `6898d92` | P8 | Identity: self.md store (D-15) + boundary/persona/learn module + leash/brain wiring (293 tests, 291 passing, 1 pre-existing env-blocked) |
