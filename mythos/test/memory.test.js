@@ -233,8 +233,8 @@ describe('identity', () => {
   afterEach(function() { cleanupDir(dir); });
 
   it('writes and recalls a self-fact', () => {
-    const result = identity.write({ text: 'Values clear, honest communication', source: 'seed', confidence: 0.8 });
-    assert.ok(result.ref.startsWith('id-'));
+    const result = identity.write('Values clear, honest communication', { source: 'seed', confidence: 0.8 });
+    assert.ok(result.ref.startsWith('idn-'));
     assert.equal(result.degraded, false);
 
     const hits = identity.recall('honest communication');
@@ -244,28 +244,29 @@ describe('identity', () => {
   });
 
   it('get finds entry by ref', () => {
-    const { ref } = identity.write({ text: 'Prefers concise answers', source: 'learned', confidence: 0.6 });
+    const { ref } = identity.write('Prefers concise answers', { source: 'learned', confidence: 0.6 });
     const entry = identity.get(ref);
     assert.ok(entry);
     assert.equal(entry.text, 'Prefers concise answers');
-    assert.equal(entry.confidence, 0.6);
+    assert.equal(entry.sidecar.confidence, 0.6);
   });
 
   it('get returns null for missing ref', () => {
-    assert.equal(identity.get('id-nonexistent'), null);
+    assert.equal(identity.get('idn-nonexistent'), null);
   });
 
   it('stats returns count', () => {
-    identity.write({ text: 'a' });
-    identity.write({ text: 'b' });
+    identity.write('a');
+    identity.write('b');
     assert.equal(identity.stats().count, 2);
   });
 
-  it('consolidate is a safe no-op at this layer', () => {
-    identity.write({ text: 'a' });
+  it('consolidate archives low-confidence prefs instead of deleting (P8: not a no-op)', () => {
+    identity.write('a', { confidence: 0.05 });
+    identity.write('b', { confidence: 0.9 });
     const result = identity.consolidate();
+    assert.equal(result.archived, 1);
     assert.equal(identity.stats().count, 1);
-    assert.ok(result);
   });
 });
 
@@ -561,7 +562,7 @@ describe('memory-facade', () => {
   });
 
   it('identity write/recall works through facade (D-15)', () => {
-    memory.identity.write({ text: 'facade identity fact', source: 'seed' });
+    memory.identity.write('facade identity fact', { source: 'seed' });
     const hits = memory.identity.recall('facade identity fact');
     assert.ok(hits.length > 0);
     assert.equal(hits[0].store, 'identity');

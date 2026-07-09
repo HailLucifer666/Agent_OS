@@ -253,6 +253,63 @@ describe('brain/index think', function() {
 });
 
 // ---------------------------------------------------------------------------
+// P8 regression: identity.persona() wins verbatim over the hardcoded
+// config.MYTHOS_NAME string when identity is wired in; omitting identity
+// keeps the pre-P8 fallback string exactly as it was (Ambiguity #5 — identity
+// is optional/cosmetic here, never a hard throw).
+// ---------------------------------------------------------------------------
+describe('brain/index — P8 identity persona injection', function() {
+  const { createBrain } = require('../src/core/brain/index');
+
+  it('uses identity.persona() verbatim when identity is provided', function() {
+    let capturedMsgs = null;
+    const chain = require('../src/core/brain/chain');
+    const origComplete = chain.complete;
+    chain.complete = function(opts) {
+      capturedMsgs = opts.messages;
+      const err = new Error('chain exhausted (test)');
+      err.chainExhausted = true;
+      return Promise.reject(err);
+    };
+
+    const identity = { persona: function() { return 'You are GALACTUS. Eater of worlds.'; } };
+    const brain = createBrain({ config: { MYTHOS_NAME: 'MYTHOS' }, bus: null, identity });
+
+    return brain.think({ lane: 'voice', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
+      chain.complete = origComplete;
+      assert.equal(capturedMsgs[0].role, 'system');
+      assert.equal(capturedMsgs[0].content, 'You are GALACTUS. Eater of worlds. Be concise and actionable.');
+    }).catch(function(err) {
+      chain.complete = origComplete;
+      throw err;
+    });
+  });
+
+  it('falls back to the old config.MYTHOS_NAME string when identity is omitted', function() {
+    let capturedMsgs = null;
+    const chain = require('../src/core/brain/chain');
+    const origComplete = chain.complete;
+    chain.complete = function(opts) {
+      capturedMsgs = opts.messages;
+      const err = new Error('chain exhausted (test)');
+      err.chainExhausted = true;
+      return Promise.reject(err);
+    };
+
+    const brain = createBrain({ config: { MYTHOS_NAME: 'MYTHOS' }, bus: null });
+
+    return brain.think({ lane: 'voice', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
+      chain.complete = origComplete;
+      assert.equal(capturedMsgs[0].role, 'system');
+      assert.equal(capturedMsgs[0].content, 'You are MYTHOS. Be concise and actionable.');
+    }).catch(function(err) {
+      chain.complete = origComplete;
+      throw err;
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // tryParseWithRepair
 // ---------------------------------------------------------------------------
 describe('tryParseWithRepair', function() {

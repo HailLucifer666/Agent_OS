@@ -9,6 +9,7 @@ const { loadConfig, SCHEMA } = require('./core/config');
 const { createLifecycle } = require('./core/lifecycle');
 const { createMemory } = require('./core/memory');
 const { createBrain } = require('./core/brain');
+const { createIdentity } = require('./core/identity');
 const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
@@ -37,22 +38,6 @@ const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
 const { createJobSensor } = require('./core/sensors/job');
 const fs = require('fs');
-
-// Temporary stubs for modules that ship in later phases. Lesson #3: gating
-// must be MANDATORY, never "if dependency present" — every module that
-// requires a not-yet-shipped collaborator gets a real (if minimal) object
-// injected here, not a runtime `if (x && typeof x.fn === 'function')` guard
-// inside the module itself. Deleted wholesale — not patched — the day the
-// real phase ships (see MYTHOS-PHASE-BUILD-SPEC.md Phase 5, Ambiguity #3).
-
-function createIdentityStub(ctx) {
-  // [TEMP — remove when Phase 8 ships src/core/identity/index.js]
-  return {
-    init: async function() {},
-    checkBoundary: function() { return null; },   // no denies until boundaries.md exists
-    persona: function() { return ctx.config.MYTHOS_NAME; }
-  };
-}
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
@@ -171,10 +156,24 @@ async function main() {
     }},
 
     { name: 'identity', fail: 'degraded', fn: async function() {
-      // [Phase 5 — NEW: stub; Phase 8 replaces this call site]
-      identity = createIdentityStub({ config });
+      // [Phase 8 — NEW: replaces the Phase 5 createIdentityStub() call site,
+      // deleted wholesale above] identity/index.js needs memory.fs (raw file
+      // access for boundaries.md) and memory.identity (the self.md store), so
+      // it cannot be constructed before the 'memory' step — but 'memory'
+      // itself constructs `brain` early (createBrain({config, bus}), no
+      // identity yet) because memory's own consolidate() takes brain as a
+      // constructor dependency. That's pre-existing architecture this phase
+      // doesn't restructure. Persona injection is optional/cosmetic (Ambiguity
+      // #5), so instead of moving brain's construction, we cheaply reconstruct
+      // it here — a stateless factory, nothing held open on the old instance —
+      // and reassign the closure variable so every step AFTER this one (goals,
+      // leash, cortex) sees a brain wired with real persona injection. memory's
+      // own internal `brain` reference (captured by value when createMemory()
+      // ran) is unaffected and keeps working exactly as before.
+      identity = createIdentity({ bus, config, fs: memory.fs, identityStore: memory.identity });
       await identity.init();
-      logger.info('identity.ready', { stub: true });
+      brain = createBrain({ config, bus, identity });
+      logger.info('identity.ready', {});
     }},
 
     { name: 'goals', fail: 'degraded', fn: async function() {

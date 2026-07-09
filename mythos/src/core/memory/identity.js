@@ -1,79 +1,144 @@
 'use strict';
 
-// Identity store — entity's self-model: purpose/values/persona/learned preferences.
-// vault/Identity/self.md — entity-writable, append-only sidecar-tagged entries.
+// Identity memory store — human-readable markdown with parseable sidecar
+// vault/Identity/self.md — ENTITY-WRITABLE. This store owns self.md and its
+// archive only; it never reads or writes any other file under Identity/ —
+// see src/core/identity/index.js for the module that owns the separate,
+// human-editable-only file (contract-tested — do not add a reference to it
+// here, even in a comment).
 // Format:
-//   <!-- {id: 'id-abc123', ts: 1700000000, source: 'learned', confidence: 0.8} -->
-//   - fact text
-//
-// Full persona/boundaries/preference-learning logic ships in Phase 8
-// (src/core/identity/); this module is only the MemoryStore-interface
-// persistence layer the other five stores already implement.
+//   # Self
+//   ## Purpose
+//   ...
+//   ## Values
+//   ...
+//   ## Persona
+//   ...
+//   ## Learned Preferences
+//   - Fact one
+//   <!-- {id: 'idn-abc123', ts: 1700000000, source: 'ep-001', confidence: 0.6} -->
 
 function createIdentityStore({ fs, config, bus, logger }) {
-  const ENTRY_RE = /<!--\s*(\{[^}]+\})\s*-->\n-\s+(.+)/g;
-  const SELF_MD = 'Identity/self.md';
+  var SELF_PATH = 'Identity/self.md';
+  var ARCHIVE_PATH = 'Identity/_archive.md';
+  var PREF_BLOCK_RE = /^-\s+(.+)\n<!--\s*(\{[^}]+\})\s*-->$/gm;
+
+  var SEED_SELF_MD = [
+    '# Self',
+    '',
+    '## Purpose',
+    'An autonomous entity that assists its operator.',
+    '',
+    '## Values',
+    'Helpfulness, honesty, efficiency.',
+    '',
+    '## Persona',
+    (config && config.MYTHOS_NAME) || 'MYTHOS',
+    '',
+    '## Learned Preferences',
+    '<!-- populated at runtime by identity.learn() -->',
+    ''
+  ].join('\n');
 
   function generateId() {
-    return 'id-' + Math.random().toString(36).slice(2, 10);
+    return 'idn-' + Math.random().toString(36).slice(2, 10);
   }
 
-  function parseEntries(content) {
-    const entries = [];
-    let m;
-    const re = new RegExp(ENTRY_RE.source, ENTRY_RE.flags);
-    while ((m = re.exec(content)) !== null) {
+  function readRaw() {
+    return fs.readText(SELF_PATH, SEED_SELF_MD);
+  }
+
+  function parsePrefs(raw) {
+    var prefs = [];
+    var m;
+    var re = new RegExp(PREF_BLOCK_RE.source, PREF_BLOCK_RE.flags);
+    while ((m = re.exec(raw)) !== null) {
       try {
-        const sidecar = JSON.parse(m[1]);
-        entries.push(Object.assign({ text: m[2].trim() }, sidecar));
+        prefs.push({ text: m[1].trim(), sidecar: JSON.parse(m[2]) });
       } catch (_) {
-        // Skip malformed sidecars
+        // Skip malformed sidecar
       }
     }
-    return entries;
+    return prefs;
   }
 
-  function write(entry) {
-    entry = entry || {};
-    const id = entry.id || generateId();
-    const ts = entry.ts || Date.now();
-    const source = entry.source || 'entity';
-    const confidence = typeof entry.confidence === 'number' ? entry.confidence : 0.5;
-    const text = entry.text || '';
+  function extractSection(raw, header) {
+    var re = new RegExp('## ' + header + '\\n([\\s\\S]*?)(?=\\n## |\\n*$)');
+    var m = raw.match(re);
+    return m ? m[1].trim() : null;
+  }
 
-    const sidecar = JSON.stringify({ id: id, ts: ts, source: source, confidence: confidence });
-    const block = '<!-- ' + sidecar + ' -->\n- ' + text + '\n\n';
+  // Header write — purpose/values/persona. Preserves Learned Preferences untouched.
+  function writeHeader(fields) {
+    fields = fields || {};
+    var raw = readRaw();
+    var purpose = fields.purpose !== undefined ? fields.purpose : extractSection(raw, 'Purpose');
+    var values = fields.values !== undefined ? fields.values : extractSection(raw, 'Values');
+    var persona = fields.persona !== undefined ? fields.persona : extractSection(raw, 'Persona');
+    var prefsRaw = raw.match(/## Learned Preferences\n[\s\S]*$/);
+
+    var content = [
+      '# Self', '',
+      '## Purpose', purpose || '', '',
+      '## Values', values || '', '',
+      '## Persona', persona || '', ''
+    ].join('\n') + (prefsRaw ? prefsRaw[0] : '## Learned Preferences\n');
 
     try {
-      const existing = fs.readText(SELF_MD, '');
-      fs.writeText(SELF_MD, existing + block);
+      fs.writeText(SELF_PATH, content);
+      return { ok: true };
+    } catch (err) {
+      bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'identity', error: err.message });
+      return { ok: false, degraded: true };
+    }
+  }
+
+  // Learned-pref write — the ONLY write() the 5-store MemoryStore contract exposes.
+  function write(prefText, opts) {
+    opts = opts || {};
+    var id = opts.id || generateId();
+    var sidecar = JSON.stringify({
+      id: id,
+      ts: Date.now(),
+      source: opts.source || 'unknown',
+      confidence: opts.confidence !== undefined ? opts.confidence : 0.5
+    });
+    var block = '- ' + prefText + '\n<!-- ' + sidecar + ' -->\n';
+
+    var raw = readRaw();
+    if (/## Learned Preferences\n/.test(raw)) {
+      raw = raw.replace(/## Learned Preferences\n/, '## Learned Preferences\n' + block);
+    } else {
+      raw = raw.replace(/\s*$/, '') + '\n\n## Learned Preferences\n' + block;
+    }
+
+    try {
+      fs.writeText(SELF_PATH, raw);
       return { ref: id, degraded: false };
     } catch (err) {
-      if (bus) bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'identity', error: err.message });
+      bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'identity', error: err.message });
       return { ref: null, degraded: true };
     }
   }
 
   function recall(query, opts) {
     opts = opts || {};
-    const limit = opts.limit || 20;
-    const content = fs.readText(SELF_MD, '');
-    if (!content) return [];
+    var limit = opts.limit || 10;
+    var raw = readRaw();
+    var prefs = parsePrefs(raw);
+    var terms = query.toLowerCase().split(/\s+/);
+    var hits = [];
 
-    const entries = parseEntries(content);
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const hits = [];
-
-    for (let i = 0; i < entries.length; i++) {
-      const lower = entries[i].text.toLowerCase();
-      const matched = terms.filter(function(t) { return lower.includes(t); }).length;
-      const score = terms.length > 0 ? matched / terms.length : 0;
+    for (var i = 0; i < prefs.length; i++) {
+      var lower = prefs[i].text.toLowerCase();
+      var matched = terms.filter(function(t) { return lower.includes(t); }).length;
+      var score = terms.length > 0 ? matched / terms.length : 0;
       if (score > 0) {
         hits.push({
-          ref: entries[i].id,
+          ref: prefs[i].sidecar.id,
           score: score,
-          record: entries[i],
-          snippet: entries[i].text.slice(0, 200),
+          record: prefs[i],
+          snippet: prefs[i].text.slice(0, 200),
           store: 'identity'
         });
       }
@@ -84,35 +149,64 @@ function createIdentityStore({ fs, config, bus, logger }) {
   }
 
   function get(ref) {
-    const content = fs.readText(SELF_MD, '');
-    if (!content) return null;
-    const entries = parseEntries(content);
-    for (let i = 0; i < entries.length; i++) {
-      if (entries[i].id === ref) return entries[i];
+    var prefs = parsePrefs(readRaw());
+    for (var i = 0; i < prefs.length; i++) {
+      if (prefs[i].sidecar.id === ref) return prefs[i];
     }
     return null;
   }
 
-  function consolidate() {
-    // Phase 4.5 scope: this is the persistence layer only. Contradiction-pruning
-    // and confidence-raising land with Phase 8's learn() — no-op here.
-    return { moved: 0, distilled: 0, archived: 0 };
+  // Consolidate: archive (never delete — see lesson #5 / D-18) low-confidence prefs.
+  function consolidate(opts) {
+    opts = opts || {};
+    var threshold = opts.threshold !== undefined ? opts.threshold : 0.2;
+    var raw = readRaw();
+    var prefs = parsePrefs(raw);
+    var keep = [];
+    var archived = [];
+
+    for (var i = 0; i < prefs.length; i++) {
+      if (prefs[i].sidecar.confidence < threshold) {
+        archived.push(prefs[i]);
+      } else {
+        keep.push(prefs[i]);
+      }
+    }
+
+    if (archived.length === 0) {
+      return { moved: 0, distilled: 0, archived: 0 };
+    }
+
+    var archiveLines = archived.map(function(p) {
+      return '- ' + p.text + '\n<!-- ' + JSON.stringify(p.sidecar) + ' -->';
+    }).join('\n') + '\n';
+    var existingArchive = fs.readText(ARCHIVE_PATH, '# Identity Archive\n\n');
+    fs.writeText(ARCHIVE_PATH, existingArchive + archiveLines);
+
+    var keptBlock = '## Learned Preferences\n' + keep.map(function(p) {
+      return '- ' + p.text + '\n<!-- ' + JSON.stringify(p.sidecar) + ' -->\n';
+    }).join('');
+    var rewritten = raw.replace(/## Learned Preferences\n[\s\S]*$/, keptBlock);
+    fs.writeText(SELF_PATH, rewritten);
+
+    return { moved: 0, distilled: 0, archived: archived.length };
   }
 
+  // D-20 fixed shape is bare {count} — matches the real house convention
+  // (semantic.js/skills.js both return { count }), not the {count,bytes,
+  // lastWrite} shape sketched in the spec's illustrative Full Code.
   function stats() {
-    const content = fs.readText(SELF_MD, '');
-    const entries = content ? parseEntries(content) : [];
-    return { count: entries.length };
+    return { count: parsePrefs(readRaw()).length };
   }
 
   async function init() {
     fs.ensureDir(fs.vaultPath('Identity'));
-    if (!fs.exists(SELF_MD)) {
-      fs.writeText(SELF_MD, '');
+    if (!fs.exists(SELF_PATH)) {
+      fs.writeText(SELF_PATH, SEED_SELF_MD);
     }
   }
 
-  return { write, recall, get, consolidate, stats, init };
+  return { init, write, writeHeader, recall, get, consolidate, stats, readRaw };
 }
 
 module.exports = { createIdentityStore };

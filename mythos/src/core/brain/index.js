@@ -36,7 +36,7 @@ function tryParseWithRepair(content) {
   return null;
 }
 
-function createBrain({ config, bus }) {
+function createBrain({ config, bus, identity }) {
   const registry = require('./registry');
   const chain = require('./chain');
   const spend = require('./spend');
@@ -57,9 +57,11 @@ function createBrain({ config, bus }) {
         ];
       }
       if (['voice', 'build', 'simple'].indexOf(lane) !== -1) {
-        const persona = (config && config.MYTHOS_NAME) || 'MYTHOS';
+        const personaLine = identity && typeof identity.persona === 'function'
+          ? identity.persona() + ' Be concise and actionable.'
+          : 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. Be concise and actionable.';
         msgs = [
-          { role: 'system', content: 'You are ' + persona + '. Be concise and actionable.' },
+          { role: 'system', content: personaLine },
           ...msgs
         ];
       }

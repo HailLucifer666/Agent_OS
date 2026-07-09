@@ -25,6 +25,9 @@ function createLeash(deps) {
   if (!identity || typeof identity.checkBoundary !== 'function') {
     throw new Error('createLeash requires identity with checkBoundary() — inject a stub until Phase 8 ships, never omit this dependency');
   }
+  if (typeof identity.getMaxAutonomousTier !== 'function') {
+    throw new Error('createLeash requires identity with getMaxAutonomousTier() — Phase 8 must add this to the real identity module and its boot-time stub alike');
+  }
   if (!auditWriter || typeof auditWriter.write !== 'function') {
     throw new Error('createLeash requires auditWriter with write() — pass memory.audit');
   }
@@ -114,7 +117,10 @@ function createLeash(deps) {
     // 2. Below maxTier -> auto-allow. Read config.AUTONOMOUS_MAX_TIER live, every
     // call — never cache at construction time (same bug class as D-46). No `|| 2`
     // fallback: the config schema already guarantees a validated 0-4 number.
-    var maxTier = config.AUTONOMOUS_MAX_TIER;
+    // Effective ceiling = MOST RESTRICTIVE of config and boundaries.md (P8).
+    // Both read LIVE, every call — never cached at construction. boundaries.md
+    // can only tighten, never loosen, beyond config's ceiling.
+    var maxTier = Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier());
     if (tier <= maxTier) {
       var allowWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'allow', { reason: 'within-autonomous-max' });
       return failClosedIfUnwritable(tier, allowWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'within-autonomous-max' });

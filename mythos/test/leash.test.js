@@ -17,7 +17,11 @@ function fakeConfig(overrides) {
 }
 
 function noopIdentity() {
-  return { checkBoundary: function() { return null; } };
+  // getMaxAutonomousTier returns 4 — the highest AUTONOMOUS_MAX_TIER any existing
+  // leash test exercises (fakeConfig({AUTONOMOUS_MAX_TIER: 4})), so
+  // Math.min(config.AUTONOMOUS_MAX_TIER, 4) never changes any pre-P8 test's
+  // observed behavior (P8 delta).
+  return { checkBoundary: function() { return null; }, getMaxAutonomousTier: function() { return 4; } };
 }
 
 function noopEffectors() {
