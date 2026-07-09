@@ -63,10 +63,14 @@ function createSemanticStore({ fs, config, bus, logger }) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   }
 
+  function activeTopicFiles() {
+    return fs.listFiles('Semantic', '.md').filter(function(f) { return f.name !== '_archive.md'; });
+  }
+
   function recall(query, opts) {
     opts = opts || {};
     const limit = opts.limit || 20;
-    const files = fs.listFiles('Semantic', '.md');
+    const files = activeTopicFiles();
     const hits = [];
 
     for (let i = 0; i < files.length; i++) {
@@ -98,7 +102,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
 
   function get(ref) {
     // Search all semantic files for a sidecar id match
-    const files = fs.listFiles('Semantic', '.md');
+    const files = activeTopicFiles();
     for (let i = 0; i < files.length; i++) {
       const content = fs.readText(files[i].path, '');
       if (!content) continue;
@@ -118,21 +122,26 @@ function createSemanticStore({ fs, config, bus, logger }) {
     return null;
   }
 
+  const ARCHIVE_PATH = 'Semantic/_archive.md';
+
   function pruneLowConfidence(threshold) {
     threshold = threshold || 0.2;
-    const files = fs.listFiles('Semantic', '.md');
-    let pruned = 0;
+    const files = activeTopicFiles();
+    let archived = 0;
     for (let i = 0; i < files.length; i++) {
       const content = fs.readText(files[i].path, '');
       if (!content) continue;
       const sidecars = parseSidecar(content);
       const sc = sidecars[0];
       if (sc && sc.confidence < threshold) {
+        const existing = fs.readText(ARCHIVE_PATH, '');
+        const stamped = '<!-- archived ' + new Date().toISOString() + ' from ' + files[i].name + ' -->\n' + content + '\n';
+        fs.writeText(ARCHIVE_PATH, existing + stamped);
         fs.removeFile(files[i].path);
-        pruned++;
+        archived++;
       }
     }
-    return pruned;
+    return archived;
   }
 
   function consolidate() {
@@ -141,8 +150,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
   }
 
   function stats() {
-    const files = fs.listFiles('Semantic', '.md');
-    return { count: files.length };
+    return { count: activeTopicFiles().length };
   }
 
   async function init() {

@@ -49,12 +49,13 @@ function fakeConfig(overrides) {
 // ---- FsStore Tests ----
 
 describe('fs-store', () => {
-  let dir, fsStore;
+  let dir, fsStore, bus;
 
   beforeEach(function() {
     dir = tempDir();
+    bus = fakeBus();
     const { createFsStore } = require('../src/core/memory/fs-store');
-    fsStore = createFsStore(() => dir);
+    fsStore = createFsStore(() => dir, bus);
   });
 
   afterEach(function() { cleanupDir(dir); });
@@ -103,6 +104,15 @@ describe('fs-store', () => {
     assert.equal(lines.length, 2);
   });
 
+  it('D-16 regression: emits health.anomaly on corrupt line instead of swallowing silently', () => {
+    fsStore.appendLine('Episodic/test.jsonl', { id: 'ep-1' });
+    fsStore.writeText('Episodic/test.jsonl', fsStore.readText('Episodic/test.jsonl') + '\ncorrupt\n');
+    fsStore.readLines('Episodic/test.jsonl');
+    const anomalies = bus._emitted().filter(function(e) { return e.type === 'health.anomaly' && e.payload.kind === 'corrupt-line'; });
+    assert.ok(anomalies.length >= 1, 'expected a corrupt-line health.anomaly event');
+    assert.equal(anomalies[0].payload.path, 'Episodic/test.jsonl');
+  });
+
   it('readDirLines reads across files', () => {
     fsStore.appendLine('Episodic/2026-01-01.jsonl', { id: 'old' });
     fsStore.appendLine('Episodic/2026-01-02.jsonl', { id: 'new' });
@@ -119,6 +129,16 @@ describe('fs-store', () => {
   it('todayKey returns YYYY-MM-DD', () => {
     const key = fsStore.todayKey();
     assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(key), 'Expected YYYY-MM-DD, got ' + key);
+  });
+
+  it('D-18 regression: pruneOldFiles archives instead of permanently deleting', () => {
+    fsStore.appendLine('Episodic/2020-01-01.jsonl', { id: 'ep-ancient', summary: 'old memory' });
+    const archived = fsStore.pruneOldFiles('Episodic', -1); // negative retention forces cutoff into the future
+    assert.equal(archived, 1);
+    assert.equal(fsStore.exists('Episodic/2020-01-01.jsonl'), false, 'original file should be removed');
+    const archiveFiles = fsStore.listFiles('Episodic/_archive', '.gz');
+    assert.equal(archiveFiles.length, 1, 'archived copy should exist under _archive/');
+    assert.ok(archiveFiles[0].name.endsWith('2020-01-01.md.gz'));
   });
 
   it('removeFile deletes file', () => {
@@ -195,6 +215,60 @@ describe('episodic', () => {
   });
 });
 
+// ---- Identity Store Tests (D-15) ----
+
+describe('identity', () => {
+  let dir, fsStore, identity, bus;
+
+  beforeEach(async function() {
+    dir = tempDir();
+    bus = fakeBus();
+    const { createFsStore } = require('../src/core/memory/fs-store');
+    fsStore = createFsStore(() => dir);
+    const { createIdentityStore } = require('../src/core/memory/identity');
+    identity = createIdentityStore({ fs: fsStore, config: fakeConfig({ MYTHOS_VAULT_ROOT: dir }), bus: bus, logger: fakeLogger() });
+    await identity.init();
+  });
+
+  afterEach(function() { cleanupDir(dir); });
+
+  it('writes and recalls a self-fact', () => {
+    const result = identity.write({ text: 'Values clear, honest communication', source: 'seed', confidence: 0.8 });
+    assert.ok(result.ref.startsWith('id-'));
+    assert.equal(result.degraded, false);
+
+    const hits = identity.recall('honest communication');
+    assert.ok(hits.length > 0);
+    assert.equal(hits[0].store, 'identity');
+    assert.ok(hits[0].score > 0);
+  });
+
+  it('get finds entry by ref', () => {
+    const { ref } = identity.write({ text: 'Prefers concise answers', source: 'learned', confidence: 0.6 });
+    const entry = identity.get(ref);
+    assert.ok(entry);
+    assert.equal(entry.text, 'Prefers concise answers');
+    assert.equal(entry.confidence, 0.6);
+  });
+
+  it('get returns null for missing ref', () => {
+    assert.equal(identity.get('id-nonexistent'), null);
+  });
+
+  it('stats returns count', () => {
+    identity.write({ text: 'a' });
+    identity.write({ text: 'b' });
+    assert.equal(identity.stats().count, 2);
+  });
+
+  it('consolidate is a safe no-op at this layer', () => {
+    identity.write({ text: 'a' });
+    const result = identity.consolidate();
+    assert.equal(identity.stats().count, 1);
+    assert.ok(result);
+  });
+});
+
 // ---- Semantic Store Tests ----
 
 describe('semantic', () => {
@@ -225,6 +299,16 @@ describe('semantic', () => {
     semantic.write('a', ['fact a']);
     semantic.write('b', ['fact b']);
     assert.equal(semantic.stats().count, 2);
+  });
+
+  it('D-18 regression: pruneLowConfidence archives to _archive.md instead of deleting', () => {
+    semantic.write('stale-fact', ['no longer trusted'], { confidence: 0.05 });
+    const archived = semantic.pruneLowConfidence();
+    assert.equal(archived, 1);
+    assert.equal(semantic.stats().count, 0, 'archived topic should no longer count as active');
+    assert.equal(semantic.recall('no longer trusted').length, 0, 'archived facts should not surface in recall');
+    const archiveContent = fsStore.readText('Semantic/_archive.md', '');
+    assert.ok(archiveContent.includes('no longer trusted'), 'archived content should be preserved, not deleted');
   });
 });
 
@@ -454,9 +538,17 @@ describe('memory-facade', () => {
     assert.ok(memory.episodic, 'episodic store');
     assert.ok(memory.semantic, 'semantic store');
     assert.ok(memory.skills, 'skills store');
+    assert.ok(memory.identity, 'identity store');
     assert.ok(memory.working, 'working memory');
     assert.ok(memory.audit, 'audit writer');
     assert.ok(memory.checkpoints, 'checkpoint store');
+  });
+
+  it('identity write/recall works through facade (D-15)', () => {
+    memory.identity.write({ text: 'facade identity fact', source: 'seed' });
+    const hits = memory.identity.recall('facade identity fact');
+    assert.ok(hits.length > 0);
+    assert.equal(hits[0].store, 'identity');
   });
 
   it('episodic write/recall works through facade', () => {
@@ -495,6 +587,22 @@ describe('memory-facade', () => {
     const loaded = memory.checkpoints.load();
     assert.ok(loaded);
     assert.equal(loaded.tick, 1);
+  });
+
+  it('D-17 regression: consolidate flushes working memory and returns identity stats', async () => {
+    memory.working.tick = 5;
+    memory.working.set('ctx-key', 'value');
+    const result = await memory.consolidate({});
+    assert.ok(result.identity, 'consolidate result should include identity stats');
+    const flushed = memory.episodic.recall('working-memory flush');
+    assert.ok(flushed.length > 0, 'flushToEpisodic should have written a snapshot');
+  });
+
+  it('D-17 regression: consolidate calls each store consolidate() instead of episodic.prune() directly', async () => {
+    memory.semantic.write('low-conf-fact', ['fades fast'], { confidence: 0.05 });
+    memory.working.tick = 1;
+    const result = await memory.consolidate({});
+    assert.equal(result.semantic.count, 0, 'low-confidence semantic fact should be archived by its own consolidate()');
   });
 
   it('stats returns combined stats', () => {

@@ -71,7 +71,7 @@ function createBrain({ config, bus }) {
           kind: lane === 'embed' ? 'simple' : lane,
           signal,
           onAttempt: function({ provider, model }) {
-            if (bus) bus.emit('brain.spend', { provider, model, lane, source });
+            if (bus) bus.emit('brain-spend', { provider, model, lane, source });
           }
         });
 

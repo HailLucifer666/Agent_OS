@@ -5,6 +5,13 @@
 const ooda = require('./ooda');
 
 function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
+  if (!leash || typeof leash.check !== 'function') {
+    throw new Error('createCortex requires a leash with a check() method — fail-closed gating cannot be skipped');
+  }
+  if (!effectors || typeof effectors.invoke !== 'function') {
+    throw new Error('createCortex requires effectors with an invoke() method — fail-closed gating cannot be skipped');
+  }
+
   let timer = null;
   let running = false;
   let generation = 0;
@@ -84,8 +91,11 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   async function decide(ranked, goals, working, brain, memory, config) {
     if (!goals || typeof goals.arbitrate !== 'function') return null;
 
-    // Arbiter: pick best goal
-    var best = goals.arbitrate(ranked.map(function(r) { return r.perception; }), working);
+    // Arbiter: pick best goal — pass the full ranked structure (perception fields +
+    // rankedSalience) so the arbiter's salience-boost term isn't silently zeroed
+    var best = goals.arbitrate(ranked.map(function(r) {
+      return Object.assign({}, r.perception, { rankedSalience: r.rankedSalience });
+    }), working);
     if (!best) return null;
 
     working.activeGoalId = best.id;
@@ -104,33 +114,28 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     var working = ctx.working, goals = ctx.goals, memory = ctx.memory;
     var config = ctx.config, ACTION_TIMEOUT_MS = ctx.ACTION_TIMEOUT_MS;
 
-    // 1. Leash check
-    if (leash && typeof leash.check === 'function') {
-      var leashResult = leash.check(decision, { goalId: working.activeGoalId });
-      if (!leashResult.allow && leashResult.requireConfirm) {
-        bus.emit('confirm-request', decision);
-        return;
-      }
-      if (!leashResult.allow) {
-        bus.emit('action.denied', Object.assign({}, decision, { reason: leashResult.reason }));
-        return;
-      }
+    // 1. Leash check — mandatory, fail-closed (createCortex requires leash to construct)
+    var leashResult = leash.check(decision, { goalId: working.activeGoalId });
+    if (!leashResult.allow && leashResult.requireConfirm) {
+      bus.emit('confirm-request', decision);
+      return;
+    }
+    if (!leashResult.allow) {
+      bus.emit('action.denied', Object.assign({}, decision, { reason: leashResult.reason }));
+      return;
     }
 
     // 2. Breaker check
-    if (effectors && effectors.breakers && typeof effectors.breakers.allow === 'function') {
+    if (effectors.breakers && typeof effectors.breakers.allow === 'function') {
       if (!effectors.breakers.allow(decision.tool)) {
         bus.emit('action.blocked', Object.assign({}, decision, { reason: 'circuit-open' }));
         return;
       }
     }
 
-    // 3. Dispatch
+    // 3. Dispatch — mandatory, fail-closed (createCortex requires effectors to construct)
     var signal = AbortSignal.timeout(ACTION_TIMEOUT_MS);
-    var result = null;
-    if (effectors && typeof effectors.invoke === 'function') {
-      result = await effectors.invoke(decision.tool, decision.args, { signal: signal, bus: bus, goalId: working.activeGoalId });
-    }
+    var result = await effectors.invoke(decision.tool, decision.args, { signal: signal, bus: bus, goalId: working.activeGoalId });
 
     // 4. Record outcome
     await memory.episodic.write({
@@ -164,14 +169,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       tickOnce();
     }, tickMs);
     if (timer.unref) timer.unref();
-    if (bus) bus.emit('lifecycle.cortex-started', { generation: myGen });
+    if (bus) bus.emit('lifecycle.started', { component: 'cortex', generation: myGen });
   }
 
   function stop() {
     running = false;
     generation++;
     if (timer) { clearInterval(timer); timer = null; }
-    if (bus) bus.emit('lifecycle.cortex-stopped', {});
+    if (bus) bus.emit('lifecycle.stopped', { component: 'cortex' });
   }
 
   return {

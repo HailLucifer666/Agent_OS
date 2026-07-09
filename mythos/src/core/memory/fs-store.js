@@ -2,12 +2,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 // FsStore — base filesystem abstraction (CA from NOVA vault.js)
 // Extended with append, entries, prune for episodic/audit stores.
 // vaultRoot read live per call for test isolation.
 
-function createFsStore(vaultRootFn) {
+function createFsStore(vaultRootFn, bus) {
   const root = typeof vaultRootFn === 'function' ? vaultRootFn : () => vaultRootFn;
 
   function vaultPath(...segments) {
@@ -82,7 +83,7 @@ function createFsStore(vaultRootFn) {
       try {
         acc.push(JSON.parse(line));
       } catch (_) {
-        // Skip corrupt lines silently
+        if (bus) bus.emit('health.anomaly', { kind: 'corrupt-line', path: relPath, line: idx });
         acc.push(null); // null marker for corrupt
       }
       return acc;
@@ -122,30 +123,42 @@ function createFsStore(vaultRootFn) {
         try {
           entries.push(JSON.parse(fileLines[j]));
         } catch (_) {
-          // Skip corrupt lines
+          if (bus) bus.emit('health.anomaly', { kind: 'corrupt-line', path: filtered[i].path, line: j });
         }
       }
     }
     return entries;
   }
 
-  // Prune: remove files older than retentionDays
+  // Archive one file to <relDir>/_archive/<name>.md.gz: gzip of a markdown digest
+  // wrapping the raw content, then remove the original — no permanent deletion.
+  function archiveFile(fileEntry) {
+    const content = fs.readFileSync(fileEntry.full, 'utf8');
+    const digest = '# Archived ' + fileEntry.name + '\n\nArchived at ' + new Date().toISOString() + '\n\n```\n' + content + '\n```\n';
+    const archiveDir = path.join(path.dirname(fileEntry.full), '_archive');
+    ensureDir(archiveDir);
+    const archivePath = path.join(archiveDir, fileEntry.name.replace(/\.jsonl$/, '') + '.md.gz');
+    fs.writeFileSync(archivePath, zlib.gzipSync(digest));
+    fs.unlinkSync(fileEntry.full);
+  }
+
+  // Archive files older than retentionDays (see archiveFile) instead of deleting them
   function pruneOldFiles(relDir, retentionDays) {
     const cutoff = Date.now() - (retentionDays * 24 * 3600000);
     const files = listFiles(relDir, '.jsonl');
-    let pruned = 0;
+    let archived = 0;
     for (let i = 0; i < files.length; i++) {
       try {
         const stat = fs.statSync(files[i].full);
         if (stat.mtimeMs < cutoff) {
-          fs.unlinkSync(files[i].full);
-          pruned++;
+          archiveFile(files[i]);
+          archived++;
         }
       } catch (_) {
-        // Skip files we can't stat/delete
+        // Skip files we can't stat/archive
       }
     }
-    return pruned;
+    return archived;
   }
 
   function exists(relPath) {

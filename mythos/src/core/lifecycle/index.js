@@ -5,11 +5,12 @@
 
 const { createEvent } = require('../bus/event');
 
-function createLifecycle({ bus, logger }) {
+function createLifecycle({ bus, logger, config }) {
   let steps = [];
   let bootIndex = 0;
   let state = 'idle';  // idle | booting | alive | shutting-down | dead
   let shutdownTimer = null;
+  const entityName = (config && config.MYTHOS_NAME) || 'MYTHOS';
 
   function setSteps(stepList) {
     steps = stepList;
@@ -47,7 +48,7 @@ function createLifecycle({ bus, logger }) {
     }
 
     state = 'alive';
-    logger.info('lifecycle.alive', { name: 'MYTHOS' });
+    logger.info('lifecycle.alive', { name: entityName });
     bus.emit('lifecycle.alive', {});
   }
 

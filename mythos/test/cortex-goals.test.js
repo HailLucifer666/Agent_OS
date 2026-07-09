@@ -81,6 +81,19 @@ function fakeGoals() {
   };
 }
 
+function fakeLeash() {
+  return { check: function() { return { allow: true }; } };
+}
+
+function fakeEffectors() {
+  var invocations = [];
+  return {
+    breakers: { allow: function() { return true; } },
+    invoke: async function(tool, args) { invocations.push({ tool: tool, args: args }); return { ok: true }; },
+    _invocations: function() { return invocations; }
+  };
+}
+
 function fakeConfig(overrides) {
   return Object.assign({
     MYTHOS_TICK_MS: 1000,
@@ -108,11 +121,13 @@ describe('cortex/sensors/timer', function() {
     timer.start();
     await sleep(180);
     timer.stop();
-    var events = bus._emitted().filter(function(e) { return e.type === 'sensor.timer'; });
+    var events = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; });
     assert.ok(events.length >= 2, 'expected at least 2 timer events, got ' + events.length);
     for (var i = 0; i < events.length; i++) {
       assert.ok(events[i].payload.ts, 'event ' + i + ' missing ts');
       assert.ok(typeof events[i].payload.generation === 'number', 'event ' + i + ' missing generation');
+      assert.equal(events[i].payload.kind, 'timer', 'event ' + i + ' missing kind');
+      assert.equal(events[i].payload.salienceHint, 0.1, 'event ' + i + ' missing salienceHint');
     }
   });
 
@@ -123,9 +138,9 @@ describe('cortex/sensors/timer', function() {
     timer.start();
     await sleep(130);
     timer.stop();
-    var countAtStop = bus._emitted().filter(function(e) { return e.type === 'sensor.timer'; }).length;
+    var countAtStop = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; }).length;
     await sleep(130);
-    var countAfter = bus._emitted().filter(function(e) { return e.type === 'sensor.timer'; }).length;
+    var countAfter = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; }).length;
     assert.equal(countAfter, countAtStop, 'new events appeared after stop()');
   });
 
@@ -139,7 +154,7 @@ describe('cortex/sensors/timer', function() {
     timer.start();
     await sleep(130);
     timer.stop();
-    var events = bus._emitted().filter(function(e) { return e.type === 'sensor.timer'; });
+    var events = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; });
     // All events should have the second generation
     var lastGen = events[events.length - 1].payload.generation;
     for (var i = 0; i < events.length; i++) {
@@ -240,13 +255,27 @@ describe('cortex/ooda', function() {
 describe('cortex/index', function() {
   var bus, memory, goals, cortex;
 
+  it('D-39 regression: construction throws without leash', function() {
+    var { createCortex } = require('../src/core/cortex');
+    assert.throws(function() {
+      createCortex({ bus: fakeBus(), memory: fakeMemory(), goals: fakeGoals(), brain: null, effectors: fakeEffectors(), config: fakeConfig() });
+    }, /leash/);
+  });
+
+  it('D-39 regression: construction throws without effectors', function() {
+    var { createCortex } = require('../src/core/cortex');
+    assert.throws(function() {
+      createCortex({ bus: fakeBus(), memory: fakeMemory(), goals: fakeGoals(), brain: null, leash: fakeLeash(), config: fakeConfig() });
+    }, /effectors/);
+  });
+
   function makeCortex(configOverrides) {
     bus = fakeBus();
     memory = fakeMemory();
     goals = fakeGoals();
     var cfg = fakeConfig(configOverrides);
     var { createCortex } = require('../src/core/cortex');
-    cortex = createCortex({ bus: bus, memory: memory, goals: goals, brain: null, config: cfg });
+    cortex = createCortex({ bus: bus, memory: memory, goals: goals, brain: null, leash: fakeLeash(), effectors: fakeEffectors(), config: cfg });
     return cortex;
   }
 
@@ -352,6 +381,11 @@ describe('cortex/index', function() {
     assert.ok(goals.arbitrateCalls.length >= 1, 'arbitrate should be called when goals active');
     var call = goals.arbitrateCalls[0];
     assert.ok(Array.isArray(call.perceptions), 'arbitrate receives perceptions array');
+    assert.ok(call.perceptions.length > 0, 'arbitrate receives at least one perception');
+    assert.ok(typeof call.perceptions[0].rankedSalience === 'number',
+      'D-38 regression: arbitrate() must receive objects carrying rankedSalience, not bare perceptions');
+    assert.equal(call.perceptions[0].summary, 'build component',
+      'perception fields must still be present alongside rankedSalience');
     assert.ok(call.working, 'arbitrate receives working state');
     cortex.stop();
   });

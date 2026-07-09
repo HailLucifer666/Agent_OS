@@ -1,9 +1,11 @@
 # dependencies / build artifacts
 app/node_modules/
+mythos/node_modules/
 _devtools/
 
 # local data — real user vault content, never publish
 app/vault/
+mythos/vault/
 
 # secrets
 app/.env

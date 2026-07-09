@@ -42,6 +42,13 @@ No phase is considered complete until both files reflect the current state.
 
 ## ⚠️ Spec-Conformance Audit — 2026-07-09
 
+> **Update 2026-07-10**: all 13 CRITICAL items below (headline findings 1-5, D-01
+> through D-39) are now fixed — see
+> [Phase 4.5](#phase-45--spec-conformance-remediation-✅-done--was-blocks-p5),
+> which is ✅ Done. This section is kept as the historical audit record; findings
+> below describe the pre-remediation state. MAJOR/MINOR items remain open, tracked
+> in Known Deviations.
+
 Every shipped module (P0–P4) was read file-by-file and diffed against
 MYTHOS-ARCHITECTURE.md, verified against an SSH clone of `HailLucifer666/Agent_OS`
 @ `a78f38b`. Result: **all 5 phases pass their own gate (161/161 tests green)**, but
@@ -94,20 +101,22 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 
 | Phase | Status | Tests | Commit | Drift (Critical / Major / Minor) |
 |-------|--------|-------|--------|-----------------------------------|
-| P0 Foundation | ✅ Done, ⚠️ drift | 26 | `0566acc` | 4 / 4 / 6 |
-| P1 Memory | ✅ Done, ⚠️ drift | 70 | `0566acc` | 4 / 6 / 4 |
-| P2 Brain | ✅ Done, ⚠️ drift | 113 | `3bf42de` | 1 / 3 / 4 |
-| P3 Cortex | ✅ Done, ⚠️ drift | 161 | `f1f6d3a` | 4 / 4 / 4 |
-| P4 Goals | ✅ Done, ⚠️ drift | 161 | `f1f6d3a` | 0 / 3 / 5 |
-| P5 Leash | ⬚ Pending — **blocked until Phase 4.5 closes** | — | — | — |
+| P0 Foundation | ✅ Done, ⚠️ major/minor drift | 26 | `0566acc` | 0 / 4 / 6 |
+| P1 Memory | ✅ Done, ⚠️ major/minor drift | 70 | `0566acc` | 0 / 6 / 4 |
+| P2 Brain | ✅ Done, ⚠️ major/minor drift | 113 | `3bf42de` | 0 / 3 / 4 |
+| P3 Cortex | ✅ Done, ⚠️ major/minor drift | 161 | `f1f6d3a` | 0 / 4 / 4 |
+| P4 Goals | ✅ Done, ⚠️ minor drift | 161 | `f1f6d3a` | 0 / 3 / 5 |
+| Phase 4.5 Remediation | ✅ Done — 13/13 criticals closed | 174 | *pending commit* | 0 / 0 / 0 |
+| P5 Leash | ⬚ Pending — **unblocked, not started** | — | — | — |
 | P6 Immune | ⬚ Pending | — | — | — |
 | P7 Sensors & Effectors | ⬚ Pending | — | — | — |
 | P8 Identity | ⬚ Pending | — | — | — |
 | P9 UI v2 & Cutover | ⬚ Pending | — | — | — |
 | P10 Chaos Drills | ⬚ Pending | — | — | — |
 
-**Current**: 161 tests, 25 src files, 9 provider files, 7 test files. 13 CRITICAL /
-20 MAJOR / 23 MINOR drift items open across P0–P4 (see Phase 4.5 + Known Deviations).
+**Current**: 174 tests, 26 src files (+`memory/identity.js`), 9 provider files, 7 test
+files. 0 CRITICAL / 20 MAJOR / 23 MINOR drift items open across P0–P4 — all 13 Phase 4.5
+criticals closed 2026-07-10 (see Phase 4.5 + Known Deviations). P5 is now unblocked.
 
 ---
 
@@ -281,28 +290,34 @@ critical-class issue, D-38, is charged to Phase 3 above since the bug is in what
 
 ---
 
-## Phase 4.5 — Spec-Conformance Remediation (BLOCKS P5) ⚠️
+## Phase 4.5 — Spec-Conformance Remediation ✅ Done — was BLOCKS P5
 
-**No work on Phase 5 (Leash) may start until every item below is fixed and covered
-by a new regression test.** These are the 13 CRITICAL items — the ones that either
-violate a core §1 principle, break an event-name contract future phases will rely
-on, or mean the system doesn't actually do what its passing tests imply.
+**Closed 2026-07-10 — all 13 CRITICAL items fixed, each covered by a new regression
+test, 174/174 tests green.** P5 (Leash) is now unblocked. These were the items that
+either violated a core §1 principle, broke an event-name contract future phases
+would rely on, or meant the system didn't actually do what its passing tests implied.
 
 | # | ID | Fix required | Status |
 |---|----|--------------|--------|
-| 1 | D-01 | Add `dependencies` to `mythos/package.json`: `dotenv`, `express`, `ws`, `playwright-core` (exact 4, pinned to same versions as NOVA `app/package.json`) | ⬚ |
-| 2 | D-02 | Call `require('dotenv').config()` at the top of `src/main.js` before config validation runs | ⬚ |
-| 3 | D-03 | Pass `config` into `createLifecycle({bus, config})`; replace hardcoded `name: 'MYTHOS'` with `name: config.MYTHOS_NAME` | ⬚ |
-| 4 | D-04 | Rebuild `src/main.js`'s boot sequence as the spec's 14-18 named FAIL-FAST/DEGRADED steps; wire `memory`, `brain`, `cortex`, `goals` (already built) into real boot steps so the entity actually runs its OODA loop end-to-end, not just in unit tests | ⬚ |
-| 5 | D-15 | Build `src/core/memory/identity.js` implementing the same `MemoryStore` interface as the other stores; wire into `memory/index.js` facade | ⬚ |
-| 6 | D-16 | Pass `bus` into `createFsStore`; emit `health.anomaly{kind:'corrupt-line',...}` on every skipped corrupt line instead of swallowing silently | ⬚ |
-| 7 | D-17 | Rewrite `memory/index.js consolidate()` to: call `working.flushToEpisodic()` correctly (or implement the flush it currently no-ops), call each store's own `consolidate()` (not `episodic.prune()` directly), and wire a real Brain 'simple' call for episodic→semantic distillation (skip cleanly if Brain offline) | ⬚ |
-| 8 | D-18 | Replace `fs.unlinkSync` in episodic decay and semantic low-confidence pruning with: digest-to-.md + gzip archive (episodic) and move-to-`_archive.md` (semantic) — no permanent deletion | ⬚ |
-| 9 | D-28 | Rename the brain-spend bus event from `'brain.spend'` to `'brain-spend'` (update the one emit site and any listening tests) | ⬚ |
-| 10 | D-36 | Rename timer sensor event from `'sensor.timer'` to `'perception.tick'`; add `kind:'timer'` to payload and `salienceHint: 0.1` | ⬚ |
-| 11 | D-37 | Rename cortex lifecycle events from `'lifecycle.cortex-started'`/`'-stopped'` to `'lifecycle.started'`/`'lifecycle.stopped'` | ⬚ |
-| 12 | D-38 | Fix `cortex/index.js:88` to pass the full ranked structure (not bare `.map(r => r.perception)`) into `goals.arbitrate()`; add a regression test asserting `arbitrate()` receives objects carrying `rankedSalience` | ⬚ |
-| 13 | D-39 | Make leash check / breaker check / effector dispatch mandatory in `act()` — if `leash`/`effectors` are not supplied to `createCortex`, fail construction loudly (throw) rather than silently skipping the gate at dispatch time | ⬚ |
+| 1 | D-01 | Add `dependencies` to `mythos/package.json`: `dotenv`, `express`, `ws`, `playwright-core` (exact 4, pinned to same versions as NOVA `app/package.json`) | ✅ |
+| 2 | D-02 | Call `require('dotenv').config()` at the top of `src/main.js` before config validation runs | ✅ |
+| 3 | D-03 | Pass `config` into `createLifecycle({bus, config})`; replace hardcoded `name: 'MYTHOS'` with `name: config.MYTHOS_NAME` | ✅ |
+| 4 | D-04 | Rebuild `src/main.js`'s boot sequence as the spec's 14-18 named FAIL-FAST/DEGRADED steps; wire `memory`, `brain`, `cortex`, `goals` (already built) into real boot steps so the entity actually runs its OODA loop end-to-end, not just in unit tests | ✅ |
+| 5 | D-15 | Build `src/core/memory/identity.js` implementing the same `MemoryStore` interface as the other stores; wire into `memory/index.js` facade | ✅ |
+| 6 | D-16 | Pass `bus` into `createFsStore`; emit `health.anomaly{kind:'corrupt-line',...}` on every skipped corrupt line instead of swallowing silently | ✅ |
+| 7 | D-17 | Rewrite `memory/index.js consolidate()` to: call `working.flushToEpisodic()` correctly (or implement the flush it currently no-ops), call each store's own `consolidate()` (not `episodic.prune()` directly), and wire a real Brain 'simple' call for episodic→semantic distillation (skip cleanly if Brain offline) | ✅ |
+| 8 | D-18 | Replace `fs.unlinkSync` in episodic decay and semantic low-confidence pruning with: digest-to-.md + gzip archive (episodic) and move-to-`_archive.md` (semantic) — no permanent deletion | ✅ |
+| 9 | D-28 | Rename the brain-spend bus event from `'brain.spend'` to `'brain-spend'` (update the one emit site and any listening tests) | ✅ |
+| 10 | D-36 | Rename timer sensor event from `'sensor.timer'` to `'perception.tick'`; add `kind:'timer'` to payload and `salienceHint: 0.1` | ✅ |
+| 11 | D-37 | Rename cortex lifecycle events from `'lifecycle.cortex-started'`/`'-stopped'` to `'lifecycle.started'`/`'lifecycle.stopped'` | ✅ |
+| 12 | D-38 | Fix `cortex/index.js:88` to pass the full ranked structure (not bare `.map(r => r.perception)`) into `goals.arbitrate()`; add a regression test asserting `arbitrate()` receives objects carrying `rankedSalience` | ✅ |
+| 13 | D-39 | Make leash check / breaker check / effector dispatch mandatory in `act()` — if `leash`/`effectors` are not supplied to `createCortex`, fail construction loudly (throw) rather than silently skipping the gate at dispatch time | ✅ |
+
+**Implementation note**: P5 (Leash) and P7 (Effectors) don't exist yet, so `main.js`
+wires temporary fail-closed `createNullLeash()`/`createNullEffectors()` placeholders
+(deny-all / no-op) to satisfy D-39's mandatory-construction requirement. The entity's
+OODA loop runs for real (observe→orient→decide) but every actual action is safely
+denied until P5/P7 ship the real modules and replace these placeholders in `main.js`.
 
 ---
 
@@ -328,7 +343,7 @@ section exists only as a consolidated non-blocking backlog view.
 
 ---
 
-## Phase 5 — Leash ⬚ (blocked — see Phase 4.5)
+## Phase 5 — Leash ⬚ (unblocked — Phase 4.5 closed 2026-07-10, not yet started)
 
 **Scope**: leash check, tiers, confirm, audit writer.
 

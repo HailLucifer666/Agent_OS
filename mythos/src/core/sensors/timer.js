@@ -1,5 +1,5 @@
 // sensors/timer.js — periodic timer perception sensor.
-// Emits a 'sensor.timer' event every tick cycle. The cortex drains these
+// Emits a 'perception.tick' event every tick cycle. The cortex drains these
 // from working memory perception queue.
 
 function createTimerSensor({ bus, config }) {
@@ -14,7 +14,7 @@ function createTimerSensor({ bus, config }) {
     const interval = (config && config.MYTHOS_TICK_MS) || 1000;
     timer = setInterval(function() {
       if (generation !== myGen) return;
-      bus.emit('sensor.timer', { ts: Date.now(), generation: myGen });
+      bus.emit('perception.tick', { ts: Date.now(), generation: myGen, kind: 'timer', salienceHint: 0.1 });
     }, interval);
     if (timer.unref) timer.unref();
   }

@@ -45,10 +45,15 @@ function createWorkingMemory({ fs, config, bus, logger, episodic }) {
   }
 
   async function flushToEpisodic() {
-    // Write current tick state to episodic if there's anything to flush
-    if (tick === 0) return;
-    // The actual flushing of perception/action records happens elsewhere
-    // This just ensures WorkingMemory context is snapshot-able
+    // Persist a working-memory snapshot so recovery can rebuild context on restart
+    if (tick === 0 || !episodic) return;
+    await episodic.write({
+      kind: 'working-snapshot',
+      tick: tick,
+      activeGoalId: activeGoalId,
+      summary: 'working-memory flush at tick ' + tick,
+      contextKeys: Array.from(context.keys())
+    });
   }
 
   async function rebuildFromEpisodic() {
