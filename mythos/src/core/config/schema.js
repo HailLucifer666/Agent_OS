@@ -38,6 +38,9 @@ const SCHEMA = {
   MAX_ACTIVE_GOALS:         { type: 'number', default: 5, min: 1, max: 20 },
   CURIOSITY_MIN_INTERVAL_MS: { type: 'number', default: 600000, min: 0 },
 
+  // Leash (Phase 5)
+  LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },
+
   // Immune
   STALL_MS:                 { type: 'number', default: 5000, min: 1000 },
   WATCHDOG_MS:              { type: 'number', default: 2000, min: 500 },

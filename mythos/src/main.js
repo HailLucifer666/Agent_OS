@@ -11,19 +11,30 @@ const { createMemory } = require('./core/memory');
 const { createBrain } = require('./core/brain');
 const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
+const { createLeash } = require('./core/leash');
 const { createTimerSensor } = require('./core/sensors/timer');
 const fs = require('fs');
 
-// Placeholder leash/effectors — P5 (Leash) and P7 (Effectors) ship the real
-// modules. Cortex requires both to construct (D-39, fail-closed gating), so
-// until those phases land the entity ticks its full OODA loop (observe →
-// orient → decide) but every actual action is safely denied/no-op.
-function createNullLeash() {
-  return { check: function() { return { allow: false, reason: 'leash-not-yet-wired (ships in P5)' }; } };
+// Temporary stubs for modules that ship in later phases. Lesson #3: gating
+// must be MANDATORY, never "if dependency present" — every module that
+// requires a not-yet-shipped collaborator gets a real (if minimal) object
+// injected here, not a runtime `if (x && typeof x.fn === 'function')` guard
+// inside the module itself. Deleted wholesale — not patched — the day the
+// real phase ships (see MYTHOS-PHASE-BUILD-SPEC.md Phase 5, Ambiguity #3).
+
+function createIdentityStub(ctx) {
+  // [TEMP — remove when Phase 8 ships src/core/identity/index.js]
+  return {
+    init: async function() {},
+    checkBoundary: function() { return null; },   // no denies until boundaries.md exists
+    persona: function() { return ctx.config.MYTHOS_NAME; }
+  };
 }
 
 function createNullEffectors() {
+  // [TEMP — remove when Phase 7 ships src/core/effectors/hub.js]
   return {
+    get: function() { return undefined; },        // no dangerWhen overrides until Phase 7
     breakers: { allow: function() { return true; } },
     invoke: async function() { return { ok: false, reason: 'effectors-not-yet-wired (ships in P7)' }; }
   };
@@ -68,7 +79,10 @@ async function main() {
   // Modules constructed by the boot steps below, closed over so shutdown can stop them
   let memory = null;
   let brain = null;
+  let identity = null;
   let goals = null;
+  let effectors = null;
+  let leash = null;
   let cortex = null;
   let timerSensor = null;
 
@@ -104,6 +118,13 @@ async function main() {
       });
     }},
 
+    { name: 'identity', fail: 'degraded', fn: async function() {
+      // [Phase 5 — NEW: stub; Phase 8 replaces this call site]
+      identity = createIdentityStub({ config });
+      await identity.init();
+      logger.info('identity.ready', { stub: true });
+    }},
+
     { name: 'goals', fail: 'degraded', fn: async function() {
       goals = createGoalSystem({ fs: memory.fs, config, bus, memory, brain });
       await goals.init();
@@ -118,14 +139,25 @@ async function main() {
       }
     }},
 
+    { name: 'leash', fn: function() {
+      // [Phase 5 — NEW] effectors stub built here (immediately before leash,
+      // which requires it) rather than inline in the cortex step — see
+      // createNullEffectors above; Phase 7 replaces this call site. Boot order
+      // is identity -> goals -> effectors -> leash -> cortex, deviating from
+      // MYTHOS-PHASE-BUILD-SPEC.md §13's literal step-position numbers on
+      // purpose (Phase 5, Ambiguity #5) because leash's constructor deps
+      // (identity, goals, effectors) must all exist first. fail-fast: T>=3
+      // fail-closed gating depends on the audit writer being live.
+      effectors = createNullEffectors();
+      leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors });
+      logger.info('leash.ready', {});
+    }},
+
     { name: 'cortex', fn: function() {
-      // Placeholder leash/effectors until P5/P7 ship — see createNullLeash/createNullEffectors above
-      cortex = createCortex({
-        bus, memory, goals, brain,
-        leash: createNullLeash(),
-        effectors: createNullEffectors(),
-        config
-      });
+      // [Phase 5 — NEW: receives the real leash + stub effectors constructed
+      // above] Per the Phase 4.5 D-39 fix, createCortex throws at construction
+      // if either is missing.
+      cortex = createCortex({ bus, memory, goals, brain, leash, effectors, config });
       cortex.start();
       logger.info('cortex.started', { generation: cortex.generation });
     }},

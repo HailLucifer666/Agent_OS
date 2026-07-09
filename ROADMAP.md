@@ -106,17 +106,19 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P2 Brain | ✅ Done, ⚠️ major/minor drift | 113 | `3bf42de` | 0 / 3 / 4 |
 | P3 Cortex | ✅ Done, ⚠️ major/minor drift | 161 | `f1f6d3a` | 0 / 4 / 4 |
 | P4 Goals | ✅ Done, ⚠️ minor drift | 161 | `f1f6d3a` | 0 / 3 / 5 |
-| Phase 4.5 Remediation | ✅ Done — 13/13 criticals closed | 174 | *pending commit* | 0 / 0 / 0 |
-| P5 Leash | ⬚ Pending — **unblocked, not started** | — | — | — |
+| Phase 4.5 Remediation | ✅ Done — 13/13 criticals closed | 174 | `3c75c26` | 0 / 0 / 0 |
+| P5 Leash | ✅ Done | 184 | *pending commit* | 0 / 0 / 1 |
 | P6 Immune | ⬚ Pending | — | — | — |
 | P7 Sensors & Effectors | ⬚ Pending | — | — | — |
 | P8 Identity | ⬚ Pending | — | — | — |
 | P9 UI v2 & Cutover | ⬚ Pending | — | — | — |
 | P10 Chaos Drills | ⬚ Pending | — | — | — |
 
-**Current**: 174 tests, 26 src files (+`memory/identity.js`), 9 provider files, 7 test
-files. 0 CRITICAL / 20 MAJOR / 23 MINOR drift items open across P0–P4 — all 13 Phase 4.5
-criticals closed 2026-07-10 (see Phase 4.5 + Known Deviations). P5 is now unblocked.
+**Current**: 184 tests, 30 src files (+`leash/{index,tiers,confirm,audit-writer}.js`), 9
+provider files, 8 test files. 0 CRITICAL / 20 MAJOR / 24 MINOR drift items open across
+P0–P4 (P5 fixed one self-introduced bug pre-merge — see Phase 5 section — and surfaced
+one new MINOR item, D-55, in P1's `memory/audit-writer.js`; see Known Deviations).
+P5 is done; P6 (Immune) is now unblocked.
 
 ---
 
@@ -313,11 +315,14 @@ would rely on, or meant the system didn't actually do what its passing tests imp
 | 12 | D-38 | Fix `cortex/index.js:88` to pass the full ranked structure (not bare `.map(r => r.perception)`) into `goals.arbitrate()`; add a regression test asserting `arbitrate()` receives objects carrying `rankedSalience` | ✅ |
 | 13 | D-39 | Make leash check / breaker check / effector dispatch mandatory in `act()` — if `leash`/`effectors` are not supplied to `createCortex`, fail construction loudly (throw) rather than silently skipping the gate at dispatch time | ✅ |
 
-**Implementation note**: P5 (Leash) and P7 (Effectors) don't exist yet, so `main.js`
-wires temporary fail-closed `createNullLeash()`/`createNullEffectors()` placeholders
-(deny-all / no-op) to satisfy D-39's mandatory-construction requirement. The entity's
-OODA loop runs for real (observe→orient→decide) but every actual action is safely
-denied until P5/P7 ship the real modules and replace these placeholders in `main.js`.
+**Implementation note (superseded by Phase 5)**: this session originally wired
+temporary fail-closed `createNullLeash()`/`createNullEffectors()` placeholders
+(deny-all / no-op) in `main.js` to satisfy D-39's mandatory-construction requirement.
+Phase 5 replaced `createNullLeash()` wholesale with the real `createLeash()` module —
+`main.js` no longer contains a null leash anywhere. `createNullEffectors()` stays
+(now commented `[TEMP — remove when Phase 7 ships]`) and a new `createIdentityStub()`
+was added alongside it (`[TEMP — remove when Phase 8 ships]`) since Leash also
+requires an `identity` dependency that doesn't ship until Phase 8.
 
 ---
 
@@ -335,30 +340,71 @@ to the P0 bus/lifecycle modules but are load-bearing for P1's audit-writer and P
 watchdog respectively — fix opportunistically when touching those files, don't
 defer both to P9).
 
-**MINOR** (23 total, tracked by ID above): D-09 through D-14, D-24 through D-27,
-D-32 through D-35, D-43 through D-46, D-50 through D-54.
+**MINOR** (24 total, tracked by ID above): D-09 through D-14, D-24 through D-27,
+D-32 through D-35, D-43 through D-46, D-50 through D-54, D-55.
+
+| ID | Severity | File:Line | Finding |
+|----|----------|-----------|---------|
+| D-55 | MINOR | `mythos/src/core/memory/audit-writer.js:11-24` | `redact()` only inspects top-level keys of `args` — nested objects/arrays (e.g. a `{headers:{authorization:...}}` shape, or free text typed into a form via `ui_type`/`browser_type`) are copied verbatim into the append-only, permanent `vault/Audit/*.jsonl` trail. `REDACT_KEYS` is also narrow (no `cookie`, `credential`, `session`). Found by Phase 5's security audit while reviewing what Leash writes through this module; the module itself is P1-shipped and out of Phase 5's touch scope — flagged here, not fixed, per "don't touch P0-P4 code outside what P5 requires." Should be fixed opportunistically (recursive redaction) before any tool that handles credentials/PII ships in Phase 7. |
 
 Full detail for every ID is in the per-phase "Drift found" tables above — this
 section exists only as a consolidated non-blocking backlog view.
 
 ---
 
-## Phase 5 — Leash ⬚ (unblocked — Phase 4.5 closed 2026-07-10, not yet started)
+## Phase 5 — Leash ✅ Done (2026-07-10)
 
 **Scope**: leash check, tiers, confirm, audit writer.
 
 **Full build spec**: [MYTHOS-PHASE-BUILD-SPEC.md § Phase 5 — Leash](MYTHOS-PHASE-BUILD-SPEC.md#phase-5--leash) —
 exact code skeletons, resolved spec ambiguities, integration points against the
-real shipped P0–P4 code, and an anti-drift checklist. Written to the corrected,
-mandatory-gating, config-not-hardcoded conventions this Phase 4.5 remediation
-establishes — do not rebuild Leash from MYTHOS-ARCHITECTURE.md §9 alone.
+real shipped P0–P4 code, and an anti-drift checklist. Built to the corrected,
+mandatory-gating, config-not-hardcoded conventions Phase 4.5 established.
 
 | Deliverable | Status |
 |---|---|
-| src/core/leash/{index,tiers,confirm,audit-writer}.js | ⬚ |
+| src/core/leash/tiers.js (TIER_TABLE, verbatim from §9) | ✅ |
+| src/core/leash/confirm.js (createConfirmRegistry — CA from NOVA) | ✅ |
+| src/core/leash/audit-writer.js (deliberate 1-line re-export of memory/audit-writer.js) | ✅ |
+| src/core/leash/index.js (createLeash — check(), fail-closed on unwritable audit) | ✅ |
+| src/core/config/schema.js — `LEASH_CONFIRM_TTL_MS` key added | ✅ |
+| src/main.js — `createNullLeash()` replaced with real `createLeash()`; `createIdentityStub()` added; boot order identity → goals → effectors → leash → cortex | ✅ |
+| test/leash.test.js (9 tests: tier gates, dry-run, fail-closed audit, construction-throws, connection-scoped confirm, 2 real-instance integration tests) | ✅ |
 
-**Gate**: tier0 auto, tier4 always, tier3 once, dry-run no-op,
-audit line per decision, wrong-connection cannot accept
+**Gate**: tier0 auto ✅, tier4 always ✅, tier3 once ✅, dry-run no-op ✅,
+audit line per decision ✅, wrong-connection cannot accept ✅ — all verified by
+`test/leash.test.js`, 184/184 tests green including the full existing suite.
+
+**Security review finding, fixed pre-merge**: an independent security audit of
+`check()` found that the spec's own code (transcribed verbatim) checked
+`config.MYTHOS_DRY_RUN && tier >= 1` *before* resolving `tier === undefined ? 3
+: tier` (the "unknown tool" fail-safe). `undefined >= 1` is always `false` in
+JS, so an unmapped/hallucinated tool name skipped the DRY_RUN no-op entirely
+and fell through to a real auto-allow whenever `AUTONOMOUS_MAX_TIER >= 3` — a
+fail-open gap for exactly the case (a tool the planner invented) DRY_RUN is
+meant to catch. **Fixed**: the "unknown tool -> T3" resolution now runs before
+any `tier >= N` comparison in `check()` (`src/core/leash/index.js`), with a
+regression test (`test/leash.test.js`, "security-audit regression: dry-run
+still no-ops an unmapped tool name..."). This is a deliberate, documented
+deviation from `MYTHOS-PHASE-BUILD-SPEC.md`'s literal statement ordering —
+the spec's own snippet had this bug, do not "fix" the code back to match it.
+
+**Anti-drift checklist**: all 11 items verified (TIER_TABLE character-for-character
+match, exact decision-reason strings, construction-throws for each missing dep,
+`maxTier`/`MYTHOS_DRY_RUN` read live inside `check()` not cached, `LEASH_CONFIRM_TTL_MS`
+sourced from config not `process.env`, `leash/audit-writer.js` remains a 1-line
+re-export, every `writeAudit()` call wrapped by `failClosedIfUnwritable()`, identity/
+effectors stubs in `main.js` marked `[TEMP — remove when Phase N ships]`, Phase 4.5's
+D-39 fail-closed gate confirmed already in place in `cortex/index.js`, `goal.grants`
+uses string key `'3'`, boot order is identity → goals → effectors → leash → cortex).
+
+**Note**: real `main.js` has more boot steps than the spec's simplified reproduction
+(`brain-probe`, `recovery`, `sensors` — all pre-existing from Phase 4.5). The `identity`
+and `leash` steps were inserted into the *real* step list, not used to replace it
+wholesale — `identity` step after `brain-probe`/before `goals`, `leash` step (which
+also constructs the `effectors` stub immediately before using it) after `recovery`/
+before `cortex`. This satisfies the spec's dependency ordering intent (Ambiguity #5)
+without discarding Phase 4.5's existing boot steps.
 
 ---
 
@@ -495,7 +541,7 @@ are Phase 4.5 items precisely because P10 depends on them.
 |----|------|------------|-------|
 | R1 | Idle-loop Brain cost | Idle-skip (P3) + spend events/cap (P2) | ✅ P2, P3 |
 | R2 | Memory growth | Decay + archive (P1), consolidate cadence | ⚠️ P1 — decay/consolidate exist but are broken (D-17, D-18) |
-| R3 | Autonomy safety | Audit + spend cap + MYTHOS_DRY_RUN + tier gates | ⏳ P5 |
+| R3 | Autonomy safety | Audit + spend cap + MYTHOS_DRY_RUN + tier gates | ✅ P5 |
 | R4 | Identity drift | Human-editable boundaries as tier ceiling | ⏳ P8 |
 | R5 | SPOF | Checkpoint every N ticks + restore (P6/P1) + drill (P10) | ⚠️ P1, P6, P10 — checkpoint restore is not wired into WorkingMemory init (D-23) |
 | R6 | Port conflict | MYTHOS_PORT 4478 (NOVA stays 4477) + separate vault root | ✅ P0 |
@@ -517,7 +563,7 @@ are Phase 4.5 items precisely because P10 depends on them.
 | rate-limit.js | 54 | CV | P9 | ⬚ |
 | logger.js | 73 | CA | P0 | ✅ |
 | vault.js | 83 | CA→fs-store.js | P1 | ⚠️ CA'd, but never wired to `bus` (D-16) |
-| confirm.js | 65 | CA | P5 | ⬚ |
+| confirm.js | 65 | CA | P5 | ✅ |
 | voice-agent.js | 318 | CA→interpret.js | P7 | ⬚ |
 | orchestrator.js | 136 | WRAP→build-runner | P7 | ⬚ |
 | tools-* (5 files) | ~1081 | CA→from-*.js | P7 | ⬚ |
@@ -541,3 +587,5 @@ are Phase 4.5 items precisely because P10 depends on them.
 | `0566acc` | P0+P1 | Architecture spec + runtime scaffold + 6 memory stores (70 tests) |
 | `3bf42de` | P2 | Brain: 9 providers, chain, think(), spend, quota (113 tests) |
 | `f1f6d3a` | P3+P4 | Cortex OODA loop + Goals system (161 tests) |
+| `3c75c26` | Phase 4.5 | Spec-conformance remediation, 13/13 criticals closed (174 tests) |
+| *pending* | P5 | Leash: tiers/confirm/audit-writer/index + main.js wiring (183 tests) |
