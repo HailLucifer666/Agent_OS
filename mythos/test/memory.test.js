@@ -451,6 +451,22 @@ describe('audit-writer', () => {
     assert.equal(entries[0].args.name, 'ok');
   });
 
+  it('redacts sensitive keys nested one level deep', () => {
+    audit.write({ tool: 'test', args: { headers: { authorization: 'Bearer xyz', accept: 'json' } }, tier: 0, decision: 'allow' });
+    const entries = audit.query({});
+    assert.equal(entries[0].args.headers.authorization, '[REDACTED]');
+    assert.equal(entries[0].args.headers.accept, 'json');
+  });
+
+  it('redacts sensitive keys inside an array of objects', () => {
+    audit.write({ tool: 'test', args: { items: [{ token: 'abc', name: 'ok' }, { cookie: 'sid=1', name: 'ok2' }] }, tier: 0, decision: 'allow' });
+    const entries = audit.query({});
+    assert.equal(entries[0].args.items[0].token, '[REDACTED]');
+    assert.equal(entries[0].args.items[0].name, 'ok');
+    assert.equal(entries[0].args.items[1].cookie, '[REDACTED]');
+    assert.equal(entries[0].args.items[1].name, 'ok2');
+  });
+
   it('queries by goalId', () => {
     audit.write({ tool: 'a', goalId: 'g1', tier: 0, decision: 'allow' });
     audit.write({ tool: 'b', goalId: 'g2', tier: 0, decision: 'allow' });

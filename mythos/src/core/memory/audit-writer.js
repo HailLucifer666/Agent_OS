@@ -6,9 +6,12 @@ function createAuditWriter({ fs, config, bus, logger }) {
   let count = 0;
   let lastWriteTs = 0;
 
-  const REDACT_KEYS = ['apiKey', 'api_key', 'token', 'authorization', 'password', 'secret'];
+  const REDACT_KEYS = ['apiKey', 'api_key', 'token', 'authorization', 'password', 'secret', 'cookie', 'credential', 'session'];
 
   function redact(obj) {
+    if (Array.isArray(obj)) {
+      return obj.map(function(item) { return redact(item); });
+    }
     if (!obj || typeof obj !== 'object') return obj;
     const copy = {};
     const keys = Object.keys(obj);
@@ -17,7 +20,7 @@ function createAuditWriter({ fs, config, bus, logger }) {
       if (REDACT_KEYS.some(function(r) { return k.toLowerCase().includes(r.toLowerCase()); })) {
         copy[k] = '[REDACTED]';
       } else {
-        copy[k] = obj[k];
+        copy[k] = redact(obj[k]);
       }
     }
     return copy;
