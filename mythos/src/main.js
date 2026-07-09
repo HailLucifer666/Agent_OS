@@ -13,6 +13,13 @@ const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
 const { createTimerSensor } = require('./core/sensors/timer');
+const { createProbes } = require('./core/immune/probes');
+const { createDiagnostician } = require('./core/immune/diagnostician');
+const { createHealer } = require('./core/immune/healer');
+const { createWatchdog } = require('./core/immune/watchdog');
+const { createAnnouncer } = require('./core/immune/announcer');
+const { createMonitor, recoverFromCrash } = require('./core/immune/monitor');
+const { createMetricSensor } = require('./core/sensors/metric');
 const fs = require('fs');
 
 // Temporary stubs for modules that ship in later phases. Lesson #3: gating
@@ -85,6 +92,8 @@ async function main() {
   let leash = null;
   let cortex = null;
   let timerSensor = null;
+  let immune = null; // { probes, diagnostician, healer, watchdog, announcer, monitor }
+  let metricSensor = null;
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -101,6 +110,37 @@ async function main() {
       memory = createMemory({ config, bus, logger, brain });
       await memory.init();
       logger.info('memory.ready', memory.stats());
+    }},
+
+    { name: 'immune', fail: 'fast', fn: function() {
+      // [Phase 6 — NEW] Constructed before 'cortex'/'goals' exist (§13's boot order) —
+      // healer/watchdog take getCortex()/getGoals() thunks closing over the `let
+      // cortex`/`let goals` bindings above, filled in by their own later boot steps
+      // (Phase 6, Ambiguity #1). Detection (watchdog) and remediation (healer) are
+      // separate components so a stall is never restarted twice (Ambiguity #2).
+      const probes = createProbes({ bus: bus, config: config });
+      const diagnostician = createDiagnostician({ bus: bus });
+      const healer = createHealer({
+        bus: bus, config: config, memory: memory,
+        getCortex: function() { return cortex; },
+        getGoals: function() { return goals; }
+      });
+      const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
+      const announcer = createAnnouncer({
+        bus: bus, config: config,
+        // Phase 7 has no voice effector yet — never a silent no-op. Re-emits onto
+        // the 'action' channel for a future voice effector to pick up.
+        speak: function(text) { bus.emit('action.speak-requested', { text: text }); return Promise.resolve(); }
+      });
+      const monitor = createMonitor({ bus: bus, config: config, memory: memory });
+
+      diagnostician.start();
+      healer.start();
+      announcer.start();
+      monitor.start();
+
+      immune = { probes: probes, diagnostician: diagnostician, healer: healer, watchdog: watchdog, announcer: announcer, monitor: monitor };
+      logger.info('immune.ready', {});
     }},
 
     { name: 'brain-probe', fail: 'degraded', fn: function() {
@@ -132,11 +172,12 @@ async function main() {
     }},
 
     { name: 'recovery', fail: 'degraded', fn: function() {
-      const checkpoint = memory.checkpoints.load();
-      if (checkpoint && checkpoint.isCrashRecovery) {
-        logger.warn('lifecycle.crash-recovery', { tick: checkpoint.tick, activeGoalId: checkpoint.activeGoalId });
-        bus.emit('lifecycle.recovered', { tick: checkpoint.tick, activeGoalId: checkpoint.activeGoalId });
-      }
+      // [Phase 6 — NEW: supersedes the old inline checkpoint.load() logic] Full §10
+      // Recovery algorithm — pauses goals active-at-crash and emits the audited
+      // 'lifecycle.recovered' event (see immune/monitor.js's recoverFromCrash()).
+      return recoverFromCrash({ bus: bus, config: config, memory: memory, goals: goals }).then(function(result) {
+        logger.info('recovery.checked', result);
+      });
     }},
 
     { name: 'leash', fn: function() {
@@ -159,6 +200,9 @@ async function main() {
       // if either is missing.
       cortex = createCortex({ bus, memory, goals, brain, leash, effectors, config });
       cortex.start();
+      // [Phase 6 — NEW] watchdog starts alongside cortex so lastTickAt is always fresh
+      // once it begins polling.
+      immune.watchdog.start();
       logger.info('cortex.started', { generation: cortex.generation });
     }},
 
@@ -166,6 +210,12 @@ async function main() {
       timerSensor = createTimerSensor({ bus, config });
       timerSensor.start();
       logger.info('sensors.timer.started', { intervalMs: config.MYTHOS_TICK_MS });
+
+      // [Phase 6 — NEW] metric sensor polls immune/probes.js every 4s and feeds
+      // the cognitive OODA loop's perception queue.
+      metricSensor = createMetricSensor({ bus, config, probes: immune.probes });
+      metricSensor.start();
+      logger.info('sensors.metric.started', {});
     }}
   ]);
 
@@ -173,7 +223,15 @@ async function main() {
   // shutdown sequencing — drain/flush/audit — is D-07, a non-blocking Known Deviation)
   function stopRunningLoops() {
     if (timerSensor) timerSensor.stop();
+    if (metricSensor) metricSensor.stop();
     if (cortex) cortex.stop();
+    if (immune) {
+      immune.watchdog.stop();
+      immune.diagnostician.stop();
+      immune.healer.stop();
+      immune.announcer.stop();
+      immune.monitor.stop();
+    }
   }
   process.on('SIGINT', stopRunningLoops);
   process.on('SIGTERM', stopRunningLoops);

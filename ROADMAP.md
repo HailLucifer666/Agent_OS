@@ -108,17 +108,22 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P4 Goals | ✅ Done, ⚠️ minor drift | 161 | `f1f6d3a` | 0 / 3 / 5 |
 | Phase 4.5 Remediation | ✅ Done — 13/13 criticals closed | 174 | `3c75c26` | 0 / 0 / 0 |
 | P5 Leash | ✅ Done | 184 | *pending commit* | 0 / 0 / 1 |
-| P6 Immune | ⬚ Pending | — | — | — |
+| P6 Immune | ✅ Done | 234 | *pending commit* | 0 / 0 / 0 |
 | P7 Sensors & Effectors | ⬚ Pending | — | — | — |
 | P8 Identity | ⬚ Pending | — | — | — |
 | P9 UI v2 & Cutover | ⬚ Pending | — | — | — |
 | P10 Chaos Drills | ⬚ Pending | — | — | — |
 
-**Current**: 184 tests, 30 src files (+`leash/{index,tiers,confirm,audit-writer}.js`), 9
-provider files, 8 test files. 0 CRITICAL / 20 MAJOR / 24 MINOR drift items open across
-P0–P4 (P5 fixed one self-introduced bug pre-merge — see Phase 5 section — and surfaced
-one new MINOR item, D-55, in P1's `memory/audit-writer.js`; see Known Deviations).
-P5 is done; P6 (Immune) is now unblocked.
+**Current**: 234 tests, 39 src files (+`immune/{monitor,breakers,watchdog,diagnostician,
+healer,announcer,probes}.js`, `sensors/metric.js`), 9 provider files, 9 test files.
+0 CRITICAL / 20 MAJOR / 23 MINOR drift items open across P0–P4 (P5 fixed one
+self-introduced bug pre-merge — see Phase 5 section — and surfaced one new MINOR
+item, D-55, in P1's `memory/audit-writer.js`, since fixed opportunistically — see
+Known Deviations). P6 fixed three
+bugs in the architecture doc's own given code before they ever shipped (breaker
+backoff formula, missing `bus` injection, watchdog double-restart) — see Phase 6
+section — and introduced no new drift. P6 is done; P7 (Sensors & Effectors) is
+now unblocked.
 
 ---
 
@@ -340,12 +345,12 @@ to the P0 bus/lifecycle modules but are load-bearing for P1's audit-writer and P
 watchdog respectively — fix opportunistically when touching those files, don't
 defer both to P9).
 
-**MINOR** (24 total, tracked by ID above): D-09 through D-14, D-24 through D-27,
-D-32 through D-35, D-43 through D-46, D-50 through D-54, D-55.
+**MINOR** (23 open, tracked by ID above): D-09 through D-14, D-24 through D-27,
+D-32 through D-35, D-43 through D-46, D-50 through D-54. D-55 resolved (see below).
 
 | ID | Severity | File:Line | Finding |
 |----|----------|-----------|---------|
-| D-55 | MINOR | `mythos/src/core/memory/audit-writer.js:11-24` | `redact()` only inspects top-level keys of `args` — nested objects/arrays (e.g. a `{headers:{authorization:...}}` shape, or free text typed into a form via `ui_type`/`browser_type`) are copied verbatim into the append-only, permanent `vault/Audit/*.jsonl` trail. `REDACT_KEYS` is also narrow (no `cookie`, `credential`, `session`). Found by Phase 5's security audit while reviewing what Leash writes through this module; the module itself is P1-shipped and out of Phase 5's touch scope — flagged here, not fixed, per "don't touch P0-P4 code outside what P5 requires." Should be fixed opportunistically (recursive redaction) before any tool that handles credentials/PII ships in Phase 7. |
+| D-55 | MINOR — ✅ RESOLVED | `mythos/src/core/memory/audit-writer.js:11-24` | `redact()` only inspected top-level keys of `args` — nested objects/arrays (e.g. a `{headers:{authorization:...}}` shape, or free text typed into a form via `ui_type`/`browser_type`) were copied verbatim into the append-only, permanent `vault/Audit/*.jsonl` trail. `REDACT_KEYS` was also narrow (no `cookie`, `credential`, `session`). Found by Phase 5's security audit while reviewing what Leash writes through this module; flagged rather than fixed in that session since `audit-writer.js` is P1-shipped code outside Phase 5's touch scope. Fixed opportunistically: `redact()` now recurses through nested objects and arrays at any depth, and `REDACT_KEYS` includes `cookie`, `credential`, `session`. Regression tests added in `mythos/test/memory.test.js` (nested-object and array-of-objects cases); full suite (234 tests) green. |
 
 Full detail for every ID is in the per-phase "Drift found" tables above — this
 section exists only as a consolidated non-blocking backlog view.
@@ -408,7 +413,7 @@ without discarding Phase 4.5's existing boot steps.
 
 ---
 
-## Phase 6 — Immune ⬚
+## Phase 6 — Immune ✅ Done (2026-07-10)
 
 **Scope**: monitor, breakers, watchdog, diagnostician, healer, announcer, probes, metric sensor.
 
@@ -420,16 +425,69 @@ do not let watchdog call `cortex.stop()`/`start()` directly, that double-restart
 
 | Deliverable | Status |
 |---|---|
-| src/core/immune/{monitor,breakers,watchdog,diagnostician,healer,announcer,probes}.js | ⬚ |
-| src/core/sensors/metric.js | ⬚ |
+| src/core/immune/breakers.js (createBreaker — CLOSED→OPEN→HALF_OPEN→CLOSED FSM, delay-based backoff) | ✅ |
+| src/core/immune/watchdog.js (createWatchdog — stall DETECTION only, never restarts cortex itself) | ✅ |
+| src/core/immune/diagnostician.js (createDiagnostician — anomaly → typed diagnosis, severity map) | ✅ |
+| src/core/immune/healer.js (createHealer + 5 SEED_PLAYBOOKS + matchClause DSL evaluator) | ✅ |
+| src/core/immune/probes.js (createProbes — registry/quota status aggregation + provider-down/quota-low anomaly emission) | ✅ |
+| src/core/immune/announcer.js (createAnnouncer — speaks health/heal/recovery events, mandatory `speak()`) | ✅ |
+| src/core/immune/monitor.js (createMonitor — checkpoint-every-N-ticks + memory-growth detection + recoverFromCrash()) | ✅ |
+| src/core/sensors/metric.js (createMetricSensor — probes+quota poll every 4s, emits `perception.metric` with `.salience`) | ✅ |
+| src/core/config/schema.js — `CHECKPOINT_EVERY_TICKS` key added | ✅ |
+| src/core/goals/index.js — `debitBudget()` gains one `bus.emit('health.anomaly', {kind:'budget-exhausted',...})` line | ✅ |
+| src/main.js — new `'immune'` boot step (getCortex()/getGoals() thunks); `'recovery'` step replaced wholesale with `recoverFromCrash()`; `'cortex'` step starts the watchdog; `'sensors'` step starts the metric sensor; shutdown stops all immune components | ✅ |
+| test/immune.test.js (48 tests: breaker FSM incl. backoff-doubling regression, watchdog detection-only regression, diagnostician severity/lookup, healer DSL both shapes + cooldown + idempotent pause-goal, real-registry degrade-lane regression, real-goals budget-exhausted producer regression, real-quota null-guard regression, announcer, monitor checkpoint cadence on a real memory facade + memory-growth + threshold-sync + recoverFromCrash, metric sensor, and a real-instance bus+cortex+diagnostician+healer+watchdog stall→restart-exactly-once integration test) | ✅ |
 
-**Gate**: breaker open→half-open, watchdog stall detect, healer playbook re-probe,
-checkpoint every N ticks
+**Gate**: breaker open→half-open ✅, watchdog stall detect ✅, healer playbook
+re-probe ✅, checkpoint every N ticks ✅ — all verified by `test/immune.test.js`,
+234/234 tests green including the full existing suite (real `boot.test.js`
+end-to-end spawn confirms the new `'immune'` boot step and the rewired
+`'recovery'`/`'cortex'`/`'sensors'` steps still boot to ALIVE and exit 0 on SIGINT).
 
-**Note**: Watchdog depends on `cortex`'s lifecycle events matching spec exactly
-(D-37 must be fixed first) and on the memory checkpoint/restore path actually
-working (D-17/D-18/D-23 must be fixed first) — do not start P6 until Phase 4.5 is
-closed.
+**Three bugs fixed in the architecture doc's own given code before they ever shipped**
+(see MYTHOS-PHASE-BUILD-SPEC.md § Phase 6, Spec Ambiguities Resolved #2–#4 for full
+reasoning): (1) the given Watchdog both emitted `health.anomaly{kind:'cortex-stall'}`
+*and* called `cortex.stop()/start()` directly — since `bus.emit()` dispatches
+synchronously, the Diagnostician→Healer pipeline's own restart would have already
+run inside that same `emit()` call, so every stall would have restarted cortex
+twice; Watchdog is detection-only here, the Healer's `'stall-restart'` playbook is
+the only restart path. (2) The given breaker backoff (`resetAt = min(resetAt*2,
+now+maxResetMs)`) doubles an absolute epoch timestamp, not the backoff delay — this
+file tracks `currentResetMs` separately and doubles that. (3) The given
+`createBreaker({name, failThreshold, windowMs, resetMs, maxResetMs})` never took
+`bus` as a parameter despite calling `bus.emit()` inside `recordFailure()` — a
+guaranteed `ReferenceError` on the first trip; `bus` (and `config`) are now real,
+required constructor params.
+
+**No-producer gaps closed**: three of the five SEED_PLAYBOOKS (`rotate-nim-key`,
+`quota-guard`, `budget-pause`) would have been permanently dead code — nothing in
+shipped code produced `provider-down`/`quota-low`/`budget-exhausted` anomalies.
+`probes.js`'s `getStatus()` (already polled every 4s for the metric sensor) now
+also emits those two as a documented side effect; `goals/index.js`'s
+`debitBudget()` gained the one-line `budget-exhausted` emit alongside its
+pre-existing synchronous self-pause (made race-safe by an idempotent `pause-goal`
+action that checks `goal.status` first).
+
+**Anti-drift checklist**: all 12 items verified (`bus.emit`/`bus.subscribe` only,
+no invented event names outside `health.diagnosed`/`health.healed`/
+`perception.metric`/`action.speak-requested`/`lifecycle.recovered`, every factory
+throws at construction on its one mandatory dependency, `STALL_MS`/`WATCHDOG_MS`/
+`BREAKER_*`/`CHECKPOINT_EVERY_TICKS` read from config not hardcoded, the two
+`50000000` memory-growth literals verified equal by a dedicated sync test, watchdog
+confirmed to never call `cortex.stop`/`start`, every `registry`/`probes` status call
+`await`ed, quota null-guard confirmed via regression test, `.salience` not
+`.salienceHint`, `debitBudget` diff is exactly the one added line, `createBreaker`
+called with `{name,bus,config}` everywhere in this phase's own code).
+
+**Note**: `main.js`'s pre-existing `'recovery'` boot step (inline
+`memory.checkpoints.load()` + conditional `lifecycle.recovered` emit, from Phase
+4.5) is superseded wholesale by `recoverFromCrash()` per this session's "delete
+wholesale, don't patch" convention — it now also pauses active-at-crash goals
+(§10 invariant #2), which the old inline version never did. The `'immune'` boot
+step is inserted right after `'memory'` (bus/config/memory all it needs) and
+before `'brain-probe'`, well ahead of `'cortex'`/`'goals'` — safe because
+`healer`/`watchdog` close over `getCortex()`/`getGoals()` thunks, never direct
+references (Ambiguity #1).
 
 ---
 
@@ -589,3 +647,4 @@ are Phase 4.5 items precisely because P10 depends on them.
 | `f1f6d3a` | P3+P4 | Cortex OODA loop + Goals system (161 tests) |
 | `3c75c26` | Phase 4.5 | Spec-conformance remediation, 13/13 criticals closed (174 tests) |
 | *pending* | P5 | Leash: tiers/confirm/audit-writer/index + main.js wiring (183 tests) |
+| *pending* | P6 | Immune: breakers/watchdog/diagnostician/healer/probes/announcer/monitor + metric sensor + main.js wiring (234 tests) |

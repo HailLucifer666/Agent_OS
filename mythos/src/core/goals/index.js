@@ -243,6 +243,9 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     if (goal.spent.tokens >= goal.budget.tokens || goal.spent.actions >= goal.budget.actions) {
       goal.status = 'paused';
       goal.reason = 'budget-exhausted';
+      // health.anomaly — exact string, do not paraphrase. Added in Phase 6 so
+      // healer.js's 'budget-pause' playbook has a real producer (Spec Ambiguities #9).
+      if (bus) bus.emit('health.anomaly', { kind: 'budget-exhausted', target: id, evidence: { spent: goal.spent, budget: goal.budget } });
     }
     saveGoal(id);
     if (bus) bus.emit('goal.budget-debited', { id: id, spent: goal.spent });

@@ -47,6 +47,7 @@ const SCHEMA = {
   BREAKER_FAIL_THRESHOLD:   { type: 'number', default: 3, min: 1 },
   BREAKER_WINDOW_MS:        { type: 'number', default: 30000, min: 1000 },
   BREAKER_RESET_MS:         { type: 'number', default: 15000, min: 1000 },
+  CHECKPOINT_EVERY_TICKS:   { type: 'number', default: 50, min: 1 },
 
   // Bus
   BUS_HISTORY_SIZE:          { type: 'number', default: 500, min: 10 },
