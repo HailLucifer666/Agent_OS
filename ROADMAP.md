@@ -1323,6 +1323,69 @@ Commits: `abbf96f` (noise/hallucination fix), `1bfb97c` (conversation memory fix
 
 ---
 
+## Phase 15 — Mic-off leak, unreadable confirm popups, artifact tab bug ✅ Done (2026-07-10)
+
+Three more voice/dashboard bugs reported after live use, all root-caused by
+reading the actual source directly (two Explore agents did the initial legwork;
+every finding was independently reverified against the real files before any
+fix, including one grep-rendering artifact that looked like a real syntax bug
+and turned out not to be — checked, not assumed).
+
+1. **Mic stayed live after toggling off.** `ui/public/js/voice/voice-loop.js`'s
+   `stop()` cleared the VAD timer and the `MediaRecorder`, but never released
+   the `getUserMedia` `MediaStream` — `stream`/`audioCtx`/`analyser` were left
+   alive forever once acquired, so the browser's own mic-in-use indicator kept
+   showing "listening" regardless of what MYTHOS's UI said. `mic-indicator.js`
+   already released its own separate level-meter stream correctly
+   (`stopLevelMeter()`) — `stop()` was just missing the equivalent line for
+   its own stream. Fixed with the same `getTracks().forEach(t => t.stop())`
+   pattern.
+2. **Confirm popups showed raw JSON.** `voice-agent.js`'s `executeAction()`
+   built the summary as `` `Voice: ${tool} (${JSON.stringify(args)})` `` —
+   braces and quotes rendered verbatim via `confirm-modal.js`'s `.textContent`.
+   `cortex/index.js` built its own (non-voice) confirm summaries the same
+   broken way, through the same modal — same bug, same fix. Both now use a
+   small `humanizeArgs()` (`key: value, key2: value2`, no braces/quotes).
+3. **"See the landing page" opened a new tab of the dashboard, not the
+   artifact.** `open_artifact` (`from-dashboard.js`) correctly resolves the
+   artifact to `http://localhost:4478/vault/builds/...` and spawns the OS's
+   default browser at that URL — verified by reading the function directly,
+   that part was never broken. The bug was server-side: `server/index.js`
+   only ever served `express.static(ui/public)`; there was no static route for
+   `vault/builds` at all, so the request fell through to the SPA catch-all
+   (`res.sendFile(index.html)`) — the dashboard. Fixed with
+   `app.use('/vault/builds', express.static(memory.fs.vaultPath('builds')))`,
+   scoped to exactly the `builds` subdirectory (not the whole vault root,
+   which also holds Episodic/Semantic/Identity/Audit/Checkpoints — none of
+   which should ever be served as plain static files).
+
+Found by the full-suite run itself: adding the `/vault/builds` static route
+required `memory.fs.vaultPath` at server construction time, which
+`test/server.test.js`'s intentionally-partial `memory` fixtures didn't
+provide — 7 tests failed with `Cannot read properties of undefined (reading
+'vaultPath')`. Fixed by adding a `fakeFs()` stub to the fixture (a real
+production `memory` always has `.fs` — this was a fixture completeness gap,
+not a production bug). A `cortex` confirm-flow test also asserted the exact
+old JSON-shaped summary string (`/^kill_session\(/`) — updated to match the
+new intentional human-readable format.
+
+Verified live against the real running instance for all three, not just
+unit tests: (1) toggled the mic on/off through the real UI click handler with
+a synthetic (Web-Audio-generated, no permission prompt needed) `MediaStream`
+injected in place of the hardware mic — confirmed the actual
+`MediaStreamTrack.readyState` transitions `live → ended` on toggle-off, not
+just a UI class change; (2) a real WS utterance through `open_artifact`'s
+confirm path came back with `summary: "Voice: open_artifact (path:
+/vault/builds/pipeline/paws-pamper-friendly-dog-grooming.html, title: Paws
+and Pamper Friendly Dog Grooming)"` — no braces, no quotes; (3) `curl`ing the
+real artifact URL now returns the actual generated HTML (`200 text/html`,
+correct `<title>`), not the dashboard.
+
+**Gate**: 357 tests, 355 pass, 1 skip, 1 fail (same pre-existing
+`boot.test.js` port conflict).
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1387,3 +1450,4 @@ Commits: `abbf96f` (noise/hallucination fix), `1bfb97c` (conversation memory fix
 | `abb223b` | P13 | get_time + get_weather tools (`from-system.js`, Open-Meteo, no API key) + a persona-rule gap found live-testing (voice-agent asked permission before calling harmless read-only lookups) (348 tests, 346 passing, 1 pre-existing env-blocked) |
 | `abbf96f` | P14 | Background-noise voice hallucinations fixed: VAD hold-ticks + peak-RMS energy gate (`voice-loop.js`) + Groq Whisper stock-phrase/punctuation-only filter (`groq-stt.js`), live-reproduced against the real Groq API (pure silence -> "Thank you." at no_speech_prob 0) (357 tests, 355 passing, 1 pre-existing env-blocked) |
 | `1bfb97c` | P14 | Conversation-memory fix: removed the clearIntake history wipe that erased all record of an in-progress build, breaking "is it done?" follow-ups; live-verified full intake -> build -> completion -> status-check cycle end to end, also confirming the `build` lane's Mistral-first provider chain actually works (357 tests, 355 passing, 1 pre-existing env-blocked) |
+| `5d2dced` | P15 | Mic-off stream leak (`voice-loop.js` never released the getUserMedia MediaStream) + unreadable JSON confirm popups (`voice-agent.js` + `cortex/index.js` humanizeArgs) + artifact tabs opening the dashboard (missing `/vault/builds` static route) — all three live-verified against the real running instance, plus a `server.test.js` fixture gap (missing `memory.fs`) found and fixed by the suite run itself (357 tests, 355 passing, 1 pre-existing env-blocked) |
