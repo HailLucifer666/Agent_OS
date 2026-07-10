@@ -64,6 +64,19 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     return r;
   }
 
+  // Chrome's on-device model download can stall indefinitely at the browser
+  // level (observed: available() stuck reporting 'downloading' for 30+
+  // minutes, install() never resolving or rejecting) — never await it
+  // unbounded. INSTALL_TIMEOUT_MS bounds the wait; on timeout we give up and
+  // fall back to cloud recognition, exactly like any other honest degrade.
+  const INSTALL_TIMEOUT_MS = 20000;
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      promise.then((v) => ({ timedOut: false, v })),
+      new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), ms)),
+    ]);
+  }
+
   // On-device STT probe + one-time language-pack install (Chrome 139+).
   // Returns true when processLocally recognition is usable.
   async function ensureLocalSTT() {
@@ -75,7 +88,13 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
       if (avail === 'downloadable' || avail === 'downloading') {
         setState('downloading');
         caption('Downloading on-device speech model (one-time)…', 'info');
-        await RecognitionCtor.install(opts);
+        const result = await withTimeout(RecognitionCtor.install(opts), INSTALL_TIMEOUT_MS);
+        if (result.timedOut) {
+          caption('On-device speech model download stalled — using cloud recognition instead.', 'error');
+          localSTT = false;
+          sttResolved = true;
+          return false;
+        }
         avail = await RecognitionCtor.available(opts);
       }
       localSTT = avail === 'available';
