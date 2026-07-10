@@ -95,13 +95,53 @@ async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
   // phase does not add — so it stays a distinct backlog item, not manufactured here.
   const recoveredJobGoalMap = recoveredJobs.map((j) => ({ jobId: j.id, goalId: j.goalId != null ? j.goalId : null }));
 
-  // 2. Active-at-crash goals -> paused 'crash-recovery'.
+  // 2. Active-at-crash goals -> paused 'crash-recovery'. Unchanged from P6/P17 —
+  //    Crash Invariant #2 ("goals paused") still holds for every active-at-crash goal,
+  //    with or without an in-flight job.
   let pausedCount = 0;
+  const pausedGoalIds = new Set();
   if (goals && typeof goals.getActiveGoals === 'function') {
     const active = goals.getActiveGoals();
     for (let i = 0; i < active.length; i++) {
       goals.update(active[i].id, { status: 'paused', reason: 'crash-recovery' });
+      pausedGoalIds.add(active[i].id);
       pausedCount++;
+    }
+  }
+
+  // 2b. [Phase 19] Auto-resume, narrowly scoped: a goal that owned one of the jobs
+  // just flipped to 'failed' above (i.e. it appears in recoveredJobGoalMap, built
+  // from real, non-invented goalIds since P18) is reactivated (status back to
+  // 'active') so goal arbitration/planning picks it up again on the next cortex tick.
+  // A goal with no recovered job stays paused, unchanged — nothing was interrupted
+  // for it to resume.
+  //
+  // This is NOT a replay of the crashed job: no enqueue()/effectors.invoke() call is
+  // made here. goals/index.js's plan() derives the next action fresh from
+  // goal.title + current state on every call (goal.plan is never populated with
+  // persisted step-state anywhere in shipped code — planning is stateless per call),
+  // so reactivating a goal is equivalent to letting its own cognition keep going,
+  // exactly as it would have absent the crash. The interrupted job itself stays
+  // honestly recorded 'failed' — Crash Invariant #2 is not violated, only the goal
+  // that was blocked on it is unblocked.
+  //
+  // Double-execution safety: this never re-issues the crashed job's own enqueue()
+  // call, so it cannot itself duplicate that specific work. Whatever concrete action
+  // a reactivated goal's planner decides on next still passes through the existing,
+  // untouched in-flight guards in agent-actions.js (`executePipelineCard`/
+  // `buildKanbanCard` throw "a build is already in progress for this card" while
+  // `existing.status` is 'queued'/'running') — a crashed job is 'failed', not
+  // 'running', so a genuine retry is permitted; a job that is still healthy and
+  // actually in-flight elsewhere is still blocked exactly as before this phase.
+  let resumedGoals = 0;
+  if (goals && typeof goals.update === 'function') {
+    const resumedIds = new Set();
+    for (let i = 0; i < recoveredJobGoalMap.length; i++) {
+      const gid = recoveredJobGoalMap[i].goalId;
+      if (gid == null || resumedIds.has(gid) || !pausedGoalIds.has(gid)) continue;
+      resumedIds.add(gid);
+      goals.update(gid, { status: 'active', reason: 'crash-recovery-resumed' });
+      resumedGoals++;
     }
   }
 
@@ -114,21 +154,19 @@ async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
     hadCheckpoint: Boolean(checkpoint),
     isCrashRecovery: checkpoint ? checkpoint.isCrashRecovery : false,
     pausedGoals: pausedCount,
+    resumedGoals: resumedGoals,
     recoveredJobs: recoveredJobs.length,
     recoveredJobGoalMap: recoveredJobGoalMap
   });
 
   // 5. No re-dispatch of any interrupted action — resumption happens purely through
-  //    goals/cortex re-arbitration on the next tick. A goal that owned one of
-  //    recoveredJobs is still covered by step 2 above if it was active-at-crash.
-  //    [Phase 18] Every enqueue() call site (agent-actions.js/orchestrator.js) now
-  //    carries goalId onto the job, so recoveredJobGoalMap (1c above) is a real,
-  //    non-invented job->goal cross-reference — surfaced here for observability/audit,
-  //    not consumed for a per-job targeted pause/resume (see 1c for why that's scoped
-  //    out honestly rather than manufactured).
+  //    goals/cortex re-arbitration on the next tick (2b above unblocks exactly the
+  //    goals with a real recovered job so that re-arbitration is reachable; goals
+  //    with no recovered job stay paused, same as P17/P18).
   return {
     hadCheckpoint: Boolean(checkpoint),
     pausedGoals: pausedCount,
+    resumedGoals: resumedGoals,
     recoveredJobs: recoveredJobs.length,
     recoveredJobGoalMap: recoveredJobGoalMap
   };

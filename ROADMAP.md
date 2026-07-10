@@ -115,6 +115,7 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P10 Chaos Drills | ✅ Done | 327 (325 pass / 1 skip / 1 fail) | `27d8842` | 1 / 1 / 0 (P10's own test files introduce 0 drift; found + documented, not fixed: D-56 CRITICAL pre-existing since P2, D-57 MAJOR pre-existing) |
 | P17 Gap-Closing (R2/R3/R4/R8/R9 + D-23/D-57) | ✅ Done | 386 (384 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (7 new test files, 0 new drift; 2 real source fixes: D-23 working.js checkpoint consult, D-57 main.js boot-order + recoverFromCrash/buildRunner wiring) |
 | P18 Gap-Closing (D-57 job↔goal mapping) | ✅ Done | 390 (388 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (1 new test file, 0 new drift; real source fix: build-runner/agent-actions/orchestrator/from-project/from-dashboard/from-mission thread goalId end to end, monitor.js's recoverFromCrash() surfaces recoveredJobGoalMap) |
+| P19 Gap-Closing (auto-resume crash-recovered goals) | ✅ Done | 393 (391 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (1 new test file, 0 new drift; real source fix: monitor.js's recoverFromCrash() reactivates a paused-at-crash goal when it owned a recovered job, without re-issuing that job) |
 
 **Current**: 327 tests (316 pre-existing + 11 new in P10), 325 passing / 1 skipped / 1
 failing. 64 src files (+`core/identity/index.js`) + `server/{index,rate-limit}.js` +
@@ -405,14 +406,15 @@ D-56 (CRITICAL, P10-attributed, tracked separately below) also resolved.
 **New, P10-attributed, tracked separately from the P0–P4 audit-era counts above**
 (same convention as D-55, found during P5): **D-56** (CRITICAL, found by P10;
 ✅ RESOLVED — see below) and **D-57** (MAJOR, found by P10; ✅ **fully RESOLVED —
-structural half in P17, job↔goal mapping in P18** — see below). D-23 (MAJOR, found
-pre-P10, tracked under R5) is also ✅ **RESOLVED in P17** — see below.
+structural half in P17, job↔goal mapping in P18, goal-level auto-resume in P19**
+— see below). D-23 (MAJOR, found pre-P10, tracked under R5) is also ✅ **RESOLVED
+in P17** — see below.
 
 | ID | Severity | File:Line | Finding |
 |----|----------|-----------|---------|
 | D-55 | MINOR — ✅ RESOLVED | `mythos/src/core/memory/audit-writer.js:11-24` | `redact()` only inspected top-level keys of `args` — nested objects/arrays (e.g. a `{headers:{authorization:...}}` shape, or free text typed into a form via `ui_type`/`browser_type`) were copied verbatim into the append-only, permanent `vault/Audit/*.jsonl` trail. `REDACT_KEYS` was also narrow (no `cookie`, `credential`, `session`). Found by Phase 5's security audit while reviewing what Leash writes through this module; flagged rather than fixed in that session since `audit-writer.js` is P1-shipped code outside Phase 5's touch scope. Fixed opportunistically: `redact()` now recurses through nested objects and arrays at any depth, and `REDACT_KEYS` includes `cookie`, `credential`, `session`. Regression tests added in `mythos/test/memory.test.js` (nested-object and array-of-objects cases); full suite (234 tests) green. |
 | D-56 | CRITICAL — ✅ RESOLVED | `mythos/src/core/brain/index.js:73` | `chain.complete({messages, kind: lane === 'embed' ? 'simple' : lane, ...})` passed the caller's lane as `kind`, never as `brain`. `chain.js`'s own `complete({messages,kind,brain,...})` (`chain.js:70`) only reads `kind` to special-case `'vision'`; `brain` is the field that selects the `'voice'/'build'/'simple'` preference table + its `CHAIN_VOICE`/`CHAIN_BUILD`/`CHAIN_SIMPLE` env override. Since `brain` was never passed, every `brain.think({lane:'voice'\|'build'\|'simple',...})` call silently fell through to the `'text'` lane's table instead of the requested lane, since Phase 2. Found while building P10's Drill 1 (`test/chaos-provider-killed.test.js`) — `test/brain.test.js` never caught it because its own assertions accepted either offline outcome. Fixed: `brain/index.js:73` now reads `brain: lane === 'embed' ? 'simple' : lane` (renamed the key, same value expression; `kind` dropped since chain.js only needs it for the 'vision' special-case, which this facade never hits directly). Regression test added in `mythos/test/brain.test.js` (D-56 describe block): stubs `zcode.chat` and asserts `brain.think({lane:'build'})` resolves via the `CHAIN_BUILD` override, not `CHAIN_TEXT`. `test/chaos-provider-killed.test.js`'s Drill 1 header comment and env setup updated to drop the now-unneeded `CHAIN_TEXT` workaround, since `brain.think({lane:'voice'})` genuinely consults `CHAIN_VOICE` now. Full suite green: 328 tests, 326 passing / 1 skipped / 1 failing (both pre-existing, unrelated — `test/boot.test.js` SIGINT and `test/sensors-file.test.js` isolated-child-process, same as before this fix). |
-| D-57 | MAJOR — ✅ RESOLVED (structural half P17, job↔goal mapping P18) | `mythos/src/main.js` (`'leash'` step, `'recovery'` step), `mythos/src/core/immune/monitor.js`, `mythos/src/core/effectors/{build-runner,agent-actions,orchestrator,from-project,from-mission,from-dashboard}.js` | The spec's own Drill 6 and Integration Points table assume `main.js`'s `'recovery'` boot step composes `buildRunner.init().recoveredJobs` → job-goal-map → `goals.update(goalId,{status:'paused',reason:'crash-recovery'})`. Found by P10: it did not — `'recovery'` ran before `'leash'` (which constructs `buildRunner`), so the composition was structurally impossible in the real boot order, and `recoverFromCrash()` had no `buildRunner` parameter at all. **P17 fix**: `'recovery'` now runs after `'leash'` in `main.js`'s step list; `recoverFromCrash({bus,config,memory,goals,buildRunner})` awaits `buildRunner.init()` and folds `recoveredJobs.length` into both its return value and the `lifecycle.recovered` event. **P18 fix (this phase)**: the remaining, explicitly-flagged half — there was genuinely no persisted job↔goal mapping in shipped code (`agent-actions.js`'s `buildRunner.enqueue()` calls carried no `goalId`). Fixed: `build-runner.js`'s `enqueue({kind,prompt,run,goalId})` now carries `goalId` (honestly `null` when the job is goal-less) onto the job record and into `recoveredJobs`; `agent-actions.js`'s `executePipelineCard/assembleKanbanPlan/buildKanbanCard` take an optional `goalId` and thread it to `enqueue()`; every real call site (`from-project.js`'s `start_project`, `from-dashboard.js`'s `pipeline_execute`/`kanban_assemble`/`kanban_build_card`, `from-mission.js`'s `run_mission` → `orchestrator.js`'s `runMission()`) now passes `ctx.goalId` — the same `working.activeGoalId` cortex's `act()` (and `server/index.js`'s voice-dispatch path) already threads into every `effectors.invoke()` call, just not further than that before this phase. `recoverFromCrash()` now builds `recoveredJobGoalMap` (`[{jobId,goalId}]`) from the real, non-invented goalId and surfaces it in both its return value and the `lifecycle.recovered` event — the actual reattachment mechanism the boot-order fix alone couldn't provide. **Scoped judgment call, stated honestly**: this closes the mapping/observability gap, not automatic job resumption — a goal-owned job that crashed mid-build is not silently re-enqueued/re-run under its goal; the goal itself is still paused (P6's existing unconditional active-at-crash pause) and re-arbitration decides what happens next tick. Full automatic resume (re-entry-point tracking, idempotency) is materially larger and stays a distinct backlog item. Regression: `test/p18-goal-job-mapping.test.js`. |
+| D-57 | MAJOR — ✅ RESOLVED (structural half P17, job↔goal mapping P18, goal auto-resume P19) | `mythos/src/main.js` (`'leash'` step, `'recovery'` step), `mythos/src/core/immune/monitor.js`, `mythos/src/core/effectors/{build-runner,agent-actions,orchestrator,from-project,from-mission,from-dashboard}.js` | The spec's own Drill 6 and Integration Points table assume `main.js`'s `'recovery'` boot step composes `buildRunner.init().recoveredJobs` → job-goal-map → `goals.update(goalId,{status:'paused',reason:'crash-recovery'})`. Found by P10: it did not — `'recovery'` ran before `'leash'` (which constructs `buildRunner`), so the composition was structurally impossible in the real boot order, and `recoverFromCrash()` had no `buildRunner` parameter at all. **P17 fix**: `'recovery'` now runs after `'leash'` in `main.js`'s step list; `recoverFromCrash({bus,config,memory,goals,buildRunner})` awaits `buildRunner.init()` and folds `recoveredJobs.length` into both its return value and the `lifecycle.recovered` event. **P18 fix**: the remaining, explicitly-flagged half — there was genuinely no persisted job↔goal mapping in shipped code (`agent-actions.js`'s `buildRunner.enqueue()` calls carried no `goalId`). Fixed: `build-runner.js`'s `enqueue({kind,prompt,run,goalId})` now carries `goalId` (honestly `null` when the job is goal-less) onto the job record and into `recoveredJobs`; `agent-actions.js`'s `executePipelineCard/assembleKanbanPlan/buildKanbanCard` take an optional `goalId` and thread it to `enqueue()`; every real call site (`from-project.js`'s `start_project`, `from-dashboard.js`'s `pipeline_execute`/`kanban_assemble`/`kanban_build_card`, `from-mission.js`'s `run_mission` → `orchestrator.js`'s `runMission()`) now passes `ctx.goalId` — the same `working.activeGoalId` cortex's `act()` (and `server/index.js`'s voice-dispatch path) already threads into every `effectors.invoke()` call, just not further than that before this phase. `recoverFromCrash()` now builds `recoveredJobGoalMap` (`[{jobId,goalId}]`) from the real, non-invented goalId and surfaces it in both its return value and the `lifecycle.recovered` event — the actual reattachment mechanism the boot-order fix alone couldn't provide. **P19 fix (this phase)**: the last, explicitly-flagged half — automatic resumption. `goals/index.js`'s `getActiveGoals()`/`arbitrate()` only ever consider `status==='active'` goals, and nothing in shipped code ever un-paused a `'crash-recovery'`-paused goal, so it stayed invisible to arbitration forever. `recoverFromCrash()` now reactivates (`status:'active'`, `reason:'crash-recovery-resumed'`) exactly the goals present in `recoveredJobGoalMap` with a non-null `goalId` — a goal with no recovered job stays paused, unchanged. This is not a replay of the crashed job (Crash Invariant #2 — "no fake resume" — is respected: the job itself stays honestly `'failed'`, and `recoverFromCrash()` issues no `enqueue()`/`effectors.invoke()` call of its own); `goals/index.js`'s `plan()` was already stateless per call (`goal.plan` is never populated with persisted step-state anywhere in shipped code), so reactivating the goal is equivalent to letting its own cognition continue, and the pre-existing in-flight guards in `agent-actions.js` (`existing.status==='queued'\|\|'running'` → throw) still gate whatever concrete action the reactivated goal's planner decides on next, proven by a real-instance test that calls `recoverFromCrash()` while a job is still genuinely running and asserts recovery enqueues nothing and a genuine duplicate build attempt is still refused. Regression: `test/p18-goal-job-mapping.test.js`, `test/p19-goal-auto-resume.test.js`. |
 | D-23 | MAJOR — ✅ RESOLVED in P17 | `mythos/src/core/memory/working.js`, `mythos/src/core/memory/index.js` | Spec: WorkingMemory should rebuild from the episodic tail only if a checkpoint is missing. Found pre-P10, tracked under R5: `working.init()` unconditionally called `rebuildFromEpisodic()`, never consulting `checkpoints.load()` at all — even though `immune/monitor.js`'s own `recoverFromCrash()` comment already (incorrectly) claimed this behavior existed. **Fixed**: `createWorkingMemory()` now takes an optional `checkpoints` dependency; `init()` restores `{tick, activeGoalId}` directly from a checkpoint when one exists, falling back to the episodic-tail scan only when it doesn't. `memory/index.js` wires `checkpoints` through. Backward compatible — the two pre-existing call sites that construct `createWorkingMemory()` without `checkpoints` (`test/chaos-memory-corrupt.test.js`, `test/memory.test.js`) keep their prior unconditional-fallback behavior unchanged. Regression: `test/d23-working-memory-checkpoint-regression.test.js`. |
 
 Full detail for every ID is in the per-phase "Drift found" tables above — this
@@ -1638,6 +1640,91 @@ this phase.
 
 ---
 
+## Phase 19 — Gap-Closing: crash-recovered goals auto-resume ✅ Done (2026-07-11)
+
+P18 closed the job↔goal *mapping* gap and explicitly declined to invent automatic
+job resumption: "It does not implement automatic job resumption... that needs
+idempotency and a re-entry-point concept this phase doesn't have a mandate to
+invent." This phase is that exact backlog item, taken up honestly rather than
+forced into the shape the backlog note implied.
+
+**Reading the real code first changed the shape of the fix.** The backlog note
+assumed "resume" meant re-enqueuing/re-running the specific crashed job — which
+would require serializing and replaying its `run` closure (a live JS function,
+never persisted) and would collide head-on with the architecture doc's own stated
+**Crash Invariant #2**: *"No fake resume — running jobs marked failed on restart,
+goals paused."* Re-running the literal interrupted job is exactly the "fake
+resume" that invariant forbids, and it isn't actually needed: reading
+`goals/index.js`'s `plan()` shows `goal.plan` (a hypothetical persisted step
+queue) is never populated anywhere in shipped code — every planning call derives
+the goal's *next* action fresh from `goal.title` + current state via a live Brain
+call. Planning was already stateless per call. The one real gap was
+`getActiveGoals()` (line 112-114) filtering strictly on `status === 'active'`: a
+goal crash-paused with `reason: 'crash-recovery'` (shipped since P6) is
+permanently invisible to arbitration forever after — nothing in shipped code ever
+flips it back to `'active'`. That is the actual, narrower bug: not "no resume
+mechanism," but "the resume mechanism (re-arbitration) exists and works, but
+nothing ever un-pauses the goal to reach it."
+
+**Fix**: `immune/monitor.js`'s `recoverFromCrash()` — after its existing,
+unchanged step 2 (pause every active-at-crash goal, `reason: 'crash-recovery'`),
+a new step 2b reactivates (`status: 'active'`, `reason: 'crash-recovery-resumed'`)
+exactly the goals that appear in `recoveredJobGoalMap` (P18) with a non-null
+`goalId` — i.e. a goal whose own in-flight build job was the thing that actually
+got interrupted. A goal that was active-at-crash but owned no recovered job (e.g.
+idle/thinking, or a goal some other actor already paused for an unrelated reason)
+stays paused, unchanged from P6/P17/P18. `resumedGoals` (a count) is added
+alongside the pre-existing `pausedGoals`/`recoveredJobs` in both the return value
+and the `lifecycle.recovered` event payload.
+
+**Double-execution safety (the hard requirement) — the actual mechanism, not just
+an assertion**: `recoverFromCrash()` makes zero `enqueue()`/`effectors.invoke()`
+calls itself; reactivating a goal only makes it eligible for arbitration again, it
+does not perform any action. Whatever concrete tool call a reactivated goal's
+planner decides on next still passes through the pre-existing, untouched in-flight
+guards in `agent-actions.js` — `executePipelineCard`/`buildKanbanCard` throw `'a
+build is already in progress for this card'` whenever the card's last known job is
+still `'queued'`/`'running'`. A crashed job is `'failed'` (build-runner's own
+restart logic, unchanged), never `'running'`, so a genuine retry is permitted
+through that guard exactly as any other legitimate retry would be; a job that is
+still genuinely healthy and in-flight elsewhere is still refused. This is proven
+by a real-instance test (`p19-goal-auto-resume.test.js`'s third case) that calls
+`recoverFromCrash()` while a job is still actually `'running'` in-process (no
+restart occurred) and asserts both that `buildRunner`'s job count is unchanged by
+recovery and that a genuine duplicate `buildKanbanCard()` call on the same
+in-flight card is still refused.
+
+**Scoped judgment call, stated honestly**: this closes the auto-resume gap at the
+*goal* level — a goal that was making real progress before the crash keeps making
+progress after the restart, without a human having to manually flip its status
+back to `'active'`. It deliberately does not attempt to resume the *specific*
+crashed job's exact in-flight state (recreate its `run` closure, replay its
+prompt) — Crash Invariant #2 says that job stays honestly `'failed'`, and nothing
+in the shipped planning model needs it replayed verbatim: the goal's next planned
+action, derived fresh, is what carries the goal forward, same as it always has.
+If a future phase wants finer-grained mid-job checkpointing (e.g. resuming a
+multi-file build from file 3 of 5 rather than restarting the deliverable from
+scratch), that is a materially larger, distinct feature — persisted step-level
+progress does not exist anywhere in the current build-runner/agent-actions model
+to resume from.
+
+**Tests**: `test/p19-goal-auto-resume.test.js` (3 new, real-instance — real
+`fs-store`, real `build-runner`, real `kanban`/`pipeline` effectors, real
+`agent-actions`, real `recoverFromCrash()`, no stubs on the module under test): a
+goal with a genuinely in-flight job at crash time is reactivated on the next boot
+(not left paused forever); a goal that was active-at-crash but owned no recovered
+job stays paused (regression guard); auto-resume cannot double-execute (recovery
+itself enqueues nothing, and the existing in-flight guard still refuses a genuine
+concurrent duplicate).
+
+**Verification**: full suite before any change: 390 tests, 388 pass / 1 skip / 1
+fail (baseline, same pre-existing `test/boot.test.js` `EADDRINUSE :4478` — the
+user's own live instance, not touched). After: 393 tests (3 new), 391 pass / 1
+skip / 1 fail — same one pre-existing failure, zero regressions. No live instance
+was booted by this phase.
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1707,3 +1794,4 @@ this phase.
 | `dccb1a3` | P16 | Live camera + hand-gesture control (`@mediapipe/tasks-vision` GestureRecognizer, client-side WASM) + vision Q&A client wiring — Thumb_Up/Closed_Fist/Open_Palm/Victory gestures reuse the live confirm-modal buttons and voice-loop API (zero new approval surface); live-verified static asset serving, honest permission-denied degrade, and a real vision reply round-tripping through the browser's own ws.js (363 tests, 361 passing, 1 pre-existing env-blocked) |
 | `TBD` | P17 | Gap-closing: closed Risk Register R2/R3/R4/R8/R9 with 5 new regression/chaos-drill/contract tests (`memory-growth-regression`, `chaos-dry-run-tier-gating-outage`, `identity-boundaries-failsafe-contract`, `integration-cortex-real-effector-failure`, `event-name-conformance`) + fixed 2 confirmed-still-open bugs (D-23 WorkingMemory now consults `checkpoints.load()` before falling back to the episodic tail; D-57 `main.js` boot order fixed so `buildRunner` exists before `recovery` runs, `recoverFromCrash()` now surfaces `recoveredJobs`) with their own regression tests; job↔goal linkage (D-57's other half) confirmed to not exist anywhere in production code and left as an explicit, separate backlog item rather than manufactured in scope (386 tests, 384 passing, 1 pre-existing env-blocked) |
 | `TBD` | P18 | Gap-closing: D-57's job↔goal mapping, the piece P17 left open — `build-runner.js`'s `enqueue()` now carries an honest `goalId` (null when goal-less) onto every job record, `agent-actions.js`'s three job-creating functions and `orchestrator.js`'s `runMission()` take it as an optional param, and every real call site (`from-project.js`, `from-dashboard.js`, `from-mission.js`) threads the `ctx.goalId` cortex/server already pass into `effectors.invoke()` — a plumbing gap one hop past where the wiring already existed, not a missing architecture; `monitor.js`'s `recoverFromCrash()` now surfaces a real `recoveredJobGoalMap` in both its return value and `lifecycle.recovered`, closing the reattachment gap without inventing automatic job resumption (390 tests, 388 passing, 1 pre-existing env-blocked) |
+| `TBD` | P19 | Gap-closing: D-57's last piece, automatic resumption of crash-recovered goals — `monitor.js`'s `recoverFromCrash()` now reactivates (`status:'active'`) exactly the goals present in P18's `recoveredJobGoalMap`, since `goals/index.js`'s arbiter only ever considers `status==='active'` goals and nothing previously un-paused a `'crash-recovery'`-paused one; a goal with no recovered job stays paused, unchanged. Respects Crash Invariant #2 ("no fake resume") — the crashed job itself stays honestly `'failed'`, recovery issues no `enqueue()`/`effectors.invoke()` call of its own, and the pre-existing `agent-actions.js` in-flight guards still gate whatever the reactivated goal's planner decides on next, proven by a real-instance test with a job still genuinely running (393 tests, 391 passing, 1 pre-existing env-blocked) |
