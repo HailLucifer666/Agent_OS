@@ -1098,6 +1098,85 @@ Risk Register section below for the authoritative per-risk rows):
 
 ---
 
+## Phase 11 — Voice Agent v2 + Semantic Memory + Mission Orchestrator ✅ Done (2026-07-10)
+
+**Scope**: user-requested fixes to voice (barge-in, TTS text sanitization, conversation
+memory, real tool-calling) plus two new capabilities the user explicitly asked about —
+semantic memory recall and a way for the brain to delegate multi-part goals to a
+background agent team.
+
+**Framework decision (explicit design commitment, not just an implementation
+detail)**: no LangChain, no LangGraph, no external vector DB. LangChain.js would wrap
+the same free-tier APIs `chain.js` already fails over across; LangGraph models graphs
+of stateful nodes, but the mission "graph" here is a fixed 3-stage pipeline (plan →
+parallel build → synthesize) — a ~150-line module over the existing build-runner, not
+a framework's worth of state machine; a vector DB is overkill for the memory volume
+this entity will ever hold — cosine similarity over an in-memory Float32 index loaded
+from a JSON sidecar is milliseconds at this scale. Zero new npm dependencies. Revisit
+only if memory outgrows ~50K vectors (sqlite-vec) or missions become genuinely dynamic
+graphs.
+
+**Voice Agent v2** (`src/core/voice/voice-agent.js`, new): CA of NOVA
+`app/lib/voice/voice-agent.js` — persona (DANGER TOOLS RULE + PROJECT INTAKE RULE) +
+a 21-tool catalog → `{say, actions, needs_result}` JSON via `brain.think(lane:'voice')`
+→ `leash.check()` per action → the same `dispatchAction` execution surface confirm-
+accepts already use → `needs_result` re-prompt loop (max 4) → one corrective pass on
+failed single-iteration turns. Per-connection conversation history (12 turns, 10-min
+TTL, CA of NOVA's `intake.js`) replaces the previous single-turn-only prompt.
+`sanitizeSpoken()` (`src/core/voice/spoken-text.js`, new) strips markdown and expands
+abbreviations before TTS — the caption still shows the original text. Client-side
+barge-in: the recognizer stays live during playback; a non-echo transcript stops
+playback and becomes the next command (echo-guarded via word-overlap against the
+currently-spoken reply).
+
+**Semantic memory** (`providers/embeddings.js` + `src/core/memory/vector-index.js`,
+new): `embed(text)` chain — Ollama `nomic-embed-text` (local, free) → Mistral
+`mistral-embed` (free tier) → `null`. Per-store cosine index (`vault/Index/<store>.vec.json`),
+partitioned by embedding provider. `memory.recallHybrid(query)` fuses the existing
+keyword scorer with vector search via reciprocal-rank fusion — same result shape every
+existing caller already expects, embeddings-down degrades to exactly today's keyword
+behavior. `PREF_EMBED` now documents the real chain (previously an empty placeholder);
+`brain.think({lane:'embed'})` still hard-short-circuits to `{offline:true}` — the real
+embedding path never goes through `chain.js`/`registry.js`.
+
+**Mission orchestrator** (`src/core/effectors/orchestrator.js`, new): fixed 3-stage
+pipeline over existing P7 primitives — `assembleKanbanPlan` (Planner agent → kanban
+cards) → `buildKanbanCard` per card in parallel (build-runner's existing queue,
+`MYTHOS_BUILD_CONCURRENCY` 1→3) → one `brain.think('simple')` synthesis call over the
+artifacts. Emits `mission.update` on every transition (relayed as WS `mission`),
+persists to `Checkpoints/missions.json` with the same crash-recovery honesty as
+build-runner. New `run_mission`/`mission_status` tools (tiers 3/0), intake-gated in the
+voice agent identically to `start_project`.
+
+**Verified live** (not simulated): full 3-turn voice intake → "run the mission now" →
+6-task plan → 6 parallel builder agents → mission `done` with 6/6 real artifacts under
+`vault/builds/kanban/` (color palette, landing page, logo guide, brand kit, +2 more),
+synthesis summary spoken back. Semantic recall: wrote an episode about "the PawShop
+landing page... for a pet shop", queried "what website did we make for animals?"
+(zero shared keywords) → hybrid recall returned it via the vector path, ranked first;
+direct cosine sanity check: related paraphrase 0.74 vs unrelated text 0.33.
+
+**One real bug found and fixed by the full-suite run itself**: `createVoiceAgent()`
+fail-fasts on a missing `brain`/`leash.check` (always present in production —
+`main.js` constructs both fully before `createServer`), but it was being constructed
+unconditionally immediately after `app.listen()` opens the socket. `test/server.test.js`'s
+intentionally-partial mocks (testing unrelated server surface — WS relay, confirm
+flow, HTTP routes) threw mid-construction with the listening socket already open and
+never reachable for `server.stop()`, hanging the entire `node --test` process
+indefinitely afterward with zero CPU growth (confirmed via repeated `Get-Process`
+sampling over a 19-minute stall before diagnosis) rather than failing fast. Fixed by
+wrapping the construction in try/catch — `voiceAgent` degrades to `null`,
+`handleUtterance` falls back to the existing "Brain is offline" honest message — no
+test-fixture changes needed, consistent with the file's own established never-throw
+philosophy.
+
+**Gate**: 341 tests, 339 pass, 1 skip, 1 fail — the fail is the same pre-existing
+`test/boot.test.js` Windows `fs.watch()`/SIGINT environment issue tracked since P7
+(confirmed via isolated run: completes in ~1.2s, fails only its own exit-code
+assertion, does not hang) — not a regression from this phase.
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1157,3 +1236,4 @@ Risk Register section below for the authoritative per-risk rows):
 | `6898d92` | P8 | Identity: self.md store (D-15) + boundary/persona/learn module + leash/brain wiring (293 tests, 291 passing, 1 pre-existing env-blocked) |
 | `b776b73` | P9 | UI v2: Express + WS v2 server (spec-verbatim) + JARVIS radial neural HUD (user-directed design) + logger/lifecycle/cortex/schema/hub diffs; cutover deferred pending MAJOR deviations (316 tests, 314 passing, 1 pre-existing env-blocked) |
 | `27d8842` | P10 | Chaos Drills: 6 failure-injection test files (provider-killed, cortex-stalled, disk-full, memory-corrupt, concurrent-tick, restart-mid-action) against real P1/P2/P3/P4/P6/P7 modules; found and documented 2 new gaps (D-56 CRITICAL brain/index.js lane-selection bug, D-57 MAJOR main.js recovery/build-runner boot-order gap), neither fixed here (test-files-only phase) (327 tests, 325 passing, 1 pre-existing env-blocked) |
+| `e281f32` | P11 | Voice Agent v2 (barge-in, TTS sanitization, conversation memory, real tool-calling — CA of NOVA voice-agent.js) + semantic memory (local embeddings/RAG, no vector DB) + mission orchestrator (brain delegates multi-part goals to a background agent team, no LangGraph) + a real createVoiceAgent()-fail-fast/socket-leak hang found and fixed by the suite run itself (341 tests, 339 passing, 1 pre-existing env-blocked) |
