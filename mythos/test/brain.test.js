@@ -358,6 +358,78 @@ describe('brain/index — D-56 regression: lane routing consults its own CHAIN_*
 });
 
 // ---------------------------------------------------------------------------
+// P20: onToken threaded from brain.think() -> chain.complete() -> provider.
+// Every provider in the hot voice/build/simple/vision lanes already speaks
+// SSE/NDJSON streaming and already accepts an onToken passthrough
+// (openai-compat.js, openrouter.js, ollama.js) — this was simply never
+// exposed above the provider layer. These regressions prove the plumbing
+// reaches the real provider call, without hitting the network.
+// ---------------------------------------------------------------------------
+describe('brain/chain — P20 onToken passthrough', function() {
+  const chain = require('../src/core/brain/chain');
+  const zcode = require('../providers/zcode');
+  after(function() { chain._internal._resetCooldowns(); });
+
+  it('complete() forwards onToken verbatim to the resolved provider', async function() {
+    const origChat = zcode.chat;
+    let capturedOnToken = null;
+    zcode.chat = async function(messages, opts) {
+      capturedOnToken = opts.onToken;
+      if (typeof opts.onToken === 'function') { opts.onToken('hel'); opts.onToken('lo'); }
+      return 'hello';
+    };
+    process.env.ZCODE_API_KEY = 'test-key';
+    process.env.CHAIN_BUILD = 'zcode:some-model';
+
+    const deltas = [];
+    try {
+      const result = await chain.complete({
+        messages: [{ role: 'user', content: 'hi' }],
+        brain: 'build',
+        onToken: (d) => deltas.push(d),
+      });
+      assert.equal(typeof capturedOnToken, 'function');
+      assert.deepEqual(deltas, ['hel', 'lo']);
+      assert.equal(result.content, 'hello');
+    } finally {
+      zcode.chat = origChat;
+      delete process.env.ZCODE_API_KEY;
+      delete process.env.CHAIN_BUILD;
+    }
+  });
+});
+
+describe('brain/index think — P20 onToken passthrough', function() {
+  const { createBrain } = require('../src/core/brain/index');
+  const chain = require('../src/core/brain/chain');
+
+  it('think() forwards onToken through to chain.complete()', async function() {
+    const origComplete = chain.complete;
+    let capturedOnToken = null;
+    chain.complete = async function(opts) {
+      capturedOnToken = opts.onToken;
+      if (typeof opts.onToken === 'function') opts.onToken('partial');
+      return { content: 'partial done', provider: 'test', model: 'test-model' };
+    };
+
+    const deltas = [];
+    try {
+      const brain = createBrain({ config: {}, bus: null });
+      const result = await brain.think({
+        lane: 'voice',
+        messages: [{ role: 'user', content: 'hi' }],
+        onToken: (d) => deltas.push(d),
+      });
+      assert.equal(typeof capturedOnToken, 'function');
+      assert.deepEqual(deltas, ['partial']);
+      assert.equal(result.content, 'partial done');
+    } finally {
+      chain.complete = origComplete;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // tryParseWithRepair
 // ---------------------------------------------------------------------------
 describe('tryParseWithRepair', function() {

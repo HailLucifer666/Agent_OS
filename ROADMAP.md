@@ -116,6 +116,7 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P17 Gap-Closing (R2/R3/R4/R8/R9 + D-23/D-57) | ✅ Done | 386 (384 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (7 new test files, 0 new drift; 2 real source fixes: D-23 working.js checkpoint consult, D-57 main.js boot-order + recoverFromCrash/buildRunner wiring) |
 | P18 Gap-Closing (D-57 job↔goal mapping) | ✅ Done | 390 (388 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (1 new test file, 0 new drift; real source fix: build-runner/agent-actions/orchestrator/from-project/from-dashboard/from-mission thread goalId end to end, monitor.js's recoverFromCrash() surfaces recoveredJobGoalMap) |
 | P19 Gap-Closing (auto-resume crash-recovered goals) | ✅ Done | 393 (391 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (1 new test file, 0 new drift; real source fix: monitor.js's recoverFromCrash() reactivates a paused-at-crash goal when it owned a recovered job, without re-issuing that job) |
+| P20 Token-level LLM streaming to first speech-chunk (partial scope) | ✅ Done | 402 (400 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (2 new test files, 0 new drift; real source change: onToken threaded chain.js→brain/index.js, handleVisionQuery streams sentence-level TTS as tokens arrive; handleUtterance/voice-agent stays full-buffer by deliberate, documented scope boundary — JSON tool-calling contract + needs_result/corrective loop makes early truncation unsafe) |
 
 **Current**: 327 tests (316 pre-existing + 11 new in P10), 325 passing / 1 skipped / 1
 failing. 64 src files (+`core/identity/index.js`) + `server/{index,rate-limit}.js` +
@@ -1425,6 +1426,18 @@ a 2-sentence reply produced 2 `speech-chunk` messages with real audio before
 `done`, first-chunk-to-done gap 1336ms (second sentence still synthesizing
 while the first played).
 
+**Deferred at the time**: sentence-splitting here operates on the *full*
+completion string returned by `brain.think()` — the LLM call itself was not
+streamed, so no chunk (not even chunk 0) could start synthesizing until the
+entire reply had finished generating. Token-level LLM streaming (detecting
+sentence boundaries as tokens arrive so TTS on sentence 1 can start while the
+model is still generating sentence 2+) was explicitly out of scope for this
+phase. **Update — P20 (2026-07-11)**: closed for the one call site where it's
+actually safe to do (`handleVisionQuery`); the tool-calling voice-agent path
+(`handleUtterance`) stays full-buffer by design — see
+[Phase 20](#phase-20--token-level-llm-streaming-to-first-speech-chunk-✅-done-partial-scope-2026-07-11)
+for why.
+
 **Part A — camera + hand-gesture recognition.** `@mediapipe/tasks-vision`
 `GestureRecognizer` (Google's official WASM successor to the
 `kinivi/hand-gesture-recognition-mediapipe` project the user pointed at —
@@ -1725,6 +1738,118 @@ was booted by this phase.
 
 ---
 
+## Phase 20 — Token-Level LLM Streaming to First Speech-Chunk ✅ Done (partial scope) (2026-07-11)
+
+P16 Part C chunked TTS by sentence-splitting the LLM's *full* completion
+string after `brain.think()` resolved — real latency win over one giant
+blob, but chunk 0 still couldn't start synthesizing until the entire reply
+had finished generating. This phase is that deferred item: plumb token-level
+streaming from the LLM through to wherever it can legitimately start
+producing speech-chunks sooner.
+
+**Finding #1 — the providers already stream, end to end.** Read every
+provider in the voice/build/simple/vision hot lanes
+(`lanes.default.js`: groq, mistral, cerebras, nim/nim2, zcode, openrouter,
+ollama). All eight already call their vendor endpoint with `stream: true`,
+already parse SSE (`data:` lines) or NDJSON (ollama) incrementally, and
+`providers/openai-compat.js` (the factory behind groq/mistral/cerebras/nim/
+nim2/zcode) plus `openrouter.js` and `ollama.js` already accept and fire an
+`onToken(delta)` callback per token — this was CA'd from NOVA and has sat
+unused since Phase 2. `grep -r "onToken" src/core/brain/` was genuinely
+empty before this phase, confirming the P16 non-goal note: the gap was never
+"can the providers stream", it was "nothing above the provider layer ever
+asked them to."
+
+**Fix — thread `onToken` two hops up.** `chain.js`'s `complete({...,
+onToken})` now forwards it verbatim to whichever provider actually answers
+(`LANES[lane].chat(messages, {model, signal, source, onToken})` / the
+`ollama.chat(...)` call) — a provider that fails mid-stream still falls
+through to the next attempt exactly as before, `onToken` just stops firing
+for that attempt. `brain/index.js`'s `think({..., onToken})` forwards it
+straight into `chain.complete()`. Zero behavior change for every existing
+caller that doesn't pass `onToken` — pure additive plumbing.
+
+**Finding #2 — the tool-calling voice-agent path cannot safely consume it,
+and this is a real constraint, not a missing feature.** `voice-agent.js`'s
+`handleUtterance()` forces the model into ONE JSON object per call
+(`{"say","actions","needs_result"}` — `OUTPUT_CONTRACT`) and then may loop:
+a `needs_result` iteration re-prompts with tool results and overwrites
+`finalSay`, and a single failed-action turn gets a corrective re-prompt that
+overwrites it again. There is no point during that loop where "the content
+generated so far is provably the final spoken reply" — iteration 1's `say`
+is frequently a placeholder ("let me check...") superseded by iteration 2,
+or is later contradicted by the corrective pass. Starting TTS on a
+provisional `say` risks the user hearing a reply that gets silently replaced
+moments later — worse than the status quo, not better. This is not a
+provider-capability limit (every provider here streams fine); it's the
+calling convention (structured JSON + multi-iteration loop) that makes
+early truncation unsafe. **`handleUtterance` stays full-buffer, unchanged,
+by deliberate scope boundary** — documented in `server/index.js` at the
+`handleVisionQuery` comment block rather than silently left unexplained.
+
+**Fix applied where it's actually safe — `handleVisionQuery`.** This path
+(`server/index.js`) calls `brain.think({lane:'vision', ...})` directly with
+no schema hint and no tool-calling loop — one plain-prose completion, always
+final. `src/core/effectors/voice.js` gains `createSentenceStreamer()` (7 new
+unit tests, `test/sentence-streamer.test.js`): the incremental counterpart
+to the existing `splitSentences()` — feed raw text deltas as they arrive and
+get back only sentences that are *provably* complete (regex requires
+terminal punctuation, same `MIN_CHUNK_CHARS` grouping as the batch version,
+so streaming never emits a 2-word chunk either); any dangling unpunctuated
+tail waits for `flush()` at end-of-stream. `handleVisionQuery` now passes
+`onToken` into `brain.think()`, feeds every delta into the streamer, and for
+each sentence that completes mid-generation, sanitizes + synthesizes +
+sends its own `speech-chunk` immediately — ordering preserved by a small
+serialized promise chain so a slow synth for chunk 0 can't let chunk 1 send
+first. Zero protocol change: still N `speech-chunk` messages then a
+metadata-only `done`, so `ws.js`/`voice-loop.js` (P16) needed no client
+changes. `total` is sent as `null` per streamed chunk (unknowable until the
+stream ends) — verified safe because `voice-loop.js`'s `maybeFinishTurn()`
+already falls back to "chunk queue drained" rather than relying solely on
+`index===total-1` (that fallback was already there to cover `done` arriving
+before all chunks finish playing).
+
+**Live verification** (separate port 4491, user's live 4478 instance never
+touched): a raw WS `vision-query` against a real running instance with a
+real Mistral vision completion produced 2 `speech-chunk`s with real
+edge-tts audio before `done` — first-chunk latency 1519ms, `done` (full
+reply resolved) at 2536ms. Since chunk 0 now starts synthesizing the moment
+sentence 1's tokens are provably complete rather than waiting for the whole
+reply, first-audio latency drops by roughly the generation time of
+sentence 2+ (here, ~1000ms) compared to the pre-P20 chunked-but-not-streamed
+behavior, where chunk 0 couldn't begin synthesis until `content` (all of it)
+was already in hand.
+
+**Scope boundary, stated honestly**: this phase closes token-level streaming
+for exactly one call site — the one where the response shape (plain prose,
+one completion, no tool loop) makes it provably safe. The tool-calling voice
+path, which carries the large majority of real voice turns, is intentionally
+left full-buffer; doing otherwise would mean speculatively speaking content
+that a later loop iteration might overwrite, which is a correctness
+regression dressed up as a latency win. The provider→chain→brain `onToken`
+plumbing itself is now generic and available to any future caller (e.g. a
+future non-JSON single-shot lane) without further wiring.
+
+**Tests**: `test/sentence-streamer.test.js` (7 new — nothing emitted until
+terminal punctuation, no re-emission across pushes, short-fragment grouping
+matches `splitSentences()`, `flush()` returns the dangling tail or `null`,
+char-by-char streaming reconstructs the same output as the batch function
+on identical input). `test/brain.test.js` gains 2 new regressions
+(`chain.complete()` forwards `onToken` to the resolved provider without
+hitting the network via a stubbed `zcode.chat`; `brain.think()` forwards
+`onToken` through to `chain.complete()`).
+
+**Verification**: full suite before any change: 393 tests, 391 pass / 1 skip
+/ 1 fail (baseline, same pre-existing `test/boot.test.js` `EADDRINUSE :4478`
+— the user's own live instance, not touched). After: 402 tests (9 new),
+400 pass / 1 skip / 1 fail — same one pre-existing failure, zero
+regressions. Live-verification instance (port 4491) was booted for the
+`handleVisionQuery` E2E check above and killed before this phase finished
+(`taskkill /F /PID <pid>`, port confirmed free by `netstat`); its scratch
+vault directory was also removed.
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1795,3 +1920,4 @@ was booted by this phase.
 | `TBD` | P17 | Gap-closing: closed Risk Register R2/R3/R4/R8/R9 with 5 new regression/chaos-drill/contract tests (`memory-growth-regression`, `chaos-dry-run-tier-gating-outage`, `identity-boundaries-failsafe-contract`, `integration-cortex-real-effector-failure`, `event-name-conformance`) + fixed 2 confirmed-still-open bugs (D-23 WorkingMemory now consults `checkpoints.load()` before falling back to the episodic tail; D-57 `main.js` boot order fixed so `buildRunner` exists before `recovery` runs, `recoverFromCrash()` now surfaces `recoveredJobs`) with their own regression tests; job↔goal linkage (D-57's other half) confirmed to not exist anywhere in production code and left as an explicit, separate backlog item rather than manufactured in scope (386 tests, 384 passing, 1 pre-existing env-blocked) |
 | `TBD` | P18 | Gap-closing: D-57's job↔goal mapping, the piece P17 left open — `build-runner.js`'s `enqueue()` now carries an honest `goalId` (null when goal-less) onto every job record, `agent-actions.js`'s three job-creating functions and `orchestrator.js`'s `runMission()` take it as an optional param, and every real call site (`from-project.js`, `from-dashboard.js`, `from-mission.js`) threads the `ctx.goalId` cortex/server already pass into `effectors.invoke()` — a plumbing gap one hop past where the wiring already existed, not a missing architecture; `monitor.js`'s `recoverFromCrash()` now surfaces a real `recoveredJobGoalMap` in both its return value and `lifecycle.recovered`, closing the reattachment gap without inventing automatic job resumption (390 tests, 388 passing, 1 pre-existing env-blocked) |
 | `TBD` | P19 | Gap-closing: D-57's last piece, automatic resumption of crash-recovered goals — `monitor.js`'s `recoverFromCrash()` now reactivates (`status:'active'`) exactly the goals present in P18's `recoveredJobGoalMap`, since `goals/index.js`'s arbiter only ever considers `status==='active'` goals and nothing previously un-paused a `'crash-recovery'`-paused one; a goal with no recovered job stays paused, unchanged. Respects Crash Invariant #2 ("no fake resume") — the crashed job itself stays honestly `'failed'`, recovery issues no `enqueue()`/`effectors.invoke()` call of its own, and the pre-existing `agent-actions.js` in-flight guards still gate whatever the reactivated goal's planner decides on next, proven by a real-instance test with a job still genuinely running (393 tests, 391 passing, 1 pre-existing env-blocked) |
+| `TBD` | P20 | Token-level LLM streaming to first speech-chunk, the P16-deferred item — every hot-lane provider already spoke SSE/NDJSON streaming with an unused `onToken` hook (CA'd from NOVA, never wired above the provider layer); `onToken` now threads through `chain.complete()` → `brain.think()`. `src/core/effectors/voice.js` gains `createSentenceStreamer()`, the incremental counterpart to `splitSentences()`. Wired into `handleVisionQuery` only (`server/index.js`) — plain single-completion prose with no tool-calling loop, so early truncation is provably safe; `handleUtterance`'s voice-agent path stays full-buffer by deliberate scope boundary (JSON `{say,actions,needs_result}` contract + needs_result/corrective-pass loop means no point in that call is provably final until the whole turn resolves). Live-verified against a real running instance (separate port): first-chunk latency 1519ms vs. full-reply completion at 2536ms (402 tests, 400 passing, 1 pre-existing env-blocked) |

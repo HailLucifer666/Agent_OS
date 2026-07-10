@@ -42,7 +42,7 @@ function createBrain({ config, bus, identity }) {
   const spend = require('./spend');
 
   return {
-    async think({ lane, messages, schemaHint, budget, signal, source }) {
+    async think({ lane, messages, schemaHint, budget, signal, source, onToken }) {
       // 1. Embed lane is placeholder — clean offline
       if (lane === 'embed') {
         return { content: null, offline: true, lane };
@@ -74,7 +74,8 @@ function createBrain({ config, bus, identity }) {
           signal,
           onAttempt: function({ provider, model }) {
             if (bus) bus.emit('brain-spend', { provider, model, lane, source });
-          }
+          },
+          onToken,
         });
 
         // 4. Parse with repair

@@ -62,12 +62,19 @@ function toOllamaVisionMessages(messages) {
   });
 }
 
-// complete({ messages, kind, brain, signal, onAttempt }) -> { content, provider, model }
+// complete({ messages, kind, brain, signal, onAttempt, onToken }) -> { content, provider, model }
 // kind:  'text' | 'json' | 'vision' (json shares the text chain; JSON discipline lives in
 //        the prompt, not in provider selection).
 // brain: 'voice' | 'build' | 'simple' | 'text' | 'vision' | 'embed' — selects the
 //        preference list. Defaults to 'text' for backward compatibility.
-async function complete({ messages, kind, brain, signal, onAttempt }) {
+// onToken: optional (delta:string) => void — every provider below already speaks
+// SSE/NDJSON streaming and already accepts an onToken passthrough (openai-compat.js,
+// openrouter.js, ollama.js); this was simply never threaded above the provider layer
+// until P20. Forwarded verbatim to whichever provider actually answers — a provider
+// that fails mid-stream still falls through to the next attempt exactly as before,
+// onToken just stops firing for that attempt (the caller only trusts the final
+// resolved `content`, same as always).
+async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
   // brain takes priority if explicitly set; otherwise fall back to kind-based routing.
   const effectiveKind = brain || (kind === 'vision' ? 'vision' : 'text');
   const ranked = await registry.chainFor(effectiveKind);
@@ -84,9 +91,9 @@ async function complete({ messages, kind, brain, signal, onAttempt }) {
       let content;
       if (lane === 'ollama') {
         const msgs = effectiveKind === 'vision' ? toOllamaVisionMessages(messages) : messages;
-        content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal });
+        content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal, onToken });
       } else {
-        content = await LANES[lane].chat(messages, { model, signal, source: 'voice-chain' });
+        content = await LANES[lane].chat(messages, { model, signal, source: 'voice-chain', onToken });
       }
       return { content, provider: lane, model };
     } catch (err) {

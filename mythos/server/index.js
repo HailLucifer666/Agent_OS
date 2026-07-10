@@ -13,7 +13,7 @@ const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const edgeTts = require('../providers/edge-tts');
 const groqStt = require('../providers/groq-stt');
-const { splitSentences } = require('../src/core/effectors/voice');
+const { splitSentences, createSentenceStreamer } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 
@@ -452,8 +452,25 @@ function createServer(deps) {
     // vision-query: one-shot multimodal ask — first real caller of the
     // 'vision' brain lane (PREF_VISION, lanes.default.js). Read-only (no tool
     // dispatch, no leash tier needed — same class as a plain chat reply).
-    // The reply reuses the exact utterance speech path: sanitize -> chunked
-    // TTS -> speech-chunk stream -> done metadata.
+    //
+    // P20 token-level streaming lands here, not in handleUtterance: this
+    // reply is plain prose straight off brain.think({lane:'vision'}) — no
+    // JSON tool-calling contract, no needs_result/corrective-pass loop that
+    // could still overwrite `say` after we'd already started speaking it.
+    // brain.think's onToken (now threaded through chain.js into every
+    // provider, all of which already speak SSE/NDJSON streaming — see
+    // ROADMAP.md P20) feeds a createSentenceStreamer(); each sentence that
+    // completes mid-stream is synthesized and sent as its own speech-chunk
+    // immediately, in order, while the model is still generating the next
+    // one — sentence 1 can be playing in the browser before sentence 2 has
+    // finished generating, instead of waiting for the whole reply first.
+    // handleUtterance (the voice-agent tool-calling path) deliberately stays
+    // full-buffer: it constrains the model to one JSON object per call
+    // ({"say","actions","needs_result"}), and finalSay can be overwritten by
+    // a later needs_result iteration or the one-shot corrective pass — there
+    // is no point in the JSON-tool-calling loop where "the content generated
+    // so far is provably the final spoken reply" until the whole turn (all
+    // iterations) has resolved, at which point streaming buys nothing.
     const MAX_IMAGE_B64 = 4 * 1024 * 1024; // ~3MB decoded — a 640x480 JPEG is ~50-100KB
     async function handleVisionQuery(msg) {
       if (!brain || typeof brain.think !== 'function') {
@@ -467,6 +484,31 @@ function createServer(deps) {
           return;
         }
         const text = String(msg.text || 'Describe what you see, briefly.').slice(0, 500);
+
+        const ttsUp = await edgeTts.isAvailable();
+        const streamer = createSentenceStreamer();
+        let chunkIndex = 0;
+        let sendChain = Promise.resolve(); // serializes synth+send so chunks stay in order
+        // total is unknown until the stream ends; the client's own barge-in-aware
+        // finish (voice-loop.js maybeFinishTurn) already falls back to "queue
+        // drained" rather than relying solely on index===total-1, so an unknown
+        // total here does not stall turn completion.
+        function enqueueChunk(rawText) {
+          const i = chunkIndex++;
+          sendChain = sendChain.then(async () => {
+            const spoken = sanitizeSpoken(rawText);
+            if (!spoken) return;
+            let audioB64 = null;
+            try {
+              const buf = await edgeTts.synthesize({ text: spoken, voice: config.VOICE_TTS_VOICE });
+              audioB64 = buf.toString('base64');
+            } catch (err) {
+              logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+            }
+            send({ type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, text: spoken });
+          });
+        }
+
         const result = await brain.think({
           lane: 'vision',
           messages: [{
@@ -477,7 +519,9 @@ function createServer(deps) {
             ],
           }],
           source: 'vision-query',
+          onToken: ttsUp ? (delta) => { for (const s of streamer.push(delta)) enqueueChunk(s); } : undefined,
         });
+
         if (result.offline || !result.content) {
           send({ type: 'done', reqId: msg.reqId, say: 'All my vision providers are offline right now.', offline: true });
           return;
@@ -485,7 +529,13 @@ function createServer(deps) {
         const say = String(result.content).trim().slice(0, 400);
         historyAppend('user', '[showed camera] ' + text);
         historyAppend('assistant', say);          // vision answers join conversation memory
-        await sendSpokenReply(msg.reqId, say, {});
+
+        if (ttsUp) {
+          const tail = streamer.flush();
+          if (tail) enqueueChunk(tail);
+          await sendChain;
+        }
+        send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: ttsUp && chunkIndex > 0 });
       } catch (err) {
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
       }

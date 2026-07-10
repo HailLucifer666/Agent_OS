@@ -73,4 +73,45 @@ function splitSentences(text) {
   return chunks;
 }
 
-module.exports = { createVoiceEffector, truncateAtSentenceBoundary, splitSentences };
+// Incremental counterpart to splitSentences() for P20 token-level streaming:
+// feed raw text deltas as they arrive from the LLM and get back only the
+// sentences that are provably complete (the regex requires terminal
+// punctuation, so a chunk is never emitted on a guess). Any trailing text
+// with no terminal punctuation yet is held back until either a later push()
+// completes it or flush() is called at end-of-stream. Same MIN_CHUNK_CHARS
+// grouping as splitSentences so streaming never emits a 2-word chunk either.
+function createSentenceStreamer() {
+  var buffer = '';
+  var acc = '';
+
+  function push(delta) {
+    buffer += String(delta || '');
+    var parts = buffer.match(/[^.!?]+[.!?]+["')\]]*\s*/g) || [];
+    var consumedLen = 0;
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      consumedLen += parts[i].length;
+      acc += parts[i];
+      if (acc.trim().length >= MIN_CHUNK_CHARS) {
+        out.push(acc.trim());
+        acc = '';
+      }
+    }
+    buffer = buffer.slice(consumedLen);
+    return out;
+  }
+
+  // End of stream: whatever is left (completed-but-not-yet-emitted sentences
+  // plus any dangling unpunctuated tail) becomes one final chunk, or null if
+  // there's nothing left to say.
+  function flush() {
+    var t = (acc + buffer).trim();
+    acc = '';
+    buffer = '';
+    return t || null;
+  }
+
+  return { push, flush };
+}
+
+module.exports = { createVoiceEffector, truncateAtSentenceBoundary, splitSentences, createSentenceStreamer };
