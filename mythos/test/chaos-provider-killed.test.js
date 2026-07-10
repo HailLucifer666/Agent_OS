@@ -9,24 +9,17 @@
 // Env vars are set BEFORE any mythos module is required, because groq.js/ollama.js/
 // registry.js read their URLs into `const`s at module-load time.
 //
-// REAL BUG FOUND WHILE BUILDING THIS DRILL (not fixed here — src/core/** is out of
-// scope for this test-only phase; documented in ROADMAP.md's P10 section as a new
-// Known Deviation): brain/index.js:73 calls
+// D-56 (fixed): brain/index.js:73 used to call
 //   chain.complete({ messages: msgs, kind: lane === 'embed' ? 'simple' : lane, ... })
-// passing the caller's lane as `kind`, never as `brain`. But chain.js's own
+// passing the caller's lane as `kind`, never as `brain`. chain.js's own
 // complete({messages,kind,brain,...}) only consults `kind` to special-case 'vision'
 // (chain.js:70: `const effectiveKind = brain || (kind === 'vision' ? 'vision' :
 // 'text')`) — `brain` is the field that actually selects the 'voice'/'build'/
 // 'simple' preference table + its CHAIN_VOICE/CHAIN_BUILD/CHAIN_SIMPLE env override.
-// Since brain/index.js never sets `brain`, EVERY brain.think({lane:'voice'|'build'|
-// 'simple',...}) call silently falls through to the 'text' lane's table (nim +
-// hardcoded ollama models) instead of the requested lane — confirmed by direct
-// reproduction against real code. test/brain.test.js never caught this because its
-// own assertions accept either offline outcome (`result.offline === true || false`).
-// Both CHAIN_VOICE and CHAIN_TEXT are set below so this test proves real current
-// behavior (brain.think() going through the 'text' table today) rather than the
-// 'voice' table the original spec assumed; CHAIN_VOICE is kept because test 2 below
-// calls chain.complete() directly with `brain:'voice'`, bypassing the buggy layer.
+// Fixed by passing `brain` instead of `kind`; regression test in test/brain.test.js
+// (D-56 describe block) asserts brain.think({lane:'build'}) resolves via CHAIN_BUILD,
+// not CHAIN_TEXT. brain.think({lane:'voice',...}) below now genuinely consults
+// CHAIN_VOICE, so only that override is needed (CHAIN_TEXT is no longer set).
 
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -113,13 +106,10 @@ describe('chaos drill: provider-killed', () => {
     process.env.GROQ_API_URL = `http://127.0.0.1:${groqServer.address().port}/v1`;
     process.env.GROQ_API_KEY = 'chaos-test-key';
     process.env.OLLAMA_URL = `http://127.0.0.1:${ollamaServer.address().port}`;
-    // CHAIN_VOICE override — exact config key, do not paraphrase. Kept for test 2,
-    // which calls chain.complete() directly with brain:'voice'.
+    // CHAIN_VOICE override — exact config key, do not paraphrase. Governs
+    // brain.think({lane:'voice'}) in tests 1 and 3, and chain.complete({brain:'voice'})
+    // directly in test 2, now that D-56 is fixed.
     process.env.CHAIN_VOICE = 'groq:chaos-model,ollama:chaos-model';
-    // CHAIN_TEXT — see the file-header note: brain.think({lane:'voice'}) actually
-    // resolves through the 'text' table today (brain/index.js's kind-vs-brain bug),
-    // so this is the override that genuinely governs tests 1 and 3 below.
-    process.env.CHAIN_TEXT = 'groq:chaos-model,ollama:chaos-model';
 
     chain = require('../src/core/brain/chain');
     createBrain = require('../src/core/brain').createBrain;
@@ -132,7 +122,6 @@ describe('chaos drill: provider-killed', () => {
     delete process.env.GROQ_API_KEY;
     delete process.env.OLLAMA_URL;
     delete process.env.CHAIN_VOICE;
-    delete process.env.CHAIN_TEXT;
   });
 
   beforeEach(() => {

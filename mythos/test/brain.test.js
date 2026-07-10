@@ -310,6 +310,48 @@ describe('brain/index — P8 identity persona injection', function() {
 });
 
 // ---------------------------------------------------------------------------
+// D-56 regression: brain.think({lane}) must consult that lane's own CHAIN_*
+// override (via chain.complete's `brain` param), not silently fall through to
+// CHAIN_TEXT. Root cause was brain/index.js:73 passing the lane as `kind`
+// instead of `brain` — chain.js only reads `kind` for the 'vision' special
+// case, so every non-text lane resolved through the 'text' table's CHAIN_TEXT
+// override. Stubs zcode.chat (isAvailable() only checks ZCODE_API_KEY at call
+// time, so no module-load-order dependency) to capture which override model
+// actually reached the provider, without hitting the network.
+// ---------------------------------------------------------------------------
+describe('brain/index — D-56 regression: lane routing consults its own CHAIN_* override', function() {
+  const { createBrain } = require('../src/core/brain/index');
+  const zcode = require('../providers/zcode');
+
+  it('brain.think({lane:"build"}) resolves through CHAIN_BUILD, not CHAIN_TEXT', async function() {
+    const origChat = zcode.chat;
+    const seenModels = [];
+    zcode.chat = async function(messages, opts) {
+      seenModels.push(opts.model);
+      return 'stubbed response';
+    };
+    process.env.ZCODE_API_KEY = 'test-key';
+    process.env.CHAIN_BUILD = 'zcode:build-override-model';
+    process.env.CHAIN_TEXT = 'zcode:text-override-model';
+
+    try {
+      const brain = createBrain({ config: {}, bus: null });
+      const result = await brain.think({ lane: 'build', messages: [{ role: 'user', content: 'hi' }] });
+
+      assert.equal(result.offline, false);
+      assert.equal(result.provider, 'zcode');
+      assert.equal(result.model, 'build-override-model', 'must resolve via CHAIN_BUILD, not CHAIN_TEXT');
+      assert.deepEqual(seenModels, ['build-override-model']);
+    } finally {
+      zcode.chat = origChat;
+      delete process.env.ZCODE_API_KEY;
+      delete process.env.CHAIN_BUILD;
+      delete process.env.CHAIN_TEXT;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // tryParseWithRepair
 // ---------------------------------------------------------------------------
 describe('tryParseWithRepair', function() {

@@ -70,7 +70,7 @@ function createBrain({ config, bus, identity }) {
       try {
         const result = await chain.complete({
           messages: msgs,
-          kind: lane === 'embed' ? 'simple' : lane,
+          brain: lane === 'embed' ? 'simple' : lane,
           signal,
           onAttempt: function({ provider, model }) {
             if (bus) bus.emit('brain-spend', { provider, model, lane, source });
