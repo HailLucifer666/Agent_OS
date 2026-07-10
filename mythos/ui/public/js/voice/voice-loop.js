@@ -1,8 +1,10 @@
 // voice-loop.js — always-listening voice loop. CA of NOVA
-// app/public/js/voice-control.js's hands-free machinery (lines 226-370): Chrome's
-// continuous=true dies silently after a few seconds, so each session is a
-// single-utterance capture (continuous=false) with a restart-on-onend loop,
-// capped at HF_RESTART_CAP to avoid an infinite loop on a broken setup.
+// app/public/js/voice-control.js's hands-free machinery (lines 226-370), with
+// one deliberate departure: continuous=true + interimResults + a SILENCE_MS
+// dispatch window, because single-utterance capture (continuous=false) lets the
+// engine end-point at the first brief pause and cut the speaker off mid-
+// sentence. The restart-on-onend loop (capped at HF_RESTART_CAP) still guards
+// Chrome's old "continuous dies silently" quirk.
 // 'not-allowed' degrades to an HONEST disabled mic — never a fake-listening dot.
 //
 // Armed by orb/mic click — every captured utterance IS the command; no wake
@@ -19,6 +21,7 @@ import { utterance } from '../ws.js';
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 const HF_RESTART_CAP = 40;
+const SILENCE_MS = 1800;  // dispatch a buffered utterance after this much quiet
 
 // voice-nav table — checked before falling through to the brain.
 const NAV_COMMANDS = [
@@ -47,8 +50,13 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   function buildRecognition() {
     const r = new RecognitionCtor();
     r.lang = 'en-US';
-    r.continuous = false;       // single-phrase capture (reliable in Chrome)
-    r.interimResults = false;
+    // continuous + interim: the on-device engine end-points single-phrase
+    // sessions at the first brief pause, cutting the speaker off mid-sentence.
+    // Instead we buffer final results across the session and dispatch only
+    // after SILENCE_MS with no new speech (see startSession). The restart-on-
+    // onend loop still guards the old "continuous dies silently" Chrome quirk.
+    r.continuous = true;
+    r.interimResults = true;
     if (localSTT) { try { r.processLocally = true; } catch { /* older Chrome */ } }
     return r;
   }
@@ -153,20 +161,41 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     if (!active || processing || disposed || recog) return;
     const r = buildRecognition();
     recog = r;
+    let buffer = '';        // final transcripts accumulated this session
+    let silenceTimer = null;
 
-    r.onresult = (event) => {
-      const last = event.results[event.results.length - 1];
-      if (!last || !last[0]) return;
-      const transcript = last[0].transcript.trim();
-      if (!transcript) return;
-      // Armed by explicit click, so the whole utterance is the command;
-      // strip a leading "Mythos, ..." if the user says it anyway.
-      const match = transcript.match(WAKE_PATTERN);
-      const command = (match ? transcript.slice(match[0].length) : transcript).trim();
-      if (!command) return;
+    // Dispatch the buffered utterance as one command. Armed by explicit click,
+    // so the whole utterance is the command; a leading "Mythos, ..." is
+    // stripped if the user says it anyway. Returns true when a command fired.
+    const dispatch = () => {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+      const text = buffer.replace(/\s+/g, ' ').trim();
+      buffer = '';
+      if (!text) return false;
+      const match = text.match(WAKE_PATTERN);
+      const command = (match ? text.slice(match[0].length) : text).trim();
+      if (!command) return false;
       restartCount = 0; // a real command proves the setup works — reset the cap
       caption('» ' + command, 'heard');
       handleCommand(command);
+      return true;
+    };
+
+    r.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        if (!res[0]) continue;
+        if (res.isFinal) buffer += ' ' + res[0].transcript;
+        else interim += res[0].transcript;
+      }
+      // ANY speech activity (interim included) postpones dispatch, so pausing
+      // mid-sentence never cuts the speaker off.
+      const preview = (buffer + ' ' + interim).replace(/\s+/g, ' ').trim();
+      if (preview) caption('» ' + preview + ' …', 'heard');
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(dispatch, SILENCE_MS);
     };
 
     r.onerror = (event) => {
@@ -184,6 +213,10 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
 
     r.onend = () => {
       if (recog === r) recog = null;
+      clearTimeout(silenceTimer);
+      // Engine closed the session on its own with speech still buffered —
+      // don't lose it, dispatch now (dispatch() flips into processing).
+      if (active && !processing && !disposed && dispatch()) return;
       if (active && !processing && !disposed) {
         if (restartCount >= HF_RESTART_CAP) {
           stop();
