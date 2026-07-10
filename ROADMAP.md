@@ -113,6 +113,7 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P8 Identity | ✅ Done | 293 (291 pass / 1 skip / 1 fail) | `6898d92` | 0 / 0 / 0 |
 | P9 UI v2 (server + JARVIS HUD; cutover deferred) | ✅ Done | 316 (314 pass / 1 skip / 1 fail) | `b776b73` | 0 / 0 / 0 |
 | P10 Chaos Drills | ✅ Done | 327 (325 pass / 1 skip / 1 fail) | `27d8842` | 1 / 1 / 0 (P10's own test files introduce 0 drift; found + documented, not fixed: D-56 CRITICAL pre-existing since P2, D-57 MAJOR pre-existing) |
+| P17 Gap-Closing (R2/R3/R4/R8/R9 + D-23/D-57) | ✅ Done | 386 (384 pass / 1 skip / 1 fail) | `TBD` | 0 / 0 / 0 (7 new test files, 0 new drift; 2 real source fixes: D-23 working.js checkpoint consult, D-57 main.js boot-order + recoverFromCrash/buildRunner wiring) |
 
 **Current**: 327 tests (316 pre-existing + 11 new in P10), 325 passing / 1 skipped / 1
 failing. 64 src files (+`core/identity/index.js`) + `server/{index,rate-limit}.js` +
@@ -402,16 +403,17 @@ D-56 (CRITICAL, P10-attributed, tracked separately below) also resolved.
 
 **New, P10-attributed, tracked separately from the P0–P4 audit-era counts above**
 (same convention as D-55, found during P5): **D-56** (CRITICAL, found by P10;
-✅ RESOLVED — see below) and **D-57** (MAJOR, found by P10, not fixed — a
-`main.js` change, out of scope). D-57 must still be resolved (or explicitly
-re-accepted) before any future cutover, alongside the pre-existing 20 MAJOR /
-23 MINOR backlog below.
+✅ RESOLVED — see below) and **D-57** (MAJOR, found by P10; ✅ **structural half
+RESOLVED in P17** — see below; job↔goal linkage remains a separate, unimplemented
+backlog item, not a regression). D-23 (MAJOR, found pre-P10, tracked under R5) is
+also ✅ **RESOLVED in P17** — see below.
 
 | ID | Severity | File:Line | Finding |
 |----|----------|-----------|---------|
 | D-55 | MINOR — ✅ RESOLVED | `mythos/src/core/memory/audit-writer.js:11-24` | `redact()` only inspected top-level keys of `args` — nested objects/arrays (e.g. a `{headers:{authorization:...}}` shape, or free text typed into a form via `ui_type`/`browser_type`) were copied verbatim into the append-only, permanent `vault/Audit/*.jsonl` trail. `REDACT_KEYS` was also narrow (no `cookie`, `credential`, `session`). Found by Phase 5's security audit while reviewing what Leash writes through this module; flagged rather than fixed in that session since `audit-writer.js` is P1-shipped code outside Phase 5's touch scope. Fixed opportunistically: `redact()` now recurses through nested objects and arrays at any depth, and `REDACT_KEYS` includes `cookie`, `credential`, `session`. Regression tests added in `mythos/test/memory.test.js` (nested-object and array-of-objects cases); full suite (234 tests) green. |
 | D-56 | CRITICAL — ✅ RESOLVED | `mythos/src/core/brain/index.js:73` | `chain.complete({messages, kind: lane === 'embed' ? 'simple' : lane, ...})` passed the caller's lane as `kind`, never as `brain`. `chain.js`'s own `complete({messages,kind,brain,...})` (`chain.js:70`) only reads `kind` to special-case `'vision'`; `brain` is the field that selects the `'voice'/'build'/'simple'` preference table + its `CHAIN_VOICE`/`CHAIN_BUILD`/`CHAIN_SIMPLE` env override. Since `brain` was never passed, every `brain.think({lane:'voice'\|'build'\|'simple',...})` call silently fell through to the `'text'` lane's table instead of the requested lane, since Phase 2. Found while building P10's Drill 1 (`test/chaos-provider-killed.test.js`) — `test/brain.test.js` never caught it because its own assertions accepted either offline outcome. Fixed: `brain/index.js:73` now reads `brain: lane === 'embed' ? 'simple' : lane` (renamed the key, same value expression; `kind` dropped since chain.js only needs it for the 'vision' special-case, which this facade never hits directly). Regression test added in `mythos/test/brain.test.js` (D-56 describe block): stubs `zcode.chat` and asserts `brain.think({lane:'build'})` resolves via the `CHAIN_BUILD` override, not `CHAIN_TEXT`. `test/chaos-provider-killed.test.js`'s Drill 1 header comment and env setup updated to drop the now-unneeded `CHAIN_TEXT` workaround, since `brain.think({lane:'voice'})` genuinely consults `CHAIN_VOICE` now. Full suite green: 328 tests, 326 passing / 1 skipped / 1 failing (both pre-existing, unrelated — `test/boot.test.js` SIGINT and `test/sensors-file.test.js` isolated-child-process, same as before this fix). |
-| D-57 | MAJOR — ⬚ OPEN, not fixed | `mythos/src/main.js` (`'recovery'` step ~186-193, `'leash'` step ~195-253) | The spec's own Drill 6 and Integration Points table assume `main.js`'s `'recovery'` boot step composes `buildRunner.init().recoveredJobs` → job-goal-map → `goals.update(goalId,{status:'paused',reason:'crash-recovery'})`. It does not: `'recovery'` calls only `recoverFromCrash({bus,config,memory,goals})` (P6's checkpoint-based recovery, no build-runner awareness at all), and `buildRunner` isn't constructed until the later `'leash'` step, which runs *after* `'recovery'` — the composition is structurally impossible in today's boot order. The literal string `'crash-recovery'` does not appear anywhere in `main.js`. Found while building P10's Drill 6 (`test/chaos-restart-mid-action.test.js`); per the spec's own Anti-Drift item 6 and "Do NOT" list, Drill 6 is written against freshly-constructed real modules directly (proving the *modules* compose correctly), not against `main.js`'s real boot sequence — R9/R5 are proven at the module level only, not the boot level, until a future small `main.js` patch closes this. Not fixed here: `main.js` is out of scope for P10's test-files-only phase. Recommended fix: reorder `'recovery'` after `'leash'` (or feed `'leash'`'s `buildRunner.init().recoveredJobs` back into a second recovery pass), plus a real-boot-level regression test. |
+| D-57 | MAJOR — ⚠️ structural half ✅ RESOLVED in P17, job↔goal linkage remains open | `mythos/src/main.js` (`'leash'` step, `'recovery'` step), `mythos/src/core/immune/monitor.js` | The spec's own Drill 6 and Integration Points table assume `main.js`'s `'recovery'` boot step composes `buildRunner.init().recoveredJobs` → job-goal-map → `goals.update(goalId,{status:'paused',reason:'crash-recovery'})`. Found by P10: it did not — `'recovery'` ran before `'leash'` (which constructs `buildRunner`), so the composition was structurally impossible in the real boot order, and `recoverFromCrash()` had no `buildRunner` parameter at all. **P17 fix**: `'recovery'` now runs after `'leash'` in `main.js`'s step list (nothing in either step depends on the other's *output*, only construction order — safe to swap); `recoverFromCrash({bus,config,memory,goals,buildRunner})` awaits `buildRunner.init()` and folds `recoveredJobs.length` into both its return value and the `lifecycle.recovered` event. Regression: `test/d57-recovery-boot-order-regression.test.js` (static boot-order assertion + a real-instance build-runner-restarted-mid-job test). **Still open, and explicitly not fixed** (verified via `grep -r "job-goal-map" src/` returning nothing): there is no persisted job↔goal mapping anywhere in shipped production code — `effectors/agent-actions.js`'s `buildRunner.enqueue()` calls carry no `goalId`. `Pipeline/job-goal-map.json` is purely `test/chaos-restart-mid-action.test.js`'s own invented fixture to prove the composition at the module level; it is not read or written by any production module. Implementing real job→goal linkage (touching `agent-actions.js`/`effectors/goals.js`) is separate, larger feature work — tracked here as its own future backlog item rather than silently left conflated with the now-fixed boot-order bug. |
+| D-23 | MAJOR — ✅ RESOLVED in P17 | `mythos/src/core/memory/working.js`, `mythos/src/core/memory/index.js` | Spec: WorkingMemory should rebuild from the episodic tail only if a checkpoint is missing. Found pre-P10, tracked under R5: `working.init()` unconditionally called `rebuildFromEpisodic()`, never consulting `checkpoints.load()` at all — even though `immune/monitor.js`'s own `recoverFromCrash()` comment already (incorrectly) claimed this behavior existed. **Fixed**: `createWorkingMemory()` now takes an optional `checkpoints` dependency; `init()` restores `{tick, activeGoalId}` directly from a checkpoint when one exists, falling back to the episodic-tail scan only when it doesn't. `memory/index.js` wires `checkpoints` through. Backward compatible — the two pre-existing call sites that construct `createWorkingMemory()` without `checkpoints` (`test/chaos-memory-corrupt.test.js`, `test/memory.test.js`) keep their prior unconditional-fallback behavior unchanged. Regression: `test/d23-working-memory-checkpoint-regression.test.js`. |
 
 Full detail for every ID is in the per-phase "Drift found" tables above — this
 section exists only as a consolidated non-blocking backlog view.
@@ -1483,19 +1485,95 @@ and untouched throughout this phase; all verification used separate ports).
 
 ---
 
+## Phase 17 — Gap-Closing: Risk Register R2/R3/R4/R8/R9 + D-23/D-57 ✅ Done (2026-07-11)
+
+The Risk Register (below) and Known Deviations backlog had accumulated five
+explicitly-flagged untested gaps (R2, R3, R4, R8, R9) and two open bugs (D-23, D-57)
+across P1/P6/P8/P10. This phase closed all seven, reading each module's actual
+current source first rather than trusting the ROADMAP prose (two items — R4's
+"no drill touches identity/boundaries.md" and D-56 — turned out to already have
+partial coverage from P8, confirmed via `git log --follow`; the rest were verified
+genuinely open before any test or fix was written).
+
+**Five new regression/contract tests** (test-files-only, no source changes):
+- `test/memory-growth-regression.test.js` (R2) — episodic (90+ simulated days,
+  two consolidate cycles, backdated file mtimes) and semantic (60 topics, mixed
+  confidence, two cycles) growth-at-scale, proving the active window stays bounded,
+  archives are real/gzip-decompressible, and repeated cycles are idempotent —
+  the exact "growth", not single-file, scenario the Risk Register flagged as untested.
+- `test/chaos-dry-run-tier-gating-outage.test.js` (R3) — a genuine P10-style chaos
+  drill: two real HTTP servers killed mid-request (both Brain providers dead), a
+  real Leash+Identity+AuditWriter stack, and a composed real `cortex.tickOnce()`
+  proving MYTHOS_DRY_RUN and tier-gating are fully decoupled from Brain health —
+  tier-0 still auto-allows, DRY_RUN still logs-and-no-ops T>=1, T3/T4 still demand
+  confirm, all while every provider is genuinely unreachable.
+- `test/identity-boundaries-failsafe-contract.test.js` (R4) — the one path P8's
+  existing `identity-boundaries-contract.test.js`/`identity-leash-integration.test.js`
+  didn't cover: a malformed/missing `max_autonomous_tier` must fail safe to 1 *and*
+  that fail-safe must cascade through a real Leash tier check (not just identity's
+  own isolated getter), while never attempting to write `boundaries.md`.
+- `test/integration-cortex-real-effector-failure.test.js` (R9) — drives
+  `effectors/from-system.js`'s real, shipped `get_weather` effector (real
+  `effectorFromTool` adapter, real network call forced to fail) through a real
+  cortex tick, proving the real breaker trips and the failure is recorded honestly —
+  every prior cortex/effector test used a minimal stub effector to isolate the seam.
+- `test/event-name-conformance.test.js` (R8) — statically greps every
+  `bus.emit()`/`*Emit()` string-literal event name under `src/` and `server/`
+  against a maintained allowlist; asserts the three historically-fixed drift bugs
+  (D-28/D-36/D-37) can never silently reappear.
+
+**Two real source fixes**, each with its own dedicated regression test:
+- **D-23** (`src/core/memory/working.js`, `src/core/memory/index.js`) — confirmed
+  still open: `working.init()` unconditionally called `rebuildFromEpisodic()`,
+  never consulting `checkpoints.load()`, even though `immune/monitor.js`'s own
+  `recoverFromCrash()` comment already (incorrectly) claimed this behavior existed.
+  Fixed: `createWorkingMemory()` now takes an optional `checkpoints` dependency;
+  `init()` restores `{tick, activeGoalId}` directly from a checkpoint when one
+  exists, only falling back to the episodic-tail scan when it doesn't.
+  `memory/index.js` wires `checkpoints` through. Backward compatible — the two
+  existing call sites that don't pass `checkpoints` (`test/chaos-memory-corrupt.test.js`,
+  `test/memory.test.js`) keep their prior unconditional-fallback behavior.
+  Regression: `test/d23-working-memory-checkpoint-regression.test.js`.
+- **D-57** (`src/main.js`, `src/core/immune/monitor.js`) — confirmed still open:
+  the `'recovery'` boot step ran before `'leash'` (which constructs `buildRunner`),
+  making the recoveredJobs→goal composition Drill 6 proves at the module level
+  structurally impossible in the real boot sequence, exactly as documented.
+  Fixed the structural half: swapped `'recovery'` to run after `'leash'` (nothing
+  in either step depends on the other's *output*, only on construction order), and
+  `recoverFromCrash()` now takes an optional `buildRunner`, awaits its `init()`,
+  and folds `recoveredJobs.length` into both its return value and the
+  `lifecycle.recovered` event payload for real observability. **Not fixed** (and
+  said so rather than manufacturing scope): there is no persisted job↔goal mapping
+  anywhere in shipped production code — `effectors/agent-actions.js`'s
+  `buildRunner.enqueue()` calls carry no `goalId`, and `Pipeline/job-goal-map.json`
+  is purely `test/chaos-restart-mid-action.test.js`'s own fixture, invented to prove
+  the composition at the module level. Implementing a real job→goal linkage
+  mechanism (touching `agent-actions.js`/`effectors/goals.js`) is separate, larger
+  feature work, not a gap-closing fix — left as an explicit backlog item, not
+  silently left half-done. Regression: `test/d57-recovery-boot-order-regression.test.js`.
+
+**Verification**: full suite run before any change: 363 tests, 361 pass / 1 skip /
+1 fail (baseline). After: 386 tests (23 new), 384 pass / 1 skip / 1 fail — the one
+failure is the same pre-existing `test/boot.test.js` `EADDRINUSE :4478` (the user's
+own live instance was running throughout, exactly as expected per house convention;
+no live instance was booted by this phase itself, so there was nothing to kill on
+exit). Zero regressions.
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
 |----|------|------------|-------|
 | R1 | Idle-loop Brain cost | Idle-skip (P3) + spend events/cap (P2) | ✅ P2, P3 — not a failure-injection concern by nature, no P10 drill needed |
-| R2 | Memory growth | Decay + archive (P1), consolidate cadence | ✅ P1 (D-17/D-18 archive-not-delete fixed at Phase 4.5) but ⚠️ **gap** — no P10 drill exercises `consolidate()`/decay-to-archive under real growth at scale (Drill 4 touches episodic corruption, not growth); recommend a dedicated P1-scope regression test |
-| R3 | Autonomy safety | Audit + spend cap + MYTHOS_DRY_RUN + tier gates | ✅ P5, but ⚠️ **partial gap** — P10's Drill 6 proves the audit trail survives a crash; no drill exercises `MYTHOS_DRY_RUN` or leash tier-gating under a simultaneous provider outage |
-| R4 | Identity drift | Human-editable boundaries as tier ceiling | ✅ P8, but ⚠️ **gap, acceptable for P10** — no drill touches `identity/index.js`/`boundaries.md`; should get its own contract test in a future phase |
-| R5 | SPOF | Checkpoint every N ticks + restore (P6/P1) + drill (P10) | ✅ **well covered** by P10 (Drill 4 checkpoint-restore-after-corruption + Drill 6 restart-mid-action) for the failure modes exercised — this is the risk P10 exists for. D-23 (WorkingMemory's `rebuildFromEpisodic()` never consults `checkpoints.load()`/`isCrashRecovery`, always rebuilds from episodic tail) remains open, untouched by P10 |
+| R2 | Memory growth | Decay + archive (P1), consolidate cadence | ✅ P1 (D-17/D-18 archive-not-delete fixed at Phase 4.5); ✅ **P17** — `test/memory-growth-regression.test.js` exercises `consolidate()`/decay-to-archive under real multi-cycle growth at scale (90+ simulated episodic days, 60 semantic topics), not just the single-file edge case |
+| R3 | Autonomy safety | Audit + spend cap + MYTHOS_DRY_RUN + tier gates | ✅ P5; ✅ **P17** — `test/chaos-dry-run-tier-gating-outage.test.js` is a real P10-style chaos drill proving `MYTHOS_DRY_RUN` and leash tier-gating stay correct (never fail-open, audit trail intact) under a genuine simultaneous Brain-provider outage |
+| R4 | Identity drift | Human-editable boundaries as tier ceiling | ✅ P8; ✅ **P17** — `test/identity-boundaries-failsafe-contract.test.js` adds the one path P8's existing contract tests didn't cover: a malformed `boundaries.md` fail-safe (tier→1) proven to cascade through a real Leash check, not just identity's own isolated getter |
+| R5 | SPOF | Checkpoint every N ticks + restore (P6/P1) + drill (P10) | ✅ **well covered** by P10 (Drill 4 checkpoint-restore-after-corruption + Drill 6 restart-mid-action). D-23 (WorkingMemory's `rebuildFromEpisodic()` never consulted `checkpoints.load()`/`isCrashRecovery`) — ✅ **fixed in P17**: `working.js`'s `init()` now restores from a checkpoint when one exists, only falling back to the episodic tail otherwise; regression in `test/d23-working-memory-checkpoint-regression.test.js` |
 | R6 | Port conflict | MYTHOS_PORT 4478 (NOVA stays 4477) + separate vault root | ✅ P0 |
 | R7 | Stale copy | Git clone verified @ `a0433b5`, future `git pull` | ✅ Step 0 |
-| R8 | Event-name drift silently breaks future-phase wiring | Every bus event name must be copy-pasted verbatim from the spec, not paraphrased — add a lint/test that greps emitted event-name string literals against a spec-derived allowlist | ⏳ P5+ still open — **intentional gap for P10**: this is a static/lint concern, not a failure-injection concern; belongs in its own `test/event-name-conformance.test.js` |
-| R9 | Cross-module contract breaks invisible to per-module unit tests | Add integration tests that exercise real module-to-module handoffs (Cortex→Goals, Cortex→Effectors) with real (non-fake) instances wired together, not just fake-bus unit tests per module | ✅ **well covered** for the two seams P10 targets — Drill 5 (Cortex↔Goals, the D-38 seam) + Drill 6 (build-runner↔goals↔audit, module level only — see D-57). Not covered: Cortex→Effectors under real (non-stub) effectors during a failure (Drills 2/5/6 all use stub effectors to isolate the seam under test); recommend one more real-instance test in a future phase |
+| R8 | Event-name drift silently breaks future-phase wiring | Every bus event name must be copy-pasted verbatim from the spec, not paraphrased — add a lint/test that greps emitted event-name string literals against a spec-derived allowlist | ✅ **P17** — `test/event-name-conformance.test.js` statically greps every `bus.emit()`/`*Emit()` literal under `src/`+`server/` against a maintained allowlist and asserts the three historical drift bugs (D-28/D-36/D-37) can never silently reappear |
+| R9 | Cross-module contract breaks invisible to per-module unit tests | Add integration tests that exercise real module-to-module handoffs (Cortex→Goals, Cortex→Effectors) with real (non-fake) instances wired together, not just fake-bus unit tests per module | ✅ **well covered** for the two seams P10 targets — Drill 5 (Cortex↔Goals, the D-38 seam) + Drill 6 (build-runner↔goals↔audit, module level only — see D-57). ✅ **P17** closes the remaining seam — `test/integration-cortex-real-effector-failure.test.js` drives a real, shipped production effector (`from-system.js`'s `get_weather`, real adapter, real forced network failure) through a real cortex tick, not a stub effector |
 
 ---
 
@@ -1550,3 +1628,4 @@ and untouched throughout this phase; all verification used separate ports).
 | `5d2dced` | P15 | Mic-off stream leak (`voice-loop.js` never released the getUserMedia MediaStream) + unreadable JSON confirm popups (`voice-agent.js` + `cortex/index.js` humanizeArgs) + artifact tabs opening the dashboard (missing `/vault/builds` static route) — all three live-verified against the real running instance, plus a `server.test.js` fixture gap (missing `memory.fs`) found and fixed by the suite run itself (357 tests, 355 passing, 1 pre-existing env-blocked) |
 | `a8e439c` | P16 | Chunked streamed TTS: sentence-chunked speech-chunk WS messages before a metadata-only done, so first audio plays while later sentences still synthesize (`splitSentences`, `sendSpokenReply`, `voice-loop.js` chunk queue) — also carries this phase's B0 vision-lane probe result (mistral-large-2512 confirmed live) and the server-side vision-query handler; live-verified 2 chunks + real audio, first-chunk-to-done gap 1336ms (363 tests, 361 passing, 1 pre-existing env-blocked) |
 | `dccb1a3` | P16 | Live camera + hand-gesture control (`@mediapipe/tasks-vision` GestureRecognizer, client-side WASM) + vision Q&A client wiring — Thumb_Up/Closed_Fist/Open_Palm/Victory gestures reuse the live confirm-modal buttons and voice-loop API (zero new approval surface); live-verified static asset serving, honest permission-denied degrade, and a real vision reply round-tripping through the browser's own ws.js (363 tests, 361 passing, 1 pre-existing env-blocked) |
+| `TBD` | P17 | Gap-closing: closed Risk Register R2/R3/R4/R8/R9 with 5 new regression/chaos-drill/contract tests (`memory-growth-regression`, `chaos-dry-run-tier-gating-outage`, `identity-boundaries-failsafe-contract`, `integration-cortex-real-effector-failure`, `event-name-conformance`) + fixed 2 confirmed-still-open bugs (D-23 WorkingMemory now consults `checkpoints.load()` before falling back to the episodic tail; D-57 `main.js` boot order fixed so `buildRunner` exists before `recovery` runs, `recoverFromCrash()` now surfaces `recoveredJobs`) with their own regression tests; job↔goal linkage (D-57's other half) confirmed to not exist anywhere in production code and left as an explicit, separate backlog item rather than manufactured in scope (386 tests, 384 passing, 1 pre-existing env-blocked) |
