@@ -2,7 +2,7 @@
 // Voice initializes on first pointerdown (Chrome's user-gesture policy for
 // mic/AudioContext); everything else mounts immediately.
 
-import { subscribe } from './ws.js';
+import { subscribe, visionQuery } from './ws.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
 import { mountCoreOrb } from './neural-map/core-orb.js';
@@ -11,6 +11,7 @@ import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
 import { createMicIndicator } from './voice/mic-indicator.js';
+import { createCameraLoop } from './vision/camera.js';
 
 const ctx = { subscribe, onRefresh };
 
@@ -58,6 +59,7 @@ function ensureVoice() {
       onState: onVoiceState,
       openPanel: (id) => overlays.openPanel(id),
       onCaption: (text, kind) => mic.setCaption(text, kind),
+      onVisionQuery: (text) => describeScene(text),
     });
   }
   return voice;
@@ -68,6 +70,51 @@ function toggleVoice() {
 }
 
 micEl.addEventListener('click', toggleVoice);
+
+// camera + hand-gesture control (Part A/B, P16). Camera is OFF by default,
+// same privacy posture as the mic — only starts on an explicit toggle click.
+const camEl = document.getElementById('camera-indicator');
+let camera = null;
+
+// Gesture -> action map. Confirm accept/reject reuse the LIVE modal buttons
+// (confirm-modal.js) — same code path as a human click, zero new approval
+// surface. Selectors return null harmlessly when no confirm is showing.
+const GESTURE_ACTIONS = {
+  Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
+  Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
+  Open_Palm:   () => { if (voice && voice.isActive()) { voice.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); } },
+  Victory:     () => describeScene('Describe what you see, briefly.'),
+};
+
+// Vision Q&A reply reuses the voice loop's own chunk-queue/barge-in playback
+// machinery (beginTurn/onExternalChunk/deliverExternalReply) so a "what do
+// you see" answer is spoken exactly like a voice reply, chunk-by-chunk.
+function describeScene(text) {
+  if (!camera || !camera.isActive()) { mic.setCaption('Camera is off — click the camera icon first.', 'error'); return; }
+  const image = camera.captureFrame();
+  if (!image) { mic.setCaption('Could not capture a frame.', 'error'); return; }
+  mic.setCaption('👁 looking…', 'info');
+  const v = ensureVoice();
+  const session = v.beginTurn();
+  visionQuery({
+    image, text,
+    onChunk: (m) => v.onExternalChunk(session, m),
+    onDone: (msg) => v.deliverExternalReply(msg, session),
+  });
+}
+
+function ensureCamera() {
+  if (!camera) {
+    camera = createCameraLoop({
+      onState: (s) => { camEl.className = `cam-${s}`; camEl.title = `camera ${s}`; },
+      onGesture: (name) => { const fn = GESTURE_ACTIONS[name]; if (fn) fn(); },
+      onCaption: (text, kind) => mic.setCaption(text, kind),
+    });
+  }
+  return camera;
+}
+
+camEl.addEventListener('click', () => ensureCamera().toggle());
 
 // Chrome gesture policy: SpeechRecognition/AudioContext need a user gesture, so
 // the loop object is constructed on the FIRST pointerdown (any click) — but
