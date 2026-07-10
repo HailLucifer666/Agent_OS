@@ -64,9 +64,27 @@ describe('chaos drill: cortex-stalled', () => {
     const memory = fakeMemory();
     const fs = { writeJSON: function() {}, ensureDir: function() {}, listFiles: function() { return []; }, removeFile: function() {} };
     const config = {
-      MYTHOS_TICK_MS: 10,
-      STALL_MS: 50,       // exact config key: STALL_MS
-      WATCHDOG_MS: 15,    // exact config key: WATCHDOG_MS
+      // MYTHOS_TICK_MS is deliberately >> WATCHDOG_MS, and by a WIDE margin.
+      // The busy-wait below freezes the ENTIRE event loop, so cortex's own
+      // tick timer and watchdog's poll timer both become simultaneously
+      // overdue the instant it unblocks — Node's timer heap fires whichever
+      // has the chronologically earlier next-deadline first, and that
+      // deadline's distance from "now" is effectively phase-random within
+      // each timer's own period (a function of exact wall-clock jitter
+      // before the block, not something the test controls directly). So the
+      // collision probability that cortex's random phase happens to land
+      // within watchdog's period is roughly WATCHDOG_MS/MYTHOS_TICK_MS — a
+      // narrow gap (empirically tried at 5/40, ~1-in-8 odds) reproduced the
+      // same failure ~25-30% of the time; a wide gap (5/300, ~1-in-60 odds)
+      // is what actually makes this reliable. This doesn't eliminate the
+      // race in principle — no fixed config can, since it's a genuine
+      // shared-event-loop-block race — but it pushes residual flakiness to
+      // a negligible level. An earlier, much narrower attempt (10/15, i.e.
+      // cortex FASTER than watchdog) had the ratio backwards entirely and
+      // failed the majority of the time.
+      MYTHOS_TICK_MS: 300,
+      STALL_MS: 600,      // exact config key: STALL_MS — comfortably > MYTHOS_TICK_MS so normal tick jitter never false-positives
+      WATCHDOG_MS: 5,     // exact config key: WATCHDOG_MS
       MAX_ACTIVE_GOALS: 5,
       // P10 BUILD FIX: cortex/index.js reads config.ACTION_TIMEOUT_MS with no inline
       // fallback (schema-guaranteed key, see cortex/index.js:21-24) — this drill's
@@ -95,22 +113,37 @@ describe('chaos drill: cortex-stalled', () => {
     });
 
     cortex.start();
+
+    // Wait for cortex's FIRST real tick before starting the immune components.
+    // cortex.lastTickAt.value initializes to 0 (epoch) — if watchdog starts
+    // polling before cortex has ticked even once, elapsed = now - 0 is
+    // trivially > STALL_MS, and watchdog fires a spurious stall/restart
+    // against a cortex that was simply still booting, not actually stalled.
+    // That's a real boot-order edge case (not something this drill is meant
+    // to exercise), and it would burn the healer's 30s cooldown before the
+    // drill's own INTENTIONAL stall ever happens. Starting the immune
+    // components only once lastTickAt is real avoids conflating "cortex
+    // hasn't ticked yet" with "cortex stalled after ticking normally."
+    while (cortex.lastTickAt.value === 0) { await sleep(5); }
+
     diagnostician.start();
     healer.start();
     watchdog.start();
 
-    await sleep(60); // let a few real ticks refresh cortex.lastTickAt.value
+    await sleep(50); // brief settle right after the first real tick
     const genBefore = cortex.generation;
     assert.ok(cortex.lastTickAt.value > 0, 'cortex should have ticked at least once before the stall');
 
     // Synchronous busy-wait — genuinely blocks the event loop, including cortex's
-    // own setInterval AND the watchdog's setInterval, for STALL_MS*5+.
-    const stallUntil = Date.now() + (config.STALL_MS * 6);
+    // own setInterval AND the watchdog's setInterval, comfortably past STALL_MS.
+    const stallUntil = Date.now() + (config.STALL_MS + 200);
     while (Date.now() < stallUntil) { /* intentional busy-block */ }
 
     // Give the now-free event loop time for watchdog's detection AND the
-    // diagnostician->healer pipeline it triggers to run.
-    await sleep(config.WATCHDOG_MS * 4);
+    // diagnostician->healer pipeline it triggers to run. Fixed, generous
+    // margin rather than WATCHDOG_MS-derived — the pipeline's total latency
+    // doesn't scale down just because the poll interval got shorter.
+    await sleep(150);
 
     const anomalies = bus._emitted().filter((e) => e.type === 'health.anomaly' && e.payload.kind === 'cortex-stall');
     assert.ok(anomalies.length >= 1, "watchdog must emit health.anomaly{kind:'cortex-stall'} (detection only — no restart here)");
