@@ -9,9 +9,11 @@ const nim = require('../../../providers/nim');
 const nim2 = require('../../../providers/nim2');
 const groq = require('../../../providers/groq');
 const mistral = require('../../../providers/mistral');
+const cerebras = require('../../../providers/cerebras');
+const openrouter = require('../../../providers/openrouter');
 const ollama = require('../../../providers/ollama');
 
-const LANES = { zcode, nim, nim2, groq, mistral };
+const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter };
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
 

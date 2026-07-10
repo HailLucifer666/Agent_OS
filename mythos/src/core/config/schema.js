@@ -22,7 +22,10 @@ const SCHEMA = {
   GROQ_API_KEY:             { type: 'string', default: '' },
   MISTRAL_API_KEY:          { type: 'string', default: '' },
   NIM_API_KEY:              { type: 'string', default: '' },
+  NIM_API_KEY_2:            { type: 'string', default: '' },
   ZCODE_API_KEY:            { type: 'string', default: '' },
+  OPENROUTER_API_KEY:       { type: 'string', default: '' },
+  CEREBRAS_API_KEY:         { type: 'string', default: '' },
 
   // Brain
   REFLECT_EVERY:            { type: 'number', default: 60, min: 1 },

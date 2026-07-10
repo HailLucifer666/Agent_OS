@@ -111,12 +111,14 @@ function parseOverride(env) {
 
 function isProviderAlive(provider, model, c) {
   switch (provider) {
-    case 'nim':     return c.nimModels.includes(model) && nimKeys().length > 0;
-    case 'groq':    return c.groqAlive;
-    case 'mistral': return c.mistralAlive;
-    case 'ollama':  return c.ollamaModels.includes(model);
-    case 'zcode':   return !!process.env.ZCODE_API_KEY;
-    default:        return false;
+    case 'nim':        return c.nimModels.includes(model) && nimKeys().length > 0;
+    case 'groq':       return c.groqAlive;
+    case 'mistral':    return c.mistralAlive;
+    case 'ollama':     return c.ollamaModels.includes(model);
+    case 'zcode':      return !!process.env.ZCODE_API_KEY;
+    case 'cerebras':   return !!process.env.CEREBRAS_API_KEY;
+    case 'openrouter': return !!process.env.OPENROUTER_API_KEY;
+    default:           return false;
   }
 }
 

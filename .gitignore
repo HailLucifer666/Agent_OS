@@ -11,6 +11,7 @@ mythos/vault/
 app/.env
 .env
 *.env.local
+Nvidia NIM.env
 
 # session/tooling junk
 .claude/

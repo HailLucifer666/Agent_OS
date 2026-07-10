@@ -1,5 +1,9 @@
 // openrouter.js — OpenRouter chat streaming provider (Phase 2).
 
+function isAvailable() {
+  return Boolean(process.env.OPENROUTER_API_KEY);
+}
+
 async function chat(messages, opts = {}) {
   const { model, onToken, signal } = opts;
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -59,4 +63,4 @@ async function chat(messages, opts = {}) {
   return full;
 }
 
-module.exports = { chat };
+module.exports = { chat, isAvailable };
