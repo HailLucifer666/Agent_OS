@@ -18,14 +18,15 @@ function buildTools(ctx) {
   var pipelineEffector = ctx.pipeline;
   var agentActions = ctx.agentActions;
 
-  function startProject({ description }) {
+  function startProject({ description }, runCtx) {
     if (!description || !String(description).trim()) {
       return { ok: false, result: 'A project description is required.' };
     }
     try {
       var card = pipelineEffector.capture(String(description).trim(), 'voice');
       pipelineEffector.approve(card.id);
-      var job = agentActions.executePipelineCard(card.id);
+      // Phase 18: thread the cortex-active goal (if any) onto the enqueued job.
+      var job = agentActions.executePipelineCard(card.id, runCtx && runCtx.goalId);
       return { ok: true, result: { cardId: card.id, jobId: job.job.id } };
     } catch (err) {
       return { ok: false, result: 'Could not start project: ' + err.message };

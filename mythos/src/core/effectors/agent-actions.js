@@ -80,8 +80,11 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     return { path: '/vault/builds/' + kind + '/' + name, title: title, name: name };
   }
 
-  // executePipelineCard(cardId) — same behavior as NOVA's POST /api/pipeline/:id/execute.
-  function executePipelineCard(cardId) {
+  // executePipelineCard(cardId, goalId?) — same behavior as NOVA's POST
+  // /api/pipeline/:id/execute. `goalId` (Phase 18) carries the originating GoalSystem
+  // goal, if any, onto the enqueued job — omitted/undefined means a goal-less,
+  // dashboard/voice-triggered action, and enqueue() honestly records that as null.
+  function executePipelineCard(cardId, goalId) {
     var found = pipeline.findCard(cardId);
     if (!found) throw new Error('card not found');
     if (found.stage !== 'execute') throw new Error('card is not in the Execute stage');
@@ -92,6 +95,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     var card = found.card;
     var job = buildRunner.enqueue({
       kind: 'pipeline-execute',
+      goalId: goalId,
       prompt: DELIVERABLE_PREAMBLE + card.text,
       run: async function(raw, j) {
         var artifact = saveDeliverable(raw, card.text, 'pipeline');
@@ -103,11 +107,13 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     return { job: job, board: pipeline.listAll() };
   }
 
-  // assembleKanbanPlan(goal) — same behavior as NOVA's POST /api/kanban/assemble.
-  function assembleKanbanPlan(goal) {
+  // assembleKanbanPlan(goal, goalId?) — same behavior as NOVA's POST /api/kanban/assemble.
+  // goalId (Phase 18) — see executePipelineCard's comment above.
+  function assembleKanbanPlan(goal, goalId) {
     if (!goal || !goal.trim()) throw new Error('goal required');
     var job = buildRunner.enqueue({
       kind: 'kanban-plan',
+      goalId: goalId,
       prompt: PLANNER_PREAMBLE + goal.trim(),
       run: async function(raw) {
         var tasks;
@@ -124,8 +130,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     return { job: job };
   }
 
-  // buildKanbanCard(cardId) — same behavior as NOVA's POST /api/kanban/cards/:id/build.
-  function buildKanbanCard(cardId) {
+  // buildKanbanCard(cardId, goalId?) — same behavior as NOVA's POST
+  // /api/kanban/cards/:id/build. goalId (Phase 18) — see executePipelineCard's comment above.
+  function buildKanbanCard(cardId, goalId) {
     var card = kanban.findCard(cardId);
     if (!card) throw new Error('card not found');
     var existing = card.jobId ? buildRunner.getJob(card.jobId) : null;
@@ -134,6 +141,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     }
     var job = buildRunner.enqueue({
       kind: 'kanban-build',
+      goalId: goalId,
       prompt: BUILDER_PREAMBLE + card.title + '\n' + (card.detail || ''),
       run: async function(raw, j) {
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';

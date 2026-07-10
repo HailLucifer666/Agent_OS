@@ -222,11 +222,12 @@ function buildTools(ctx) {
     }
   }
 
-  function pipeline_execute({ query }) {
+  function pipeline_execute({ query }, runCtx) {
     try {
       const found = findPipelineCardByQuery(query);
       if (!found) return fail(`No pipeline card matching "${query}" found.`);
-      const result = agentActions.executePipelineCard(found.card.id);
+      // Phase 18: thread the cortex-active goal (if any) onto the enqueued job.
+      const result = agentActions.executePipelineCard(found.card.id, runCtx && runCtx.goalId);
       return ok(result);
     } catch (err) {
       return fail(err.message);
@@ -268,21 +269,21 @@ function buildTools(ctx) {
     }
   }
 
-  function kanban_assemble({ goal }) {
+  function kanban_assemble({ goal }, runCtx) {
     try {
-      const result = agentActions.assembleKanbanPlan(goal);
+      const result = agentActions.assembleKanbanPlan(goal, runCtx && runCtx.goalId);
       return ok(result);
     } catch (err) {
       return fail(err.message);
     }
   }
 
-  function kanban_build_card({ query }) {
+  function kanban_build_card({ query }, runCtx) {
     try {
       const board = kanban.listBoard();
       const match = findByQuery(board.cards, query, (c) => c.title || '');
       if (!match) return fail(`No kanban card matching "${query}" found.`);
-      const result = agentActions.buildKanbanCard(match.item.id);
+      const result = agentActions.buildKanbanCard(match.item.id, runCtx && runCtx.goalId);
       return ok(result);
     } catch (err) {
       return fail(err.message);

@@ -83,6 +83,18 @@ async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
     }
   }
 
+  // 1c. Phase 18: recoveredJobs now carries goalId (see build-runner.js's enqueue()/
+  // loadPersisted()) — build the job->goal map for observability/audit. This is the
+  // "natural next step" P17 explicitly left undone, scoped honestly: it reports which
+  // goal each recovered job belonged to, it does NOT re-enqueue/resume the job under
+  // that goal. A goal-owned job that crashed mid-build is not silently retried — the
+  // goal itself is already paused (step 2 below, unconditionally, since P6) and
+  // whatever re-arbitrates it next tick decides whether to replan. Full automatic
+  // job resumption (re-running the same prompt/artifact write under the same goal)
+  // is materially larger — it needs idempotency and re-entry-point tracking this
+  // phase does not add — so it stays a distinct backlog item, not manufactured here.
+  const recoveredJobGoalMap = recoveredJobs.map((j) => ({ jobId: j.id, goalId: j.goalId != null ? j.goalId : null }));
+
   // 2. Active-at-crash goals -> paused 'crash-recovery'.
   let pausedCount = 0;
   if (goals && typeof goals.getActiveGoals === 'function') {
@@ -102,18 +114,24 @@ async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
     hadCheckpoint: Boolean(checkpoint),
     isCrashRecovery: checkpoint ? checkpoint.isCrashRecovery : false,
     pausedGoals: pausedCount,
-    recoveredJobs: recoveredJobs.length
+    recoveredJobs: recoveredJobs.length,
+    recoveredJobGoalMap: recoveredJobGoalMap
   });
 
   // 5. No re-dispatch of any interrupted action — resumption happens purely through
   //    goals/cortex re-arbitration on the next tick. A goal that owned one of
-  //    recoveredJobs is still covered by step 2 above if it was active-at-crash;
-  //    a full job->goal cross-reference (a persisted job-goal-map) does not exist
-  //    in shipped production code today — agent-actions.js's buildRunner.enqueue()
-  //    calls carry no goalId — so recoveredJobs is surfaced for observability/audit
-  //    here, not yet consumed for a per-job targeted pause. Tracked as a distinct,
-  //    separate backlog item from the structural boot-order gap this fix closes.
-  return { hadCheckpoint: Boolean(checkpoint), pausedGoals: pausedCount, recoveredJobs: recoveredJobs.length };
+  //    recoveredJobs is still covered by step 2 above if it was active-at-crash.
+  //    [Phase 18] Every enqueue() call site (agent-actions.js/orchestrator.js) now
+  //    carries goalId onto the job, so recoveredJobGoalMap (1c above) is a real,
+  //    non-invented job->goal cross-reference — surfaced here for observability/audit,
+  //    not consumed for a per-job targeted pause/resume (see 1c for why that's scoped
+  //    out honestly rather than manufactured).
+  return {
+    hadCheckpoint: Boolean(checkpoint),
+    pausedGoals: pausedCount,
+    recoveredJobs: recoveredJobs.length,
+    recoveredJobGoalMap: recoveredJobGoalMap
+  };
 }
 
 module.exports = { createMonitor: createMonitor, recoverFromCrash: recoverFromCrash, MEMORY_GROWTH_BYTES: MEMORY_GROWTH_BYTES };

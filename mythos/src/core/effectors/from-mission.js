@@ -11,12 +11,14 @@ const { effectorFromTool } = require('./adapter');
 function buildTools(ctx) {
   var orchestrator = ctx.orchestrator;
 
-  function runMission({ goal }) {
+  function runMission({ goal }, runCtx) {
     if (!goal || !String(goal).trim()) {
       return { ok: false, result: 'A mission goal is required.' };
     }
     try {
-      var mission = orchestrator.runMission(String(goal).trim());
+      // Phase 18: thread the cortex-active goal (if any) so every job the mission
+      // spawns (plan + per-card builds) carries it back to build-runner.
+      var mission = orchestrator.runMission(String(goal).trim(), runCtx && runCtx.goalId);
       return { ok: true, result: { missionId: mission.id, status: mission.status } };
     } catch (err) {
       return { ok: false, result: 'Could not start mission: ' + err.message };

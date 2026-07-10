@@ -8,6 +8,13 @@
 //
 // Uses brain.think({ lane: 'build' }) — reasoning.chat() was DELETED in Phase 2.
 // enqueue() shape is exactly { kind, prompt, run } — no cardId (see Spec Ambiguities #7).
+//
+// [Phase 18 — NEW] enqueue() also takes an optional `goalId`, carried onto the job
+// record verbatim (null when the job is goal-less, e.g. a dashboard/voice-triggered
+// action with no GoalSystem goal behind it — never a fake id). Closes the gap P17
+// documented but explicitly left open: "no persisted job<->goal mapping anywhere in
+// shipped production code." recoveredJobs (below) surfaces goalId too, so crash
+// recovery can report which goal each recovered job belonged to.
 
 function createBuildRunner({ config, brain, bus, vault }) {
   if (!brain || typeof brain.think !== 'function') {
@@ -62,7 +69,7 @@ function createBuildRunner({ config, brain, bus, vault }) {
         j.stage = 'failed';
         j.error = 'entity restarted mid-job';
         j.finishedAt = j.finishedAt || Date.now();
-        recoveredJobs.push({ id: j.id, error: j.error });
+        recoveredJobs.push({ id: j.id, error: j.error, goalId: j.goalId != null ? j.goalId : null });
       }
       jobs.set(j.id, j);
     }
@@ -85,10 +92,11 @@ function createBuildRunner({ config, brain, bus, vault }) {
     });
   }
 
-  function enqueue({ kind, prompt, run }) {
+  function enqueue({ kind, prompt, run, goalId }) {
     var job = {
       id: 'job-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       kind: kind,
+      goalId: goalId != null ? goalId : null,
       status: 'queued',
       stage: 'queued',
       artifact: null,

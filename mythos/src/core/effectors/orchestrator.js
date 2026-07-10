@@ -27,7 +27,7 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
 
   function publicView(m) {
     return {
-      id: m.id, goal: m.goal, status: m.status,
+      id: m.id, goal: m.goal, goalId: m.goalId != null ? m.goalId : null, status: m.status,
       agents: { total: m.cardIds.length, done: m.doneCount, failed: m.failedCount },
       artifacts: m.artifacts, summary: m.summary, error: m.error,
       createdAt: m.createdAt, finishedAt: m.finishedAt,
@@ -106,7 +106,7 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
     notify(m);
     for (var i = 0; i < cards.length; i++) {
       try {
-        var res = agentActions.buildKanbanCard(cards[i].id);
+        var res = agentActions.buildKanbanCard(cards[i].id, m.goalId);
         buildJobs.set(res.job.id, m.id);
       } catch (err) {
         m.failedCount++;
@@ -149,18 +149,23 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
     }
   });
 
-  function runMission(goal) {
+  // goalId (Phase 18, optional): the GoalSystem goal that delegated this mission, if
+  // any (a cortex-dispatched run_mission carries working.activeGoalId; a
+  // dashboard/voice-direct mission has none). Threaded onto every plan/build job the
+  // mission spawns so a crash-recovered job can be traced back to its goal.
+  function runMission(goal, goalId) {
     if (!goal || !String(goal).trim()) throw new Error('goal required');
     var m = {
       id: 'mission-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
       goal: String(goal).trim(),
+      goalId: goalId != null ? goalId : null,
       status: 'planning',
       cardIds: [], doneCount: 0, failedCount: 0,
       artifacts: [], summary: null, error: null,
       createdAt: Date.now(), finishedAt: null,
     };
     missions.set(m.id, m);
-    var res = agentActions.assembleKanbanPlan(m.goal);
+    var res = agentActions.assembleKanbanPlan(m.goal, m.goalId);
     planJobs.set(res.job.id, m.id);
     notify(m);
     return publicView(m);
