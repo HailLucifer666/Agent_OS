@@ -1,27 +1,28 @@
-// voice-loop.js — always-listening voice loop. CA of NOVA
-// app/public/js/voice-control.js's hands-free machinery (lines 226-370), with
-// one deliberate departure: continuous=true + interimResults + a SILENCE_MS
-// dispatch window, because single-utterance capture (continuous=false) lets the
-// engine end-point at the first brief pause and cut the speaker off mid-
-// sentence. The restart-on-onend loop (capped at HF_RESTART_CAP) still guards
-// Chrome's old "continuous dies silently" quirk.
-// 'not-allowed' degrades to an HONEST disabled mic — never a fake-listening dot.
+// voice-loop.js — always-listening voice loop. Speech input runs through
+// server-side Groq Whisper transcription, NOT the browser's built-in
+// SpeechRecognition: Chrome's cloud speech backend (speech.googleapis.com)
+// and its on-device model download are both unreachable on this network
+// (confirmed live: cloud fails with a 'network' error in <0.5s; on-device
+// install() never resolves, available() reports 'downloading' indefinitely
+// across reloads) — a network-level block to Google's speech infrastructure
+// specifically, not something client-side retry/timeout logic can fix.
+// Groq's host is proven reachable all session for chat completions, so audio
+// is recorded here and POSTed to /api/voice/transcribe for transcription.
 //
 // Armed by orb/mic click — every captured utterance IS the command; no wake
-// word required (a leading "Mythos, ..." is stripped when present). Recognition
-// prefers Chrome's on-device engine (processLocally) because the default cloud
-// speech backend is unreachable from some networks — it fails with a 'network'
-// error in under half a second while the mic itself is fine. The on-device
-// language pack installs once on first arm; cloud mode remains the fallback.
+// word required (a leading "Mythos, ..." is stripped when present).
 //
-// States: idle -> (downloading) -> listening -> processing -> speaking -> listening.
+// States: idle -> listening -> processing -> speaking -> listening.
 
 import { utterance } from '../ws.js';
 
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
-const HF_RESTART_CAP = 40;
-const SILENCE_MS = 1800;  // dispatch a buffered utterance after this much quiet
+const SILENCE_MS = 1800;       // quiet gap that ends an utterance
+const SPEECH_RMS = 0.015;      // volume threshold marking "speech present"
+const VAD_TICK_MS = 100;
+const MIN_CLIP_MS = 300;       // shorter clips are noise/mic-bumps, dropped
+const MIN_CLIP_BYTES = 800;
 
 // voice-nav table — checked before falling through to the brain.
 const NAV_COMMANDS = [
@@ -34,78 +35,24 @@ const NAV_COMMANDS = [
 ];
 
 export function createVoiceLoop({ onState, openPanel, onCaption }) {
-  const RecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-
   let active = false;
-  let recog = null;
   let processing = false;
-  let restartCount = 0;
   let disposed = false;
-  let localSTT = false;      // resolved by ensureLocalSTT() on first start()
-  let sttResolved = false;   // probe/install runs once per page, not per arm
   let currentAudio = null;   // in-flight TTS playback (barge-in target)
   let speakingText = '';     // spoken reply text — echo-guard reference
   let speakSession = 0;      // invalidates stale playback callbacks
 
+  let stream = null;         // persistent mic stream for the whole active session
+  let audioCtx = null;
+  let analyser = null;
+  let vadTimer = null;
+  let recorder = null;
+  let chunks = [];
+  let recordingSince = 0;
+  let silenceSince = null;
+
   function setState(s) { if (onState) onState(s); }
   function caption(text, kind) { if (onCaption) onCaption(text, kind); }
-
-  function buildRecognition() {
-    const r = new RecognitionCtor();
-    r.lang = 'en-US';
-    // continuous + interim: the on-device engine end-points single-phrase
-    // sessions at the first brief pause, cutting the speaker off mid-sentence.
-    // Instead we buffer final results across the session and dispatch only
-    // after SILENCE_MS with no new speech (see startSession). The restart-on-
-    // onend loop still guards the old "continuous dies silently" Chrome quirk.
-    r.continuous = true;
-    r.interimResults = true;
-    if (localSTT) { try { r.processLocally = true; } catch { /* older Chrome */ } }
-    return r;
-  }
-
-  // Chrome's on-device model download can stall indefinitely at the browser
-  // level (observed: available() stuck reporting 'downloading' for 30+
-  // minutes, install() never resolving or rejecting) — never await it
-  // unbounded. INSTALL_TIMEOUT_MS bounds the wait; on timeout we give up and
-  // fall back to cloud recognition, exactly like any other honest degrade.
-  const INSTALL_TIMEOUT_MS = 20000;
-  function withTimeout(promise, ms) {
-    return Promise.race([
-      promise.then((v) => ({ timedOut: false, v })),
-      new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), ms)),
-    ]);
-  }
-
-  // On-device STT probe + one-time language-pack install (Chrome 139+).
-  // Returns true when processLocally recognition is usable.
-  async function ensureLocalSTT() {
-    if (sttResolved) return localSTT;
-    if (typeof RecognitionCtor.available !== 'function') { sttResolved = true; return false; }
-    try {
-      const opts = { langs: ['en-US'], processLocally: true };
-      let avail = await RecognitionCtor.available(opts);
-      if (avail === 'downloadable' || avail === 'downloading') {
-        setState('downloading');
-        caption('Downloading on-device speech model (one-time)…', 'info');
-        const result = await withTimeout(RecognitionCtor.install(opts), INSTALL_TIMEOUT_MS);
-        if (result.timedOut) {
-          caption('On-device speech model download stalled — using cloud recognition instead.', 'error');
-          localSTT = false;
-          sttResolved = true;
-          return false;
-        }
-        avail = await RecognitionCtor.available(opts);
-      }
-      localSTT = avail === 'available';
-    } catch (err) {
-      console.warn('[voice] on-device STT unavailable:', err);
-      localSTT = false;
-    }
-    sttResolved = true;
-    if (!localSTT) caption('On-device speech unavailable — using cloud recognition.', 'info');
-    return localSTT;
-  }
 
   function navTarget(command) {
     for (const [pattern, panelId] of NAV_COMMANDS) {
@@ -117,8 +64,7 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   function handleCommand(command) {
     processing = true;
     setState('processing');
-    if (recog) { try { recog.abort(); } catch { /* ok */ } }
-    recog = null;
+    stopRecording();
 
     const panelId = navTarget(command);
     if (panelId) {
@@ -148,14 +94,14 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     });
   }
 
-  // Show the brain's reply and speak it aloud. BARGE-IN: the recognizer stays
-  // LIVE during playback (processing drops before 'speaking'), so the user can
-  // talk over MYTHOS — dispatch() stops playback and treats the interruption
-  // as a new command. isEcho() drops transcripts that are mostly MYTHOS's own
-  // words leaking from the speakers (hardware echo cancellation catches most
-  // of it; this is the software backstop). Preferred voice: server edge-tts
-  // mp3 in msg.audioB64; browser speechSynthesis (msg.speak, sanitized) is
-  // the fallback.
+  // Show the brain's reply and speak it aloud. BARGE-IN: the mic keeps
+  // recording during playback (processing drops before 'speaking'), so the
+  // user can talk over MYTHOS — a non-echo transcript stops playback and
+  // becomes the next command. isEcho() drops transcripts that are mostly
+  // MYTHOS's own words leaking from the speakers (hardware echo cancellation
+  // catches most of it; this is the software backstop). Preferred voice:
+  // server edge-tts mp3 in msg.audioB64; browser speechSynthesis (msg.speak,
+  // sanitized) is the fallback.
   function isEcho(text) {
     if (!speakingText) return false;
     const spoken = new Set(speakingText.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean));
@@ -190,9 +136,8 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     };
 
     speakingText = spoken;
-    processing = false;      // recognizer live during playback — barge-in
+    processing = false;      // mic stays live during playback — barge-in
     setState('speaking');
-    startSession();
 
     if (msg.audioB64) {
       const audio = new Audio('data:audio/mpeg;base64,' + msg.audioB64);
@@ -226,112 +171,139 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
 
   function finishTurn() {
     processing = false;
-    if (active && !disposed) {
-      setState('listening');
-      startSession();
-    } else {
-      setState('idle');
-    }
+    setState(active && !disposed ? 'listening' : 'idle');
   }
 
-  function startSession() {
-    if (!active || processing || disposed || recog) return;
-    const r = buildRecognition();
-    recog = r;
-    let buffer = '';        // final transcripts accumulated this session
-    let silenceTimer = null;
+  // Runs the exact same command logic regardless of where the final text
+  // came from (mirrors the old inline recognizer dispatch()).
+  function processTranscript(text) {
+    const trimmed = (text || '').replace(/\s+/g, ' ').trim();
+    if (!trimmed) return;
+    const match = trimmed.match(WAKE_PATTERN);
+    const command = (match ? trimmed.slice(match[0].length) : trimmed).trim();
+    if (!command) return;
+    if (speakingText) {
+      if (isEcho(command)) return; // MYTHOS hearing its own reply — drop
+      stopSpeaking();              // barge-in: user talked over playback
+    }
+    caption('» ' + command, 'heard');
+    handleCommand(command);
+  }
 
-    // Dispatch the buffered utterance as one command. Armed by explicit click,
-    // so the whole utterance is the command; a leading "Mythos, ..." is
-    // stripped if the user says it anyway. Returns true when a command fired.
-    const dispatch = () => {
-      clearTimeout(silenceTimer);
-      silenceTimer = null;
-      const text = buffer.replace(/\s+/g, ' ').trim();
-      buffer = '';
-      if (!text) return false;
-      const match = text.match(WAKE_PATTERN);
-      const command = (match ? text.slice(match[0].length) : text).trim();
-      if (!command) return false;
-      if (speakingText) {
-        if (isEcho(command)) return false; // MYTHOS hearing its own reply — drop
-        stopSpeaking();                    // barge-in: user talked over playback
-      }
-      restartCount = 0; // a real command proves the setup works — reset the cap
-      caption('» ' + command, 'heard');
-      handleCommand(command);
-      return true;
+  function pickMimeType() {
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return '';
+  }
+
+  function rms(data) {
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / data.length);
+  }
+
+  async function ensureMic() {
+    if (stream) return stream;
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    return stream;
+  }
+
+  function startRecording() {
+    if (recorder) return;
+    chunks = [];
+    recordingSince = Date.now();
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: pickMimeType() });
+    } catch (err) {
+      console.warn('[voice] MediaRecorder failed to start:', err);
+      recorder = null;
+      return;
+    }
+    caption('🎤 …', 'heard');
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      const clipMs = Date.now() - recordingSince;
+      const type = recorder.mimeType || 'audio/webm';
+      const blob = new Blob(chunks, { type });
+      recorder = null;
+      chunks = [];
+      if (clipMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) return; // noise/blip — drop silently
+      transcribeAndDispatch(blob);
     };
+    recorder.start();
+  }
 
-    r.onresult = (event) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (!res[0]) continue;
-        if (res.isFinal) buffer += ' ' + res[0].transcript;
-        else interim += res[0].transcript;
-      }
-      // ANY speech activity (interim included) postpones dispatch, so pausing
-      // mid-sentence never cuts the speaker off.
-      const preview = (buffer + ' ' + interim).replace(/\s+/g, ' ').trim();
-      if (preview) caption('» ' + preview + ' …', 'heard');
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(dispatch, SILENCE_MS);
-    };
+  function stopRecording() {
+    if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* ok */ } }
+    silenceSince = null;
+  }
 
-    r.onerror = (event) => {
-      console.warn('[voice] recognition error:', event.error);
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        stop();               // honest-disabled — mic permission is gone
-        setState('disabled');
+  async function transcribeAndDispatch(blob) {
+    try {
+      const res = await fetch('/api/voice/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'audio/webm' },
+        body: blob,
+      });
+      if (disposed || !active) return; // stopped while the request was in flight — drop it
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        caption(err.error || 'Speech-to-text unavailable.', 'error');
         return;
       }
-      if (event.error === 'network') {
-        caption('Speech service unreachable — recognition failing.', 'error');
-      }
-      // 'no-speech' / 'aborted' are benign; the restart loop handles them
-    };
-
-    r.onend = () => {
-      if (recog === r) recog = null;
-      clearTimeout(silenceTimer);
-      // Engine closed the session on its own with speech still buffered —
-      // don't lose it, dispatch now (dispatch() flips into processing).
-      if (active && !processing && !disposed && dispatch()) return;
-      if (active && !processing && !disposed) {
-        if (restartCount >= HF_RESTART_CAP) {
-          stop();
-          setState('error');
-          caption('Voice loop stopped after repeated recognition failures — click the mic to retry.', 'error');
-          return;
-        }
-        restartCount++;
-        setTimeout(startSession, 50);
-      }
-    };
-
-    try {
-      r.start();
-    } catch {
-      recog = null;
-      if (active && !processing && !disposed) setTimeout(startSession, 500);
+      const { text } = await res.json();
+      if (disposed || !active) return;
+      processTranscript(text);
+    } catch (err) {
+      if (disposed || !active) return;
+      console.warn('[voice] transcription request failed:', err);
+      caption('Speech-to-text request failed — check connection.', 'error');
     }
   }
 
-  function start() {
-    if (!RecognitionCtor) {
-      setState('unsupported'); // honest: no Web Speech API in this browser
+  function vadTick() {
+    if (!analyser) return;
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    const speaking = rms(data) > SPEECH_RMS;
+    if (speaking) {
+      if (!recorder && !processing) startRecording();
+      silenceSince = null;
+    } else if (recorder) {
+      if (silenceSince === null) silenceSince = Date.now();
+      else if (Date.now() - silenceSince >= SILENCE_MS) stopRecording();
+    }
+  }
+
+  async function start() {
+    if (active) return true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      setState('unsupported'); // honest: no mic-recording API in this browser
       return false;
     }
-    if (active) return true;
+    try {
+      await ensureMic();
+    } catch (err) {
+      console.warn('[voice] microphone permission denied:', err);
+      setState('disabled');
+      caption('Microphone permission denied — enable it in the browser to use voice.', 'error');
+      return false;
+    }
+    if (disposed) return false;
     active = true;
     processing = false;
-    restartCount = 0;
-    ensureLocalSTT().then(() => {
-      if (!active || disposed) return; // toggled off while the model downloaded
-      setState('listening');
-      startSession();
-    });
+    setState('listening');
+    vadTimer = setInterval(vadTick, VAD_TICK_MS);
     return true;
   }
 
@@ -339,9 +311,10 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     active = false;
     processing = false;
     stopSpeaking();
-    if (recog) { try { recog.abort(); } catch { /* ok */ } }
-    recog = null;
+    if (vadTimer) { clearInterval(vadTimer); vadTimer = null; }
+    stopRecording();
     setState('idle');
+    caption('', 'info');
   }
 
   return {

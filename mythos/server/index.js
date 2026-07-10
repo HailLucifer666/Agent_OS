@@ -12,6 +12,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const edgeTts = require('../providers/edge-tts');
+const groqStt = require('../providers/groq-stt');
 const { truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
@@ -224,6 +225,23 @@ function createServer(deps) {
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Speech-to-text — Groq Whisper transcribes audio recorded client-side.
+  // Replaces the browser's own SpeechRecognition: Google's cloud speech backend
+  // and Chrome's on-device model download are both unreachable on this network
+  // ('network' error / stalled 'downloading' state, confirmed live); Groq's host
+  // is the same one already proven reachable all session for chat completions.
+  // express.raw() is scoped to this one route only — the global express.json()
+  // above only matches 'application/json' and won't consume this body.
+  app.post('/api/voice/transcribe', express.raw({ type: '*/*', limit: '15mb' }), expensiveLimit, async (req, res) => {
+    try {
+      if (!groqStt.isAvailable()) return res.status(503).json({ error: 'Speech-to-text unavailable — GROQ_API_KEY missing.' });
+      const text = await groqStt.transcribe(req.body, req.headers['content-type']);
+      res.json({ text });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
     }
   });
 

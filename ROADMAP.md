@@ -1177,6 +1177,59 @@ assertion, does not hang) — not a regression from this phase.
 
 ---
 
+## Phase 12 — Voice Input: Server-Side Transcription ✅ Done (2026-07-10)
+
+Voice input never worked reliably on this dev machine, across every fix attempted in
+P11 and after: dropping the wake-word gate, fixing reply-discarding, fixing
+mid-sentence cutoff, bounding the on-device install with a timeout. Root cause,
+confirmed live against the real running instance (not assumed): Chrome's built-in
+`SpeechRecognition` depends on Google's hosted speech backend
+(`speech.googleapis.com`), unreachable from this network — cloud recognition fails
+in <0.5s with a `network`-class error; the on-device `processLocally` fallback
+stalls indefinitely trying to download its language-pack component for the same
+underlying network reason (`available()` reports `'downloading'` persistently across
+reloads, `install()` never resolves or rejects even after a 20s race). No
+client-side retry/timeout logic can fix a blocked network path to a specific host.
+
+**Fix**: stop depending on Google's speech engine entirely.
+- `providers/groq-stt.js` (new): `transcribe(buffer, mimeType)` — multipart POST to
+  Groq's Whisper endpoint (`whisper-large-v3-turbo`), same host (`api.groq.com`)
+  already proven reachable all session for chat completions. Native `fetch`/
+  `FormData`/`Blob` (Node 26) — zero new deps.
+- `server/index.js`: `POST /api/voice/transcribe`, `express.raw()` scoped to this
+  one route (global `express.json()` only matches `application/json`, doesn't
+  interfere). Honest 503/502 on missing key / Groq failure — never hangs.
+- `ui/public/js/voice/voice-loop.js`: replaced the browser recognizer with
+  `getUserMedia` + a simple RMS-based VAD (`AnalyserNode`, ~100ms tick,
+  `SILENCE_MS`-gated utterance boundaries) driving per-utterance `MediaRecorder`
+  segments POSTed to the new route. Everything downstream — wake-word strip,
+  nav commands, echo-guard/barge-in, `handleCommand` → voice-agent → brain — is
+  unchanged; only the input engine was swapped. Public API (`{start, stop, toggle,
+  isActive, cleanup}`) unchanged, no caller-side changes needed.
+- Found by live testing (not a test file): an in-flight transcription request that
+  resolved *after* the mic was toggled off still dispatched a command — the
+  synchronous `recognizer.abort()` in the old design had no equivalent async race;
+  `transcribeAndDispatch()` now re-checks `active`/`disposed` after every `await`
+  before acting on a late-arriving transcript.
+
+**Verified live** against the real running instance: a synthesized test phrase
+round-tripped through `edge-tts` → `/api/voice/transcribe` → Groq came back
+correctly transcribed; arming the mic drove real `getUserMedia` → VAD → Whisper →
+brain → TTS turns end-to-end with no wake word; toggling the mic off mid-turn (after
+the race fix) stayed idle with no further replies. TTS (Fable's original
+`en-GB-RyanNeural` work) is a separate one-way channel untouched by this change and
+confirmed still working via the same round-trip test.
+
+Windows Defender's Network Inspection System remains an untested hypothesis for the
+underlying network block (both Google's speech endpoint and Chrome's on-device
+component download are affected) — informational only, doesn't gate voice working
+today since this phase routes around it entirely.
+
+**Gate**: 341 tests, 339 pass, 1 skip, 1 fail (same pre-existing `boot.test.js` port
+conflict — expected, a live instance was running on 4478 during the run).
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1237,3 +1290,4 @@ assertion, does not hang) — not a regression from this phase.
 | `b776b73` | P9 | UI v2: Express + WS v2 server (spec-verbatim) + JARVIS radial neural HUD (user-directed design) + logger/lifecycle/cortex/schema/hub diffs; cutover deferred pending MAJOR deviations (316 tests, 314 passing, 1 pre-existing env-blocked) |
 | `27d8842` | P10 | Chaos Drills: 6 failure-injection test files (provider-killed, cortex-stalled, disk-full, memory-corrupt, concurrent-tick, restart-mid-action) against real P1/P2/P3/P4/P6/P7 modules; found and documented 2 new gaps (D-56 CRITICAL brain/index.js lane-selection bug, D-57 MAJOR main.js recovery/build-runner boot-order gap), neither fixed here (test-files-only phase) (327 tests, 325 passing, 1 pre-existing env-blocked) |
 | `e281f32` | P11 | Voice Agent v2 (barge-in, TTS sanitization, conversation memory, real tool-calling — CA of NOVA voice-agent.js) + semantic memory (local embeddings/RAG, no vector DB) + mission orchestrator (brain delegates multi-part goals to a background agent team, no LangGraph) + a real createVoiceAgent()-fail-fast/socket-leak hang found and fixed by the suite run itself (341 tests, 339 passing, 1 pre-existing env-blocked) |
+| _pending_ | P12 | Voice input replaced with server-side Groq Whisper transcription (`providers/groq-stt.js` + `/api/voice/transcribe` + `voice-loop.js` MediaRecorder/VAD) after live-confirming Chrome's SpeechRecognition (cloud AND on-device) is blocked at the network level on this machine; found and fixed a stop()-vs-in-flight-transcription race live-testing against the real instance (341 tests, 339 passing, 1 pre-existing env-blocked) |
