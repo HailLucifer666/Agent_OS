@@ -1386,6 +1386,103 @@ correct `<title>`), not the dashboard.
 
 ---
 
+## Phase 16 — Live Camera + Hand-Gesture Control, Vision Q&A, Streamed Speech Replies ✅ Done (2026-07-11)
+
+Handoff-grade spec, built in dependency order: B0 (vision-lane probe, blocking)
+→ C (chunked TTS) → A (camera + gestures) → B (vision Q&A) → this entry.
+
+**B0 — vision-lane sanity check.** `PREF_VISION`'s first entry
+(`mistral-large-2512`) had never actually been exercised by any caller
+(`grep -r "lane:.*vision"` under `src/`/`server/` was empty before this
+phase). Live-probed it with a real image through `brain.think({lane:
+'vision', ...})` before writing any feature code, per the spec's blocking
+requirement — **it answered correctly** (detailed, accurate description of a
+real screenshot, 461 tokens spent, `provider: mistral, model:
+mistral-large-2512`). No fix needed to `lanes.default.js`; a prior session
+(P2 wiring commit `ac4d7f5`) had already verified this same lane live and
+left a comment to that effect, which this probe re-confirmed still holds.
+
+**Part C — sentence-chunked streamed TTS.** Replies now stream N
+`speech-chunk` WS messages (one per sentence, synthesized serially by
+edge-tts) followed by a metadata-only `done`, instead of one blob
+synthesized after the full reply completes. `splitSentences()`
+(`src/core/effectors/voice.js`, 6 new unit tests) groups short fragments
+with their successor so no chunk is a 2-word synthesis-overhead-dominated
+blob. `server/index.js`'s `synthesizeReply` → `sendSpokenReply`, shared by
+`handleUtterance` and the new `handleVisionQuery`. `ws.js` gains
+`makeReplyHandler()` so `speech-chunk` messages route to `onChunk` without
+deleting the `reqId` handler (only `done` does). `voice-loop.js` gains a
+chunk playback queue (`beginTurn`/`enqueueChunk`/`playNextChunk`/
+`maybeFinishTurn`) — the session token is reserved at dispatch time, before
+any chunk can arrive, so barge-in still works mid-queue (talking over chunk
+1 of 3 stops playback and drops the rest). Verified E2E against a real
+running instance (separate port, user's live 4478 instance never touched):
+a 2-sentence reply produced 2 `speech-chunk` messages with real audio before
+`done`, first-chunk-to-done gap 1336ms (second sentence still synthesizing
+while the first played).
+
+**Part A — camera + hand-gesture recognition.** `@mediapipe/tasks-vision`
+`GestureRecognizer` (Google's official WASM successor to the
+`kinivi/hand-gesture-recognition-mediapipe` project the user pointed at —
+that one is Python/OpenCV/TensorFlow-only, no JS port, would fight the
+browser for the webcam) — fully client-side, no Python, no GPU, no server
+round-trip for detection. The 8MB pretrained model
+(`gesture_recognizer.task`) is committed to `ui/public/models/` (not shipped
+in the npm package) so the app stays fully self-hosted, no CDN at runtime.
+`server/index.js` mounts `/vendor/mediapipe` → `node_modules/@mediapipe/
+tasks-vision` (confirmed actual layout after install: `vision_bundle.mjs` +
+`wasm/`, exactly as expected, no import-path adjustment needed). New
+`ui/public/js/vision/camera.js` mirrors `voice-loop.js`'s factory shape and
+honest-degrade philosophy — camera OFF by default, same privacy posture as
+the mic, releases the actual hardware stream on `stop()` (same lesson as
+P15's mic-leak fix). Gesture → action bindings live in `app.js`: **Thumb_Up**
+clicks `.confirm-accept`, **Closed_Fist** clicks `.confirm-reject`,
+**Open_Palm** stops the voice loop, **Victory** captures a frame and asks
+"describe what you see" — all four reuse the *live* confirm-modal buttons or
+voice-loop API, zero new approval surface, zero leash bypass. New
+`#camera-indicator` HUD ring (`cam-idle|watching|disabled|error|unsupported`)
+clones the mic ring's look with a distinct accent color so the two never
+read as the same state.
+
+**Part B — vision Q&A ("what do you see").** `ws.js`'s `visionQuery()` and
+`server/index.js`'s `handleVisionQuery` share the exact same chunked-reply
+path as voice utterances (read-only, no tool dispatch, no leash tier —
+same class as a plain chat reply). `voice-loop.js` intercepts a
+`VISION_TRIGGER` regex ("what do you see", "describe this", "look at me",
+etc.) before falling through to the brain, same pattern as `NAV_COMMANDS`.
+**Deviation from the handoff spec, noted here per house convention**: the
+spec's `app.js` snippet aliased `deliverExternalReply: deliverReply` as a
+one-line passthrough with no session handling, but that would have left
+`speech-chunk` messages for a vision reply with nowhere to enqueue (chunks
+arrive *before* `done`, and the spec's own C4 section says the session must
+be reserved "at dispatch time" for exactly this reason — it just didn't
+carry that requirement through to the vision wiring). Fixed by exposing
+`beginTurn()`/`onExternalChunk()` alongside `deliverExternalReply()` so
+`app.js`'s `describeScene()` reserves a session before calling `visionQuery()`
+and routes its `onChunk`/`onDone` through the same queue voice utterances
+use — without this, vision replies would have played zero audio.
+
+Verified live end-to-end against a real running instance (separate port):
+a raw WS `vision-query` against a real screenshot produced 3 real
+`speech-chunk`s + a correct scene description; the same request driven
+through the actual browser's `ws.js` module (not a Node script) against a
+tiny synthetic JPEG produced 2 chunks + a correct "plain white background"
+description, confirming the full client wiring (not just the server side).
+Camera/gesture testing is honestly limited by this environment: no real
+webcam hardware is available in the sandbox used to build this phase, so
+`getUserMedia` is denied by the browser chrome itself — verified that this
+denial is handled honestly (state → `disabled`, caption shown, no hang, no
+silent failure) rather than verifying real gesture accuracy on physical
+hardware. **Gesture accuracy/reliability on the user's actual camera and
+lighting is unverified and should be treated as unknown until tried live.**
+
+**Gate**: 363 tests, 361 pass, 1 skip, 1 fail (same pre-existing
+`boot.test.js` port conflict — this run, the specific cause was the user's
+own live instance holding port 4478, which was deliberately left running
+and untouched throughout this phase; all verification used separate ports).
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1451,3 +1548,5 @@ correct `<title>`), not the dashboard.
 | `abbf96f` | P14 | Background-noise voice hallucinations fixed: VAD hold-ticks + peak-RMS energy gate (`voice-loop.js`) + Groq Whisper stock-phrase/punctuation-only filter (`groq-stt.js`), live-reproduced against the real Groq API (pure silence -> "Thank you." at no_speech_prob 0) (357 tests, 355 passing, 1 pre-existing env-blocked) |
 | `1bfb97c` | P14 | Conversation-memory fix: removed the clearIntake history wipe that erased all record of an in-progress build, breaking "is it done?" follow-ups; live-verified full intake -> build -> completion -> status-check cycle end to end, also confirming the `build` lane's Mistral-first provider chain actually works (357 tests, 355 passing, 1 pre-existing env-blocked) |
 | `5d2dced` | P15 | Mic-off stream leak (`voice-loop.js` never released the getUserMedia MediaStream) + unreadable JSON confirm popups (`voice-agent.js` + `cortex/index.js` humanizeArgs) + artifact tabs opening the dashboard (missing `/vault/builds` static route) — all three live-verified against the real running instance, plus a `server.test.js` fixture gap (missing `memory.fs`) found and fixed by the suite run itself (357 tests, 355 passing, 1 pre-existing env-blocked) |
+| `a8e439c` | P16 | Chunked streamed TTS: sentence-chunked speech-chunk WS messages before a metadata-only done, so first audio plays while later sentences still synthesize (`splitSentences`, `sendSpokenReply`, `voice-loop.js` chunk queue) — also carries this phase's B0 vision-lane probe result (mistral-large-2512 confirmed live) and the server-side vision-query handler; live-verified 2 chunks + real audio, first-chunk-to-done gap 1336ms (363 tests, 361 passing, 1 pre-existing env-blocked) |
+| `dccb1a3` | P16 | Live camera + hand-gesture control (`@mediapipe/tasks-vision` GestureRecognizer, client-side WASM) + vision Q&A client wiring — Thumb_Up/Closed_Fist/Open_Palm/Victory gestures reuse the live confirm-modal buttons and voice-loop API (zero new approval surface); live-verified static asset serving, honest permission-denied degrade, and a real vision reply round-tripping through the browser's own ws.js (363 tests, 361 passing, 1 pre-existing env-blocked) |
