@@ -4,6 +4,14 @@
 
 const ooda = require('./ooda');
 
+// Confirm-popup text — plain "key: value" pairs instead of a raw JSON dump
+// (which rendered braces/quotes verbatim to the user). Same fix as voice-agent.js.
+function humanizeArgs(args) {
+  const entries = Object.entries(args || {});
+  if (!entries.length) return '';
+  return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
+}
+
 function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   if (!leash || typeof leash.check !== 'function') {
     throw new Error('createCortex requires a leash with a check() method — fail-closed gating cannot be skipped');
@@ -136,7 +144,8 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // connectionId is the sentinel 'system': cortex-initiated actions have no
       // single waiting client, so the server accepts 'system'-scoped confirms
       // from any connected client (open question resolved in ROADMAP.md P9).
-      var summary = decision.tool + '(' + JSON.stringify(decision.args || {}).slice(0, 80) + ')';
+      var argsText = humanizeArgs(decision.args).slice(0, 120);
+      var summary = decision.tool + (argsText ? ' (' + argsText + ')' : '');
       var confirmId = leash.confirm.create(
         summary,
         { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier },

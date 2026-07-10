@@ -139,7 +139,8 @@ describe('cortex confirm flow (P9 diff — spec Ambiguity #2 contract)', () => {
     assert.equal(emitted.length, 1, 'exactly one confirm-request emitted');
     assert.ok(emitted[0].confirmId, 'payload must carry the confirmId');
     assert.equal(emitted[0].tier, 3);
-    assert.match(emitted[0].summary, /^kill_session\(/);
+    // Human-readable "key: value" summary (not raw JSON) — see cortex/index.js's humanizeArgs.
+    assert.match(emitted[0].summary, /^kill_session \(/);
 
     // The registered confirm is resolvable through the REAL registry with the
     // 'system' scope — the exact path server/index.js takes on confirm-reply.

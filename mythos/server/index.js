@@ -76,6 +76,12 @@ function createServer(deps) {
 
   app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), { etag: false, maxAge: 0, lastModified: false }));
 
+  // Build artifacts (open_artifact spawns the OS browser pointed at these
+  // URLs) — scoped to exactly vault/builds, not the whole vault root, which
+  // also holds Episodic/Semantic/Identity/Audit/Checkpoints that should never
+  // be served as plain static files.
+  app.use('/vault/builds', express.static(memory.fs.vaultPath('builds'), { etag: false, maxAge: 0, lastModified: false }));
+
   app.use('/api', globalLimit);
   app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
 

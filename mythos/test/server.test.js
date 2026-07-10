@@ -9,14 +9,21 @@ const assert = require('node:assert/strict');
 const http = require('http');
 const WebSocket = require('ws');
 const { createBus } = require('../src/core/bus');
+const path = require('path');
 const { createServer } = require('../server');
+
+// Minimal fs-store stand-in — the real one resolves paths under the vault
+// root; tests never touch the filesystem, so any deterministic join works.
+function fakeFs() {
+  return { vaultPath: (...segments) => path.join('/test-vault', ...segments) };
+}
 
 function baseDeps(bus, overrides) {
   return Object.assign({
     bus,
     config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000 },
     logger: { info() {}, warn() {}, error() {} },
-    memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} } },
+    memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() },
     goalsEffector: { listGoals: () => [], stats: () => ({ total: 0, done: 0, active: 0 }) },
     kanbanEffector: { listBoard: () => ({ cards: [] }) },
     pipelineEffector: { listAll: () => ({}) },
@@ -39,7 +46,7 @@ function httpGet(port, pathName) {
 
 test('real bus tick event relays to a real WS client as type:tick', async () => {
   const bus = createBus({ historySize: 50 });
-  const fakeMemory = { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} } };
+  const fakeMemory = { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() };
   const server = createServer(baseDeps(bus, { memory: fakeMemory }));
 
   await server.ready; // address() is null until the listening event (async bind on Windows)
@@ -83,7 +90,7 @@ test('confirm-reply accept invokes the effector via dispatchAction, not a shadow
     },
   };
   const server = createServer(baseDeps(bus, {
-    memory: { working: { tick: 0 }, episodic: { write: async () => {} } },
+    memory: { working: { tick: 0 }, episodic: { write: async () => {} }, fs: fakeFs() },
     effectors: fakeEffectors,
     leash: fakeLeash,
   }));
@@ -144,6 +151,7 @@ test('GET /api/stats returns the HUD density snapshot shape over real HTTP', asy
         episodic: { count: 12 }, semantic: { count: 3 }, skills: { count: 1 },
         identity: { count: 2 }, working: { keys: 0 }, audit: { count: 7 },
       }),
+      fs: fakeFs(),
     },
     goalsEffector: { listGoals: () => [], stats: () => ({ total: 4, done: 1, active: 3 }) },
     kanbanEffector: { listBoard: () => ({ cards: [{ id: 'c1', lane: 'backlog' }, { id: 'c2', lane: 'done' }, { id: 'c3', lane: 'backlog' }] }) },
@@ -175,6 +183,7 @@ test('GET /api/memory/:store browses episodic via tail and rejects unknown store
         tail: (n) => [{ ts: '2026-07-10T00:00:00Z', summary: 'first', kind: 'action' }].slice(0, n),
       },
       audit: { query: (opts) => [{ ts: '2026-07-10T00:00:01Z', tier: 3, decision: 'confirm', tool: 'kill_session' }].slice(0, opts.limit) },
+      fs: fakeFs(),
     },
   }));
 

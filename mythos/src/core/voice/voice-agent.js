@@ -111,6 +111,14 @@ function normalizeParsed(parsed) {
   return { say, actions, needs_result };
 }
 
+// Confirm-popup text — plain "key: value" pairs instead of a raw JSON dump
+// (which rendered braces/quotes verbatim to the user).
+function humanizeArgs(args) {
+  const entries = Object.entries(args || {});
+  if (!entries.length) return '';
+  return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
+}
+
 function createVoiceAgent({ brain, leash, dispatch, bus }) {
   if (!brain || typeof brain.think !== 'function') throw new Error('createVoiceAgent requires brain.think');
   if (!leash || typeof leash.check !== 'function') throw new Error('createVoiceAgent requires leash');
@@ -165,7 +173,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
     const verdict = leash.check(decision, {});
 
     if (verdict.requireConfirm && !INTAKE_GATED.has(decision.tool)) {
-      const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${JSON.stringify(decision.args)})` : ''}`;
+      const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${humanizeArgs(decision.args)})` : ''}`;
       const confirmId = leash.confirm.create(summary, { decision, goalId: null, tier: verdict.tier }, connectionId || 'system');
       bus.emit('confirm-request', { ...decision, confirmId, summary, tier: verdict.tier });
       return { tool: decision.tool, args: decision.args, ok: false, confirmPending: true, confirmId, summary };

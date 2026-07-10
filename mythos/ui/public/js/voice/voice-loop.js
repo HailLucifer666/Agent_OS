@@ -331,6 +331,13 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     stopSpeaking();
     if (vadTimer) { clearInterval(vadTimer); vadTimer = null; }
     stopRecording();
+    // Release the actual hardware mic — without this the getUserMedia stream
+    // stays live forever (browser mic-in-use indicator included) even though
+    // the UI says "off"; ensureMic() re-acquires instantly next start() since
+    // permission is already granted.
+    if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    analyser = null;
     setState('idle');
     caption('', 'info');
   }
