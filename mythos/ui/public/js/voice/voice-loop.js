@@ -127,13 +127,29 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   }
 
   // Show the brain's reply and speak it aloud. The recognizer stays paused
-  // (processing flag) until synthesis ends so MYTHOS never hears itself.
+  // (processing flag) until playback/synthesis ends so MYTHOS never hears
+  // itself. Preferred voice: server-side edge-tts (Microsoft Neural) shipped
+  // as base64 mp3 in msg.audioB64; browser speechSynthesis is the fallback.
   function deliverReply(msg) {
     const say = msg && msg.say ? String(msg.say) : '';
     if (!say) { finishTurn(); return; }
     const kind = msg.error || msg.offline ? 'error' : 'reply';
     caption(say, kind);
-    if (kind === 'reply' && window.speechSynthesis && !disposed) {
+    if (kind !== 'reply' || disposed) { finishTurn(); return; }
+
+    if (msg.audioB64) {
+      setState('speaking');
+      const audio = new Audio('data:audio/mpeg;base64,' + msg.audioB64);
+      audio.onended = () => finishTurn();
+      audio.onerror = () => speakFallback(say);
+      audio.play().catch(() => speakFallback(say));
+      return;
+    }
+    speakFallback(say);
+  }
+
+  function speakFallback(say) {
+    if (window.speechSynthesis && !disposed) {
       setState('speaking');
       const u = new SpeechSynthesisUtterance(say);
       u.onend = () => finishTurn();

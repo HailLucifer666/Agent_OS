@@ -27,6 +27,9 @@ const SCHEMA = {
   OPENROUTER_API_KEY:       { type: 'string', default: '' },
   CEREBRAS_API_KEY:         { type: 'string', default: '' },
 
+  // Voice reply TTS (edge-tts Microsoft Neural voice id)
+  VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-RyanNeural' },
+
   // Brain
   REFLECT_EVERY:            { type: 'number', default: 60, min: 1 },
   CONSOLIDATE_EVERY:        { type: 'number', default: 300, min: 1 },

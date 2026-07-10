@@ -28,6 +28,7 @@ const { createKanbanEffector } = require('./core/effectors/kanban');
 const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createVoiceEffector } = require('./core/effectors/voice');
+const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { registerFromComputer } = require('./core/effectors/from-computer');
 const { registerFromPc } = require('./core/effectors/from-pc');
 const { registerFromBrowser } = require('./core/effectors/from-browser');
@@ -91,6 +92,7 @@ async function main() {
   let fileSensor = null;
   let wsSensor = null;
   let jobSensor = null;
+  let edgeTtsChild = null;
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -328,12 +330,22 @@ async function main() {
       logger.info('sensors.file.started', {});
       logger.info('sensors.job.started', {});
       logger.info('sensors.ws.started', {});
+    }},
+
+    { name: 'edge-tts', fail: 'degraded', fn: function() {
+      // Local Microsoft Neural TTS service (free, no key) — voice replies get
+      // synthesized server-side (server/index.js handleUtterance) and shipped
+      // to the browser as base64 mp3. Degraded: missing python/module just
+      // means the client falls back to browser speechSynthesis.
+      edgeTtsChild = createEdgeTtsChild({ logger: logger });
+      edgeTtsChild.start();
     }}
   ]);
 
   // Stop running loops before the lifecycle's own shutdown/exit runs (full graceful
   // shutdown sequencing — drain/flush/audit — is D-07, a non-blocking Known Deviation)
   function stopRunningLoops() {
+    if (edgeTtsChild) edgeTtsChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
     if (fileSensor) fileSensor.stop();

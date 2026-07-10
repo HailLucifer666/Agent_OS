@@ -11,6 +11,8 @@ const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
+const edgeTts = require('../providers/edge-tts');
+const { truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop'
@@ -309,6 +311,21 @@ function createServer(deps) {
     // built — the P2 brain's real surface is think({lane, messages, ...}). The
     // 'voice' lane is the shipped conversational lane (persona-injected). Offline
     // brain degrades honestly: the client gets told, never a silent empty reply.
+    // Synthesize the spoken form of a reply via the local edge-tts service
+    // (Microsoft Neural voices, free/no key). Honest-null on any failure —
+    // the client falls back to browser speechSynthesis when audioB64 is absent.
+    async function synthesizeReply(text) {
+      try {
+        if (!(await edgeTts.isAvailable())) return null;
+        const spoken = truncateAtSentenceBoundary(text);
+        const buf = await edgeTts.synthesize({ text: spoken, voice: config.VOICE_TTS_VOICE });
+        return buf.toString('base64');
+      } catch (err) {
+        logger.warn('edge-tts.synthesis-failed', { error: err.message });
+        return null;
+      }
+    }
+
     async function handleUtterance(msg) {
       if (!brain || typeof brain.think !== 'function') {
         send({ type: 'done', reqId: msg.reqId, say: 'Brain is offline.', offline: true });
@@ -323,7 +340,8 @@ function createServer(deps) {
         if (result.offline || !result.content) {
           send({ type: 'done', reqId: msg.reqId, say: 'All providers are offline right now.', offline: true });
         } else {
-          send({ type: 'done', reqId: msg.reqId, say: result.content });
+          const audioB64 = await synthesizeReply(result.content);
+          send({ type: 'done', reqId: msg.reqId, say: result.content, audioB64 });
         }
       } catch (err) {
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
