@@ -31,6 +31,13 @@
       <circle cx="12" cy="13" r="3.4"></circle>
     </svg>
   </div>
+  <!-- Debug-only live preview: shows the raw camera feed + top-1 gesture
+       guess so gesture detection can be visually confirmed during testing.
+       Hidden unless the camera is actively watching. -->
+  <div id="camera-preview" class="cam-preview-hidden">
+    <div id="camera-preview-video"></div>
+    <div id="camera-preview-label">no hand</div>
+  </div>
 
   <script type="module" src="/js/app.js"></script>
 </body>

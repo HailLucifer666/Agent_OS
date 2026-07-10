@@ -98,17 +98,34 @@ function describeScene(text) {
   const session = v.beginTurn();
   visionQuery({
     image, text,
-    onChunk: (m) => v.onExternalChunk(session, m),
+    onChunk: (m) => v.onExternalChunk(m, session),
     onDone: (msg) => v.deliverExternalReply(msg, session),
   });
 }
 
+// Debug-only live preview (not part of the shipped P16 UI — see voice.css's
+// #camera-preview comment): raw feed + top-1 gesture guess, so gesture
+// detection can be visually confirmed against a real camera while testing.
+const camPreviewEl = document.getElementById('camera-preview');
+const camPreviewVideoEl = document.getElementById('camera-preview-video');
+const camPreviewLabelEl = document.getElementById('camera-preview-label');
+
 function ensureCamera() {
   if (!camera) {
     camera = createCameraLoop({
-      onState: (s) => { camEl.className = `cam-${s}`; camEl.title = `camera ${s}`; },
+      onState: (s) => {
+        camEl.className = `cam-${s}`;
+        camEl.title = `camera ${s}`;
+        camPreviewEl.className = s === 'watching' ? '' : 'cam-preview-hidden';
+      },
       onGesture: (name) => { const fn = GESTURE_ACTIONS[name]; if (fn) fn(); },
       onCaption: (text, kind) => mic.setCaption(text, kind),
+      onDebug: ({ handSeen, name, score }) => {
+        camPreviewLabelEl.textContent = handSeen
+          ? `${name || '...'} ${(score * 100).toFixed(0)}%`
+          : 'no hand';
+      },
+      previewEl: camPreviewVideoEl,
     });
   }
   return camera;

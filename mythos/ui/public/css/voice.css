@@ -176,3 +176,40 @@
   border-color: var(--status-warn);
   color: var(--status-warn);
 }
+
+/* #camera-preview — TESTING WIDGET ONLY, not part of the P16 spec's shipped
+   UI (that deliberately omits a preview pane). Shows the raw feed + live
+   top-1 gesture guess so detection can be visually confirmed against a real
+   camera during hardware verification. Toggled by the camera indicator's
+   watching state, not a separate control. */
+#camera-preview {
+  position: fixed;
+  left: calc(50% + 90px);
+  bottom: 72px;
+  width: 200px;
+  height: 150px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1.5px solid var(--accent-memory);
+  box-shadow: 0 0 16px rgba(96, 165, 250, 0.35);
+  z-index: 60;
+  background: #000;
+}
+#camera-preview-video { position: relative; }
+#camera-preview.cam-preview-hidden { display: none; }
+#camera-preview-video {
+  width: 100%;
+  height: 100%;
+}
+#camera-preview-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px 8px;
+  font: 12px/1.2 var(--font-mono, monospace);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  text-align: center;
+  pointer-events: none;
+}

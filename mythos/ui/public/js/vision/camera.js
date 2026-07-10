@@ -19,10 +19,10 @@ const GESTURE_HOLD_TICKS = 3;       // ~450ms sustained before firing
 const GESTURE_COOLDOWN_MS = 2000;   // per-gesture refractory period after firing
 const MIN_CONFIDENCE = 0.6;
 
-export function createCameraLoop({ onState, onGesture, onCaption }) {
+export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previewEl }) {
   let active = false;
   let stream = null;
-  let video = null;          // offscreen <video> the recognizer reads from
+  let video = null;          // <video> the recognizer reads from (mounted into previewEl if given)
   let recognizer = null;     // lazy-built once, reused across start/stop
   let detectTimer = null;
   let holdGesture = null;    // gesture name currently being held
@@ -50,6 +50,12 @@ export function createCameraLoop({ onState, onGesture, onCaption }) {
       result = recognizer.recognizeForVideo(video, performance.now());
     } catch { return; } // a single bad frame is not an error condition
     const top = result.gestures && result.gestures[0] && result.gestures[0][0];
+    const handSeen = !!(result.landmarks && result.landmarks.length);
+    // Debug feed: raw top-1 result every tick, even below MIN_CONFIDENCE / hold
+    // ticks — lets a test widget show "yes I see a hand" independent of
+    // whether the production debounce logic would actually fire an action.
+    if (onDebug) onDebug({ handSeen, name: top ? top.categoryName : null, score: top ? top.score : 0 });
+
     const name = top && top.score >= MIN_CONFIDENCE ? top.categoryName : null;
 
     if (!name || name === 'None') { holdGesture = null; holdCount = 0; return; }
@@ -103,6 +109,17 @@ export function createCameraLoop({ onState, onGesture, onCaption }) {
     video.muted = true;
     video.playsInline = true;
     video.srcObject = stream;
+    if (previewEl) {
+      // Debug/testing widget: mirror the feed so raising your right hand
+      // shows on your right, like a mirror — mounted only while active,
+      // torn down on stop() same as the stream itself.
+      video.style.width = '100%';
+      video.style.height = '100%';
+      video.style.objectFit = 'cover';
+      video.style.transform = 'scaleX(-1)';
+      previewEl.innerHTML = '';
+      previewEl.appendChild(video);
+    }
     await video.play();
     active = true;
     setState('watching');
@@ -113,6 +130,7 @@ export function createCameraLoop({ onState, onGesture, onCaption }) {
   function releaseStream() {
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (video) { video.srcObject = null; video = null; }
+    if (previewEl) previewEl.innerHTML = '';
   }
 
   function stop() {
