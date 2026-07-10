@@ -189,7 +189,6 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
       ok,
       summary: ok ? `${decision.tool} done.` : String((raw && raw.error) || raw || 'Failed.').slice(0, 200),
       raw: outcome,
-      clearIntake: ok && decision.tool === 'start_project',
     };
   }
 

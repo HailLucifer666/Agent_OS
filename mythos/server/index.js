@@ -346,8 +346,14 @@ function createServer(deps) {
 
     // Per-connection conversation memory (CA of NOVA app/lib/voice/intake.js,
     // folded into the connection closure): last 12 turns, 2000 chars each,
-    // 10-minute idle TTL; wiped when start_project succeeds (the intake
-    // conversation must not bleed into post-build turns) and on WS close.
+    // 10-minute idle TTL. Deliberately NOT wiped after start_project succeeds —
+    // an earlier version cleared it here on the theory that the intake
+    // conversation shouldn't bleed into post-build turns, but that also erased
+    // the only record that a build was ever started: "is it done?" a few turns
+    // later had zero context and the voice-agent asked what to build, as if
+    // starting fresh. The rolling window (already capped at 12 turns / 10 min
+    // idle) is exactly the mechanism that should carry "I started building X"
+    // forward to a later "is it done" — so it's left alone.
     const HISTORY_MAX_TURNS = 12;
     const HISTORY_IDLE_TTL_MS = Number(process.env.VOICE_INTAKE_IDLE_MS) || 10 * 60 * 1000;
     let history = [];
@@ -409,7 +415,6 @@ function createServer(deps) {
         const say = result.say || 'Done.';
         historyAppend('user', text);
         historyAppend('assistant', say);
-        if ((result.actions || []).some((a) => a && a.clearIntake)) { history = []; }
 
         const speak = sanitizeSpoken(say);
         const audioB64 = await synthesizeReply(speak);
