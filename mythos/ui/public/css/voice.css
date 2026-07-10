@@ -54,6 +54,25 @@
   height: 20px;
 }
 
+/* transcript / reply / error caption above the cluster */
+.mic-caption {
+  max-width: min(72vw, 560px);
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: 0.04em;
+  color: var(--text-dim, #8ba3c4);
+  background: rgba(8, 14, 24, 0.82);
+  border: 1px solid var(--text-faint);
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-bottom: 4px;
+  text-align: center;
+  white-space: pre-wrap;
+}
+.mic-caption[data-kind="heard"] { color: var(--accent); border-color: var(--accent); }
+.mic-caption[data-kind="reply"] { color: var(--text, #dbe7f5); border-color: var(--accent); }
+.mic-caption[data-kind="error"] { color: var(--status-warn); border-color: var(--status-warn); }
+
 /* state variants */
 #mic-indicator.mic-listening .mic-ring {
   border-color: var(--accent);
@@ -68,6 +87,25 @@
   color: var(--accent-goals-purple, #a78bfa);
 }
 #mic-indicator.mic-processing .mic-status {
+  color: var(--accent-goals-purple, #a78bfa);
+  animation: mic-pulse 0.9s var(--ease) infinite;
+}
+
+#mic-indicator.mic-speaking .mic-ring {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--accent-glow);
+}
+#mic-indicator.mic-speaking .mic-status {
+  color: var(--accent);
+  animation: mic-pulse 0.9s var(--ease) infinite;
+}
+
+#mic-indicator.mic-downloading .mic-ring {
+  border-color: var(--accent-goals-purple, #a78bfa);
+  color: var(--accent-goals-purple, #a78bfa);
+}
+#mic-indicator.mic-downloading .mic-status {
   color: var(--accent-goals-purple, #a78bfa);
   animation: mic-pulse 0.9s var(--ease) infinite;
 }

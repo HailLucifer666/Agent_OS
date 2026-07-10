@@ -7,21 +7,26 @@
 // idle waveform, honest and static.
 
 const STATUS_TEXT = {
-  idle: 'OFF', listening: 'ONLINE', processing: 'PROCESSING',
-  disabled: 'MIC BLOCKED', error: 'STOPPED', unsupported: 'UNSUPPORTED',
+  idle: 'OFF', listening: 'ONLINE', processing: 'PROCESSING', speaking: 'SPEAKING',
+  downloading: 'LOADING MODEL', disabled: 'MIC BLOCKED', error: 'STOPPED', unsupported: 'UNSUPPORTED',
 };
 
 const TITLES = {
-  idle: "Voice off — click to enable, then say 'Mythos, …'",
-  listening: "Listening for 'Mythos, …' — click to disable",
+  idle: 'Voice off — click to enable, then just speak',
+  listening: 'Listening — speak a command, click to disable',
   processing: 'Processing…',
+  speaking: 'Speaking…',
+  downloading: 'Downloading on-device speech model (one-time)…',
   disabled: 'Microphone permission denied — enable it in browser settings',
   error: 'Voice loop stopped (restart cap) — click to retry',
   unsupported: 'Web Speech API not available in this browser',
 };
 
+const CAPTION_FADE_MS = { heard: 6000, reply: 14000, error: 10000, info: 6000 };
+
 export function createMicIndicator(el) {
   el.innerHTML = `
+    <div class="mic-caption mono" data-role="caption" hidden></div>
     <div class="mic-ring">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="9" y="3.5" width="6" height="11" rx="3"></rect>
@@ -34,6 +39,7 @@ export function createMicIndicator(el) {
     <canvas class="mic-wave" width="132" height="20"></canvas>
   `;
   const statusEl = el.querySelector('[data-role="status"]');
+  const captionEl = el.querySelector('[data-role="caption"]');
   const wave = el.querySelector('.mic-wave');
   const wctx = wave.getContext('2d');
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -110,7 +116,18 @@ export function createMicIndicator(el) {
     analyser = null;
   }
 
-  const STATE_CLASSES = ['mic-idle', 'mic-listening', 'mic-processing', 'mic-disabled', 'mic-error', 'mic-unsupported'];
+  const STATE_CLASSES = ['mic-idle', 'mic-listening', 'mic-processing', 'mic-speaking', 'mic-downloading', 'mic-disabled', 'mic-error', 'mic-unsupported'];
+
+  // Transcript / reply / error caption above the cluster; auto-fades per kind.
+  let captionTimer = null;
+  function setCaption(text, kind) {
+    if (!text) { captionEl.hidden = true; return; }
+    captionEl.textContent = text;
+    captionEl.dataset.kind = kind || 'info';
+    captionEl.hidden = false;
+    clearTimeout(captionTimer);
+    captionTimer = setTimeout(() => { captionEl.hidden = true; }, CAPTION_FADE_MS[kind] || 6000);
+  }
 
   function setState(s) {
     state = STATUS_TEXT[s] ? s : 'idle';
@@ -127,8 +144,10 @@ export function createMicIndicator(el) {
 
   return {
     setState,
+    setCaption,
     cleanup() {
       stopLevelMeter();
+      clearTimeout(captionTimer);
       if (raf) { cancelAnimationFrame(raf); raf = null; }
     },
   };

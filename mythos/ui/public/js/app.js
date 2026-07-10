@@ -53,7 +53,13 @@ function onVoiceState(s) {
 }
 
 function ensureVoice() {
-  if (!voice) voice = createVoiceLoop({ onState: onVoiceState, openPanel: (id) => overlays.openPanel(id) });
+  if (!voice) {
+    voice = createVoiceLoop({
+      onState: onVoiceState,
+      openPanel: (id) => overlays.openPanel(id),
+      onCaption: (text, kind) => mic.setCaption(text, kind),
+    });
+  }
   return voice;
 }
 

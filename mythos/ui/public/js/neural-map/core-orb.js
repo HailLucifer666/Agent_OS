@@ -397,10 +397,14 @@ export function mountCoreOrb(canvas, ctx) {
   return {
     setDegraded(v) { degraded = !!v; },
     notifyConfirmResolved() { confirmPending = false; },
-    // voice-loop states (idle|listening|processing) — hardware states
-    // (disabled/error/unsupported) collapse to idle; those are mic-indicator's
-    // job, not the entity-cognition orb's.
-    setVoiceState(s) { voiceState = (s === 'listening' || s === 'processing') ? s : 'idle'; },
+    // voice-loop states (idle|listening|processing|speaking) — 'speaking' shares
+    // the processing/thinking visual; hardware states (downloading/disabled/
+    // error/unsupported) collapse to idle; those are mic-indicator's job, not
+    // the entity-cognition orb's.
+    setVoiceState(s) {
+      voiceState = s === 'speaking' ? 'processing'
+        : (s === 'listening' || s === 'processing') ? s : 'idle';
+    },
     // category comes from hud-canvas.js's toolTarget() — single source of
     // truth for tool->category mapping, never re-derived here.
     flashAction(category, ok) {
