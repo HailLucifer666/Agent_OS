@@ -17,14 +17,19 @@ const ctx = { subscribe, onRefresh };
 // overlays
 const overlays = createOverlayManager(document.getElementById('overlay-root'));
 
-// neural map + core orb
-mountHud(document.getElementById('hud-canvas'), {
-  ...ctx,
-  onNodeClick: (panelId) => overlays.openPanel(panelId),
-});
+// core orb mounts first — hud-canvas's ctx needs orb.flashAction for its
+// per-action-type color relay (pure reorder, no visual side effect: DOM
+// z-order is CSS-driven, not mount-call-order-driven).
 const orb = mountCoreOrb(document.getElementById('core-orb'), {
   ...ctx,
   onClick: () => toggleVoice(),
+});
+
+// neural map
+mountHud(document.getElementById('hud-canvas'), {
+  ...ctx,
+  onNodeClick: (panelId) => overlays.openPanel(panelId),
+  onAction: (category, ok) => orb.flashAction(category, ok),
 });
 
 // floating widgets
@@ -35,14 +40,25 @@ mountConfirmModal(document.getElementById('confirm-root'), {
   onResolved: () => orb.notifyConfirmResolved && orb.notifyConfirmResolved(),
 });
 
-// voice — created lazily on first user gesture, then toggled via mic/orb clicks
+// voice — created lazily on first user gesture, then toggled via mic/orb clicks.
+// One shared callback feeds both the mic ring and the core orb's voice-reactive
+// color (listening/processing), so they never drift into two separate states.
 const micEl = document.getElementById('mic-indicator');
 const mic = createMicIndicator(micEl);
 let voice = null;
 
+function onVoiceState(s) {
+  mic.setState(s);
+  orb.setVoiceState(s);
+}
+
+function ensureVoice() {
+  if (!voice) voice = createVoiceLoop({ onState: onVoiceState, openPanel: (id) => overlays.openPanel(id) });
+  return voice;
+}
+
 function toggleVoice() {
-  if (!voice) voice = createVoiceLoop({ onState: (s) => mic.setState(s), openPanel: (id) => overlays.openPanel(id) });
-  voice.toggle();
+  ensureVoice().toggle();
 }
 
 micEl.addEventListener('click', toggleVoice);
@@ -52,6 +68,6 @@ micEl.addEventListener('click', toggleVoice);
 // listening still starts only when the user explicitly clicks the mic or orb.
 const armOnce = () => {
   document.removeEventListener('pointerdown', armOnce);
-  if (!voice) voice = createVoiceLoop({ onState: (s) => mic.setState(s), openPanel: (id) => overlays.openPanel(id) });
+  ensureVoice();
 };
 document.addEventListener('pointerdown', armOnce);

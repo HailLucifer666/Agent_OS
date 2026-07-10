@@ -267,6 +267,7 @@ export function mountHud(canvas, ctx) {
       else spawnBurst('core', target);
     } else if (msg.type === 'action') {
       const target = toolTarget(msg.payload.tool);
+      if (ctx.onAction) ctx.onAction(target, msg.payload.ok);
       flashEdge('core', target);
       spawnBurst('core', 'audit', msg.payload.ok ? COLORS.ok : COLORS.danger);
       if (target === 'kanban') live.kanbanDelta += 1;
