@@ -1256,6 +1256,73 @@ port conflict).
 
 ---
 
+## Phase 14 — Voice reliability: noise hallucinations + conversation memory ✅ Done (2026-07-10)
+
+Two user-reported voice bugs, both root-caused live against the real running
+instance rather than assumed.
+
+### Background noise producing fabricated words
+
+Ambient noise was getting picked up mid-conversation and turned into words
+("hi", "how are you", "thank you"), with MYTHOS replying to them. Two
+independent causes:
+
+1. The VAD (`ui/public/js/voice/voice-loop.js`) armed a recording the instant a
+   single 100ms tick crossed `SPEECH_RMS` — a door, a click, an AC hum spike
+   was enough. Fixed with `SPEECH_HOLD_TICKS` (require 2 consecutive
+   above-threshold ticks) and `MIN_PEAK_RMS` (track the loudest moment of the
+   clip; if it never got meaningfully louder than ambient noise, drop it
+   without ever calling the transcription API). `autoGainControl: true` added
+   to the `getUserMedia` constraints alongside the existing echo/noise
+   suppression.
+2. Whisper hallucinates stock phrases from silence/noise — a well-documented
+   failure mode (its training data is full of YouTube-style sign-offs).
+   Verified LIVE against the real Groq API, not assumed: a 3-second pure
+   digital-silence WAV posted to `/api/voice/transcribe` came back as
+   `"Thank you."` with `no_speech_prob: 0` and `avg_logprob: -0.29` — both
+   comfortably inside what looked like "confident real speech" range, proving
+   Whisper's own documented confidence signals are unreliable here in
+   practice. `providers/groq-stt.js` now also blocklists an exact-match
+   (post-punctuation-stripped) set of known Whisper silence-hallucination
+   phrases (`thank you`, `hi`, `bye`, `subscribe`, etc.) and drops
+   punctuation-only transcripts (a bare `"."` came back from the same live
+   test) — a real sentence merely *containing* one of these phrases as a
+   clause is untouched. `test/groq-stt.test.js` (9 cases) covers both the
+   confidence-score path and the exact live-reproduced regression.
+
+### Conversation memory forgetting an in-progress build
+
+User: "build me a landing page for a pet shop" → clarify → restate → "go
+ahead" → `start_project` fires, replies "in pipeline." Minutes later: "is it
+done? tell me when it's ready" → MYTHOS asks "what kind of website do you want
+me to build?" as if starting fresh. Root cause: `server/index.js`'s
+per-connection history was wiped to `[]` the instant `start_project` succeeded
+(`clearIntake`, added in P11 on the theory that the intake conversation
+shouldn't bleed into post-build turns) — which also erased the only record
+that a build had ever started. Fixed by removing the wipe entirely (and the
+now-dead `clearIntake` flag from `voice-agent.js`) — the existing rolling
+12-turn/10-minute-idle window already CA's from NOVA's intake.js and is
+exactly the mechanism that should carry "I started building X" forward to a
+later "is it done."
+
+Verified live end-to-end via a real multi-turn WS session (not mocked): full
+intake → `start_project` → job broadcasts (queued → generating →
+writing-artifact → done, real artifact `paws-pamper-friendly-dog-grooming.html`
+written under `vault/builds/pipeline/`) → "is it done yet?" correctly answered
+"still being generated" mid-build (no re-ask) → later "is it done now?"
+correctly answered "It's ready, I'll open it" and attempted `open_artifact`
+(itself correctly gated through the leash's confirm flow). This also
+positively confirms the `build` lane's provider chain (Mistral first, per
+`lanes.default.js`'s `PREF_BUILD`) is wired and actually producing real
+generated content, not silently failing over or stalling.
+
+**Gate**: 357 tests, 355 pass, 1 skip, 1 fail (same pre-existing `boot.test.js`
+port conflict).
+
+Commits: `abbf96f` (noise/hallucination fix), `1bfb97c` (conversation memory fix).
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1318,3 +1385,5 @@ port conflict).
 | `e281f32` | P11 | Voice Agent v2 (barge-in, TTS sanitization, conversation memory, real tool-calling — CA of NOVA voice-agent.js) + semantic memory (local embeddings/RAG, no vector DB) + mission orchestrator (brain delegates multi-part goals to a background agent team, no LangGraph) + a real createVoiceAgent()-fail-fast/socket-leak hang found and fixed by the suite run itself (341 tests, 339 passing, 1 pre-existing env-blocked) |
 | `3914163` | P12 | Voice input replaced with server-side Groq Whisper transcription (`providers/groq-stt.js` + `/api/voice/transcribe` + `voice-loop.js` MediaRecorder/VAD) after live-confirming Chrome's SpeechRecognition (cloud AND on-device) is blocked at the network level on this machine; found and fixed a stop()-vs-in-flight-transcription race live-testing against the real instance (341 tests, 339 passing, 1 pre-existing env-blocked) |
 | `abb223b` | P13 | get_time + get_weather tools (`from-system.js`, Open-Meteo, no API key) + a persona-rule gap found live-testing (voice-agent asked permission before calling harmless read-only lookups) (348 tests, 346 passing, 1 pre-existing env-blocked) |
+| `abbf96f` | P14 | Background-noise voice hallucinations fixed: VAD hold-ticks + peak-RMS energy gate (`voice-loop.js`) + Groq Whisper stock-phrase/punctuation-only filter (`groq-stt.js`), live-reproduced against the real Groq API (pure silence -> "Thank you." at no_speech_prob 0) (357 tests, 355 passing, 1 pre-existing env-blocked) |
+| `1bfb97c` | P14 | Conversation-memory fix: removed the clearIntake history wipe that erased all record of an in-progress build, breaking "is it done?" follow-ups; live-verified full intake -> build -> completion -> status-check cycle end to end, also confirming the `build` lane's Mistral-first provider chain actually works (357 tests, 355 passing, 1 pre-existing env-blocked) |
