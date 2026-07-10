@@ -1,5 +1,7 @@
 @echo off
 setlocal
+title MYTHOS — Personal AI OS
+chcp 65001 >nul
 cd /d "%~dp0mythos"
 
 if not exist ".env" (

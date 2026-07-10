@@ -53,6 +53,9 @@ async function main() {
   }
   const config = configResult.config;
 
+  // Boot cinematic (TTY-only cosmetic — no-op on pipes and under tests)
+  await require('./core/boot-banner').print({ name: config.MYTHOS_NAME, port: config.MYTHOS_PORT });
+
   // Step 2: Logger
   const logger = createLogger(config.LOG_LEVEL);
   logger.info('config.loaded', { name: config.MYTHOS_NAME, port: config.MYTHOS_PORT });

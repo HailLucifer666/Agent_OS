@@ -21,11 +21,13 @@ function createEdgeTtsChild({ logger }) {
     if (process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT) return false;
     const port = process.env.EDGE_TTS_PORT || '5050';
 
-    // Detect python (try "python" then "python3")
+    // Detect python (try "python" then "python3"). shell:false — the exe
+    // resolves via PATH directly, and shell:true with an args array trips
+    // Node's DEP0190 deprecation warning.
     let pyBin = null;
     for (const bin of ['python', 'python3']) {
       try {
-        const r = spawnSync(bin, ['--version'], { shell: true, encoding: 'utf8', timeout: 3000 });
+        const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 3000 });
         if (r.status === 0) { pyBin = bin; break; }
       } catch { /* try next */ }
     }
