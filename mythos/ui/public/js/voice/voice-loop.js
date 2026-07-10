@@ -19,10 +19,12 @@ import { utterance } from '../ws.js';
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 const SILENCE_MS = 1800;       // quiet gap that ends an utterance
-const SPEECH_RMS = 0.015;      // volume threshold marking "speech present"
+const SPEECH_RMS = 0.02;       // volume threshold marking "speech present"
 const VAD_TICK_MS = 100;
+const SPEECH_HOLD_TICKS = 2;   // consecutive above-threshold ticks required before recording starts — filters brief noise blips (a door, a click, a cough)
 const MIN_CLIP_MS = 300;       // shorter clips are noise/mic-bumps, dropped
 const MIN_CLIP_BYTES = 800;
+const MIN_PEAK_RMS = 0.035;    // the loudest moment of the clip must clear this — real speech peaks well above ambient noise that merely brushed SPEECH_RMS
 
 // voice-nav table — checked before falling through to the brain.
 const NAV_COMMANDS = [
@@ -50,6 +52,8 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   let chunks = [];
   let recordingSince = 0;
   let silenceSince = null;
+  let aboveCount = 0;        // consecutive above-threshold VAD ticks (see SPEECH_HOLD_TICKS)
+  let peakRms = 0;           // loudest VAD tick seen during the current recording (see MIN_PEAK_RMS)
 
   function setState(s) { if (onState) onState(s); }
   function caption(text, kind) { if (onCaption) onCaption(text, kind); }
@@ -209,7 +213,7 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
 
   async function ensureMic() {
     if (stream) return stream;
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -222,6 +226,7 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     if (recorder) return;
     chunks = [];
     recordingSince = Date.now();
+    peakRms = 0;
     try {
       recorder = new MediaRecorder(stream, { mimeType: pickMimeType() });
     } catch (err) {
@@ -235,9 +240,11 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
       const clipMs = Date.now() - recordingSince;
       const type = recorder.mimeType || 'audio/webm';
       const blob = new Blob(chunks, { type });
+      const loudEnough = peakRms >= MIN_PEAK_RMS;
       recorder = null;
       chunks = [];
       if (clipMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) return; // noise/blip — drop silently
+      if (!loudEnough) return; // never actually got louder than ambient noise — drop silently, don't waste a transcription call on it
       transcribeAndDispatch(blob);
     };
     recorder.start();
@@ -246,6 +253,7 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   function stopRecording() {
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* ok */ } }
     silenceSince = null;
+    aboveCount = 0;
   }
 
   async function transcribeAndDispatch(blob) {
@@ -275,13 +283,23 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     if (!analyser) return;
     const data = new Uint8Array(analyser.fftSize);
     analyser.getByteTimeDomainData(data);
-    const speaking = rms(data) > SPEECH_RMS;
+    const level = rms(data);
+    if (recorder) peakRms = Math.max(peakRms, level);
+    const speaking = level > SPEECH_RMS;
     if (speaking) {
-      if (!recorder && !processing) startRecording();
       silenceSince = null;
-    } else if (recorder) {
-      if (silenceSince === null) silenceSince = Date.now();
-      else if (Date.now() - silenceSince >= SILENCE_MS) stopRecording();
+      if (recorder || processing) return;
+      // Require a short sustained hold above threshold before committing to a
+      // recording — a single loud tick (a door, a click, a cough) shouldn't
+      // arm the whole capture-and-transcribe pipeline.
+      aboveCount++;
+      if (aboveCount >= SPEECH_HOLD_TICKS) startRecording();
+    } else {
+      aboveCount = 0;
+      if (recorder) {
+        if (silenceSince === null) silenceSince = Date.now();
+        else if (Date.now() - silenceSince >= SILENCE_MS) stopRecording();
+      }
     }
   }
 

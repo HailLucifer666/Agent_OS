@@ -10,6 +10,28 @@
 const BASE = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1';
 const MODEL = process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo';
 
+// Whisper hallucinates plausible-sounding phrases from near-silent or noisy
+// audio instead of reporting nothing was said. verbose_json exposes per-segment
+// no_speech_prob/avg_logprob, the documented signals for this — kept as one
+// layer of defense, but verified LIVE against Groq's real API to be unreliable
+// here: feeding it pure digital silence returned "Thank you." with
+// no_speech_prob 0 and avg_logprob -0.29, well inside "confident real speech"
+// range by these thresholds. So the primary defense is the client-side peak-
+// energy gate in voice-loop.js (never sends a clip that didn't get louder than
+// ambient noise); this is the backstop for whatever gets past it — Whisper's
+// hallucinations on silence/near-silence are a well-documented, narrow set of
+// stock phrases (its training data is full of YouTube-style sign-offs). An
+// EXACT match (after trimming punctuation/case) against this list is dropped
+// regardless of confidence scores; a real command that happens to CONTAIN one
+// of these phrases as part of a longer sentence is untouched.
+const NO_SPEECH_PROB_MAX = 0.6;
+const AVG_LOGPROB_MIN = -1.0;
+const HALLUCINATION_PHRASES = new Set([
+  'thank you', 'thanks', 'thanks for watching', 'thank you for watching',
+  'please subscribe', 'subscribe', 'bye', 'goodbye', 'see you next time',
+  'see you later', 'hi', 'hello', 'you', 'the end', 'okay', 'bye bye',
+]);
+
 function getApiKey() {
   const v = process.env.GROQ_API_KEY;
   return v && v.trim() ? v.trim() : null;
@@ -36,7 +58,7 @@ async function transcribe(buffer, mimeType) {
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: mimeType || 'audio/webm' }), `utterance.${extFor(mimeType)}`);
   form.append('model', MODEL);
-  form.append('response_format', 'json');
+  form.append('response_format', 'verbose_json');
 
   const res = await fetch(`${BASE}/audio/transcriptions`, {
     method: 'POST',
@@ -49,7 +71,29 @@ async function transcribe(buffer, mimeType) {
     throw new Error(`groq transcription failed: ${res.status} ${detail}`);
   }
   const data = await res.json();
-  return typeof data.text === 'string' ? data.text.trim() : '';
+  const text = typeof data.text === 'string' ? data.text.trim() : '';
+  // A bare "." or "..." (no actual letters) is as meaningless as an empty
+  // string — Whisper emits these on pure noise about as often as real phrases.
+  const hasWord = /\w/.test(text);
+  if (!text || !hasWord || isLowConfidence(data.segments) || isStockHallucination(text)) return '';
+  return text;
+}
+
+// No segments (some response shapes omit them) — nothing to filter on, trust
+// the text. Otherwise: any segment Whisper itself flagged as likely-no-speech,
+// or with very low average token confidence, means this clip was noise/silence
+// that got transcribed into a plausible-sounding phrase anyway.
+function isLowConfidence(segments) {
+  if (!Array.isArray(segments) || !segments.length) return false;
+  return segments.some((s) =>
+    (typeof s.no_speech_prob === 'number' && s.no_speech_prob > NO_SPEECH_PROB_MAX) ||
+    (typeof s.avg_logprob === 'number' && s.avg_logprob < AVG_LOGPROB_MIN)
+  );
+}
+
+function isStockHallucination(text) {
+  const normalized = text.toLowerCase().replace(/[.!?,]+$/g, '').trim();
+  return HALLUCINATION_PHRASES.has(normalized);
 }
 
 module.exports = { name: 'groq-stt', isAvailable, transcribe };
