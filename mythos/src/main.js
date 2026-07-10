@@ -191,15 +191,6 @@ async function main() {
       logger.info('goals.ready', goals.stats());
     }},
 
-    { name: 'recovery', fail: 'degraded', fn: function() {
-      // [Phase 6 — NEW: supersedes the old inline checkpoint.load() logic] Full §10
-      // Recovery algorithm — pauses goals active-at-crash and emits the audited
-      // 'lifecycle.recovered' event (see immune/monitor.js's recoverFromCrash()).
-      return recoverFromCrash({ bus: bus, config: config, memory: memory, goals: goals }).then(function(result) {
-        logger.info('recovery.checked', result);
-      });
-    }},
-
     { name: 'leash', fn: function() {
       // [Phase 7 — NEW] Real effector hub + all 45 tool effectors + the goals-effector
       // bridge + voice effector, built here (immediately before leash, which requires
@@ -271,6 +262,24 @@ async function main() {
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors });
       logger.info('leash.ready', {});
+    }},
+
+    { name: 'recovery', fail: 'degraded', fn: function() {
+      // [Phase 6 — NEW: supersedes the old inline checkpoint.load() logic] Full §10
+      // Recovery algorithm — pauses goals active-at-crash and emits the audited
+      // 'lifecycle.recovered' event (see immune/monitor.js's recoverFromCrash()).
+      //
+      // D-57 fix: this step used to run BEFORE 'leash', so buildRunner didn't exist
+      // yet — recoverFromCrash() had no way to learn which build jobs got flipped to
+      // 'failed' on this restart, even though buildRunner.init() already computes
+      // exactly that list (build-runner.js's own recoveredJobs, populated at
+      // construction). Moved after 'leash' (which constructs buildRunner) so recovery
+      // can actually pass it through; recoverFromCrash() now awaits
+      // buildRunner.init() and folds recoveredJobs.length into both the
+      // 'lifecycle.recovered' payload and its own return value for observability.
+      return recoverFromCrash({ bus: bus, config: config, memory: memory, goals: goals, buildRunner: buildRunner }).then(function(result) {
+        logger.info('recovery.checked', result);
+      });
     }},
 
     { name: 'server', fail: 'fast', fn: function() {

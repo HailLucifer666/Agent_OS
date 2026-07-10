@@ -60,12 +60,28 @@ function createMonitor({ bus, config, memory }) {
   return { start: start, stop: stop, checkMemoryGrowth: checkMemoryGrowth };
 }
 
-// Recovery (Post-Crash) — §10. Runs once, at boot, as the 'recovery' DEGRADED step.
-async function recoverFromCrash({ bus, config, memory, goals }) {
+// Recovery (Post-Crash) — §10. Runs once, at boot, as the 'recovery' DEGRADED step
+// (after 'leash', per the D-57 fix — see main.js's 'recovery' step comment).
+async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
   const checkpoint = memory.checkpoints.load();
 
   // 1. WorkingMemory is already rebuilt (from the checkpoint if present, else the
-  //    episodic tail) by memory.working.init() before this runs — nothing further here.
+  //    episodic tail — see D-23 fix in memory/working.js) by memory.working.init()
+  //    before this runs — nothing further here.
+
+  // 1b. D-57 fix: surface which build jobs got flipped to 'failed' by this restart.
+  // build-runner.js computes recoveredJobs synchronously at construction (Phase 7);
+  // init() just returns what it already knows. Best-effort — a missing/broken
+  // buildRunner degrades to an empty list, never blocks recovery.
+  let recoveredJobs = [];
+  if (buildRunner && typeof buildRunner.init === 'function') {
+    try {
+      const buildResult = await buildRunner.init();
+      recoveredJobs = (buildResult && buildResult.recoveredJobs) || [];
+    } catch (_) {
+      // best-effort — a broken buildRunner must never block goal recovery below
+    }
+  }
 
   // 2. Active-at-crash goals -> paused 'crash-recovery'.
   let pausedCount = 0;
@@ -85,12 +101,19 @@ async function recoverFromCrash({ bus, config, memory, goals }) {
   bus.emit('lifecycle.recovered', {
     hadCheckpoint: Boolean(checkpoint),
     isCrashRecovery: checkpoint ? checkpoint.isCrashRecovery : false,
-    pausedGoals: pausedCount
+    pausedGoals: pausedCount,
+    recoveredJobs: recoveredJobs.length
   });
 
   // 5. No re-dispatch of any interrupted action — resumption happens purely through
-  //    goals/cortex re-arbitration on the next tick.
-  return { hadCheckpoint: Boolean(checkpoint), pausedGoals: pausedCount };
+  //    goals/cortex re-arbitration on the next tick. A goal that owned one of
+  //    recoveredJobs is still covered by step 2 above if it was active-at-crash;
+  //    a full job->goal cross-reference (a persisted job-goal-map) does not exist
+  //    in shipped production code today — agent-actions.js's buildRunner.enqueue()
+  //    calls carry no goalId — so recoveredJobs is surfaced for observability/audit
+  //    here, not yet consumed for a per-job targeted pause. Tracked as a distinct,
+  //    separate backlog item from the structural boot-order gap this fix closes.
+  return { hadCheckpoint: Boolean(checkpoint), pausedGoals: pausedCount, recoveredJobs: recoveredJobs.length };
 }
 
 module.exports = { createMonitor: createMonitor, recoverFromCrash: recoverFromCrash, MEMORY_GROWTH_BYTES: MEMORY_GROWTH_BYTES };
