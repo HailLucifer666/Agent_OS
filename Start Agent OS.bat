@@ -1,6 +1,13 @@
 @echo off
 setlocal
-cd /d "%~dp0app"
+cd /d "%~dp0mythos"
+
+if not exist ".env" (
+    if exist ".env.example" (
+        echo Creating .env from .env.example ...
+        copy /y ".env.example" ".env" >nul
+    )
+)
 
 if not exist "node_modules" (
     echo Installing dependencies...
@@ -12,6 +19,6 @@ if not exist "node_modules" (
     )
 )
 
-start "" http://localhost:4477
-node server.js
+start "" http://127.0.0.1:4478
+node src/main.js
 pause
