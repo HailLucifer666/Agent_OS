@@ -19,8 +19,14 @@ describe('brain/lanes.default', function() {
     assert.equal(Object.keys(lanes.BRAIN_TABLES).length, 6);
   });
 
-  it('embed lane has empty prefs', function() {
-    assert.deepEqual(lanes.PREF_EMBED, []);
+  it('embed lane documents the real embeddings chain (ollama then mistral)', function() {
+    // brain.think({lane:'embed'}) still hard-short-circuits to {offline:true}
+    // (brain/index.js) — actual embeddings run through providers/embeddings.js,
+    // never through chain.js/registry.js. This table is documentation only.
+    assert.deepEqual(lanes.PREF_EMBED, [
+      { provider: 'ollama', model: 'nomic-embed-text' },
+      { provider: 'mistral', model: 'mistral-embed' },
+    ]);
   });
 
   it('voice lane has groq first', function() {

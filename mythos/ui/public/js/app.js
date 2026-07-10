@@ -77,3 +77,54 @@ const armOnce = () => {
   ensureVoice();
 };
 document.addEventListener('pointerdown', armOnce);
+
+// Live build-job progress ('job' WS broadcasts from build-runner): auto-open
+// the pipeline panel when a build starts, narrate stage transitions in the
+// voice caption, announce done/failed honestly.
+// Mission (agent team) progress: kanban panel shows the cards moving
+// backlog -> building -> review; caption narrates the team.
+let missionPanelShown = false;
+subscribe(['mission'], (msg) => {
+  const m = msg.payload || {};
+  if (m.status === 'planning' || m.status === 'building') {
+    if (!missionPanelShown) {
+      missionPanelShown = true;
+      overlays.openPanel('kanban');
+    }
+    const a = m.agents || {};
+    mic.setCaption(
+      m.status === 'planning'
+        ? '🤖 planning mission — splitting into tasks…'
+        : `🤖 ${a.total} agents building — ${a.done}/${a.total} done`,
+      'info'
+    );
+  } else if (m.status === 'synthesizing') {
+    mic.setCaption('🤖 all agents done — writing summary…', 'info');
+  } else if (m.status === 'done') {
+    missionPanelShown = false;
+    const n = (m.artifacts || []).length;
+    mic.setCaption(`✔ mission complete — ${n} deliverable${n === 1 ? '' : 's'} built. Say "open it" to view.`, 'reply');
+  } else if (m.status === 'failed') {
+    missionPanelShown = false;
+    mic.setCaption('✘ mission failed: ' + (m.error || 'unknown error'), 'error');
+  }
+});
+
+let buildPanelShown = false;
+subscribe(['job'], (msg) => {
+  if (missionPanelShown) return; // mission handler above narrates its own jobs
+  const j = msg.payload || {};
+  if (j.status === 'queued' || j.status === 'running') {
+    if (!buildPanelShown) {
+      buildPanelShown = true;
+      overlays.openPanel('pipeline');
+    }
+    mic.setCaption('⚙ building — ' + (j.stage || j.status) + '…', 'info');
+  } else if (j.status === 'done') {
+    buildPanelShown = false;
+    mic.setCaption('✔ build finished — say "open it" to view', 'reply');
+  } else if (j.status === 'failed') {
+    buildPanelShown = false;
+    mic.setCaption('✘ build failed: ' + (j.error || 'unknown error'), 'error');
+  }
+});

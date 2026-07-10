@@ -13,6 +13,7 @@ const TIER_TABLE = {
   'pipeline_status':       0,
   'kanban_status':         0,
   'monitor_snapshot':      0,
+  'mission_status':        0,
   'list_folder':           0,
   'read_file':             0,
   'list_windows':          0,
@@ -48,6 +49,7 @@ const TIER_TABLE = {
   'kanban_assemble':       3,
   'kanban_build_card':     3,
   'start_project':         3,
+  'run_mission':           3,
   'compose_email':         3,
   'close_window':          3,
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable

@@ -13,11 +13,13 @@ const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const edgeTts = require('../providers/edge-tts');
 const { truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
+const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
+const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop'
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
-//                  'health', 'audit', 'confirm-request', 'brain-spend', 'log'
+//                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
 
 function isLoopback(req) {
   const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
@@ -38,6 +40,7 @@ function createServer(deps) {
   const goals = deps.goals;                       // cognitive GoalSystem — .debitBudget
   const probes = deps.probes;                     // P6 immune/probes.js — .getStatus()
   const brain = deps.brain;                       // P2 brain — .think({lane, messages, ...})
+  const buildRunner = deps.buildRunner;           // P7 build-runner — .onJobUpdate (job WS relay)
 
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
@@ -296,9 +299,53 @@ function createServer(deps) {
     return result;
   }
 
+  // Voice tool-calling agent: leash-gated actions dispatched through the same
+  // dispatchAction path as confirm-accepts — one execution surface, no shadow.
+  // createVoiceAgent() fail-fasts on a missing brain/leash/bus (real deps
+  // always have these — see main.js); caught here so a partial dep set (unit
+  // tests exercising unrelated server surface, e.g. server.test.js's baseDeps)
+  // degrades to voice-offline instead of throwing mid-construction, after
+  // app.listen() has already opened a socket nothing would ever close.
+  let voiceAgent = null;
+  try {
+    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus });
+  } catch (err) {
+    logger.warn('voice-agent.unavailable', { error: err.message });
+  }
+
+  // Live build-job progress relay ('job' OUT type). build-runner's onJobUpdate
+  // fires on every status/stage transition (queued -> generating ->
+  // writing-artifact -> done|failed); the perception pipeline stays untouched.
+  if (buildRunner && typeof buildRunner.onJobUpdate === 'function') {
+    buildRunner.onJobUpdate((job) => {
+      broadcastAll({ type: 'job', payload: { id: job.id, kind: job.kind, status: job.status, stage: job.stage, error: job.error, artifact: job.artifact } });
+    });
+  }
+
   wss.on('connection', (ws) => {
     const connectionId = crypto.randomUUID();
     const subscriptions = new Set(); // which OUT types this client wants relayed
+
+    // Per-connection conversation memory (CA of NOVA app/lib/voice/intake.js,
+    // folded into the connection closure): last 12 turns, 2000 chars each,
+    // 10-minute idle TTL; wiped when start_project succeeds (the intake
+    // conversation must not bleed into post-build turns) and on WS close.
+    const HISTORY_MAX_TURNS = 12;
+    const HISTORY_IDLE_TTL_MS = Number(process.env.VOICE_INTAKE_IDLE_MS) || 10 * 60 * 1000;
+    let history = [];
+    let historyAt = 0;
+
+    function historyGet() {
+      if (Date.now() - historyAt > HISTORY_IDLE_TTL_MS) history = [];
+      return history;
+    }
+    function historyAppend(role, content) {
+      if (!content) return;
+      historyGet(); // apply TTL first
+      history.push({ role, content: String(content).slice(0, 2000) });
+      history = history.slice(-HISTORY_MAX_TURNS);
+      historyAt = Date.now();
+    }
 
     function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
 
@@ -327,22 +374,32 @@ function createServer(deps) {
     }
 
     async function handleUtterance(msg) {
-      if (!brain || typeof brain.think !== 'function') {
+      if (!voiceAgent) {
         send({ type: 'done', reqId: msg.reqId, say: 'Brain is offline.', offline: true });
         return;
       }
       try {
-        const result = await brain.think({
-          lane: 'voice',
-          messages: [{ role: 'user', content: String(msg.text || '') }],
-          source: 'ws:utterance',
+        const text = String(msg.text || '');
+        const result = await voiceAgent.handleUtterance({
+          text,
+          ctx: { history: historyGet(), connectionId },
         });
-        if (result.offline || !result.content) {
-          send({ type: 'done', reqId: msg.reqId, say: 'All providers are offline right now.', offline: true });
-        } else {
-          const audioB64 = await synthesizeReply(result.content);
-          send({ type: 'done', reqId: msg.reqId, say: result.content, audioB64 });
+        if (result.offline) {
+          send({ type: 'done', reqId: msg.reqId, say: result.say || 'All providers are offline right now.', offline: true });
+          return;
         }
+        const say = result.say || 'Done.';
+        historyAppend('user', text);
+        historyAppend('assistant', say);
+        if ((result.actions || []).some((a) => a && a.clearIntake)) { history = []; }
+
+        const speak = sanitizeSpoken(say);
+        const audioB64 = await synthesizeReply(speak);
+        send({
+          type: 'done', reqId: msg.reqId, say, speak, audioB64,
+          actions: (result.actions || []).map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
+          confirmPending: result.confirmPending ? { confirmId: result.confirmPending.confirmId, summary: result.confirmPending.summary } : null,
+        });
       } catch (err) {
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
       }
@@ -460,6 +517,11 @@ function createServer(deps) {
   });
 
   // confirm-request — exact string, cortex act() (Ambiguity #2: P9's cortex diff embeds confirmId).
+  // mission — orchestrator's plan/build/synthesize transitions (agent team)
+  bus.subscribe('mission.update', (e) => {
+    broadcastAll({ type: 'mission', payload: e.payload });
+  });
+
   bus.subscribe('confirm-request', (e) => {
     broadcastAll({ type: 'confirm-request', payload: { id: e.payload.confirmId, tool: e.payload.tool, summary: e.payload.summary, tier: e.payload.tier } });
   });

@@ -54,8 +54,13 @@ const PREF_VISION = [
   { provider: 'ollama',  model: 'qwen2.5vl:7b' },
 ];
 
-// embed lane — placeholder, always returns empty chain
-const PREF_EMBED = [];
+// embed lane — semantic-memory embeddings. NOTE: served by providers/
+// embeddings.js (a different API shape than chat), not chain.js; these
+// entries document the real chain order used there.
+const PREF_EMBED = [
+  { provider: 'ollama',  model: 'nomic-embed-text' },
+  { provider: 'mistral', model: 'mistral-embed' },
+];
 
 const BRAIN_TABLES = {
   voice:   { prefs: PREF_VOICE,  env: 'CHAIN_VOICE' },

@@ -43,6 +43,9 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   let disposed = false;
   let localSTT = false;      // resolved by ensureLocalSTT() on first start()
   let sttResolved = false;   // probe/install runs once per page, not per arm
+  let currentAudio = null;   // in-flight TTS playback (barge-in target)
+  let speakingText = '';     // spoken reply text — echo-guard reference
+  let speakSession = 0;      // invalidates stale playback callbacks
 
   function setState(s) { if (onState) onState(s); }
   function caption(text, kind) { if (onCaption) onCaption(text, kind); }
@@ -126,10 +129,32 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     });
   }
 
-  // Show the brain's reply and speak it aloud. The recognizer stays paused
-  // (processing flag) until playback/synthesis ends so MYTHOS never hears
-  // itself. Preferred voice: server-side edge-tts (Microsoft Neural) shipped
-  // as base64 mp3 in msg.audioB64; browser speechSynthesis is the fallback.
+  // Show the brain's reply and speak it aloud. BARGE-IN: the recognizer stays
+  // LIVE during playback (processing drops before 'speaking'), so the user can
+  // talk over MYTHOS — dispatch() stops playback and treats the interruption
+  // as a new command. isEcho() drops transcripts that are mostly MYTHOS's own
+  // words leaking from the speakers (hardware echo cancellation catches most
+  // of it; this is the software backstop). Preferred voice: server edge-tts
+  // mp3 in msg.audioB64; browser speechSynthesis (msg.speak, sanitized) is
+  // the fallback.
+  function isEcho(text) {
+    if (!speakingText) return false;
+    const spoken = new Set(speakingText.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean));
+    const words = text.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean);
+    if (!words.length) return true;
+    let hits = 0;
+    for (const w of words) if (spoken.has(w)) hits++;
+    return hits / words.length >= 0.6;
+  }
+
+  // Stops any in-flight playback and invalidates its pending finish callbacks.
+  function stopSpeaking() {
+    speakSession++;
+    if (currentAudio) { try { currentAudio.pause(); } catch { /* ok */ } currentAudio = null; }
+    if (window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch { /* ok */ } }
+    speakingText = '';
+  }
+
   function deliverReply(msg) {
     const say = msg && msg.say ? String(msg.say) : '';
     if (!say) { finishTurn(); return; }
@@ -137,30 +162,47 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     caption(say, kind);
     if (kind !== 'reply' || disposed) { finishTurn(); return; }
 
+    const spoken = msg.speak || say;
+    const session = ++speakSession;
+    const finish = () => {
+      if (speakSession !== session) return; // superseded (barge-in) — new turn owns state
+      stopSpeaking();
+      finishTurn();
+    };
+
+    speakingText = spoken;
+    processing = false;      // recognizer live during playback — barge-in
+    setState('speaking');
+    startSession();
+
     if (msg.audioB64) {
-      setState('speaking');
       const audio = new Audio('data:audio/mpeg;base64,' + msg.audioB64);
-      audio.onended = () => finishTurn();
-      audio.onerror = () => speakFallback(say);
-      audio.play().catch(() => speakFallback(say));
+      currentAudio = audio;
+      audio.onended = finish;
+      audio.onerror = () => { if (speakSession === session) speakFallback(spoken, session); };
+      audio.play().catch(() => { if (speakSession === session) speakFallback(spoken, session); });
       return;
     }
-    speakFallback(say);
+    speakFallback(spoken, session);
   }
 
-  function speakFallback(say) {
+  function speakFallback(spoken, session) {
+    const finish = () => {
+      if (speakSession !== session) return;
+      stopSpeaking();
+      finishTurn();
+    };
     if (window.speechSynthesis && !disposed) {
-      setState('speaking');
-      const u = new SpeechSynthesisUtterance(say);
-      u.onend = () => finishTurn();
-      u.onerror = () => finishTurn();
+      const u = new SpeechSynthesisUtterance(spoken);
+      u.onend = finish;
+      u.onerror = finish;
       try {
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(u);
         return;
       } catch { /* synthesis broken — fall through to silent finish */ }
     }
-    finishTurn();
+    finish();
   }
 
   function finishTurn() {
@@ -192,6 +234,10 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
       const match = text.match(WAKE_PATTERN);
       const command = (match ? text.slice(match[0].length) : text).trim();
       if (!command) return false;
+      if (speakingText) {
+        if (isEcho(command)) return false; // MYTHOS hearing its own reply — drop
+        stopSpeaking();                    // barge-in: user talked over playback
+      }
       restartCount = 0; // a real command proves the setup works — reset the cap
       caption('» ' + command, 'heard');
       handleCommand(command);
@@ -273,7 +319,7 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
   function stop() {
     active = false;
     processing = false;
-    if (window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch { /* ok */ } }
+    stopSpeaking();
     if (recog) { try { recog.abort(); } catch { /* ok */ } }
     recog = null;
     setState('idle');

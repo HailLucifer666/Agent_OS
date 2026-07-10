@@ -11,6 +11,8 @@ const { createIdentityStore } = require('./identity');
 const { createWorkingMemory } = require('./working');
 const { createAuditWriter } = require('./audit-writer');
 const { createCheckpointStore } = require('./checkpoints');
+const { createVectorIndex, rrfMerge } = require('./vector-index');
+const embeddings = require('../../../providers/embeddings');
 
 function createMemory({ config, bus, logger, brain }) {
   const vaultRoot = () => config.MYTHOS_VAULT_ROOT || './vault';
@@ -23,6 +25,45 @@ function createMemory({ config, bus, logger, brain }) {
   const audit = createAuditWriter({ fs, config, bus, logger });
   const checkpoints = createCheckpointStore({ fs, config, bus, logger });
   const working = createWorkingMemory({ fs, config, bus, logger, episodic });
+
+  // ---- semantic recall layer (vector indexes over episodic + semantic) ----
+  // Existing sync recall() on each store is untouched (tests + callers keep
+  // their shape); embedding happens fire-and-forget on write, and the async
+  // recallHybrid() facade below fuses keyword + vector rankings. Embeddings
+  // unavailable -> hybrid degrades to exactly the keyword behavior.
+  const vecIndexes = {
+    episodic: createVectorIndex({ fs, store: 'episodic' }),
+    semantic: createVectorIndex({ fs, store: 'semantic' }),
+  };
+
+  function indexAsync(store, ref, text) {
+    if (!ref || !text) return;
+    embeddings.embed(text)
+      .then((e) => { if (e) vecIndexes[store].add(ref, e); })
+      .catch(() => { /* embedding is a cache-fill — never surfaces */ });
+  }
+
+  const baseEpisodicWrite = episodic.write;
+  episodic.write = function(record) {
+    const res = baseEpisodicWrite(record);
+    Promise.resolve(res)
+      .then((r) => { if (r && r.ref) indexAsync('episodic', r.ref, record && record.summary); })
+      .catch(() => {});
+    return res;
+  };
+
+  const baseSemanticWrite = semantic.write;
+  semantic.write = function(topic, facts, meta) {
+    const res = baseSemanticWrite(topic, facts, meta);
+    Promise.resolve(res)
+      .then((r) => {
+        if (r && r.ref) indexAsync('semantic', r.ref, Array.isArray(facts) ? facts.join('; ') : String(facts || ''));
+      })
+      .catch(() => {});
+    return res;
+  };
+
+  const VECTOR_MIN_SCORE = 0.5;
 
   return {
     fs,
@@ -48,6 +89,65 @@ function createMemory({ config, bus, logger, brain }) {
       await audit.init();
       await checkpoints.init();
       await working.init();
+      fs.ensureDir(fs.vaultPath('Index'));
+      vecIndexes.episodic.init();
+      vecIndexes.semantic.init();
+    },
+
+    // Hybrid recall: keyword scorer (both stores, unchanged) fused with
+    // vector-similarity hits via reciprocal-rank fusion. Async because the
+    // query embedding is a network/local-model call; embeddings down ->
+    // pure keyword results, same shape.
+    async recallHybrid(query, opts) {
+      opts = opts || {};
+      const limit = opts.limit || 10;
+      const keyword = (episodic.recall(query, opts) || []).concat(semantic.recall(query, opts) || []);
+      const vector = [];
+      const q = await embeddings.embed(query);
+      if (q) {
+        for (const storeName of ['episodic', 'semantic']) {
+          const hits = vecIndexes[storeName].search(q, limit);
+          for (const h of hits) {
+            if (h.score < VECTOR_MIN_SCORE) continue;
+            const store = storeName === 'episodic' ? episodic : semantic;
+            let rec = null;
+            try { rec = store.get(h.ref); } catch { /* pruned/archived ref */ }
+            if (!rec) continue;
+            const record = rec.record || rec;
+            vector.push({
+              ref: h.ref,
+              score: h.score,
+              record,
+              snippet: String(record.summary || rec.snippet || '').slice(0, 200),
+              store: storeName,
+            });
+          }
+        }
+      }
+      return rrfMerge([keyword, vector]).slice(0, limit);
+    },
+
+    // One-time backfill: embed recent episodic entries into the index.
+    // Sequential on purpose (local model, ~ms each); capped to the newest 500.
+    async reindex(opts) {
+      opts = opts || {};
+      const windowDays = opts.windowDays || 30;
+      const sinceDate = new Date(Date.now() - windowDays * 24 * 3600000);
+      const since = sinceDate.getFullYear() + '-' +
+        String(sinceDate.getMonth() + 1).padStart(2, '0') + '-' +
+        String(sinceDate.getDate()).padStart(2, '0');
+      const entries = (fs.readDirLines('Episodic', { since, until: fs.todayKey() }) || [])
+        .filter((e) => e && e.id && e.summary)
+        .slice(-500);
+      let indexed = 0;
+      for (const entry of entries) {
+        const e = await embeddings.embed(entry.summary);
+        if (!e) break; // embeddings down — stop honestly, report what we did
+        vecIndexes.episodic.add(entry.id, e);
+        indexed++;
+      }
+      vecIndexes.episodic.flush();
+      return { scanned: entries.length, indexed };
     },
 
     async consolidate(opts) {

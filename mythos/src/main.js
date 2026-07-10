@@ -34,6 +34,8 @@ const { registerFromPc } = require('./core/effectors/from-pc');
 const { registerFromBrowser } = require('./core/effectors/from-browser');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
 const { registerFromProject } = require('./core/effectors/from-project');
+const { registerFromMission } = require('./core/effectors/from-mission');
+const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
@@ -248,6 +250,18 @@ async function main() {
         probes: immune.probes, abtop: abtop, config: config
       });
       registerFromProject(hub, { pipeline: pipelineEffector, agentActions: agentActionsEffector });
+
+      // Mission orchestrator: plan -> parallel builder agents -> synthesize.
+      // Constructed here (needs buildRunner/kanban/agentActions/brain, all
+      // just built); its bus 'mission.update' events are relayed by P9's
+      // server as the 'mission' WS broadcast.
+      var orchestrator = createOrchestrator({
+        buildRunner: buildRunner, kanban: kanbanEffector, agentActions: agentActionsEffector,
+        brain: brain, bus: bus, fs: memory.fs
+      });
+      orchestrator.init();
+      registerFromMission(hub, { orchestrator: orchestrator });
+
       hub.register(createVoiceEffector({ config: config }));
 
       effectors = hub;
@@ -276,7 +290,7 @@ async function main() {
         kanbanEffector: kanbanEffector,
         pipelineEffector: pipelineEffector,
         effectors: effectors, leash: leash, goals: goals, probes: immune.probes,
-        brain: brain,
+        brain: brain, buildRunner: buildRunner,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
