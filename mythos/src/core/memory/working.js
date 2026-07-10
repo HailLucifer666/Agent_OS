@@ -1,6 +1,6 @@
 'use strict';
 
-function createWorkingMemory({ fs, config, bus, logger, episodic }) {
+function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints }) {
   let tick = 0;
   let lastModel = null;
   let perceptionQueue = [];
@@ -86,7 +86,21 @@ function createWorkingMemory({ fs, config, bus, logger, episodic }) {
     };
   }
 
+  // D-23 fix: rebuild from the checkpoint when one exists — it is the more precise,
+  // less lossy source (episodic tail is a best-effort proxy for what a checkpoint
+  // already recorded exactly: tick + activeGoalId). Only fall back to the episodic
+  // tail scan when no checkpoint is present at all (first boot, or checkpoints
+  // cleared) — matches immune/monitor.js's recoverFromCrash() comment #1, which
+  // already assumed this behavior existed.
   async function init() {
+    if (checkpoints && typeof checkpoints.load === 'function') {
+      const checkpoint = checkpoints.load();
+      if (checkpoint) {
+        tick = checkpoint.tick || 0;
+        activeGoalId = checkpoint.activeGoalId || null;
+        return;
+      }
+    }
     await rebuildFromEpisodic();
   }
 

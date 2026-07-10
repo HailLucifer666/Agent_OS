@@ -24,7 +24,7 @@ function createMemory({ config, bus, logger, brain }) {
   const identity = createIdentityStore({ fs, config, bus, logger });
   const audit = createAuditWriter({ fs, config, bus, logger });
   const checkpoints = createCheckpointStore({ fs, config, bus, logger });
-  const working = createWorkingMemory({ fs, config, bus, logger, episodic });
+  const working = createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints });
 
   // ---- semantic recall layer (vector indexes over episodic + semantic) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
