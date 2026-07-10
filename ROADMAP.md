@@ -112,7 +112,7 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P7 Sensors & Effectors | ✅ Done, ⚠️ one environment-blocked pre-existing test | 272 (270 pass / 1 skip / 1 fail) | `532106d` | 0 / 0 / 1 |
 | P8 Identity | ✅ Done | 293 (291 pass / 1 skip / 1 fail) | `6898d92` | 0 / 0 / 0 |
 | P9 UI v2 (server + JARVIS HUD; cutover deferred) | ✅ Done | 316 (314 pass / 1 skip / 1 fail) | `b776b73` | 0 / 0 / 0 |
-| P10 Chaos Drills | ✅ Done | 327 (325 pass / 1 skip / 1 fail) | _(backfill)_ | 1 / 1 / 0 (P10's own test files introduce 0 drift; found + documented, not fixed: D-56 CRITICAL pre-existing since P2, D-57 MAJOR pre-existing) |
+| P10 Chaos Drills | ✅ Done | 327 (325 pass / 1 skip / 1 fail) | `27d8842` | 1 / 1 / 0 (P10's own test files introduce 0 drift; found + documented, not fixed: D-56 CRITICAL pre-existing since P2, D-57 MAJOR pre-existing) |
 
 **Current**: 327 tests (316 pre-existing + 11 new in P10), 325 passing / 1 skipped / 1
 failing. 64 src files (+`core/identity/index.js`) + `server/{index,rate-limit}.js` +
@@ -1150,4 +1150,4 @@ Risk Register section below for the authoritative per-risk rows):
 | `532106d` | P7 | Sensors & Effectors: effector hub/adapter/build-runner/goals-bridge/voice/45 NOVA tool catalogs (CA) + file/ws/job sensors + main.js wiring (272 tests, 270 passing, 1 pre-existing env-blocked) |
 | `6898d92` | P8 | Identity: self.md store (D-15) + boundary/persona/learn module + leash/brain wiring (293 tests, 291 passing, 1 pre-existing env-blocked) |
 | `b776b73` | P9 | UI v2: Express + WS v2 server (spec-verbatim) + JARVIS radial neural HUD (user-directed design) + logger/lifecycle/cortex/schema/hub diffs; cutover deferred pending MAJOR deviations (316 tests, 314 passing, 1 pre-existing env-blocked) |
-| _(backfill)_ | P10 | Chaos Drills: 6 failure-injection test files (provider-killed, cortex-stalled, disk-full, memory-corrupt, concurrent-tick, restart-mid-action) against real P1/P2/P3/P4/P6/P7 modules; found and documented 2 new gaps (D-56 CRITICAL brain/index.js lane-selection bug, D-57 MAJOR main.js recovery/build-runner boot-order gap), neither fixed here (test-files-only phase) (327 tests, 325 passing, 1 pre-existing env-blocked) |
+| `27d8842` | P10 | Chaos Drills: 6 failure-injection test files (provider-killed, cortex-stalled, disk-full, memory-corrupt, concurrent-tick, restart-mid-action) against real P1/P2/P3/P4/P6/P7 modules; found and documented 2 new gaps (D-56 CRITICAL brain/index.js lane-selection bug, D-57 MAJOR main.js recovery/build-runner boot-order gap), neither fixed here (test-files-only phase) (327 tests, 325 passing, 1 pre-existing env-blocked) |
