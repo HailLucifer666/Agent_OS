@@ -37,6 +37,7 @@ const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
 const { createJobSensor } = require('./core/sensors/job');
+const { createServer } = require('../server');
 const fs = require('fs');
 
 async function main() {
@@ -216,6 +217,12 @@ async function main() {
       var goalsBridge = createGoalsMdBridge({ fs: memory.fs, goalSystem: goals, bus: bus });
       goalsBridge.sync();  // reconcile Goals.md -> GoalSystem once at boot
       hub.registerNamed('goals-effector', goalsBridge);
+      // [Phase 9 — NEW] kanban/pipeline join goals-effector in the hub's
+      // namedServices map (hub.js's own comment names all three as its purpose)
+      // so the 'server' boot step below reaches them via effectors.get(name) —
+      // named services, not tool effectors: no breaker, not counted in the 45.
+      hub.registerNamed('kanban-effector', kanbanEffector);
+      hub.registerNamed('pipeline-effector', pipelineEffector);
 
       // NOTE: abtop.start() (the optional NOVA agent-CLI-session poller behind
       // monitor_snapshot/kill_session) is deliberately NOT started here. In NOVA it was
@@ -243,6 +250,31 @@ async function main() {
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors });
       logger.info('leash.ready', {});
+    }},
+
+    { name: 'server', fail: 'fast', fn: function() {
+      // [Phase 9 — NEW] Express + WS v2 transport, positioned after 'effectors'/
+      // 'leash' and before the cortex tick starts (§13 literal order). fail-fast:
+      // an entity nobody can observe or confirm-gate is not a smaller entity.
+      // Anti-drift #5: REST routes are gated only by presence at boot — a missing
+      // P7 effector throws here at construction, never silently serves 404s.
+      var goalsEffector = effectors.get('goals-effector');
+      var kanbanEffector = effectors.get('kanban-effector');
+      var pipelineEffector = effectors.get('pipeline-effector');
+      if (!goalsEffector) throw new Error("server boot: effectors.get('goals-effector') missing — P7 must register the Goals.md bridge before P9 can serve /api/goals");
+      if (!kanbanEffector) throw new Error("server boot: effectors.get('kanban-effector') missing — P7 must register it before P9 can serve /api/kanban");
+      if (!pipelineEffector) throw new Error("server boot: effectors.get('pipeline-effector') missing — P7 must register it before P9 can serve /api/pipeline");
+
+      var serverHandle = createServer({
+        bus: bus, config: config, logger: logger, memory: memory,
+        goalsEffector: goalsEffector,
+        kanbanEffector: kanbanEffector,
+        pipelineEffector: pipelineEffector,
+        effectors: effectors, leash: leash, goals: goals, probes: immune.probes,
+        brain: brain,
+      });
+      lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
+      logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
 
     { name: 'cortex', fn: function() {

@@ -101,7 +101,8 @@ function fakeConfig(overrides) {
     MAX_ACTIVE_GOALS: 5,
     GOAL_TOKEN_BUDGET: 20000,
     GOAL_ACTION_BUDGET: 25,
-    MYTHOS_IDLE_SALIENCE: 0.3
+    MYTHOS_IDLE_SALIENCE: 0.3,
+    ACTION_TIMEOUT_MS: 30000
   }, overrides);
 }
 

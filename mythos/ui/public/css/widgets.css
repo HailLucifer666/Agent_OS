@@ -1,0 +1,75 @@
+/* widgets.css — floating live-data widget cards. Token vars only. */
+
+.widget-card {
+  position: absolute;
+  min-width: 170px;
+  max-width: 260px;
+  padding: 0 0 12px;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.widget-card.dragging {
+  opacity: 0.85;
+  box-shadow: var(--accent-glow);
+}
+
+.widget-title {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--text-faint);
+  padding: 10px 14px 6px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.widget-card.dragging .widget-title { cursor: grabbing; }
+
+.widget-body { padding: 0 14px; }
+
+.widget-value {
+  font-size: 22px;
+  color: var(--text);
+}
+
+.widget-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.widget-spark {
+  display: block;
+  margin-top: 8px;
+  width: 100%;
+  height: 28px;
+}
+
+.widget-feed-row {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-lane-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 2px 0;
+  color: var(--text);
+}
+
+.widget-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.widget-chip {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+}
+.widget-chip.chip-open { color: var(--status-warn); border-color: var(--status-warn); }
+.widget-chip.chip-half-open { color: var(--status-degraded); border-color: var(--status-degraded); }
+.widget-chip.chip-closed { color: var(--status-ok); border-color: var(--status-ok); }

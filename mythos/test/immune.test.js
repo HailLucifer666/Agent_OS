@@ -76,7 +76,8 @@ function fakeConfig(overrides) {
     MYTHOS_TICK_MS: 60000,
     MAX_ACTIVE_GOALS: 5,
     STALL_MS: 5000,
-    WATCHDOG_MS: 2000
+    WATCHDOG_MS: 2000,
+    ACTION_TIMEOUT_MS: 30000
   }, overrides);
 }
 

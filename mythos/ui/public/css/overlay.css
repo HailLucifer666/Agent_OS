@@ -1,0 +1,95 @@
+/* overlay.css — translucent glass panels floating over the HUD. Token vars only. */
+
+.hud-panel-wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.hud-panel-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 8, 15, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.hud-panel {
+  position: relative;
+  width: min(860px, 92vw);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--accent-glow), 0 24px 80px rgba(0, 0, 0, 0.6);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.hud-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.hud-panel-title {
+  color: var(--gold);
+  font-size: 13px;
+  letter-spacing: 0.2em;
+}
+
+.hud-panel-close {
+  color: var(--text-faint);
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.hud-panel-close:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.hud-panel-body {
+  padding: 20px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+/* health view rows (new P9 view — no NOVA css to CV) */
+.health-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+.health-row .status-ok { color: var(--status-ok); }
+.health-row .status-degraded { color: var(--status-degraded); }
+.health-row .status-warn { color: var(--status-warn); }
+.health-providers { margin-top: 18px; }
+.health-anomalies { margin-top: 18px; }
+.health-anomaly-row {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-left: 2px solid var(--status-degraded);
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+/* audit view rows (new P9 view) */
+.audit-row {
+  display: flex;
+  gap: 14px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.audit-row .mono:first-child { color: var(--gold); min-width: 28px; }

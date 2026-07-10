@@ -1,0 +1,239 @@
+/* tokens.css — design system tokens for Agentic OS. */
+
+@font-face {
+  font-family: 'Outfit';
+  src: url('../fonts/Outfit-Variable.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Serif 4 Light';
+  src: url('../fonts/SourceSerif4-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../fonts/JetBrainsMono-Variable.woff2') format('woff2');
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Caveat';
+  src: url('../fonts/Caveat-Variable.woff2') format('woff2');
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* fonts */
+  --font-sans: 'Outfit', -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Source Serif 4 Light', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+  --font-script: 'Caveat', cursive;
+
+  /* base palette — Jarvis: near-black navy, single cyan accent */
+  --bg: #05080f;
+  --bg-raised: #0a101c;
+  --bg-raised-2: #101828;
+  --bg-hover: #162034;
+  --border: #1a2540;
+  --border-soft: rgba(120, 200, 255, 0.1);
+
+  --text: #d7e3f4;
+  --text-dim: #8ba3c4;
+  --text-faint: #5f7391;
+  --text-mono: #a0b8d4;
+
+  --gold: #4fd8ff;
+  --gold-soft: rgba(79, 216, 255, 0.15);
+
+  /* status colors */
+  --status-ok: #43e5a0;
+  --status-degraded: #eab308;
+  --status-offline: #5f7391;
+  --status-warn: #ff5f66;
+
+  /* per-surface accents — kept for existing views, values retinted to cyan family */
+  --accent-claude: #5ba8e0;
+  --accent-hermes: #4fd8ff;
+  --accent-zcode: #4fd8ff;
+  --accent-nim: #76b900;
+  --accent-groq: #f55036;
+  --accent-openrouter-free: #8b5cf6;
+  --accent-cerebras: #e45550;
+  --accent-mistral: #ff7000;
+  --accent-cloudflare: #f38020;
+  --accent-tts: #4fd8ff;
+  --accent-mastermind: #4fd8ff;
+  --accent-goals-purple: #a78bfa;
+  --accent-goals-yellow: #eab308;
+  --accent-kanban: #2dd4bf;
+  --accent-pipeline: #34d399;
+  --accent-video: #e05252;
+  --accent-music: #a855f7;
+  --accent-game: #39ff8a;
+  --accent-thumbnail: #e0525a;
+  --accent-radar: #4fd8ff;
+  --accent-monitor: #4fd8ff;
+
+  /* layout */
+  --sidebar-w: 56px;
+  --header-pad-x: 40px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  /* motion */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur-med: 320ms;
+  --dur-slow: 900ms;
+
+  /* new Jarvis tokens */
+  --accent: #4fd8ff;
+  --accent-dim: rgba(79, 216, 255, 0.3);
+  --accent-glow: 0 0 12px rgba(79, 216, 255, 0.3);
+  --danger: #ff5f66;
+  --ok: #43e5a0;
+  --hairline: rgba(120, 200, 255, 0.14);
+  --panel: rgba(14, 22, 38, 0.55);
+  --font-ui: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  background-image:
+    radial-gradient(circle at 15% -10%, rgba(79, 216, 255, 0.04), transparent 40%),
+    radial-gradient(circle at 85% 0%, rgba(79, 216, 255, 0.02), transparent 35%);
+  background-attachment: fixed;
+}
+
+h1, h2, h3 {
+  margin: 0;
+  font-weight: 300;
+  font-family: var(--font-serif);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+::selection {
+  background: var(--gold-soft);
+  color: var(--text);
+}
+
+/* scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.script {
+  font-family: var(--font-script);
+}
+
+.text-dim { color: var(--text-dim); }
+.text-faint { color: var(--text-faint); }
+.text-gold { color: var(--gold); }
+
+/* gold divider with sparkle, used across headers/sections */
+.gold-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--gold);
+}
+.gold-divider .line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold), transparent);
+  opacity: 0.5;
+}
+.gold-divider .spark {
+  font-size: 14px;
+}
+
+/* fade-in utility for panels */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeInUp var(--dur-slow) var(--ease) both;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* glass panel utility — Jarvis frosted panels */
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  backdrop-filter: blur(14px);
+  border-radius: var(--radius-md);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

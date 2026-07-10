@@ -111,16 +111,17 @@ be resolved before the P9 NOVA→MYTHOS cutover.
 | P6 Immune | ✅ Done | 234 | `1c0735b` | 0 / 0 / 0 |
 | P7 Sensors & Effectors | ✅ Done, ⚠️ one environment-blocked pre-existing test | 272 (270 pass / 1 skip / 1 fail) | `532106d` | 0 / 0 / 1 |
 | P8 Identity | ✅ Done | 293 (291 pass / 1 skip / 1 fail) | `6898d92` | 0 / 0 / 0 |
-| P9 UI v2 & Cutover | ⬚ Pending | — | — | — |
+| P9 UI v2 (server + JARVIS HUD; cutover deferred) | ✅ Done | 316 (314 pass / 1 skip / 1 fail) | _(backfill)_ | 0 / 0 / 0 |
 | P10 Chaos Drills | ⬚ Pending | — | — | — |
 
-**Current**: 293 tests (272 pre-existing + 21 new in P8), 291 passing / 1 skipped / 1
-failing. 64 src files (+`core/identity/index.js`), `effectors/{adapter,hub,build-runner,goals,voice,routes,
+**Current**: 316 tests (293 pre-existing + 23 new in P9), 314 passing / 1 skipped / 1
+failing. 64 src files (+`core/identity/index.js`) + `server/{index,rate-limit}.js` +
+30 `ui/public/` assets (JARVIS HUD: neural-map/overlay/widgets/voice/confirm modules,
+6 panel views, 10 css files), `effectors/{adapter,hub,build-runner,goals,voice,routes,
 from-computer,from-pc,from-browser,from-dashboard,from-project,pipeline,kanban,
 agent-actions,collectors/abtop}.js`, `sensors/{file,ws,job}.js`), `adapters/{pc-child,
-browser-agent}/index.js`, 10 provider files (+`edge-tts.js`), 20 test files
-(+`identity.test.js`, `identity-boundaries-contract.test.js`,
-`identity-leash-integration.test.js`). 0 CRITICAL / 20 MAJOR / 24 MINOR drift items
+browser-agent}/index.js`, 10 provider files (+`edge-tts.js`), 23 test files
+(+`server.test.js`, `p9-diffs.test.js`, `hud-model.test.js`). 0 CRITICAL / 20 MAJOR / 24 MINOR drift items
 open across P0–P4 (P5 fixed one self-introduced bug pre-merge — see Phase 5 section —
 and surfaced one new MINOR item, D-55, in P1's `memory/audit-writer.js`, since fixed
 opportunistically — see Known Deviations). P6 fixed three bugs in the architecture
@@ -741,16 +742,145 @@ together in this phase since the module cannot function without the store.
 
 ---
 
-## Phase 9 — UI v2 & Cutover ⬚
+## Phase 9 — UI v2 (Server + JARVIS HUD) ✅ Done (2026-07-10) — Cutover DEFERRED
 
-**Scope**: server, WS v2, all views, NOVA→MYTHOS cutover.
+**Scope shipped**: Express + WS v2 server (spec-verbatim backend), JARVIS-style
+full-screen radial neural HUD (user-directed UI design, replaces the spec's
+sidebar shell — see deviation #1), shipped-module diffs (logger/lifecycle/cortex/
+schema/hub), 23 new tests. **Cutover NOT performed** — user-confirmed deferral:
+the spec gates cutover on all 20 MAJOR Known Deviations being closed and they
+remain open; cutover becomes its own post-P10 step. MYTHOS (:4478) runs
+side-by-side with NOVA (:4477).
 
 **Full build spec**: [MYTHOS-PHASE-BUILD-SPEC.md § Phase 9 — UI v2 & Cutover](MYTHOS-PHASE-BUILD-SPEC.md#phase-9--ui-v2--cutover) —
-the exact WS v2 message-to-bus-event mapping table (every OUT type traced to its
-real upstream event, no phantom names) and an expanded, command-level cutover
-runbook.
+backend followed verbatim (relay table, dispatchAction, verifyClient, rate
+limits); only the UI layer diverges, deliberately.
 
-**Cutover plan:**
+| Deliverable | Status |
+|---|---|
+| server/rate-limit.js — CV byte-identical from app/lib/rate-limit.js (only the header path reference updated, CRLF preserved) | ✅ |
+| server/index.js — spec Full Code: 127.0.0.1 bind, CORS allowlist, global/expensive limiters, static ui/public/, REST (goals CRUD / kanban / pipeline / status), SPA fallback, WS v2 verifyClient (CSWSH), broadcastAll, shared dispatchAction, full bus→WS relay table (exact strings) | ✅ |
+| server/index.js — spec-mandated `/api/memory/:store` (episodic tail / semantic-skills-identity recall('') / audit query, normalized `{ts,summary,kind}`) + new `/api/stats` (HUD density snapshot) | ✅ |
+| src/core/logger.js — `onLog(fn)` hook (threshold-gated, listener-crash-proof, returns unsubscribe) | ✅ |
+| src/core/lifecycle/index.js — `registerStopServer(fn)` as shutdown step 0 (wss.close → httpServer.close, best-effort) | ✅ |
+| src/core/cortex/index.js — act() requireConfirm branch calls `leash.confirm.create(summary, {decision,goalId,tier}, 'system')` and embeds `confirmId` in the confirm-request payload (spec Ambiguity #2 contract closed) | ✅ |
+| src/core/config/schema.js — `ACTION_TIMEOUT_MS` (default 30000); cortex reads the schema key, fallback deleted; 3 test fakes updated to mirror it | ✅ |
+| src/core/effectors/hub.js — `registerNamed('kanban-effector'/'pipeline-effector')` in main.js (brief claimed all three registered; only goals-effector was) + breaker-registry `[Symbol.iterator]` so the spec's `for..of effectors.breakers` works on the real wrapper | ✅ |
+| src/main.js — `'server'` boot step, fail-fast, after 'leash' before 'cortex' (§13 order); constructor-throws if any named effector missing (anti-drift #5) | ✅ |
+| ui/public/ — JARVIS HUD: index.html shell (no nav markup), ws.js (spec verbatim), app.js boot, stats-bus, neural-map/{graph-model,graph-layout (pure), hud-canvas, core-orb}, overlay/{overlay-manager, panel-registry}, widgets/{widget-host, widget-registry, 7 kinds}, voice/{voice-loop, mic-indicator}, confirm/confirm-modal | ✅ |
+| ui/public/js/views/{goals,kanban,pipeline,speech-to-text}.js — CA byte-identical from app/public/js/views/ | ✅ |
+| ui/public/js/views/{memory,audit,health}.js — spec Full Code, panel-mounted | ✅ |
+| ui/public/css — tokens.css + goals/kanban/pipeline/memory.css CV byte-identical; hud/overlay/widgets/voice/confirm.css new (token vars only); fonts/ copied (tokens.css @font-face targets) | ✅ |
+| test/server.test.js (7), test/p9-diffs.test.js (6), test/hud-model.test.js (10) | ✅ |
+| ROADMAP.md + graphify-out/graph.html (communities 70 Server / 71 UI, +50 convention) synced in the same commit | ✅ |
+
+**Gate** (reinterpreted for the HUD): server boots in §13 position and entity
+stays ALIVE ✅; WS v2 messages flow (live smoke: 9 ticks/9s, health on 4s cadence,
+salience-gated perceptions, actions) ✅; panels render with live data (goals CRUD
+round-trip browser→REST→GoalSystem→Goals.md verified in a real browser) ✅;
+confirm modal works (tier-4 modal rendered in a real browser against the real
+transport + real confirm registry; Approve click → confirm-reply →
+`leash.confirm.accept(id,'system')` → dispatchAction → effector invoked exactly
+once + budget debited + action.completed) ✅. 316 tests, 314 pass / 1 skip /
+1 fail (the same pre-existing environment-blocked boot.test.js fs.watch/SIGINT
+item from P7/P8 — its `gotAlive` path now also proves the server boot step
+reaches ALIVE). One nuance the 'server' boot step adds: if another process
+already holds :4478 (e.g. a second MYTHOS or a dev preview), boot.test.js now
+fails with exit 1 instead — that is the fail-fast step refusing to boot an
+unobservable entity, working as designed, not a new flake.
+
+**Documented deviations** (same convention as P5–P8 — deliberate, not drift):
+1. **UI design (user-directed)**: the spec's sidebar shell + hash router
+   (`router.js`/`shell.js`/`mind.js`) is replaced by a full-screen JARVIS radial
+   neural HUD matching the user's two reference mockups — voice-first, clickable
+   radial nodes opening translucent overlay panels, floating draggable live-data
+   widgets (clock/weather/actions/spend/wip/tick-rate/breakers), a core circle
+   with entity wordmark + live status + tick-pulsed EKG waveform, ring-icon
+   satellites with real-data values, seeded starfield, organic branching
+   tendrils with ambient electron particles. The Mind view's duties (tick/
+   perception/goal live feed) are absorbed by the core orb + canvas + widgets.
+   Neural-map density grows from real vault data via `/api/stats` (empty vault =
+   exactly core + 6 modules + 6 tendrils; clusters/breaker nodes appear with
+   data, weight ∝ sqrt(count)) — trending toward the second (dense) mockup as
+   the entity lives. Anti-drift #6 holds (live views are WS-only; only CRUD +
+   memory browse use REST); anti-drift #8 holds (every panel/widget mount
+   returns a cleanup, overlay close runs it).
+2. **`connectionId` open question resolved**: cortex-initiated confirms use the
+   sentinel `'system'`; the server resolves confirm-reply by trying the caller's
+   own connection scope first, then `'system'` — any connected client may
+   approve a cortex-initiated confirm. A wrong-scope probe never deletes the
+   entry (P5 registry semantics), so the two-step probe cannot DoS a pending
+   confirm.
+3. **`brain.interpret` never shipped** — the spec's `handleUtterance` calls it,
+   but the P2 brain's real surface is `think()`; the server adapts utterances to
+   `brain.think({lane:'voice'})` with an honest-offline reply, never a silent
+   empty response.
+4. **NOVA goals stats shape translated at the REST seam**: the byte-identical
+   goals view renders `{total,active,completed,progress}` (NOVA app/lib/goals.js)
+   but the P7 bridge ships `{total,done,active}` — `novaGoalsStats()` translates
+   in server/index.js so the copied view needs zero changes (Ambiguity #1's own
+   promise), and the bridge's shape (already consumed by from-dashboard tools)
+   stays untouched.
+5. **Feedback-storm fix (found in live smoke, spec's own Full Code has the
+   landmine)**: `probes.getStatus()` emits `health.anomaly` on every call
+   (documented no-dedupe) and the spec's `broadcastHealth()` called
+   `getStatus()` on every `health.anomaly` — one down provider recursed
+   anomaly→probe→anomaly, saturating the event loop and starving HTTP. Fixed:
+   only the 4s `perception.metric` trigger runs a fresh probe; `health.anomaly`
+   rebroadcasts immediately with cached provider status. Both spec triggers
+   preserved.
+6. **`ready` promise added to the server handle** — `app.listen` binds
+   asynchronously on Windows so the spec test fixture's synchronous
+   `httpServer.address()` read races null; tests `await server.ready`.
+7. **Initial `entity-state` snapshot on WS connect** — `lifecycle.*` is
+   broadcast-only, so a client connecting after boot would sit on "booting"
+   forever; the server now sends the current snapshot to each new connection.
+8. **Unknown `/api/*` routes answer honest JSON 404** — the byte-identical NOVA
+   kanban/pipeline views probe NOVA-era routes (`/api/kanban/assemble`,
+   `/api/pipeline/:id/execute`, `/api/jobs/:id`, …) whose backing now lives in
+   P7 effectors, not this REST surface; those buttons fail with a clean message
+   instead of an HTML-404 JSON-parse error.
+9. **Weather widget calls open-meteo.com** (no API key) — the HUD's only
+   external network dependency; geolocation falls back to a fixed city and any
+   failure degrades to an explicit "weather offline", never a fake reading.
+10. **jarvis-core.js not reused after all** — initially copied per the brief,
+    then replaced by a bespoke `core-orb.js` renderer when the user supplied the
+    exact reference image (wordmark/status/waveform core, not the abstract
+    plasma orb); the mechanics (dpr scaling, ResizeObserver, pulse envelope,
+    reduced-motion, visibility pause) are CA from it, and the orphaned copy was
+    removed.
+11. **`abtop.start()` still not called** — the P7 comment defers it to "whatever
+    owns the dashboard surface" (P9), but starting it spawns a shell-wrapped
+    child that breaks Windows SIGINT delivery (verified in P7); it stays
+    honest-inert until cutover, when NOVA's dashboard stops being the owner.
+12. **Audit browse formatting** — immune heal records carry no tier/tool;
+    `/api/memory/audit` renders placeholders instead of "Tundefined undefined".
+13. **`spec test 2` fixture inconsistency resolved** — the spec's own test stores
+    a bare `{tool,args}` decision but its server code reads `action.decision`;
+    `handleConfirmReply` normalizes both the bare form (spec fixture) and the
+    cortex `{decision,goalId,tier}` envelope through the single dispatchAction
+    path — no shadow dispatch.
+
+**Manual smoke (performed live)**: `node src/main.js` → boot log shows
+`server` step ok at index 11 (after leash, before cortex) → MYTHOS ALIVE →
+`server.listening 127.0.0.1:4478`. REST: /health, /api/stats, /api/goals,
+/api/kanban, /api/pipeline, /api/memory/{episodic,audit}, /api/nope→JSON 404,
+/ → HUD shell — all verified. WS (real client): 9 ticks in 9s with advancing
+counter, bounded health cadence, salience gate observed. Browser (preview):
+HUD renders (core wordmark/status/waveform, 6 ring-icon satellites with live
+values, starfield, tendrils), SYSTEM STATUS OPTIMAL, canvas click on the goals
+node opens the GOALS panel, add-goal round-trips to Goals.md on disk, widgets
+show real data (tick rate 0.99 Hz measured off WS ticks, 46 breakers closed,
+weather honest-fallback). Tier-4 confirm: modal rendered against a real
+bus+server+registry harness serving the real UI; Approve click invoked the
+effector exactly once (log-verified). **Not live-verifiable in this
+environment (code-reviewed instead, stated honestly)**: wake-word voice loop
+(no real microphone available — the loop is a CA of NOVA's proven hands-free
+restart pattern with the same caps and honest-disabled paths) and drag-persist
+across sessions (drag/pointerup/localStorage write path reviewed; positions
+restore from `mythos.widgets.v1` on mount).
+
+**Cutover plan (unchanged, DEFERRED to its own post-P10 step):**
 1. Tag NOVA as `nova-final`
 2. Side-by-side soak (MYTHOS :4478 vs NOVA :4477)
 3. One-shot vault import (Goals.md, Kanban.json, Pipeline/)
@@ -758,12 +888,9 @@ runbook.
 5. Update launch scripts to point `mythos/`
 6. Rollback: `archive/nova/` stays runnable
 
-**Gate**: all views render, WS v2 messages flow, confirm modal works,
-Mind/Memory/Health/Audit views show live data
-
-**Note**: all 20 MAJOR + 23 MINOR items in Known Deviations must be closed before
-this cutover — several (D-19–D-23, D-40–D-42) directly affect what the Memory/Health/
-Audit views will show as "live data."
+**Cutover gate (unchanged)**: all 20 MAJOR + 23 MINOR items in Known Deviations
+must be closed first — several (D-19–D-23, D-40–D-42) directly affect what the
+Memory/Health/Audit panels show as "live data."
 
 ---
 
@@ -817,7 +944,7 @@ are Phase 4.5 items precisely because P10 depends on them.
 | chain.js | 110 | CA | P2 | ✅ |
 | activity-log.js | 154 | CA→spend.js | P2 | ✅ |
 | quota.js | 165 | CV | P2 | ✅ |
-| rate-limit.js | 54 | CV | P9 | ⬚ |
+| rate-limit.js | 54 | CV | P9 | ✅ |
 | logger.js | 73 | CA | P0 | ✅ |
 | vault.js | 83 | CA→fs-store.js | P1 | ⚠️ CA'd, but never wired to `bus` (D-16) |
 | confirm.js | 65 | CA | P5 | ✅ |
@@ -828,9 +955,9 @@ are Phase 4.5 items precisely because P10 depends on them.
 | pipeline/kanban/goals | ~238 | CA | P7 | ⬚ |
 | probes.js | 140 | CA | P6 | ⬚ |
 | BRAIN-MAP.md | 66 | CV→lanes.default.js | P2 | ✅ |
-| server.js (patterns) | 1533 | RW | P9 | ⬚ |
-| ws.js (client) | 181 | CA | P9 | ⬚ |
-| tokens.css | 240 | CV | P9 | ⬚ |
+| server.js (patterns) | 1533 | RW | P9 | ✅ |
+| ws.js (client) | 181 | CA | P9 | ✅ |
+| tokens.css | 240 | CV | P9 | ✅ (+ goals/kanban/pipeline/memory.css, 3 views + speech-to-text.js CA byte-identical, fonts) |
 | reasoning.js | 55 | DELETED | P2 | ✅ confirmed deleted, no trace |
 
 **Total NOVA lines reused**: ~4,700 of ~5,600 (84%) — the other 16% is either DELETED (reasoning.js duplication) or REWRITTEN (server.js, voice-agent.js).
@@ -849,3 +976,4 @@ are Phase 4.5 items precisely because P10 depends on them.
 | `1c0735b` | P6 | Immune: breakers/watchdog/diagnostician/healer/probes/announcer/monitor + metric sensor + main.js wiring (234 tests) |
 | `532106d` | P7 | Sensors & Effectors: effector hub/adapter/build-runner/goals-bridge/voice/45 NOVA tool catalogs (CA) + file/ws/job sensors + main.js wiring (272 tests, 270 passing, 1 pre-existing env-blocked) |
 | `6898d92` | P8 | Identity: self.md store (D-15) + boundary/persona/learn module + leash/brain wiring (293 tests, 291 passing, 1 pre-existing env-blocked) |
+| _(backfill)_ | P9 | UI v2: Express + WS v2 server (spec-verbatim) + JARVIS radial neural HUD (user-directed design) + logger/lifecycle/cortex/schema/hub diffs; cutover deferred pending MAJOR deviations (316 tests, 314 passing, 1 pre-existing env-blocked) |

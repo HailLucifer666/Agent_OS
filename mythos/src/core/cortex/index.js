@@ -18,7 +18,10 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   const lastTickAt = { value: 0 };
 
   const MAX_DRAIN_PER_TICK = (config && config.MAX_DRAIN_PER_TICK) || 50;
-  const ACTION_TIMEOUT_MS = (config && config.ACTION_TIMEOUT_MS) || 30000;
+  // [Phase 9] ACTION_TIMEOUT_MS is now a real schema key (config/schema.js,
+  // default 30000) — read it, don't re-default it (Lesson #6). The schema
+  // guarantees the key on every loadConfig()'d config; test fakes mirror it.
+  const ACTION_TIMEOUT_MS = config.ACTION_TIMEOUT_MS;
 
   async function tickOnce() {
     if (!running) return;
@@ -126,7 +129,22 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     // 1. Leash check — mandatory, fail-closed (createCortex requires leash to construct)
     var leashResult = leash.check(decision, { goalId: working.activeGoalId });
     if (!leashResult.allow && leashResult.requireConfirm) {
-      bus.emit('confirm-request', decision);
+      // [Phase 9 — spec Ambiguity #2 contract] Register the paused action with
+      // leash.confirm BEFORE emitting, and embed the returned confirmId in the
+      // event payload — the server resolves confirm-reply via
+      // leash.confirm.accept(confirmId, connectionId), never an ad-hoc map.
+      // connectionId is the sentinel 'system': cortex-initiated actions have no
+      // single waiting client, so the server accepts 'system'-scoped confirms
+      // from any connected client (open question resolved in ROADMAP.md P9).
+      var summary = decision.tool + '(' + JSON.stringify(decision.args || {}).slice(0, 80) + ')';
+      var confirmId = leash.confirm.create(
+        summary,
+        { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier },
+        'system'
+      );
+      bus.emit('confirm-request', Object.assign({}, decision, {
+        confirmId: confirmId, summary: summary, tier: leashResult.tier
+      }));
       return;
     }
     if (!leashResult.allow) {

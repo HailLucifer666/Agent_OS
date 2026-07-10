@@ -1,0 +1,47 @@
+/* hud.css — full-screen JARVIS radial HUD shell. Consumes tokens.css vars only. */
+
+html, body {
+  overflow: hidden;
+  height: 100vh;
+}
+
+#hud-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  z-index: 1;
+}
+
+#core-orb {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: min(34vmin, 340px);
+  height: min(34vmin, 340px);
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  cursor: pointer;
+}
+
+#widget-root {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none; /* cards re-enable their own pointer events */
+}
+
+#overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+#confirm-root {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+}

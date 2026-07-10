@@ -41,6 +41,11 @@ const SCHEMA = {
   // Leash (Phase 5)
   LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },
 
+  // Cortex / server action dispatch (Phase 9 — closes the Gap-4 hardcoded
+  // fallback in cortex/index.js:21; both cortex act() and server dispatchAction()
+  // read this schema key, never a re-defaulted literal)
+  ACTION_TIMEOUT_MS:        { type: 'number', default: 30000, min: 1000 },
+
   // Immune
   STALL_MS:                 { type: 'number', default: 5000, min: 1000 },
   WATCHDOG_MS:              { type: 'number', default: 2000, min: 500 },

@@ -33,7 +33,7 @@ describe('integration: real cortex + real effector hub', () => {
     };
     const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
 
-    const cortex = createCortex({ bus, memory, goals, brain: null, leash, effectors: hub, config: { MYTHOS_TICK_MS: 1000 } });
+    const cortex = createCortex({ bus, memory, goals, brain: null, leash, effectors: hub, config: { MYTHOS_TICK_MS: 1000, ACTION_TIMEOUT_MS: 30000 } });
     memory.working.drainPerceptions = () => [{ summary: 'x', channel: 'test', salience: 0.9 }];
 
     // tickOnce() no-ops unless the cortex is running (real cortex/index.js:24 guards on

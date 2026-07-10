@@ -27,7 +27,12 @@ function createBreakerRegistry() {
       var b = byName.get(name);
       if (b) b.recordFailure();
     },
-    get size() { return byName.size; }
+    get size() { return byName.size; },
+    // [Phase 9 — NEW, additive] iterable like the raw Map it wraps: P9's
+    // server/index.js broadcastHealth() does `for (const [name, breaker] of
+    // effectors.breakers)` (spec Full Code, Ambiguity #4) — the wrapper must
+    // not break that contract vs. the raw-Map fakes the spec tests inject.
+    [Symbol.iterator]: function() { return byName[Symbol.iterator](); }
   };
 }
 

@@ -1,0 +1,70 @@
+/* confirm.css — tier-3/4 approval modal. Token vars only. */
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.65);
+  backdrop-filter: blur(4px);
+  pointer-events: auto;
+  z-index: 210;
+}
+
+.confirm-modal {
+  width: min(440px, 90vw);
+  padding: 32px 28px 24px;
+  text-align: center;
+  border-color: var(--status-degraded);
+  box-shadow: 0 0 32px rgba(234, 179, 8, 0.18), 0 24px 80px rgba(0, 0, 0, 0.7);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.confirm-orb {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  border: 2px solid var(--status-degraded);
+  background: radial-gradient(circle at 35% 30%, rgba(234, 179, 8, 0.5), rgba(234, 179, 8, 0.08) 70%);
+  animation: mic-pulse 1.4s var(--ease) infinite;
+}
+
+.confirm-summary {
+  font-size: 15px;
+  color: var(--text);
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+
+.confirm-tier {
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  color: var(--status-degraded);
+  margin-bottom: 22px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.confirm-actions button {
+  padding: 9px 26px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  border: 1px solid var(--hairline);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.confirm-accept {
+  background: var(--gold-soft);
+  color: var(--gold);
+  border-color: var(--accent-dim);
+}
+.confirm-accept:hover { background: var(--accent-dim); color: var(--text); }
+
+.confirm-reject { color: var(--text-dim); }
+.confirm-reject:hover { background: var(--bg-hover); color: var(--status-warn); }

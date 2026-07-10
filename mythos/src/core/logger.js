@@ -12,6 +12,19 @@ function createLogger(levelName) {
   const out = process.stdout;
   const err = process.stderr;
 
+  // [Phase 9 — NEW] onLog(fn) listener hook: server/index.js relays every emitted
+  // entry as a WS 'log' broadcast. Listeners see the structured entry object (not
+  // the serialized string) and are notified only for lines that pass the level
+  // threshold. A throwing listener must never crash logging.
+  const logListeners = [];
+  function onLog(fn) {
+    logListeners.push(fn);
+    return function unsubscribe() {
+      const i = logListeners.indexOf(fn);
+      if (i !== -1) logListeners.splice(i, 1);
+    };
+  }
+
   function emit(level, msg, fields) {
     if (LEVELS[level] < threshold) return;
     const entry = { ts: new Date().toISOString(), level: level, msg: msg };
@@ -27,6 +40,9 @@ function createLogger(levelName) {
     } else {
       out.write(line + '\n');
     }
+    for (let i = 0; i < logListeners.length; i++) {
+      try { logListeners[i](entry); } catch (_) { /* never let a listener crash logging */ }
+    }
   }
 
   return {
@@ -34,6 +50,7 @@ function createLogger(levelName) {
     info: function(msg, fields) { emit('info', msg, fields); },
     warn: function(msg, fields) { emit('warn', msg, fields); },
     error: function(msg, fields) { emit('error', msg, fields); },
+    onLog: onLog,
     level: levelName || DEFAULT_LEVEL
   };
 }

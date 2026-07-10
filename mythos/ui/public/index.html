@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MYTHOS</title>
+  <link rel="stylesheet" href="/css/tokens.css" />
+  <link rel="stylesheet" href="/css/hud.css" />
+  <link rel="stylesheet" href="/css/overlay.css" />
+  <link rel="stylesheet" href="/css/widgets.css" />
+  <link rel="stylesheet" href="/css/voice.css" />
+  <link rel="stylesheet" href="/css/confirm.css" />
+  <!-- NOVA view styles — CV byte-identical; the copied views depend on these class names -->
+  <link rel="stylesheet" href="/css/goals.css" />
+  <link rel="stylesheet" href="/css/kanban.css" />
+  <link rel="stylesheet" href="/css/pipeline.css" />
+  <link rel="stylesheet" href="/css/memory.css" />
+</head>
+<body>
+  <!-- JARVIS radial HUD — full-screen, no nav markup (user-directed design,
+       deliberate deviation from the spec's sidebar shell; see ROADMAP.md P9) -->
+  <canvas id="hud-canvas"></canvas>
+  <canvas id="core-orb" width="300" height="300" aria-label="MYTHOS core"></canvas>
+  <div id="widget-root"></div>
+  <div id="overlay-root"></div>
+  <div id="confirm-root"></div>
+  <div id="mic-indicator" class="mic-idle" title="Say 'Mythos, ...' — click to enable voice"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

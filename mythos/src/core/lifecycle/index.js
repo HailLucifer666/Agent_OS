@@ -10,7 +10,13 @@ function createLifecycle({ bus, logger, config }) {
   let bootIndex = 0;
   let state = 'idle';  // idle | booting | alive | shutting-down | dead
   let shutdownTimer = null;
+  let stopServerFn = null; // [Phase 9] registered by the 'server' boot step
   const entityName = (config && config.MYTHOS_NAME) || 'MYTHOS';
+
+  // [Phase 9 — NEW] Server-close is shutdown step 0 (spec Ambiguity #5): stop
+  // accepting new WS/HTTP connections and drain in-flight before anything else,
+  // matching NOVA's own graceful order (wss.close() -> httpServer.close(cb)).
+  function registerStopServer(fn) { stopServerFn = fn; }
 
   function setSteps(stepList) {
     steps = stepList;
@@ -65,23 +71,23 @@ function createLifecycle({ bus, logger, config }) {
       process.exit(1);
     }, timeoutMs);
 
-    // Graceful: stop components in reverse order
-    // (In Phase 0, nothing to stop yet — this is the scaffold)
-    cleanup();
-
     function cleanup() {
       if (shutdownTimer) clearTimeout(shutdownTimer);
       state = 'dead';
       logger.info('lifecycle.shutdown.complete');
     }
 
-    // Return a promise that resolves when done
-    return new Promise(function(resolve) {
-      setImmediate(function() {
-        cleanup();
-        resolve();
-      });
-    });
+    // Graceful sequence. Step 0 (Phase 9): stop the HTTP/WS server first —
+    // open sockets would otherwise block a clean process.exit(0). Steps 1-5
+    // (sensors stop, cortex drain, working->episodic flush, checkpoint write,
+    // audit flush) are wired by the phases that own them (D-07 tracks the rest).
+    return (async function() {
+      if (stopServerFn) {
+        try { await stopServerFn(); } catch (_) { /* best-effort — never block exit */ }
+      }
+      await new Promise(function(resolve) { setImmediate(resolve); });
+      cleanup();
+    })();
   }
 
   function registerShutdown() {
@@ -97,7 +103,7 @@ function createLifecycle({ bus, logger, config }) {
 
   function getState() { return state; }
 
-  return { setSteps, boot, shutdown, registerShutdown, getState };
+  return { setSteps, boot, shutdown, registerShutdown, registerStopServer, getState };
 }
 
 module.exports = { createLifecycle };
