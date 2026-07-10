@@ -97,13 +97,29 @@ export function subscribe(types, onEvent) {
   return () => types.forEach((t) => offBroadcast(t, onEvent));
 }
 
-export function utterance({ text, onDone }) {
+// Shared reply handler for utterance() and visionQuery(): 'speech-chunk'
+// messages are routed through onChunk WITHOUT deleting the handler (chunks
+// arrive before 'done'); the handler is removed only once 'done' lands.
+function makeReplyHandler(reqId, { onDone, onChunk }) {
+  return (msg) => {
+    if (msg.type === 'speech-chunk') { if (onChunk) onChunk(msg); return; }
+    if (msg.type === 'done') { handlers.delete(reqId); if (onDone) onDone(msg); }
+  };
+}
+
+export function utterance({ text, onDone, onChunk }) {
   connect();
   const reqId = nextReqId();
-  handlers.set(reqId, (msg) => {
-    if (msg.type === 'done') { handlers.delete(reqId); if (onDone) onDone(msg); }
-  });
+  handlers.set(reqId, makeReplyHandler(reqId, { onDone, onChunk }));
   sendMessage({ type: 'utterance', reqId, text });
+  return { stop: () => stopRequest(reqId) };
+}
+
+export function visionQuery({ image, text, onDone, onChunk }) {
+  connect();
+  const reqId = nextReqId();
+  handlers.set(reqId, makeReplyHandler(reqId, { onDone, onChunk }));
+  sendMessage({ type: 'vision-query', reqId, image, text });
   return { stop: () => stopRequest(reqId) };
 }
 

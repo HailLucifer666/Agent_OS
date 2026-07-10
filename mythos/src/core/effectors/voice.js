@@ -50,4 +50,27 @@ function createVoiceEffector({ config }) {
   };
 }
 
-module.exports = { createVoiceEffector, truncateAtSentenceBoundary };
+// Split text into speakable sentences for chunked TTS. Groups very short
+// fragments with their successor so we never synthesize a 2-word chunk (the
+// per-request overhead would dominate). Same boundary set as
+// truncateAtSentenceBoundary above.
+var MIN_CHUNK_CHARS = 25;
+
+function splitSentences(text) {
+  var trimmed = String(text || '').trim();
+  if (!trimmed) return [];
+  var parts = trimmed.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [trimmed];
+  var chunks = [];
+  var buf = '';
+  for (var i = 0; i < parts.length; i++) {
+    buf += parts[i];
+    if (buf.trim().length >= MIN_CHUNK_CHARS || i === parts.length - 1) {
+      var t = buf.trim();
+      if (t) chunks.push(t);
+      buf = '';
+    }
+  }
+  return chunks;
+}
+
+module.exports = { createVoiceEffector, truncateAtSentenceBoundary, splitSentences };

@@ -13,14 +13,15 @@ const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const edgeTts = require('../providers/edge-tts');
 const groqStt = require('../providers/groq-stt');
-const { truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
+const { splitSentences } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 
 // WS v2 message types — exact strings, do not paraphrase:
-// IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop'
+// IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
 //                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
+// OUT (per-reqId reply stream): 'speech-chunk' (0..N) then 'done' (1, metadata only)
 
 function isLoopback(req) {
   const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
@@ -81,6 +82,11 @@ function createServer(deps) {
   // also holds Episodic/Semantic/Identity/Audit/Checkpoints that should never
   // be served as plain static files.
   app.use('/vault/builds', express.static(memory.fs.vaultPath('builds'), { etag: false, maxAge: 0, lastModified: false }));
+
+  // MediaPipe tasks-vision runtime assets (gesture recognition runs fully
+  // client-side; these are the WASM runtime + ESM bundle served from
+  // node_modules so the app never loads from a CDN).
+  app.use('/vendor/mediapipe', express.static(path.join(__dirname, '..', 'node_modules', '@mediapipe', 'tasks-vision'), { etag: false, maxAge: 0, lastModified: false }));
 
   app.use('/api', globalLimit);
   app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
@@ -388,19 +394,30 @@ function createServer(deps) {
     // built — the P2 brain's real surface is think({lane, messages, ...}). The
     // 'voice' lane is the shipped conversational lane (persona-injected). Offline
     // brain degrades honestly: the client gets told, never a silent empty reply.
-    // Synthesize the spoken form of a reply via the local edge-tts service
-    // (Microsoft Neural voices, free/no key). Honest-null on any failure —
-    // the client falls back to browser speechSynthesis when audioB64 is absent.
-    async function synthesizeReply(text) {
-      try {
-        if (!(await edgeTts.isAvailable())) return null;
-        const spoken = truncateAtSentenceBoundary(text);
-        const buf = await edgeTts.synthesize({ text: spoken, voice: config.VOICE_TTS_VOICE });
-        return buf.toString('base64');
-      } catch (err) {
-        logger.warn('edge-tts.synthesis-failed', { error: err.message });
-        return null;
+    // Chunked spoken reply: split into sentences, synthesize each in order,
+    // and send each chunk the moment ITS audio is ready — the client starts
+    // playing chunk 0 while chunk 1..n are still synthesizing. The final
+    // 'done' carries text/metadata only (audio already streamed). If edge-tts
+    // is down, chunks are sent with audioB64:null and the client falls back
+    // to browser speechSynthesis exactly as before. Shared by handleUtterance
+    // and handleVisionQuery — one reply-emission path, one protocol.
+    async function sendSpokenReply(reqId, say, meta) {
+      const speak = sanitizeSpoken(say);
+      const ttsUp = await edgeTts.isAvailable();
+      const chunks = ttsUp ? splitSentences(speak) : [];
+      if (ttsUp && chunks.length) {
+        for (let i = 0; i < chunks.length; i++) {
+          let audioB64 = null;
+          try {
+            const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
+            audioB64 = buf.toString('base64');
+          } catch (err) {
+            logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+          }
+          send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
+        }
       }
+      send({ type: 'done', reqId, say, speak, chunked: ttsUp && chunks.length > 0, ...meta });
     }
 
     async function handleUtterance(msg) {
@@ -422,13 +439,53 @@ function createServer(deps) {
         historyAppend('user', text);
         historyAppend('assistant', say);
 
-        const speak = sanitizeSpoken(say);
-        const audioB64 = await synthesizeReply(speak);
-        send({
-          type: 'done', reqId: msg.reqId, say, speak, audioB64,
+        const meta = {
           actions: (result.actions || []).map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
           confirmPending: result.confirmPending ? { confirmId: result.confirmPending.confirmId, summary: result.confirmPending.summary } : null,
+        };
+        await sendSpokenReply(msg.reqId, say, meta);
+      } catch (err) {
+        send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
+      }
+    }
+
+    // vision-query: one-shot multimodal ask — first real caller of the
+    // 'vision' brain lane (PREF_VISION, lanes.default.js). Read-only (no tool
+    // dispatch, no leash tier needed — same class as a plain chat reply).
+    // The reply reuses the exact utterance speech path: sanitize -> chunked
+    // TTS -> speech-chunk stream -> done metadata.
+    const MAX_IMAGE_B64 = 4 * 1024 * 1024; // ~3MB decoded — a 640x480 JPEG is ~50-100KB
+    async function handleVisionQuery(msg) {
+      if (!brain || typeof brain.think !== 'function') {
+        send({ type: 'done', reqId: msg.reqId, say: 'Vision is offline.', offline: true });
+        return;
+      }
+      try {
+        const image = String(msg.image || '');
+        if (!image || image.length > MAX_IMAGE_B64) {
+          send({ type: 'done', reqId: msg.reqId, say: 'I could not read that image.', error: true });
+          return;
+        }
+        const text = String(msg.text || 'Describe what you see, briefly.').slice(0, 500);
+        const result = await brain.think({
+          lane: 'vision',
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: text + ' Answer in at most two short spoken sentences, plain text, no markdown.' },
+              { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + image } },
+            ],
+          }],
+          source: 'vision-query',
         });
+        if (result.offline || !result.content) {
+          send({ type: 'done', reqId: msg.reqId, say: 'All my vision providers are offline right now.', offline: true });
+          return;
+        }
+        const say = String(result.content).trim().slice(0, 400);
+        historyAppend('user', '[showed camera] ' + text);
+        historyAppend('assistant', say);          // vision answers join conversation memory
+        await sendSpokenReply(msg.reqId, say, {});
       } catch (err) {
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
       }
@@ -465,6 +522,7 @@ function createServer(deps) {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'utterance') handleUtterance(msg);
+      else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);
       else if (msg.type === 'confirm-reply') handleConfirmReply(msg);
       else if (msg.type === 'subscribe') handleSubscribe(msg);

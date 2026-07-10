@@ -36,13 +36,23 @@ const NAV_COMMANDS = [
   [/^(show|open)\s+(the\s+)?audit( log| trail)?$/i, 'audit'],
 ];
 
-export function createVoiceLoop({ onState, openPanel, onCaption }) {
+// Vision questions are intercepted before the brain, same as NAV_COMMANDS —
+// they need a camera frame attached, which only the client can do.
+const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
+
+export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }) {
   let active = false;
   let processing = false;
   let disposed = false;
   let currentAudio = null;   // in-flight TTS playback (barge-in target)
   let speakingText = '';     // spoken reply text — echo-guard reference
   let speakSession = 0;      // invalidates stale playback callbacks
+
+  // ---- chunked playback (speech-chunk messages arrive before 'done') ----
+  let chunkQueue = [];
+  let playing = false;
+  let doneReceived = false;
+  let lastChunkPlayed = false;
 
   let stream = null;         // persistent mic stream for the whole active session
   let audioCtx = null;
@@ -77,6 +87,11 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
       return;
     }
 
+    // Reserve this turn's session token now, at dispatch time — speech-chunk
+    // messages can arrive before 'done' and need a live session to enqueue
+    // against (see enqueueChunk/playNextChunk below).
+    const session = beginTurn();
+
     // Fall through to the brain over WS. Grace timeout returns to listening
     // even if the reply never lands (no new WS type invented — P9 brief).
     let done = false;
@@ -89,13 +104,26 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     }, 20000);
     utterance({
       text: command,
+      onChunk: (msg) => enqueueChunk(msg, session),
       onDone: (msg) => {
         if (done) return;
         done = true;
         clearTimeout(grace);
-        deliverReply(msg);
+        deliverReply(msg, session);
       },
     });
+  }
+
+  // Reserves a fresh session token for a turn whose reply may stream
+  // speech-chunk messages before 'done' arrives. Shared by handleCommand
+  // (voice) and the external vision-query path (Part B / app.js).
+  function beginTurn() {
+    const session = ++speakSession;
+    doneReceived = false;
+    lastChunkPlayed = false;
+    chunkQueue = [];
+    playing = false;
+    return session;
   }
 
   // Show the brain's reply and speak it aloud. BARGE-IN: the mic keeps
@@ -122,9 +150,67 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     if (currentAudio) { try { currentAudio.pause(); } catch { /* ok */ } currentAudio = null; }
     if (window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch { /* ok */ } }
     speakingText = '';
+    chunkQueue = [];
+    playing = false;
   }
 
-  function deliverReply(msg) {
+  // ---- chunked playback (speech-chunk messages arrive before 'done') ----
+  function enqueueChunk(msg, session) {
+    if (speakSession !== session) return; // barge-in already happened
+    chunkQueue.push(msg);
+    if (!playing) playNextChunk(session);
+  }
+
+  function playNextChunk(session) {
+    if (speakSession !== session) return;
+    const chunk = chunkQueue.shift();
+    if (!chunk) { playing = false; maybeFinishTurn(session); return; }
+    playing = true;
+    processing = false;     // mic stays live during playback — barge-in
+    setState('speaking');
+    const isLast = chunk.index === chunk.total - 1;
+    const onOneDone = () => {
+      if (speakSession !== session) return;
+      if (isLast) lastChunkPlayed = true;
+      playNextChunk(session);
+    };
+    if (chunk.audioB64) {
+      const audio = new Audio('data:audio/mpeg;base64,' + chunk.audioB64);
+      currentAudio = audio;
+      audio.onended = onOneDone;
+      audio.onerror = () => speakChunkFallback(chunk.text, session, onOneDone);
+      audio.play().catch(() => speakChunkFallback(chunk.text, session, onOneDone));
+    } else {
+      speakChunkFallback(chunk.text, session, onOneDone);
+    }
+  }
+
+  function speakChunkFallback(text, session, onDone) {
+    if (window.speechSynthesis && !disposed) {
+      const u = new SpeechSynthesisUtterance(text);
+      u.onend = () => { if (speakSession === session) onDone(); };
+      u.onerror = () => { if (speakSession === session) onDone(); };
+      try { window.speechSynthesis.speak(u); return; } catch { /* fall through to silent finish */ }
+    }
+    if (speakSession === session) onDone();
+  }
+
+  function maybeFinishTurn(session) {
+    if (speakSession !== session) return;
+    if (doneReceived && (lastChunkPlayed || chunkQueue.length === 0) && !playing) {
+      stopSpeaking();
+      finishTurn();
+    }
+  }
+
+  // Show the brain's reply and speak it aloud. `session` was reserved by
+  // beginTurn() at dispatch time (before any speech-chunk could arrive).
+  // Chunked replies (msg.chunked) already streamed their audio via
+  // speech-chunk messages — 'done' here just supplies the caption text and
+  // triggers the barge-in-aware finish once the queue drains. Non-chunked
+  // replies (TTS down / offline / error) keep the direct fallback path,
+  // byte-identical to pre-Part-C behavior.
+  function deliverReply(msg, session) {
     const say = msg && msg.say ? String(msg.say) : '';
     if (!say) { finishTurn(); return; }
     const kind = msg.error || msg.offline ? 'error' : 'reply';
@@ -132,23 +218,13 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     if (kind !== 'reply' || disposed) { finishTurn(); return; }
 
     const spoken = msg.speak || say;
-    const session = ++speakSession;
-    const finish = () => {
-      if (speakSession !== session) return; // superseded (barge-in) — new turn owns state
-      stopSpeaking();
-      finishTurn();
-    };
-
     speakingText = spoken;
     processing = false;      // mic stays live during playback — barge-in
     setState('speaking');
+    doneReceived = true;
 
-    if (msg.audioB64) {
-      const audio = new Audio('data:audio/mpeg;base64,' + msg.audioB64);
-      currentAudio = audio;
-      audio.onended = finish;
-      audio.onerror = () => { if (speakSession === session) speakFallback(spoken, session); };
-      audio.play().catch(() => { if (speakSession === session) speakFallback(spoken, session); });
+    if (msg.chunked) {
+      maybeFinishTurn(session); // covers the case where all chunks already played
       return;
     }
     speakFallback(spoken, session);
@@ -191,6 +267,10 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
       stopSpeaking();              // barge-in: user talked over playback
     }
     caption('» ' + command, 'heard');
+    if (VISION_TRIGGER.test(command) && onVisionQuery) {
+      onVisionQuery(command);
+      return;
+    }
     handleCommand(command);
   }
 
@@ -348,5 +428,14 @@ export function createVoiceLoop({ onState, openPanel, onCaption }) {
     toggle() { return active ? (stop(), false) : start(); },
     isActive: () => active,
     cleanup() { disposed = true; stop(); },
+    // External reply path (Part B, vision Q&A): the camera flow dispatches
+    // its own WS request (visionQuery, not utterance) but the reply must
+    // flow through this same chunk-queue/barge-in machinery so a "what do
+    // you see" answer is spoken exactly like a voice reply. beginTurn()
+    // reserves the session before any speech-chunk can arrive; the caller
+    // routes onChunk/onDone to onExternalChunk/deliverExternalReply with it.
+    beginTurn,
+    onExternalChunk: enqueueChunk,
+    deliverExternalReply: deliverReply,
   };
 }
