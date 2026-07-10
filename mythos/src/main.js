@@ -35,6 +35,7 @@ const { registerFromBrowser } = require('./core/effectors/from-browser');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
+const { registerFromSystem } = require('./core/effectors/from-system');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
@@ -261,6 +262,7 @@ async function main() {
       });
       orchestrator.init();
       registerFromMission(hub, { orchestrator: orchestrator });
+      registerFromSystem(hub, { config: config });
 
       hub.register(createVoiceEffector({ config: config }));
 

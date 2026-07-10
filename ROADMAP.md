@@ -1230,6 +1230,32 @@ conflict — expected, a live instance was running on 4478 during the run).
 
 ---
 
+## Phase 13 — get_time / get_weather tools ✅ Done (2026-07-10)
+
+Basic situational questions ("what time is it", "what's the weather") had no tool
+to answer them at all. Added `src/core/effectors/from-system.js` following the
+exact `from-mission.js` registration pattern: `get_time` (native `Date`/`Intl`, no
+dependency, optional IANA `timezone` param, degrades to system default on an
+invalid zone instead of throwing) and `get_weather` (Open-Meteo, no API key — the
+same free provider the dashboard's weather widget already uses, WMO code table
+copied verbatim; optional `location` param geocoded through Open-Meteo's free
+geocoding endpoint, else a new `WEATHER_LOCATION` config default matching the
+widget's existing Kolkata fallback). Both are tier 0 (read-only, auto-allow) in
+`tiers.js` and added to the voice-agent `CATALOG`.
+
+Found by live testing (not a unit test): the voice-agent asked a clarifying
+question instead of just calling either tool, even though every argument is
+optional — nothing in the persona rules distinguished harmless informational
+lookups from the PROJECT INTAKE RULE's deliberate clarify-first dance for
+build/create requests. Added an explicit INFORMATIONAL TOOLS RULE so read-only,
+danger:false lookups are called in the same turn instead of asking permission
+first; reverified live and both tools now answer directly with real data.
+
+**Gate**: 348 tests, 346 pass, 1 skip, 1 fail (same pre-existing `boot.test.js`
+port conflict).
+
+---
+
 ## Risk Register
 
 | ID | Risk | Mitigation | Phase |
@@ -1291,3 +1317,4 @@ conflict — expected, a live instance was running on 4478 during the run).
 | `27d8842` | P10 | Chaos Drills: 6 failure-injection test files (provider-killed, cortex-stalled, disk-full, memory-corrupt, concurrent-tick, restart-mid-action) against real P1/P2/P3/P4/P6/P7 modules; found and documented 2 new gaps (D-56 CRITICAL brain/index.js lane-selection bug, D-57 MAJOR main.js recovery/build-runner boot-order gap), neither fixed here (test-files-only phase) (327 tests, 325 passing, 1 pre-existing env-blocked) |
 | `e281f32` | P11 | Voice Agent v2 (barge-in, TTS sanitization, conversation memory, real tool-calling — CA of NOVA voice-agent.js) + semantic memory (local embeddings/RAG, no vector DB) + mission orchestrator (brain delegates multi-part goals to a background agent team, no LangGraph) + a real createVoiceAgent()-fail-fast/socket-leak hang found and fixed by the suite run itself (341 tests, 339 passing, 1 pre-existing env-blocked) |
 | `3914163` | P12 | Voice input replaced with server-side Groq Whisper transcription (`providers/groq-stt.js` + `/api/voice/transcribe` + `voice-loop.js` MediaRecorder/VAD) after live-confirming Chrome's SpeechRecognition (cloud AND on-device) is blocked at the network level on this machine; found and fixed a stop()-vs-in-flight-transcription race live-testing against the real instance (341 tests, 339 passing, 1 pre-existing env-blocked) |
+| _pending_ | P13 | get_time + get_weather tools (`from-system.js`, Open-Meteo, no API key) + a persona-rule gap found live-testing (voice-agent asked permission before calling harmless read-only lookups) (348 tests, 346 passing, 1 pre-existing env-blocked) |

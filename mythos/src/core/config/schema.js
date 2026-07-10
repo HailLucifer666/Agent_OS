@@ -30,6 +30,10 @@ const SCHEMA = {
   // Voice reply TTS (edge-tts Microsoft Neural voice id)
   VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-RyanNeural' },
 
+  // get_weather tool default location ("lat,lon") when no location is spoken —
+  // same Kolkata fallback the dashboard weather widget already uses.
+  WEATHER_LOCATION:         { type: 'string', default: '22.57,88.36' },
+
   // Brain
   REFLECT_EVERY:            { type: 'number', default: 60, min: 1 },
   CONSOLIDATE_EVERY:        { type: 'number', default: 300, min: 1 },

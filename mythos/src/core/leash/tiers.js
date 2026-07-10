@@ -14,6 +14,8 @@ const TIER_TABLE = {
   'kanban_status':         0,
   'monitor_snapshot':      0,
   'mission_status':        0,
+  'get_time':              0,
+  'get_weather':           0,
   'list_folder':           0,
   'read_file':             0,
   'list_windows':          0,
