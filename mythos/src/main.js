@@ -48,6 +48,9 @@ async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
   require('dotenv').config();
 
+  // Render / cloud injects PORT; promote it to MYTHOS_PORT if not explicitly set.
+  if (!process.env.MYTHOS_PORT && process.env.PORT) process.env.MYTHOS_PORT = process.env.PORT;
+
   // Step 1: Config
   const configResult = loadConfig();
   if (!configResult.ok) {

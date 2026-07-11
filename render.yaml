@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: agent-os
+    runtime: docker
+    repo: https://github.com/HailLucifer666/Agent_OS
+    branch: main
+    rootDir: mythos
+    plan: free
+    envVars:
+      - key: PORT
+        generateValue: true
+      - key: MYTHOS_BIND
+        value: "0.0.0.0"
+      - key: MYTHOS_NAME
+        value: "MYTHOS"
+      - key: LOG_LEVEL
+        value: "info"
+      # --- Brain provider keys (set these in Render dashboard, NOT here) ---
+      # NIM_API_KEY=
+      # NIM_API_KEY_2=
+      # GROQ_API_KEY=
+      # MISTRAL_API_KEY=
+      # OPENROUTER_API_KEY=
+      # CEREBRAS_API_KEY=
+    healthCheckPath: /api/health
