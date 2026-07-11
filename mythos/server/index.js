@@ -16,11 +16,13 @@ const groqStt = require('../providers/groq-stt');
 const { splitSentences, createSentenceStreamer } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
+const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
 //                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
+//                  'proactive-speech' (entity-initiated, no inbound utterance)
 // OUT (per-reqId reply stream): 'speech-chunk' (0..N) then 'done' (1, metadata only)
 
 function isLoopback(req) {
@@ -304,6 +306,35 @@ function createServer(deps) {
     });
   }
 
+  // Proactive speech — the entity speaks without an inbound utterance.
+  // Synthesizes via edge-tts (same as reactive sendSpokenReply) and broadcasts
+  // to ALL connected clients as a synthetic reqId'd turn. The browser
+  // voice-loop treats 'proactive-speech' like a turn start without a user
+  // utterance. Falls back gracefully if edge-tts is down (client uses
+  // speechSynthesis). Never throws — proactive speech is best-effort.
+  let proactiveSeq = 0;
+  async function proactiveSpeak(text) {
+    if (!text || !wss) return;
+    const reqId = 'proactive-' + Date.now() + '-' + (++proactiveSeq);
+    const speak = sanitizeSpoken(text);
+    broadcastAll({ type: 'proactive-speech', reqId, text, speak });
+    const ttsUp = await edgeTts.isAvailable();
+    if (ttsUp) {
+      const chunks = splitSentences(speak);
+      for (let i = 0; i < chunks.length; i++) {
+        let audioB64 = null;
+        try {
+          const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
+          audioB64 = buf.toString('base64');
+        } catch (err) {
+          logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+        }
+        broadcastAll({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
+      }
+    }
+    broadcastAll({ type: 'done', reqId, say: text, speak, chunked: ttsUp, proactive: true });
+  }
+
   // Shared dispatch — the ONE place that executes an already-gated action, whether
   // called from a confirm-accept (below) or any future caller. Steps stay
   // byte-for-byte identical to cortex/act()'s steps 3-6 (Anti-Drift #4): breaker
@@ -342,6 +373,28 @@ function createServer(deps) {
   } catch (err) {
     logger.warn('voice-agent.unavailable', { error: err.message });
   }
+
+  // Proactive conversation announcer — listens for build completions, goal
+  // completions, and critical anomalies, generates natural speech via brain,
+  // delivers through proactiveSpeak(). This is what fixes the "is it done?"
+  // gap: when a build finishes, MYTHOS says so without being asked.
+  let conversationAnnouncer = null;
+  try {
+    conversationAnnouncer = createConversationAnnouncer({
+      bus: bus, brain: brain, config: config, speak: proactiveSpeak
+    });
+    conversationAnnouncer.start();
+  } catch (err) {
+    logger.warn('conversation-announcer.unavailable', { error: err.message });
+  }
+
+  // Fix the dead wire: the immune announcer's speak() shim in main.js emits
+  // 'action.speak-requested' but nothing subscribed to it — so health-driven
+  // speech was silently dropped. Route it through proactiveSpeak() so the
+  // immune system has a real voice for critical health events.
+  bus.subscribe('action.speak-requested', (e) => {
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+  });
 
   // Live build-job progress relay ('job' OUT type). build-runner's onJobUpdate
   // fires on every status/stage transition (queued -> generating ->
@@ -431,9 +484,44 @@ function createServer(deps) {
       const timer = setTimeout(() => ctrl.abort(), 30000);
       try {
         const text = String(msg.text || '');
+
+        // Recall relevant memories before responding — gives the entity long-term
+        // context: past conversations, user facts, and actions relevant to this query.
+        // Best-effort: failures degrade to no memory context (amnesia), never crash.
+        var memoryContext = null;
+        try {
+          var recalled = memory.episodic.recall(text, { limit: 5, windowDays: 7 });
+          // Also pull semantic user-facts for durable preferences
+          var semanticHits = memory.semantic.recall(text, { limit: 3 });
+          if (recalled.length > 0 || semanticHits.length > 0) {
+            var parts = [];
+            for (var i = 0; i < recalled.length; i++) {
+              parts.push(recalled[i].snippet || recalled[i].record.summary);
+            }
+            for (var j = 0; j < semanticHits.length; j++) {
+              if (semanticHits[j].snippet) parts.push('(fact) ' + semanticHits[j].snippet);
+            }
+            if (parts.length > 0) memoryContext = parts.join('\n');
+          }
+        } catch (_) { /* memory recall is best-effort */ }
+
+        // Surface pending thoughts from idle reasoning — if the entity formed a
+        // thought during a quiet moment, inject it as context so it can be
+        // mentioned naturally ("earlier I noticed that...").
+        try {
+          var pending = memory.episodic.recall('', { kind: 'thought', limit: 1, windowDays: 1 });
+          if (pending.length > 0 && pending[0].record && pending[0].record.detail) {
+            var thoughtText = pending[0].record.detail.text || pending[0].record.summary;
+            if (thoughtText) {
+              memoryContext = (memoryContext ? memoryContext + '\n' : '') +
+                'YOU NOTED EARLIER (mention naturally if relevant, do not force): ' + thoughtText;
+            }
+          }
+        } catch (_) { /* best-effort */ }
+
         const result = await voiceAgent.handleUtterance({
           text,
-          ctx: { history: historyGet(), connectionId },
+          ctx: { history: historyGet(), connectionId, memoryContext: memoryContext },
           signal: ctrl.signal,
         });
         clearTimeout(timer);
@@ -444,6 +532,21 @@ function createServer(deps) {
         const say = result.say || 'Done.';
         historyAppend('user', text);
         historyAppend('assistant', say);
+
+        // Persist conversation turn to episodic memory — this is what gives the
+        // entity memory across sessions. The in-RAM history (12 turns, 10min TTL)
+        // carries context within a session; this episodic write makes it durable.
+        // Written AFTER historyAppend so the reply is final (no later corrective
+        // pass can overwrite it — handleUtterance already ran to completion here).
+        try {
+          var turnId = 'turn-' + Date.now();
+          memory.episodic.write({
+            kind: 'conversation', tick: memory.working.tick,
+            summary: 'User: ' + text.slice(0, 100) + ' | MYTHOS: ' + say.slice(0, 100),
+            detail: { role: 'user', text: text.slice(0, 2000), reply: say.slice(0, 1000), turnId: turnId },
+            salience: 0.6, channel: 'voice'
+          });
+        } catch (_) { /* persistence is best-effort */ }
 
         const meta = {
           actions: (result.actions || []).map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
@@ -536,6 +639,16 @@ function createServer(deps) {
         const say = String(result.content).trim().slice(0, 400);
         historyAppend('user', '[showed camera] ' + text);
         historyAppend('assistant', say);          // vision answers join conversation memory
+
+        // Persist vision conversation turn to episodic memory (same as voice path)
+        try {
+          memory.episodic.write({
+            kind: 'conversation', tick: memory.working.tick,
+            summary: 'Vision query: ' + text.slice(0, 80) + ' | MYTHOS: ' + say.slice(0, 100),
+            detail: { role: 'user', text: '[showed camera] ' + text, reply: say, modality: 'vision' },
+            salience: 0.5, channel: 'voice'
+          });
+        } catch (_) { /* best-effort */ }
 
         if (ttsUp) {
           const tail = streamer.flush();

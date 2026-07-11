@@ -187,6 +187,42 @@ function createMemory({ config, bus, logger, brain }) {
         } catch (_) {
           // Brain distillation is best-effort — never block consolidation on it
         }
+
+        // 3b. Conversation → user-facts distillation: mine recent conversation
+        // turns specifically for durable facts about the operator (preferences,
+        // ongoing projects, working style). Separate from the general distillation
+        // above because conversations have different structure (user said / entity
+        // replied) and warrant a different extraction prompt. Results land in
+        // Semantic/user-facts.md, recalled by the server's recall-before-respond.
+        try {
+          const convos = episodic.recall('', { kind: 'conversation', limit: 20, windowDays: 1 });
+          // Only distill if there are NEW conversations since last consolidation
+          // (avoid re-processing the same turns every cycle). Heuristic: need at
+          // least 3 conversation entries to bother the brain.
+          if (convos.length >= 3) {
+            const convoText = convos.map(function(c) { return '- ' + (c.record.summary || ''); }).join('\n');
+            const result = await brain.think({
+              lane: 'simple',
+              messages: [{ role: 'user', content:
+                'Extract durable facts about the user from these conversation excerpts.\n' +
+                'Only include facts that will still be true tomorrow: preferences, ongoing projects, ' +
+                'working style, recurring topics, skill level. Ignore transient requests and one-off actions.\n' +
+                'Respond as JSON: {"facts": ["fact 1", "fact 2"]}\n' +
+                'If there are no durable facts, return {"facts": []}.\n\n' + convoText
+              }],
+              schemaHint: '{ facts: string[] }',
+              source: 'memory:consolidate-user-facts'
+            });
+            if (result && !result.offline && result.parsed && Array.isArray(result.parsed.facts)) {
+              for (let i = 0; i < result.parsed.facts.length; i++) {
+                var fact = String(result.parsed.facts[i]).trim();
+                if (fact) semantic.write('user-facts', [fact], { confidence: 0.7 });
+              }
+            }
+          }
+        } catch (_) {
+          // Conversation distillation is best-effort — never block consolidation
+        }
       }
 
       // 4. Stats

@@ -34,7 +34,10 @@ function createJobSensor({ bus, buildRunner }) {
       jobId: job.id,
       status: job.status,
       stage: job.stage,
-      error: job.error
+      error: job.error,
+      // artifact path — included so the conversation announcer and cortex know
+      // WHAT to open/announce on completion, not just that "a job finished".
+      artifact: job.artifact || null
     });
   }
 

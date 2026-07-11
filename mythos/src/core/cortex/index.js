@@ -68,10 +68,18 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         }
       }
 
-      // -- IDLE CHECK (cost lever #1: zero Brain calls on idle) --
+      // -- IDLE CHECK (cost lever #1: zero Brain calls on MOST idle ticks) --
+      // Idle ticks still skip the brain entirely EXCEPT for the throttled "mull"
+      // below — a periodic background reasoning pass that lets the entity form
+      // thoughts about the operator's situation during quiet moments. The mull
+      // cadence is config-driven (MYTHOS_MULL_EVERY_TICKS, default 300 = ~5min);
+      // setting it to 0 reverts to pure zero-cost idle.
       var hasActive = goals && typeof goals.hasActive === 'function' && goals.hasActive();
       if (perceptions.length === 0 && !hasActive) {
         working.activeGoalId = null;
+        if (shouldMull(working.tick, config)) {
+          await mull(working, memory, brain, bus, config);
+        }
         if (ooda.shouldReflect(working.tick)) {
           reflect(working, memory, bus);
         }
@@ -193,6 +201,66 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   function reflect(working, memory, bus) {
     // Lightweight self-check — emit heartbeat with tick count
     if (bus) bus.emit('reflect', { tick: working.tick, activeGoalId: working.activeGoalId });
+  }
+
+  // Background reasoning during idle ticks — the entity "mulls". Gathers recent
+  // context (conversations, events), asks the brain whether anything is worth
+  // mentioning to the operator next time they speak. Thoughts are stored in
+  // episodic memory (kind: 'thought') and surface in the next conversation via
+  // the server's recall-before-respond path. Best-effort: never throws, never
+  // blocks the tick loop. Disabled when MYTHOS_MULL_EVERY_TICKS is 0.
+  function shouldMull(tick, cfg) {
+    var every = (cfg && cfg.MYTHOS_MULL_EVERY_TICKS) || 300;
+    if (every === 0) return false;
+    return tick % every === 0;
+  }
+
+  async function mull(working, memory, brain, bus, cfg) {
+    if (!brain || typeof brain.think !== 'function') return;
+    try {
+      var recentConvos = memory.episodic.recall('', { kind: 'conversation', limit: 5, windowDays: 1 });
+      var recentEvents = memory.episodic.recall('', { limit: 10, windowDays: 1 });
+
+      var convoSummaries = recentConvos.map(function(r) { return r.record.summary || ''; }).join('\n');
+      var eventSummaries = recentEvents.map(function(r) { return r.record.summary || ''; }).join('\n');
+
+      // Skip if there's nothing to think about — pure zero-cost idle
+      if (!convoSummaries.trim() && !eventSummaries.trim()) return;
+
+      var result = await brain.think({
+        lane: 'simple',
+        messages: [{ role: 'user', content:
+          'You are MYTHOS, reflecting during a quiet moment. Here is your recent context:\n\n' +
+          'Recent conversations:\n' + (convoSummaries || '(none)') + '\n\n' +
+          'Recent events:\n' + (eventSummaries || '(none)') + '\n\n' +
+          'Is there anything worth mentioning to the operator next time they speak? ' +
+          'Consider: loose ends, follow-ups they might forget, observations about their ' +
+          'work patterns, things that seem important. If yes, respond with JSON: ' +
+          '{"thoughts": "what to mention", "priority": "low|medium|high"}\n' +
+          'If nothing is worth mentioning, respond: {"thoughts": "", "priority": "low"}'
+        }],
+        schemaHint: '{ thoughts: string, priority: string }',
+        source: 'idle-mull'
+      });
+
+      if (result && !result.offline && result.parsed && result.parsed.thoughts &&
+          result.parsed.priority && result.parsed.priority !== 'low') {
+        var thoughtText = String(result.parsed.thoughts).trim();
+        if (thoughtText) {
+          memory.episodic.write({
+            kind: 'thought',
+            tick: working.tick,
+            summary: thoughtText.slice(0, 200),
+            detail: { text: thoughtText, priority: result.parsed.priority },
+            salience: 0.4,
+            channel: 'cognition'
+          });
+          bus.emit('cortex.thought', { text: thoughtText, priority: result.parsed.priority });
+        }
+      }
+    } catch (_) {
+      // Idle reasoning is best-effort — never surfaces as a tick error
+    }
   }
 
   function start() {

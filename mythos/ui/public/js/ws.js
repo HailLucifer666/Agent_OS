@@ -126,3 +126,13 @@ export function visionQuery({ image, text, onDone, onChunk }) {
 export function confirmReply(confirmId, accept) {
   sendMessage({ type: 'confirm-reply', confirmId, accept });
 }
+
+// Register a reply handler for a server-initiated reqId (proactive speech).
+// The server sends 'proactive-speech' (broadcast, carries the text) followed by
+// 'speech-chunk' + 'done' messages with the same reqId. Without registering a
+// handler, those chunk/done messages would be ignored (no handler in the map).
+// Uses the same makeReplyHandler shape as utterance()/visionQuery().
+export function registerReplyHandler(reqId, { onDone, onChunk }) {
+  handlers.set(reqId, makeReplyHandler(reqId, { onDone, onChunk }));
+  return () => handlers.delete(reqId);
+}

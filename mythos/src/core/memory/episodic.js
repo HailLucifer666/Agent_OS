@@ -84,12 +84,14 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
    * @param {object} [opts]
    * @param {number} [opts.limit=20]       Max results.
    * @param {number} [opts.windowDays=7]   How far back to scan (days).
+   * @param {string} [opts.kind]           Filter by record kind (e.g. 'conversation', 'thought'). Omit for all.
    * @returns {Array<{ref:string, score:number, record:object, snippet:string, store:string}>}
    */
   function recall(query, opts) {
     opts = opts || {};
     const maxResults = opts.limit || 20;
     const windowDays = opts.windowDays || 7;
+    const kindFilter = opts.kind || null;
 
     // Date range boundaries
     const until = fs.todayKey();
@@ -106,7 +108,12 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       if (!entry) continue; // corrupt / unparseable
-      const score = scorer(query, entry);
+      if (kindFilter && entry.kind !== kindFilter) continue;
+      // When filtering by kind with no text query, score by recency only
+      // (lexicalScore returns 0 for empty query, which would hide all results).
+      const score = (kindFilter && !query.trim())
+        ? Math.exp(-((Date.now() - (entry.ts || 0)) / (7 * 24 * 3600000)) * 0.3)
+        : scorer(query, entry);
       if (score > 0) {
         scored.push({
           ref: entry.id,

@@ -72,6 +72,10 @@ const ALLOWED_EVENTS = new Set([
 
   // mission.* (P11 — mission orchestrator)
   'mission.update',
+
+  // conversation.* + cortex.thought (conversational brain — proactive speech + idle reasoning)
+  'conversation.announced',
+  'cortex.thought',
 ]);
 
 // -- Static scan -------------------------------------------------------------

@@ -75,6 +75,14 @@ const SCHEMA = {
   MYTHOS_JOBS_MAX_PERSISTED: { type: 'number', default: 100, min: 10 },
   MYTHOS_WATCH_DIRS:         { type: 'string', default: '' },
   MYTHOS_FILE_DEBOUNCE_MS:   { type: 'number', default: 500, min: 50 },
+
+  // Conversation brain (idle reasoning) — how often the entity "mulls" during
+  // quiet moments (forms thoughts about the operator's situation, loose ends,
+  // follow-ups). 0 = disabled (reverts to zero-cost idle). At 1s ticks, 300 = ~5min.
+  MYTHOS_MULL_EVERY_TICKS:   { type: 'number', default: 300, min: 0, max: 3600 },
+  // Voice agent max spoken reply length (chars). 800 = allows full reasoning
+  // paragraphs; lower for terser responses.
+  VOICE_MAX_SAY_CHARS:       { type: 'number', default: 800, min: 100, max: 4000 },
 };
 
 module.exports = { SCHEMA };

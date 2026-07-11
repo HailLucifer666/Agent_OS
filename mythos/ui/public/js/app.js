@@ -2,7 +2,7 @@
 // Voice initializes on first pointerdown (Chrome's user-gesture policy for
 // mic/AudioContext); everything else mounts immediately.
 
-import { subscribe, visionQuery } from './ws.js';
+import { subscribe, visionQuery, registerReplyHandler } from './ws.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
 import { mountCoreOrb } from './neural-map/core-orb.js';
@@ -191,4 +191,22 @@ subscribe(['job'], (msg) => {
     buildPanelShown = false;
     mic.setCaption('✘ build failed: ' + (j.error || 'unknown error'), 'error');
   }
+});
+
+// Proactive speech — MYTHOS speaks without being asked (build done, goal done,
+// critical anomaly, or an idle thought it wants to share). The server sends a
+// 'proactive-speech' broadcast (carries the text) followed by 'speech-chunk' +
+// 'done' messages with the same reqId. We register a reply handler for those
+// chunks and route them through the voice loop's playback machinery — same
+// chunk-queue/barge-in path as voice replies and vision answers. The orb
+// flashes so the user knows MYTHOS is speaking on its own initiative.
+subscribe(['proactive-speech'], (msg) => {
+  const v = ensureVoice();
+  const session = v.beginTurn();
+  mic.setCaption(msg.text || msg.speak || '', 'reply');
+  if (orb.flashAction) orb.flashAction('proactive', true);
+  registerReplyHandler(msg.reqId, {
+    onChunk: (m) => v.onExternalChunk(m, session),
+    onDone: () => v.deliverExternalReply({ say: msg.text, speak: msg.speak }, session),
+  });
 });
