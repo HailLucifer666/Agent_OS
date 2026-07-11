@@ -1,284 +1,453 @@
 <div align="center">
 
-# Agentic OS
+# 🔮 MYTHOS — Autonomous Entity OS
 
-**A local-first, single-user mission control for AI agents.**
+**An always-on cognitive entity that perceives, reasons, acts, and self-heals.**
 
-One screen. One shared brain. One crew. Builds while you watch.
+Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 402 tests.
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Dependencies](https://img.shields.io/badge/dependencies-3-005571?logo=npm&logoColor=white)](app/package.json)
-[![Dev Deps](https://img.shields.io/badge/dev_dependencies-0-005571?logo=npm&logoColor=white)](app/package.json)
-[![Tests](https://img.shields.io/badge/tests-node%3Atest%20%C2%B7%2098-2dd4bf)](app/server.test.js)
-[![Bind](https://img.shields.io/badge/bind-127.0.0.1-76b900)](app/server.js)
+[![Tests](https://img.shields.io/badge/tests-402%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
+[![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9)](ROADMAP.md)
+[![Render](https://img.shields.io/badge/deploy-render-4fc08d?logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey)](#license)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Dashboard Assets/built/mission-control.png">
+  <img alt="MYTHOS JARVIS HUD" width="880" src="Dashboard Assets/built/mission-control.png">
+</picture>
+
+<em>The JARVIS HUD — radial neural map, live entity state, voice mesh.</em>
 
 </div>
 
 ---
 
-> **Honest-inert by design.** Missing keys, dead providers, and failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you see that it doesn't work.
-
-Agentic OS runs entirely on your machine — no cloud, no account, no telemetry. Every agent shares one Obsidian-compatible **vault** so context is never re-explained. A reasoning engine resolves `ZCode → NIM → Claude CLI`, so the orchestrator runs without an Anthropic key. A fleet of free OpenAI-compatible providers (Groq, Cerebras, Mistral, Cloudflare, OpenRouter-Free) ships through one factory.
-
-<p align="center">
-  <em>Mission Control — the fleet at a glance.</em><br>
-  <img src="Dashboard Assets/built/mission-control.png" alt="Mission Control dashboard" width="880">
-</p>
+> **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you see that it doesn't work.
 
 ---
 
-## Table of contents
+## Table of Contents
 
+- [Architecture Overview](#architecture-overview)
+- [The OODA Cognitive Loop](#the-ooda-cognitive-loop)
+- [Six-Layer Stack](#six-layer-stack)
+- [Brain — Multi-Provider Chain](#brain--multi-provider-chain)
+- [Memory System](#memory-system)
+- [Immune System](#immune-system)
+- [Tiered Autonomy & Safety](#tiered-autonomy--safety)
+- [Voice System](#voice-system)
+- [45-Tool Effectors](#45-tool-effectors)
+- [Deploy](#deploy)
 - [Quickstart](#quickstart)
-- [How it's built](#how-its-built)
-- [Core features](#core-features)
-- [The provider fleet](#the-provider-fleet)
-- [How a request flows](#how-a-request-flows)
-- [Orchestration workflow](#orchestration-workflow)
 - [Screenshots](#screenshots)
-- [Roadmap](#roadmap)
-- [What's left](#whats-left)
-- [Tech stack & layout](#tech-stack--layout)
+- [Build History](#build-history)
+- [Tech Stack](#tech-stack)
 - [Documentation](#documentation)
-- [MYTHOS — Autonomous Entity](#mythos--autonomous-entity)
 - [License](#license)
 
 ---
 
-## Quickstart
+## Architecture Overview
 
-**Windows** — double-click `Start Agent OS.bat`.
+```mermaid
+flowchart TB
+    subgraph Cloud["☁️ Cloud Providers"]
+        direction LR
+        NIM["NVIDIA NIM<br/>2 keys · key rotation"]
+        GQ["Groq<br/>70B · 1K RPD"]
+        MI["Mistral<br/>Large · ∞ free"]
+        CE["Cerebras<br/>Sub-100ms"]
+        OR["OpenRouter<br/>Free models"]
+        ZC["ZCode<br/>GLM-5.2"]
+    end
 
-**Any platform**
+    subgraph MYTHOS["🔮 MYTHOS Entity"]
+        direction TB
+        subgraph Foundation["Foundation"]
+            CFG["Config"] BUS["Event Bus"] LIFE["Lifecycle"]
+        end
+        subgraph Cognition["Cognition"]
+            CORT["Cortex<br/>OODA Loop"]
+            BRN["Brain<br/>Chain Walk"]
+            MEM["Memory<br/>5 Stores"]
+            GOAL["Goals"]
+            LEASH["Leash<br/>Safety"]
+            IMM["Immune<br/>Self-Heal"]
+        end
+        subgraph IOLayer["I/O"]
+            SENS["5 Sensors"]
+            EFF["45 Effectors"]
+        end
+        CORT --> BRN --> Cloud
+        SENS --> BUS --> EFF
+    end
+
+    subgraph Interface["🖥️ Interface"]
+        HUD["JARVIS HUD<br/>Radial Neural Map"]
+        VOICE["Voice Loop<br/>Push-to-Talk"]
+        CAM["Camera<br/>Gesture Control"]
+        API["REST API<br/>+ WebSocket v2"]
+    end
+
+    Interface <--> MYTHOS
+```
+
+### Entity vs Agent
+
+| Property | Traditional Agent | **MYTHOS Entity** |
+|----------|-------------------|---------------------|
+| Trigger | User request | OODA cognitive loop (1s tick) |
+| Cognition | On-demand chain walk | Continuous cortex tick |
+| Memory | Session-only | Layered persistent memory (5 stores) |
+| Safety | Confirm dialog | Tiered autonomy + audit trail + immune |
+| Failure | Return error | Self-diagnose → self-heal → degrade |
+| Idle | No work, no cost | Idle ticks call zero LLM APIs |
+| Deployment | Serverless | Long-running process + Docker |
+
+---
+
+## The OODA Cognitive Loop
+
+Every second, MYTHOS runs a full observe-orient-decide-act cycle:
+
+```mermaid
+flowchart LR
+    OBS["👁️ OBSERVE<br/>Timer · File · WS<br/>Job · Metric sensors"] --> ORI
+
+    subgraph ORI["🧭 ORIENT"]
+        RANK["Rank salience<br/>vs goals + drives"] --> HIGH{"High?"}
+        HIGH -->|yes| EPI["Record to<br/>episodic memory"]
+        HIGH -->|no| SKIP["Skip"]
+    end
+
+    ORI --> DEC
+
+    subgraph DEC["⚖️ DECIDE"]
+        ARB["Arbiter<br/>weighted score"] --> PLAN["Planner<br/>recall or Brain"]
+    end
+
+    DEC --> ACT
+
+    subgraph ACT["⚡ ACT"]
+        CHK["Leash check"] --> BRK["Breaker allow"] --> DSP["Dispatch<br/>effector"]
+        DSP --> CONF{"Tier ≥ 3?"}
+        CONF -->|yes| AUD["Write audit<br/>then execute"]
+        CONF -->|no| EXE["Execute"]
+    end
+
+    ACT --> REF["🔄 REFLECT<br/>consolidate memory<br/>every 60 ticks"]
+    REF -.-> OBS
+
+    style OBS fill:#0e4429,stroke:#43e5a0,color:#fff
+    style ORI fill:#1a1a4e,stroke:#4fd8ff,color:#fff
+    style DEC fill:#4a1a6b,stroke:#a78bfa,color:#fff
+    style ACT fill:#4a2a0a,stroke:#eab308,color:#fff
+    style REF fill:#1a3a1a,stroke:#22c55e,color:#fff
+```
+
+**Key insight:** Idle ticks skip Brain entirely (no LLM call = no cost). Only salient perceptions trigger reasoning.
+
+---
+
+## Six-Layer Stack
+
+```
+┌─────────────────────────────────────────────────────┐
+│              SERVER & UI v2                          │  Express + WS on :4478
+│         JARVIS HUD · Voice · Camera                  │  Vanilla JS, zero build step
+├─────────────────────────────────────────────────────┤
+│              IDENTITY                                │  self.md · boundaries.md
+│         Human-editable persona                       │  Entity has no write path
+├─────────────────────────────────────────────────────┤
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  5 sensors · 45 effectors
+│  timer·file·ws·job·metric                           │  Publish/subscribe, never direct
+├─────────────────────────────────────────────────────┤
+│              CORTEX (OODA)                            │  1s tick, generation guard
+│         observe → orient → decide → act               │  Breakers + timeouts
+├─────────────────────────────────────────────────────┤
+│  GOALS  │  BRAIN  │  LEASH  │  IMMUNE               │  Cognition subsystems
+│  Arbitrage  Chain   Audit    Heal                    │
+├─────────────────────────────────────────────────────┤
+│           MEMORY (5 stores)                           │  Episodic · Semantic
+│           Skills · Identity · Audit                   │  Vault-backed, persistent
+├─────────────────────────────────────────────────────┤
+│  CONFIG  │  BUS  │  LIFECYCLE  │  LOGGER            │  Foundation
+└─────────────────────────────────────────────────────┘
+```
+
+**Wiring rule:** Modules never call across layer boundaries directly — publish/subscribe on bus. Cortex is the only module that holds direct refs to memory, goals, brain, leash, and effectors.
+
+---
+
+## Brain — Multi-Provider Chain
+
+6 cloud providers, 2 NVIDIA keys with automatic rotation, walking ranked preference tables with per-model cooldown.
+
+```mermaid
+flowchart LR
+    THINK["brain.think()"] --> REG["Registry<br/>probe all providers"]
+
+    subgraph Chain["Chain Walk"]
+        direction LR
+        A1["Groq 70B"] -->|fail| A2["Mistral Large"]
+        A2 -->|fail| A3["Cerebras Gemma"]
+        A3 -->|fail| A4["NIM Key 1"]
+        A4 -->|fail| A5["NIM Key 2"]
+        A5 -->|fail| A6["OpenRouter"]
+        A6 -->|fail| A7["Ollama ∞"]
+    end
+
+    A7 -->|fail| DEAD["chainExhausted<br/>offline: true"]
+    A1 -->|success| RESP["Response"]
+
+    style A1 fill:#0e4429,stroke:#43e5a0
+    style A2 fill:#0e4429,stroke:#43e5a0
+    style A3 fill:#0e4429,stroke:#43e5a0
+    style DEAD fill:#4a0a0a,stroke:#ef4444
+    style RESP fill:#0e4429,stroke:#22c55e
+```
+
+### Provider Fleet
+
+| Provider | Model(s) | Free Tier | Lanes | Key Rotation |
+|----------|----------|-----------|-------|:---:|
+| **Groq** | `llama-3.3-70b-versatile` | 1K RPD / 100K TPD | voice, simple | — |
+| **Mistral** | `mistral-large-2512` | No cap · 1 req/sec | voice, build, simple, vision | — |
+| **Cerebras** | `gemma-4-31b`, `zai-glm-4.7`, `gpt-oss-120b` | 2.4K RPD | build, simple, text | — |
+| **NVIDIA NIM** | `meta/llama-3.1-8b-instruct`, vision models | ~1K/month · 40 RPM | voice, build, simple, text, vision | ✅ 2 keys |
+| **OpenRouter** | `hermes-3-405b`, `qwen3-coder`, `llama-3.3-70b` | 50 RPD | voice, build, simple, text | — |
+| **Ollama** | `qwen3:8b`, `ornith:9b`, `qwen3.5`, `qwen2.5vl` | Unlimited (local) | voice, build, simple, text, vision | — |
+
+### Failover Chains per Lane
+
+```mermaid
+graph TD
+    subgraph Voice["🎙️ VOICE"]
+        V1["Groq 70B"] --> V2["Mistral Large"] --> V3["Cerebras"] --> V4["NIM"] --> V5["OpenRouter"] --> V6["Ollama"]
+    end
+    subgraph Build["🏗️ BUILD"]
+        B1["Mistral Large"] --> B2["Cerebras GLM-4.7"] --> B3["Cerebras GPT-OSS"] --> B4["OpenRouter"] --> B5["NIM"] --> B6["Ollama"]
+    end
+    subgraph Simple["✉️ SIMPLE"]
+        S1["Mistral"] --> S2["Cerebras"] --> S3["NIM"] --> S4["OpenRouter Hermes"] --> S5["Ollama"]
+    end
+    subgraph Vision["👁️ VISION"]
+        VN1["Mistral (multimodal)"] --> VN2["NIM Vision"] --> VN3["Ollama qwen3.5"] --> VN4["Ollama qwen2.5vl"]
+    end
+```
+
+---
+
+## Memory System
+
+Five persistent stores, vault-backed, layered from short-term to long-term:
+
+```mermaid
+flowchart LR
+    IN["Perception<br/>event"] --> WM["WorkingMemory<br/>15-item buffer"]
+
+    WM -->|"high salience"| EP["Episodic Store<br/>time-series events"]
+    WM -->|"consolidation"| SE["Semantic Store<br/>knowledge graph"]
+
+    EP -->|"every 60 ticks"| CONS["Consolidation<br/>Brain distills"]
+    CONS --> SE
+
+    SE --> SK["Skills Store<br/>learned procedures"]
+    ID["Identity Store<br/>self.md sections"]
+    AU["Audit Store<br/>immutable log"]
+
+    style WM fill:#1a1a4e,stroke:#4fd8ff,color:#fff
+    style EP fill:#0e4429,stroke:#43e5a0,color:#fff
+    style SE fill:#0e4429,stroke:#22c55e,color:#fff
+    style AU fill:#4a1a1a,stroke:#ef4444,color:#fff
+```
+
+| Store | Purpose | Retention | Format |
+|-------|---------|-----------|--------|
+| **Working Memory** | 15-item perception buffer, drain on orient | Tick-scoped | In-memory |
+| **Episodic** | Time-series of events and experiences | 30 days (config) | JSON files |
+| **Semantic** | Consolidated knowledge, relationships | Permanent | JSON + vector index |
+| **Skills** | Learned procedures and patterns | Permanent | JSON |
+| **Identity** | Persona sections (self.md, boundaries.md) | Permanent | Markdown |
+| **Audit** | Immutable action log for tier ≥ 3 | Permanent | JSON lines |
+
+---
+
+## Immune System
+
+Self-healing architecture with watchdog, healer, diagnostician, and circuit breakers:
+
+```mermaid
+flowchart TD
+    WATCH["🐕 Watchdog<br/>polls every 2s"] -->|"stall detected"| DIAG["🔬 Diagnostician<br/>classify fault"]
+
+    DIAG -->|"provider failure"| BRK["⚡ Circuit Breaker<br/>3 fails → open 15s"]
+    DIAG -->|"cortex stall"| HEAL["🩹 Healer<br/>restart cortex"]
+
+    BRK -->|"reset after 15s"| RETRY["Retry lane"]
+    HEAL -->|"max restarts"| ANN["📢 Announcer<br/>speak status"]
+
+    ANN -.->|"voice"| TTS["Edge TTS<br/>322 voices"]
+
+    style WATCH fill:#4a2a0a,stroke:#eab308,color:#fff
+    style BRK fill:#4a1a1a,stroke:#ef4444,color:#fff
+    style HEAL fill:#0e4429,stroke:#22c55e,color:#fff
+```
+
+| Component | Role | Trigger |
+|-----------|------|---------|
+| **Watchdog** | Detects cortex stalls | Polls every 2s |
+| **Diagnostician** | Classifies fault type | Stall or anomaly event |
+| **Breakers** | Trip on 3 consecutive fails | Provider-level circuit |
+| **Healer** | Restarts failed subsystems | Diagnostician dispatch |
+| **Announcer** | Voice status updates | Health events |
+| **Monitor** | Crash recovery on restart | Boot-time checkpoint scan |
+
+---
+
+## Tiered Autonomy & Safety
+
+Four tiers of action autonomy with human sovereignty baked in:
+
+| Tier | Actions | Human Gate | Audit |
+|:----:|---------|:-----------:|:-----:|
+| **0** | Internal state changes | No | No |
+| **1** | Memory writes, perception routing | No | No |
+| **2** | Goal CRUD, kanban moves, pipeline advance | No | Yes |
+| **3** | Code execution, file writes, agent dispatch | Confirm | ✅ |
+| **4** | System-level changes, destructive ops | Confirm + reason | ✅ |
+
+```mermaid
+flowchart LR
+    ACT["Action request"] --> LCK["Leash.check()"]
+    LCK --> T3{"Tier ≥ 3?"}
+    T3 -->|yes| CONF["Confirm dialog<br/>30s TTL"]
+    T3 -->|no| GO["Execute"]
+    CONF -->|accept| AUD["Write audit line"]
+    CONF -->|reject| DENY["Denied"]
+    AUD --> GO
+
+    style T3 fill:#4a1a1a,stroke:#ef4444,color:#fff
+    style DENY fill:#4a0a0a,stroke:#ef4444,color:#fff
+```
+
+**`MYTHOS_DRY_RUN=true`** — makes all tier ≥ 1 actions logged no-ops. Perfect for observing what the entity *would* do.
+
+---
+
+## Voice System
+
+Three integrated voice channels — browser push-to-talk, speech-to-speech pipeline, and gesture control:
+
+```mermaid
+flowchart TB
+    subgraph Input["🎤 Input Channels"]
+        PTT["Push-to-Talk<br/>Hold Space / mic pill"]
+        S2S["Speech-to-Speech<br/>Silero VAD + Whisper"]
+        CAM["Camera Gestures<br/>MediaPipe · 4 gestures"]
+    end
+
+    subgraph Brain["🧠 Voice Brain"]
+        STT["Speech-to-Text"] --> INT["Ollama JSON<br/>tool-calling"]
+        INT --> TOOLS["20 Dashboard tools<br/>4 Computer tools<br/>10 PC tools"]
+    end
+
+    subgraph Output["🔊 Output"]
+        TTS["Edge TTS<br/>322 Neural voices"]
+        SYNTH["Browser<br/>speechSynthesis fallback"]
+    end
+
+    Input --> Brain --> Output
+    CAM -->|"Confirm/Deny/Mute/Vision"| TOOLS
+
+    style Input fill:#1a1a4e,stroke:#4fd8ff,color:#fff
+    style Output fill:#0e4429,stroke:#43e5a0,color:#fff
+```
+
+### Gesture Control
+
+| Gesture | Action |
+|---------|--------|
+| 👍 **Thumb Up** | Accept confirmation |
+| ✊ **Closed Fist** | Reject confirmation |
+| 🖐️ **Open Palm** | Mute / stop voice |
+| ✌️ **Victory** | Vision Q&A — describe scene |
+
+### Voice Actions
+- **Dashboard:** navigate, goals CRUD, pipeline capture/advance, kanban build, ask agents
+- **Computer:** open folders, list files, read files, compose emails
+- **Safety:** dangerous actions require spoken confirmation (30s TTL)
+
+---
+
+## 45-Tool Effectors
+
+Every action MYTHOS can take goes through one of these 45 registered effectors:
+
+```mermaid
+pie title Tool Distribution
+    "Dashboard" : 21
+    "PC Control" : 10
+    "Browser Automation" : 10
+    "Computer" : 4
+    "Project" : 1
+```
+
+| Catalog | Count | Examples |
+|---------|:-----:|---------|
+| **Dashboard** | 21 | navigate, create_goal, pipeline_execute, kanban_build, ask_agent, monitor_snapshot, kill_session |
+| **PC Control** | 10 | launch_app, focus_window, screen_look, ui_click, ui_type, media_key |
+| **Browser** | 10 | browser_navigate, browser_click, browser_screenshot, browser_evaluate |
+| **Computer** | 4 | open_folder, list_folder, read_file, compose_email |
+| **Project** | 1 | start_project (auto-pipeline) |
+
+All dangerous tools (delete, execute, kill) require confirmation via the Leash system.
+
+---
+
+## Deploy
+
+### Render (Cloud)
+
+```yaml
+# render.yaml — auto-detected by Render Blueprint
+services:
+  - type: web
+    name: agent-os
+    runtime: docker
+    rootDir: mythos
+    plan: free
+    envVars:
+      - key: PORT
+        generateValue: true
+      - key: MYTHOS_BIND
+        value: "0.0.0.0"
+```
+
+**Deploy steps:**
+1. Push to `main` — auto-deploys
+2. Set env vars in Render dashboard (API keys, model configs)
+3. Live at `https://agent-xxxx.onrender.com`
+
+**Dockerfile included** — Node 20 Alpine + edge-tts + zero build step.
+
+> 📋 **Environment variables you need to set** (in Render dashboard, NOT in the repo):
+> `NIM_API_KEY` · `NIM_API_KEY_2` · `GROQ_API_KEY` · `MISTRAL_API_KEY` · `OPENROUTER_API_KEY` · `CEREBRAS_API_KEY`
+
+### Local (Windows)
+
+Double-click **`Start Agent OS.bat`** — that's it.
 
 ```bash
-cd app
-npm install        # 3 deps, finishes in seconds
-node server.js
+# Or manually:
+cd mythos
+npm install
+node src/main.js
+# Open http://127.0.0.1:4478
 ```
 
-Then open <http://localhost:4477>.
-
-The server binds to `127.0.0.1` (loopback only) — the dashboard is unreachable from your LAN. Set `BIND=0.0.0.0` only if you deliberately want network exposure; the process-killing monitor endpoints stay loopback-gated either way.
-
-Copy `app/.env.example` to `app/.env` and fill in keys as desired. The app boots **degraded without any keys** — the dashboard still loads and status tiles show exactly what's offline.
-
----
-
-## How it's built
-
-```mermaid
-flowchart LR
-    subgraph Browser["Browser (vanilla-JS SPA, no build step)"]
-        UI["Shell + 30 view modules"]
-        WS["ws.js client"]
-    end
-    subgraph Server["Express server  :4477  bound 127.0.0.1"]
-        Mid["Middleware stack<br/>requestId · json · logger · CORS · rate-limit"]
-        API["34 API routes"]
-        WSrv["WebSocket /ws<br/>13 Mastermind seats"]
-        Orch["Orchestrator<br/>job queue + reasoning engine"]
-    end
-    subgraph Local["Local machine"]
-        Vault[("Vault<br/>Obsidian-shaped<br/>JSON + Markdown")]
-        TTS["edge-tts<br/>Python service :5050"]
-        AB["abtop CLI<br/>agent monitor"]
-        CLI["claude CLI<br/>child_process"]
-        FF["ffmpeg<br/>video render"]
-    end
-    subgraph Cloud["Free / low-cost providers"]
-        ZC["ZCode · NIM<br/>reasoning"]
-        Fleet["Groq · Cerebras · Mistral<br/>Cloudflare · OpenRouter-Free"]
-        Media["Suno · HeyGen · ElevenLabs<br/>MiniMax · Grok · OpenAI"]
-    end
-
-    UI <-->|HTTP /api| Mid
-    UI <-->|WebSocket| WSrv
-    Mid --> API --> Orch
-    API --> Vault
-    API --> TTS
-    API --> AB
-    API --> CLI
-    API --> FF
-    Orch -->|reasoning.chat| ZC
-    WSrv --> Fleet
-    WSrv --> CLI
-    API --> Media
-```
-
-Everything inside the **Local** and **Server** boxes stays on your machine. Only the **Cloud** box leaves localhost, and only when a key is present.
-
----
-
-## Core features
-
-22 surfaces across 5 sidebar groups. Each row below is a real route in `app/public/js/sidebar-config.js`.
-
-### 🛰️ Workspace — the dashboard layer
-
-| Surface | What it does |
-|---|---|
-| **Mission Control** | Live status tiles for the whole fleet, one card per chat agent, heartbeat + latency. |
-| **Provider Activity** | Real-time log of *your own* free-provider API calls — calls/min, tokens/min, success rate. |
-| **Quota Tracker** | Estimated free-tier usage per provider against researched caps (labeled as estimates — no free API exposes real remaining quota). |
-| **Agent Monitor** | Live Claude Code / Codex / OpenCode sessions on this machine, via the `abtop` CLI. Kill by PID (loopback-only). |
-
-### 🧠 Agent Orchestration — the spine
-
-| Surface | What it does |
-|---|---|
-| **Paperclip** | Idea intake → drops straight into Pipeline Capture. |
-| **AI Agent Mastermind** | A 13-seat room streaming concurrently over WebSocket: Claude, Hermes, ZCode, NIM, Free-Claude, Gemini, Codex, GLM, Groq, OpenRouter-Free, Cerebras, Mistral, Cloudflare. `@mention` to filter seats. Every exchange auto-saves to the vault. |
-| **Pipeline** | Capture → Human Gate → Execute → Shipped. Approve/reject/ship cards; Execute enqueues an orchestrator job. |
-| **Agent Kanban** | Backlog → Building → Review → Done board, driven by Planner / Builder / Reviewer agents. |
-
-### 💬 Agents — the chat fleet
-
-Nine dedicated chat surfaces, all streaming over `/ws` with vault auto-save:
-
-`Claude` · `Hermes` (Ollama) · `ZCode` (GLM-4.6) · `NVIDIA NIM` (Nemotron-70B) · `Groq` · `OpenRouter Free` · `Cerebras` · `Mistral` · `Cloudflare AI`
-
-### 🪞 Self — your context
-
-| Surface | What it does |
-|---|---|
-| **Memory** | Obsidian-vault notes rendered as a navigable **galaxy** — each note a star (size ∝ recency), each `[[wiki-link]]` an edge. |
-| **Goals** | CRUD against `vault/Goals.md`, categories, progress stats. Voice-input supported. |
-| **The Radar** | Free RSS signal aggregation (configure feeds via `RADAR_FEEDS`). Server-side fetch to avoid CORS. X/Grok paid APIs are a future enhancement. |
-| **Free Claude Code** | Agent Factory UI for $0 local builds. *UI-ready; Claude Code CLI wiring into this view is in progress.* |
-
-### 🎤 Voice Control — hands-free dashboard + computer access (Phase 1 + Phase 2)
-
-#### Phase 1: Browser push-to-talk (included, always on)
-**Hold Space** (or click the mic pill in the header) to speak a command. Your browser's native speech recognition (works in Chrome, Edge, Safari) sends audio to a local Ollama model, which interprets the utterance and executes tools — no voice transcription sent to the cloud.
-
-**What you can do:**
-- **Dashboard:** navigate to a surface, create/list/toggle/delete goals, capture a pipeline idea, list/advance/execute cards, build/assemble kanban items, ask an agent, check session status, kill a session by PID.
-- **Computer:** open a folder in File Explorer, list a folder's contents, read a text file, compose an email (drafts the text; opens your mail client or Gmail compose — you click Send, nothing is auto-sent).
-
-**Safety first:** dangerous actions (delete a goal, execute a card, assemble/build a kanban item, kill a session) require an explicit spoken confirmation — say "yes" when prompted. Confirmations expire after 30 seconds.
-
-**Configuration:**
-- Requires a local Ollama model running with JSON tool-calling capability (e.g., `qwen3`, `llama3.1-8B`).
-- Spoken replies use the same edge-tts service as Voice Studio; falls back to the browser's speech synthesis if edge-tts isn't running.
-- Filesystem access is sandboxed to folders you specify in `VOICE_ALLOWED_DIRS` (defaults to your home directory).
-- See `app/.env.example` for all tuning: `VOICE_ENABLED`, `VOICE_OLLAMA_MODEL`, `VOICE_TTS_VOICE`, `VOICE_CONFIRM_TTL_MS`, `VOICE_EMAIL_MODE`.
-
-**Honest degradation:** The mic pill shows `VOICE OFFLINE` if Ollama is unreachable. Tool errors surface plainly — no silent failures.
-
-#### Phase 2: Fully-local speech-to-speech (optional, off by default)
-Run a local speech-to-speech pipeline with **no browser tab open** — a true open-mic hands-free loop. The pipeline (Silero VAD + faster-whisper STT + Kokoro TTS) runs as a managed child process and uses the dashboard as its reasoning backend via an OpenAI-shaped `/voice/v1/chat/completions` endpoint. Same 20-tool agent brain as Phase 1; same danger confirmations.
-
-**To enable Phase 2:**
-1. Run `powershell -ExecutionPolicy Bypass -File app/services/setup-s2s.ps1` — installs the pipeline venv, downloads models (~2 GB first run), detects CUDA/CPU, verifies espeak-ng, lists audio devices.
-2. Set `S2S_AUTOSTART=true` in `app/.env` (off by default — it's heavier and more experimental than Phase 1).
-3. Server restarts automatically; watch `/api/voice/status` dashboard tile for `s2s` process state.
-
-**What Phase 2 adds:** hands-free without a browser tab, no Web Speech API dependency, true open-mic listening. **Known validation gap:** end-to-end live testing with a real installed pipeline and microphone has not been performed in this dev environment; see `app/services/README.md` section "Unverified in this environment" for the specific checklist items and how to verify them on a live install.
-
-**Honest caveats:** The upstream `speech-to-speech` Python project is untested on Windows; multi-GB model downloads; open-mic has no additional auth once enabled (stay on `127.0.0.1` loopback only). Phase 2 is experimental and opt-in.
-
-#### Phase 3: Voice HUD observability view (included, ready to use)
-A dedicated, same-tab live view of voice activity — what was heard, what tools ran with their arguments and results, agent replies, and pending confirmations — all in one causally-ordered feed. Accessible via the sidebar under Workspace (next to Mission Control and Agent Monitor).
-
-**What it shows:**
-- Merged chronological log of all voice events from the current browser tab since page load: utterances, tool calls (arguments + success/error), agent replies, and active confirmations.
-- Health panel: voice brain (Ollama) reachability, S2S child status (if enabled), TTS status, plus a mute toggle.
-- Interactive Confirm/Cancel banner for pending danger-tier confirmations, using the same underlying WebSocket mechanism as Phase 1 and Phase 2.
-
-**Scope (intentional):** This view shows activity only from the current browser tab, starting when the page loaded. It has no cross-tab history, no persistence across reload, and no access to activity that happened before the page opened. This is a deliberate investigation-backed choice, not a limitation to apologize for — the UI states this plainly.
-
-**Under the hood:** Pure client-side. The backend `/api/voice/status` endpoint is unchanged; the view consumes it for health status. A small extension to the existing Phase 1 `voice-control.js` module adds an in-memory event history and subscription API so this view (and future consumers) can observe voice activity. Zero changes to any server-side voice code (brain, tools, WebSocket protocol, or S2S transport).
-
-### 🎬 Studio — generation surfaces
-
-| Surface | Engine | Status |
-|---|---|---|
-| **Game Studio** | Reasoning engine → single-file HTML game | ✅ Live |
-| **Thumbnail Studio** | OpenAI `gpt-image-1` generate/edit | ✅ Live |
-| **Music Studio** | Suno (via sunoapi.org proxy) | ✅ Live |
-| **Video Studio** | HeyGen/ElevenLabs narrator + MiniMax/Grok b-roll, **combined via ffmpeg** | ✅ Live |
-| **Voice Studio** | Free Microsoft Neural TTS via edge-tts — 322 voices | ✅ Live · *UNOFFICIAL* |
-
-<p align="center">
-  <em>Memory Galaxy — vault notes as a navigable starfield.</em><br>
-  <img src="Dashboard Assets/built/memory-galaxy.png" alt="Memory Galaxy" width="880">
-</p>
-
----
-
-## The provider fleet
-
-The reasoning engine (used by the orchestrator) resolves in priority order: **ZCode → NIM → Claude CLI fallback**, so Pipeline Execute / Kanban build / review jobs run without an Anthropic key. The chat fleet is OpenAI-SSE-compatible, built from one factory (`lib/providers/openai-compat.js`).
-
-| Provider | Kind | Model | Free-tier cap | Powers | Status |
-|---|:---:|---|---|---|:---:|
-| **ZCode** | chat | Z.AI GLM-4.6 | Z.AI coding plan | Reasoning engine (primary), chat seat | ✅ |
-| **NVIDIA NIM** | chat | Nemotron-70B | ~1,000 credits · 40 RPM | Reasoning engine (fallback), chat seat | 🧪 trial |
-| **Groq** | chat | Llama 3.3 70B | ~14,400 req/day · 30 RPM | Chat seat, Mastermind seat | ✅ |
-| **Cerebras** | chat | Llama 3.1 8B | ~1M tokens/day | Chat seat, Mastermind seat | ✅ |
-| **Mistral** | chat | mistral-small-latest | ~1 req/sec | Chat seat, Mastermind seat | ✅ |
-| **Cloudflare AI** | chat | Llama 3.3 70B fp8 | 10,000 Neurons/day | Chat seat, Mastermind seat | ✅ |
-| **OpenRouter Free** | chat | `openrouter/free` router | ~50 req/day | Chat seat, Mastermind seat | ✅ |
-| **Edge TTS** | tts | 322 Microsoft Neural voices | Unlimited | Voice Studio, video narration | ⚠️ unofficial |
-| **Ollama** | chat | any local model | unlimited | Hermes seat, Voice Control (Phase 1) | ✅ local |
-| **Claude Code CLI** | chat | claude (binary) | Anthropic key | Claude seat, reasoning fallback | ✅ |
-| OpenAI Images | media | `gpt-image-1` | paid | Thumbnail Studio | 🔧 key-gated |
-| Suno | media | Suno API | paid | Music Studio | 🔧 key-gated |
-| HeyGen · ElevenLabs | media | avatar · voiceover | paid | Video Studio narrator | 🔧 key-gated |
-| MiniMax · Grok | media | b-roll video | paid | Video Studio b-roll | 🔧 key-gated |
-
-**Legend:** ✅ wired · 🧪 trial (finite credits) · ⚠️ unofficial (personal use only) · 🔧 key-gated (honest-OFFLINE without key)
-
-> The Edge TTS integration reverse-engineers Microsoft Edge's Read Aloud endpoint. It is **UNOFFICIAL and personal/hobby use only** — not licensed for commercial deployment. See [`app/services/README.md`](app/services/README.md).
-
----
-
-## How a request flows
-
-The Sprint 7 hardening stack — every request passes through these in order:
-
-```mermaid
-flowchart LR
-    Req([HTTP request]) --> RID["requestId<br/>crypto.randomUUID"]
-    RID --> JSON["express.json<br/>limit 1mb"]
-    JSON --> LOG["requestLogger<br/>one JSON line on finish"]
-    LOG --> CORS["CORS<br/>localhost allowlist"]
-    CORS --> RL["rate-limit<br/>240/min global · 8/min expensive"]
-    RL --> Routes["34 API routes"]
-    Routes --> Err["error middleware<br/>generic msg + requestId to client<br/>full stack logged server-side"]
-    Routes --> Resp([response])
-    Err --> Resp
-```
-
-A user-reported `requestId` maps to exactly one server log line. Stack traces never leak to the client.
-
----
-
-## Orchestration workflow
-
-Two coordinated boards drive work from idea to shipped artifact. The orchestrator is a persisted job queue with concurrency control and honest failure (restarted jobs are marked `failed`, never fake-resumed).
-
-```mermaid
-flowchart LR
-    Idea([Idea]) --> Cap["Paperclip<br/>capture"]
-    Cap --> Pipe["Pipeline<br/>Inbox"]
-    Pipe --> Gate{Human Gate}
-    Gate -->|reject| Drop([discarded])
-    Gate -->|approve| Exec["Execute<br/>orchestrator job"]
-    Exec --> Reason["reasoning.chat<br/>ZCode → NIM → Claude CLI"]
-    Reason --> Ship([Shipped])
-
-    Goal([Goal]) --> Plan["Kanban<br/>Planner agent"]
-    Plan --> Tasks["3-6 JSON tasks"]
-    Tasks --> Build["Builder agent"]
-    Build --> Rev["Reviewer agent"]
-    Rev -->|accept| Done([Done])
-    Rev -->|reject| Build
-```
-
-Every orchestrator job streams progress over WebSocket to all connected clients.
+Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any keys** — status tiles show exactly what's offline.
 
 ---
 
@@ -287,152 +456,191 @@ Every orchestrator job streams progress over WebSocket to all connected clients.
 <p align="center">
   <table>
     <tr>
-      <td width="50%" align="center"><b>Pipeline — Capture → Human Gate → Execute → Shipped</b></td>
+      <td width="50%" align="center"><b>JARVIS HUD — Radial Neural Map</b></td>
       <td width="50%" align="center"><b>Agent Kanban — Planner / Builder / Reviewer</b></td>
     </tr>
     <tr>
-      <td><img src="Dashboard Assets/built/pipeline.png" alt="Pipeline board" width="100%"></td>
+      <td><img src="Dashboard Assets/built/mission-control.png" alt="JARVIS HUD" width="100%"></td>
       <td><img src="Dashboard Assets/built/agent-kanban.png" alt="Agent Kanban" width="100%"></td>
     </tr>
     <tr>
-      <td align="center"><b>Mastermind — 13 concurrent seats</b></td>
-      <td align="center"><b>The Radar — signals + oracle</b></td>
+      <td align="center"><b>Memory Galaxy — Vault as a Starfield</b></td>
+      <td align="center"><b>Goals — CRUD + Voice Input</b></td>
     </tr>
     <tr>
-      <td><img src="Dashboard Assets/built/agent-room.png" alt="Mastermind room" width="100%"></td>
-      <td><img src="Dashboard Assets/built/radar.png" alt="The Radar" width="100%"></td>
+      <td><img src="Dashboard Assets/built/memory-galaxy.png" alt="Memory Galaxy" width="100%"></td>
+      <td><img src="Dashboard Assets/built/goals-completed.png" alt="Goals" width="100%"></td>
+    </tr>
+    <tr>
+      <td align="center"><b>Pipeline — Capture → Gate → Execute → Ship</b></td>
+      <td align="center"><b>The Radar — RSS Signal Aggregation</b></td>
+    </tr>
+    <tr>
+      <td><img src="Dashboard Assets/built/pipeline.png" alt="Pipeline" width="100%"></td>
+      <td><img src="Dashboard Assets/built/radar.png" alt="Radar" width="100%"></td>
+    </tr>
+    <tr>
+      <td align="center"><b>Mastermind — 13 Concurrent AI Seats</b></td>
+      <td align="center"><b>Agent Room — Multi-Model Streaming</b></td>
+    </tr>
+    <tr>
+      <td><img src="Dashboard Assets/built/agent-room.png" alt="Mastermind" width="100%"></td>
+      <td><img src="Dashboard Assets/built/hermes.png" alt="Hermes" width="100%"></td>
     </tr>
   </table>
 </p>
 
-More captures in [`Dashboard Assets/built/`](Dashboard%20Assets/built/) — goals, game studio, video studio, music studio, thumbnail studio, palette, and more.
+<p align="center">
+  <table>
+    <tr>
+      <td width="25%" align="center"><b>Game Studio</b></td>
+      <td width="25%" align="center"><b>Music Studio</b></td>
+      <td width="25%" align="center"><b>Video Studio</b></td>
+      <td width="25%" align="center"><b>Thumbnail Studio</b></td>
+    </tr>
+    <tr>
+      <td><img src="Dashboard Assets/built/game-studio.png" alt="Game Studio" width="100%"></td>
+      <td><img src="Dashboard Assets/built/music-studio.png" alt="Music Studio" width="100%"></td>
+      <td><img src="Dashboard Assets/built/video-studio.png" alt="Video Studio" width="100%"></td>
+      <td><img src="Dashboard Assets/built/thumbnail-studio.png" alt="Thumbnail Studio" width="100%"></td>
+    </tr>
+  </table>
+</p>
 
 ---
 
-## Roadmap
+## Build History
 
-Eleven sprints shipped. Linear history on `main`. 240 tests green throughout, zero new dependencies added in any sprint.
+20 phases shipped. Linear history on `main`. 402 tests green.
 
 ```mermaid
 gantt
-    title Sprint history
+    title Phase History
     dateFormat YYYY-MM-DD
-    axisFormat %b
-    section Shipped
-    Sprint 1 Runnable core          :done, s1, 2026-06-20, 4d
-    Sprint 2 ZCode + NIM reasoning  :done, s2, after s1, 3d
-    Sprint 3 node-test safety net   :done, s3, after s2, 3d
-    Sprint 4 Free fleet + quota     :done, s4, after s3, 4d
-    Sprint 5 Edge TTS 322 voices    :done, s5, after s4, 2d
-    Sprint 6 Close Phase 2 gaps     :done, s6, after s5, 3d
-    Sprint 7 Land + harden          :done, s7, after s6, 2d
-    Sprint 8 Free Claude builder    :done, s8, after s7, 2d
-    Sprint 9 Radar improvements     :done, s9, after s8, 2d
-    Sprint 10 Voice Phase 1         :done, s10, after s9, 3d
-    Sprint 11 Voice Phase 2         :done, s11, after s10, 2d
-    Sprint 12 Voice Phase 3         :done, s12, after s11, 1d
+    axisFormat %b %d
+    section Foundation
+    P0 Foundation               :done, p0, 2026-07-08, 2d
+    P1 Memory                  :done, p1, after p0, 2d
+    P2 Brain                   :done, p2, after p1, 2d
+    P3 Cortex (OODA)          :done, p3, after p2, 2d
+    P4 Goals                   :done, p4, after p3, 1d
+    section Safety
+    P4.5 Spec Remediation      :done, p4b, after p4, 1d
+    P5 Leash                   :done, p5, after p4b, 2d
+    P6 Immune System           :done, p6, after p5, 2d
+    section I/O
+    P7 Sensors + 45 Effectors  :done, p7, after p6, 3d
+    P8 Identity                :done, p8, after p7, 2d
+    P9 UI v2 + JARVIS HUD     :done, p9, after p8, 3d
+    section Hardening
+    P10 Chaos Drills          :done, p10, after p9, 2d
+    P11 Token Streaming       :done, p11, after p10, 1d
 ```
 
-| Sprint | Scope |
-|---|---|
-| **1** | Runnable core: Mission Control, Express server, vault, `/api/status` probes, SPA shell |
-| **2** | ZCode + NVIDIA NIM reasoning engines — orchestrator runs without an Anthropic key |
-| **3** | `node:test` safety net (10 suites across state modules + server smoke) |
-| **4** | Free-provider fleet (7 providers) + activity monitor + Quota Tracker |
-| **5** | Free Microsoft Neural TTS via edge-tts (322 voices, unofficial) |
-| **6** | Close Phase 2 gaps: full-fleet Mission Control cards, Web Speech voice input, Video Studio ffmpeg render, Radar RSS MVP. *(Memory Galaxy was already wired — verified, no change needed.)* |
-| **7** | Land sprints 1–6 to `main`, then harden: loopback bind, loopback-only kill endpoints, zero-dep rate limiter, structured JSON logger + requestId, centralized error middleware, graceful shutdown, explicit CORS, this README + ROADMAP |
-| **8** | Wire Free Claude Code Agent Factory + Chat & Workspace |
-| **9** | Free-only Radar improvements: dedup, keyword scoring, Draft this button |
-| **10** | Voice Control Phase 1: hands-free push-to-talk, Ollama JSON agent, 20-tool catalog, confirmation gating on danger actions, pre-ship security audit |
-| **11** | Voice Control Phase 2: fully-local speech-to-speech pipeline (Silero VAD + faster-whisper + Kokoro TTS) as optional child process, browser-free open-mic, confirmation fix + transport-agnostic brain, security review, test growth |
-| **12** | Voice Control Phase 3: Voice HUD observability view, merged chronological log, health panel, confirmation banner, same-tab-only scope, zero server changes |
+| Phase | Scope | Tests |
+|:-----:|-------|:-----:|
+| **P0** | Foundation: config, bus, lifecycle, logger, vault | 26 |
+| **P1** | Memory: 5 stores, consolidation, working memory | 70 |
+| **P2** | Brain: chain walk, provider registry, failover | 113 |
+| **P3** | Cortex: OODA loop, orient/decide/act cycle | 161 |
+| **P4** | Goals: arbitrage, budget, CRUD, priority scoring | 161 |
+| **P4.5** | Spec-conformance remediation (13 criticals closed) | 174 |
+| **P5** | Leash: tiered autonomy, confirmation gating, audit | 184 |
+| **P6** | Immune: watchdog, healer, breakers, announcer | 234 |
+| **P7** | 45 effectors, 5 sensors, voice, build-runner | 272 |
+| **P8** | Identity: self.md, boundaries.md, persona injection | 293 |
+| **P9** | UI v2: JARVIS HUD, WS v2, REST routes, overlay panels | 316 |
+| **P10** | Chaos drills: 6 drills against real shipped code | 327 |
+| **P11** | Token streaming, gap-closing (D-23/D-57 fixes) | 402 |
 
-Full history with per-commit detail in [`ROADMAP.md`](ROADMAP.md).
+Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-ARCHITECTURE.md)
 
 ---
 
-## What's left
+## Tech Stack
 
-**Deferred by design** (not oversights):
+| Layer | Choice | Rationale |
+|-------|--------|-----------|
+| **Runtime** | Node.js ≥ 18 | Zero config, universal |
+| **Server** | Express 4 + `ws` | Battle-tested, minimal |
+| **Frontend** | Vanilla JS SPA | No framework, no bundler, no build step |
+| **UI** | JARVIS HUD (Canvas) | Radial neural map, floating widgets |
+| **Data** | Filesystem vault | Obsidian-compatible JSON + Markdown |
+| **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
+| **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
+| **Vision** | MediaPipe gestures | 4 gestures: confirm, deny, mute, vision |
+| **Tests** | Built-in `node:test` | 402 tests, zero test framework deps |
+| **Deps** | 4 total | `dotenv` · `express` · `playwright-core` · `ws` |
+| **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
-- **Auth / multi-user** — single-user local-first is the product. Loopback bind + loopback-only kill endpoints close the network exposure without auth complexity.
-- **Next.js / React migration** — `the-agent-operating-system Idea.txt` references it; the shipped codebase is intentionally a no-build vanilla-JS SPA.
-- **Express 5 upgrade** — GA, but carries subtle breaking-change risk; separate from hardening.
-
-**Ranked feature ideas** (from the gap audit — not committed):
-
-| Priority | Feature | Honest status |
-|---|---|---|
-| High | Radar X/Grok live API wiring | Free RSS MVP shipped (Sprint 6); paid X/Grok APIs are the original vision |
-| High | Free Claude Code: full builder wiring | Agent Factory UI ready; Claude Code CLI plumbing into this view in progress |
-| Med | Video Studio: Create + Avatar tabs | "coming in Phase 2" placeholders |
-| Med | Session picker for Claude Code `--resume` | The flag works; no UI to choose which past session |
-| Low | Omi device sync | Memory surface is vault-wired; physical Omi recorder sync is a device-integration feature |
-| Low | Hermes Goal Mode / profiles / Jarvis / MCP tabs | Listed placeholders |
-
----
-
-## Tech stack & layout
-
-| Layer | Choice |
-|---|---|
-| Backend | Node.js + Express 4 + `ws` — **3 production deps, 0 dev deps** (deliberate minimalism) |
-| Frontend | Hand-written vanilla-JS SPA — no framework, no bundler, no build step |
-| Data | Filesystem "vault" (`app/vault/`) — JSON + Markdown, Obsidian-compatible |
-| Realtime | WebSocket `/ws` for chat streaming + Mastermind room + job broadcast |
-| Tests | Built-in `node:test` runner — 98 tests, 10 suites |
-| Logging | Zero-dep structured JSON to stdout, keyed by `requestId` |
-| Rate limiting | Zero-dep token-bucket — 240/min global, 8/min on expensive routes |
+### Project Layout
 
 ```
-the-agent-operating-system/
-├── app/
-│   ├── server.js              # Express + WebSocket server (~1080 lines)
-│   ├── package.json           # 3 prod deps, 0 dev deps
-│   ├── lib/                   # 19 modules: vault, providers/, orchestrator,
-│   │                          #   probes, reasoning, rate-limit, logger, video-render, radar-feeds
-│   ├── public/                # vanilla-JS SPA
-│   │   ├── css/               # 20 surface stylesheets + tokens.css
-│   │   ├── js/                # shell, router, palette, ws, sidebar-config
-│   │   │   └── views/         # 30 ES-module view files
-│   │   └── fonts/             # 4 self-hosted variable woff2 fonts
-│   ├── services/              # edge-tts Python service (unofficial)
-│   └── vault/                 # your data — gitignored
-├── Dashboard Assets/          # product screenshots (committed)
-├── ROADMAP.md                 # full sprint history
-└── Start Agent OS.bat         # Windows launcher
+Agent_OS/
+├── mythos/                      # MYTHOS entity runtime
+│   ├── Dockerfile               # Docker image for cloud deploy
+│   ├── .env.example             # All config knobs (documented)
+│   ├── package.json             # 4 deps, 402 tests
+│   ├── src/
+│   │   ├── main.js              # Boot sequence (13 lifecycle steps)
+│   │   └── core/
+│   │       ├── brain/           # chain.js, registry.js, lanes, spend
+│   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
+│   │       ├── config/          # Schema validation + env loading
+│   │       ├── cortex/          # OODA loop + orient/decide
+│   │       ├── effectors/       # 45 tools, build-runner, orchestrator
+│   │       ├── goals/           # Arbitrage + budget system
+│   │       ├── identity/        # self.md + boundaries.md
+│   │       ├── immune/          # watchdog, healer, breakers, announcer
+│   │       ├── leash/           # Tiered autonomy + audit
+│   │       ├── lifecycle/       # Boot/shutdown sequencing
+│   │       ├── memory/          # 5 stores + working memory
+│   │       ├── sensors/         # timer, file, ws, job, metric
+│   │       └── voice/           # Voice agent + spoken text
+│   ├── providers/               # 12 providers (openai-compat factory)
+│   │   ├── nim.js / nim2.js     # NVIDIA NIM (2-key rotation)
+│   │   ├── groq.js              # Groq LPU
+│   │   ├── mistral.js           # Mistral La Plateforme
+│   │   ├── cerebras.js          # Cerebras Cloud
+│   │   ├── openrouter.js        # OpenRouter free models
+│   │   └── ollama.js            # Local inference
+│   ├── server/                  # Express + WebSocket v2
+│   ├── ui/public/               # JARVIS HUD (canvas + widgets)
+│   │   ├── js/                  # app.js, ws.js, voice, neural-map
+│   │   └── css/                 # 10 stylesheets, design tokens
+│   ├── test/                    # 402 tests (node --test)
+│   └── vault/                   # Persistent data (gitignored)
+├── render.yaml                  # Render Blueprint (cloud deploy)
+├── Start Agent OS.bat            # Windows launcher
+├── ROADMAP.md                   # Full phase history
+├── MYTHOS-ARCHITECTURE.md       # Architecture spec (16 sections)
+└── README.md                    # ← You are here
 ```
-
----
-
-## MYTHOS — Autonomous Entity
-
-MYTHOS is the next evolution of Agent OS — from request→respond agent dashboard to continuous autonomous entity with an OODA cognitive loop, layered persistent memory, tiered autonomy with audit trails, and a self-healing immune system.
-
-> **Builder entry point:** [`MYTHOS-ARCHITECTURE.md`](MYTHOS-ARCHITECTURE.md) — complete 16-section handoff spec with code snippets, migration map, and phase 0-10 build plan.
-
-Phase 0 foundation is live in [`mythos/`](mythos/) — boots clean, 26 tests green, zero new dependencies. Build phase-by-phase from the architecture spec.
 
 ---
 
 ## Documentation
 
-- 📜 **[ROADMAP.md](ROADMAP.md)** — full sprint history, deferred items, feature ideas
-- 🛠️ **[app/README.md](app/README.md)** — developer guide: architecture, request pipeline, running, testing, how to add a provider, hardening posture
-- ⚙️ **[app/.env.example](app/.env.example)** — every configuration knob, documented inline with free-tier caps
-- 🔊 **[app/services/README.md](app/services/README.md)** — edge-tts Python service (unofficial / personal-use caveat)
+| Doc | What it covers |
+|-----|---------------|
+| 📜 **[ROADMAP.md](ROADMAP.md)** | Phase-by-phase build history, test counts, drift tracking |
+| 🏗️ **[MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHITECTURE.md)** | Complete 16-section architecture spec with code |
+| 🧠 **[app/BRAIN-MAP.md](app/BRAIN-MAP.md)** | Verified brain lane configuration, failover chains |
+| 🎯 **[MYTHOS-PHASE-BUILD-SPEC.md](MYTHOS-PHASE-BUILD-SPEC.md)** | Detailed build specifications per phase |
+| ⚙️ **[mythos/.env.example](mythos/.env.example)** | Every config knob, documented with defaults |
 
 ---
 
 ## License
 
-Personal / hobby use. The bundled **edge-tts** integration reverse-engineers Microsoft Edge's Read Aloud endpoint and is **not licensed for commercial deployment** (violates Microsoft ToS). Provider integrations (OpenAI, Suno, HeyGen, ElevenLabs, MiniMax, Grok) require their respective API keys and are subject to those providers' terms. No warranty. See [`app/services/README.md`](app/services/README.md) for details.
+Personal / hobby use. The bundled **edge-tts** integration reverse-engineers Microsoft Edge's Read Aloud endpoint and is **not licensed for commercial deployment**. Provider integrations require their respective API keys and are subject to those providers' terms. No warranty.
 
 ---
 
 <div align="center">
 
-*Designed for the local-first operator. Built honestly.*
+**Designed for the local-first operator. Built honestly. Deployed to the cloud.**
+
+*From NOVA request→respond dashboard → MYTHOS continuous autonomous entity.*
 
 </div>
