@@ -112,8 +112,8 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 45 registered count', () => {
-  it('booting a hub with all five register* functions against the real TOOLS arrays yields exactly 45', () => {
+describe('gate: 47 registered count', () => {
+  it('booting a hub with all five register* functions against the real TOOLS arrays yields exactly 47', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
     const hub = createEffectorHub({ bus, config: {} });
@@ -124,7 +124,7 @@ describe('gate: 45 registered count', () => {
     registerFromDashboard(hub, ctx);
     registerFromProject(hub, ctx);
 
-    assert.equal(hub.count(), 45);
+    assert.equal(hub.count(), 47);
   });
 });
 

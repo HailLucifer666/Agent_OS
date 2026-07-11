@@ -31,6 +31,7 @@ const CATALOG = [
   { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
   { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done.', params: { jobId: 'string (optional)' }, danger: false },
   { name: 'open_artifact', description: 'Open a built artifact (a file under vault/builds) in the browser so the human can see it.', params: { path: 'string', title: 'string (optional)' }, danger: false },
+  { name: 'delete_artifact', description: 'Permanently delete a built artifact (file + pipeline card) by matching its title or name. Destructive.', params: { query: 'string - artifact title or name' }, danger: true },
   { name: 'create_goal', description: 'Create a goal.', params: { text: 'string', category: 'string (optional)' }, danger: false },
   { name: 'list_goals', description: 'List goals.', params: {}, danger: false },
   { name: 'toggle_goal', description: 'Toggle a goal done/active by fuzzy text match.', params: { query: 'string' }, danger: false },
@@ -50,6 +51,7 @@ const CATALOG = [
   { name: 'mission_status', description: 'Progress of the background agent team: how many agents done, artifacts, summary. Omit missionId for the latest mission.', params: { missionId: 'string (optional)' }, danger: false },
   { name: 'get_time', description: "Current date and time. Pass timezone (IANA, e.g. 'America/New_York') for a specific place, omit for local system time.", params: { timezone: 'string (optional)' }, danger: false },
   { name: 'get_weather', description: 'Current weather conditions. Pass location (a city name) to check elsewhere, omit for the configured default location.', params: { location: 'string (optional)' }, danger: false },
+  { name: 'web_fetch', description: 'Fetch text content from a URL — real internet access. Returns readable text (HTML stripped, truncated). Use for research, news, or real-time data the user asks about.', params: { url: 'string - the http(s) URL' }, danger: false },
 ];
 
 // ---- prompt construction (DANGER TOOLS RULE + PROJECT INTAKE RULE are CA
@@ -97,7 +99,16 @@ function buildPrompt({ text, history, toolResults, corrective, originalSay, memo
   if (history && history.length) {
     parts.push('', 'RECENT EXCHANGES:');
     for (const h of history) {
-      parts.push(`${h.role === 'user' ? 'User' : 'You'}: ${h.content}`);
+      // The 'system' role carries action OUTCOMES (e.g. "delete_goal FAILED:
+      // No goal matching"). This is the ground truth — if it contradicts a
+      // prior 'You:' claim, the outcome is what actually happened. Without
+      // this, MYTHOS would recall its own spoken claim ("deleting now") as
+      // fact and re-assert it in later turns — the fabrication bug.
+      if (h.role === 'system') {
+        parts.push(`[OUTCOME] ${h.content}`);
+      } else {
+        parts.push(`${h.role === 'user' ? 'User' : 'You'}: ${h.content}`);
+      }
     }
   }
   if (corrective) {

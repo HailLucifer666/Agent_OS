@@ -58,11 +58,22 @@ export function createMicIndicator(el) {
     return v || '#4fd8ff';
   }
 
+  // Live VAD level from voice-loop's onActivity callback. When set, this is the
+  // primary driver of the wave amplitude — showing dynamic waves proportional to
+  // actual speech input, and a flat line when silent. Falls back to the cosmetic
+  // analyser when no activity callback is wired (older callers).
+  let vadLevel = -1; // -1 = no activity callback; >=0 = use this level
+
   function drawWave(timestamp) {
     const dt = lastTime ? Math.min((timestamp - lastTime) / 1000, 0.05) : 0.016;
     lastTime = timestamp;
     if (!reduced) t += dt;
-    if (analyser) {
+    if (vadLevel >= 0) {
+      // Primary: voice-loop VAD level (0.0 = silence, 0.06+ = speech)
+      // Normalize: map 0..0.15 to 0..1 so normal speech hits ~0.8-1.0
+      const target = Math.min(1, vadLevel / 0.12);
+      level += (target - level) * 0.3;
+    } else if (analyser) {
       const data = new Uint8Array(analyser.frequencyBinCount);
       analyser.getByteFrequencyData(data);
       let sum = 0;
@@ -76,13 +87,23 @@ export function createMicIndicator(el) {
     wctx.clearRect(0, 0, w, h);
     wctx.beginPath();
     const active = state === 'listening' || state === 'processing';
-    const amp = (active ? 0.25 + level * 0.75 : 0.12) * mid;
-    for (let x = 0; x <= w; x += 2) {
-      const frac = x / w;
-      const env = Math.sin(frac * Math.PI); // taper at both ends
-      const y = mid - Math.sin(frac * Math.PI * 14 - t * 6) * amp * env;
-      if (x === 0) wctx.moveTo(x, y);
-      else wctx.lineTo(x, y);
+    // When active but silent (level near 0), draw a flat line — the user's
+    // explicit request: "show planes in the line when it's not active / not
+    // hearing anything." When speech is present, amplitude scales with level.
+    const silent = active && level < 0.02;
+    const amp = (active ? level * 0.85 : 0.12) * mid;
+    if (silent) {
+      // Flat line at the midpoint
+      wctx.moveTo(0, mid);
+      wctx.lineTo(w, mid);
+    } else {
+      for (let x = 0; x <= w; x += 2) {
+        const frac = x / w;
+        const env = Math.sin(frac * Math.PI); // taper at both ends
+        const y = mid - Math.sin(frac * Math.PI * 14 - t * 6) * amp * env;
+        if (x === 0) wctx.moveTo(x, y);
+        else wctx.lineTo(x, y);
+      }
     }
     wctx.strokeStyle = accent();
     wctx.globalAlpha = active ? 0.85 : 0.35;
@@ -142,9 +163,17 @@ export function createMicIndicator(el) {
   setState('idle');
   startWaveLoop();
 
+  // Receive the live VAD level from voice-loop. Called on every VAD tick while
+  // listening. Drives the wave amplitude directly — flat line when silent,
+  // dynamic waves when speech is present.
+  function setActivity(lvl) {
+    vadLevel = lvl;
+  }
+
   return {
     setState,
     setCaption,
+    setActivity,
     cleanup() {
       stopLevelMeter();
       clearTimeout(captionTimer);

@@ -76,6 +76,10 @@ const ALLOWED_EVENTS = new Set([
   // conversation.* + cortex.thought (conversational brain — proactive speech + idle reasoning)
   'conversation.announced',
   'cortex.thought',
+
+  // ui.navigate — emitted by dispatchAction when a navigate effector call succeeds,
+  // relayed to clients so the panel actually opens (FIX 2: dashboard wiring).
+  'ui.navigate',
 ]);
 
 // -- Static scan -------------------------------------------------------------

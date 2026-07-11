@@ -52,6 +52,7 @@ function buildTools(ctx) {
   const probes = ctx.probes;
   const abtop = ctx.abtop;
   const config = ctx.config;
+  const fs = ctx.fs;
 
   // ---- navigate ----
 
@@ -189,7 +190,100 @@ function buildTools(ctx) {
     }
   }
 
+  // Delete a built artifact: find the shipped pipeline card whose title or
+  // artifact name matches the query, delete the artifact file from disk, and
+  // reject (remove) the card. Previously the model had no tool for this and
+  // fell back to delete_goal (wrong store) which failed silently — then
+  // claimed success anyway (the fabrication bug). This gives it the right tool.
+  function delete_artifact({ query }) {
+    try {
+      if (!query || !String(query).trim()) return fail('An artifact name or title to match is required.');
+      const board = pipeline.listAll();
+      // Search all stages — an artifact may be in shipped or execute
+      var allCards = [];
+      Object.keys(board).forEach(function(stage) {
+        allCards = allCards.concat(board[stage] || []);
+      });
+      var match = findByQuery(allCards, query, function(c) {
+        var title = (c.artifact && c.artifact.title) || '';
+        var name = (c.artifact && c.artifact.name) || '';
+        return (c.text || '') + ' ' + title + ' ' + name;
+      });
+      if (!match) return fail('No built artifact matching "' + query + '" found.');
+      var card = match.card || match.item;
+      // Delete the artifact file from disk if it exists
+      var deletedFile = null;
+      if (card.artifact && card.artifact.path && fs) {
+        try {
+          // artifact.path is like /vault/builds/pipeline/foo.html — strip leading /vault/
+          var relPath = String(card.artifact.path).replace(/^\/?vault\//, '');
+          fs.removeFile(relPath);
+          deletedFile = card.artifact.path;
+        } catch (_) { /* best-effort — the card is still removed */ }
+      }
+      // Remove the pipeline card
+      pipeline.reject(card.id);
+      return ok({ deleted: card.artifact && card.artifact.title || card.id, fileRemoved: deletedFile });
+    } catch (err) {
+      return fail(err.message);
+    }
+  }
+
   // ---- pipeline ----
+
+  // web_fetch: retrieve text content from a URL. Read-only, no side effects.
+  // Gives the entity real internet access so the build agent can pull actual
+  // content (e.g. real AI news) instead of hallucinating from training data.
+  // Returns the response body as text, truncated to a sensible length. HTML
+  // tags are stripped so the model sees readable text, not markup.
+  async function web_fetch({ url }) {
+    try {
+      if (!url || !String(url).trim()) return fail('A URL is required.');
+      const raw = String(url).trim();
+      // Basic URL validation — reject obviously malformed input
+      if (!/^https?:\/\//i.test(raw)) return fail('URL must start with http:// or https://');
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      const res = await fetch(raw, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'MYTHOS/1.0 (entity assistant)' },
+        redirect: 'follow',
+      });
+      clearTimeout(timer);
+      if (!res.ok) return fail('Fetch failed: HTTP ' + res.status + ' ' + res.statusText);
+      const contentType = res.headers.get('content-type') || '';
+      const body = await res.text();
+      // Truncate to keep token usage reasonable (~1000 tokens max)
+      const maxChars = 4000;
+      let text = body;
+      // Strip HTML tags if the response is HTML — model wants readable text
+      if (contentType.includes('text/html')) {
+        text = body
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+      const truncated = text.length > maxChars;
+      return ok({
+        url: raw,
+        status: res.status,
+        contentType: contentType.split(';')[0].trim(),
+        content: text.slice(0, maxChars),
+        truncated: truncated,
+        totalLength: text.length,
+      });
+    } catch (err) {
+      return fail('Fetch failed: ' + err.message);
+    }
+  }
 
   function capture_idea({ text }) {
     try {
@@ -348,7 +442,9 @@ function buildTools(ctx) {
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
+    { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },
+    { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch },
     { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted).', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
     { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals },

@@ -60,6 +60,7 @@ function ensureVoice() {
       openPanel: (id) => overlays.openPanel(id),
       onCaption: (text, kind) => mic.setCaption(text, kind),
       onVisionQuery: (text) => describeScene(text),
+      onActivity: (level) => mic.setActivity(level),
     });
   }
   return voice;
@@ -209,4 +210,13 @@ subscribe(['proactive-speech'], (msg) => {
     onChunk: (m) => v.onExternalChunk(m, session),
     onDone: () => v.deliverExternalReply({ say: msg.text, speak: msg.speak }, session),
   });
+});
+
+// Navigate — emitted by dispatchAction when a brain-driven `navigate` effector
+// call succeeds. The voice-loop's NAV_COMMANDS shortcut opens panels directly
+// for exact-match phrases, but anything that falls through to the brain needs
+// this relay to actually open the panel. Without it, "open the memory panel"
+// succeeds server-side but the view never changes.
+subscribe(['navigate'], (msg) => {
+  if (msg.route) overlays.openPanel(msg.route);
 });

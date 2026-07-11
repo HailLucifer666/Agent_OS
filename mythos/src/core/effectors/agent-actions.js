@@ -15,7 +15,11 @@ var DELIVERABLE_PREAMBLE = [
   '(all CSS/JS inline, no external resources, starting with <!DOCTYPE html>) OR a thorough',
   'markdown document (plan, spec, draft, or write-up, starting with a # title line).',
   'Choose whichever genuinely fits the idea. Output ONLY the raw file content — no',
-  'commentary, no markdown fences around the whole output. Idea: '
+  'commentary, no markdown fences around the whole output.',
+  'TITLE CONSTRAINT: the <title> or # heading MUST use words FROM the idea, describing',
+  'what the deliverable IS. Do NOT invent a brand name, product name, or marketing title.',
+  'If the idea is "a landing page for AI news", the title should be "AI News Landing Page"',
+  'or similar — never "The Applied Signal" or any other name you made up. Idea: '
 ].join(' ');
 
 var PLANNER_PREAMBLE = [
@@ -29,7 +33,8 @@ var BUILDER_PREAMBLE = [
   'You are the Kanban Builder agent. Build the single most useful self-contained deliverable',
   'for this task: EITHER a complete single-file HTML page/app (all CSS/JS inline, starting',
   'with <!DOCTYPE html>) OR a markdown document (starting with a # title). Output ONLY the',
-  'raw file content, no commentary, no fences around the whole output.\nTask: '
+  'raw file content, no commentary, no fences around the whole output.',
+  'Title the deliverable using words FROM the task, not an invented brand name.\nTask: '
 ].join(' ');
 
 function extractJsonBlock(raw) {

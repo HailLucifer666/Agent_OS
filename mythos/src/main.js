@@ -242,7 +242,7 @@ async function main() {
       registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
-        probes: immune.probes, abtop: abtop, config: config
+        probes: immune.probes, abtop: abtop, config: config, fs: memory.fs
       });
       registerFromProject(hub, { pipeline: pipelineEffector, agentActions: agentActionsEffector });
 

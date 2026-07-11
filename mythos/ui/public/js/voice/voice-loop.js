@@ -41,7 +41,7 @@ const NAV_COMMANDS = [
 // they need a camera frame attached, which only the client can do.
 const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
 
-export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }) {
+export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery, onActivity })
   let active = false;
   let processing = false;
   let disposed = false;
@@ -67,6 +67,15 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
   let silenceSince = null;
   let aboveCount = 0;        // consecutive above-threshold VAD ticks (see SPEECH_HOLD_TICKS)
   let peakRms = 0;           // loudest VAD tick seen during the current recording (see MIN_PEAK_RMS)
+
+  // Pre-roll ring buffer state — the fix for first-word clipping. The mic is
+  // always feeding an AudioWorkletProcessor ring buffer (off main thread). When
+  // VAD confirms speech, we snapshot the ring contents (the last ~1s of audio)
+  // and prepend them to the MediaRecorder output so the first 1-3 words that
+  // were lost during the hold gate are recovered.
+  let prerollNode = null;     // AudioWorkletNode
+  let prerollBuffer = null;   // Float32Array snapped at speech-confirm (or null)
+  let prerollSampleRate = 0;  // sample rate of the pre-roll (for WAV encoding)
 
   function setState(s) { if (onState) onState(s); }
   function caption(text, kind) { if (onCaption) onCaption(text, kind); }
@@ -331,7 +340,52 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 512;
     source.connect(analyser);
+    // Pre-roll ring buffer: load the AudioWorklet module and connect the source
+    // to a PrerollProcessor node, then to a muted gain → destination so the
+    // graph keeps pulling audio (AudioWorklet is pull-based; without a
+    // downstream sink the process() callback never fires). The muted gain
+    // ensures no sound leaks to the speakers.
+    try {
+      await audioCtx.audioWorklet.addModule('/js/voice/preroll-worklet.js');
+      prerollNode = new AudioWorkletNode(audioCtx, 'preroll-processor');
+      const mutedGain = audioCtx.createGain();
+      mutedGain.gain.value = 0;
+      source.connect(prerollNode);
+      prerollNode.connect(mutedGain);
+      mutedGain.connect(audioCtx.destination);
+      prerollSampleRate = audioCtx.sampleRate;
+    } catch (err) {
+      // Worklet not supported or module failed to load — degrade to no pre-roll
+      // (the old behavior: first 1-3 words may be clipped, but capture works).
+      console.warn('[voice] preroll worklet unavailable, capturing without pre-roll:', err);
+      prerollNode = null;
+    }
     return stream;
+  }
+
+  // Snapshot the current pre-roll ring buffer contents. Called when VAD confirms
+  // speech (at startRecording time). Returns a Promise that resolves to a
+  // Float32Array of the last ~1s of audio, or null if no worklet is available.
+  function snapshotPreroll() {
+    if (!prerollNode) return Promise.resolve(null);
+    return new Promise(function(resolve) {
+      var settled = false;
+      var onMsg = function(e) {
+        if (settled || !e.data || e.data.type !== 'snapshot') return;
+        settled = true;
+        prerollNode.port.removeEventListener('message', onMsg);
+        resolve(e.data.samples);
+      };
+      prerollNode.port.addEventListener('message', onMsg);
+      prerollNode.port.postMessage({ type: 'snapshot' });
+      // Safety timeout — if the worklet doesn't respond in 200ms, give up
+      setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        prerollNode.port.removeEventListener('message', onMsg);
+        resolve(null);
+      }, 200);
+    });
   }
 
   function startRecording() {
@@ -339,6 +393,13 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
     chunks = [];
     recordingSince = Date.now();
     peakRms = 0;
+    // Snapshot the pre-roll ring buffer NOW — this captures the ~1s of audio
+    // BEFORE the hold gate completed, recovering the first 1-3 words that were
+    // previously lost. Snapshotted synchronously before recording starts so the
+    // audio predates the MediaRecorder's first sample. The snapshot resolves
+    // async (worklet message round-trip) but the recorder starts immediately —
+    // the merge happens in onstop after recording finishes.
+    snapshotPreroll().then(function(snap) { prerollBuffer = snap; });
     try {
       recorder = new MediaRecorder(stream, { mimeType: pickMimeType() });
     } catch (err) {
@@ -353,13 +414,95 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
       const type = recorder.mimeType || 'audio/webm';
       const blob = new Blob(chunks, { type });
       const loudEnough = peakRms >= MIN_PEAK_RMS;
+      var capturedPreroll = prerollBuffer; // grab before clearing
       recorder = null;
       chunks = [];
-      if (clipMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) return; // noise/blip — drop silently
-      if (!loudEnough) return; // never actually got louder than ambient noise — drop silently, don't waste a transcription call on it
-      transcribeAndDispatch(blob);
+      prerollBuffer = null;
+      if (!loudEnough) return; // never actually got louder than ambient noise — drop silently
+      // With pre-roll, the effective clip length includes the pre-roll duration.
+      // MIN_CLIP_MS was originally raised to 500 because the first words were
+      // being clipped — with pre-roll recovered, we can check the full duration.
+      var prerollMs = capturedPreroll ? Math.round(capturedPreroll.length / prerollSampleRate * 1000) : 0;
+      var effectiveMs = clipMs + prerollMs;
+      if (effectiveMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) return;
+      // Merge pre-roll + recorded audio if a pre-roll snapshot is available.
+      if (capturedPreroll && capturedPreroll.length) {
+        mergePrerollAndTranscribe(blob, type, capturedPreroll);
+      } else {
+        transcribeAndDispatch(blob);
+      }
     };
     recorder.start();
+  }
+
+  // Merge the pre-roll PCM (from the ring buffer snapshot) with the recorded
+  // audio blob (from MediaRecorder), then transcribe. The MediaRecorder blob
+  // is decoded back to PCM via decodeAudioData, concatenated with the pre-roll,
+  // and re-encoded as a WAV file. The /api/voice/transcribe route accepts
+  // arbitrary audio MIME types so WAV is fine. If any step fails, fall back to
+  // transcribing the raw recorded blob (the old behavior — no pre-roll).
+  async function mergePrerollAndTranscribe(blob, blobType, prerollPcm) {
+    try {
+      var arrayBuf = await blob.arrayBuffer();
+      var decoded = await audioCtx.decodeAudioData(arrayBuf);
+      // Take channel 0 (mono) from the decoded audio
+      var recordedPcm = decoded.getChannelData(0);
+      var sr = decoded.sampleRate;
+      // If pre-roll sample rate differs from decoded rate, skip the merge
+      // (resampling is out of scope — the worklet and MediaRecorder should both
+      // run at the context sample rate, so this is a safety check only).
+      if (sr !== prerollSampleRate) {
+        transcribeAndDispatch(blob);
+        return;
+      }
+      // Concatenate: pre-roll PCM first (oldest audio), then recorded PCM
+      var merged = new Float32Array(prerollPcm.length + recordedPcm.length);
+      merged.set(prerollPcm, 0);
+      merged.set(recordedPcm, prerollPcm.length);
+      // Encode to WAV
+      var wav = encodeWav(merged, sr);
+      var wavBlob = new Blob([wav], { type: 'audio/wav' });
+      transcribeAndDispatch(wavBlob);
+    } catch (err) {
+      // decode/merge failed — fall back to the raw recorded blob
+      console.warn('[voice] pre-roll merge failed, transcribing raw:', err);
+      transcribeAndDispatch(blob);
+    }
+  }
+
+  // Encode a Float32Array of mono PCM into a WAV Blob (44-byte header + raw
+  // 16-bit PCM). No dependencies — pure byte manipulation. WAV is the simplest
+  // uncompressed audio format and is universally decodable by Whisper.
+  function encodeWav(samples, sampleRate) {
+    var buffer = new ArrayBuffer(44 + samples.length * 2);
+    var view = new DataView(buffer);
+    // RIFF header
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(view, 8, 'WAVE');
+    // fmt chunk
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);          // chunk size
+    view.setUint16(20, 1, true);           // audio format = PCM
+    view.setUint16(22, 1, true);           // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true);           // block align
+    view.setUint16(34, 16, true);          // bits per sample
+    // data chunk
+    writeString(view, 36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    // PCM samples (float32 → int16)
+    var offset = 44;
+    for (var i = 0; i < samples.length; i++, offset += 2) {
+      var s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    return buffer;
+  }
+
+  function writeString(view, offset, str) {
+    for (var i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
   }
 
   function stopRecording() {
@@ -397,6 +540,12 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
     analyser.getByteTimeDomainData(data);
     const level = rms(data);
     if (recorder) peakRms = Math.max(peakRms, level);
+    // Drive the visualizer with the live VAD level — the mic-indicator shows
+    // dynamic waves proportional to the input level, flat when silent. Only
+    // fires while listening (not during processing/speaking/idle).
+    if (onActivity && active && !processing && !speakingText) {
+      onActivity(level);
+    }
     const speaking = level > SPEECH_RMS;
     if (speaking) {
       silenceSince = null;
@@ -450,6 +599,8 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
     analyser = null;
+    prerollNode = null;
+    prerollBuffer = null;
     setState('idle');
     caption('', 'info');
   }

@@ -368,6 +368,13 @@ function createServer(deps) {
     });
     if (ctx.goalId) goals.debitBudget(ctx.goalId, { tokens: 0, actions: 1 });
     bus.emit('action.completed', { tool: decision.tool, ok: result && result.ok, goalId: ctx.goalId });
+    // Navigate actions need to reach the client so the panel actually opens.
+    // The generic action.* relay drops the result/route, so emit a dedicated
+    // ui.navigate event the client subscribes to. Without this, "open goals"
+    // via the brain succeeds server-side but the panel never opens.
+    if (decision.tool === 'navigate' && result && result.ok && result.result && result.result.route) {
+      bus.emit('ui.navigate', { route: result.result.route });
+    }
     return result;
   }
 
@@ -445,6 +452,25 @@ function createServer(deps) {
       history.push({ role, content: String(content).slice(0, 2000) });
       history = history.slice(-HISTORY_MAX_TURNS);
       historyAt = Date.now();
+    }
+
+    // Build a system-note summarizing action outcomes for the history and
+    // episodic record. Returns null when there are no actions (pure chat turns
+    // produce no note). Failed actions are flagged explicitly so future turns
+    // know the model's spoken claim was wrong — this is the anti-fabrication
+    // fix: without it, MYTHOS recalls "deleting now" as fact after a failed delete.
+    function summarizeActionsForResult(actions) {
+      if (!actions || !actions.length) return null;
+      var parts = [];
+      for (var i = 0; i < actions.length; i++) {
+        var a = actions[i];
+        if (!a || !a.tool) continue;
+        if (a.confirmPending) continue; // confirm-pending = deferred, not an outcome
+        var status = a.ok ? 'succeeded' : 'FAILED';
+        parts.push(a.tool + ' ' + status + (a.summary ? ': ' + a.summary : ''));
+      }
+      if (!parts.length) return null;
+      return 'Action outcomes: ' + parts.join('; ') + '.';
     }
 
     function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
@@ -544,17 +570,34 @@ function createServer(deps) {
         historyAppend('user', text);
         historyAppend('assistant', say);
 
+        // Record action OUTCOMES into history — not just the model's claim.
+        // Without this, MYTHOS recalls its own lie as fact: it said "deleting
+        // now", the delete failed, but history only stored the claim. Later
+        // turns see "deleting now" and treat it as accomplished. Now a system
+        // note records the actual result so future turns know the truth.
+        var actionSummary = summarizeActionsForResult(result.actions);
+        if (actionSummary) {
+          historyAppend('system', actionSummary);
+        }
+
         // Persist conversation turn to episodic memory — this is what gives the
         // entity memory across sessions. The in-RAM history (12 turns, 10min TTL)
         // carries context within a session; this episodic write makes it durable.
         // Written AFTER historyAppend so the reply is final (no later corrective
         // pass can overwrite it — handleUtterance already ran to completion here).
+        // Includes action outcomes in detail so recall surfaces the truth, not
+        // just the model's spoken claim.
         try {
           var turnId = 'turn-' + Date.now();
           memory.episodic.write({
             kind: 'conversation', tick: memory.working.tick,
             summary: 'User: ' + text.slice(0, 100) + ' | MYTHOS: ' + say.slice(0, 100),
-            detail: { role: 'user', text: text.slice(0, 2000), reply: say.slice(0, 1000), turnId: turnId },
+            detail: {
+              role: 'user', text: text.slice(0, 2000), reply: say.slice(0, 1000), turnId: turnId,
+              actions: (result.actions || []).map(function(a) {
+                return { tool: a.tool, ok: a.ok, summary: a.summary };
+              })
+            },
             salience: 0.6, channel: 'voice'
           });
         } catch (_) { /* persistence is best-effort */ }
@@ -756,6 +799,12 @@ function createServer(deps) {
   // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
   bus.subscribe('action.*', (e) => {
     broadcastAll({ type: 'action', payload: { tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId, reason: e.payload.reason } });
+  });
+
+  // Navigate events — emitted by dispatchAction when a navigate effector call
+  // succeeds. Relays the resolved route to all clients so the panel opens.
+  bus.subscribe('ui.navigate', (e) => {
+    broadcastAll({ type: 'navigate', route: e.payload.route });
   });
 
   // health — synthesized snapshot per Ambiguity #4; triggered by 'perception.metric'
