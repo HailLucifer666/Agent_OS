@@ -44,12 +44,27 @@ function createSemanticStore({ fs, config, bus, logger }) {
     const id = opts.id || generateId();
     const confidence = opts.confidence || 0.5;
     const sources = opts.sources || [];
+    const relPath = 'Semantic/' + sanitizeFilename(topic) + '.md';
+
+    // Append mode (opt-in via opts.append): read existing facts, dedup against
+    // the new ones, and write the merged set. Without this, every distillation
+    // call clobbers the previous — user-facts.md would only ever hold the last
+    // fact written. Default mode (overwrite) is unchanged for existing callers.
+    let allFacts = facts;
+    if (opts.append) {
+      const existing = fs.readText(relPath, '');
+      const existingFacts = parseFacts(existing).filter(function(f) {
+        return !facts.some(function(nf) {
+          return String(nf).trim().toLowerCase() === String(f).trim().toLowerCase();
+        });
+      });
+      allFacts = existingFacts.concat(facts);
+    }
 
     const sidecar = JSON.stringify({ id: id, ts: Date.now(), confidence: confidence, sources: sources });
-    const bulletLines = facts.map(function(f) { return '- ' + f; }).join('\n');
+    const bulletLines = allFacts.map(function(f) { return '- ' + f; }).join('\n');
     const content = '## ' + topic + '\n\n<!-- ' + sidecar + ' -->\n' + bulletLines + '\n';
 
-    const relPath = 'Semantic/' + sanitizeFilename(topic) + '.md';
     try {
       fs.writeText(relPath, content);
       return { ref: id, degraded: false };

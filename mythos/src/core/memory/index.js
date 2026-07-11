@@ -216,7 +216,7 @@ function createMemory({ config, bus, logger, brain }) {
             if (result && !result.offline && result.parsed && Array.isArray(result.parsed.facts)) {
               for (let i = 0; i < result.parsed.facts.length; i++) {
                 var fact = String(result.parsed.facts[i]).trim();
-                if (fact) semantic.write('user-facts', [fact], { confidence: 0.7 });
+                if (fact) semantic.write('user-facts', [fact], { confidence: 0.7, append: true });
               }
             }
           }

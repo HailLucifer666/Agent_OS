@@ -490,7 +490,7 @@ function createServer(deps) {
         // Best-effort: failures degrade to no memory context (amnesia), never crash.
         var memoryContext = null;
         try {
-          var recalled = memory.episodic.recall(text, { limit: 5, windowDays: 7 });
+          var recalled = memory.episodic.recall(text, { limit: 8, windowDays: 7 });
           // Also pull semantic user-facts for durable preferences
           var semanticHits = memory.semantic.recall(text, { limit: 3 });
           if (recalled.length > 0 || semanticHits.length > 0) {

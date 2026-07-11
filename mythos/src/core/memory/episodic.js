@@ -5,8 +5,23 @@ const crypto = require('crypto');
 // ---------------------------------------------------------------------------
 // Default lexical scorer — term overlap + recency decay
 // ---------------------------------------------------------------------------
+// Common English stopwords removed from queries before scoring. Without this,
+// a query like "show me the landing page we created" has 4 of 7 terms as
+// stopwords ("me","the","we") that match almost every conversation record,
+// crowding out rare meaningful terms ("landing","page") and burying
+// high-signal action records under common chitchat.
+const STOPWORDS = new Set([
+  'the','a','an','is','are','was','were','be','been','being','am',
+  'to','of','in','on','at','for','with','from','by','as','into','about',
+  'me','you','we','they','it','this','that','these','those','he','she','him','her',
+  'do','did','does','done','have','has','had','having','can','could','will','would','should',
+  'my','your','our','their','its','his','her','i','and','or','but','so','if','then','than',
+  'what','which','who','whom','whose','where','when','why','how','there','here','just',
+  'some','any','all','no','not','now','up','out','down','over','again','very','really',
+]);
+
 function lexicalScore(query, record) {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = query.toLowerCase().split(/\s+/).filter(function(t) { return t && !STOPWORDS.has(t); });
   if (terms.length === 0) return 0;
   const text = [record.summary || '', JSON.stringify(record.detail || '')].join(' ').toLowerCase();
   const hits = terms.filter(function(t) { return text.includes(t); }).length;

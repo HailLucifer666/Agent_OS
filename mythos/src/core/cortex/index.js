@@ -80,11 +80,20 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         if (shouldMull(working.tick, config)) {
           await mull(working, memory, brain, bus, config);
         }
-        if (ooda.shouldReflect(working.tick)) {
-          reflect(working, memory, bus);
-        }
-        return;
+      if (ooda.shouldReflect(working.tick)) {
+        reflect(working, memory, bus);
       }
+      // Consolidation must run on a time cadence regardless of whether goals
+      // are active — conversation turns are written to episodic memory by the
+      // server (not routed here as perceptions), so a purely conversational
+      // session would otherwise NEVER consolidate. Without this, user-facts
+      // distillation never fires and long-term memory stalls. Mirrors the
+      // shouldReflect call above (already duplicated in the idle branch).
+      if (ooda.shouldConsolidate(working.tick)) {
+        await memory.consolidate({});
+      }
+      return;
+    }
 
       // -- DECIDE --
       // BUG FIX (Phase 7, found via the spec-mandated real-instance integration test —
