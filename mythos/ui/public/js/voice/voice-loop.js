@@ -98,10 +98,10 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
     const grace = setTimeout(() => {
       if (!done) {
         done = true;
-        caption('No reply from the brain (timed out after 20s).', 'error');
+        caption('No reply from the brain (timed out). Check that providers are configured.', 'error');
         finishTurn();
       }
-    }, 20000);
+    }, 35000);
     utterance({
       text: command,
       onChunk: (msg) => enqueueChunk(msg, session),

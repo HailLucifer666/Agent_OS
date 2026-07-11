@@ -425,12 +425,18 @@ function createServer(deps) {
         send({ type: 'done', reqId: msg.reqId, say: 'Brain is offline.', offline: true });
         return;
       }
+      // 30s hard ceiling — matches CHAIN_ATTEMPT_TIMEOUT_MS so the voice agent
+      // is never left hanging after chain.js has already exhausted all providers.
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 30000);
       try {
         const text = String(msg.text || '');
         const result = await voiceAgent.handleUtterance({
           text,
           ctx: { history: historyGet(), connectionId },
+          signal: ctrl.signal,
         });
+        clearTimeout(timer);
         if (result.offline) {
           send({ type: 'done', reqId: msg.reqId, say: result.say || 'All providers are offline right now.', offline: true });
           return;
@@ -445,6 +451,7 @@ function createServer(deps) {
         };
         await sendSpokenReply(msg.reqId, say, meta);
       } catch (err) {
+        clearTimeout(timer);
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
       }
     }

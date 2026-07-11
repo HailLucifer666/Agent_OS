@@ -15,6 +15,7 @@ const ollama = require('../../../providers/ollama');
 
 const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter };
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
+const ATTEMPT_TIMEOUT_MS = Number(process.env.CHAIN_ATTEMPT_TIMEOUT_MS) || 30000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
 
 function laneKey(lane, model) {
@@ -88,13 +89,24 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
     if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
     if (onAttempt) onAttempt({ provider: lane, model });
     try {
+      // Per-attempt timeout prevents a slow/hanging provider from blocking the
+      // entire chain walk (critical on cloud depots where cold starts or
+      // network latency can stall a single provider for 30+ seconds).
+      const attemptCtrl = new AbortController();
+      const attemptTimer = setTimeout(() => attemptCtrl.abort(), ATTEMPT_TIMEOUT_MS);
+      // If the caller already has an abort signal, forward it.
+      const onCallerAbort = () => attemptCtrl.abort();
+      signal && signal.addEventListener('abort', onCallerAbort, { once: true });
+
       let content;
       if (lane === 'ollama') {
         const msgs = effectiveKind === 'vision' ? toOllamaVisionMessages(messages) : messages;
-        content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal, onToken });
+        content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal: attemptCtrl.signal, onToken });
       } else {
-        content = await LANES[lane].chat(messages, { model, signal, source: 'voice-chain', onToken });
+        content = await LANES[lane].chat(messages, { model, signal: attemptCtrl.signal, source: 'voice-chain', onToken });
       }
+      clearTimeout(attemptTimer);
+      signal && signal.removeEventListener('abort', onCallerAbort);
       return { content, provider: lane, model };
     } catch (err) {
       errors.push(`${lane}:${model}: ${err.message}`);
