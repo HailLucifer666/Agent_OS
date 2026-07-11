@@ -118,11 +118,30 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   }
 
   // Critical health anomalies → "I've hit a problem with X"
+  //
+  // CONTRACT NOTE: no health.anomaly emitter sets `severity` on the payload —
+  // only identity-boundaries-malformed does. So gating on p.severity === 'critical'
+  // silently dropped EVERY anomaly (provider-down, cortex-stall, effector-flapping,
+  // memory-growth). Now we announce when EITHER severity is critical OR the kind
+  // matches a known-serious condition. Conservative — better to occasionally
+  // announce than to silently miss a problem the operator needs to hear.
+  var SERIOUS_KINDS = {
+    'provider-down': true, 'provider-unhealthy': true,
+    'cortex-stalled': true, 'tick-error': true,
+    'effector-flapping': true, 'memory-growth': true,
+    'identity-boundaries-malformed': true
+  };
+
+  function isSerious(p) {
+    if (p.severity === 'critical') return true;
+    if (p.kind && SERIOUS_KINDS[p.kind]) return true;
+    return false;
+  }
+
   function onHealthAnomaly(event) {
     var p = event.payload;
     if (!p) return;
-    // Only announce critical anomalies — not every provider blip
-    if (p.severity !== 'critical') return;
+    if (!isSerious(p)) return;
 
     var key = 'anomaly:' + (p.kind || 'unknown') + ':' + Date.now();
     if (isRecent(p.kind)) return; // dedup by kind, not by timestamp
@@ -138,12 +157,34 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
     markAnnounced(p.kind);
   }
 
+  // health.diagnosed carries severity from the diagnostician (anomaly → diagnose
+  // → diagnose.pipeline). This is the reliable severity path — subscribe here
+  // too so critical diagnoses are announced even if the raw anomaly kind isn't
+  // in SERIOUS_KINDS above.
+  function onHealthDiagnosed(event) {
+    var p = event.payload;
+    if (!p || p.severity !== 'critical') return;
+    var key = 'diagnosed:' + (p.kind || p.syndrome || 'unknown') + ':' + Date.now();
+    var dedupKey = 'diag:' + (p.kind || p.syndrome || 'unknown');
+    if (isRecent(dedupKey)) return;
+    generate(
+      'A critical issue was diagnosed: ' + (p.kind || p.syndrome || 'a system problem') +
+      '. Say one natural sentence informing the operator. Be calm and direct.',
+      'I have identified a problem with ' + (p.kind || p.syndrome || 'a system') + '.'
+    ).then(function(text) {
+      if (!DRYRUN) speak(text);
+      bus.emit('conversation.announced', { key: key, text: text, kind: 'diagnosed' });
+    });
+    markAnnounced(dedupKey);
+  }
+
   var unsubscribers = [];
 
   function start() {
     unsubscribers.push(bus.subscribe('perception.job', onJobPerception));
     unsubscribers.push(bus.subscribe('goal.*', onGoalUpdate));
     unsubscribers.push(bus.subscribe('health.anomaly', onHealthAnomaly));
+    unsubscribers.push(bus.subscribe('health.diagnosed', onHealthDiagnosed));
   }
 
   function stop() {

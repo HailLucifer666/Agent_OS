@@ -258,7 +258,13 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
     }
 
     // One corrective pass: don't let the model claim success over failed tools.
-    if (!didRetry && iterations === 1 && executedActions.some((a) => a && a.ok === false && !a.confirmPending)) {
+    // Fires whenever ANY action in the turn failed, regardless of how many
+    // iterations the needs_result loop ran. The old `iterations === 1` gate
+    // skipped correction when iteration 1 had needs_result:true and the tool
+    // failed — the loop iterated to 2, and the model's final reply was never
+    // corrected against the failed action. That's how MYTHOS ended up claiming
+    // success over failed lookups.
+    if (!didRetry && executedActions.some((a) => a && a.ok === false && !a.confirmPending)) {
       didRetry = true;
       const correctivePrompt = buildPrompt({
         text,

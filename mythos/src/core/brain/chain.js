@@ -98,16 +98,24 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
       const onCallerAbort = () => attemptCtrl.abort();
       signal && signal.addEventListener('abort', onCallerAbort, { once: true });
 
-      let content;
-      if (lane === 'ollama') {
-        const msgs = effectiveKind === 'vision' ? toOllamaVisionMessages(messages) : messages;
-        content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal: attemptCtrl.signal, onToken });
-      } else {
-        content = await LANES[lane].chat(messages, { model, signal: attemptCtrl.signal, source: 'voice-chain', onToken });
+      try {
+        let content;
+        if (lane === 'ollama') {
+          const msgs = effectiveKind === 'vision' ? toOllamaVisionMessages(messages) : messages;
+          content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal: attemptCtrl.signal, onToken });
+        } else {
+          content = await LANES[lane].chat(messages, { model, signal: attemptCtrl.signal, source: 'voice-chain', onToken });
+        }
+        return { content, provider: lane, model };
+      } finally {
+        // Cleanup MUST run on BOTH success and error paths. Previously this was
+        // before the return only — the catch block leaked the timer and the
+        // abort listener on every failed provider attempt. Over a long-running
+        // process each chain walk accumulated N stale 30s timers + N permanent
+        // listeners on the caller's signal (slow memory + listener leak).
+        clearTimeout(attemptTimer);
+        signal && signal.removeEventListener('abort', onCallerAbort);
       }
-      clearTimeout(attemptTimer);
-      signal && signal.removeEventListener('abort', onCallerAbort);
-      return { content, provider: lane, model };
     } catch (err) {
       errors.push(`${lane}:${model}: ${err.message}`);
       markCooldown(lane, model);

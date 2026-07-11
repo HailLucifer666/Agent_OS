@@ -318,7 +318,18 @@ function createServer(deps) {
     const reqId = 'proactive-' + Date.now() + '-' + (++proactiveSeq);
     const speak = sanitizeSpoken(text);
     broadcastAll({ type: 'proactive-speech', reqId, text, speak });
-    const ttsUp = await edgeTts.isAvailable();
+    let ttsUp = false;
+    try {
+      ttsUp = await edgeTts.isAvailable();
+    } catch (err) {
+      // The availability probe itself can throw (network error hitting the TTS
+      // endpoint, provider init failure). Previously this rejected out of
+      // proactiveSpeak unhandled — and the announcer had already called
+      // markAnnounced(key), so the event was deduped as "announced" though the
+      // operator never heard it. Treat a failed probe as "TTS down" and still
+      // deliver the done message so the client falls back to speechSynthesis.
+      logger.warn('edge-tts.proactive-availability-probe-failed', { error: err.message });
+    }
     if (ttsUp) {
       const chunks = splitSentences(speak);
       for (let i = 0; i < chunks.length; i++) {
@@ -681,7 +692,18 @@ function createServer(deps) {
       // a bare {tool, args} decision (the spec's own test 2 fixture) passes through
       // unchanged — one normalization, no shadow dispatch paths.
       const decision = action.decision || { tool: action.tool, args: action.args };
-      await dispatchAction(decision, { goalId: action.goalId, tier: action.tier });
+      try {
+        await dispatchAction(decision, { goalId: action.goalId, tier: action.tier });
+      } catch (err) {
+        // dispatchAction awaits effectors.invoke + memory.episodic.write +
+        // goals.debitBudget — any of these can throw (disk full, EPERM, vault
+        // locked). This handler is fired un-awaited from ws.on('message'), so
+        // an unhandled rejection here crashes the process. Catch, surface to
+        // the client, and emit an anomaly — the confirm was already consumed
+        // in accept(), so the outcome MUST be reported honestly.
+        send({ type: 'done', reqId: confirmId, say: `Action failed: ${err.message}`, error: true });
+        bus.emit('health.anomaly', { kind: 'confirm-dispatch-failed', error: err.message, confirmId });
+      }
     }
 
     function handleSubscribe(msg) {

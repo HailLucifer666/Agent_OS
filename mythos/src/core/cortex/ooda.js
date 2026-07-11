@@ -1,8 +1,23 @@
 // cortex/ooda.js — pure OODA stage functions.
 // Stateless helpers used by cortex/index.js tick loop.
 
-const REFLECT_EVERY = 10;     // every N ticks
-const CONSOLIDATE_EVERY = 60;  // every N ticks
+const REFLECT_EVERY = 10;      // fallback cadence (ticks) if config absent
+const CONSOLIDATE_EVERY = 60;  // fallback cadence (ticks) if config absent
+
+// Read cadences from the validated config object (schema.js keys
+// REFLECT_EVERY / CONSOLIDATE_EVERY) with the hardcoded fallbacks above.
+// Previously these functions ignored config entirely — the schema keys were
+// orphaned (defined in schema.js but nothing read them), so setting
+// REFLECT_EVERY=120 in .env silently did nothing. config is optional for
+// backward compatibility with tests that call shouldReflect(tick) directly.
+function reflectEvery(cfg) {
+  return (cfg && typeof cfg.REFLECT_EVERY === 'number' && cfg.REFLECT_EVERY > 0)
+    ? cfg.REFLECT_EVERY : REFLECT_EVERY;
+}
+function consolidateEvery(cfg) {
+  return (cfg && typeof cfg.CONSOLIDATE_EVERY === 'number' && cfg.CONSOLIDATE_EVERY > 0)
+    ? cfg.CONSOLIDATE_EVERY : CONSOLIDATE_EVERY;
+}
 
 function orient(perceptions, activeGoal) {
   // Rank each perception by salience + goal relevance boost
@@ -31,12 +46,13 @@ function goalRelevance(perception, goal) {
   return pTerms.length > 0 ? hits / pTerms.length : 0;
 }
 
-function shouldReflect(tick) {
-  return tick % REFLECT_EVERY === 0;
+function shouldReflect(tick, cfg) {
+  return tick % reflectEvery(cfg) === 0;
 }
 
-function shouldConsolidate(tick) {
-  return tick % CONSOLIDATE_EVERY === 0;
+function shouldConsolidate(tick, cfg) {
+  return tick % consolidateEvery(cfg) === 0;
 }
 
-module.exports = { orient, goalRelevance, shouldReflect, shouldConsolidate, REFLECT_EVERY, CONSOLIDATE_EVERY };
+module.exports = { orient, goalRelevance, shouldReflect, shouldConsolidate,
+  REFLECT_EVERY, CONSOLIDATE_EVERY, reflectEvery, consolidateEvery };

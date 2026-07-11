@@ -76,6 +76,15 @@ function buildTools(ctx) {
         return fail('An artifact path is required.');
       }
       const rawPath = String(path).trim();
+      // Reject shell metacharacters — this path becomes part of a shell command
+      // (cmd /c start on Windows, xdg-open on Linux). Without this, an LLM or
+      // attacker who controls the path can inject commands (&, |, ;, backticks,
+      // $() are all command separators/subshells). The voice path is incidentally
+      // gated by a T3 confirm, but the REST/dashboard path is not — defense in
+      // depth means rejecting metacharacters regardless of the caller.
+      if (/[;&|`$()<>^]/.test(rawPath)) {
+        return fail('Artifact path contains disallowed characters.');
+      }
       let targetUrl = rawPath;
       if (rawPath.startsWith('/vault/') || rawPath.startsWith('vault/')) {
         const port = process.env.PORT || (config && config.MYTHOS_PORT) || 4478;
@@ -91,9 +100,14 @@ function buildTools(ctx) {
       } else {
         cmd = ['xdg-open', targetUrl];
       }
-      const { spawnSync } = require('child_process');
-      const result = spawnSync(cmd[0], cmd.slice(1), { shell: platform === 'win32', detached: true, stdio: 'ignore' });
-      if (result.error) throw result.error;
+      // spawn (async), NOT spawnSync — spawnSync blocks the entire event loop
+      // until the child exits, freezing the WS server and cortex tick. On Linux
+      // xdg-open can block for seconds. shell:false — we pass an explicit argv
+      // so no shell wrapping is needed; this is the injection-safe path.
+      const { spawn } = require('child_process');
+      const child = spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore', shell: false });
+      child.on('error', function() { /* best-effort open — surface nothing, the file may still be reachable via the returned url */ });
+      child.unref();
       const display = title || rawPath;
       return ok({ opened: true, url: targetUrl, display }, [{ action: 'navigate', route: 'pipeline' }]);
     } catch (err) {

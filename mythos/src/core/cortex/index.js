@@ -77,10 +77,12 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       var hasActive = goals && typeof goals.hasActive === 'function' && goals.hasActive();
       if (perceptions.length === 0 && !hasActive) {
         working.activeGoalId = null;
+        var mullFired = false;
         if (shouldMull(working.tick, config)) {
           await mull(working, memory, brain, bus, config);
+          mullFired = true;
         }
-      if (ooda.shouldReflect(working.tick)) {
+      if (ooda.shouldReflect(working.tick, config)) {
         reflect(working, memory, bus);
       }
       // Consolidation must run on a time cadence regardless of whether goals
@@ -89,7 +91,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // session would otherwise NEVER consolidate. Without this, user-facts
       // distillation never fires and long-term memory stalls. Mirrors the
       // shouldReflect call above (already duplicated in the idle branch).
-      if (ooda.shouldConsolidate(working.tick)) {
+      //
+      // STAGGER: skip consolidate when mull already fired this tick — mull
+      // (tick%300) and consolidate (tick%60) co-fire on tick 300/600/900,
+      // causing up to 3 brain calls on one tick. Skipping consolidate when
+      // mull fired keeps idle ticks to at most 1 brain call. Consolidate
+      // fires on the next 60-boundary that isn't also a 300-boundary.
+      if (!mullFired && ooda.shouldConsolidate(working.tick, config)) {
         await memory.consolidate({});
       }
       return;
@@ -112,10 +120,10 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       await act(decision, { bus, memory, goals, brain, leash, effectors, config, working, ACTION_TIMEOUT_MS });
 
       // -- REFLECT --
-      if (ooda.shouldReflect(working.tick)) {
+      if (ooda.shouldReflect(working.tick, config)) {
         reflect(working, memory, bus);
       }
-      if (ooda.shouldConsolidate(working.tick)) {
+      if (ooda.shouldConsolidate(working.tick, config)) {
         await memory.consolidate({});
       }
     } catch (err) {

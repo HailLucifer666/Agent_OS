@@ -25,6 +25,19 @@ function createConfirmRegistry({ config }) {
   // (Leash callers pass the {tool, args} decision) and is only ever handed back
   // verbatim via accept() — this registry never inspects or executes it.
   function create(summary, action, connectionId) {
+    // Sweep expired entries on every create — piggybacks on the common path so
+    // we need no new setInterval. Without this, confirms leak forever when the
+    // client disconnects before replying: accept()/reject() are the only
+    // deletion paths, and they only fire on a reply. A disconnected client
+    // leaves orphaned {summary, action, expiresAt, connectionId} entries that
+    // never get swept — unbounded memory growth over a long-running session
+    // with reconnects. The Map is typically <10 entries so this scan is cheap.
+    if (pending.size > 0) {
+      const now = Date.now();
+      for (const [id, entry] of pending) {
+        if (now > entry.expiresAt) pending.delete(id);
+      }
+    }
     connectionId = connectionId === undefined ? null : connectionId;
     const confirmId = nextId();
     pending.set(confirmId, { summary: summary, action: action, expiresAt: Date.now() + ttlMs, connectionId: connectionId });
