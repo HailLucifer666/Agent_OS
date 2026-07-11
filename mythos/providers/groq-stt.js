@@ -30,6 +30,11 @@ const HALLUCINATION_PHRASES = new Set([
   'thank you', 'thanks', 'thanks for watching', 'thank you for watching',
   'please subscribe', 'subscribe', 'bye', 'goodbye', 'see you next time',
   'see you later', 'hi', 'hello', 'you', 'the end', 'okay', 'bye bye',
+  // Noise-induced single-word hallucinations — Whisper emits these from
+  // near-silent or ambient-noise audio when it can't find real speech.
+  'yeah', 'huh', 'uh', 'um', 'hmm', 'mmm', 'oh', 'wow', 'wait', 'so',
+  'and', 'the', 'a', 'i', 'me', 'my', 'we', 'it', 'its', 'is',
+  'en el', 'el', 'la', 'de', 'que', 'y',  // Spanish fragments Whisper emits on noise
 ]);
 
 function getApiKey() {
@@ -59,6 +64,13 @@ async function transcribe(buffer, mimeType) {
   form.append('file', new Blob([buffer], { type: mimeType || 'audio/webm' }), `utterance.${extFor(mimeType)}`);
   form.append('model', MODEL);
   form.append('response_format', 'verbose_json');
+  // temperature 0 = most stable decoding, least likely to hallucinate from
+  // near-silent/ambient-noise audio. language 'en' = skip language detection
+  // (which burns decode budget AND misfires on noise, producing foreign-language
+  // fragments like "Ég hef miklu..." from pure ambient). Hardcoded 'en' matches
+  // the persona/UI locale.
+  form.append('temperature', '0');
+  form.append('language', 'en');
 
   const res = await fetch(`${BASE}/audio/transcriptions`, {
     method: 'POST',

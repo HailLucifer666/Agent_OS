@@ -19,12 +19,13 @@ import { utterance } from '../ws.js';
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 const SILENCE_MS = 1800;       // quiet gap that ends an utterance
-const SPEECH_RMS = 0.02;       // volume threshold marking "speech present"
+const SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
 const VAD_TICK_MS = 100;
-const SPEECH_HOLD_TICKS = 2;   // consecutive above-threshold ticks required before recording starts — filters brief noise blips (a door, a click, a cough)
-const MIN_CLIP_MS = 300;       // shorter clips are noise/mic-bumps, dropped
+const SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
+const MIN_CLIP_MS = 500;       // shorter clips are noise/mic-bumps, dropped — raised from 300; real utterances are longer
 const MIN_CLIP_BYTES = 800;
-const MIN_PEAK_RMS = 0.035;    // the loudest moment of the clip must clear this — real speech peaks well above ambient noise that merely brushed SPEECH_RMS
+const MIN_PEAK_RMS = 0.06;     // the loudest moment of the clip must clear this — raised from 0.035; real speech peaks well above ambient that merely brushed the old floor
+const ECHO_GUARD_MS = 3000;    // after playback ends, keep rejecting transcripts matching what was just spoken — speakers bleed into the mic for a beat after TTS finishes
 
 // voice-nav table — checked before falling through to the brain.
 const NAV_COMMANDS = [
@@ -45,7 +46,9 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
   let processing = false;
   let disposed = false;
   let currentAudio = null;   // in-flight TTS playback (barge-in target)
-  let speakingText = '';     // spoken reply text — echo-guard reference
+  let speakingText = '';     // spoken reply text — echo-guard reference (during playback)
+  let lastSpokenText = '';   // what was just spoken — echo-guard reference (after playback ends)
+  let lastSpokenAt = 0;      // when playback ended — used to expire the post-playback echo window
   let speakSession = 0;      // invalidates stale playback callbacks
 
   // ---- chunked playback (speech-chunk messages arrive before 'done') ----
@@ -135,8 +138,24 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
   // server edge-tts mp3 in msg.audioB64; browser speechSynthesis (msg.speak,
   // sanitized) is the fallback.
   function isEcho(text) {
-    if (!speakingText) return false;
-    const spoken = new Set(speakingText.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean));
+    // Active playback: check against speakingText
+    if (speakingText) {
+      if (echoMatch(text, speakingText)) return true;
+    }
+    // Post-playback window: check against lastSpokenText within ECHO_GUARD_MS.
+    // Speaker bleed arrives after TTS finishes — without this, "to help." (the
+    // tail of "...ready to help") gets treated as a real command.
+    if (lastSpokenText && (Date.now() - lastSpokenAt) < ECHO_GUARD_MS) {
+      if (echoMatch(text, lastSpokenText)) return true;
+    } else {
+      lastSpokenText = ''; // window expired — clear stale reference
+    }
+    return false;
+  }
+
+  function echoMatch(text, reference) {
+    if (!reference) return false;
+    const spoken = new Set(reference.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean));
     const words = text.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean);
     if (!words.length) return true;
     let hits = 0;
@@ -145,10 +164,14 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
   }
 
   // Stops any in-flight playback and invalidates its pending finish callbacks.
+  // Does NOT wipe the echo-guard reference: moves it to lastSpokenText with a
+  // timestamp so transcripts arriving AFTER playback ends (late speaker bleed)
+  // are still caught by isEcho() within ECHO_GUARD_MS.
   function stopSpeaking() {
     speakSession++;
     if (currentAudio) { try { currentAudio.pause(); } catch { /* ok */ } currentAudio = null; }
     if (window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch { /* ok */ } }
+    if (speakingText) { lastSpokenText = speakingText; lastSpokenAt = Date.now(); }
     speakingText = '';
     chunkQueue = [];
     playing = false;
@@ -262,10 +285,19 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery }
     const match = trimmed.match(WAKE_PATTERN);
     const command = (match ? trimmed.slice(match[0].length) : trimmed).trim();
     if (!command) return;
-    if (speakingText) {
-      if (isEcho(command)) return; // MYTHOS hearing its own reply — drop
-      stopSpeaking();              // barge-in: user talked over playback
+    // Drop single-word transcripts — they are almost always noise hallucinations
+    // ("and", "I", "yeah") or incomplete fragments, never real commands.
+    const words = command.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length < 2) return;
+    // Echo check covers BOTH active playback (speakingText) and the post-playback
+    // window (lastSpokenText within ECHO_GUARD_MS). Stops MYTHOS hearing its own
+    // voice — during playback AND the beat after it ends.
+    if (isEcho(command)) {
+      if (speakingText) return;          // during playback: drop the echo silently
+      // after playback: also drop — it's late speaker bleed, not a real command
+      return;
     }
+    if (speakingText) stopSpeaking();    // barge-in: user talked over playback
     caption('» ' + command, 'heard');
     if (VISION_TRIGGER.test(command) && onVisionQuery) {
       onVisionQuery(command);
