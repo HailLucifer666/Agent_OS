@@ -156,8 +156,8 @@ export function createMicIndicator(el) {
     el.classList.add(`mic-${state}`);
     el.title = TITLES[state] || '';
     statusEl.textContent = STATUS_TEXT[state].split('').join(' ');
-    if (state === 'listening') startLevelMeter();
-    else stopLevelMeter();
+    if (state === 'listening' && vadLevel < 0) startLevelMeter();
+    else if (state !== 'listening') stopLevelMeter();
   }
 
   setState('idle');
