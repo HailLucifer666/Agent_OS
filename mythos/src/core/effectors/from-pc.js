@@ -13,6 +13,8 @@ function fail(reason) {
   return { ok: false, result: reason };
 }
 
+var brain = null;
+
 // Guard: pc-child must be ONLINE to send commands
 function requireOnline() {
   const status = pcChild.getStatus();
@@ -67,8 +69,26 @@ async function media_key({ key }) {
   return delegate({ cmd: 'media_key', key });
 }
 
-async function screen_look() {
-  return delegate({ cmd: 'screen_look' });
+async function screen_look({ query }) {
+  var shot = await delegate({ cmd: 'screen_look' });
+  if (!shot.ok) return shot;
+  var b64 = shot.result && (shot.result.image || shot.result.png || shot.result);
+  if (!brain || typeof brain.think !== 'function') {
+    return fail('Screenshot captured but no vision brain is available to describe it.');
+  }
+  var result = await brain.think({
+    lane: 'vision',
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: (query ? String(query).slice(0, 300) : 'Describe what is on this screen, briefly and concretely.') },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } },
+      ],
+    }],
+    source: 'screen-look',
+  });
+  if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the screen.');
+  return ok({ description: String(result.content).trim().slice(0, 600) });
 }
 
 async function ui_elements({ pid, depth }) {
@@ -103,14 +123,15 @@ const TOOLS = [
   { name: 'focus_window', description: 'Bring a window to the foreground and restore it if minimized.', params: { pid: 'number - process ID of the window' }, danger: false, fn: focus_window },
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },
   { name: 'media_key', description: 'Send a media key press (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute).', params: { key: 'string - media key name' }, danger: false, fn: media_key },
-  { name: 'screen_look', description: 'Take a screenshot of the primary screen for vision analysis. Returns base64 PNG data.', params: {}, danger: false, fn: screen_look, needs_result: true },
+  { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center.', params: { pid: 'number - window process ID', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
 ];
 
-function registerFromPc(hub) {
+function registerFromPc(hub, opts) {
+  brain = (opts && opts.brain) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }

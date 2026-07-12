@@ -43,6 +43,8 @@ const { createWsSensor } = require('./core/sensors/ws');
 const { createJobSensor } = require('./core/sensors/job');
 const { createServer } = require('../server');
 const fs = require('fs');
+const browserAgent = require('../../adapters/browser-agent');
+const pcChild = require('../../adapters/pc-child');
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
@@ -244,7 +246,7 @@ async function main() {
       // honest-inert (abtop.getState() reports enabled:false), which is correct: there
       // is no dashboard process to monitor CLI sessions for yet.
       registerFromComputer(hub);
-      registerFromPc(hub);
+      registerFromPc(hub, { brain: brain });
       registerFromBrowser(hub);
       var dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
@@ -332,6 +334,32 @@ async function main() {
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
 
+    { name: 'browser-automation', fail: 'degraded', fn: function() {
+      // [Phase 9 — NEW] Browser automation via playwright-core. Tries CDP to an
+      // already-running Chrome first, then launches Chrome/Edge locally as fallback.
+      // Also starts the PC child (PowerShell automation daemon).
+      if (config.BROWSER_AUTOMATION !== false) {
+        var browserProfile = memory.fs.vaultPath('BrowserProfile');
+        browserAgent.ensureOnline({
+          cdpUrl: config.BROWSER_CDP_URL,
+          userDataDir: browserProfile,
+        }).then(function(ok) {
+          var status = browserAgent.getStatus();
+          if (ok) {
+            logger.info('browser-automation.online', { mode: status.mode, pages: status.pageCount });
+          } else {
+            logger.warn('browser-automation.offline', { hint: status.hint });
+          }
+        }).catch(function(err) {
+          logger.warn('browser-automation.failed', { error: err.message });
+        });
+      }
+
+      // Start PC child (PowerShell automation daemon) for desktop control tools.
+      pcChild.startPcChild();
+      logger.info('pc-child.starting', {});
+    }},
+
     { name: 'cortex', fn: function() {
       // [Phase 5 — NEW: receives the real leash] [Phase 7 — NEW: receives the real
       // effector hub, replacing the Phase 5 null-effectors stub] Per the Phase 4.5
@@ -398,6 +426,8 @@ async function main() {
   // Stop running loops before the lifecycle's own shutdown/exit runs (full graceful
   // shutdown sequencing — drain/flush/audit — is D-07, a non-blocking Known Deviation)
   function stopRunningLoops() {
+    pcChild.shutdownPcChild();
+    browserAgent.disconnect();
     if (edgeTtsChild) edgeTtsChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();

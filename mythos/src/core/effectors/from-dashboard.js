@@ -237,75 +237,82 @@ function buildTools(ctx) {
   // content (e.g. real AI news) instead of hallucinating from training data.
   // Returns the response body as text, truncated to a sensible length. HTML
   // tags are stripped so the model sees readable text, not markup.
-  // web_fetch: retrieve readable text from a URL via Jina Reader.
-  // Jina Reader (https://r.jina.ai/) returns clean markdown — no HTML stripping
-  // needed, handles JS-rendered content, returns readable text. Free, no API key.
-  // Falls back to direct fetch + regex strip if Jina is unavailable.
+  // web_fetch: retrieve readable text from a URL. Direct fetch first (with
+  // browser UA + naive HTML-to-text strip), falls back to Jina Reader if
+  // direct fetch fails or returns nothing useful.
   async function web_fetch({ url }) {
     try {
       if (!url || !String(url).trim()) return fail('A URL is required.');
       const raw = String(url).trim();
       if (!/^https?:\/\//i.test(raw)) return fail('URL must start with http:// or https://');
       const maxChars = 4000;
+      var browserUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
-      // Try Jina Reader first — prepend https://r.jina.ai/ to the URL
+      // Try direct fetch first — fast, no third-party dependency
       try {
-        const jinaController = new AbortController();
-        const jinaTimer = setTimeout(() => jinaController.abort(), 15000);
-        const jinaRes = await fetch('https://r.jina.ai/' + raw, {
+        var controller = new AbortController();
+        var timer = setTimeout(() => controller.abort(), 15000);
+        var res = await fetch(raw, {
+          signal: controller.signal,
+          headers: { 'User-Agent': browserUA },
+          redirect: 'follow',
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          var contentType = res.headers.get('content-type') || '';
+          var body = await res.text();
+          var text = body;
+          if (contentType.includes('text/html')) {
+            text = body
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[\s\S]*?<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+              .replace(/\s+/g, ' ').trim();
+          }
+          if (text && text.trim().length > 0) {
+            var truncated = text.length > maxChars;
+            return ok({
+              url: raw,
+              status: res.status,
+              contentType: contentType.split(';')[0].trim(),
+              content: text.slice(0, maxChars),
+              truncated: truncated,
+              totalLength: text.length,
+              source: 'direct',
+            });
+          }
+        }
+      } catch (_) { /* Direct fetch failed — fall through to Jina */ }
+
+      // Fallback: Jina Reader — prepend https://r.jina.ai/ to the URL
+      try {
+        var jinaController = new AbortController();
+        var jinaTimer = setTimeout(() => jinaController.abort(), 15000);
+        var jinaRes = await fetch('https://r.jina.ai/' + raw, {
           signal: jinaController.signal,
           headers: { 'Accept': 'text/plain' },
         });
         clearTimeout(jinaTimer);
         if (jinaRes.ok) {
-          const text = await jinaRes.text();
-          if (text && text.trim().length > 0) {
-            const truncated = text.length > maxChars;
+          var jinaText = await jinaRes.text();
+          if (jinaText && jinaText.trim().length > 0) {
+            var jinaTruncated = jinaText.length > maxChars;
             return ok({
               url: raw,
               status: jinaRes.status,
               contentType: 'text/plain',
-              content: text.slice(0, maxChars),
-              truncated: truncated,
-              totalLength: text.length,
+              content: jinaText.slice(0, maxChars),
+              truncated: jinaTruncated,
+              totalLength: jinaText.length,
               source: 'jina-reader',
             });
           }
         }
-      } catch (_) { /* Jina failed — fall through to direct fetch */ }
+      } catch (_) { /* Jina also failed */ }
 
-      // Fallback: direct fetch + regex HTML strip
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(raw, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'MYTHOS/1.0 (entity assistant)' },
-        redirect: 'follow',
-      });
-      clearTimeout(timer);
-      if (!res.ok) return fail('Fetch failed: HTTP ' + res.status + ' ' + res.statusText);
-      const contentType = res.headers.get('content-type') || '';
-      const body = await res.text();
-      let text = body;
-      if (contentType.includes('text/html')) {
-        text = body
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-          .replace(/\s+/g, ' ').trim();
-      }
-      const truncated = text.length > maxChars;
-      return ok({
-        url: raw,
-        status: res.status,
-        contentType: contentType.split(';')[0].trim(),
-        content: text.slice(0, maxChars),
-        truncated: truncated,
-        totalLength: text.length,
-        source: 'direct',
-      });
+      return fail('Fetch failed: all providers returned empty or errored.');
     } catch (err) {
       return fail('Fetch failed: ' + err.message);
     }

@@ -83,6 +83,10 @@ const SCHEMA = {
   // Voice agent max spoken reply length (chars). 800 = allows full reasoning
   // paragraphs; lower for terser responses.
   VOICE_MAX_SAY_CHARS:       { type: 'number', default: 800, min: 100, max: 4000 },
+
+  // Browser automation (Phase 9 — playwright-core, drives installed Chrome/Edge)
+  BROWSER_CDP_URL:            { type: 'string',  default: 'http://127.0.0.1:9222' },
+  BROWSER_AUTOMATION:         { type: 'bool', default: true },
 };
 
 module.exports = { SCHEMA };

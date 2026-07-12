@@ -80,6 +80,9 @@ const ALLOWED_EVENTS = new Set([
   // ui.navigate — emitted by dispatchAction when a navigate effector call succeeds,
   // relayed to clients so the panel actually opens (FIX 2: dashboard wiring).
   'ui.navigate',
+
+  // reminder.* (P21 — calendar/reminder effector)
+  'reminder.due',
 ]);
 
 // -- Static scan -------------------------------------------------------------

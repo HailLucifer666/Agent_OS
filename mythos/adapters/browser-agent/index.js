@@ -6,11 +6,13 @@
 // NOVA's `const { log } = require('../logger')` -> a logger instance obtained from
 // MYTHOS's createLogger() factory — same re-pointing as adapters/pc-child/index.js.
 //
-// Connects to an already-running Chrome instance (launched via setup-chrome-debug.ps1).
+// Connects to an already-running Chrome instance (launched via setup-chrome-debug.ps1)
+// OR launches a local Chrome/Edge via playwright-core's launchPersistentContext.
 // Side-effect-free require — does NOT launch Chrome or connect at require time.
-// Caller must call connect() explicitly when BROWSER_CDP_URL is set.
+// Caller must call connect() or ensureOnline() explicitly.
 //
-// Exposes: connect(), disconnect(), getStatus(), withPage(callback) -> Promise
+// Exposes: connect(), disconnect(), getStatus(), withPage(callback) -> Promise,
+//          launchLocal(userDataDir), ensureOnline({ cdpUrl, userDataDir })
 
 const { chromium } = require('playwright-core');
 const { createLogger } = require('../../src/core/logger');
@@ -21,27 +23,32 @@ const PAGE_TIMEOUT_MS = 15000;
 const NAVIGATE_TIMEOUT_MS = 30000;
 
 // Module-level singleton state
-let browser = null;
-let state = 'OFFLINE'; // OFFLINE | CONNECTING | ONLINE
+let browser = null;      // CDP-connected Browser instance
+let context = null;      // launchPersistentContext BrowserContext instance
+let launched = false;    // true when we own the context (launched mode)
+let mode = null;         // 'cdp' | 'launched' | null
+let state = 'OFFLINE';   // OFFLINE | CONNECTING | ONLINE
 let hint = null;
 let intentionalDisconnect = false;
 let cdpUrl = null;
 
 function getStatus() {
   let pageCount = 0;
-  if (browser) {
-    try {
+  try {
+    if (launched && context) {
+      pageCount = context.pages().length;
+    } else if (browser) {
       const contexts = browser.contexts();
       for (const ctx of contexts) {
         pageCount += ctx.pages().length;
       }
-    } catch { /* ignore */ }
-  }
-  return { state, hint, cdpUrl, pageCount };
+    }
+  } catch { /* ignore */ }
+  return { state, mode, hint, cdpUrl, pageCount };
 }
 
 async function connect(url) {
-  if (browser) {
+  if (browser || context) {
     log.info('browser-agent already connected, disconnecting first');
     await disconnect();
   }
@@ -53,11 +60,13 @@ async function connect(url) {
 
   try {
     browser = await chromium.connectOverCDP(url, { timeout: CONNECT_TIMEOUT_MS });
+    launched = false;
+    mode = 'cdp';
     state = 'ONLINE';
     log.info('browser-agent connected via CDP', { url, contexts: browser.contexts().length });
 
     // Handle disconnection events
-    browser.on('disconnected', () => {
+    browser.on('disconnected', function() {
       if (!intentionalDisconnect) {
         state = 'OFFLINE';
         hint = 'Chrome disconnected unexpectedly.';
@@ -69,41 +78,120 @@ async function connect(url) {
     return true;
   } catch (err) {
     state = 'OFFLINE';
-    hint = `CDP connect failed: ${err.message}`;
+    hint = 'CDP connect failed: ' + err.message;
     browser = null;
     log.warn('browser-agent connect failed', { error: err.message });
     return false;
   }
 }
 
+async function launchLocal(userDataDir) {
+  if (browser || context) {
+    log.info('browser-agent already connected, disconnecting first');
+    await disconnect();
+  }
+
+  state = 'CONNECTING';
+  hint = null;
+  intentionalDisconnect = false;
+  launched = false;
+  mode = null;
+
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
+      channel: ['chrome', 'msedge'],
+      headless: false,
+      viewport: null,
+    });
+    launched = true;
+    mode = 'launched';
+    state = 'ONLINE';
+    log.info('browser-agent launched local browser', { userDataDir, pages: context.pages().length });
+
+    context.on('close', function() {
+      if (!intentionalDisconnect) {
+        state = 'OFFLINE';
+        hint = 'Launched browser closed unexpectedly.';
+        log.warn('browser-agent launched browser closed unexpectedly');
+      }
+      context = null;
+      launched = false;
+    });
+
+    return true;
+  } catch (err) {
+    state = 'OFFLINE';
+    hint = 'launchLocal failed: ' + err.message;
+    context = null;
+    launched = false;
+    mode = null;
+    log.warn('browser-agent launchLocal failed', { error: err.message });
+    return false;
+  }
+}
+
+async function ensureOnline(opts) {
+  opts = opts || {};
+  if (state === 'ONLINE') return true;
+
+  // Try CDP connection first
+  if (opts.cdpUrl) {
+    var ok = await connect(opts.cdpUrl);
+    if (ok) return true;
+  }
+
+  // Fall back to launching a local browser
+  if (opts.userDataDir) {
+    var ok2 = await launchLocal(opts.userDataDir);
+    if (ok2) return true;
+  }
+
+  return false;
+}
+
 async function disconnect() {
   intentionalDisconnect = true;
-  if (browser) {
+
+  if (launched && context) {
+    try {
+      await context.close();
+    } catch { /* best-effort */ }
+    context = null;
+    launched = false;
+    mode = null;
+  } else if (browser) {
     try {
       browser.close();
     } catch { /* best-effort */ }
     browser = null;
+    mode = null;
   }
+
   state = 'OFFLINE';
 }
 
 // Execute a callback with a page reference. Finds or creates a suitable page.
 async function withPage(callback) {
-  if (!browser || state !== 'ONLINE') {
+  if (state !== 'ONLINE' || (!browser && !context)) {
     throw new Error('Browser automation is OFFLINE.');
   }
 
   try {
-    const contexts = browser.contexts();
-    const ctx = contexts[0] || await browser.newContext();
-    const pages = ctx.pages();
-    const page = pages[0] || await ctx.newPage();
+    var ctx;
+    if (launched && context) {
+      ctx = context;
+    } else {
+      var contexts = browser.contexts();
+      ctx = contexts[0] || await browser.newContext();
+    }
+    var pages = ctx.pages();
+    var page = pages[0] || await ctx.newPage();
     page.setDefaultTimeout(PAGE_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATE_TIMEOUT_MS);
 
     return await callback(page, ctx);
   } catch (err) {
-    throw new Error(`Browser command failed: ${err.message}`);
+    throw new Error('Browser command failed: ' + err.message);
   }
 }
 
@@ -112,4 +200,6 @@ module.exports = {
   disconnect,
   getStatus,
   withPage,
+  launchLocal,
+  ensureOnline,
 };
