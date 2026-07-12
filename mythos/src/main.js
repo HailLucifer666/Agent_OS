@@ -221,7 +221,11 @@ async function main() {
       agentActionsEffector = createAgentActions({
         fs: memory.fs, pipeline: pipelineEffector, kanban: kanbanEffector,
         buildRunner: buildRunner,
-        designSystem: true  // Integration 2: enables design-system prompt injection
+        designSystem: true,  // Integration 2: enables design-system prompt injection
+        brain: brain,  // P22: for visual verification + reviewer/reality-check
+        webSearch: require('./core/effectors/web-search').web_search,  // P22: research gate
+        webFetch: require('./core/effectors/web-fetch').web_fetch,     // P22: research gate
+        browserAgent: browserAgent,  // P22: visual verification (render + screenshot)
       });
 
       // goals-effector: Goals.md <-> GoalSystem bridge (Spec Ambiguities #6), registered

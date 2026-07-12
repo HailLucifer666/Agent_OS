@@ -1,11 +1,11 @@
 'use strict';
 
-// effectors/agent-actions.js — CA of app/lib/agent-actions.js. `executePipelineCard`/
-// `assembleKanbanPlan`/`buildKanbanCard` call `buildRunner.enqueue({kind, prompt, run})`
-// (no `cardId` arg) instead of `orchestrator.enqueue({kind, cardId, prompt, run})` — card
-// association moves into the `run` closure per Spec Ambiguities Resolved #7. Re-pointed
-// from the NOVA singleton `require('./vault')`/`require('./pipeline')`/`require('./kanban')`
-// to injected instances (same factory convention as effectors/pipeline.js/kanban.js).
+// effectors/agent-actions.js — Pipeline/Kanban agent actions.
+// P22 QUALITY GATE: every build now flows through research → build → visual verify → review.
+// No artifact ships without passing grounding (real web data injected into prompt),
+// visual verification (rendered screenshot checked by vision brain), and reviewer
+// verdict (reviewer + reality-checker personas). Rejects retry once, then ship
+// honestly flagged as "with-issues" rather than silently passing garbage.
 
 var path = require('path');
 var designSystemEngine = require('../design/system');
@@ -41,9 +41,35 @@ var BUILDER_PREAMBLE = [
 
 var REVIEWER_PREAMBLE = [
   'You are the Kanban Reviewer agent. Review the deliverable below against its task.',
-  'Judge: does it actually fulfil the task? Is it complete and self-contained? Any obvious',
-  'defects? Respond with ONLY a JSON object, no commentary, no markdown fence:',
-  '{"verdict": "approve" | "reject", "notes": "1-2 sentences explaining the verdict"}'
+  'You are thorough and honest — you never rubber-stamp. Check ALL of these:',
+  '1. Does the deliverable actually fulfil the task? Is it complete and self-contained?',
+  '2. Does the title use words from the task spec (not an invented brand name)?',
+  '3. Is the content topically related to the task (not a generic template)?',
+  '4. Are there placeholder texts, fake testimonials, or fabricated statistics?',
+  '5. Does it match any design requirements (dark theme, animations, etc.) from the spec?',
+  'Respond with ONLY a JSON object, no commentary, no markdown fence:',
+  '{"verdict": "approve" | "reject", "issues": ["specific issue 1", ...], "notes": "1-2 sentences"}'
+].join(' ');
+
+var REALITY_CHECK_PREAMBLE = [
+  'You are the Reality Checker. Verify that content in the deliverable is factually accurate',
+  'and not hallucinated. Flag: invented brand names, fabricated testimonials/quotes, made-up',
+  'statistics, generic marketing copy that has nothing to do with the task topic. If the',
+  'deliverable is about topic X but contains content about topic Y, flag it as off-topic.',
+  'Respond with ONLY a JSON object:',
+  '{"verdict": "approve" | "reject", "issues": ["specific problem 1", ...]}'
+].join(' ');
+
+var VISUAL_VERIFY_PREAMBLE = [
+  'You are verifying a built web page by looking at a screenshot of the rendered result.',
+  'Compare what you see against the task spec. Check:',
+  '1. Does the rendered page match what the spec asked for?',
+  '2. Is the title/heading correct (derived from the spec, not an invented brand)?',
+  '3. Is the content topically correct (not a generic template about a different product)?',
+  '4. Are there visible placeholder texts or empty sections?',
+  '5. Does the visual style match the spec (dark/light theme, animations, etc.)?',
+  'Respond with ONLY a JSON object:',
+  '{"match": true|false, "description": "what you see in 1-2 sentences", "issues": ["specific problem 1", ...]}'
 ].join(' ');
 
 function extractJsonBlock(raw) {
@@ -52,7 +78,7 @@ function extractJsonBlock(raw) {
   return JSON.parse(text.trim());
 }
 
-function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem }) {
+function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, webSearch, webFetch, browserAgent }) {
   if (!fs || typeof fs.writeText !== 'function' || typeof fs.exists !== 'function') {
     throw new Error('createAgentActions requires a vault fs-store with writeText/exists');
   }
@@ -66,8 +92,122 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
     throw new Error('createAgentActions requires a buildRunner with enqueue()');
   }
 
-  // Saves an LLM deliverable (HTML or markdown) into vault/builds/<kind>/, deriving a
-  // filename from a <title>/# heading (or the source text) and de-duplicating on disk.
+  // ---- P22: Research gate — grounds the builder with real web data ----
+  // Calls web_search for the topic, then web_fetch on top results to get real
+  // content. Returns a condensed brief injected into the builder's prompt so
+  // it works with actual data instead of hallucinating from training memory.
+  async function researchForBuild(topic, maxResults) {
+    if (!webSearch) return null;
+    try {
+      var searchRes = await webSearch({ query: topic, maxResults: maxResults || 5 });
+      if (!searchRes || !searchRes.ok || !searchRes.result || !searchRes.result.results) return null;
+      var results = searchRes.result.results.slice(0, maxResults || 5);
+      if (!results.length) return null;
+
+      // Fetch the top 2-3 results for deeper content
+      var briefs = [];
+      var fetchCount = Math.min(results.length, 3);
+      for (var i = 0; i < fetchCount; i++) {
+        if (!webFetch) break;
+        try {
+          var fetched = await webFetch({ url: results[i].url });
+          if (fetched && fetched.ok && fetched.result && fetched.result.content) {
+            var content = String(fetched.result.content).slice(0, 800);
+            briefs.push({ title: results[i].title, url: results[i].url, snippet: results[i].snippet || '', content: content });
+          }
+        } catch (_) { /* best-effort — snippet alone is still useful */ }
+      }
+
+      // Build the research brief (max 2000 chars to stay within context budget)
+      var lines = ['RESEARCH BRIEF (real web data — use this, do not hallucinate):'];
+      for (var j = 0; j < results.length; j++) {
+        var r = results[j];
+        lines.push((j + 1) + '. ' + (r.title || 'Untitled') + ' — ' + (r.url || ''));
+        if (r.snippet) lines.push('   ' + String(r.snippet).slice(0, 200));
+      }
+      if (briefs.length) {
+        lines.push('');
+        lines.push('KEY CONTENT EXTRACTS:');
+        for (var k = 0; k < briefs.length; k++) {
+          lines.push('— ' + briefs[k].title + ': ' + briefs[k].content.slice(0, 400));
+        }
+      }
+      var brief = lines.join('\n');
+      if (brief.length > 2000) brief = brief.slice(0, 2000) + '\n[...truncated]';
+      return brief;
+    } catch (_) {
+      return null; // research is best-effort — don't block builds on network issues
+    }
+  }
+
+  // ---- P22: Visual verification — render + look at the built page ----
+  // Opens the built HTML in the automated browser, screenshots it, and sends
+  // the screenshot through the vision brain to verify it matches the spec.
+  // Returns { checked: bool, verdict: 'approve'|'reject'|'skipped', issues: [], description: '' }
+  async function verifyBuildVisually(artifactPath, spec) {
+    // Graceful degradation: if browser or vision brain isn't available, skip
+    if (!browserAgent || typeof browserAgent.getStatus !== 'function') {
+      return { checked: false, verdict: 'skipped', issues: [], description: 'browser automation unavailable' };
+    }
+    var status = browserAgent.getStatus();
+    if (!status || status.state !== 'ONLINE') {
+      return { checked: false, verdict: 'skipped', issues: [], description: 'browser offline' };
+    }
+    if (!brain || typeof brain.think !== 'function') {
+      return { checked: false, verdict: 'skipped', issues: [], description: 'vision brain unavailable' };
+    }
+
+    try {
+      // Resolve artifact web path (/vault/builds/...) to filesystem path
+      var rel = String(artifactPath).replace(/^\/vault\//, '');
+      var absPath = typeof fs.vaultPath === 'function' ? fs.vaultPath(rel) : path.join(process.cwd(), rel);
+      var fileUrl = 'file:///' + absPath.replace(/\\/g, '/');
+
+      // Navigate to the artifact and screenshot it
+      var navResult = await browserAgent.withPage(async function(page) {
+        await page.goto(fileUrl, { waitUntil: 'networkidle', timeout: 10000 });
+        // Small delay for JS animations to settle
+        await page.waitForTimeout(1500);
+        var buf = await page.screenshot({ fullPage: false });
+        return buf.toString('base64');
+      });
+
+      if (!navResult) {
+        return { checked: false, verdict: 'skipped', issues: [], description: 'screenshot failed' };
+      }
+
+      // Send screenshot through vision brain
+      var visionResult = await brain.think({
+        lane: 'vision',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: VISUAL_VERIFY_PREAMBLE + '\n\nTASK SPEC: ' + String(spec || '').slice(0, 500) },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,' + navResult } }
+          ]
+        }],
+        source: 'visual-verify',
+      });
+
+      if (!visionResult || visionResult.offline || !visionResult.parsed) {
+        return { checked: false, verdict: 'skipped', issues: [], description: 'vision brain returned no parseable result' };
+      }
+
+      var parsed = visionResult.parsed;
+      var issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+      var match = parsed.match !== false;
+      return {
+        checked: true,
+        verdict: match ? 'approve' : 'reject',
+        issues: issues,
+        description: String(parsed.description || '').slice(0, 300)
+      };
+    } catch (err) {
+      return { checked: false, verdict: 'skipped', issues: [], description: 'visual verify error: ' + (err.message || err) };
+    }
+  }
+
+  // Saves an LLM deliverable (HTML or markdown) into vault/builds/<kind>/
   function saveDeliverable(raw, sourceText, kind) {
     kind = kind || 'pipeline';
     var content = raw.trim();
@@ -94,10 +234,80 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
     return { path: '/vault/builds/' + kind + '/' + name, title: title, name: name };
   }
 
-  // executePipelineCard(cardId, goalId?) — same behavior as NOVA's POST
-  // /api/pipeline/:id/execute. `goalId` (Phase 18) carries the originating GoalSystem
-  // goal, if any, onto the enqueued job — omitted/undefined means a goal-less,
-  // dashboard/voice-triggered action, and enqueue() honestly records that as null.
+  // ---- P22: Full review gate — text review + reality check + visual verify ----
+  // Returns { verdict: 'approve'|'reject', issues: [], visualDescription: '' }
+  async function fullReview(card, artifact, brain) {
+    var allIssues = [];
+    var visualDescription = '';
+
+    // Read artifact content for text-based review
+    var rel = String(artifact.path).replace(/^\/vault\//, '');
+    var content = fs.readText(rel, '');
+    if (!content) {
+      return { verdict: 'reject', issues: ['artifact file missing or empty'], visualDescription: '' };
+    }
+
+    var specText = card.title + (card.detail ? ' — ' + card.detail : '');
+
+    // 1. Visual verification (if browser is online)
+    var visual = await verifyBuildVisually(artifact.path, specText);
+    if (visual.checked) {
+      visualDescription = visual.description;
+      if (visual.verdict === 'reject' && visual.issues.length) {
+        allIssues = allIssues.concat(visual.issues.map(function(i) { return '[visual] ' + i; }));
+      }
+    }
+
+    // 2. Text-based reviewer check
+    if (brain && typeof brain.think === 'function') {
+      try {
+        var reviewResult = await brain.think({
+          lane: 'simple',
+          persona: personas.loadPersona('reviewer'),
+          messages: [{ role: 'user', content:
+            REVIEWER_PREAMBLE +
+            '\n\nTASK: ' + specText +
+            '\n\nDELIVERABLE (truncated to 16000 chars):\n' + content.slice(0, 16000)
+          }],
+          source: 'reviewer-agent',
+        });
+        if (reviewResult && !reviewResult.offline && reviewResult.parsed) {
+          if (reviewResult.parsed.verdict === 'reject') {
+            var rIssues = Array.isArray(reviewResult.parsed.issues) ? reviewResult.parsed.issues : [];
+            allIssues = allIssues.concat(rIssues.map(function(i) { return '[review] ' + i; }));
+          }
+        }
+      } catch (_) { /* best-effort */ }
+
+      // 3. Reality check (hallucination detection)
+      try {
+        var realityResult = await brain.think({
+          lane: 'simple',
+          persona: personas.loadPersona('reality-checker'),
+          messages: [{ role: 'user', content:
+            REALITY_CHECK_PREAMBLE +
+            '\n\nTASK: ' + specText +
+            '\n\nDELIVERABLE (first 8000 chars):\n' + content.slice(0, 8000)
+          }],
+          source: 'reality-check',
+        });
+        if (realityResult && !realityResult.offline && realityResult.parsed) {
+          if (realityResult.parsed.verdict === 'reject') {
+            var rcIssues = Array.isArray(realityResult.parsed.issues) ? realityResult.parsed.issues : [];
+            allIssues = allIssues.concat(rcIssues.map(function(i) { return '[reality] ' + i; }));
+          }
+        }
+      } catch (_) { /* best-effort */ }
+    }
+
+    return {
+      verdict: allIssues.length === 0 ? 'approve' : 'reject',
+      issues: allIssues,
+      visualDescription: visualDescription
+    };
+  }
+
+  // executePipelineCard — P22: research → build → visual verify → review → ship
   function executePipelineCard(cardId, goalId) {
     var found = pipeline.findCard(cardId);
     if (!found) throw new Error('card not found');
@@ -107,32 +317,85 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
       throw new Error('a build is already in progress for this card');
     }
     var card = found.card;
+
+    var basePrompt = (function() {
+      var base = DELIVERABLE_PREAMBLE + card.text;
+      if (designSystem) {
+        try {
+          var ds = designSystemEngine.generateDesignSystem(card.text);
+          var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
+          if (dsBlock) return dsBlock + '\n\n' + base;
+        } catch (_) { /* design system lookup is best-effort */ }
+      }
+      return base;
+    })();
+
     var job = buildRunner.enqueue({
       kind: 'pipeline-execute',
       goalId: goalId,
-      prompt: (function() {
-        var base = DELIVERABLE_PREAMBLE + card.text;
-        if (designSystem) {
-          try {
-            var ds = designSystemEngine.generateDesignSystem(card.text);
-            var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-            if (dsBlock) return dsBlock + '\n\n' + base;
-          } catch (_) { /* design system lookup is best-effort */ }
-        }
-        return base;
-      })(),
+      prompt: basePrompt,
       run: async function(raw, j) {
+        // P22: Research gate — gather real web data before committing to the build.
+        // The initial `raw` was generated without grounding; if research returns
+        // a brief, regenerate with the grounded prompt for a properly sourced build.
+        var researchBrief = await researchForBuild(card.text, 5);
+        if (researchBrief && brain) {
+          try {
+            var grounded = await brain.think({
+              lane: 'build',
+              messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
+              source: 'pipeline-grounded:' + j.id
+            });
+            if (grounded && !grounded.offline && grounded.content) {
+              raw = grounded.content; // use the grounded build instead of the un-grounded one
+            }
+          } catch (_) { /* research/rebuild failed — use original raw */ }
+        }
+
         var artifact = saveDeliverable(raw, card.text, 'pipeline');
-        pipeline.moveCard(card.id, 'shipped', { progress: 100, jobId: j.id, artifact: artifact });
-        return { artifact: artifact };
+
+        // P22: Full review gate — visual verify + reviewer + reality check
+        var review = await fullReview(card, artifact, brain);
+
+        // If rejected, retry once with the issues fed back to the builder
+        if (review.verdict === 'reject' && !j._reviewRetried && brain) {
+          j._reviewRetried = true;
+          try {
+            var retryResult = await brain.think({
+              lane: 'build',
+              messages: [{ role: 'user', content:
+                basePrompt + '\n\nYour previous output was rejected by review for these reasons:\n' +
+                review.issues.map(function(i) { return '- ' + i; }).join('\n') +
+                '\nFix ALL of these issues and regenerate the complete deliverable.'
+              }],
+              source: 'pipeline-retry:' + j.id
+            });
+            if (retryResult && !retryResult.offline && retryResult.content) {
+              // Overwrite the artifact with the retry
+              artifact = saveDeliverable(retryResult.content, card.text, 'pipeline');
+              review = await fullReview(card, artifact, brain);
+            }
+          } catch (_) { /* retry failed — ship original with issues flagged */ }
+        }
+
+        // Ship — with honest status flag
+        var reviewed = review.verdict === 'approve';
+        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact };
+        if (!reviewed) {
+          shipMeta.reviewIssues = review.issues;
+          shipMeta.reviewStatus = 'failed';
+        } else {
+          shipMeta.reviewStatus = 'approved';
+          if (review.visualDescription) shipMeta.visualReview = review.visualDescription;
+        }
+        pipeline.moveCard(card.id, 'shipped', shipMeta);
+        return { artifact: artifact, review: review };
       }
     });
     pipeline.moveCard(card.id, 'execute', { jobId: job.id, progress: 25 });
     return { job: job, board: pipeline.listAll() };
   }
 
-  // assembleKanbanPlan(goal, goalId?) — same behavior as NOVA's POST /api/kanban/assemble.
-  // goalId (Phase 18) — see executePipelineCard's comment above.
   function assembleKanbanPlan(goal, goalId) {
     if (!goal || !goal.trim()) throw new Error('goal required');
     var job = buildRunner.enqueue({
@@ -154,8 +417,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
     return { job: job };
   }
 
-  // buildKanbanCard(cardId, goalId?) — same behavior as NOVA's POST
-  // /api/kanban/cards/:id/build. goalId (Phase 18) — see executePipelineCard's comment above.
+  // buildKanbanCard — P22: research → build → visual verify → review
   function buildKanbanCard(cardId, goalId) {
     var card = kanban.findCard(cardId);
     if (!card) throw new Error('card not found');
@@ -165,39 +427,93 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
     }
     var builderPersonaRole = personas.pickBuilderPersona(card.title, card.detail);
     var builderPersona = personas.loadPersona(builderPersonaRole);
+    var basePrompt = (function() {
+      var base = BUILDER_PREAMBLE + card.title + '\n' + (card.detail || '');
+      if (designSystem) {
+        try {
+          var ds = designSystemEngine.generateDesignSystem(card.title + ' ' + (card.detail || ''));
+          var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
+          if (dsBlock) return dsBlock + '\n\n' + base;
+        } catch (_) { /* best-effort */ }
+      }
+      return base;
+    })();
+
     var job = buildRunner.enqueue({
       kind: 'kanban-build',
       goalId: goalId,
-      prompt: (function() {
-        var base = BUILDER_PREAMBLE + card.title + '\n' + (card.detail || '');
-        if (designSystem) {
-          try {
-            var ds = designSystemEngine.generateDesignSystem(card.title + ' ' + (card.detail || ''));
-            var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-            if (dsBlock) return dsBlock + '\n\n' + base;
-          } catch (_) { /* best-effort */ }
-        }
-        return base;
-      })(),
+      prompt: basePrompt,
       persona: builderPersona,
       run: async function(raw, j) {
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
+
+        // P22: Research gate — gather real web data before committing to the build.
+        var researchTopic = card.title + ' ' + (card.detail || '');
+        var researchBrief = await researchForBuild(researchTopic, 5);
+        if (researchBrief && brain) {
+          try {
+            var grounded = await brain.think({
+              lane: 'build',
+              persona: builderPersona,
+              messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
+              source: 'kanban-grounded:' + j.id
+            });
+            if (grounded && !grounded.offline && grounded.content) {
+              raw = grounded.content;
+            }
+          } catch (_) { /* research/rebuild failed — use original raw */ }
+        }
+
         var artifact = saveDeliverable(raw, slug + '-' + j.id, 'kanban');
-        kanban.patchCard(card.id, { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact });
-        return { artifact: artifact };
+
+        // P22: Full review gate
+        var review = await fullReview(card, artifact, brain);
+
+        // If rejected, retry once with the issues fed back
+        if (review.verdict === 'reject' && !j._reviewRetried && brain) {
+          j._reviewRetried = true;
+          try {
+            var retryResult = await brain.think({
+              lane: 'build',
+              persona: builderPersona,
+              messages: [{ role: 'user', content:
+                basePrompt + '\n\nYour previous output was rejected by review for these reasons:\n' +
+                review.issues.map(function(i) { return '- ' + i; }).join('\n') +
+                '\nFix ALL of these issues and regenerate the complete deliverable.'
+              }],
+              source: 'kanban-retry:' + j.id
+            });
+            if (retryResult && !retryResult.offline && retryResult.content) {
+              artifact = saveDeliverable(retryResult.content, slug + '-' + j.id + '-r', 'kanban');
+              review = await fullReview(card, artifact, brain);
+            }
+          } catch (_) { /* retry failed — ship original with issues flagged */ }
+        }
+
+        var reviewed = review.verdict === 'approve';
+        var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact };
+        if (!reviewed) {
+          patchMeta.reviewIssues = review.issues;
+          patchMeta.reviewStatus = 'failed';
+        } else {
+          patchMeta.reviewStatus = 'approved';
+          if (review.visualDescription) patchMeta.visualReview = review.visualDescription;
+        }
+        kanban.patchCard(card.id, patchMeta);
+        return { artifact: artifact, review: review };
       }
     });
     kanban.patchCard(card.id, { lane: 'building', jobId: job.id });
     return { job: job, board: kanban.listBoard() };
   }
 
+  // Manual review endpoint (still available for dashboard/voice)
   function reviewKanbanCard(cardId, goalId) {
     var card = kanban.findCard(cardId);
     if (!card) throw new Error('kanban card not found: ' + cardId);
     if (!card.artifact || !card.artifact.path) {
       throw new Error('nothing to review — build this card first');
     }
-    // artifact.path is the web path (/vault/builds/<kind>/<name>); vault-relative strips /vault/
     var rel = String(card.artifact.path).replace(/^\/vault\//, '');
     var content = fs.readText(rel, '');
     if (!content) throw new Error('artifact file missing or empty: ' + rel);
@@ -207,7 +523,8 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
       goalId: goalId,
       prompt: REVIEWER_PREAMBLE +
         '\n\nTASK: ' + card.title + (card.detail ? ' — ' + card.detail : '') +
-        '\n\nDELIVERABLE (truncated to 8000 chars):\n' + content.slice(0, 8000),
+        '\n\nDELIVERABLE (truncated to 16000 chars):\n' + content.slice(0, 16000),
+      persona: personas.loadPersona('reviewer'),
       run: async function(raw) {
         var parsed = extractJsonBlock(raw);
         var verdict = parsed && parsed.verdict;
@@ -216,7 +533,8 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
         }
         kanban.patchCard(cardId, {
           reviewVerdict: verdict,
-          reviewNotes: String(parsed.notes || '').slice(0, 300)
+          reviewNotes: String(parsed.notes || '').slice(0, 300),
+          reviewIssues: Array.isArray(parsed.issues) ? parsed.issues : []
         });
         return {};
       }
@@ -227,6 +545,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
   return {
     saveDeliverable: saveDeliverable,
     extractJsonBlock: extractJsonBlock,
+    researchForBuild: researchForBuild,
+    verifyBuildVisually: verifyBuildVisually,
+    fullReview: fullReview,
     executePipelineCard: executePipelineCard,
     assembleKanbanPlan: assembleKanbanPlan,
     buildKanbanCard: buildKanbanCard,

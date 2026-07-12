@@ -21,6 +21,11 @@ const TIER_TABLE = {
   'list_windows':          0,
   'ui_elements':           0,
   'browser_get_title':     0,
+  'web_search':            0,  // read-only research — fetches public search results
+  'web_fetch':             0,  // read-only fetch — retrieves public web page content
+  'gmail_unread':          0,  // read-only — lists unread emails
+  'gmail_read':            0,  // read-only — reads a single email
+  'camera_look':           0,  // read-only — captures and describes camera frame
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,

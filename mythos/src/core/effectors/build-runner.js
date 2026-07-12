@@ -141,6 +141,9 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
 
       // Verification gate — check the output before saving. If it fails and we
       // haven't retried yet, regenerate once with the issues appended.
+      // P22: if verification fails AFTER retry, mark the job failed — do NOT
+      // save a known-defective artifact. Previously this saved anyway, shipping
+      // garbage to the user silently.
       var raw = result.content;
       if (verifier && typeof verifier.verify === 'function') {
         job.stage = 'verifying';
@@ -158,10 +161,15 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
           });
           if (retryResult && !retryResult.offline) {
             raw = retryResult.content;
+            // Re-verify the retry — if it still fails, block shipment
+            var reverify = await verifier.verify(raw, prompt);
+            if (!reverify.pass) {
+              throw new Error('build failed verification after retry: ' + reverify.issues.join('; '));
+            }
           }
         } else if (!verification.pass) {
-          // Retried already or retry failed — save anyway but record issues
-          job.verificationIssues = verification.issues;
+          // Already retried or retry didn't help — block shipment
+          throw new Error('build failed verification: ' + verification.issues.join('; '));
         }
       }
 
