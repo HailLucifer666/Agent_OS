@@ -15,7 +15,7 @@ var path = require('path');
 
 var STAGES = ['capture', 'human-gate', 'execute', 'shipped'];
 
-function createPipelineEffector({ fs }) {
+function createPipelineEffector({ fs, classifier }) {
   if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function' || typeof fs.listFiles !== 'function') {
     throw new Error('createPipelineEffector requires a vault fs-store with readJSON/writeJSON/listFiles');
   }
@@ -46,7 +46,8 @@ function createPipelineEffector({ fs }) {
       progress: 0,
       tags: [],
       created: new Date().toISOString(),
-      origin: origin
+      origin: origin,
+      risk: classifier ? classifier.classify(String(text).trim()) : 'feature'
     };
     fs.writeJSON(path.join(stageDir('capture'), id + '.json'), card);
     return card;

@@ -16,6 +16,7 @@ var createConfirmRegistry = require('./confirm').createConfirmRegistry;
 function createLeash(deps) {
   var bus = deps.bus, config = deps.config, identity = deps.identity;
   var auditWriter = deps.auditWriter, goals = deps.goals, effectors = deps.effectors;
+  var scanner = deps.scanner;  // P23: optional credential scanner
 
   // Mandatory dependencies — fail construction loudly, never no-op at call time
   // (Lesson #3). identity/effectors get boot-time stubs until Phase 8/7 ship
@@ -99,6 +100,18 @@ function createLeash(deps) {
     // the resolution earlier changes nothing for tools that ARE in
     // TIER_TABLE; it only closes the gap for tools that aren't.
     if (tier === undefined) tier = 3;
+
+    // P23: Credential scan — before any T3/T4 effector executes, scan args for
+    // secret patterns. If found, deny immediately (credential leak prevention).
+    // The scanner output is always redacted — never echoes the full secret.
+    if (tier >= 3 && scanner) {
+      var credScan = scanner.scan(args);
+      if (credScan.found) {
+        var credReason = 'credential-detected: ' + credScan.matches.map(function(m) { return m.name + '(' + m.sample + ')'; }).join(', ');
+        var credWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'deny', { boundaryHit: 'credential-leak', reason: credReason });
+        return failClosedIfUnwritable(tier, credWrite, { allow: false, requireConfirm: false, tier: tier, reason: credReason });
+      }
+    }
 
     // DRY RUN -> T>=1 becomes logged no-op. Read config.MYTHOS_DRY_RUN live,
     // every call — never cached at createLeash() construction time.

@@ -24,6 +24,8 @@ const { createMetricSensor } = require('./core/sensors/metric');
 const { createEffectorHub } = require('./core/effectors/hub');
 const { createBuildRunner } = require('./core/effectors/build-runner');
 const { createPipelineEffector } = require('./core/effectors/pipeline');
+const { createRiskClassifier } = require('./core/effectors/risk-classifier');
+const { createEvidenceValidator } = require('./core/effectors/evidence-validator');
 const { createKanbanEffector } = require('./core/effectors/kanban');
 const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
@@ -211,7 +213,9 @@ async function main() {
       // 'unknown-effector') — see Phase 7's Anti-Drift Checklist and Integration Points.
       var hub = createEffectorHub({ bus: bus, config: config });
 
-      var pipelineEffector = createPipelineEffector({ fs: memory.fs });
+      var riskClassifier = createRiskClassifier();
+      var evidenceValidator = createEvidenceValidator();
+      var pipelineEffector = createPipelineEffector({ fs: memory.fs, classifier: riskClassifier });
       var kanbanEffector = createKanbanEffector({ fs: memory.fs });
       // Integration 3: build verifier (needs brain)
       var verifier = require('./core/design/verify').createVerifier({ brain: brain });
@@ -226,6 +230,7 @@ async function main() {
         webSearch: require('./core/effectors/web-search').web_search,  // P22: research gate
         webFetch: require('./core/effectors/web-fetch').web_fetch,     // P22: research gate
         browserAgent: browserAgent,  // P22: visual verification (render + screenshot)
+        evidenceValidator: evidenceValidator,  // P23: external ship gate
       });
 
       // goals-effector: Goals.md <-> GoalSystem bridge (Spec Ambiguities #6), registered
@@ -293,7 +298,7 @@ async function main() {
       effectors = hub;
       logger.info('effectors.ready', { count: effectors.count() });
 
-      leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors });
+      leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors, scanner: require('./core/effectors/credential-scanner').createCredentialScanner() });
       logger.info('leash.ready', {});
     }},
 

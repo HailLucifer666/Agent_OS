@@ -78,7 +78,9 @@ function extractJsonBlock(raw) {
   return JSON.parse(text.trim());
 }
 
-function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, webSearch, webFetch, browserAgent }) {
+var riskClassifierLib = require('./risk-classifier');
+
+function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, webSearch, webFetch, browserAgent, evidenceValidator }) {
   if (!fs || typeof fs.writeText !== 'function' || typeof fs.exists !== 'function') {
     throw new Error('createAgentActions requires a vault fs-store with writeText/exists');
   }
@@ -335,27 +337,37 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       goalId: goalId,
       prompt: basePrompt,
       run: async function(raw, j) {
+        // P23: Risk-classified gate path — scale rigor to the change type
+        var risk = card.risk || 'feature';
+        var needsResearch = riskClassifierLib.requiresResearch(risk);
+        var needsReview = riskClassifierLib.requiresReview(risk);
+        var needsVisual = riskClassifierLib.requiresVisual(risk);
+
         // P22: Research gate — gather real web data before committing to the build.
         // The initial `raw` was generated without grounding; if research returns
         // a brief, regenerate with the grounded prompt for a properly sourced build.
-        var researchBrief = await researchForBuild(card.text, 5);
-        if (researchBrief && brain) {
-          try {
-            var grounded = await brain.think({
-              lane: 'build',
-              messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
-              source: 'pipeline-grounded:' + j.id
-            });
-            if (grounded && !grounded.offline && grounded.content) {
-              raw = grounded.content; // use the grounded build instead of the un-grounded one
-            }
-          } catch (_) { /* research/rebuild failed — use original raw */ }
+        // P23: skip for tiny-fix and quick-win (low-risk work doesn't need web grounding)
+        if (needsResearch) {
+          var researchBrief = await researchForBuild(card.text, 5);
+          if (researchBrief && brain) {
+            try {
+              var grounded = await brain.think({
+                lane: 'build',
+                messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
+                source: 'pipeline-grounded:' + j.id
+              });
+              if (grounded && !grounded.offline && grounded.content) {
+                raw = grounded.content;
+              }
+            } catch (_) { /* research/rebuild failed — use original raw */ }
+          }
         }
 
         var artifact = saveDeliverable(raw, card.text, 'pipeline');
 
         // P22: Full review gate — visual verify + reviewer + reality check
-        var review = await fullReview(card, artifact, brain);
+        // P23: skip for tiny-fix (build only) and quick-win (verify-only, no full review)
+        var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
 
         // If rejected, retry once with the issues fed back to the builder
         if (review.verdict === 'reject' && !j._reviewRetried && brain) {
@@ -380,7 +392,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
         // Ship — with honest status flag
         var reviewed = review.verdict === 'approve';
-        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact };
+        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk };
         if (!reviewed) {
           shipMeta.reviewIssues = review.issues;
           shipMeta.reviewStatus = 'failed';
@@ -388,6 +400,20 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           shipMeta.reviewStatus = 'approved';
           if (review.visualDescription) shipMeta.visualReview = review.visualDescription;
         }
+
+        // P23: Evidence validator — external gate that blocks ship if required
+        // phases are missing evidence. Cannot be bypassed by the agent.
+        if (evidenceValidator) {
+          var evidence = evidenceValidator.verify({
+            card: card, artifact: artifact, review: review, job: j,
+            requiredPhases: riskClassifierLib.gatePath(risk)
+          });
+          if (!evidence.pass) {
+            throw new Error('evidence gate blocked ship: ' + evidence.missing.join('; '));
+          }
+          shipMeta.evidence = { pass: true, phases: riskClassifierLib.gatePath(risk) };
+        }
+
         pipeline.moveCard(card.id, 'shipped', shipMeta);
         return { artifact: artifact, review: review };
       }
@@ -447,27 +473,34 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       run: async function(raw, j) {
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
 
+        // P23: Risk-classified gate path for kanban cards
+        var risk = riskClassifierLib.classify((card.title || '') + ' ' + (card.detail || ''));
+        var needsResearch = riskClassifierLib.requiresResearch(risk);
+        var needsReview = riskClassifierLib.requiresReview(risk);
+
         // P22: Research gate — gather real web data before committing to the build.
-        var researchTopic = card.title + ' ' + (card.detail || '');
-        var researchBrief = await researchForBuild(researchTopic, 5);
-        if (researchBrief && brain) {
-          try {
-            var grounded = await brain.think({
-              lane: 'build',
-              persona: builderPersona,
-              messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
-              source: 'kanban-grounded:' + j.id
-            });
-            if (grounded && !grounded.offline && grounded.content) {
-              raw = grounded.content;
-            }
-          } catch (_) { /* research/rebuild failed — use original raw */ }
+        if (needsResearch) {
+          var researchTopic = card.title + ' ' + (card.detail || '');
+          var researchBrief = await researchForBuild(researchTopic, 5);
+          if (researchBrief && brain) {
+            try {
+              var grounded = await brain.think({
+                lane: 'build',
+                persona: builderPersona,
+                messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
+                source: 'kanban-grounded:' + j.id
+              });
+              if (grounded && !grounded.offline && grounded.content) {
+                raw = grounded.content;
+              }
+            } catch (_) { /* research/rebuild failed — use original raw */ }
+          }
         }
 
         var artifact = saveDeliverable(raw, slug + '-' + j.id, 'kanban');
 
-        // P22: Full review gate
-        var review = await fullReview(card, artifact, brain);
+        // P22: Full review gate (P23: skip for tiny-fix)
+        var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
 
         // If rejected, retry once with the issues fed back
         if (review.verdict === 'reject' && !j._reviewRetried && brain) {
