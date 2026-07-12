@@ -48,6 +48,18 @@ function createServer(deps) {
   const buildRunner = deps.buildRunner;           // P7 build-runner — .onJobUpdate (job WS relay)
   const agentActions = deps.agentActions;         // P7 agent-actions — assemble/build/review kanban agents
 
+  // Server-initiated camera look: broadcast a frame request; any connected UI
+  // with the camera actively watching answers with one JPEG frame. 8s timeout.
+  const pendingFrames = new Map(); // frameReqId -> { resolve, timer }
+  function requestCameraFrame() {
+    return new Promise(function(resolve) {
+      const id = 'frame-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      const timer = setTimeout(function() { pendingFrames.delete(id); resolve(null); }, 8000);
+      pendingFrames.set(id, { resolve: resolve, timer: timer });
+      broadcastAll({ type: 'camera-frame-request', frameReqId: id });
+    });
+  }
+
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
 
@@ -799,6 +811,10 @@ function createServer(deps) {
       else if (msg.type === 'command') handleCommand(msg);
       else if (msg.type === 'confirm-reply') handleConfirmReply(msg);
       else if (msg.type === 'subscribe') handleSubscribe(msg);
+      else if (msg.type === 'camera-frame') {
+        const p = pendingFrames.get(msg.frameReqId);
+        if (p) { clearTimeout(p.timer); pendingFrames.delete(msg.frameReqId); p.resolve(String(msg.image || '') || null); }
+      }
       // 'stop' — no in-flight per-connection controllers to abort yet in this
       // phase's scope (utterance/command are not streamed); reserved for parity.
     });
@@ -919,7 +935,7 @@ function createServer(deps) {
 
   // `ready` resolves once the ephemeral port is bound — httpServer.address() is
   // null until the 'listening' event fires (async on Windows), so tests await it.
-  return { app, httpServer, wss, stop, dispatchAction, ready };
+  return { app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame };
 }
 
 module.exports = { createServer };

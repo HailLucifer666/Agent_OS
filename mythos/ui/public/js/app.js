@@ -2,7 +2,7 @@
 // Voice initializes on first pointerdown (Chrome's user-gesture policy for
 // mic/AudioContext); everything else mounts immediately.
 
-import { subscribe, visionQuery, registerReplyHandler } from './ws.js';
+import { subscribe, visionQuery, registerReplyHandler, sendMessage } from './ws.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
 import { mountCoreOrb } from './neural-map/core-orb.js';
@@ -133,6 +133,15 @@ function ensureCamera() {
 }
 
 camEl.addEventListener('click', () => ensureCamera().toggle());
+
+// Server-initiated camera look: when the entity asks to see, answer with
+// one frame if the camera is actively watching. Privacy-safe: camera off = silent.
+subscribe(['camera-frame-request'], (msg) => {
+  const m = msg.payload || msg;
+  if (!camera || !camera.isActive()) return;
+  const image = camera.captureFrame();
+  if (image) sendMessage({ type: 'camera-frame', frameReqId: m.frameReqId, image: image });
+});
 
 // Chrome gesture policy: SpeechRecognition/AudioContext need a user gesture, so
 // the loop object is constructed on the FIRST pointerdown (any click) — but

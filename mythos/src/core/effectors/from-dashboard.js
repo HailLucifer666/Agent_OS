@@ -440,6 +440,40 @@ function buildTools(ctx) {
     askAgentDispatch = fn;
   }
 
+  // ---- camera_look (server-initiated) ----
+  // Provider injected by server/index.js after WS is set up.
+  let cameraFrameProvider = null;
+  function setCameraFrameProvider(fn) {
+    cameraFrameProvider = fn;
+  }
+
+  async function camera_look({ query }) {
+    try {
+      if (!cameraFrameProvider) return fail('Camera is not available — no dashboard is open or the camera is off.');
+      var brain = (ctx && ctx.brain) || null;
+      var b64 = await cameraFrameProvider();
+      if (!b64) return fail('Camera is off or no dashboard is open.');
+      if (!brain || typeof brain.think !== 'function') {
+        return fail('Screenshot captured but no vision brain is available to describe it.');
+      }
+      var result = await brain.think({
+        lane: 'vision',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: (query ? String(query).slice(0, 300) : 'Describe what is on this screen, briefly and concretely.') },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } }
+          ]
+        }],
+        source: 'camera-look',
+      });
+      if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the camera view.');
+      return ok({ description: String(result.content).trim().slice(0, 600) });
+    } catch (err) {
+      return fail(String(err.message || err));
+    }
+  }
+
   async function ask_agent({ seat, prompt }) {
     try {
       if (!askAgentDispatch) return fail('ask_agent is not wired up in this context.');
@@ -496,9 +530,10 @@ function buildTools(ctx) {
     { name: 'ask_agent', description: 'Ask a specific agent seat a question and get a short reply.', params: { seat: 'string', prompt: 'string' }, danger: false, fn: ask_agent },
     { name: 'monitor_snapshot', description: 'Read the live agent monitor snapshot (running CLI sessions).', params: {}, danger: false, fn: monitor_snapshot },
     { name: 'kill_session', description: 'Kill a running agent CLI session by PID. Irreversible.', params: { pid: 'number', agentCli: 'string' }, danger: true, fn: kill_session },
+    { name: 'camera_look', description: 'Capture a frame from the dashboard camera and describe what is visible. Use when you need to see the user, their environment, or objects they are showing.', params: { query: 'string (optional) — what specifically to look for' }, danger: false, fn: camera_look },
   ];
 
-  return { TOOLS, setAskAgentDispatch };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -508,7 +543,7 @@ function registerFromDashboard(hub, ctx) {
   }
   // Return the count AND the ask_agent dispatch injector so main.js can wire it.
   // Previously the injector was discarded here, leaving ask_agent permanently null.
-  return { count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch };
+  return { count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch, setCameraFrameProvider: built.setCameraFrameProvider };
 }
 
 module.exports = { registerFromDashboard, buildTools };

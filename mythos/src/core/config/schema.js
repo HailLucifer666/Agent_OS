@@ -87,6 +87,11 @@ const SCHEMA = {
   // Browser automation (Phase 9 — playwright-core, drives installed Chrome/Edge)
   BROWSER_CDP_URL:            { type: 'string',  default: 'http://127.0.0.1:9222' },
   BROWSER_AUTOMATION:         { type: 'bool', default: true },
+
+  // Google OAuth (Phase 13 — Gmail adapter)
+  GOOGLE_CLIENT_ID:            { type: 'string', default: '' },
+  GOOGLE_CLIENT_SECRET:        { type: 'string', default: '' },
+  GOOGLE_REFRESH_TOKEN:       { type: 'string', default: '' },
 };
 
 module.exports = { SCHEMA };

@@ -36,6 +36,7 @@ const { registerFromDashboard } = require('./core/effectors/from-dashboard');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
+const { registerFromGmail } = require('./core/effectors/from-gmail');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
@@ -280,6 +281,7 @@ async function main() {
       orchestrator.init();
       registerFromMission(hub, { orchestrator: orchestrator });
       registerFromSystem(hub, { config: config });
+      registerFromGmail(hub, { logger: logger });
 
       hub.register(createVoiceEffector({ config: config }));
 
@@ -331,6 +333,10 @@ async function main() {
         agentActions: agentActionsEffector,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
+      // Wire camera_look — server-initiated frame capture from dashboard clients.
+      if (dashboardWiring && typeof dashboardWiring.setCameraFrameProvider === 'function' && typeof serverHandle.requestCameraFrame === 'function') {
+        dashboardWiring.setCameraFrameProvider(serverHandle.requestCameraFrame);
+      }
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
 

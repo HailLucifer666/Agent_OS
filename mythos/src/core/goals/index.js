@@ -25,6 +25,7 @@ var AUTONOMOUS_EXCLUDED = [
   'open_artifact',     // opens system browser on the user's machine — human/voice only
   'pipeline_advance',  // the human gate itself — cortex approving its own cards defeats it
   'kill_session',      // irreversible process kill — human only
+  'gmail_send',        // sends email to real people — operator-gated
 ];
 
 function createGoalSystem({ fs, config, bus, memory, brain }) {

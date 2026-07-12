@@ -71,6 +71,8 @@ function sendMessage(payload) {
   }
 }
 
+export { sendMessage };
+
 function stopRequest(reqId) {
   sendMessage({ type: 'stop', reqId });
 }

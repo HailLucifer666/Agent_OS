@@ -16,6 +16,7 @@ const { registerFromPc } = require('../src/core/effectors/from-pc');
 const { registerFromBrowser } = require('../src/core/effectors/from-browser');
 const { registerFromDashboard, buildTools: buildDashboardTools } = require('../src/core/effectors/from-dashboard');
 const { registerFromProject, buildTools: buildProjectTools } = require('../src/core/effectors/from-project');
+const { registerFromGmail } = require('../src/core/effectors/from-gmail');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
 const { createAgentActions } = require('../src/core/effectors/agent-actions');
@@ -113,7 +114,7 @@ describe('gate: danger -> tier >= 3', () => {
 });
 
 describe('gate: 48 registered count', () => {
-  it('booting a hub with all five register* functions against the real TOOLS arrays yields exactly 48', () => {
+  it('booting a hub with all register* functions (incl. gmail) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
     const hub = createEffectorHub({ bus, config: {} });
@@ -123,8 +124,9 @@ describe('gate: 48 registered count', () => {
     registerFromBrowser(hub);
     registerFromDashboard(hub, ctx);
     registerFromProject(hub, ctx);
+    registerFromGmail(hub, { logger: console });
 
-    assert.equal(hub.count(), 48);
+    assert.equal(hub.count(), 53);
   });
 });
 
