@@ -98,11 +98,16 @@ async function launchLocal(userDataDir) {
   mode = null;
 
   try {
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: ['chrome', 'msedge'],
-      headless: false,
-      viewport: null,
-    });
+    // Playwright expects channel as a string, not array. Try Chrome first, fall back to Edge.
+    try {
+      context = await chromium.launchPersistentContext(userDataDir, {
+        channel: 'chrome', headless: false, viewport: null,
+      });
+    } catch (e1) {
+      context = await chromium.launchPersistentContext(userDataDir, {
+        channel: 'msedge', headless: false, viewport: null,
+      });
+    }
     launched = true;
     mode = 'launched';
     state = 'ONLINE';
