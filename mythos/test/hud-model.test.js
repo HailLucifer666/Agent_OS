@@ -33,10 +33,10 @@ function emptyStats() {
 }
 
 describe('graph-model (pure)', () => {
-  it('empty vault -> exactly core + 6 module nodes and 6 trunk edges', () => {
+  it('empty vault -> exactly core + 7 module nodes and 7 trunk edges', () => {
     const { nodes, edges } = graphModel.buildGraph(emptyStats(), {});
-    assert.equal(nodes.length, 7, '1 core + 6 modules, nothing else at first boot');
-    assert.equal(edges.length, 6, 'exactly 6 core->module tendrils');
+    assert.equal(nodes.length, 8, '1 core + 7 modules, nothing else at first boot');
+    assert.equal(edges.length, 7, 'exactly 7 core->module tendrils');
     assert.ok(nodes.find((n) => n.id === 'core' && n.type === 'core'));
     graphModel.MODULE_IDS.forEach((id) => {
       assert.ok(nodes.find((n) => n.id === id && n.type === 'module'), `module node ${id}`);
@@ -46,8 +46,8 @@ describe('graph-model (pure)', () => {
 
   it('null stats (pre-fetch) behaves like an empty vault', () => {
     const { nodes, edges } = graphModel.buildGraph(null, {});
-    assert.equal(nodes.length, 7);
-    assert.equal(edges.length, 6);
+    assert.equal(nodes.length, 8);
+    assert.equal(edges.length, 7);
   });
 
   it('memory clusters appear only when store counts > 0, sized by sqrt(count)', () => {
@@ -122,9 +122,9 @@ describe('graph-layout (pure)', () => {
 });
 
 describe('panel-registry (pure)', () => {
-  it('exposes the six HUD panels with title + loader, no duplicates', () => {
+  it('exposes the seven HUD panels with title + loader, no duplicates', () => {
     const ids = panelRegistry.panelIds();
-    assert.deepEqual(new Set(ids), new Set(['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit']));
+    assert.deepEqual(new Set(ids), new Set(['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit', 'backend']));
     assert.equal(ids.length, new Set(ids).size, 'no duplicate panel ids');
     ids.forEach((id) => {
       const p = panelRegistry.getPanel(id);

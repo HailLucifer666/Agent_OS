@@ -3,7 +3,7 @@
 // REAL vault data: an empty vault yields exactly 6 module nodes + 6 edges around
 // the core; memory clusters and breaker nodes appear only when the data does.
 
-export const MODULE_IDS = ['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit'];
+export const MODULE_IDS = ['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit', 'backend'];
 
 const MEMORY_CLUSTERS = ['episodic', 'semantic', 'skills', 'identity'];
 
@@ -43,6 +43,7 @@ export function buildGraph(stats, live) {
     { id: 'memory', type: 'module', label: 'MEMORY', weight: weightFromCount(memTotal), meta: { total: memTotal } },
     { id: 'health', type: 'module', label: 'HEALTH', weight: weightFromCount(openBreakers), meta: { openBreakers } },
     { id: 'audit', type: 'module', label: 'AUDIT', weight: weightFromCount(auditCount), meta: { count: auditCount } },
+    { id: 'backend', type: 'module', label: 'TERMINAL', weight: 1, meta: {} },
   ];
 
   const edges = MODULE_IDS.map((id) => ({ from: 'core', to: id, kind: 'trunk' }));

@@ -52,6 +52,7 @@ const CATALOG = [
   { name: 'get_time', description: "Current date and time. Pass timezone (IANA, e.g. 'America/New_York') for a specific place, omit for local system time.", params: { timezone: 'string (optional)' }, danger: false },
   { name: 'get_weather', description: 'Current weather conditions. Pass location (a city name) to check elsewhere, omit for the configured default location.', params: { location: 'string (optional)' }, danger: false },
   { name: 'web_fetch', description: 'Fetch text content from a URL — real internet access. Returns readable text (HTML stripped, truncated). Use for research, news, or real-time data the user asks about.', params: { url: 'string - the http(s) URL' }, danger: false },
+  { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets.', params: { query: 'string', numResults: 'number (optional)' }, danger: false },
 ];
 
 // ---- prompt construction (DANGER TOOLS RULE + PROJECT INTAKE RULE are CA

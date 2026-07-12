@@ -208,9 +208,15 @@ async function main() {
 
       var pipelineEffector = createPipelineEffector({ fs: memory.fs });
       var kanbanEffector = createKanbanEffector({ fs: memory.fs });
-      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs });
+      // Integration 3: build verifier (needs brain)
+      var verifier = require('./core/design/verify').createVerifier({ brain: brain });
+      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier });
+
+      // Integration 2 + 4: agent actions with design system + persona dispatch
       var agentActionsEffector = createAgentActions({
-        fs: memory.fs, pipeline: pipelineEffector, kanban: kanbanEffector, buildRunner: buildRunner
+        fs: memory.fs, pipeline: pipelineEffector, kanban: kanbanEffector,
+        buildRunner: buildRunner,
+        designSystem: true  // Integration 2: enables design-system prompt injection
       });
 
       // goals-effector: Goals.md <-> GoalSystem bridge (Spec Ambiguities #6), registered
@@ -239,11 +245,25 @@ async function main() {
       registerFromComputer(hub);
       registerFromPc(hub);
       registerFromBrowser(hub);
-      registerFromDashboard(hub, {
+      var dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
         probes: immune.probes, abtop: abtop, config: config, fs: memory.fs
       });
+      // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
+      // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.
+      // Previously setAskAgentDispatch was never called, so ask_agent always failed.
+      if (dashboardWiring && typeof dashboardWiring.setAskAgentDispatch === 'function') {
+        dashboardWiring.setAskAgentDispatch(async function(seat, prompt) {
+          var result = await brain.think({
+            lane: 'simple',
+            messages: [{ role: 'user', content: String(prompt || '') }],
+            source: 'ask_agent:' + (seat || 'unknown'),
+          });
+          if (!result || result.offline) return 'Agent offline.';
+          return result.content || (result.parsed ? JSON.stringify(result.parsed) : '');
+        });
+      }
       registerFromProject(hub, { pipeline: pipelineEffector, agentActions: agentActionsEffector });
 
       // Mission orchestrator: plan -> parallel builder agents -> synthesize.

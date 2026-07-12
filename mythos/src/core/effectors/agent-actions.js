@@ -8,6 +8,8 @@
 // to injected instances (same factory convention as effectors/pipeline.js/kanban.js).
 
 var path = require('path');
+var designSystemEngine = require('../design/system');
+var personas = require('../agents/personas');
 
 var DELIVERABLE_PREAMBLE = [
   'You are the Pipeline build agent. Take the captured idea below and produce the single',
@@ -43,7 +45,7 @@ function extractJsonBlock(raw) {
   return JSON.parse(text.trim());
 }
 
-function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
+function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem }) {
   if (!fs || typeof fs.writeText !== 'function' || typeof fs.exists !== 'function') {
     throw new Error('createAgentActions requires a vault fs-store with writeText/exists');
   }
@@ -101,7 +103,17 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     var job = buildRunner.enqueue({
       kind: 'pipeline-execute',
       goalId: goalId,
-      prompt: DELIVERABLE_PREAMBLE + card.text,
+      prompt: (function() {
+        var base = DELIVERABLE_PREAMBLE + card.text;
+        if (designSystem) {
+          try {
+            var ds = designSystemEngine.generateDesignSystem(card.text);
+            var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
+            if (dsBlock) return dsBlock + '\n\n' + base;
+          } catch (_) { /* design system lookup is best-effort */ }
+        }
+        return base;
+      })(),
       run: async function(raw, j) {
         var artifact = saveDeliverable(raw, card.text, 'pipeline');
         pipeline.moveCard(card.id, 'shipped', { progress: 100, jobId: j.id, artifact: artifact });
@@ -144,10 +156,23 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner }) {
     if (existing && (existing.status === 'queued' || existing.status === 'running')) {
       throw new Error('a build is already in progress for this card');
     }
+    var builderPersonaRole = personas.pickBuilderPersona(card.title, card.detail);
+    var builderPersona = personas.loadPersona(builderPersonaRole);
     var job = buildRunner.enqueue({
       kind: 'kanban-build',
       goalId: goalId,
-      prompt: BUILDER_PREAMBLE + card.title + '\n' + (card.detail || ''),
+      prompt: (function() {
+        var base = BUILDER_PREAMBLE + card.title + '\n' + (card.detail || '');
+        if (designSystem) {
+          try {
+            var ds = designSystemEngine.generateDesignSystem(card.title + ' ' + (card.detail || ''));
+            var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
+            if (dsBlock) return dsBlock + '\n\n' + base;
+          } catch (_) { /* best-effort */ }
+        }
+        return base;
+      })(),
+      persona: builderPersona,
       run: async function(raw, j) {
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
         var artifact = saveDeliverable(raw, slug + '-' + j.id, 'kanban');

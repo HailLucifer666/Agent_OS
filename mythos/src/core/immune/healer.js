@@ -88,6 +88,10 @@ function resolveArgs(args, diagnosis) {
 // Action implementations
 // ---------------------------------------------------------------------------
 
+// RC#4: tracks degraded lanes with TTL so they auto-restore after the cooldown.
+// Keyed by lane name → { env: envVarName, restoreAt: timestamp }
+var degradedLanes = {};
+
 function buildActions({ getCortex, getGoals, memory }) {
   const registry = require('../brain/registry');
   const { BRAIN_TABLES } = require('../brain/lanes.default');
@@ -119,14 +123,32 @@ function buildActions({ getCortex, getGoals, memory }) {
     },
 
     // Real mutable seam: registry.js's per-lane env override, read fresh on every
-    // chainFor() call (Spec Ambiguities #12).
+    // chainFor() call (Spec Ambiguity #12).
+    // RC#4: track degradation with a TTL so the provider is automatically restored
+    // when the cooldown window expires. Previously this permanently mutated
+    // process.env[table.env] with no restore path — after one quota-low event, groq
+    // was gone from the voice lane until process restart.
     'degrade-lane': async function(diagnosis, args) {
       const table = BRAIN_TABLES[args.lane];
       if (!table) return { ok: false, reason: 'unknown-lane:' + args.lane };
       const kept = table.prefs.filter(function(p) { return p.provider !== args.removeProvider; });
       const override = kept.map(function(p) { return p.provider + ':' + p.model; }).join(',');
       process.env[table.env] = override;
+      // Track when this degradation should be reversed (5 min = the quota-guard
+      // playbook cooldown). The healer's tick loop checks degradedLanes and
+      // restores expired entries via restore-lane.
+      degradedLanes[args.lane] = { env: table.env, restoreAt: Date.now() + 300000 };
       return { ok: true, result: { lane: args.lane, removed: args.removeProvider, override: override } };
+    },
+
+    // RC#4: restore a degraded lane by clearing the env override so registry.js
+    // falls back to the built-in BRAIN_TABLES preference list.
+    'restore-lane': async function(diagnosis, args) {
+      var entry = degradedLanes[args.lane];
+      if (!entry) return { ok: false, reason: 'lane-not-degraded:' + args.lane };
+      delete process.env[entry.env];
+      delete degradedLanes[args.lane];
+      return { ok: true, result: { lane: args.lane, restored: true } };
     },
 
     'consolidate-memory': async function() {
@@ -164,6 +186,7 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
   const ACTIONS = buildActions({ getCortex: getCortex, getGoals: getGoals, memory: memory });
   const activePlaybooks = playbooks || SEED_PLAYBOOKS;
   const lastFiredAt = {}; // playbook.id -> ts
+  var restoreTimer = null;
 
   async function applyPlaybook(playbook, diagnosis) {
     let outcome = 'applied';
@@ -224,10 +247,29 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
 
   function start() {
     unsubscribe = bus.subscribe('health.diagnosed', onDiagnosed);
+    // RC#4: periodic check for expired lane degradations. Every 60s, if a
+    // degraded lane's restoreAt has passed, clear the env override so the
+    // registry falls back to the built-in preference list (re-adding groq etc.).
+    restoreTimer = setInterval(function() {
+      var now = Date.now();
+      Object.keys(degradedLanes).forEach(function(lane) {
+        if (degradedLanes[lane].restoreAt <= now) {
+          var entry = degradedLanes[lane];
+          delete process.env[entry.env];
+          delete degradedLanes[lane];
+          bus.emit('health.healed', {
+            playbookId: 'lane-restore', kind: 'quota-recovered',
+            target: lane, outcome: 'applied', detail: { restored: true }
+          });
+        }
+      });
+    }, 60000);
+    if (restoreTimer.unref) restoreTimer.unref();
   }
 
   function stop() {
     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    if (restoreTimer) { clearInterval(restoreTimer); restoreTimer = null; }
   }
 
   return {

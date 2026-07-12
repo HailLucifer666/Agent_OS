@@ -30,12 +30,19 @@ function fail(reason) {
 
 function allowedRoots() {
   const raw = process.env.VOICE_ALLOWED_DIRS || '%USERPROFILE%';
-  return raw
+  const roots = raw
     .split(';')
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => s.replace(/%USERPROFILE%/gi, os.homedir()))
     .map((s) => path.resolve(s));
+  // Always include the project root so the cortex can read its own source tree.
+  // from-computer.js is at src/core/effectors/ — 4 levels up reaches the mythos/ root.
+  var projectRoot = path.resolve(__dirname, '..', '..', '..', '..');
+  if (!roots.some(function(r) { return path.resolve(r) === projectRoot; })) {
+    roots.push(projectRoot);
+  }
+  return roots;
 }
 
 // Rejects UNC paths (\\host\share or //host/share) before resolution — path.resolve()

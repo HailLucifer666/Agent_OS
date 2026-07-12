@@ -9,6 +9,7 @@ export const PANELS = {
   memory:   { title: 'MEMORY',   loader: () => import('/js/views/memory.js'),   mutating: false },
   health:   { title: 'HEALTH',   loader: () => import('/js/views/health.js'),   mutating: false },
   audit:    { title: 'AUDIT',    loader: () => import('/js/views/audit.js'),    mutating: false },
+  backend:  { title: 'BACKEND TERMINAL', loader: () => import('/js/views/backend-terminal.js'), mutating: false },
 };
 
 export function getPanel(id) {

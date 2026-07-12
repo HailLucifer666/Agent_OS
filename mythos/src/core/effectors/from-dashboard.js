@@ -24,6 +24,7 @@
 
 const { effectorFromTool } = require('./adapter');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
+const { web_search } = require('./web-search');
 
 function ok(result, uiActions) {
   return uiActions ? { ok: true, result, uiActions } : { ok: true, result };
@@ -236,14 +237,46 @@ function buildTools(ctx) {
   // content (e.g. real AI news) instead of hallucinating from training data.
   // Returns the response body as text, truncated to a sensible length. HTML
   // tags are stripped so the model sees readable text, not markup.
+  // web_fetch: retrieve readable text from a URL via Jina Reader.
+  // Jina Reader (https://r.jina.ai/) returns clean markdown — no HTML stripping
+  // needed, handles JS-rendered content, returns readable text. Free, no API key.
+  // Falls back to direct fetch + regex strip if Jina is unavailable.
   async function web_fetch({ url }) {
     try {
       if (!url || !String(url).trim()) return fail('A URL is required.');
       const raw = String(url).trim();
-      // Basic URL validation — reject obviously malformed input
       if (!/^https?:\/\//i.test(raw)) return fail('URL must start with http:// or https://');
+      const maxChars = 4000;
+
+      // Try Jina Reader first — prepend https://r.jina.ai/ to the URL
+      try {
+        const jinaController = new AbortController();
+        const jinaTimer = setTimeout(() => jinaController.abort(), 15000);
+        const jinaRes = await fetch('https://r.jina.ai/' + raw, {
+          signal: jinaController.signal,
+          headers: { 'Accept': 'text/plain' },
+        });
+        clearTimeout(jinaTimer);
+        if (jinaRes.ok) {
+          const text = await jinaRes.text();
+          if (text && text.trim().length > 0) {
+            const truncated = text.length > maxChars;
+            return ok({
+              url: raw,
+              status: jinaRes.status,
+              contentType: 'text/plain',
+              content: text.slice(0, maxChars),
+              truncated: truncated,
+              totalLength: text.length,
+              source: 'jina-reader',
+            });
+          }
+        }
+      } catch (_) { /* Jina failed — fall through to direct fetch */ }
+
+      // Fallback: direct fetch + regex HTML strip
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      const timer = setTimeout(() => controller.abort(), 15000);
       const res = await fetch(raw, {
         signal: controller.signal,
         headers: { 'User-Agent': 'MYTHOS/1.0 (entity assistant)' },
@@ -253,23 +286,15 @@ function buildTools(ctx) {
       if (!res.ok) return fail('Fetch failed: HTTP ' + res.status + ' ' + res.statusText);
       const contentType = res.headers.get('content-type') || '';
       const body = await res.text();
-      // Truncate to keep token usage reasonable (~1000 tokens max)
-      const maxChars = 4000;
       let text = body;
-      // Strip HTML tags if the response is HTML — model wants readable text
       if (contentType.includes('text/html')) {
         text = body
           .replace(/<script[\s\S]*?<\/script>/gi, '')
           .replace(/<style[\s\S]*?<\/style>/gi, '')
           .replace(/<[^>]+>/g, ' ')
-          .replace(/&nbsp;/g, ' ')
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&#39;/g, "'")
-          .replace(/&quot;/g, '"')
-          .replace(/\s+/g, ' ')
-          .trim();
+          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+          .replace(/\s+/g, ' ').trim();
       }
       const truncated = text.length > maxChars;
       return ok({
@@ -279,6 +304,7 @@ function buildTools(ctx) {
         content: text.slice(0, maxChars),
         truncated: truncated,
         totalLength: text.length,
+        source: 'direct',
       });
     } catch (err) {
       return fail('Fetch failed: ' + err.message);
@@ -445,6 +471,7 @@ function buildTools(ctx) {
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },
     { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch },
+    { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', numResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(args); } },
     { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted).', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
     { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals },
@@ -472,7 +499,9 @@ function registerFromDashboard(hub, ctx) {
   for (var i = 0; i < built.TOOLS.length; i++) {
     hub.register(effectorFromTool(built.TOOLS[i]));
   }
-  return built.TOOLS.length;
+  // Return the count AND the ask_agent dispatch injector so main.js can wire it.
+  // Previously the injector was discarded here, leaving ask_agent permanently null.
+  return { count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch };
 }
 
 module.exports = { registerFromDashboard, buildTools };

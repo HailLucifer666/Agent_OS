@@ -16,7 +16,7 @@
 // shipped production code." recoveredJobs (below) surfaces goalId too, so crash
 // recovery can report which goal each recovered job belonged to.
 
-function createBuildRunner({ config, brain, bus, vault }) {
+function createBuildRunner({ config, brain, bus, vault, verifier }) {
   if (!brain || typeof brain.think !== 'function') {
     throw new Error('createBuildRunner requires a brain with think()');
   }
@@ -92,7 +92,7 @@ function createBuildRunner({ config, brain, bus, vault }) {
     });
   }
 
-  function enqueue({ kind, prompt, run, goalId }) {
+  function enqueue({ kind, prompt, run, goalId, persona }) {
     var job = {
       id: 'job-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       kind: kind,
@@ -105,7 +105,7 @@ function createBuildRunner({ config, brain, bus, vault }) {
       finishedAt: null
     };
     jobs.set(job.id, job);
-    queue.push({ job: job, prompt: prompt, run: run });
+    queue.push({ job: job, prompt: prompt, run: run, persona: persona });
     notify(job);
     // Defer pump() so enqueue() always returns a job in 'queued' state — see NOVA
     // orchestrator.js's identical queueMicrotask comment; same race exists here.
@@ -119,7 +119,7 @@ function createBuildRunner({ config, brain, bus, vault }) {
     if (!next) return;
     runningCount += 1;
 
-    var job = next.job, prompt = next.prompt, run = next.run;
+    var job = next.job, prompt = next.prompt, run = next.run, persona = next.persona;
     job.status = 'running';
     job.stage = 'generating';
     notify(job);
@@ -128,7 +128,8 @@ function createBuildRunner({ config, brain, bus, vault }) {
       var result = await brain.think({
         lane: 'build',
         messages: [{ role: 'user', content: prompt }],
-        source: 'build-runner:' + job.id
+        source: 'build-runner:' + job.id,
+        persona: persona || undefined
       });
 
       if (!result || result.offline) {
@@ -138,10 +139,35 @@ function createBuildRunner({ config, brain, bus, vault }) {
         throw new Error('build aborted');
       }
 
+      // Verification gate — check the output before saving. If it fails and we
+      // haven't retried yet, regenerate once with the issues appended.
+      var raw = result.content;
+      if (verifier && typeof verifier.verify === 'function') {
+        job.stage = 'verifying';
+        notify(job);
+        var verification = await verifier.verify(raw, prompt);
+        if (!verification.pass && !job._retried) {
+          job._retried = true;
+          var retryResult = await brain.think({
+            lane: 'build',
+            messages: [{ role: 'user', content:
+              prompt + '\n\nYour previous output had these problems: ' +
+              verification.issues.join('; ') + '. Fix them and regenerate.'
+            }],
+            source: 'build-runner-retry:' + job.id
+          });
+          if (retryResult && !retryResult.offline) {
+            raw = retryResult.content;
+          }
+        } else if (!verification.pass) {
+          // Retried already or retry failed — save anyway but record issues
+          job.verificationIssues = verification.issues;
+        }
+      }
+
       job.stage = 'writing-artifact';
       notify(job);
 
-      var raw = result.content;
       var runResult = await run(raw, job);
       job.status = 'done';
       job.stage = 'done';

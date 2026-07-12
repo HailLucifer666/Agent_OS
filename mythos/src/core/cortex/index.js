@@ -116,6 +116,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       var decision = await decide(ranked, goals, working, brain, memory, config);
       if (!decision) return;
 
+      // RC#3: feed the planner's brain-call spend into the working-memory ledger
+      // so episodic records and goal budgets reflect real token usage. Previously
+      // addSpend() was dead code — every action showed tokensSpent:0.
+      if (decision._spentTokens && typeof working.addSpend === 'function') {
+        working.addSpend(decision._spentTokens);
+      }
+
       // -- ACT --
       await act(decision, { bus, memory, goals, brain, leash, effectors, config, working, ACTION_TIMEOUT_MS });
 
@@ -147,7 +154,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
 
     // Planner: procedural recall first, then brain
     if (typeof goals.plan === 'function') {
-      var plan = await goals.plan(best, { memory: memory, brain: brain });
+      var plan = await goals.plan(best, { memory: memory, brain: brain, effectors: effectors });
       if (!plan) return null;
       return plan;
     }
@@ -158,6 +165,19 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     var bus = ctx.bus, leash = ctx.leash, effectors = ctx.effectors;
     var working = ctx.working, goals = ctx.goals, memory = ctx.memory;
     var config = ctx.config, ACTION_TIMEOUT_MS = ctx.ACTION_TIMEOUT_MS;
+
+    // RC#2: pre-flight effector existence check. If the planner returned a tool
+    // that isn't registered, fail fast — emit action.completed with ok:false and
+    // return BEFORE the leash confirm gate. Without this, a hallucinated tool
+    // name blocks on a confirm popup (tier-3) that can never succeed, stalling
+    // the cortex tick for 5s+ and triggering the watchdog's stall-restart loop.
+    if (effectors && typeof effectors.count === 'function' && decision && decision.tool) {
+      var regMap = effectors.effectors;
+      if (regMap && typeof regMap.has === 'function' && !regMap.has(decision.tool)) {
+        bus.emit('action.completed', { tool: decision.tool, ok: false, goalId: working.activeGoalId, reason: 'unknown-effector' });
+        return;
+      }
+    }
 
     // 1. Leash check — mandatory, fail-closed (createCortex requires leash to construct)
     var leashResult = leash.check(decision, { goalId: working.activeGoalId });
@@ -259,6 +279,11 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         schemaHint: '{ thoughts: string, priority: string }',
         source: 'idle-mull'
       });
+
+      // RC#3: account for the mull's token spend too
+      if (result && result.spentTokens && typeof working.addSpend === 'function') {
+        working.addSpend(result.spentTokens);
+      }
 
       if (result && !result.offline && result.parsed && result.parsed.thoughts &&
           result.parsed.priority && result.parsed.priority !== 'low') {

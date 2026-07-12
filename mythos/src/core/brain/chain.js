@@ -118,7 +118,18 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
       }
     } catch (err) {
       errors.push(`${lane}:${model}: ${err.message}`);
-      markCooldown(lane, model);
+      // Error discrimination: only cooldown on rate-limit (429) or network errors.
+      // Auth failures (401/403) won't recover in 60s — let isAvailable() handle them.
+      // Bad-request (400) means the provider is healthy, the request was wrong — don't
+      // penalize the provider. Caller-abort is not a provider fault either.
+      var msg = String(err && err.message || '');
+      var isAbort = err && err.name === 'AbortError';
+      var isRateLimit = /:\s*429\b/.test(msg);
+      var isServerError = /:\s*5\d\d\b/.test(msg);
+      var isNetwork = /fetch failed|network|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg);
+      if (isRateLimit || isServerError || isNetwork || isAbort) {
+        markCooldown(lane, model);
+      }
     }
   }
 

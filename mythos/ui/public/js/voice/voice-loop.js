@@ -35,13 +35,14 @@ const NAV_COMMANDS = [
   [/^(show|open)\s+(my\s+)?memor(y|ies)$/i, 'memory'],
   [/^(show|open)\s+health$/i, 'health'],
   [/^(show|open)\s+(the\s+)?audit( log| trail)?$/i, 'audit'],
+  [/^(show|open)\s+(the\s+)?(backend|terminal|system logs)$/i, 'backend'],
 ];
 
 // Vision questions are intercepted before the brain, same as NAV_COMMANDS —
 // they need a camera frame attached, which only the client can do.
 const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
 
-export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery, onActivity })
+export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery, onActivity }) {
   let active = false;
   let processing = false;
   let disposed = false;

@@ -42,7 +42,7 @@ function createBrain({ config, bus, identity }) {
   const spend = require('./spend');
 
   return {
-    async think({ lane, messages, schemaHint, budget, signal, source, onToken }) {
+    async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona }) {
       // 1. Embed lane is placeholder — clean offline
       if (lane === 'embed') {
         return { content: null, offline: true, lane };
@@ -57,9 +57,18 @@ function createBrain({ config, bus, identity }) {
         ];
       }
       if (['voice', 'build', 'simple'].indexOf(lane) !== -1) {
-        const personaLine = identity && typeof identity.persona === 'function'
-          ? identity.persona() + ' Be concise and actionable.'
-          : 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. Be concise and actionable.';
+        // Per-call persona override — when the caller passes a `persona` string,
+        // use it instead of the global identity persona. This enables specialized
+        // agent seats (frontend-builder, backend-builder, reviewer) without
+        // changing the global identity. When persona is absent, keep the default.
+        var personaLine;
+        if (persona) {
+          personaLine = persona + ' Be concise and actionable.';
+        } else if (identity && typeof identity.persona === 'function') {
+          personaLine = identity.persona() + ' Be concise and actionable.';
+        } else {
+          personaLine = 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. Be concise and actionable.';
+        }
         msgs = [
           { role: 'system', content: personaLine },
           ...msgs

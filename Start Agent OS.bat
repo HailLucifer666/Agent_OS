@@ -21,6 +21,15 @@ if not exist "node_modules" (
     )
 )
 
-start "" http://127.0.0.1:4478
-node src/main.js
-pause
+REM Launch split-view via Windows Terminal: left = MYTHOS server, right = live backend logs.
+REM Falls back to single-pane mode if wt.exe is unavailable.
+where wt.exe >nul 2>nul
+if %errorlevel%==0 (
+    start "" http://127.0.0.1:4478
+    wt.exe -d "%~dp0mythos" --title "MYTHOS SERVER" cmd /k "node src/main.js" ^; split-pane -V -d "%~dp0mythos" --title "BACKEND LOGS" cmd /k "node scripts/live-logs.js"
+) else (
+    echo Windows Terminal not found — starting in single-pane mode.
+    start "" http://127.0.0.1:4478
+    node src/main.js
+    pause
+)

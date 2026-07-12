@@ -17,6 +17,7 @@ const { splitSentences, createSentenceStreamer } = require('../src/core/effector
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
+const spend = require('../src/core/brain/spend');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -830,6 +831,9 @@ function createServer(deps) {
     probes.getStatus().then((providers) => {
       lastProviders = providers;
       broadcastHealth(providers);
+      // Token-usage snapshot for the widget — real per-provider token data,
+      // piggybacked on the existing 4s metric tick so no new polling infra is needed.
+      broadcastAll({ type: 'token-usage', payload: spend.getStats() });
     }).catch(() => {});
   });
 

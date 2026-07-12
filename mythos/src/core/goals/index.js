@@ -214,15 +214,47 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     // 4. Brain call
     if (ctx && ctx.brain) {
       var lane = goal.drive === 'user-service' ? 'build' : 'simple';
+      // RC#1: build the available-tool list from the effector registry so the
+      // planner can only choose real tools. Without this, the LLM hallucinated
+      // names like 'clarify', 'ask_user', 'reason', 'search_files' that don't
+      // exist — every one returned 'unknown-effector' and stalled the cortex.
+      var toolList = '';
+      if (ctx.effectors && typeof ctx.effectors.count === 'function') {
+        var names = [];
+        var iter = ctx.effectors.effectors;
+        if (iter && typeof iter.keys === 'function') {
+          names = Array.from(iter.keys());
+        }
+        toolList = 'You may ONLY choose a tool from this list (use the exact name):\n' +
+          names.map(function(n) { return '  - ' + n; }).join('\n') +
+          '\nDo NOT invent tool names. If none of these tools fit, return {"tool":"", "args":{}}.';
+      }
       try {
         var result = await ctx.brain.think({
           lane: lane,
-          messages: [{ role: 'user', content: 'Plan next action for goal: ' + goal.title }],
+          messages: [{ role: 'user', content:
+            toolList + '\n\nPlan next action for goal: ' + goal.title +
+            '\nRespond as JSON: {"tool": "<exact tool name from the list>", "args": {<required params>}}'
+          }],
           schemaHint: '{ tool: string, args: object }',
           source: 'goal:' + goal.id
         });
         if (result && !result.offline && result.parsed && result.parsed.tool) {
-          return { tool: result.parsed.tool, args: result.parsed.args || {}, rationale: 'brain-planned', done: false };
+          // RC#1 validation: reject hallucinated tool names before dispatching.
+          // If the model returned a tool not in the registry, return null (cortex
+          // goes idle) instead of an unknown-effector failure loop.
+          if (ctx.effectors && typeof ctx.effectors.count === 'function') {
+            var regIter = ctx.effectors.effectors;
+            var regNames = regIter && typeof regIter.keys === 'function' ? Array.from(regIter.keys()) : [];
+            if (regNames.length > 0 && regNames.indexOf(result.parsed.tool) === -1) {
+              if (bus) bus.emit('health.anomaly', {
+                kind: 'planner-hallucinated-tool', target: goal.id,
+                evidence: { tool: result.parsed.tool, available: regNames.length }
+              });
+              return null;
+            }
+          }
+          return { tool: result.parsed.tool, args: result.parsed.args || {}, rationale: 'brain-planned', done: false, _spentTokens: result.spentTokens || 0 };
         }
       } catch (_) { /* brain offline */ }
     }
