@@ -44,8 +44,8 @@ const { createWsSensor } = require('./core/sensors/ws');
 const { createJobSensor } = require('./core/sensors/job');
 const { createServer } = require('../server');
 const fs = require('fs');
-const browserAgent = require('../../adapters/browser-agent');
-const pcChild = require('../../adapters/pc-child');
+const browserAgent = require('../adapters/browser-agent');
+const pcChild = require('../adapters/pc-child');
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
@@ -102,6 +102,7 @@ async function main() {
   let metricSensor = null;
   let buildRunner = null;
   let agentActionsEffector = null;
+  let dashboardWiring = null;
   let fileSensor = null;
   let wsSensor = null;
   let jobSensor = null;
@@ -249,7 +250,7 @@ async function main() {
       registerFromComputer(hub);
       registerFromPc(hub, { brain: brain });
       registerFromBrowser(hub);
-      var dashboardWiring = registerFromDashboard(hub, {
+      dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
         probes: immune.probes, abtop: abtop, config: config, fs: memory.fs
