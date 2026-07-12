@@ -346,19 +346,18 @@ async function main() {
       // already-running Chrome first, then launches Chrome/Edge locally as fallback.
       // Also starts the PC child (PowerShell automation daemon).
       if (config.BROWSER_AUTOMATION !== false) {
-        var browserProfile = memory.fs.vaultPath('BrowserProfile');
-        browserAgent.ensureOnline({
-          cdpUrl: config.BROWSER_CDP_URL,
-          userDataDir: browserProfile,
-        }).then(function(ok) {
+        // CDP connect only — no auto-launch. Launching a real browser on boot
+        // steals the mic/audio device on Windows, breaking voice input. Browser
+        // launches on-demand when tools actually need it.
+        browserAgent.connect(config.BROWSER_CDP_URL).then(function(ok) {
           var status = browserAgent.getStatus();
           if (ok) {
             logger.info('browser-automation.online', { mode: status.mode, pages: status.pageCount });
           } else {
-            logger.warn('browser-automation.offline', { hint: status.hint });
+            logger.info('browser-automation.standby', { hint: 'CDP not connected — browser will launch on demand' });
           }
         }).catch(function(err) {
-          logger.warn('browser-automation.failed', { error: err.message });
+          logger.warn('browser-automation.connect-failed', { error: err.message });
         });
       }
 
