@@ -39,6 +39,13 @@ var BUILDER_PREAMBLE = [
   'Title the deliverable using words FROM the task, not an invented brand name.\nTask: '
 ].join(' ');
 
+var REVIEWER_PREAMBLE = [
+  'You are the Kanban Reviewer agent. Review the deliverable below against its task.',
+  'Judge: does it actually fulfil the task? Is it complete and self-contained? Any obvious',
+  'defects? Respond with ONLY a JSON object, no commentary, no markdown fence:',
+  '{"verdict": "approve" | "reject", "notes": "1-2 sentences explaining the verdict"}'
+].join(' ');
+
 function extractJsonBlock(raw) {
   var fence = raw.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
   var text = fence ? fence[1] : raw;
@@ -184,12 +191,46 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem })
     return { job: job, board: kanban.listBoard() };
   }
 
+  function reviewKanbanCard(cardId, goalId) {
+    var card = kanban.findCard(cardId);
+    if (!card) throw new Error('kanban card not found: ' + cardId);
+    if (!card.artifact || !card.artifact.path) {
+      throw new Error('nothing to review — build this card first');
+    }
+    // artifact.path is the web path (/vault/builds/<kind>/<name>); vault-relative strips /vault/
+    var rel = String(card.artifact.path).replace(/^\/vault\//, '');
+    var content = fs.readText(rel, '');
+    if (!content) throw new Error('artifact file missing or empty: ' + rel);
+
+    var job = buildRunner.enqueue({
+      kind: 'kanban-review',
+      goalId: goalId,
+      prompt: REVIEWER_PREAMBLE +
+        '\n\nTASK: ' + card.title + (card.detail ? ' — ' + card.detail : '') +
+        '\n\nDELIVERABLE (truncated to 8000 chars):\n' + content.slice(0, 8000),
+      run: async function(raw) {
+        var parsed = extractJsonBlock(raw);
+        var verdict = parsed && parsed.verdict;
+        if (verdict !== 'approve' && verdict !== 'reject') {
+          throw new Error('reviewer did not return a valid verdict — try again');
+        }
+        kanban.patchCard(cardId, {
+          reviewVerdict: verdict,
+          reviewNotes: String(parsed.notes || '').slice(0, 300)
+        });
+        return {};
+      }
+    });
+    return { job: job };
+  }
+
   return {
     saveDeliverable: saveDeliverable,
     extractJsonBlock: extractJsonBlock,
     executePipelineCard: executePipelineCard,
     assembleKanbanPlan: assembleKanbanPlan,
-    buildKanbanCard: buildKanbanCard
+    buildKanbanCard: buildKanbanCard,
+    reviewKanbanCard: reviewKanbanCard
   };
 }
 

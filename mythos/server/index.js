@@ -46,6 +46,7 @@ function createServer(deps) {
   const probes = deps.probes;                     // P6 immune/probes.js — .getStatus()
   const brain = deps.brain;                       // P2 brain — .think({lane, messages, ...})
   const buildRunner = deps.buildRunner;           // P7 build-runner — .onJobUpdate (job WS relay)
+  const agentActions = deps.agentActions;         // P7 agent-actions — assemble/build/review kanban agents
 
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
@@ -154,6 +155,42 @@ function createServer(deps) {
   app.delete('/api/kanban/cards/:id', (req, res) => {
     kanbanEffector.deleteCard(req.params.id);
     res.json({ board: kanbanEffector.listBoard() });
+  });
+
+  // ---- kanban agent routes: assemble / build / review / accept + job polling ----
+  app.post('/api/kanban/assemble', (req, res) => {
+    const { goal } = req.body || {};
+    if (!goal || !goal.trim()) return res.status(400).json({ error: 'goal required' });
+    try {
+      res.json(agentActions.assembleKanbanPlan(goal.trim()));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/kanban/cards/:id/build', (req, res) => {
+    try {
+      res.json(agentActions.buildKanbanCard(req.params.id));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/kanban/cards/:id/review', (req, res) => {
+    try {
+      res.json(agentActions.reviewKanbanCard(req.params.id));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/kanban/cards/:id/accept', (req, res) => {
+    const lane = (req.body || {}).lane === 'backlog' ? 'backlog' : 'done';
+    try {
+      kanbanEffector.moveCard(req.params.id, lane);
+      kanbanEffector.patchCard(req.params.id, { reviewVerdict: null, reviewNotes: null });
+      res.json({ board: kanbanEffector.listBoard() });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.get('/api/jobs/:id', (req, res) => {
+    const job = buildRunner && buildRunner.getJob ? buildRunner.getJob(req.params.id) : null;
+    if (!job) return res.status(404).json({ error: 'job not found' });
+    res.json({ job });
   });
 
   app.get('/api/pipeline', (req, res) => { res.json(pipelineEffector.listAll()); });

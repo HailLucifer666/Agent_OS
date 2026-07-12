@@ -87,8 +87,10 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
 
     generate(
       'A build job just completed. The artifact is: ' + artifactName +
-      '. Say one natural, warm sentence to tell the operator it is done and offer to open it. ' +
-      'Do not be robotic. Speak plainly.',
+      '. Say one natural, warm sentence to tell the operator it is done. ' +
+      'After stating what finished, optionally add ONE short offer for the most obvious next step ' +
+      '(e.g. "Want me to open it?" or "Shall I have the reviewer check it?"). Skip the offer if nothing obvious follows. ' +
+      'Never more than one offer. Do not be robotic. Speak plainly.',
       'Your ' + artifactName + ' is ready. Want me to open it?'
     ).then(function(text) {
       if (!DRYRUN) speak(text);

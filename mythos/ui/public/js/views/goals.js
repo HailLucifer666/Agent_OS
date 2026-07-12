@@ -77,8 +77,8 @@ function renderGoalsUI() {
 }
 
 function applyData(data) {
-  state.goals = data.goals;
-  state.stats = data.stats;
+  state.goals = (data && Array.isArray(data.goals)) ? data.goals : [];
+  state.stats = (data && data.stats) ? data.stats : { total: 0, active: 0, completed: 0, progress: 0 };
   renderGoalsUI();
 }
 
@@ -114,10 +114,13 @@ export async function render(mount) {
   async function load() {
     try {
       const res = await fetch('/api/goals');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       applyData(data);
     } catch (err) {
       console.error('goals load failed', err);
+      const list = document.getElementById('goals-list');
+      if (list) list.innerHTML = `<div class="goals-empty">Could not load goals: ${err.message}. Close and reopen this panel to retry.</div>`;
     }
   }
 
@@ -185,5 +188,5 @@ export async function render(mount) {
     if (e.target.closest('[data-action="delete"]')) deleteGoal(id);
   });
 
-  load();
+  await load();
 }

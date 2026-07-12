@@ -31,6 +31,12 @@ function baseDeps(bus, overrides) {
     leash: { confirm: { create: () => 'cf-1', accept: () => null, reject: () => true } },
     goals: { debitBudget: () => {} },
     probes: { getStatus: async () => ({}) },
+    agentActions: {
+      assembleKanbanPlan: () => ({ job: { id: 'j1', status: 'queued' } }),
+      buildKanbanCard: () => ({ job: { id: 'j1', status: 'queued' }, board: { cards: [] } }),
+      reviewKanbanCard: () => ({ job: { id: 'j1', status: 'queued' } }),
+    },
+    buildRunner: { getJob: () => null, onJobUpdate: () => () => {} },
   }, overrides || {});
 }
 

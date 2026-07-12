@@ -10,6 +10,23 @@ var DRIVE_WEIGHTS = {
   'curiosity': 0.25
 };
 
+// User-intake and human-gate tools the autonomous cortex must NEVER call —
+// these exist for the operator (voice/dashboard), not the goal loop. Without
+// this exclusion the planner dumps its own prompts and complaints into the
+// pipeline inbox as "ideas", creates duplicate goals, and can approve its own
+// human-gate cards. (Names verified against from-dashboard.js registrations.)
+var AUTONOMOUS_EXCLUDED = [
+  'capture_idea',      // pipeline inbox — human intake only
+  'create_goal',       // goal creation — human/voice only (cortex serves goals, doesn't mint them)
+  'kanban_add_card',   // kanban intake — human only
+  'delete_goal',       // destructive, human-gated
+  'delete_artifact',   // destructive, human-gated
+  'navigate',          // dashboard routing — pointless + confusing when fired headless
+  'open_artifact',     // opens system browser on the user's machine — human/voice only
+  'pipeline_advance',  // the human gate itself — cortex approving its own cards defeats it
+  'kill_session',      // irreversible process kill — human only
+];
+
 function createGoalSystem({ fs, config, bus, memory, brain }) {
   var goals = new Map(); // id -> goal record (in-memory index)
 
@@ -223,7 +240,9 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         var names = [];
         var iter = ctx.effectors.effectors;
         if (iter && typeof iter.keys === 'function') {
-          names = Array.from(iter.keys());
+          names = Array.from(iter.keys()).filter(function(n) {
+            return AUTONOMOUS_EXCLUDED.indexOf(n) === -1;
+          });
         }
         toolList = 'You may ONLY choose a tool from this list (use the exact name):\n' +
           names.map(function(n) { return '  - ' + n; }).join('\n') +
@@ -246,7 +265,8 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           if (ctx.effectors && typeof ctx.effectors.count === 'function') {
             var regIter = ctx.effectors.effectors;
             var regNames = regIter && typeof regIter.keys === 'function' ? Array.from(regIter.keys()) : [];
-            if (regNames.length > 0 && regNames.indexOf(result.parsed.tool) === -1) {
+            if (regNames.length > 0 && (regNames.indexOf(result.parsed.tool) === -1 ||
+                AUTONOMOUS_EXCLUDED.indexOf(result.parsed.tool) !== -1)) {
               if (bus) bus.emit('health.anomaly', {
                 kind: 'planner-hallucinated-tool', target: goal.id,
                 evidence: { tool: result.parsed.tool, available: regNames.length }

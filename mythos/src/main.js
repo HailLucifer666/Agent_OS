@@ -98,6 +98,7 @@ async function main() {
   let immune = null; // { probes, diagnostician, healer, watchdog, announcer, monitor }
   let metricSensor = null;
   let buildRunner = null;
+  let agentActionsEffector = null;
   let fileSensor = null;
   let wsSensor = null;
   let jobSensor = null;
@@ -213,7 +214,7 @@ async function main() {
       buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier });
 
       // Integration 2 + 4: agent actions with design system + persona dispatch
-      var agentActionsEffector = createAgentActions({
+      agentActionsEffector = createAgentActions({
         fs: memory.fs, pipeline: pipelineEffector, kanban: kanbanEffector,
         buildRunner: buildRunner,
         designSystem: true  // Integration 2: enables design-system prompt injection
@@ -325,6 +326,7 @@ async function main() {
         pipelineEffector: pipelineEffector,
         effectors: effectors, leash: leash, goals: goals, probes: immune.probes,
         brain: brain, buildRunner: buildRunner,
+        agentActions: agentActionsEffector,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });

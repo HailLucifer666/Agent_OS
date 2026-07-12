@@ -101,7 +101,7 @@ export async function render(mount) {
         <div>
           <div class="kanban-name-row">
             <span class="kanban-name">Agent Kanban</span>
-            <span class="kanban-team-pill">&#9986; offline team</span>
+            <span class="kanban-team-pill">&#9986; local team</span>
           </div>
           <div class="kanban-subtitle">A team of local agents plans, builds + reviews &mdash; live, on your machine</div>
         </div>
@@ -109,12 +109,12 @@ export async function render(mount) {
       <div class="kanban-header-right">
         <div class="kanban-toggle-group">
           <button class="kanban-toggle active" type="button">&#9638; Board</button>
-          <button class="kanban-toggle" type="button" disabled>&#128193; Workspace <span class="kanban-badge">11</span></button>
+          <span class="kanban-toggle">&#128193; Workspace</span>
         </div>
         <div class="kanban-role-pills">
-          <button class="kanban-role-pill" type="button" disabled>&#8853; Planner</button>
-          <button class="kanban-role-pill" type="button" disabled>&#128736; Builder</button>
-          <button class="kanban-role-pill" type="button" disabled>&#9989; Reviewer</button>
+          <span class="kanban-role-pill">&#8853; Planner</span>
+          <span class="kanban-role-pill">&#128736; Builder</span>
+          <span class="kanban-role-pill">&#9989; Reviewer</span>
         </div>
       </div>
     </div>
@@ -133,11 +133,16 @@ export async function render(mount) {
   async function load() {
     try {
       const res = await fetch('/api/kanban');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      cards = data.cards;
+      cards = (data && Array.isArray(data.cards)) ? data.cards : [];
       renderBoard();
     } catch (err) {
       console.error('kanban load failed', err);
+      cards = [];
+      renderBoard();
+      const note = document.getElementById('kanban-note');
+      if (note) note.textContent = `Could not load the board: ${err.message}`;
     }
   }
 
@@ -150,7 +155,7 @@ export async function render(mount) {
         body: JSON.stringify({ title: title.trim(), lane }),
       });
       const data = await res.json();
-      cards = Array.isArray(data.board) ? data.board : data.board.cards;
+      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
       renderBoard();
     } catch (err) {
       console.error('add card failed', err);
@@ -165,7 +170,7 @@ export async function render(mount) {
         body: JSON.stringify({ lane }),
       });
       const data = await res.json();
-      cards = Array.isArray(data.board) ? data.board : data.board.cards;
+      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
       renderBoard();
     } catch (err) {
       console.error('move card failed', err);
@@ -176,7 +181,7 @@ export async function render(mount) {
     try {
       const res = await fetch(`/api/kanban/cards/${id}`, { method: 'DELETE' });
       const data = await res.json();
-      cards = Array.isArray(data.board) ? data.board : data.board.cards;
+      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
       renderBoard();
     } catch (err) {
       console.error('delete card failed', err);
@@ -239,7 +244,7 @@ export async function render(mount) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       jobs[id] = data.job;
-      cards = Array.isArray(data.board) ? data.board : data.board.cards;
+      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
       renderBoard();
       watchJobs();
     } catch (err) {
@@ -270,7 +275,7 @@ export async function render(mount) {
         body: JSON.stringify({ lane }),
       });
       const data = await res.json();
-      cards = Array.isArray(data.board) ? data.board : data.board.cards;
+      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
       renderBoard();
     } catch (err) {
       console.error('accept failed', err);
@@ -327,7 +332,7 @@ export async function render(mount) {
     });
   });
 
-  load();
+  await load();
 
   return () => {
     if (jobTimer) clearInterval(jobTimer);
