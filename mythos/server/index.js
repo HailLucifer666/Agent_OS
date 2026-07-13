@@ -18,6 +18,7 @@ const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const spend = require('../src/core/brain/spend');
+const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -65,11 +66,27 @@ function createServer(deps) {
 
   // ALLOWED_ORIGINS mirrors NOVA exactly: comma-sep env passthrough, NOT schema-ized —
   // matches NOVA's own precedent of leaving this outside the coerced-type config.
+  // A5 FIX: validate env-sourced origins to prevent injection of malicious origins.
+  function isValidOrigin(o) { return /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?$/.test(o); }
   const ALLOWED_ORIGINS = new Set([
     `http://localhost:${PORT}`,
     `http://127.0.0.1:${PORT}`,
-    ...(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    ...(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).filter(isValidOrigin),
   ]);
+
+  // A4 FIX: sanitize error messages before sending to WS clients.
+  // Prevents leaking internal paths, dependency details, stack fragments.
+  function sanitizeErrorForClient(err) {
+    const msg = (err && err.message) || 'Unknown error';
+    // Map common internal errors to safe user-facing strings
+    if (/EACCES|EPERM/.test(msg)) return 'Permission denied — check file permissions.';
+    if (/ENOSPC/.test(msg)) return 'Disk full — unable to write data.';
+    if (/ENOENT/.test(msg)) return 'File not found.';
+    if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg)) return 'Network request failed.';
+    if (/all models failed/.test(msg)) return 'All AI providers are currently unavailable.';
+    // Generic fallback — strip any paths or technical details
+    return 'An internal error occurred. Check server logs for details.';
+  }
 
   const app = express();
   app.use((req, res, next) => { req.id = crypto.randomUUID(); next(); });
@@ -302,7 +319,13 @@ function createServer(deps) {
   app.post('/api/voice/transcribe', express.raw({ type: '*/*', limit: '15mb' }), expensiveLimit, async (req, res) => {
     try {
       if (!groqStt.isAvailable()) return res.status(503).json({ error: 'Speech-to-text unavailable — GROQ_API_KEY missing.' });
-      const text = await groqStt.transcribe(req.body, req.headers['content-type']);
+      let text;
+      try {
+        text = await groqStt.transcribe(req.body, req.headers['content-type']);
+      } catch (groqErr) {
+        // Groq failed — try browser fallback hint
+        return res.status(200).json({ ok: false, error: 'stt-down', fallback: 'browser', message: 'Speech-to-text service is temporarily unavailable. Use browser speech recognition.' });
+      }
       res.json({ text });
     } catch (err) {
       res.status(502).json({ error: err.message });
@@ -394,42 +417,34 @@ function createServer(deps) {
       }
     }
     broadcastAll({ type: 'done', reqId, say: text, speak, chunked: ttsUp, proactive: true });
+    // B6: Persist proactive speech to episodic memory for conversation continuity.
+    try {
+      memory.episodic.write({
+        kind: 'proactive-speech', channel: 'proactive',
+        summary: text.slice(0, 100),
+        detail: { text: text, proactive: true },
+        salience: 0.5,
+      });
+    } catch (_) {}
   }
 
   // Shared dispatch — the ONE place that executes an already-gated action, whether
   // called from a confirm-accept (below) or any future caller. Steps stay
   // byte-for-byte identical to cortex/act()'s steps 3-6 (Anti-Drift #4): breaker
   // check, invoke, episodic write, budget debit, action.completed emit.
+  // F1: Delegate to shared dispatch-action module — single dispatch surface
+  // shared between cortex autonomous loop, voice confirm-accept, and REST.
   async function dispatchAction(decision, ctx) {
-    const breakerOk = effectors.breakers.get(decision.tool)
-      ? effectors.breakers.get(decision.tool).allow()
-      : true;
-    if (!breakerOk) {
-      bus.emit('action.blocked', { ...decision, reason: 'circuit-open' });
-      return { ok: false, result: 'circuit-open' };
-    }
-    const signal = AbortSignal.timeout(config.ACTION_TIMEOUT_MS || 30000);
-    const result = await effectors.invoke(decision.tool, decision.args, { signal, bus, goalId: ctx.goalId });
-    await memory.episodic.write({
-      kind: 'action', channel: 'cortex',
-      summary: `${decision.tool}(${JSON.stringify(decision.args).slice(0, 80)})`,
-      detail: result, outcome: result && result.ok ? 'ok' : 'fail',
-      tier: ctx.tier, tokensSpent: 0,
+    return sharedDispatch(decision, {
+      effectors: effectors,
+      bus: bus,
+      goals: goals,
+      memory: memory,
+      config: config,
+      goalId: ctx.goalId || null,
+      tier: ctx.tier || 0,
+      channel: 'voice',
     });
-    if (ctx.goalId) goals.debitBudget(ctx.goalId, { tokens: 0, actions: 1 });
-    bus.emit('action.completed', { tool: decision.tool, ok: result && result.ok, goalId: ctx.goalId });
-    // Navigate actions need to reach the client so the panel actually opens.
-    // The generic action.* relay drops the result/route, so emit a dedicated
-    // ui.navigate event the client subscribes to. Without this, "open goals"
-    // via the brain succeeds server-side but the panel never opens.
-    if (decision.tool === 'navigate' && result && result.ok && result.result && result.result.route) {
-      bus.emit('ui.navigate', { route: result.result.route });
-    }
-    // Close-panel: broadcast to all connected clients so they close their panels
-    if (decision.tool === 'close_panel' && result && result.ok) {
-      bus.emit('ui.close-panel', { all: result.result.all });
-    }
-    return result;
   }
 
   // Voice tool-calling agent: leash-gated actions dispatched through the same
@@ -441,7 +456,7 @@ function createServer(deps) {
   // app.listen() has already opened a socket nothing would ever close.
   let voiceAgent = null;
   try {
-    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus });
+    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus, config: config });
   } catch (err) {
     logger.warn('voice-agent.unavailable', { error: err.message });
   }
@@ -468,6 +483,11 @@ function createServer(deps) {
     if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
   });
 
+  // Calendar reminders — proactive speech when a reminder fires due.
+  bus.subscribe('reminder.due', (e) => {
+    if (e && e.payload && e.payload.text) proactiveSpeak('Reminder: ' + e.payload.text);
+  });
+
   // Live build-job progress relay ('job' OUT type). build-runner's onJobUpdate
   // fires on every status/stage transition (queued -> generating ->
   // writing-artifact -> done|failed); the perception pipeline stays untouched.
@@ -480,6 +500,11 @@ function createServer(deps) {
   wss.on('connection', (ws) => {
     const connectionId = crypto.randomUUID();
     const subscriptions = new Set(); // which OUT types this client wants relayed
+
+    // A2 FIX: prevent unhandled 'error' events from crashing the process.
+    ws.on('error', (err) => {
+      logger.warn('ws-connection-error', { error: err.message, connectionId });
+    });
 
     // Per-connection conversation memory (CA of NOVA app/lib/voice/intake.js,
     // folded into the connection closure): last 12 turns, 2000 chars each,
@@ -506,6 +531,14 @@ function createServer(deps) {
       history.push({ role, content: String(content).slice(0, 2000) });
       history = history.slice(-HISTORY_MAX_TURNS);
       historyAt = Date.now();
+    }
+
+    // C3: Serialize utterances per-connection to prevent concurrent races.
+    let turnChain = Promise.resolve();
+    function queueTurn(fn) {
+      const next = turnChain.then(fn, fn);
+      turnChain = next.catch(function() {});
+      return next;
     }
 
     // Build a system-note summarizing action outcomes for the history and
@@ -594,7 +627,7 @@ function createServer(deps) {
             }
             if (parts.length > 0) memoryContext = parts.join('\n');
           }
-        } catch (_) { /* memory recall is best-effort */ }
+        } catch (err) { logger.warn('memory-recall-failed', { store: 'episodic+semantic', error: err.message }); }
 
         // Surface pending thoughts from idle reasoning — if the entity formed a
         // thought during a quiet moment, inject it as context so it can be
@@ -608,7 +641,7 @@ function createServer(deps) {
                 'YOU NOTED EARLIER (mention naturally if relevant, do not force): ' + thoughtText;
             }
           }
-        } catch (_) { /* best-effort */ }
+        } catch (err) { logger.warn('memory-recall-failed', { store: 'thoughts', error: err.message }); }
 
         const result = await voiceAgent.handleUtterance({
           text,
@@ -663,7 +696,8 @@ function createServer(deps) {
         await sendSpokenReply(msg.reqId, say, meta);
       } catch (err) {
         clearTimeout(timer);
-        send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
+        logger.warn('voice-utterance-error', { error: err.message, reqId: msg.reqId });
+        send({ type: 'done', reqId: msg.reqId, say: `Error: ${sanitizeErrorForClient(err)}`, error: true });
       }
     }
 
@@ -765,7 +799,8 @@ function createServer(deps) {
         }
         send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: ttsUp && chunkIndex > 0 });
       } catch (err) {
-        send({ type: 'done', reqId: msg.reqId, say: `Error: ${err.message}`, error: true });
+        logger.warn('vision-query-error', { error: err.message, reqId: msg.reqId });
+        send({ type: 'done', reqId: msg.reqId, say: `Error: ${sanitizeErrorForClient(err)}`, error: true });
       }
     }
 
@@ -776,14 +811,42 @@ function createServer(deps) {
     async function handleConfirmReply(msg) {
       const { confirmId, accept } = msg;
       if (!accept) {
+        // B3: Audit-log the rejection for security accountability.
+        // Peek BEFORE reject — once rejected, the entry is deleted and peek() returns null.
+        var rejectInfo = null;
+        try {
+          if (typeof leash.confirm.peek === 'function') rejectInfo = leash.confirm.peek(confirmId);
+        } catch (_) {}
+        var rejectTier = null;
+        try {
+          if (typeof leash.confirm.peekTier === 'function') rejectTier = leash.confirm.peekTier(confirmId);
+        } catch (_) {}
         // Try this connection's scope first, then the cortex 'system' sentinel —
         // a wrong-scope reject never deletes the entry (leash/confirm.js), so the
         // two-step probe cannot DoS another connection's pending confirm.
         if (!leash.confirm.reject(confirmId, connectionId)) leash.confirm.reject(confirmId, 'system');
+        // Write audit entry after reject so the record reflects the final decision.
+        try {
+          if (rejectInfo && memory && memory.audit && typeof memory.audit.write === 'function') {
+            memory.audit.write({
+              tool: '(confirm-rejected)', tier: rejectTier || 0,
+              decision: 'deny', reason: 'user-rejected',
+              args: { confirmId: confirmId, summary: rejectInfo.summary },
+            });
+          }
+        } catch (_) {}
         return;
       }
+      // A3 FIX: only allow 'system' scope fallback for low-risk (T0-T2) actions.
+      // T3/T4 actions require the originating connection to approve — prevents
+      // any local WS client from approving dangerous actions (browser_evaluate, etc.)
       let action = leash.confirm.accept(confirmId, connectionId);
-      if (!action) action = leash.confirm.accept(confirmId, 'system');
+      if (!action) {
+        const tier = typeof leash.confirm.peekTier === 'function' ? leash.confirm.peekTier(confirmId) : null;
+        if (tier === null || tier <= 2) {
+          action = leash.confirm.accept(confirmId, 'system');
+        }
+      }
       if (!action) return; // expired / already consumed / wrong connection — silent no-op, matches NOVA
       // Cortex stores {decision, goalId, tier} envelopes (cortex/index.js act());
       // a bare {tool, args} decision (the spec's own test 2 fixture) passes through
@@ -798,7 +861,7 @@ function createServer(deps) {
         // an unhandled rejection here crashes the process. Catch, surface to
         // the client, and emit an anomaly — the confirm was already consumed
         // in accept(), so the outcome MUST be reported honestly.
-        send({ type: 'done', reqId: confirmId, say: `Action failed: ${err.message}`, error: true });
+        send({ type: 'done', reqId: confirmId, say: `Action failed: ${sanitizeErrorForClient(err)}`, error: true });
         bus.emit('health.anomaly', { kind: 'confirm-dispatch-failed', error: err.message, confirmId });
       }
     }
@@ -810,7 +873,7 @@ function createServer(deps) {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
-      if (msg.type === 'utterance') handleUtterance(msg);
+      if (msg.type === 'utterance') queueTurn(function() { return handleUtterance(msg); });
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);
       else if (msg.type === 'confirm-reply') handleConfirmReply(msg);
@@ -888,6 +951,15 @@ function createServer(deps) {
     anomalyLog.push(e.payload);
     if (anomalyLog.length > 200) anomalyLog.shift();
     broadcastHealth(lastProviders);
+    // B2: Persist anomalies to episodic memory for long-term health tracking.
+    try {
+      memory.episodic.write({
+        kind: 'anomaly', channel: 'immune',
+        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.error || e.payload.target || ''),
+        detail: { kind: e.payload.kind, scope: e.payload.scope, error: e.payload.error, target: e.payload.target },
+        outcome: 'anomaly', salience: 0.8,
+      });
+    } catch (_) {}
   });
   bus.subscribe('perception.metric', () => {
     probes.getStatus().then((providers) => {
