@@ -98,7 +98,7 @@ function buildPrompt({ text, history, toolResults, corrective, originalSay, memo
   const parts = [
     RULES,
     '',
-    `SYSTEM DATE: ${sysDate} ${sysTime} — Use this as ground truth for any date/time question. Never guess dates from memory.`,
+    `LOCAL CLOCK: ${sysDate} ${sysTime} (machine time — may be wrong or out of sync). For any question about the current date, time, or "what day is it", call web_search or get_time to VERIFY the real date. Never trust the local clock or your training memory for dates — always confirm via web or system clock.`,
     '',
     `TOOLS: ${toolCatalogJson()}`,
   ];
