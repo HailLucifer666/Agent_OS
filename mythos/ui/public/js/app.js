@@ -58,6 +58,7 @@ function ensureVoice() {
     voice = createVoiceLoop({
       onState: onVoiceState,
       openPanel: (id) => overlays.openPanel(id),
+      closePanel: () => overlays.closeAll(),
       onCaption: (text, kind) => mic.setCaption(text, kind),
       onVisionQuery: (text) => describeScene(text),
       onActivity: (level) => mic.setActivity(level),
@@ -228,4 +229,10 @@ subscribe(['proactive-speech'], (msg) => {
 // succeeds server-side but the view never changes.
 subscribe(['navigate'], (msg) => {
   if (msg.route) overlays.openPanel(msg.route);
+});
+
+// Close-panel — emitted by dispatchAction when a close_panel effector call succeeds.
+subscribe(['close-panel'], (msg) => {
+  if (msg.all) overlays.closeAll();
+  else overlays.closeTop();
 });

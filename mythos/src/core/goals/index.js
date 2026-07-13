@@ -254,6 +254,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           lane: lane,
           messages: [{ role: 'user', content:
             toolList + '\n\nPlan next action for goal: ' + goal.title +
+            '\n\nGROUNDING: If this goal involves current events, real-time data, news, dates, or anything that could be stale, use web_search or web_fetch FIRST to get real data before planning further actions.' +
             '\nRespond as JSON: {"tool": "<exact tool name from the list>", "args": {<required params>}}'
           }],
           schemaHint: '{ tool: string, args: object }',

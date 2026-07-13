@@ -81,6 +81,9 @@ const ALLOWED_EVENTS = new Set([
   // relayed to clients so the panel actually opens (FIX 2: dashboard wiring).
   'ui.navigate',
 
+  // ui.close-panel — emitted when close_panel effector succeeds, relayed to clients
+  'ui.close-panel',
+
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
 ]);

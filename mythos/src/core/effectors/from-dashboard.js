@@ -70,6 +70,17 @@ function buildTools(ctx) {
     }
   }
 
+  // ---- close_panel ----
+  // Broadcasts a close-panel UI action — the dashboard closes the top panel
+  // or all panels depending on the `all` flag.
+  function close_panel({ all }) {
+    try {
+      return ok({ closed: true, all: Boolean(all) }, [{ action: 'close-panel', all: Boolean(all) }]);
+    } catch (err) {
+      return fail(err.message);
+    }
+  }
+
   // ---- open_artifact ----
 
   async function open_artifact({ path, title }) {
@@ -508,6 +519,7 @@ function buildTools(ctx) {
 
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
+    { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top one.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },

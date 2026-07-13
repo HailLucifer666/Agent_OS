@@ -30,6 +30,10 @@ export function createOverlayManager(root) {
     if (top) close(top.id);
   }
 
+  function closeAll() {
+    [...open.keys()].forEach((id) => close(id));
+  }
+
   function focus(panelId) {
     const entry = open.get(panelId);
     if (entry) entry.el.style.zIndex = String(++zTop);
@@ -81,6 +85,8 @@ export function createOverlayManager(root) {
   return {
     openPanel,
     close,
+    closeTop,
+    closeAll,
     isOpen: (id) => open.has(id),
     cleanup() {
       document.removeEventListener('keydown', onKey);

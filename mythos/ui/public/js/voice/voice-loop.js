@@ -28,21 +28,29 @@ const MIN_PEAK_RMS = 0.06;     // the loudest moment of the clip must clear this
 const ECHO_GUARD_MS = 3000;    // after playback ends, keep rejecting transcripts matching what was just spoken — speakers bleed into the mic for a beat after TTS finishes
 
 // voice-nav table — checked before falling through to the brain.
+// Patterns allow filler words (the/my/current/active) between verb and target.
 const NAV_COMMANDS = [
-  [/^(show|open)\s+(my\s+)?goals?$/i, 'goals'],
-  [/^(show|open)\s+(the\s+)?kanban( board)?$/i, 'kanban'],
-  [/^(show|open)\s+(the\s+)?pipeline$/i, 'pipeline'],
-  [/^(show|open)\s+(my\s+)?memor(y|ies)$/i, 'memory'],
-  [/^(show|open)\s+health$/i, 'health'],
-  [/^(show|open)\s+(the\s+)?audit( log| trail)?$/i, 'audit'],
-  [/^(show|open)\s+(the\s+)?(backend|terminal|system logs)$/i, 'backend'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*goals?(?:\s+(?:panel|tab|view))?$/i, 'goals'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*kanban(?:\s+board)?(?:\s+(?:panel|tab|view))?$/i, 'kanban'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*pipeline(?:\s+(?:panel|tab|view))?$/i, 'pipeline'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?memor(?:y|ies)(?:\s+(?:panel|tab|view))?$/i, 'memory'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?health(?:\s+(?:panel|tab|view))?$/i, 'health'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?audit(?:\s+(?:log|trail))?(?:\s+(?:panel|tab|view))?$/i, 'audit'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:backend|terminal|system\s+logs?)(?:\s+(?:panel|tab|view))?$/i, 'backend'],
+];
+
+// Close commands — close the top panel or all panels.
+const CLOSE_COMMANDS = [
+  /^(?:close|hide|dismiss)\s+(?:the\s+|all\s+)?(?:panel|tab|window|overlay|view)s?$/i,
+  /^(?:close|hide|dismiss)\s+(?:everything|all)$/i,
+  /^close\s+(?:it|them|that)$/i,
 ];
 
 // Vision questions are intercepted before the brain, same as NAV_COMMANDS —
 // they need a camera frame attached, which only the client can do.
 const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
 
-export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery, onActivity }) {
+export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity }) {
   let active = false;
   let processing = false;
   let disposed = false;
@@ -88,10 +96,26 @@ export function createVoiceLoop({ onState, openPanel, onCaption, onVisionQuery, 
     return null;
   }
 
+  function isCloseCommand(command) {
+    var trimmed = command.trim();
+    for (const pattern of CLOSE_COMMANDS) {
+      if (pattern.test(trimmed)) return true;
+    }
+    return false;
+  }
+
   function handleCommand(command) {
     processing = true;
     setState('processing');
     stopRecording();
+
+    // Close panel command — checked before nav
+    if (isCloseCommand(command) && closePanel) {
+      closePanel();
+      caption(' Panels closed.', 'info');
+      finishTurn();
+      return;
+    }
 
     const panelId = navTarget(command);
     if (panelId) {

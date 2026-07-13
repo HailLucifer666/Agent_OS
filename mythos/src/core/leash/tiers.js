@@ -7,6 +7,7 @@
 const TIER_TABLE = {
   // T0 — READ ONLY (auto-allow, never audit)
   'navigate':              0,
+  'close_panel':           0,
   'read_status':           0,
   'job_status':            0,
   'list_goals':            0,

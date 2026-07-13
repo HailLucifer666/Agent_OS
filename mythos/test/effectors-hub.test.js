@@ -126,7 +126,7 @@ describe('gate: 48 registered count', () => {
     registerFromProject(hub, ctx);
     registerFromGmail(hub, { logger: console });
 
-    assert.equal(hub.count(), 53);
+    assert.equal(hub.count(), 54);
   });
 });
 

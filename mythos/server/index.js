@@ -425,6 +425,10 @@ function createServer(deps) {
     if (decision.tool === 'navigate' && result && result.ok && result.result && result.result.route) {
       bus.emit('ui.navigate', { route: result.result.route });
     }
+    // Close-panel: broadcast to all connected clients so they close their panels
+    if (decision.tool === 'close_panel' && result && result.ok) {
+      bus.emit('ui.close-panel', { all: result.result.all });
+    }
     return result;
   }
 
@@ -859,6 +863,11 @@ function createServer(deps) {
   // succeeds. Relays the resolved route to all clients so the panel opens.
   bus.subscribe('ui.navigate', (e) => {
     broadcastAll({ type: 'navigate', route: e.payload.route });
+  });
+
+  // Close-panel events — relay to all clients to close panels.
+  bus.subscribe('ui.close-panel', (e) => {
+    broadcastAll({ type: 'close-panel', all: e.payload.all });
   });
 
   // health — synthesized snapshot per Ambiguity #4; triggered by 'perception.metric'

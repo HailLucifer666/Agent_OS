@@ -28,6 +28,7 @@ const MAX_SAY_CHARS = Number(process.env.VOICE_MAX_SAY_CHARS) || 800;
 // from-project.js). danger mirrors the leash tier table (tier >= 3 -> true).
 const CATALOG = [
   { name: 'navigate', description: 'Open a dashboard panel. route is one of: goals, kanban, pipeline, memory, health, audit.', params: { route: 'string' }, danger: false },
+  { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top panel.', params: { all: 'boolean (optional)' }, danger: false },
   { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
   { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done.', params: { jobId: 'string (optional)' }, danger: false },
   { name: 'open_artifact', description: 'Open a built artifact (a file under vault/builds) in the browser so the human can see it.', params: { path: 'string', title: 'string (optional)' }, danger: false },
@@ -76,7 +77,9 @@ IDEA SPARRING: you are a creative partner, not a form. When you ask intake quest
 
 INFORMATIONAL TOOLS RULE: danger:false read-only lookups (read_status, list_goals, job_status, pipeline_status, kanban_status, mission_status, get_time, get_weather, etc.) are never build/create requests and never need the PROJECT INTAKE RULE's clarify-first dance — call them in the SAME turn the user asks, even with no arguments (all their params are optional or have sensible defaults). Only ask first when the utterance is genuinely ambiguous about which optional argument to use AND the answer would change the result the user actually wants (e.g. they said "the weather" while mid-conversation about two different cities). Simply not having every optional argument filled in is never a reason to ask instead of calling the tool. If the user says "I don't know" or "I don't care" about an OPTIONAL parameter, that is NOT a reason to abandon the task — call the tool with its default (omit the arg) and proceed with the result. Only abandon if a REQUIRED parameter is missing and the user cannot provide it.
 
-CLARIFYING QUESTIONS: Ask when you genuinely need information. One focused question is better than guessing wrong. But don't ask when the answer is obvious or when you can reasonably infer intent from context.`;
+CLARIFYING QUESTIONS: Ask when you genuinely need information. One focused question is better than guessing wrong. But don't ask when the answer is obvious or when you can reasonably infer intent from context.
+
+WEB GROUNDING RULE (critical for accuracy): For ANY question about current events, news, dates, real-time data, recent developments, stock prices, weather, sports scores, or anything that could be stale in your training data, you MUST call web_search FIRST with needs_result:true to read the actual results before answering. NEVER answer time-sensitive or factual questions from your training memory when you have search tools available. If the user says "check the internet", "what's the latest", "what's happening with", "search for", or "look up", that is ALWAYS a web_search or web_fetch call with needs_result:true. Answering from training data when you have a search tool is fabrication — the same violation as the HONESTY RULE.`;
 
 const OUTPUT_CONTRACT = `Respond with ONLY a single JSON object, no markdown fence, no commentary, matching exactly:
 {"say": "<your natural spoken reply>", "actions": [{"tool": "<tool name>", "args": {}}], "needs_result": false}
@@ -89,8 +92,13 @@ function toolCatalogJson() {
 }
 
 function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext }) {
+  const now = new Date();
+  const sysDate = now.toISOString().slice(0, 10);
+  const sysTime = now.toLocaleTimeString('en-US', { hour12: false });
   const parts = [
     RULES,
+    '',
+    `SYSTEM DATE: ${sysDate} ${sysTime} — Use this as ground truth for any date/time question. Never guess dates from memory.`,
     '',
     `TOOLS: ${toolCatalogJson()}`,
   ];
@@ -264,6 +272,16 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
       }
 
       if (confirmPending) break;
+
+      // Force needs_result for web tools: if the model called web_search or
+      // web_fetch but set needs_result:false, force it to true so the search
+      // results are fed back into the model. Without this, the model searches,
+      // gets results, never reads them, and hallucinates from training data.
+      var webActionsCalled = parsed.actions.some(function(a) { return a.tool === 'web_search' || a.tool === 'web_fetch'; });
+      if (webActionsCalled && !parsed.needs_result) {
+        parsed.needs_result = true;
+      }
+
       if (!parsed.needs_result) break;
       if (iterations >= MAX_ITERATIONS) break;
 
