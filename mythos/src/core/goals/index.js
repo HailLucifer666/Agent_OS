@@ -74,20 +74,23 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
   function update(id, patch) {
     var goal = goals.get(id);
     if (!goal) return null;
-    for (var key in patch) {
-      if (key === 'id') continue; // immutable
-      if (key === 'budget' && typeof patch[key] === 'object') {
-        for (var bk in patch[key]) goal.budget[bk] = patch[key][bk];
-      } else if (key === 'spent' && typeof patch[key] === 'object') {
-        for (var sk in patch[key]) goal.spent[sk] = patch[key][sk];
-      } else {
-        goal[key] = patch[key];
-      }
+    // C4: Create new object instead of mutating in-place (immutability standard).
+    var updated = Object.assign({}, goal);
+    if (patch.budget && typeof patch.budget === 'object') {
+      updated.budget = Object.assign({}, goal.budget, patch.budget);
     }
-    goal.updatedAt = Date.now();
+    if (patch.spent && typeof patch.spent === 'object') {
+      updated.spent = Object.assign({}, goal.spent, patch.spent);
+    }
+    for (var key in patch) {
+      if (key === 'id' || key === 'budget' || key === 'spent') continue;
+      updated[key] = patch[key];
+    }
+    updated.updatedAt = Date.now();
+    goals.set(id, updated);
     saveGoal(id);
-    if (bus) bus.emit('goal.updated', { id: id, status: goal.status });
-    return goal;
+    if (bus) bus.emit('goal.updated', { id: id, status: updated.status, title: updated.title });
+    return updated;
   }
 
   function remove(id) {
@@ -153,10 +156,10 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         urgency = remaining < 1 ? 1.0 : remaining < 24 ? 0.5 : 0;
       }
 
-      // Budget pressure
-      var tokenPressure = g.budget.tokens > 0 ? 1 - (g.spent.tokens / g.budget.tokens) : 0;
-      var actionPressure = g.budget.actions > 0 ? 1 - (g.spent.actions / g.budget.actions) : 0;
-      var budgetPressure = Math.min(tokenPressure, actionPressure);
+      // Budget headroom: fraction of budget remaining (higher = more headroom).
+      var tokenHeadroom = g.budget.tokens > 0 ? 1 - (g.spent.tokens / g.budget.tokens) : 0;
+      var actionHeadroom = g.budget.actions > 0 ? 1 - (g.spent.actions / g.budget.actions) : 0;
+      var budgetHeadroom = Math.min(tokenHeadroom, actionHeadroom);
 
       // Salience boost from perceptions
       var salienceBoost = 0;
@@ -172,7 +175,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       var sticky = (working && working.activeGoalId === g.id) ? 0.15 : 0;
 
       var score = driveWeight * 0.3 + priority * 0.3 + urgency * 0.15 +
-                  budgetPressure * 0.1 + salienceBoost * 0.1 + sticky;
+                  budgetHeadroom * 0.1 + salienceBoost * 0.1 + sticky;
 
       return { goal: g, score: score };
     });
@@ -218,11 +221,12 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
             return { tool: step.tool, args: step.args, rationale: 'procedural-skill', offline: true };
           }
         }
-      } catch (_) { /* skills store may not be available */ }
+      } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'skills-recall-failed', error: err.message }); }
     }
 
-    // 3. Budget check BEFORE Brain call
-    if (goal.spent.tokens >= goal.budget.tokens) {
+    // 3. Budget check BEFORE Brain call — check BOTH token and action budgets
+    // to match debitBudget()'s dual-dimension check and prevent wasted actions.
+    if (goal.spent.tokens >= goal.budget.tokens || goal.spent.actions >= goal.budget.actions) {
       goal.status = 'paused';
       goal.reason = 'budget-exhausted';
       saveGoal(goal.id);
@@ -278,7 +282,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           }
           return { tool: result.parsed.tool, args: result.parsed.args || {}, rationale: 'brain-planned', done: false, _spentTokens: result.spentTokens || 0 };
         }
-      } catch (_) { /* brain offline */ }
+      } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'planner-brain-failed', error: err.message }); }
     }
 
     return null;
@@ -320,20 +324,23 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     try {
       var relPath = 'Goals/' + id + '.json';
       fs.writeJSON(relPath, goal);
-    } catch (_) { /* best-effort */ }
+    } catch (err) {
+      // C5: Emit anomaly so operator knows persistence is degraded.
+      if (bus) bus.emit('health.anomaly', { kind: 'goal-save-failed', target: id, error: err.message });
+    }
   }
 
   function removeGoalFile(id) {
     if (!fs) return;
     try {
       fs.removeFile('Goals/' + id + '.json');
-    } catch (_) {}
+    } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'goals-file-remove-failed', error: err.message }); }
   }
 
   async function init() {
     if (!fs) return;
     // Ensure Goals directory
-    try { fs.ensureDir('Goals'); } catch (_) {}
+    try { fs.ensureDir('Goals'); } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'goals-dir-init-failed', error: err.message }); }
 
     // Load existing goals from vault
     try {
@@ -342,11 +349,21 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         try {
           var data = fs.readJSON(files[i].path, null);
           if (data && data.id) {
+            // B1: Normalize loaded goals to prevent crashes on corrupt/legacy files.
+            data.spent = data.spent || { tokens: 0, actions: 0 };
+            data.budget = data.budget || { tokens: 50000, actions: 50, deadline: null };
+            data.plan = data.plan || [];
+            data.childIds = data.childIds || [];
+            data.grants = data.grants || {};
+            data.drive = data.drive || 'user-service';
+            data.status = data.status || 'proposed';
+            // Validate drive against known weights
+            if (!DRIVE_WEIGHTS[data.drive]) data.drive = 'user-service';
             goals.set(data.id, data);
           }
-        } catch (_) { /* skip corrupt */ }
+        } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'goals-load-corrupt', error: err.message }); }
       }
-    } catch (_) {}
+    } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'goals-list-files-failed', error: err.message }); }
   }
 
   // --- Stats ---
