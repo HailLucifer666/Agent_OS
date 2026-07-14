@@ -14,6 +14,7 @@ const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
 const { createTimerSensor } = require('./core/sensors/timer');
+const { createReminderSensor } = require('./core/sensors/reminder-sensor');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
 const { createHealer } = require('./core/immune/healer');
@@ -39,6 +40,8 @@ const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
 const { registerFromGmail } = require('./core/effectors/from-gmail');
+const { registerFromMemory } = require('./core/effectors/from-memory');
+const { registerFromCalendar } = require('./core/effectors/from-calendar');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
@@ -109,6 +112,7 @@ async function main() {
   let wsSensor = null;
   let jobSensor = null;
   let edgeTtsChild = null;
+  let calendarWiring = null;
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -262,7 +266,7 @@ async function main() {
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
-        probes: immune.probes, abtop: abtop, config: config, fs: memory.fs
+        probes: immune.probes, abtop: abtop, config: config, fs: memory.fs, bus: bus
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.
@@ -292,6 +296,8 @@ async function main() {
       registerFromMission(hub, { orchestrator: orchestrator });
       registerFromSystem(hub, { config: config });
       registerFromGmail(hub, { logger: logger });
+      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs });
+      calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
 
       hub.register(createVoiceEffector({ config: config }));
 
@@ -398,6 +404,14 @@ async function main() {
       timerSensor = createTimerSensor({ bus, config });
       timerSensor.start();
       logger.info('sensors.timer.started', { intervalMs: config.MYTHOS_TICK_MS });
+
+      // Calendar reminder sensor — polls fireDueReminders() every 30s so due
+      // reminders emit 'reminder.due' on the bus for proactive speech.
+      if (calendarWiring && calendarWiring.calendar) {
+        var reminderSensor = createReminderSensor({ calendar: calendarWiring.calendar, bus: bus });
+        reminderSensor.start();
+        logger.info('sensors.reminder.started', {});
+      }
 
       // [Phase 6 — NEW] metric sensor polls immune/probes.js every 4s and feeds
       // the cognitive OODA loop's perception queue.
