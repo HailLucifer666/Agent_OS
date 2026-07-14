@@ -37,6 +37,7 @@ const NAV_COMMANDS = [
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?health(?:\s+(?:panel|tab|view))?$/i, 'health'],
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?audit(?:\s+(?:log|trail))?(?:\s+(?:panel|tab|view))?$/i, 'audit'],
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:backend|terminal|system\s+logs?)(?:\s+(?:panel|tab|view))?$/i, 'backend'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:conversation|chat|transcript|history)(?:\s+(?:panel|tab|view))?$/i, 'conversation'],
 ];
 
 // Close commands — close the top panel or all panels.
@@ -50,10 +51,31 @@ const CLOSE_COMMANDS = [
 // they need a camera frame attached, which only the client can do.
 const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
 
-export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity }) {
+// E2: Strip markdown, HTML, and control characters before passing text to TTS engines.
+// Without this, the browser SpeechSynthesis reads aloud "asterisk asterisk bold asterisk"
+// and edge-tts may misinterpret markdown as pronunciation instructions.
+function sanitizeForTts(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/\*\*([^*]+)\*\*/g, '$1')   // **bold**
+    .replace(/\*([^*]+)\*/g, '$1')        // *italic*
+    .replace(/`([^`]+)`/g, '$1')          // `code`
+    .replace(/^#{1,6}\s+/gm, '')          // # headings
+    .replace(/^[-*+]\s+/gm, '')           // - bullet points
+    .replace(/^\d+\.\s+/gm, '')           // 1. numbered lists
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url) -> text
+    .replace(/<[^>]+>/g, '')              // HTML tags
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')  // control chars
+    .trim();
+}
+
+export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline }) {
   let active = false;
   let processing = false;
   let disposed = false;
+  // D5: Track brain availability — set by app.js via entity-state subscription.
+  // When false, voice commands skip transcription to avoid wasting API calls.
+  let _brainOnline = typeof brainOnline === 'function' ? brainOnline : () => true;
   let currentAudio = null;   // in-flight TTS playback (barge-in target)
   let speakingText = '';     // spoken reply text — echo-guard reference (during playback)
   let lastSpokenText = '';   // what was just spoken — echo-guard reference (after playback ends)
@@ -128,6 +150,16 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     // messages can arrive before 'done' and need a live session to enqueue
     // against (see enqueueChunk/playNextChunk below).
     const session = beginTurn();
+
+    // D5: Pre-flight brain availability check — skip transcription if brain is known offline.
+    if (!_brainOnline()) {
+      caption('Brain is offline — voice processing unavailable.', 'error');
+      finishTurn();
+      return;
+    }
+
+    // E3: Show progress feedback while waiting for brain response.
+    caption('Thinking…', 'info');
 
     // Fall through to the brain over WS. Grace timeout returns to listening
     // even if the reply never lands (no new WS type invented — P9 brief).
@@ -244,7 +276,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   function speakChunkFallback(text, session, onDone) {
     if (window.speechSynthesis && !disposed) {
-      const u = new SpeechSynthesisUtterance(text);
+      const u = new SpeechSynthesisUtterance(sanitizeForTts(text));
       u.onend = () => { if (speakSession === session) onDone(); };
       u.onerror = () => { if (speakSession === session) onDone(); };
       try { window.speechSynthesis.speak(u); return; } catch { /* fall through to silent finish */ }
@@ -274,7 +306,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     caption(say, kind);
     if (kind !== 'reply' || disposed) { finishTurn(); return; }
 
-    const spoken = msg.speak || say;
+    const spoken = sanitizeForTts(msg.speak || say);
     speakingText = spoken;
     processing = false;      // mic stays live during playback — barge-in
     setState('speaking');
@@ -294,7 +326,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       finishTurn();
     };
     if (window.speechSynthesis && !disposed) {
-      const u = new SpeechSynthesisUtterance(spoken);
+      const u = new SpeechSynthesisUtterance(sanitizeForTts(spoken));
       u.onend = finish;
       u.onerror = finish;
       try {
