@@ -87,8 +87,11 @@ async function browser_get_text({ selector } = {}) {
     let text;
     if (selector) {
       text = await page.textContent(selector);
+      if (!text && selector) return fail('Element not found or empty for selector: ' + selector);
     } else {
       text = await page.textContent('body');
+      if (!text && !selector) { text = await page.textContent('body'); }
+      if (!text) return fail('No text content found on the page.');
     }
     // Truncate to avoid huge payloads
     const truncated = text.length > 4000;
