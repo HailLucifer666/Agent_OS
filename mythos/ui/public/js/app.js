@@ -15,6 +15,14 @@ import { createCameraLoop } from './vision/camera.js';
 
 const ctx = { subscribe, onRefresh };
 
+// D5: Track brain availability from entity-state broadcasts.
+// When entity reports offline/degraded, voice loop skips transcription to save API calls.
+let _brainOnline = true;
+subscribe(['entity-state'], (msg) => {
+  const state = msg.state || msg.status || '';
+  _brainOnline = state !== 'offline' && state !== 'error';
+});
+
 // overlays
 const overlays = createOverlayManager(document.getElementById('overlay-root'));
 
@@ -62,6 +70,7 @@ function ensureVoice() {
       onCaption: (text, kind) => mic.setCaption(text, kind),
       onVisionQuery: (text) => describeScene(text),
       onActivity: (level) => mic.setActivity(level),
+      brainOnline: () => _brainOnline,
     });
   }
   return voice;
