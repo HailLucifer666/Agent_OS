@@ -56,7 +56,7 @@ function unwrapDdgHref(href) {
 
 // DuckDuckGo HTML direct parser.
 // Fetches https://html.duckduckgo.com/html/?q=<query> and parses result links.
-function ddgHtml(q, maxResults) {
+function ddgHtml(q, maxResults, bus) {
   return new Promise(function(resolve) {
     var controller = new AbortController()
     var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
@@ -97,13 +97,13 @@ function ddgHtml(q, maxResults) {
       }
       resolve(results)
     })
-    .catch(function() { resolve([]) })
+    .catch(function(err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-html', error: err.message }); resolve([]) })
   })
 }
 
 // DuckDuckGo Lite parser.
 // Fetches https://lite.duckduckgo.com/lite/?q=<query> and parses the table rows.
-function ddgLite(q, maxResults) {
+function ddgLite(q, maxResults, bus) {
   return new Promise(function(resolve) {
     var controller = new AbortController()
     var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
@@ -142,12 +142,12 @@ function ddgLite(q, maxResults) {
       }
       resolve(results)
     })
-    .catch(function() { resolve([]) })
+    .catch(function(err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-lite', error: err.message }); resolve([]) })
   })
 }
 
 // Wikipedia OpenSearch — last resort for factual queries.
-function wikiSearch(q, maxResults) {
+function wikiSearch(q, maxResults, bus) {
   return new Promise(function(resolve) {
     var controller = new AbortController()
     var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
@@ -169,13 +169,13 @@ function wikiSearch(q, maxResults) {
       }
       resolve(results)
     })
-    .catch(function() { resolve([]) })
+    .catch(function(err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'wikipedia', error: err.message }); resolve([]) })
   })
 }
 
 // --- main entry point ---
 
-async function web_search({ query, maxResults }) {
+async function web_search({ query, maxResults, bus }) {
   try {
     if (!query || !String(query).trim()) return { ok: false, result: 'A search query is required.' }
     var q = String(query).trim()
@@ -213,12 +213,12 @@ async function web_search({ query, maxResults }) {
             return { ok: true, result: { query: q, results: results.slice(0, max), source: 'exa' } }
           }
         }
-      } catch (_) { /* Exa unavailable — fall through */ }
+      } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa', error: err.message }); }
     }
 
     // 2. DuckDuckGo HTML direct
     try {
-      var ddgResults = await ddgHtml(q, max)
+      var ddgResults = await ddgHtml(q, max, bus)
       if (ddgResults.length) {
         return { ok: true, result: { query: q, results: ddgResults, source: 'duckduckgo-html' } }
       }
@@ -226,7 +226,7 @@ async function web_search({ query, maxResults }) {
 
     // 3. DuckDuckGo Lite
     try {
-      var liteResults = await ddgLite(q, max)
+      var liteResults = await ddgLite(q, max, bus)
       if (liteResults.length) {
         return { ok: true, result: { query: q, results: liteResults, source: 'duckduckgo-lite' } }
       }
@@ -234,7 +234,7 @@ async function web_search({ query, maxResults }) {
 
     // 4. Wikipedia OpenSearch
     try {
-      var wikiResults = await wikiSearch(q, max)
+      var wikiResults = await wikiSearch(q, max, bus)
       if (wikiResults.length) {
         return { ok: true, result: { query: q, results: wikiResults, source: 'wikipedia' } }
       }
