@@ -7,8 +7,8 @@ var effectorFromTool = require('./adapter').effectorFromTool;
 
 var _adapter = null;
 
-function ok(data) { return { ok: true, data: data }; }
-function fail(msg) { return { ok: false, error: msg }; }
+function ok(data) { return { ok: true, result: data }; }
+function fail(msg) { return { ok: false, result: { error: msg } }; }
 
 function buildTools(ctx) {
   var logger = (ctx && ctx.logger) || { warn: function() {} };
