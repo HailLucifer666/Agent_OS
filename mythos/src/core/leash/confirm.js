@@ -73,11 +73,18 @@ function createConfirmRegistry({ config }) {
     return { summary: entry.summary, expired: Date.now() > entry.expiresAt };
   }
 
+  // A3: non-consuming read of the tier level for scope-gating decisions.
+  function peekTier(confirmId) {
+    const entry = pending.get(confirmId);
+    if (!entry || !entry.action) return null;
+    return entry.action.tier || 0;
+  }
+
   function stats() {
     return { pending: pending.size, ttlMs: ttlMs };
   }
 
-  return { create: create, accept: accept, reject: reject, peek: peek, stats: stats };
+  return { create: create, accept: accept, reject: reject, peek: peek, peekTier: peekTier, stats: stats };
 }
 
 module.exports = { createConfirmRegistry };
