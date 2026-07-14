@@ -16,11 +16,14 @@ const groqStt = require('../providers/groq-stt');
 const { splitSentences, createSentenceStreamer } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent } = require('../src/core/voice/voice-agent');
+const { createProactiveSpeech } = require('../src/core/voice/proactive-speech');
+const { classifyAffirmation } = require('../src/core/voice/affirmation');
 
 // WS v2 message types — exact strings, do not paraphrase:
-// IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
+// IN (reqId):  'utterance', 'command', 'confirm-reply', 'checkpoint-reply', 'subscribe', 'stop', 'vision-query'
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
-//                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
+//                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission',
+//                  'checkpoint', 'forge', 'research', 'conversation-turn', 'intake-update', 'speak-push'
 // OUT (per-reqId reply stream): 'speech-chunk' (0..N) then 'done' (1, metadata only)
 
 function isLoopback(req) {
@@ -43,6 +46,12 @@ function createServer(deps) {
   const probes = deps.probes;                     // P6 immune/probes.js — .getStatus()
   const brain = deps.brain;                       // P2 brain — .think({lane, messages, ...})
   const buildRunner = deps.buildRunner;           // P7 build-runner — .onJobUpdate (job WS relay)
+  const conversation = deps.conversation;         // P21 durable conversation store (undefined in some tests)
+  const intakeSession = deps.intakeSession;       // P21 intake FSM (undefined in some tests)
+  const checkpoints = deps.checkpoints;           // P21 checkpoint registry (undefined in some tests)
+  const forge = deps.forge;                       // P22 Forge (undefined until P22 lands)
+  const research = deps.research;                 // P23 research orchestrator (undefined until P23 lands)
+  const agentActionsEffector = deps.agentActionsEffector; // P24 dead-button REST routes (undefined in tests)
 
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
@@ -170,6 +179,74 @@ function createServer(deps) {
   app.post('/api/pipeline/:id/ship', (req, res) => {
     try { res.json({ card: pipelineEffector.ship(req.params.id), board: pipelineEffector.listAll() }); }
     catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  // ---- P21 — conversation + checkpoints REST ----
+  app.get('/api/conversation', (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const turns = conversation ? conversation.getRecentTurns().slice(-limit) : [];
+    const intake = intakeSession ? intakeSession.getSnapshot() : { state: 'idle' };
+    res.json({ turns, intake });
+  });
+  app.get('/api/checkpoints', (req, res) => {
+    if (!checkpoints) return res.json({ checkpoints: [] });
+    res.json({ checkpoints: checkpoints.list({ status: req.query.status }) });
+  });
+  app.get('/api/checkpoints/:id', (req, res) => {
+    if (!checkpoints) return res.status(404).json({ error: 'checkpoints unavailable' });
+    const c = checkpoints.get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'not found' });
+    res.json({ checkpoint: c });
+  });
+
+  // ---- P22 — Forge build projects REST ----
+  app.get('/api/forge/projects', (req, res) => {
+    res.json({ projects: forge ? forge.listProjects() : [] });
+  });
+  app.get('/api/forge/projects/:id', (req, res) => {
+    if (!forge) return res.status(404).json({ error: 'forge unavailable' });
+    const project = forge.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    res.json({ project });
+  });
+
+  // ---- P23 — Research runs REST ----
+  app.get('/api/research', (req, res) => {
+    res.json({ runs: research ? research.listResearch() : [] });
+  });
+  app.get('/api/research/:id', (req, res) => {
+    if (!research) return res.status(404).json({ error: 'research unavailable' });
+    const run = research.getResearch(req.params.id);
+    if (!run) return res.status(404).json({ error: 'not found' });
+    res.json({ run });
+  });
+
+  // ---- P24 — dashboard build-trigger routes. These were dead 404s the copied
+  // NOVA views probed; the backing effectors already existed, only the REST seam
+  // was missing. A dashboard click is itself the human authorization (same
+  // rationale as the voice intake go-ahead), so a required confirm is recorded as
+  // an audited two-step and then the EXACT-id agentActions call runs directly —
+  // routing through the async confirm modal + dispatchAction would lose the card
+  // id the dashboard already knows (the tool-effector path is fuzzy-match-by-query).
+  function dashboardGated(toolName, run, res) {
+    if (!agentActionsEffector || !leash) return res.status(503).json({ error: 'build subsystem unavailable' });
+    const decision = { tool: toolName, args: {} };
+    const verdict = leash.check(decision, { goalId: null });
+    if (!verdict.allow && !verdict.requireConfirm) return res.status(403).json({ error: verdict.reason });
+    if (verdict.requireConfirm) {
+      const confirmId = leash.confirm.create('Dashboard: ' + toolName, { decision, goalId: null, tier: verdict.tier }, 'system');
+      leash.confirm.accept(confirmId, 'system'); // dashboard click = the human gate (audited)
+    }
+    try { return res.json(run()); } catch (err) { return res.status(400).json({ error: err.message }); }
+  }
+  app.post('/api/pipeline/:id/execute', (req, res) => dashboardGated('pipeline_execute', () => agentActionsEffector.executePipelineCard(req.params.id, null), res));
+  app.post('/api/kanban/assemble', (req, res) => dashboardGated('kanban_assemble', () => agentActionsEffector.assembleKanbanPlan(req.body && req.body.goal, null), res));
+  app.post('/api/kanban/cards/:id/build', (req, res) => dashboardGated('kanban_build_card', () => agentActionsEffector.buildKanbanCard(req.params.id, null), res));
+  app.get('/api/jobs/:id', (req, res) => {
+    if (!buildRunner) return res.status(503).json({ error: 'build runner unavailable' });
+    const job = buildRunner.getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'not found' });
+    res.json({ job });
   });
 
   // ---- /api/memory/:store — spec-mandated route ("omitted above for space"),
@@ -343,12 +420,23 @@ function createServer(deps) {
     logger.warn('voice-agent.unavailable', { error: err.message });
   }
 
+  // P21 — server-initiated speech (checkpoint questions, build/mission/forge/
+  // research milestones, completions). broadcastAll is defined above.
+  const proactiveSpeech = createProactiveSpeech({ config, edgeTts, sanitizeSpoken, splitSentences, logger, broadcastAll, bus });
+  // Server-wide most-recent pending checkpoint (checkpoints are connectionId:'system',
+  // so not scoped to one socket). Per-connection pendingConfirm lives in the closure.
+  let latestCheckpoint = null;
+
   // Live build-job progress relay ('job' OUT type). build-runner's onJobUpdate
   // fires on every status/stage transition (queued -> generating ->
   // writing-artifact -> done|failed); the perception pipeline stays untouched.
   if (buildRunner && typeof buildRunner.onJobUpdate === 'function') {
     buildRunner.onJobUpdate((job) => {
       broadcastAll({ type: 'job', payload: { id: job.id, kind: job.kind, status: job.status, stage: job.stage, error: job.error, artifact: job.artifact } });
+      if (intakeSession) {
+        const say = intakeSession.onJobUpdate(job);
+        if (say) proactiveSpeech.speak(say, { kind: 'completion', relatedId: job.id });
+      }
     });
   }
 
@@ -356,32 +444,30 @@ function createServer(deps) {
     const connectionId = crypto.randomUUID();
     const subscriptions = new Set(); // which OUT types this client wants relayed
 
-    // Per-connection conversation memory (CA of NOVA app/lib/voice/intake.js,
-    // folded into the connection closure): last 12 turns, 2000 chars each,
-    // 10-minute idle TTL. Deliberately NOT wiped after start_project succeeds —
-    // an earlier version cleared it here on the theory that the intake
-    // conversation shouldn't bleed into post-build turns, but that also erased
-    // the only record that a build was ever started: "is it done?" a few turns
-    // later had zero context and the voice-agent asked what to build, as if
-    // starting fresh. The rolling window (already capped at 12 turns / 10 min
-    // idle) is exactly the mechanism that should carry "I started building X"
-    // forward to a later "is it done" — so it's left alone.
-    const HISTORY_MAX_TURNS = 12;
-    const HISTORY_IDLE_TTL_MS = Number(process.env.VOICE_INTAKE_IDLE_MS) || 10 * 60 * 1000;
-    let history = [];
-    let historyAt = 0;
-
+    // P21: conversation memory is now a durable global-singleton store (survives
+    // reconnect/restart, JSONL-backed). These per-connection shims delegate to it
+    // so the vision-query path (which also calls historyGet/historyAppend) is
+    // untouched; a local fallback keeps partial-dep unit tests working when no
+    // store is injected.
+    let localHistory = [];
+    let localHistoryAt = 0;
     function historyGet() {
-      if (Date.now() - historyAt > HISTORY_IDLE_TTL_MS) history = [];
-      return history;
+      if (conversation) return conversation.getRecentTurns();
+      if (Date.now() - localHistoryAt > 600000) localHistory = [];
+      return localHistory;
     }
     function historyAppend(role, content) {
       if (!content) return;
-      historyGet(); // apply TTL first
-      history.push({ role, content: String(content).slice(0, 2000) });
-      history = history.slice(-HISTORY_MAX_TURNS);
-      historyAt = Date.now();
+      if (conversation) { conversation.appendTurn(role, content, { connectionId }); return; }
+      localHistory.push({ role, content: String(content).slice(0, 2000) });
+      localHistory = localHistory.slice(-12);
+      localHistoryAt = Date.now();
     }
+
+    // Per-connection pending single-action confirm (T3/T4). Checkpoints are
+    // server-wide (latestCheckpoint above). A short spoken "yes"/"no" resolves
+    // whichever is pending, in handleUtterance, before any LLM call.
+    let pendingConfirm = null;
 
     function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
 
@@ -420,16 +506,67 @@ function createServer(deps) {
       send({ type: 'done', reqId, say, speak, chunked: ttsUp && chunks.length > 0, ...meta });
     }
 
+    // Resolve a pending confirm/checkpoint from a spoken yes/no. Confirms use this
+    // connection's scope (falling back to the cortex 'system' sentinel); checkpoints
+    // are always 'system'-scoped and resolvable from any connection.
+    async function resolvePendingGate(gate, intent) {
+      if (gate.kind === 'confirm') {
+        const id = pendingConfirm && pendingConfirm.confirmId;
+        pendingConfirm = null;
+        if (!id) return 'There was nothing to confirm, Sir.';
+        if (intent === 'yes') {
+          let action = leash.confirm.accept(id, connectionId) || leash.confirm.accept(id, 'system');
+          if (!action) return 'That request has already expired, Sir.';
+          const decision = action.decision || { tool: action.tool, args: action.args };
+          await dispatchAction(decision, { goalId: action.goalId, tier: action.tier });
+          return 'Understood. Proceeding now.';
+        }
+        if (!leash.confirm.reject(id, connectionId)) leash.confirm.reject(id, 'system');
+        return 'Cancelled, Sir.';
+      }
+      // checkpoint
+      if (!checkpoints) return "I can't reach the checkpoint system right now, Sir.";
+      if (intent === 'yes') { await checkpoints.accept(gate.checkpointId, connectionId); return 'Understood. Proceeding.'; }
+      await checkpoints.reject(gate.checkpointId, connectionId);
+      return 'Understood, holding off.';
+    }
+
     async function handleUtterance(msg) {
       if (!voiceAgent) {
         send({ type: 'done', reqId: msg.reqId, say: 'Brain is offline.', offline: true });
         return;
       }
+      const text = String(msg.text || '');
+
+      // Voice approval intercept — a short unambiguous yes/no resolves a pending
+      // gate BEFORE any LLM call (zero token cost). Anything longer/ambiguous
+      // (classifyAffirmation returns null) falls through to the normal turn.
+      const gate = pendingConfirm ? { kind: 'confirm' }
+        : (latestCheckpoint ? { kind: 'checkpoint', checkpointId: latestCheckpoint.id } : null);
+      if (gate) {
+        const intent = classifyAffirmation(text, config.VOICE_APPROVAL_MAX_WORDS);
+        if (intent) {
+          const ack = await resolvePendingGate(gate, intent);
+          historyAppend('user', text);
+          historyAppend('assistant', ack);
+          await sendSpokenReply(msg.reqId, ack, { resolvedGate: gate.kind });
+          return;
+        }
+      }
+
       try {
-        const text = String(msg.text || '');
         const result = await voiceAgent.handleUtterance({
           text,
-          ctx: { history: historyGet(), connectionId },
+          ctx: {
+            history: historyGet(),
+            connectionId,
+            goalId: intakeSession ? intakeSession.getSnapshot().goalId : null,
+            intake: intakeSession ? intakeSession.getSnapshot() : null,
+          },
+          onAction: (r) => {
+            if (r && r.confirmPending) pendingConfirm = { confirmId: r.confirmId, summary: r.summary };
+            if (intakeSession && r) intakeSession.onToolResult(r);
+          },
         });
         if (result.offline) {
           send({ type: 'done', reqId: msg.reqId, say: result.say || 'All providers are offline right now.', offline: true });
@@ -438,6 +575,7 @@ function createServer(deps) {
         const say = result.say || 'Done.';
         historyAppend('user', text);
         historyAppend('assistant', say);
+        if (intakeSession) intakeSession.afterTurn({ userText: text, result });
 
         const meta = {
           actions: (result.actions || []).map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
@@ -545,8 +683,18 @@ function createServer(deps) {
       send({ type: 'done', reqId: msg.reqId, command: msg.command });
     }
 
+    async function handleCheckpointReply(msg) {
+      if (!checkpoints) return;
+      const { id, accept, feedback } = msg;
+      if (accept) await checkpoints.accept(id, connectionId, feedback);
+      else await checkpoints.reject(id, connectionId, feedback);
+      // No reply needed — the 'checkpoint' broadcast (checkpoint.resolved) tells
+      // every client the outcome, same silent-no-op-on-failure posture as confirm-reply.
+    }
+
     async function handleConfirmReply(msg) {
       const { confirmId, accept } = msg;
+      pendingConfirm = null; // this connection's spoken-yes gate is now moot
       if (!accept) {
         // Try this connection's scope first, then the cortex 'system' sentinel —
         // a wrong-scope reject never deletes the entry (leash/confirm.js), so the
@@ -575,6 +723,7 @@ function createServer(deps) {
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);
       else if (msg.type === 'confirm-reply') handleConfirmReply(msg);
+      else if (msg.type === 'checkpoint-reply') handleCheckpointReply(msg);
       else if (msg.type === 'subscribe') handleSubscribe(msg);
       // 'stop' — no in-flight per-connection controllers to abort yet in this
       // phase's scope (utterance/command are not streamed); reserved for parity.
@@ -657,10 +806,53 @@ function createServer(deps) {
   // mission — orchestrator's plan/build/synthesize transitions (agent team)
   bus.subscribe('mission.update', (e) => {
     broadcastAll({ type: 'mission', payload: e.payload });
+    if (intakeSession) {
+      const say = intakeSession.onMissionUpdate(e.payload);
+      if (say) proactiveSpeech.speak(say, { kind: 'completion', relatedId: e.payload.id });
+    }
   });
 
   bus.subscribe('confirm-request', (e) => {
     broadcastAll({ type: 'confirm-request', payload: { id: e.payload.confirmId, tool: e.payload.tool, summary: e.payload.summary, tier: e.payload.tier } });
+  });
+
+  // ---- P21/P22/P23 relays ----
+  // checkpoint.created / .resolved — workflow approval gates (Forge plan/mid/final,
+  // research scope). Tracked server-wide (latestCheckpoint) so a spoken yes/no can
+  // resolve the most recent one; spoken aloud as a JARVIS question (Voice + HUD).
+  bus.subscribe('checkpoint.created', (e) => {
+    latestCheckpoint = e.payload;
+    broadcastAll({ type: 'checkpoint', payload: { ...e.payload, event: 'created' } });
+    proactiveSpeech.speak(e.payload.title || e.payload.body || 'I need your approval on something, Sir.', { kind: 'checkpoint-question', relatedId: e.payload.id });
+  });
+  bus.subscribe('checkpoint.resolved', (e) => {
+    if (latestCheckpoint && latestCheckpoint.id === e.payload.id) latestCheckpoint = null;
+    broadcastAll({ type: 'checkpoint', payload: { ...e.payload, event: 'resolved' } });
+  });
+
+  // forge.update / research.update — build + research progress (consumed by the
+  // Build and Research panels; intake FSM narrates the milestone transitions).
+  bus.subscribe('forge.update', (e) => {
+    broadcastAll({ type: 'forge', payload: e.payload });
+    if (intakeSession) {
+      const say = intakeSession.onForgeUpdate(e.payload);
+      if (say) proactiveSpeech.speak(say, { kind: 'progress', relatedId: e.payload.projectId });
+    }
+  });
+  bus.subscribe('research.update', (e) => {
+    broadcastAll({ type: 'research', payload: e.payload });
+    if (intakeSession) {
+      const say = intakeSession.onResearchUpdate(e.payload);
+      if (say) proactiveSpeech.speak(say, { kind: 'progress', relatedId: e.payload.id });
+    }
+  });
+
+  // conversation.turn / intake.updated — feed the Conversation transcript panel.
+  bus.subscribe('conversation.turn', (e) => {
+    broadcastAll({ type: 'conversation-turn', payload: e.payload });
+  });
+  bus.subscribe('intake.updated', (e) => {
+    broadcastAll({ type: 'intake-update', payload: e.payload });
   });
 
   // brain-spend — exact string with hyphen (D-28 fixed).

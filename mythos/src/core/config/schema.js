@@ -75,6 +75,40 @@ const SCHEMA = {
   MYTHOS_JOBS_MAX_PERSISTED: { type: 'number', default: 100, min: 10 },
   MYTHOS_WATCH_DIRS:         { type: 'string', default: '' },
   MYTHOS_FILE_DEBOUNCE_MS:   { type: 'number', default: 500, min: 50 },
+
+  // P21 — Conversation core (durable conversation, intake FSM, JARVIS voice, proactive speech)
+  CONVERSATION_MAX_TURNS:      { type: 'number', default: 12,      min: 2,     max: 200 },
+  CONVERSATION_TURN_MAX_CHARS: { type: 'number', default: 2000,    min: 100,   max: 8000 },
+  CONVERSATION_TTL_MS:         { type: 'number', default: 600000,  min: 0 },
+  CONVERSATION_RETENTION_DAYS: { type: 'number', default: 30,      min: 1 },
+  VOICE_INTAKE_MAX_QUESTIONS:  { type: 'number', default: 3,       min: 1,     max: 6 },
+  INTAKE_SESSION_IDLE_MS:      { type: 'number', default: 1800000, min: 60000 },
+  VOICE_APPROVAL_MAX_WORDS:    { type: 'number', default: 6,       min: 1,     max: 20 },
+  PROACTIVE_SPEECH:            { type: 'bool',   default: true },
+  PROACTIVE_SPEECH_MAX_CHARS:  { type: 'number', default: 400,     min: 50,    max: 800 },
+
+  // P21 — Checkpoints (workflow approval gates; distinct from LEASH_CONFIRM_TTL_MS)
+  CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
+  CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },
+
+  // P22 — Forge (multi-file build pipeline)
+  FORGE_MAX_FILES:             { type: 'number', default: 12,      min: 1,     max: 40 },
+  FORGE_FILE_RETRY:            { type: 'number', default: 2,       min: 0,     max: 5 },
+  FORGE_CONCURRENCY:           { type: 'number', default: 2,       min: 1,     max: 6 },
+
+  // P23 — Research (web search/fetch, research orchestrator, browser automation)
+  SEARXNG_URL:                 { type: 'string', default: '' },
+  BRAVE_API_KEY:               { type: 'string', default: '' },  // secret — audit-writer REDACT_KEYS covers *api_key* substring
+  WEB_SEARCH_MAX_RESULTS:      { type: 'number', default: 10,      min: 1,     max: 20 },
+  WEB_SEARCH_TIMEOUT_MS:       { type: 'number', default: 10000,   min: 1000,  max: 60000 },
+  WEB_SEARCH_MIN_INTERVAL_MS:  { type: 'number', default: 2000,    min: 0,     max: 60000 },
+  WEB_FETCH_MAX_BYTES:         { type: 'number', default: 2097152, min: 1024,  max: 10485760 },
+  WEB_FETCH_TIMEOUT_MS:        { type: 'number', default: 15000,   min: 1000,  max: 60000 },
+  RESEARCH_MAX_SOURCES:        { type: 'number', default: 8,       min: 1,     max: 12 },
+  RESEARCH_FETCH_CONCURRENCY:  { type: 'number', default: 3,       min: 1,     max: 6 },
+  RESEARCH_MAX_PERSISTED:      { type: 'number', default: 50,      min: 5 },
+  RESEARCH_SCOPE_CHECKPOINT:   { type: 'bool',   default: false },
+  BROWSER_CDP_URL:             { type: 'string', default: '' },  // empty = browser automation disabled
 };
 
 module.exports = { SCHEMA };

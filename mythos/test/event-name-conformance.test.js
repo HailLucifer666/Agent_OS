@@ -72,6 +72,20 @@ const ALLOWED_EVENTS = new Set([
 
   // mission.* (P11 — mission orchestrator)
   'mission.update',
+
+  // checkpoint.* (P21 — workflow approval gates)
+  'checkpoint.created',
+  'checkpoint.resolved',
+
+  // conversation.* / intake.* (P21 — durable conversation + intake FSM)
+  'conversation.turn',
+  'intake.updated',
+
+  // forge.* (P22 — multi-file build pipeline)
+  'forge.update',
+
+  // research.* (P23 — web research orchestrator)
+  'research.update',
 ]);
 
 // -- Static scan -------------------------------------------------------------

@@ -9,6 +9,9 @@ export const PANELS = {
   memory:   { title: 'MEMORY',   loader: () => import('/js/views/memory.js'),   mutating: false },
   health:   { title: 'HEALTH',   loader: () => import('/js/views/health.js'),   mutating: false },
   audit:    { title: 'AUDIT',    loader: () => import('/js/views/audit.js'),    mutating: false },
+  conversation: { title: 'CONVERSATION', loader: () => import('/js/views/conversation.js'), mutating: false },
+  forge:    { title: 'BUILD',    loader: () => import('/js/views/forge.js'),    mutating: true },
+  research: { title: 'RESEARCH', loader: () => import('/js/views/research.js'), mutating: false },
 };
 
 export function getPanel(id) {

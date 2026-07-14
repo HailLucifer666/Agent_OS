@@ -34,8 +34,10 @@ describe('brain/lanes.default', function() {
     assert.equal(lanes.PREF_VOICE[0].model, 'llama-3.3-70b-versatile');
   });
 
-  it('build lane has mistral first', function() {
-    assert.equal(lanes.PREF_BUILD[0].provider, 'mistral');
+  it('build lane has Hermes (ollama) first, mistral as first cloud fallback', function() {
+    assert.equal(lanes.PREF_BUILD[0].provider, 'ollama');
+    assert.equal(lanes.PREF_BUILD[0].model, 'hermes3:8b');
+    assert.equal(lanes.PREF_BUILD[1].provider, 'mistral');
   });
 
   it('each table has env override key', function() {

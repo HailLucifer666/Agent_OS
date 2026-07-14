@@ -3,6 +3,7 @@
 // CA patterns from NOVA tools-dashboard goals CRUD + BRAIN-MAP lane selection.
 
 var crypto = require('crypto');
+var { tryParseWithRepair } = require('../brain'); // D-48: robust plan-content parse fallback
 
 var DRIVE_WEIGHTS = {
   'user-service': 1.0,
@@ -29,9 +30,11 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       status: opts.status || 'proposed',
       priority: typeof opts.priority === 'number' ? opts.priority : 0.5,
       budget: {
-        tokens: opts.budget && opts.budget.tokens || 50000,
-        actions: opts.budget && opts.budget.actions || 50,
-        deadline: opts.budget && opts.budget.deadline || null
+        // D-49 fix: honor the GOAL_TOKEN_BUDGET/GOAL_ACTION_BUDGET config keys
+        // (default 20000/25) instead of hardcoded 50000/50 that ignored them.
+        tokens: (opts.budget && opts.budget.tokens) || (config && config.GOAL_TOKEN_BUDGET) || 50000,
+        actions: (opts.budget && opts.budget.actions) || (config && config.GOAL_ACTION_BUDGET) || 50,
+        deadline: (opts.budget && opts.budget.deadline) || null
       },
       spent: { tokens: 0, actions: 0 },
       parentId: opts.parentId || null,
@@ -221,8 +224,12 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           schemaHint: '{ tool: string, args: object }',
           source: 'goal:' + goal.id
         });
-        if (result && !result.offline && result.parsed && result.parsed.tool) {
-          return { tool: result.parsed.tool, args: result.parsed.args || {}, rationale: 'brain-planned', done: false };
+        // D-48 fix: fall back to parsing result.content when the provider did
+        // not populate result.parsed (a plan step used to silently return null).
+        var parsed = result && result.parsed;
+        if (!parsed && result && result.content) parsed = tryParseWithRepair(result.content);
+        if (result && !result.offline && parsed && parsed.tool) {
+          return { tool: parsed.tool, args: parsed.args || {}, rationale: 'brain-planned', done: false };
         }
       } catch (_) { /* brain offline */ }
     }

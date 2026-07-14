@@ -126,3 +126,10 @@ export function visionQuery({ image, text, onDone, onChunk }) {
 export function confirmReply(confirmId, accept) {
   sendMessage({ type: 'confirm-reply', confirmId, accept });
 }
+
+// P21 — resolve a workflow approval checkpoint (Forge plan/mid/final, research
+// scope). feedback is optional; a final-review reject uses it as the revision
+// instruction.
+export function checkpointReply(id, accept, feedback) {
+  sendMessage({ type: 'checkpoint-reply', id, accept, feedback });
+}

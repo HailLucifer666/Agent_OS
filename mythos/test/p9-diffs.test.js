@@ -90,6 +90,7 @@ describe('cortex confirm flow (P9 diff — spec Ambiguity #2 contract)', () => {
       working: {
         tick: 0, activeGoalId: null, spendThisTick: 0,
         resetTickState() {}, drainPerceptions() { return [{ summary: 'x', channel: 'test', salience: 0.9 }]; },
+        _ctx: new Map(), get(k) { return this._ctx.get(k); }, set(k, v) { this._ctx.set(k, v); },
       },
       episodic: { write: async () => {} },
     };
@@ -147,6 +148,18 @@ describe('cortex confirm flow (P9 diff — spec Ambiguity #2 contract)', () => {
     const action = registry.accept(emitted[0].confirmId, 'system');
     assert.ok(action, 'accept(confirmId, system) must return the stored action');
     assert.equal(action.decision.tool, 'kill_session');
+  });
+
+  it('P24: does NOT re-emit a fresh confirm every tick while the same one is still pending', async () => {
+    const registry = createConfirmRegistry({ config: { LEASH_CONFIRM_TTL_MS: 30000 } });
+    const { cortex, emitted, createCalls } = harness(registry);
+    cortex.start();
+    await cortex.tickOnce(); // proposes kill_session -> creates confirm #1
+    await cortex.tickOnce(); // re-proposes the SAME action -> must be suppressed
+    await cortex.tickOnce();
+    cortex.stop();
+    assert.equal(createCalls.length, 1, 'confirm.create fires once, not once per tick');
+    assert.equal(emitted.length, 1, 'exactly one confirm-request across three ticks');
   });
 });
 

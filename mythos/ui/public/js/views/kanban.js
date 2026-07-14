@@ -24,15 +24,9 @@ function cardTemplate(card) {
   if (card.lane === 'backlog' && !busy) {
     actions.push(`<button class="kanban-card-action" data-action="build" data-id="${card.id}" type="button">&#128736; Build</button>`);
   }
-  if (card.lane === 'review' && !card.reviewVerdict && !busy) {
-    actions.push(`<button class="kanban-card-action" data-action="review" data-id="${card.id}" type="button">&#9989; Review</button>`);
-  }
-  if (card.lane === 'review' && card.reviewVerdict === 'approve') {
-    actions.push(`<button class="kanban-card-action" data-action="accept-done" data-id="${card.id}" type="button">&#10003; Accept &#8594; Done</button>`);
-  }
-  if (card.lane === 'review' && card.reviewVerdict === 'reject') {
-    actions.push(`<button class="kanban-card-action" data-action="accept-backlog" data-id="${card.id}" type="button">&#8617; Send back</button>`);
-  }
+  // P24: the Review / Accept buttons were removed — no reviewer effector was ever
+  // built, so /api/kanban/cards/:id/review and /accept have no backing and only
+  // failed cleanly. Cards still show their build artifact + any verdict note.
   const artifactLink = card.artifact && card.artifact.path
     ? `<a class="kanban-card-artifact" href="${escapeHtml(card.artifact.path)}" target="_blank" rel="noopener">&#9655; ${escapeHtml(card.artifact.title || 'view build')}</a>`
     : '';
@@ -248,34 +242,7 @@ export async function render(mount) {
     }
   }
 
-  async function reviewCard(id) {
-    try {
-      const res = await fetch(`/api/kanban/cards/${id}/review`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      jobs[id] = data.job;
-      renderBoard();
-      watchJobs();
-    } catch (err) {
-      jobs[id] = { status: 'failed', stage: 'failed', error: err.message };
-      renderBoard();
-    }
-  }
-
-  async function acceptCard(id, lane) {
-    try {
-      const res = await fetch(`/api/kanban/cards/${id}/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lane }),
-      });
-      const data = await res.json();
-      cards = Array.isArray(data.board) ? data.board : data.board.cards;
-      renderBoard();
-    } catch (err) {
-      console.error('accept failed', err);
-    }
-  }
+  // P24: reviewCard/acceptCard removed — no reviewer effector backs them.
 
   // Drag and drop + per-lane add inputs + delete, delegated on the board container.
   const board = mount.querySelector('.kanban-board');
@@ -310,12 +277,6 @@ export async function render(mount) {
     if (del) return deleteCard(del.dataset.id);
     const build = e.target.closest('[data-action="build"]');
     if (build) return buildCard(build.dataset.id);
-    const review = e.target.closest('[data-action="review"]');
-    if (review) return reviewCard(review.dataset.id);
-    const acceptDone = e.target.closest('[data-action="accept-done"]');
-    if (acceptDone) return acceptCard(acceptDone.dataset.id, 'done');
-    const acceptBacklog = e.target.closest('[data-action="accept-backlog"]');
-    if (acceptBacklog) return acceptCard(acceptBacklog.dataset.id, 'backlog');
   });
 
   board.querySelectorAll('.kanban-add-input').forEach((input) => {

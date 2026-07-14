@@ -16,6 +16,10 @@ const TIER_TABLE = {
   'mission_status':        0,
   'get_time':              0,
   'get_weather':           0,
+  'web_search':            0,  // P23 — read-only web lookup
+  'web_fetch':             0,  // P23 — read-only page fetch (SSRF-guarded)
+  'research_status':       0,  // P23
+  'project_status':        0,  // P22 — Forge build status
   'list_folder':           0,
   'read_file':             0,
   'list_windows':          0,
@@ -36,6 +40,7 @@ const TIER_TABLE = {
   'browser_go_back':       1,
   'focus_window':          1,
   'pipeline_advance':      1,  // approve only — dangerWhen handles reject
+  'run_research':          1,  // P23 — writes only vault/Semantic + local HTML artifact
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
@@ -52,6 +57,8 @@ const TIER_TABLE = {
   'kanban_build_card':     3,
   'start_project':         3,
   'run_mission':           3,
+  'build_project':         3,  // P22 — Forge multi-file build
+  'revise_project':        3,  // P22 — targeted regen of a build
   'compose_email':         3,
   'close_window':          3,
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable

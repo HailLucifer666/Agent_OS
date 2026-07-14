@@ -21,10 +21,12 @@ const PREF_VOICE = [
 ];
 
 const PREF_BUILD = [
+  { provider: 'ollama',     model: 'hermes3:8b' },                                // P22 — local free Hermes (ollama pull hermes3:8b to activate; else falls through)
   { provider: 'mistral',    model: 'mistral-large-2512' },
   { provider: 'cerebras',   model: 'zai-glm-4.7' },
   { provider: 'cerebras',   model: 'gpt-oss-120b' },
   { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
+  { provider: 'openrouter', model: 'nousresearch/hermes-3-llama-3.1-405b:free' }, // P22 — Hermes 405B free fallback
   { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },
   { provider: 'ollama',     model: 'ornith:9b' },
 ];

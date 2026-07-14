@@ -192,3 +192,27 @@ subscribe(['job'], (msg) => {
     mic.setCaption('✘ build failed: ' + (j.error || 'unknown error'), 'error');
   }
 });
+
+// P21 — server-initiated (proactive) speech: checkpoint questions, build/mission/
+// forge/research milestones, completions. No reqId — routed by type. Reuses the
+// voice loop's own external-reply machinery (same barge-in-safe chunk playback as
+// a normal voice reply), keyed by pushId so concurrent pushes don't interleave.
+const activePush = new Map(); // pushId -> voice turn session
+subscribe(['speak-push'], (msg) => {
+  const v = ensureVoice();
+  let session = activePush.get(msg.pushId);
+  if (session === undefined) { session = v.beginTurn(); activePush.set(msg.pushId, session); }
+  if (msg.done) { activePush.delete(msg.pushId); v.deliverExternalReply(msg, session); }
+  else v.onExternalChunk(msg, session);
+});
+
+// P21 — workflow approval checkpoints (Forge plan/mid/final, research scope): open
+// the Conversation panel (which renders the approve/deny card) and narrate. The
+// spoken question itself arrives via speak-push above.
+subscribe(['checkpoint'], (msg) => {
+  const c = msg.payload || {};
+  if (c.event === 'created') {
+    overlays.openPanel('conversation');
+    mic.setCaption('✋ ' + (c.title || 'Approval needed') + ' — say yes or no, or use the card.', 'reply');
+  }
+});

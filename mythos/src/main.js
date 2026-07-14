@@ -13,6 +13,9 @@ const { createIdentity } = require('./core/identity');
 const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
+const { createCheckpointRegistry } = require('./core/leash/checkpoints');
+const { createConversationStore } = require('./core/voice/conversation-store');
+const { createIntakeSession } = require('./core/voice/intake-session');
 const { createTimerSensor } = require('./core/sensors/timer');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
@@ -37,6 +40,13 @@ const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
+const { createForge } = require('./core/effectors/forge');
+const { registerFromForge } = require('./core/effectors/from-forge');
+const { createWebSearch, registerWebSearch } = require('./core/effectors/web-search');
+const { createWebFetch, registerWebFetch } = require('./core/effectors/web-fetch');
+const { createResearch } = require('./core/effectors/research');
+const { registerFromResearch } = require('./core/effectors/from-research');
+const browserAgent = require('../adapters/browser-agent');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
@@ -72,7 +82,7 @@ async function main() {
   logger.info('bus.created', bus.stats());
 
   // Step 4: Ensure vault directories
-  const vaultDirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints'];
+  const vaultDirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints', 'Conversation'];
   const vaultRoot = path.resolve(config.MYTHOS_VAULT_ROOT);
   for (let i = 0; i < vaultDirs.length; i++) {
     const dir = path.join(vaultRoot, vaultDirs[i]);
@@ -99,6 +109,13 @@ async function main() {
   let wsSensor = null;
   let jobSensor = null;
   let edgeTtsChild = null;
+  let checkpoints = null;      // P21 checkpoint registry
+  let conversation = null;     // P21 durable conversation store
+  let intakeSession = null;    // P21 intake FSM
+  let checkpointSweepTimer = null;
+  let forge = null;            // P22 Forge
+  let research = null;         // P23 research orchestrator
+  let agentActionsEffector = null; // hoisted from the leash step for P24 REST routes
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -191,6 +208,22 @@ async function main() {
       logger.info('goals.ready', goals.stats());
     }},
 
+    { name: 'conversation', fail: 'degraded', fn: async function() {
+      // [P21 — NEW] Durable conversation store + intake FSM + checkpoint registry.
+      // Runs after 'goals' (checkpoints needs memory.audit + goals; intake creates
+      // goals) and before 'leash'/'server' (which thread these through). The sweep
+      // timer is unref'd so it never holds the process open on its own.
+      checkpoints = createCheckpointRegistry({ config: config, bus: bus, auditWriter: memory.audit, goals: goals, fs: memory.fs });
+      checkpoints.init();
+      conversation = createConversationStore({ fs: memory.fs, bus: bus, config: config, logger: logger });
+      await conversation.init();
+      intakeSession = createIntakeSession({ fs: memory.fs, bus: bus, config: config, goals: goals });
+      await intakeSession.init();
+      checkpointSweepTimer = setInterval(function() { checkpoints.sweep(); }, config.CHECKPOINT_SWEEP_MS);
+      if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
+      logger.info('conversation.ready', {});
+    }},
+
     { name: 'leash', fn: function() {
       // [Phase 7 — NEW] Real effector hub + all 45 tool effectors + the goals-effector
       // bridge + voice effector, built here (immediately before leash, which requires
@@ -206,7 +239,7 @@ async function main() {
       var pipelineEffector = createPipelineEffector({ fs: memory.fs });
       var kanbanEffector = createKanbanEffector({ fs: memory.fs });
       buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs });
-      var agentActionsEffector = createAgentActions({
+      agentActionsEffector = createAgentActions({
         fs: memory.fs, pipeline: pipelineEffector, kanban: kanbanEffector, buildRunner: buildRunner
       });
 
@@ -255,6 +288,34 @@ async function main() {
       registerFromMission(hub, { orchestrator: orchestrator });
       registerFromSystem(hub, { config: config });
 
+      // [P22 — NEW] Forge: multi-file agentic build pipeline. Constructed after
+      // agentActionsEffector (mirrors the sibling effectors) and gated by the P21
+      // checkpoints registry (built in the 'conversation' step, which runs before
+      // 'leash'). forge.init() re-arms pending plan/final checkpoints from its own
+      // persisted state (honest-inert — no fake in-flight builds survive a restart).
+      forge = createForge({ config: config, brain: brain, bus: bus, vault: memory.fs, checkpoints: checkpoints });
+      forge.init();
+      registerFromForge(hub, { forge: forge });
+
+      // [P23 — NEW] Web search/fetch effectors + research orchestrator. The
+      // web-search/web-fetch cores are constructed once and reused by research
+      // directly (no hub round-trip); registerWebSearch/registerWebFetch also
+      // register the T0 web_search/web_fetch tools on the hub. research writes
+      // only vault/Semantic + a local HTML artifact (run_research is T1), gated
+      // by the P21 checkpoints registry; browserAgent is the optional deep-depth
+      // fetch fallback (OFFLINE unless the 'browser-automation' step connects).
+      var webSearchSvc = createWebSearch({ config: config, bus: bus });
+      var webFetchSvc = createWebFetch({ config: config });
+      registerWebSearch(hub, { config: config, bus: bus });
+      registerWebFetch(hub, { config: config });
+      research = createResearch({
+        config: config, brain: brain, bus: bus, memory: memory,
+        search: webSearchSvc.search, fetchPage: webFetchSvc.webFetch,
+        checkpoints: checkpoints, fs: memory.fs, browserAgent: browserAgent,
+      });
+      research.init();
+      registerFromResearch(hub, { research: research });
+
       hub.register(createVoiceEffector({ config: config }));
 
       effectors = hub;
@@ -262,6 +323,18 @@ async function main() {
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors });
       logger.info('leash.ready', {});
+    }},
+
+    { name: 'browser-automation', fail: 'degraded', fn: function() {
+      // [P23 — NEW] Chrome CDP connection for the browser-agent (research's
+      // deep-depth fetch fallback). fail:'degraded' — an empty BROWSER_CDP_URL
+      // (the default) is a clean no-op, and a failed connect leaves the agent
+      // OFFLINE without blocking boot. Launch Chrome first via setup-chrome-debug.ps1.
+      var url = config.BROWSER_CDP_URL;
+      if (!url) { logger.info('browser-automation.disabled', { reason: 'BROWSER_CDP_URL empty' }); return; }
+      return browserAgent.connect(url).then(function(ok) {
+        logger.info('browser-automation.' + (ok ? 'connected' : 'offline'), { url: url });
+      });
     }},
 
     { name: 'recovery', fail: 'degraded', fn: function() {
@@ -302,6 +375,10 @@ async function main() {
         pipelineEffector: pipelineEffector,
         effectors: effectors, leash: leash, goals: goals, probes: immune.probes,
         brain: brain, buildRunner: buildRunner,
+        // P21/P22/P23 — durable conversation, intake FSM, checkpoint gates, Forge,
+        // research; agentActionsEffector for P24 dead-button REST routes.
+        conversation: conversation, intakeSession: intakeSession, checkpoints: checkpoints,
+        forge: forge, research: research, agentActionsEffector: agentActionsEffector,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
@@ -373,6 +450,8 @@ async function main() {
   // Stop running loops before the lifecycle's own shutdown/exit runs (full graceful
   // shutdown sequencing — drain/flush/audit — is D-07, a non-blocking Known Deviation)
   function stopRunningLoops() {
+    if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
+    if (browserAgent) browserAgent.disconnect().catch(function() {});
     if (edgeTtsChild) edgeTtsChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();

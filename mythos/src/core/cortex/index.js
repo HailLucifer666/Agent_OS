@@ -144,6 +144,17 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // connectionId is the sentinel 'system': cortex-initiated actions have no
       // single waiting client, so the server accepts 'system'-scoped confirms
       // from any connected client (open question resolved in ROADMAP.md P9).
+      // P24 — suppress the every-tick re-prompt storm: if we already emitted a
+      // confirm for this exact {tool,args} and it's still pending (unresolved and
+      // unexpired), do NOT create+emit a fresh one each tick. leash.confirm.peek
+      // returns null once the confirm is consumed or expired, so the tick after a
+      // human resolves it (or it times out) naturally falls through to a fresh one.
+      var argsJson = JSON.stringify(decision.args || {});
+      var already = working.get('pendingConfirm');
+      if (already && already.tool === decision.tool && already.argsJson === argsJson) {
+        var peeked = leash.confirm.peek(already.confirmId);
+        if (peeked && !peeked.expired) return;
+      }
       var argsText = humanizeArgs(decision.args).slice(0, 120);
       var summary = decision.tool + (argsText ? ' (' + argsText + ')' : '');
       var confirmId = leash.confirm.create(
@@ -151,6 +162,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier },
         'system'
       );
+      working.set('pendingConfirm', { confirmId: confirmId, tool: decision.tool, argsJson: argsJson, createdAt: Date.now() });
       bus.emit('confirm-request', Object.assign({}, decision, {
         confirmId: confirmId, summary: summary, tier: leashResult.tier
       }));
