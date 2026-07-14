@@ -1,5 +1,8 @@
 'use strict';
 
+// F3: Import tierOf to compute danger flags dynamically from the tier table.
+const { tierOf } = require('../leash/tiers');
+
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
 // {say, actions, needs_result} JSON -> execute -> needs_result re-prompt loop
@@ -25,8 +28,9 @@ const MAX_ITERATIONS = Number(process.env.VOICE_MAX_TOOL_ITERATIONS) || 4;
 const MAX_SAY_CHARS = Number(process.env.VOICE_MAX_SAY_CHARS) || 800;
 
 // Voice-safe subset of the registered effector tools (P7 from-dashboard.js +
-// from-project.js). danger mirrors the leash tier table (tier >= 3 -> true).
-const CATALOG = [
+// from-project.js). F3: danger is now computed dynamically from tierOf() at
+// buildPrompt time to prevent drift between the voice catalog and the tier table.
+const CATALOG_RAW = [
   { name: 'navigate', description: 'Open a dashboard panel. route is one of: goals, kanban, pipeline, memory, health, audit.', params: { route: 'string' }, danger: false },
   { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top panel.', params: { all: 'boolean (optional)' }, danger: false },
   { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
@@ -37,7 +41,7 @@ const CATALOG = [
   { name: 'list_goals', description: 'List goals.', params: {}, danger: false },
   { name: 'toggle_goal', description: 'Toggle a goal done/active by fuzzy text match.', params: { query: 'string' }, danger: false },
   { name: 'delete_goal', description: 'Delete a goal by fuzzy text match. Destructive.', params: { query: 'string' }, danger: true },
-  { name: 'capture_idea', description: 'Capture an idea into the pipeline inbox.', params: { text: 'string' }, danger: false },
+  { name: 'capture_idea', description: 'Capture an idea into the pipeline inbox.', params: { text: 'string', idea: 'string (optional)' }, danger: false },
   { name: 'pipeline_status', description: 'List pipeline cards by stage.', params: {}, danger: false },
   { name: 'pipeline_advance', description: 'Approve or reject a pipeline card.', params: { query: 'string', action: "'approve' | 'reject'" }, danger: false },
   { name: 'pipeline_execute', description: 'Run the build agent on a pipeline card in the Execute stage.', params: { query: 'string' }, danger: true },
@@ -53,8 +57,26 @@ const CATALOG = [
   { name: 'get_time', description: "Current date and time. Pass timezone (IANA, e.g. 'America/New_York') for a specific place, omit for local system time.", params: { timezone: 'string (optional)' }, danger: false },
   { name: 'get_weather', description: 'Current weather conditions. Pass location (a city name) to check elsewhere, omit for the configured default location.', params: { location: 'string (optional)' }, danger: false },
   { name: 'web_fetch', description: 'Fetch text content from a URL — real internet access. Returns readable text (HTML stripped, truncated). Use for research, news, or real-time data the user asks about.', params: { url: 'string - the http(s) URL' }, danger: false },
-  { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets.', params: { query: 'string', numResults: 'number (optional)' }, danger: false },
+  { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets.', params: { query: 'string', maxResults: 'number (optional)' }, danger: false },
+  { name: 'gmail_unread', description: 'List unread Gmail messages. Returns subject, sender, date for each.', params: {}, danger: false },
+  { name: 'gmail_read', description: 'Read a specific email by its message ID. Returns full body text.', params: { messageId: 'string' }, danger: false },
+  { name: 'gmail_send', description: 'Send an email. Requires to, subject, body. Use for real email sends only after confirming with the user.', params: { to: 'string', subject: 'string', body: 'string' }, danger: true },
+  { name: 'gmail_draft', description: 'Create a Gmail draft. Returns the draft ID.', params: { to: 'string', subject: 'string', body: 'string' }, danger: false },
+  { name: 'remember', description: 'Save a durable fact/preference/instruction to permanent memory. Use when user says "remember","note that","don\'t forget","from now on","keep in mind". Persists across restarts.', params: { text: 'string' }, danger: false },
+  { name: 'log_incident', description: 'Record an error/bug/incident the user flags. Use when user says "log this","this is wrong","you hallucinated".', params: { text: 'string', severity: 'string (optional)' }, danger: false },
+  { name: 'reminder_add', description: 'Set a reminder. Time can be relative ("in 10 minutes") or ISO date. Returns reminder ID.', params: { text: 'string', when: 'string' }, danger: false },
+  { name: 'reminder_list', description: 'List upcoming pending reminders with times and text.', params: {}, danger: false },
+  { name: 'reminder_cancel', description: 'Cancel a pending reminder by ID or text match.', params: { query: 'string' }, danger: false },
 ];
+
+// F3: Build the runtime catalog with danger flags computed from the tier table.
+// This prevents drift — the tier table is the single source of truth for danger.
+function buildCatalog() {
+  return CATALOG_RAW.map(function(entry) {
+    return Object.assign({}, entry, { danger: tierOf(entry.name) >= 3 });
+  });
+}
+const CATALOG = buildCatalog();
 
 // ---- prompt construction (DANGER TOOLS RULE + PROJECT INTAKE RULE are CA
 // from NOVA — the danger rule was validated by NOVA's day-one spike: without
@@ -66,7 +88,7 @@ BREVITY: Match your reply length to the question. For greetings ("what's up", "h
 
 REASONING: Before acting, reason about what the user actually wants. Consider context from RECENT EXCHANGES and RELEVANT MEMORIES. If you remember something relevant from a past conversation, reference it naturally ("last time you mentioned...").
 
-HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks you to do something and you have no tool for it (record logs, inspect audio buffers, restart pipelines, run diagnostics, download files, send emails, access the filesystem directly, etc.), NEVER claim you are doing it and NEVER say "I'll do that now" or "one moment". Instead say plainly what you can and cannot do: "I don't have a tool to [X]. What I can do is [Y]." Fabricating capabilities destroys trust faster than any bug. When you genuinely cannot help, say so in one short sentence and suggest what the user could do instead.
+HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks for something with no tool, NEVER claim you are doing it. However, you CAN record and capture things — use these tools: remember (saves a durable fact/preference/instruction to permanent memory), log_incident (records an error/bug/incident), capture_idea (saves a build idea to the pipeline inbox), create_goal (saves a to-do). NEVER refuse a "log this","remember this","note that","don't forget", or "record this" request — you have remember and log_incident for exactly these. Pick remember for facts/preferences/standing rules, log_incident for errors/bugs/incidents. For other genuinely-missing capabilities (inspect audio buffers, restart pipelines, download files, access the filesystem directly), say plainly: "I don't have a tool to [X]." Fabricating capabilities destroys trust faster than any bug.
 
 ARTIFACT RULE: NEVER fabricate or guess file paths. If the user asks to open/show/view a build or artifact, call pipeline_status (needs_result:true) FIRST to get the real artifact path from the result, THEN call open_artifact with that exact path. Do not invent paths based on the project description — they will be wrong and the user will see a 404 or the wrong page. Same for job_status if the user references a specific job.
 
@@ -155,7 +177,10 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
-function createVoiceAgent({ brain, leash, dispatch, bus }) {
+function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
+  // F2: Use config-provided values if available, falling back to env-based defaults.
+  const maxIterations = (config && config.VOICE_MAX_TOOL_ITERATIONS) || MAX_ITERATIONS;
+  const maxSayChars = (config && config.VOICE_MAX_SAY_CHARS) || MAX_SAY_CHARS;
   if (!brain || typeof brain.think !== 'function') throw new Error('createVoiceAgent requires brain.think');
   if (!leash || typeof leash.check !== 'function') throw new Error('createVoiceAgent requires leash');
   if (typeof dispatch !== 'function') throw new Error('createVoiceAgent requires dispatch(decision, ctx)');
@@ -185,7 +210,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
     if (reparsed) return reparsed;
 
     const fallbackText = stripThink(second.content) || stripThink(first.content) || "I couldn't process that.";
-    return { say: fallbackText.slice(0, MAX_SAY_CHARS), actions: [], needs_result: false };
+    return { say: fallbackText.slice(0, maxSayChars), actions: [], needs_result: false };
   }
 
   // ---- execution: leash gate first, then the server's dispatch path ----
@@ -202,6 +227,16 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
   const INTAKE_GATED = new Set(['start_project', 'run_mission']);
 
   async function executeAction(action, { connectionId } = {}) {
+    // H4: Guard against empty/invalid args before dispatch.
+    if (!action || !action.tool) return { tool: '?', args: {}, ok: false, summary: 'no tool specified' };
+    if (action.args && typeof action.args === 'object') {
+      // Sanitize args — ensure no undefined/null values leak through
+      var clean = {};
+      for (var k in action.args) {
+        if (action.args[k] !== undefined && action.args[k] !== null) clean[k] = action.args[k];
+      }
+      action.args = clean;
+    }
     if (!KNOWN.has(action.tool)) {
       return { tool: action.tool, args: action.args, ok: false, summary: `Unknown tool "${action.tool}".` };
     }
@@ -245,6 +280,9 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
     let finalSay = '';
     let confirmPending = null;
     let didRetry = false;
+    // B2: Accumulate failed actions across iterations so corrective pass sees
+    // failures from earlier iterations, not just the last one.
+    const allFailedActions = [];
 
     for (;;) {
       if (signal && signal.aborted) {
@@ -264,6 +302,8 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
         }
         const result = await executeAction(action, { connectionId: ctx.connectionId });
         executedActions.push(result);
+        // B2: Track failures across all iterations.
+        if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);
         if (onAction) onAction(result);
         if (result.confirmPending) {
           confirmPending = result;
@@ -283,7 +323,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
       }
 
       if (!parsed.needs_result) break;
-      if (iterations >= MAX_ITERATIONS) break;
+      if (iterations >= maxIterations) break;
 
       toolResults = executedActions.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary, result: a.raw && a.raw.result }));
     }
@@ -295,18 +335,25 @@ function createVoiceAgent({ brain, leash, dispatch, bus }) {
     // failed — the loop iterated to 2, and the model's final reply was never
     // corrected against the failed action. That's how MYTHOS ended up claiming
     // success over failed lookups.
-    if (!didRetry && executedActions.some((a) => a && a.ok === false && !a.confirmPending)) {
+    // B2: Check allFailedActions (accumulator across iterations) instead of
+    // executedActions (which is cleared each iteration). Also wrap in try/catch
+    // so a brain failure during corrective doesn't discard the original response.
+    if (!didRetry && allFailedActions.some((a) => a && a.ok === false && !a.confirmPending)) {
       didRetry = true;
-      const correctivePrompt = buildPrompt({
-        text,
-        history: ctx.history,
-        toolResults: executedActions.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
-        corrective: true,
-        originalSay: finalSay,
-        memoryContext: ctx.memoryContext,
-      });
-      const corrective = await callAndParse(correctivePrompt, { signal });
-      finalSay = corrective.say;
+      try {
+        const correctivePrompt = buildPrompt({
+          text,
+          history: ctx.history,
+          toolResults: allFailedActions.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
+          corrective: true,
+          originalSay: finalSay,
+          memoryContext: ctx.memoryContext,
+        });
+        const corrective = await callAndParse(correctivePrompt, { signal });
+        finalSay = corrective.say;
+      } catch (_) {
+        // Corrective failed — keep the original response rather than propagating error.
+      }
     }
 
     return { say: finalSay, actions: executedActions, confirmPending: confirmPending || null };
