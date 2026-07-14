@@ -14,6 +14,10 @@ const { spawn, spawnSync } = require('child_process');
 const TTS_SCRIPT = path.join(__dirname, '..', '..', '..', 'services', 'edge-tts-server.py');
 
 function createEdgeTtsChild({ logger }) {
+  var MAX_RESTART = 3;
+  var BACKOFF_MS = [2000, 5000, 15000];
+  var restartCount = 0;
+  var restartTimer = null;
   let child = null;
 
   function start() {
@@ -57,6 +61,18 @@ function createEdgeTtsChild({ logger }) {
         env: { ...process.env, EDGE_TTS_PORT: port },
       });
       child.on('error', () => { child = null; });
+      child.on('exit', function(code, signal) {
+        if (code === 0 || code === null) return; // clean exit or killed by us
+        child = null;
+        if (restartCount >= MAX_RESTART) {
+          console.error('[edge-tts] child crashed ' + MAX_RESTART + ' times, giving up');
+          return;
+        }
+        var delay = BACKOFF_MS[restartCount] || BACKOFF_MS[BACKOFF_MS.length - 1];
+        restartCount++;
+        console.warn('[edge-tts] child exited with code ' + code + ', restarting in ' + delay + 'ms (attempt ' + restartCount + '/' + MAX_RESTART + ')');
+        restartTimer = setTimeout(function() { start(); }, delay);
+      });
       logger.info('edge-tts.started', { port });
       return true;
     } catch {
@@ -67,6 +83,7 @@ function createEdgeTtsChild({ logger }) {
   }
 
   function stop() {
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     if (child) {
       try { child.kill(); } catch { /* already gone */ }
       child = null;
