@@ -10,6 +10,7 @@ export const PANELS = {
   health:   { title: 'HEALTH',   loader: () => import('/js/views/health.js'),   mutating: false },
   audit:    { title: 'AUDIT',    loader: () => import('/js/views/audit.js'),    mutating: false },
   backend:  { title: 'BACKEND TERMINAL', loader: () => import('/js/views/backend-terminal.js'), mutating: false },
+  conversation: { title: 'CONVERSATION', loader: () => import('/js/views/conversation.js'), mutating: false },
 };
 
 export function getPanel(id) {
