@@ -24,8 +24,13 @@ function laneKey(lane, model) {
 function isCooling(lane, model) {
   return (cooldowns.get(laneKey(lane, model)) || 0) > Date.now();
 }
-function markCooldown(lane, model) {
-  cooldowns.set(laneKey(lane, model), Date.now() + COOLDOWN_MS);
+function markCooldown(lane, model, ms) {
+  cooldowns.set(laneKey(lane, model), Date.now() + (ms || COOLDOWN_MS));
+  // C6: Amortized eviction — sweep expired entries to prevent unbounded growth.
+  var now = Date.now();
+  for (var [key, until] of cooldowns) {
+    if (until <= now) cooldowns.delete(key);
+  }
 }
 
 function nimLanesAvailable() {
@@ -75,7 +80,10 @@ function toOllamaVisionMessages(messages) {
 // that fails mid-stream still falls through to the next attempt exactly as before,
 // onToken just stops firing for that attempt (the caller only trusts the final
 // resolved `content`, same as always).
-async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
+async function complete({ messages, kind, brain, signal, onAttempt, onToken, config }) {
+  // F2: Use config-provided values if available, falling back to env-based defaults.
+  const cooldownMs = (config && config.CHAIN_COOLDOWN_MS) || COOLDOWN_MS;
+  const attemptTimeoutMs = (config && config.CHAIN_ATTEMPT_TIMEOUT_MS) || ATTEMPT_TIMEOUT_MS;
   // brain takes priority if explicitly set; otherwise fall back to kind-based routing.
   const effectiveKind = brain || (kind === 'vision' ? 'vision' : 'text');
   const ranked = await registry.chainFor(effectiveKind);
@@ -83,7 +91,8 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
   const errors = [];
 
   for (const { lane, model } of attempts) {
-    if (signal && signal.aborted) throw new Error('aborted');
+    // B4: Use AbortError name so downstream catch blocks recognize it as a caller abort.
+    if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
     if (isCooling(lane, model)) continue;
     // Skip lanes whose provider isn't configured (e.g. GROQ_API_KEY not set).
     if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
@@ -93,7 +102,7 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
       // entire chain walk (critical on cloud depots where cold starts or
       // network latency can stall a single provider for 30+ seconds).
       const attemptCtrl = new AbortController();
-      const attemptTimer = setTimeout(() => attemptCtrl.abort(), ATTEMPT_TIMEOUT_MS);
+      const attemptTimer = setTimeout(() => attemptCtrl.abort(), attemptTimeoutMs);
       // If the caller already has an abort signal, forward it.
       const onCallerAbort = () => attemptCtrl.abort();
       signal && signal.addEventListener('abort', onCallerAbort, { once: true });
@@ -127,13 +136,17 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken }) {
       var isRateLimit = /:\s*429\b/.test(msg);
       var isServerError = /:\s*5\d\d\b/.test(msg);
       var isNetwork = /fetch failed|network|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg);
-      if (isRateLimit || isServerError || isNetwork || isAbort) {
-        markCooldown(lane, model);
+      // C7: Caller-initiated abort is not a provider fault — don't penalize with cooldown.
+      if (isRateLimit || isServerError || isNetwork) {
+        markCooldown(lane, model, cooldownMs);
       }
     }
   }
 
-  const err = new Error(`all models failed: ${errors.join(' | ') || 'no live models configured'}`);
+  // A4: Use generic error message — avoid leaking provider lane/model details to clients.
+  // Full details are in the `errors` array for server-side logging only.
+  if (errors.length > 0) console.warn('[brain chain] chain-exhausted:', JSON.stringify(errors.map(function(e) { return String(e).slice(0, 120); })));
+  const err = new Error('All AI providers are currently unavailable. Please try again later.');
   err.chainExhausted = true;
   throw err;
 }
