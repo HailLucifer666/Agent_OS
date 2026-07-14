@@ -329,9 +329,9 @@ function buildTools(ctx) {
     }
   }
 
-  function capture_idea({ text }) {
+  function capture_idea(args) { var text = (args && (args.text || args.idea) || '').trim();
     try {
-      if (!text || !text.trim()) return fail('Idea text is required.');
+      if (!text) return fail('Idea text is required.');
       const card = pipeline.capture(text);
       return ok({ card });
     } catch (err) {
@@ -524,7 +524,7 @@ function buildTools(ctx) {
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },
     { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch },
-    { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', numResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(args); } },
+    { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); } },
     { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted).', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
     { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals },
