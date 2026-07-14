@@ -24,9 +24,11 @@ const TIER_TABLE = {
   'browser_get_title':     0,
   'web_search':            0,  // read-only research — fetches public search results
   'web_fetch':             0,  // read-only fetch — retrieves public web page content
-  'gmail_unread':          0,  // read-only — lists unread emails
-  'gmail_read':            0,  // read-only — reads a single email
   'camera_look':           0,  // read-only — captures and describes camera frame
+  'remember':              0,
+  'log_incident':          0,
+  'reminder_add':          0,  // read-only — creates a local reminder record
+  'reminder_list':         0,  // read-only — lists pending reminders
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
@@ -42,6 +44,10 @@ const TIER_TABLE = {
   'browser_go_back':       1,
   'focus_window':          1,
   'pipeline_advance':      1,  // approve only — dangerWhen handles reject
+  'gmail_unread':          1,
+  'gmail_read':            1,
+  'gmail_draft':           1,
+  'reminder_cancel':       1,  // local write — cancels a pending reminder
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
@@ -60,6 +66,7 @@ const TIER_TABLE = {
   'run_mission':           3,
   'compose_email':         3,
   'close_window':          3,
+  'gmail_send':            3,
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable
   'ui_type':               3,  // ELEVATED — same reasoning
   'browser_click':         3,
