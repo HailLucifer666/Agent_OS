@@ -7,7 +7,7 @@
 Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 402 tests.
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-402%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
+[![Tests](https://img.shields.io/badge/tests-568%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9)](ROADMAP.md)
 [![Render](https://img.shields.io/badge/deploy-render-4fc08d?logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey)](#license)
@@ -406,6 +406,61 @@ All dangerous tools (delete, execute, kill) require confirmation via the Leash s
 
 ---
 
+## Engagement Layer — Structured Task Lifecycle
+
+Takes an intent (a sentence) and walks it through a structured lifecycle: interview, spec, plan, approval, execution, verification, repair, and completion.
+
+```mermaid
+flowchart TB
+    INTENT["Initial intent"] --> DRAFT["DRAFT"]
+    DRAFT -->|startInterview| IV["INTERVIEWING"]
+    IV -->|completeInterview| SPEC["SPEC_READY"]
+    SPEC -->|buildPlan| PLAN["PLAN_READY"]
+    PLAN -->|requestApproval| APPROVAL["AWAITING_APPROVAL"]
+
+    APPROVAL -->|approve| EXEC["EXECUTING"]
+    APPROVAL -->|rejectWithFeedback| PLAN
+
+    EXEC -->|stageComplete| VERIFY["VERIFYING"]
+    EXEC -->|stageFailed| REPAIR["REPAIRING"]
+    EXEC -->|fatalError| FAIL["FAILED"]
+
+    VERIFY -->|allVerified| DONE["COMPLETED"]
+    VERIFY -->|verificationFailed| REPAIR
+    VERIFY -->|noRepairsRemaining| BLOCK["BLOCKED"]
+
+    REPAIR -->|retryReady| EXEC
+    REPAIR -->|repairExhausted| BLOCK
+
+    BLOCK -->|unblock| EXEC
+    BLOCK -->|abandon| FAIL
+    FAIL -->|restart| DRAFT
+
+    style DONE fill:#0e4429,stroke:#43e5a0,color:#fff
+    style BLOCK fill:#4a2a0a,stroke:#eab308,color:#fff
+    style FAIL fill:#4a0a0a,stroke:#ef4444,color:#fff
+```
+
+| Capability | Modules | What it does |
+|-----------|---------|-------------|
+| **State Machine** | `state-machine.js`, `schema.js` | 12 states, 22 validated transitions with preconditions. Invalid transitions emit typed health anomalies. |
+| **Interview** | `interview.js`, `interview-card` UI | Up to 5 questions, 5 variants (text, choice, confirm, multi-select, numeric), per-type validation. |
+| **Spec Builder** | `spec-builder.js`, `recommendations.js` | Generates markdown specs from interview answers. Recommends build/research/hybrid approaches with confidence scores. |
+| **Plan Builder** | `plan-builder.js` | Produces staged plans (setup, core, verify) with verification gates per stage. |
+| **Progress** | `progress.js`, `progress-stream` UI | Real-time progress tracking, percentage-complete, repair budget monitoring. |
+| **Conversation Gateway** | `gateway.js`, `intent-router.js` | Classifies messages as action/question/chat with 9 engagement action patterns. |
+| **Events** | `events.js` | 18 typed bus event factories covering the full lifecycle. |
+
+**Backend** (15 modules): `src/core/engagements/` (10) + `src/core/assistant/` (5).
+
+**Frontend** (8 component + 3 view modules): 3-column dashboard with Active/Recent/Completed filters, 5-tab detail panel, live WS-driven progress streaming, approval gate modals, interview cards (5 variants), verification check cards (5 types, 6 states), completion reports with artifact links.
+
+**Tests:** 166 tests (121 engagement + 45 assistant) across 14 test files.
+
+**Next:** REST routes for `/api/engagements`, boot sequence wiring, workspace/artifact/verification subsystems.
+
+---
+
 ## Deploy
 
 ### Render (Cloud)
@@ -552,6 +607,7 @@ gantt
 | **P9** | UI v2: JARVIS HUD, WS v2, REST routes, overlay panels | 316 |
 | **P10** | Chaos drills: 6 drills against real shipped code | 327 |
 | **P11** | Token streaming, gap-closing (D-23/D-57 fixes) | 402 |
+| **P17/18** | Engagement Layer: lifecycle FSM, interview, spec, plan, store, assistant, UI | 568 |
 
 Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-ARCHITECTURE.md)
 
@@ -569,7 +625,7 @@ Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-AR
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 4 gestures: confirm, deny, mute, vision |
-| **Tests** | Built-in `node:test` | 402 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 568 tests, zero test framework deps |
 | **Deps** | 4 total | `dotenv` · `express` · `playwright-core` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -596,6 +652,8 @@ Agent_OS/
 │   │       ├── lifecycle/       # Boot/shutdown sequencing
 │   │       ├── memory/          # 5 stores + working memory
 │   │       ├── sensors/         # timer, file, ws, job, metric
+│   │       ├── engagements/     # 10 modules: lifecycle, FSM, interview, spec, plan, store
+│   │       └── assistant/       # 5 modules: gateway, intent routing, response planning
 │   │       └── voice/           # Voice agent + spoken text
 │   ├── providers/               # 12 providers (openai-compat factory)
 │   │   ├── nim.js / nim2.js     # NVIDIA NIM (2-key rotation)
@@ -628,6 +686,8 @@ Agent_OS/
 | 🧠 **[app/BRAIN-MAP.md](app/BRAIN-MAP.md)** | Verified brain lane configuration, failover chains |
 | 🎯 **[MYTHOS-PHASE-BUILD-SPEC.md](MYTHOS-PHASE-BUILD-SPEC.md)** | Detailed build specifications per phase |
 | ⚙️ **[mythos/.env.example](mythos/.env.example)** | Every config knob, documented with defaults |
+| 📋 **[ENGAGEMENT-CHANGELOG.md](ENGAGEMENT-CHANGELOG.md)** | Engagement Layer changelog -- modules, test counts, event types |
+| 🚀 **[ENGAGEMENT-LAUNCH-NARRATIVE.md](ENGAGEMENT-LAUNCH-NARRATIVE.md)** | Launch announcement for the Engagement Layer |
 
 ---
 

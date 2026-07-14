@@ -92,6 +92,12 @@ const SCHEMA = {
   GOOGLE_CLIENT_ID:            { type: 'string', default: '' },
   GOOGLE_CLIENT_SECRET:        { type: 'string', default: '' },
   GOOGLE_REFRESH_TOKEN:       { type: 'string', default: '' },
+
+  // Engagement Layer (Phase 17/18 — structured task lifecycle)
+  ENGAGEMENT_TTL_MS:           { type: 'number', default: 604800000, min: 3600000 },
+  ENGAGEMENT_MAX_REPAIRS:      { type: 'number', default: 3, min: 0, max: 10 },
+  ENGAGEMENT_INTERVIEW_MAX_Q:  { type: 'number', default: 5, min: 1, max: 20 },
+  ENGAGEMENT_MAX_STAGES:       { type: 'number', default: 10, min: 1, max: 50 },
 };
 
 module.exports = { SCHEMA };

@@ -11,6 +11,7 @@ export const PANELS = {
   audit:    { title: 'AUDIT',    loader: () => import('/js/views/audit.js'),    mutating: false },
   backend:  { title: 'BACKEND TERMINAL', loader: () => import('/js/views/backend-terminal.js'), mutating: false },
   conversation: { title: 'CONVERSATION', loader: () => import('/js/views/conversation.js'), mutating: false },
+  engagements: { title: 'ENGAGEMENTS', loader: () => import('/js/views/engagements.js'), mutating: true },
 };
 
 export function getPanel(id) {
