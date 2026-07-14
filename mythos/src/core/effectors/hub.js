@@ -84,6 +84,8 @@ function createEffectorHub({ bus, config }) {
     } catch (err) {
       // invoke() contract says effectors never throw, but hub must not trust that —
       // an uncaught throw here must still count as a breaker failure, not crash Cortex.
+      // B5: Emit anomaly for observability so operator can see the root cause.
+      if (bus) bus.emit('health.anomaly', { kind: 'effector-throw', target: name, error: err.message });
       result = { ok: false, result: err.message };
     }
 
