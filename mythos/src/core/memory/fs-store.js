@@ -36,7 +36,13 @@ function createFsStore(vaultRootFn, bus) {
     // Atomic write: write to temp then rename
     const tmp = full + '.tmp';
     fs.writeFileSync(tmp, content, 'utf8');
-    fs.renameSync(tmp, full);
+    // B6: Clean up .tmp file on rename failure (e.g., Windows EPERM/EXDEV).
+    try {
+      fs.renameSync(tmp, full);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      throw err;
+    }
   }
 
   function readJSON(relPath, fallback) {
@@ -44,7 +50,9 @@ function createFsStore(vaultRootFn, bus) {
     if (raw === null) return fallback;
     try {
       return JSON.parse(raw);
-    } catch (_) {
+    } catch (e) {
+      // B7: Emit anomaly on JSON corruption so operator knows persistence is degraded.
+      if (bus) bus.emit('health.anomaly', { kind: 'json-corrupt', path: relPath, error: e.message });
       return fallback;
     }
   }
