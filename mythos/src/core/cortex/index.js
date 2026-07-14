@@ -133,8 +133,16 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       if (ooda.shouldConsolidate(working.tick, config)) {
         await memory.consolidate({});
       }
+      // D4: Reset consecutive error counter on successful tick.
+      tickOnce._consecutiveErrors = 0;
     } catch (err) {
-      bus.emit('health.anomaly', { kind: 'tick-error', error: err.message, tick: memory ? memory.working.tick : 0 });
+      // D4: Track consecutive tick errors. After 10 consecutive failures, escalate
+      // to a diagnosed event so the healer can trigger a cortex restart.
+      tickOnce._consecutiveErrors = (tickOnce._consecutiveErrors || 0) + 1;
+      bus.emit('health.anomaly', { kind: 'tick-error', error: err.message, tick: memory ? memory.working.tick : 0, consecutive: tickOnce._consecutiveErrors });
+      if (tickOnce._consecutiveErrors >= 10) {
+        bus.emit('health.diagnosed', { kind: 'cortex-stall', target: 'tick-loop', consecutive: tickOnce._consecutiveErrors });
+      }
     } finally {
       tickOnce._inFlight = false;
     }
@@ -289,7 +297,8 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
           result.parsed.priority && result.parsed.priority !== 'low') {
         var thoughtText = String(result.parsed.thoughts).trim();
         if (thoughtText) {
-          memory.episodic.write({
+          // B3: Await the write to prevent unhandled promise rejection on disk failure.
+          await memory.episodic.write({
             kind: 'thought',
             tick: working.tick,
             summary: thoughtText.slice(0, 200),
@@ -300,8 +309,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
           bus.emit('cortex.thought', { text: thoughtText, priority: result.parsed.priority });
         }
       }
-    } catch (_) {
-      // Idle reasoning is best-effort — never surfaces as a tick error
+      // D2: Reset consecutive failure counter on success.
+      mull._consecutiveFailures = 0;
+    } catch (err) {
+      // D2: Track consecutive mull failures and emit anomaly after repeated failures.
+      mull._consecutiveFailures = (mull._consecutiveFailures || 0) + 1;
+      if (mull._consecutiveFailures >= 3) {
+        bus.emit('health.anomaly', { kind: 'mull-repeated-failure', error: err.message, count: mull._consecutiveFailures });
+      }
     }
   }
 
