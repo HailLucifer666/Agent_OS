@@ -64,6 +64,9 @@ const TIER_TABLE = {
   'kanban_build_card':     3,
   'start_project':         3,
   'run_mission':           3,
+  'build_project':         3,  // P22 Forge — multi-file build
+  'revise_project':        3,  // P22 Forge — targeted regen
+  'project_status':        0,  // P22 Forge — read-only build status (tier 0; flat table, position cosmetic)
   'compose_email':         3,
   'close_window':          3,
   'gmail_send':            3,

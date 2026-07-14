@@ -12,6 +12,7 @@ export const PANELS = {
   backend:  { title: 'BACKEND TERMINAL', loader: () => import('/js/views/backend-terminal.js'), mutating: false },
   conversation: { title: 'CONVERSATION', loader: () => import('/js/views/conversation.js'), mutating: false },
   engagements: { title: 'ENGAGEMENTS', loader: () => import('/js/views/engagements.js'), mutating: true },
+  forge:    { title: 'BUILD',    loader: () => import('/js/views/forge.js'),    mutating: true },
 };
 
 export function getPanel(id) {

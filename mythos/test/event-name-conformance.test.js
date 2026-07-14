@@ -86,6 +86,11 @@ const ALLOWED_EVENTS = new Set([
 
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
+
+  // checkpoint.* / forge.* (P22 — Forge build pipeline + approval gates)
+  'checkpoint.created',
+  'checkpoint.resolved',
+  'forge.update',
 ]);
 
 // -- Static scan -------------------------------------------------------------

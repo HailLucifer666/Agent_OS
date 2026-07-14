@@ -54,6 +54,9 @@ const CATALOG_RAW = [
   { name: 'start_project', description: 'Start building ONE deliverable the user has confirmed (a single page/app/document). Call ONLY after: (1) you asked clarifying questions, (2) you restated the plan in one sentence, (3) the user explicitly said to proceed in a LATER turn. Pass the complete spec including all clarifying answers as description.', params: { description: 'string - complete build specification' }, danger: false },
   { name: 'run_mission', description: 'Delegate a MULTI-PART goal (several pages, a brand kit, a suite of deliverables) to a background agent team: a planner splits it into tasks and builder agents work them in parallel. Same intake rule as start_project: clarify, restate, and call ONLY after an explicit go-ahead in a later turn.', params: { goal: 'string - the complete multi-part goal with all details' }, danger: false },
   { name: 'mission_status', description: 'Progress of the background agent team: how many agents done, artifacts, summary. Omit missionId for the latest mission.', params: { missionId: 'string (optional)' }, danger: false },
+  { name: 'build_project', description: 'Build a multi-file app or website the user has confirmed (several files working together). A file plan is proposed for your approval before anything is generated. Same intake rule as start_project: clarify, restate the plan in one sentence, and call ONLY after an explicit go-ahead in a LATER turn. Pass the complete spec as spec, and kind as "app" or "website".', params: { spec: 'string - complete build specification', kind: '"app" | "website"' }, danger: false },
+  { name: 'revise_project', description: 'Apply feedback to a build that is awaiting review or already done — only the affected files are regenerated.', params: { projectId: 'string', feedback: 'string - what to change' }, danger: false },
+  { name: 'project_status', description: 'Status of a multi-file build: stage, files done/total, preview URL. Omit projectId for the latest.', params: { projectId: 'string (optional)' }, danger: false },
   { name: 'get_time', description: "Current date and time. Pass timezone (IANA, e.g. 'America/New_York') for a specific place, omit for local system time.", params: { timezone: 'string (optional)' }, danger: false },
   { name: 'get_weather', description: 'Current weather conditions. Pass location (a city name) to check elsewhere, omit for the configured default location.', params: { location: 'string (optional)' }, danger: false },
   { name: 'web_fetch', description: 'Fetch text content from a URL — real internet access. Returns readable text (HTML stripped, truncated). Use for research, news, or real-time data the user asks about.', params: { url: 'string - the http(s) URL' }, danger: false },
@@ -224,7 +227,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
   // second confirmation. The confirm is still created AND accepted through
   // the leash registry so the audit trail records a proper two-step, scoped
   // to this connection — never a silent bypass.
-  const INTAKE_GATED = new Set(['start_project', 'run_mission']);
+  const INTAKE_GATED = new Set(['start_project', 'run_mission', 'build_project']);
 
   async function executeAction(action, { connectionId } = {}) {
     // H4: Guard against empty/invalid args before dispatch.

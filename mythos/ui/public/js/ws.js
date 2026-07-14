@@ -125,6 +125,10 @@ export function visionQuery({ image, text, onDone, onChunk }) {
   return { stop: () => stopRequest(reqId) };
 }
 
+export function checkpointReply(id, accept, feedback) {
+  sendMessage({ type: 'checkpoint-reply', id, accept, feedback });
+}
+
 export function confirmReply(confirmId, accept) {
   sendMessage({ type: 'confirm-reply', confirmId, accept });
 }

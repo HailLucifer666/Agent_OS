@@ -34,8 +34,10 @@ describe('brain/lanes.default', function() {
     assert.equal(lanes.PREF_VOICE[0].model, 'llama-3.3-70b-versatile');
   });
 
-  it('build lane has mistral first', function() {
-    assert.equal(lanes.PREF_BUILD[0].provider, 'mistral');
+  it('build lane has local Hermes (ollama) first, Mistral as first hosted fallback (P22 re-rank)', function() {
+    assert.equal(lanes.PREF_BUILD[0].provider, 'ollama');
+    assert.equal(lanes.PREF_BUILD[0].model, 'hermes3:8b');
+    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'mistral' && p.model === 'mistral-large-2512'; }), 'Mistral fallback preserved');
   });
 
   it('each table has env override key', function() {

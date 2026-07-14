@@ -98,6 +98,14 @@ const SCHEMA = {
   ENGAGEMENT_MAX_REPAIRS:      { type: 'number', default: 3, min: 0, max: 10 },
   ENGAGEMENT_INTERVIEW_MAX_Q:  { type: 'number', default: 5, min: 1, max: 20 },
   ENGAGEMENT_MAX_STAGES:       { type: 'number', default: 10, min: 1, max: 50 },
+
+  // Forge (P22 — multi-file agentic build pipeline)
+  FORGE_MAX_FILES:             { type: 'number', default: 12,      min: 1,     max: 40 },
+  FORGE_FILE_RETRY:            { type: 'number', default: 2,       min: 0,     max: 5 },
+  FORGE_CONCURRENCY:           { type: 'number', default: 2,       min: 1,     max: 6 },
+  // Checkpoints (P22 — workflow approval gates, distinct from LEASH_CONFIRM_TTL_MS)
+  CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
+  CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },
 };
 
 module.exports = { SCHEMA };

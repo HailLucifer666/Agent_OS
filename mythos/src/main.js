@@ -13,6 +13,9 @@ const { createIdentity } = require('./core/identity');
 const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
+const { createCheckpointRegistry } = require('./core/leash/checkpoints');
+const { createForge } = require('./core/effectors/forge');
+const { registerFromForge } = require('./core/effectors/from-forge');
 const { createTimerSensor } = require('./core/sensors/timer');
 const { createReminderSensor } = require('./core/sensors/reminder-sensor');
 const { createProbes } = require('./core/immune/probes');
@@ -113,6 +116,9 @@ async function main() {
   let jobSensor = null;
   let edgeTtsChild = null;
   let calendarWiring = null;
+  let checkpoints = null;          // P22 checkpoint approval registry
+  let forge = null;                // P22 Forge multi-file build pipeline
+  let checkpointSweepTimer = null;
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -299,6 +305,17 @@ async function main() {
       registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
 
+      // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
+      // registry. checkpoints needs memory.audit + goals (both exist by now); forge
+      // drives brain.think({lane:'build'}) and writes files under vault/builds/projects.
+      checkpoints = createCheckpointRegistry({ config: config, bus: bus, auditWriter: memory.audit, goals: goals, fs: memory.fs });
+      checkpoints.init();
+      checkpointSweepTimer = setInterval(function() { checkpoints.sweep(); }, config.CHECKPOINT_SWEEP_MS);
+      if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
+      forge = createForge({ config: config, brain: brain, bus: bus, vault: memory.fs, checkpoints: checkpoints });
+      forge.init();
+      registerFromForge(hub, { forge: forge });
+
       hub.register(createVoiceEffector({ config: config }));
 
       effectors = hub;
@@ -347,6 +364,7 @@ async function main() {
         effectors: effectors, leash: leash, goals: goals, probes: immune.probes,
         brain: brain, buildRunner: buildRunner,
         agentActions: agentActionsEffector,
+        checkpoints: checkpoints, forge: forge,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.
@@ -455,6 +473,7 @@ async function main() {
   // Stop running loops before the lifecycle's own shutdown/exit runs (full graceful
   // shutdown sequencing — drain/flush/audit — is D-07, a non-blocking Known Deviation)
   function stopRunningLoops() {
+    if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     pcChild.shutdownPcChild();
     browserAgent.disconnect();
     if (edgeTtsChild) edgeTtsChild.stop();

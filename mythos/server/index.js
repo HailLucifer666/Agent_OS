@@ -48,6 +48,8 @@ function createServer(deps) {
   const brain = deps.brain;                       // P2 brain — .think({lane, messages, ...})
   const buildRunner = deps.buildRunner;           // P7 build-runner — .onJobUpdate (job WS relay)
   const agentActions = deps.agentActions;         // P7 agent-actions — assemble/build/review kanban agents
+  const checkpoints = deps.checkpoints;           // P22 checkpoint approval registry (may be undefined in tests)
+  const forge = deps.forge;                       // P22 Forge build pipeline (may be undefined in tests)
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
   // with the camera actively watching answers with one JPEG frame. 8s timeout.
@@ -170,6 +172,24 @@ function createServer(deps) {
   });
 
   app.get('/api/kanban', (req, res) => { res.json(kanbanEffector.listBoard()); });
+
+  // ---- P22 — Forge build projects + checkpoint approval gates ----
+  app.get('/api/forge/projects', (req, res) => { res.json({ projects: forge ? forge.listProjects() : [] }); });
+  app.get('/api/forge/projects/:id', (req, res) => {
+    if (!forge) return res.status(404).json({ error: 'forge unavailable' });
+    const project = forge.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
+    res.json({ project });
+  });
+  app.get('/api/checkpoints', (req, res) => {
+    res.json({ checkpoints: checkpoints ? checkpoints.list({ status: req.query.status }) : [] });
+  });
+  app.get('/api/checkpoints/:id', (req, res) => {
+    if (!checkpoints) return res.status(404).json({ error: 'checkpoints unavailable' });
+    const c = checkpoints.get(req.params.id);
+    if (!c) return res.status(404).json({ error: 'not found' });
+    res.json({ checkpoint: c });
+  });
   app.post('/api/kanban/cards', (req, res) => {
     const { title, lane } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: 'title required' });
@@ -866,6 +886,20 @@ function createServer(deps) {
       }
     }
 
+    // P22 — resolve a Forge workflow checkpoint (plan/mid/final approval). Checkpoints
+    // are connectionId:'system', so any connected client may approve (Voice+HUD parity).
+    // The 'checkpoint' broadcast (checkpoint.resolved) tells every client the outcome.
+    async function handleCheckpointReply(msg) {
+      if (!checkpoints) return;
+      const { id, accept, feedback } = msg;
+      try {
+        if (accept) await checkpoints.accept(id, connectionId, feedback);
+        else await checkpoints.reject(id, connectionId, feedback);
+      } catch (err) {
+        bus.emit('health.anomaly', { kind: 'checkpoint-reply-failed', error: err.message, id });
+      }
+    }
+
     function handleSubscribe(msg) {
       (msg.types || []).forEach((t) => subscriptions.add(t));
     }
@@ -877,6 +911,7 @@ function createServer(deps) {
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);
       else if (msg.type === 'confirm-reply') handleConfirmReply(msg);
+      else if (msg.type === 'checkpoint-reply') handleCheckpointReply(msg);
       else if (msg.type === 'subscribe') handleSubscribe(msg);
       else if (msg.type === 'camera-frame') {
         const p = pendingFrames.get(msg.frameReqId);
@@ -986,6 +1021,17 @@ function createServer(deps) {
   // mission — orchestrator's plan/build/synthesize transitions (agent team)
   bus.subscribe('mission.update', (e) => {
     broadcastAll({ type: 'mission', payload: e.payload });
+  });
+
+  // P22 — Forge build progress + checkpoint approval gates -> WS.
+  bus.subscribe('forge.update', (e) => {
+    broadcastAll({ type: 'forge', payload: e.payload });
+  });
+  bus.subscribe('checkpoint.created', (e) => {
+    broadcastAll({ type: 'checkpoint', payload: Object.assign({}, e.payload, { event: 'created' }) });
+  });
+  bus.subscribe('checkpoint.resolved', (e) => {
+    broadcastAll({ type: 'checkpoint', payload: Object.assign({}, e.payload, { event: 'resolved' }) });
   });
 
   bus.subscribe('confirm-request', (e) => {
