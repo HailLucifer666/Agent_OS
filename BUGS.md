@@ -320,6 +320,48 @@ Route text input through the voice loop's `beginTurn()/onExternalChunk()/deliver
 
 ---
 
+### BUG-023: Weather widget fails without resolved location
+**Status:** ❌ BROKEN
+**Severity:** MEDIUM | **Reported:** 2026-07-15 (2 audit failures)
+
+**Symptom:** `open_web type:"weather"` called without a usable location arg returns `ok:false`. Failed twice (once with no location, once with "Kolkata, West Bengal" which couldn't be geocoded), then succeeded with bare "Kolkata". The geocoder is brittle with city+state formatting.
+
+**Audit evidence:** `aud-ea61766b33db` (no location → fail), `aud-4f23b6bd9cfe` ("Kolkata, West Bengal" → fail), `aud-922f2147b02c` ("Kolkata" → ok).
+
+**Fix needed:** The weather path in `from-dashboard.js` should trim location to city name before geocoding, or use a more robust geocoding approach.
+
+**Files:** `mythos/src/core/effectors/from-dashboard.js` (weather branch, lines ~117-130)
+
+---
+
+### BUG-024: Calendar and Gmail integration never completed
+**Status:** ❌ BROKEN (missing feature)
+**Severity:** HIGH (user expectation) | **Reported:** 07-12, 07-14
+
+**Symptom:** User repeatedly asked about calendar integration ("calendar phase is still left to add to integrate") and Gmail. MYTHOS correctly said it doesn't have those tools — but this is a stated user expectation that remained unfulfilled across the entire dataset.
+
+**Note:** Gmail tools DO exist in the catalog (`gmail_unread`, `gmail_read`, `gmail_send`, `gmail_draft` in voice-agent.js) but require OAuth setup. Calendar wiring exists in main.js (`registerFromCalendar`) but the reminder sensor depends on it working.
+
+**Fix needed:** Complete Gmail OAuth adapter setup. Verify calendar reminder sensor fires.
+
+---
+
+### BUG-025: Pipeline spec lost between capture and execute stages
+**Status:** ❌ BROKEN
+**Severity:** HIGH | **Reported:** 07-14, 07-15
+
+**Symptom:** The build reviewer repeatedly reports "The deliverable does not match the task spec as the task is undefined." The spec passed to the builder arrives as `undefined` or "not specified" even though the user gave detailed requirements.
+
+**Root cause:** The spec/description from `start_project` or `capture_idea` is being lost between the capture stage and the execute stage of the pipeline. The builder agent receives no spec context.
+
+**Evidence:** 07-14.jsonl review issues: "task is undefined"; 07-15.jsonl same. Multiple builds failed verification for this reason.
+
+**Fix needed:** Trace the spec field through `capture_idea → pipeline → start_project → build-runner → brain.think({lane:'build'})`. Find where the description/spec is dropped.
+
+**Files:** `mythos/src/core/effectors/pipeline.js`, `mythos/src/core/effectors/build-runner.js`, `mythos/src/core/effectors/agent-actions.js`
+
+---
+
 ## 📋 TRACKED — ROADMAP.md D-NN Drift Items (architectural debt)
 
 These are formally tracked in `ROADMAP.md`, not user-facing bugs. 43 open (20 MAJOR + 23 MINOR). Most impactful:
@@ -359,23 +401,26 @@ Full list in `ROADMAP.md` lines 396-403.
 ## Priority Queue (what to fix next, in order)
 
 1. **BUG-002** — Compose bar reply not wired (blocks ALL text chat)
-2. **BUG-001** — Spotify play doesn't play (most-reported bug, 6 failures)
-3. **BUG-004** — Media widget blank (3 sub-issues)
+2. **BUG-001** — Spotify play doesn't play (most-reported bug, 6 failures; URI fix applied, needs verification)
+3. **BUG-004** — Media widget blank (3 sub-issues; WinRT init fix applied, needs verification)
 4. **BUG-007** — Fabrication of success (trust-destroying)
-5. **BUG-008** — `open_artifact` voice channel broken
-6. **BUG-005** — Widget close button non-functional
-7. **BUG-013** — Cortex flapping/stall loops (healer can't fix)
-8. **BUG-010** — `ask_agent` not wired
-9. **BUG-011** — Browser automation offline
-10. **BUG-014** — Memory pollution (remember auto-saves noise)
-11. **BUG-016** — Pipeline ships failed-review builds
-12. **BUG-009** — No screenshot tool for evidence
-13. **BUG-018** — Can't read own source tree
-14. **BUG-015** — Identity boundaries malformed (healer can't fix)
-15. **BUG-019** — Audit panel empty
-16. **BUG-020** — Voice noise sensitivity
-17. **BUG-021** — Canned empathy instead of diagnosis
-18. **BUG-022** — identity.learn() never writes
+5. **BUG-025** — Pipeline spec lost between capture and execute
+6. **BUG-016** — Pipeline ships failed-review builds
+7. **BUG-008** — `open_artifact` voice channel broken
+8. **BUG-005** — Widget close button non-functional
+9. **BUG-013** — Cortex flapping/stall loops (healer can't fix)
+10. **BUG-010** — `ask_agent` not wired
+11. **BUG-011** — Browser automation offline
+12. **BUG-014** — Memory pollution (remember auto-saves noise)
+13. **BUG-024** — Calendar/Gmail integration incomplete
+14. **BUG-023** — Weather widget fails with city+state location
+15. **BUG-009** — No screenshot tool for evidence
+16. **BUG-018** — Can't read own source tree
+17. **BUG-015** — Identity boundaries malformed (healer can't fix)
+18. **BUG-019** — Audit panel empty
+19. **BUG-020** — Voice noise sensitivity
+20. **BUG-021** — Canned empathy instead of diagnosis
+21. **BUG-022** — identity.learn() never writes
 
 ---
 
