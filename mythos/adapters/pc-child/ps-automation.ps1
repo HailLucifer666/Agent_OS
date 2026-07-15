@@ -28,6 +28,7 @@ $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
 
 Add-Type -TypeDefinition @'
 using System;
@@ -165,11 +166,12 @@ function Send-UnicodeText($text) {
 function Handle-LaunchApp($name) {
     if (-not $name) { return 'App name is required.' }
 
-    # Special handling for Spotify - use URI scheme (works for Windows Store/UWP apps)
-    if ($name -eq 'spotify') {
+    # Special handling for Spotify - use URI scheme (works for both desktop and Windows Store/UWP apps)
+    if ($name -eq 'spotify' -or $name -like 'spotify:*') {
         # Use Spotify URI scheme - works for both desktop and Windows Store versions
+        # Supports spotify: (launch app), spotify:track:<id>, spotify:search:<query>
         try {
-            Start-Process 'spotify:' -ErrorAction Stop
+            Start-Process $name -ErrorAction Stop
             Start-Sleep -Milliseconds 1500
             # Try to get the PID after launch
             $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -423,14 +425,16 @@ function Handle-MediaStatus {
     try {
         # Try to use Windows SMTC API (Windows 10 1903+)
         # This requires PowerShell 5.1+ with Windows Runtime support
-        if (-not ([System.Management.Automation.PSTypeName]'Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager').Type) {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction SilentlyContinue
+
+        $type = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        if (-not $type) {
             # Type not available - likely older PowerShell/Windows
             return @{ available = $false; error = 'SMTC API not available (requires Windows 10 1903+ and PowerShell 5.1+)' }
         }
 
         # Get the session manager
-        $managerType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]
-        $sessionManagerTask = $managerType::RequestAsync()
+        $sessionManagerTask = $type::RequestAsync()
         $sessionManagerTask.Wait()
         if ($sessionManagerTask.Status -ne 'RanToCompletion') {
             return @{ available = $true; playing = $false; error = 'Failed to get session manager' }
