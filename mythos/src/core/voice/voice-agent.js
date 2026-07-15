@@ -27,6 +27,15 @@ const { tierOf } = require('../leash/tiers');
 const MAX_ITERATIONS = Number(process.env.VOICE_MAX_TOOL_ITERATIONS) || 4;
 const MAX_SAY_CHARS = Number(process.env.VOICE_MAX_SAY_CHARS) || 800;
 
+// Self-awareness: version + recent git changes, captured once per process.
+// Injected into every voice prompt so the model can answer "what version are
+// you" / "what's new" / "what changed" honestly from real data.
+const version = require('../identity/version');
+// External skills catalog (curated allowlist from ~/.zcode/skills). Surfaced
+// as one-liners so the model knows what methodology/design guides exist and
+// can call use_skill(<name>) to load full guidance on demand.
+const skillsLoader = require('../skills/loader');
+
 // Voice-safe subset of the registered effector tools (P7 from-dashboard.js +
 // from-project.js). F3: danger is now computed dynamically from tierOf() at
 // buildPrompt time to prevent drift between the voice catalog and the tier table.
@@ -34,7 +43,7 @@ const CATALOG_RAW = [
   { name: 'navigate', description: 'Open a dashboard panel. route is one of: goals, kanban, pipeline, memory, health, audit.', params: { route: 'string' }, danger: false },
   { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top panel.', params: { all: 'boolean (optional)' }, danger: false },
   { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
-  { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done.', params: { jobId: 'string (optional)' }, danger: false },
+  { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done and researchStatus (grounded/skipped) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false },
   { name: 'open_artifact', description: 'Open a built artifact (a file under vault/builds) in the browser so the human can see it.', params: { path: 'string', title: 'string (optional)' }, danger: false },
   { name: 'delete_artifact', description: 'Permanently delete a built artifact (file + pipeline card) by matching its title or name. Destructive.', params: { query: 'string - artifact title or name' }, danger: true },
   { name: 'create_goal', description: 'Create a goal.', params: { text: 'string', category: 'string (optional)' }, danger: false },
@@ -70,6 +79,17 @@ const CATALOG_RAW = [
   { name: 'reminder_add', description: 'Set a reminder. Time can be relative ("in 10 minutes") or ISO date. Returns reminder ID.', params: { text: 'string', when: 'string' }, danger: false },
   { name: 'reminder_list', description: 'List upcoming pending reminders with times and text.', params: {}, danger: false },
   { name: 'reminder_cancel', description: 'Cancel a pending reminder by ID or text match.', params: { query: 'string' }, danger: false },
+  { name: 'use_skill', description: 'Load the full guidance text for a skill (methodology or design guide) by name. Use when a task fits a skill from SKILLS AVAILABLE — e.g. ui-ux-pro-max before building a UI, spec-driven-development before starting a project, tdd-workflow before writing tests. Returns the complete skill instructions.', params: { name: 'string - the skill name from SKILLS AVAILABLE' }, danger: false },
+  { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search for). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Use with needs_result:false — it opens a view.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional)', url: 'string (optional, for type:web)', location: 'string (optional, for type:weather)', title: 'string (optional)' }, danger: false },
+  { name: 'spotify_play', description: 'Play a specific track on Spotify. Provide either a search query (song name, artist) or a Spotify track ID.', params: { query: 'string (optional) - search query like "Bohemian Rhapsody Queen"', trackId: 'string (optional) - Spotify track ID like "3z8h0TU7ReDPLIbEnYhWZb"' }, danger: true },
+  { name: 'spotify_search', description: 'Search Spotify for tracks/artists/albums and return results.', params: { query: 'string - search query' }, danger: true },
+  { name: 'spotify_play_pause', description: 'Toggle play/pause on Spotify.', params: {}, danger: false },
+  { name: 'spotify_next', description: 'Skip to next track on Spotify.', params: {}, danger: false },
+  { name: 'spotify_previous', description: 'Go to previous track on Spotify.', params: {}, danger: false },
+  { name: 'spotify_volume', description: 'Adjust Spotify volume.', params: { direction: 'string - up, down, or mute' }, danger: false },
+  { name: 'spotify_status', description: 'Check if Spotify is running and get window info.', params: {}, danger: false },
+  { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Use for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false },
+  { name: 'media_status', description: 'Get currently playing media info (title, artist, album, art) from Windows SMTC.', params: {}, danger: false },
 ];
 
 // F3: Build the runtime catalog with danger flags computed from the tier table.
@@ -93,6 +113,8 @@ REASONING: Before acting, reason about what the user actually wants. Consider co
 
 HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks for something with no tool, NEVER claim you are doing it. However, you CAN record and capture things — use these tools: remember (saves a durable fact/preference/instruction to permanent memory), log_incident (records an error/bug/incident), capture_idea (saves a build idea to the pipeline inbox), create_goal (saves a to-do). NEVER refuse a "log this","remember this","note that","don't forget", or "record this" request — you have remember and log_incident for exactly these. Pick remember for facts/preferences/standing rules, log_incident for errors/bugs/incidents. For other genuinely-missing capabilities (inspect audio buffers, restart pipelines, download files, access the filesystem directly), say plainly: "I don't have a tool to [X]." Fabricating capabilities destroys trust faster than any bug.
 
+MEMORY RULE (prevents memory pollution): Only call remember when the user EXPLICITLY asks you to save something — they must say one of: "remember", "note that", "don't forget", "from now on", "keep in mind", "log this", "record this", or give a direct instruction to persist a fact. Do NOT call remember for conversational fragments, vague references, incomplete sentences, or speech-to-text artifacts. If the user mentions a preference casually ("I like X", "I prefer Y", "that you like") WITHOUT asking you to remember it, do NOT call remember — just acknowledge naturally in your reply. Never write a "the user mentioned..." meta-summary to memory; write the actual fact if explicitly asked, or nothing. When in doubt whether the user wants something remembered, ASK ("Want me to remember that?") instead of silently writing to memory.
+
 ARTIFACT RULE: NEVER fabricate or guess file paths. If the user asks to open/show/view a build or artifact, call pipeline_status (needs_result:true) FIRST to get the real artifact path from the result, THEN call open_artifact with that exact path. Do not invent paths based on the project description — they will be wrong and the user will see a 404 or the wrong page. Same for job_status if the user references a specific job.
 
 DANGER TOOLS RULE (safety-critical, read carefully): each tool below is marked "danger": true or "danger": false. For a danger:true tool, you may ONLY put it in "actions" if the utterance itself clearly and specifically names the target (an exact goal/card/file described in THIS utterance, or an explicit direct confirmation like "yes, delete it" replying to a question YOU just asked in this same turn). If the utterance is vague about WHAT to act on (words like "it", "that", "this", "the thing") and nothing concrete is named anywhere else in this turn, that is NOT authorization: you MUST put "actions": [] and instead ask a clarifying question in "say". Never put a danger:true tool call in "actions" as a placeholder while you ask a clarifying question — asking a question and queuing the dangerous action in the same turn is always wrong. When genuinely unsure, prefer actions: [] and ask.
@@ -104,7 +126,11 @@ INFORMATIONAL TOOLS RULE: danger:false read-only lookups (read_status, list_goal
 
 CLARIFYING QUESTIONS: Ask when you genuinely need information. One focused question is better than guessing wrong. But don't ask when the answer is obvious or when you can reasonably infer intent from context.
 
-WEB GROUNDING RULE (critical for accuracy): For ANY question about current events, news, dates, real-time data, recent developments, stock prices, weather, sports scores, or anything that could be stale in your training data, you MUST call web_search FIRST with needs_result:true to read the actual results before answering. NEVER answer time-sensitive or factual questions from your training memory when you have search tools available. If the user says "check the internet", "what's the latest", "what's happening with", "search for", or "look up", that is ALWAYS a web_search or web_fetch call with needs_result:true. Answering from training data when you have a search tool is fabrication — the same violation as the HONESTY RULE.`;
+WEB GROUNDING RULE (critical for accuracy): For ANY question about current events, news, dates, real-time data, recent developments, stock prices, weather, sports scores, or anything that could be stale in your training data, you MUST call web_search FIRST with needs_result:true to read the actual results before answering. NEVER answer time-sensitive or factual questions from your training memory when you have search tools available. If the user says "check the internet", "what's the latest", "what's happening with", "search for", or "look up", that is ALWAYS a web_search or web_fetch call with needs_result:true. Answering from training data when you have a search tool is fabrication — the same violation as the HONESTY RULE.
+
+SKILLS RULE: You have SKILLS available (methodology and design guides listed in the SKILLS AVAILABLE block). When a task fits a skill — building a UI (ui-ux-pro-max, frontend-ui-engineering), starting a project (spec-driven-development), writing tests (tdd-workflow), doing research (deep-research), or reviewing code (code-review) — call use_skill with that skill's name to load its full guidance, then apply it. Proactively use skills rather than working from general knowledge alone. If asked "what can you do?", mention your skills alongside your tools.
+
+WEB PANEL RULE: When the user asks to watch, play, or show a video on YouTube, see weather for a location, or view search results visually ("show me flights", "play X on YouTube", "show me pictures of Y", "search for Z and show me"), call open_web with the appropriate type. For YouTube: type:"youtube", query:"<song or topic>". For weather: type:"weather", location:"<city>". For flights: type:"flights", query:"<origin to destination>". For images: type:"image", query:"<topic>". For visual search results: type:"search", query:"<topic>". This opens a dashboard panel (video/web) or floating widget (results) — say briefly what you're showing in your reply. Do NOT call open_web for a purely conversational question that doesn't need a visual ("what's the capital of France" needs an answer, not a widget).`;
 
 const OUTPUT_CONTRACT = `Respond with ONLY a single JSON object, no markdown fence, no commentary, matching exactly:
 {"say": "<your natural spoken reply>", "actions": [{"tool": "<tool name>", "args": {}}], "needs_result": false}
@@ -116,6 +142,20 @@ function toolCatalogJson() {
   return JSON.stringify(CATALOG);
 }
 
+// Compact self-awareness block: version + recent changes. Answers "what are
+// you" / "what's new" without a separate introspection call. ~6 lines.
+function buildSystemContext() {
+  var v = version.getVersion();
+  var lines = [
+    'SYSTEM CONTEXT:',
+    'Version: ' + v.version + ' (git: ' + v.gitRef + ').',
+    'Recent changes:',
+  ];
+  v.recentChanges.slice(0, 4).forEach(function(c) { lines.push('  - ' + c); });
+  lines.push('If asked "what can you do", "what version are you", or "what\'s new", answer from this block and the TOOLS list below. Never invent capabilities.');
+  return lines.join('\n');
+}
+
 function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext }) {
   const now = new Date();
   const sysDate = now.toISOString().slice(0, 10);
@@ -124,6 +164,10 @@ function buildPrompt({ text, history, toolResults, corrective, originalSay, memo
     RULES,
     '',
     `LOCAL CLOCK: ${sysDate} ${sysTime} (machine time — may be wrong or out of sync). For any question about the current date, time, or "what day is it", call web_search or get_time to VERIFY the real date. Never trust the local clock or your training memory for dates — always confirm via web or system clock.`,
+    '',
+    buildSystemContext(),
+    '',
+    skillsLoader.catalogBlock(),
     '',
     `TOOLS: ${toolCatalogJson()}`,
   ];

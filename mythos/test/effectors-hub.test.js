@@ -126,7 +126,9 @@ describe('gate: 48 registered count', () => {
     registerFromProject(hub, ctx);
     registerFromGmail(hub, { logger: console });
 
-    assert.equal(hub.count(), 54);
+    // 54 base + open_web (from-dashboard) + send_key (from-pc) = 56.
+    // use_skill is registered separately via registerFromSkills (not called here).
+    assert.equal(hub.count(), 56);
   });
 });
 

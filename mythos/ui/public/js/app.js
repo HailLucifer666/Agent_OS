@@ -10,8 +10,8 @@ import { createOverlayManager } from './overlay/overlay-manager.js';
 import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
-import { createMicIndicator } from './voice/mic-indicator.js';
 import { createCameraLoop } from './vision/camera.js';
+import { createComposeBar } from './compose-bar.js';
 
 const ctx = { subscribe, onRefresh };
 
@@ -46,23 +46,35 @@ mountHud(document.getElementById('hud-canvas'), {
   },
 });
 
-// floating widgets
-mountWidgets(document.getElementById('widget-root'), ctx);
+// floating widgets — mountWidgets returns { cleanup, spawnWebWidget }
+const widgetApi = mountWidgets(document.getElementById('widget-root'), ctx);
 
 // global confirm modal (mounted once, never routed)
 mountConfirmModal(document.getElementById('confirm-root'), {
   onResolved: () => orb.notifyConfirmResolved && orb.notifyConfirmResolved(),
 });
 
-// voice — created lazily on first user gesture, then toggled via mic/orb clicks.
-// One shared callback feeds both the mic ring and the core orb's voice-reactive
-// color (listening/processing), so they never drift into two separate states.
-const micEl = document.getElementById('mic-indicator');
-const mic = createMicIndicator(micEl);
+// voice — created lazily on first user gesture, then toggled via compose-bar
+// voice button or orb click. The compose bar is the primary input surface
+// (text + voice); the old standalone mic indicator is hidden.
+const compose = createComposeBar({
+  onVoiceToggle: () => toggleVoice(),
+  onVoiceState: (s) => orb.setVoiceState(s),
+  onCaption: (text, kind) => {},
+  onActivity: () => {},
+});
+
+// mic indicator API still used by some caption calls below — keep a shim.
+const mic = {
+  setState: (s) => compose.setVoiceState(s),
+  setCaption: (text, kind) => compose.setCaption(text, kind),
+  setActivity: (level) => compose.setActivity(level),
+};
+
 let voice = null;
 
 function onVoiceState(s) {
-  mic.setState(s);
+  compose.setVoiceState(s);
   orb.setVoiceState(s);
 }
 
@@ -72,9 +84,9 @@ function ensureVoice() {
       onState: onVoiceState,
       openPanel: (id) => overlays.openPanel(id),
       closePanel: () => overlays.closeAll(),
-      onCaption: (text, kind) => mic.setCaption(text, kind),
+      onCaption: (text, kind) => compose.setCaption(text, kind),
       onVisionQuery: (text) => describeScene(text),
-      onActivity: (level) => mic.setActivity(level),
+      onActivity: (level) => compose.setActivity(level),
       brainOnline: () => _brainOnline,
     });
   }
@@ -85,7 +97,8 @@ function toggleVoice() {
   ensureVoice().toggle();
 }
 
-micEl.addEventListener('click', toggleVoice);
+// Orb click still toggles voice (legacy affordance)
+// (onClick already wired in mountCoreOrb above)
 
 // camera + hand-gesture control (Part A/B, P16). Camera is OFF by default,
 // same privacy posture as the mic — only starts on an explicit toggle click.
@@ -249,4 +262,23 @@ subscribe(['navigate'], (msg) => {
 subscribe(['close-panel'], (msg) => {
   if (msg.all) overlays.closeAll();
   else overlays.closeTop();
+});
+
+// Open-web — emitted by dispatchAction when an open_web effector call succeeds.
+// Routes rich media (YouTube, direct URLs) to the overlay panel; compact results
+// (search, weather, flights, images) to floating widgets; iframe-blocking sites
+// get smart-routed: 'newtab' opens externally, 'news' navigates to news panel.
+subscribe(['open-web'], (msg) => {
+  const p = msg.payload;
+  if (!p || !p.widgetType) return;
+  if (p.widgetType === 'newtab' || p.widgetType === 'news') {
+    const targetUrl = p.url || 'https://news.google.com';
+    window.open(targetUrl, '_blank', 'noopener');
+    return;
+  }
+  if (p.widgetType === 'youtube' || p.widgetType === 'web') {
+    overlays.openPanel('web', p);
+  } else {
+    widgetApi.spawnWebWidget(p);
+  }
 });

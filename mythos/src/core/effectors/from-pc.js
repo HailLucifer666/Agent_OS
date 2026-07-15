@@ -110,6 +110,13 @@ async function ui_type({ text, pid, elementPath }) {
   return delegate(cmdObj);
 }
 
+async function send_key({ key }) {
+  if (!key) return fail('Key name is required (enter, tab, escape, space, up, down, left, right).');
+  const validKeys = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right'];
+  if (!validKeys.includes(key)) return fail(`Invalid key: "${key}". Valid: ${validKeys.join(', ')}`);
+  return delegate({ cmd: 'send_key', key });
+}
+
 async function write_note({ text, title }) {
   if (!text) return fail('Note text is required.');
   return delegate({ cmd: 'write_note', text, title: title || null });
@@ -127,6 +134,7 @@ const TOOLS = [
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center.', params: { pid: 'number - window process ID', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
+  { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
 ];
 
@@ -142,5 +150,5 @@ module.exports = {
   registerFromPc,
   TOOLS,
   launch_app, list_windows, focus_window, close_window, media_key,
-  screen_look, ui_elements, ui_click, ui_type, write_note,
+  screen_look, ui_elements, ui_click, ui_type, send_key, write_note,
 };

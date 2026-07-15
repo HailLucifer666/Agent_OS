@@ -39,19 +39,20 @@ export function createOverlayManager(root) {
     if (entry) entry.el.style.zIndex = String(++zTop);
   }
 
-  async function openPanel(panelId) {
+  async function openPanel(panelId, payload) {
     if (open.has(panelId)) { focus(panelId); return; }
     const panel = getPanel(panelId);
     if (!panel) return;
 
+    const displayTitle = (payload && payload.title) ? payload.title : panel.title;
     const el = document.createElement('div');
     el.className = 'hud-panel-wrap';
     el.style.zIndex = String(++zTop);
     el.innerHTML = `
       <div class="hud-panel-backdrop"></div>
-      <div class="hud-panel glass" role="dialog" aria-label="${panel.title}">
+      <div class="hud-panel glass" role="dialog" aria-label="${displayTitle}">
         <div class="hud-panel-header">
-          <span class="hud-panel-title mono">${panel.title}</span>
+          <span class="hud-panel-title mono">${displayTitle}</span>
           <button class="hud-panel-close" aria-label="Close">&times;</button>
         </div>
         <div class="hud-panel-body"><div class="text-faint mono">Loading&hellip;</div></div>
@@ -69,7 +70,9 @@ export function createOverlayManager(root) {
       const mod = await panel.loader();
       const body = el.querySelector('.hud-panel-body');
       body.innerHTML = '';
-      const result = await mod.render(body);
+      // Pass payload to render() for panels that need it (e.g. web-panel gets
+      // the embed URL/cards). Existing views ignore the second arg — backward compatible.
+      const result = await mod.render(body, payload);
       if (typeof result === 'function') entry.cleanup = result;
     } catch (err) {
       const body = el.querySelector('.hud-panel-body');

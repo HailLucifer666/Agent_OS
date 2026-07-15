@@ -254,10 +254,20 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           '\nDo NOT invent tool names. If none of these tools fit, return {"tool":"", "args":{}}.';
       }
       try {
+        // Skills hint: surface the curated skill catalog so the autonomous
+        // planner knows methodology/design guides exist. use_skill is already
+        // in the tool list above (registered as an effector); this block tells
+        // the model WHICH skills are worth loading for this kind of work.
+        var skillsHint = '';
+        try {
+          var sl = require('../skills/loader');
+          var sBlock = sl.catalogBlock();
+          if (sBlock) skillsHint = '\n\n' + sBlock;
+        } catch (_) { /* skills loader unavailable — non-fatal */ }
         var result = await ctx.brain.think({
           lane: lane,
           messages: [{ role: 'user', content:
-            toolList + '\n\nPlan next action for goal: ' + goal.title +
+            toolList + skillsHint + '\n\nPlan next action for goal: ' + goal.title +
             '\n\nGROUNDING: If this goal involves current events, real-time data, news, dates, or anything that could be stale, use web_search or web_fetch FIRST to get real data before planning further actions.' +
             '\nRespond as JSON: {"tool": "<exact tool name from the list>", "args": {<required params>}}'
           }],

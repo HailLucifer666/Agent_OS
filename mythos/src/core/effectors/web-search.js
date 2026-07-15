@@ -11,6 +11,7 @@
 
 var BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 var EXA_SEARCH_URL = 'https://api.exa.ai/search'
+var EXA_MCP_URL = 'https://mcp.exa.ai/mcp'
 var DDG_HTML_URL = 'https://html.duckduckgo.com/html/?q='
 var DDG_LITE_URL = 'https://lite.duckduckgo.com/lite/?q='
 var WIKI_SEARCH_URL = 'https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit='
@@ -146,6 +147,100 @@ function ddgLite(q, maxResults, bus) {
   })
 }
 
+// DDG HTML fallback parser — handles markup variants DDG rotates through.
+// The primary ddgHtml parser targets class="result__a"; this catches the
+// alternative result__url + h2 pattern and bare redirect links. Runs only if
+// the primary parser returned zero results.
+function ddgHtmlFallback(html, maxResults) {
+  var results = []
+  // Variant 1: <a class="result__url" href="..."> + sibling <h2> title
+  var urlRe = /<a[^>]+class="[^"]*result__url[^"]*"[^>]+href="([^"]*)"/gi
+  var hrefs = []
+  var m
+  while ((m = urlRe.exec(html)) !== null && hrefs.length < maxResults) {
+    hrefs.push(unwrapDdgHref(m[1]))
+  }
+  // Variant 2: any redirect link containing uddg= (DDG's universal redirect)
+  if (!hrefs.length) {
+    var redirectRe = /href="([^"]*uddg=[^"]*)"/gi
+    while ((m = redirectRe.exec(html)) !== null && hrefs.length < maxResults) {
+      hrefs.push(unwrapDdgHref(m[1]))
+    }
+  }
+  // Titles: grab result headings
+  var titleRe = /<h2[^>]*>([\s\S]*?)<\/h2>|<a[^>]+class="result__a"[^>]*>([\s\S]*?)<\/a>/gi
+  var titles = []
+  while ((m = titleRe.exec(html)) !== null && titles.length < maxResults) {
+    titles.push(stripTags(m[1] || m[2]))
+  }
+  // Snippets
+  var snipRe = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi
+  var snippets = []
+  while ((m = snipRe.exec(html)) !== null && snippets.length < maxResults) {
+    snippets.push(stripTags(m[1]))
+  }
+  for (var i = 0; i < hrefs.length; i++) {
+    if (hrefs[i]) results.push({
+      title: (titles[i] || hrefs[i]).slice(0, 200),
+      url: hrefs[i],
+      snippet: (snippets[i] || '').slice(0, 300)
+    })
+  }
+  return results
+}
+
+// Jina AI search — free, no key. Uses s.jina.ai/q/<query> which returns
+// readable text results. A good third-tier fallback before Wikipedia.
+var JINA_SEARCH_URL = 'https://s.jina.ai/'
+function jinaSearch(q, maxResults, bus) {
+  return new Promise(function(resolve) {
+    var controller = new AbortController()
+    var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
+    fetch(JINA_SEARCH_URL + encodeURIComponent(q), {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json', 'X-Return-Format': 'text' }
+    })
+    .then(function(res) { clearTimeout(timer); return res.text() })
+    .then(function(text) {
+      var results = []
+      // Jina returns either JSON or plain text with URL: Title: patterns.
+      // Try JSON first.
+      try {
+        var data = JSON.parse(text)
+        if (data && data.data) {
+          var items = Array.isArray(data.data) ? data.data : [data.data]
+          for (var i = 0; i < items.length && results.length < maxResults; i++) {
+            if (items[i] && items[i].url) {
+              results.push({
+                title: items[i].title || items[i].url,
+                url: items[i].url,
+                snippet: String(items[i].content || '').slice(0, 300)
+              })
+            }
+          }
+        }
+      } catch (_) {
+        // Plain text fallback: parse "Title: ... URL: ..." blocks
+        var blocks = text.split(/\n\n+/)
+        for (var j = 0; j < blocks.length && results.length < maxResults; j++) {
+          var urlM = blocks[j].match(/https?:\/\/\S+/)
+          var titleM = blocks[j].match(/Title:\s*(.+)/i)
+          if (urlM) {
+            results.push({
+              title: titleM ? titleM[1].trim() : urlM[0],
+              url: urlM[0],
+              snippet: blocks[j].slice(0, 300)
+            })
+          }
+        }
+      }
+      resolve(results)
+    })
+    .catch(function(err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'jina', error: err.message }); resolve([]) })
+  })
+}
+
 // Wikipedia OpenSearch — last resort for factual queries.
 function wikiSearch(q, maxResults, bus) {
   return new Promise(function(resolve) {
@@ -173,6 +268,92 @@ function wikiSearch(q, maxResults, bus) {
   })
 }
 
+// --- Exa MCP free tier (zero-config, no API key required) ---
+// The hosted MCP endpoint at https://mcp.exa.ai/mcp offers an unauthenticated
+// free tier (3 QPS, 150 calls/day) via JSON-RPC over Server-Sent Events.
+// This is the reliable default — DuckDuckGo HTML scraping below is the
+// brittle fallback. Verified working 2026-07.
+//
+// Flow: initialize handshake -> notifications/initialized -> tools/call.
+// The SSE response carries the JSON-RPC reply on a `data:` line.
+async function exaMcpSearch(q, maxResults, bus) {
+  var rpcId = 1
+  function parseSse(txt) {
+    var m = String(txt).match(/data:\s*(\{[\s\S]*?\})\s*\n/)
+    return m ? JSON.parse(m[1]) : null
+  }
+  async function rpc(method, params, includeId) {
+    var body = { jsonrpc: '2.0', method: method }
+    if (includeId) { body.id = rpcId++; body.params = params || {}; }
+    var controller = new AbortController()
+    var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
+    try {
+      var res = await fetch(EXA_MCP_URL, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+        body: JSON.stringify(body)
+      })
+      clearTimeout(timer)
+      if (!res.ok) return null
+      return parseSse(await res.text())
+    } catch (err) {
+      clearTimeout(timer)
+      if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message })
+      return null
+    }
+  }
+
+  // 1. Handshake
+  var init = await rpc('initialize', {
+    protocolVersion: '2024-11-05', capabilities: {},
+    clientInfo: { name: 'mythos', version: '0.1.0' }
+  }, true)
+  if (!init || !init.result) return []
+
+  // 2. Notification (no id, no response expected)
+  await rpc('notifications/initialized', {}, false)
+
+  // 3. Search
+  var search = await rpc('tools/call', {
+    name: 'web_search_exa',
+    arguments: { query: q, numResults: maxResults }
+  }, true)
+  if (!search || !search.result || !search.result.content) return []
+
+  // The MCP tool returns content as [{type:'text', text:'Title: ...\nURL: ...'}].
+  // Parse the text block into structured results.
+  var textBlock = ''
+  for (var i = 0; i < search.result.content.length; i++) {
+    if (search.result.content[i].type === 'text') {
+      textBlock += search.result.content[i].text + '\n'
+    }
+  }
+  return parseExaMcpText(textBlock)
+}
+
+// Parse the Exa MCP text response into {title, url, snippet} objects.
+// Format observed: "Title: <t>\nURL: <u>\nPublished: ...\nHighlights:\n<snip>\n\n---\n"
+function parseExaMcpText(text) {
+  var blocks = String(text).split(/\n*---\n*/)
+  var results = []
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i].trim()
+    if (!b) continue
+    var titleM = b.match(/Title:\s*(.+)/)
+    var urlM = b.match(/URL:\s*(\S+)/)
+    var hlM = b.match(/Highlights:\s*\n([\s\S]*?)$/)
+    if (titleM && urlM) {
+      results.push({
+        title: titleM[1].trim(),
+        url: urlM[1].trim(),
+        snippet: hlM ? hlM[1].trim().slice(0, 300) : ''
+      })
+    }
+  }
+  return results
+}
+
 // --- main entry point ---
 
 async function web_search({ query, maxResults, bus }) {
@@ -181,7 +362,7 @@ async function web_search({ query, maxResults, bus }) {
     var q = String(query).trim()
     var max = Math.min(maxResults || 5, 10)
 
-    // 1. Exa — only if API key is configured
+    // 1a. Exa REST API — only if EXA_API_KEY is configured (higher rate limits)
     if (process.env.EXA_API_KEY) {
       try {
         var controller = new AbortController()
@@ -216,9 +397,30 @@ async function web_search({ query, maxResults, bus }) {
       } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa', error: err.message }); }
     }
 
-    // 2. DuckDuckGo HTML direct
+    // 1b. Exa MCP free tier — zero-config default (no key needed, 150 calls/day)
+    try {
+      var mcpResults = await exaMcpSearch(q, max, bus)
+      if (mcpResults.length) {
+        return { ok: true, result: { query: q, results: mcpResults.slice(0, max), source: 'exa-mcp' } }
+      }
+    } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
+
+    // 2. DuckDuckGo HTML direct (+ fallback parser if primary returns nothing)
     try {
       var ddgResults = await ddgHtml(q, max, bus)
+      if (!ddgResults.length) {
+        // A2: try the fallback parser against the same HTML — DDG rotates
+        // markup variants and the primary class-targeted regex misses sometimes.
+        try {
+          var controller2 = new AbortController()
+          var timer2 = setTimeout(function() { controller2.abort() }, PROVIDER_TIMEOUT)
+          var htmlRes = await fetch(DDG_HTML_URL + encodeURIComponent(q), {
+            signal: controller2.signal, headers: { 'User-Agent': BROWSER_UA }
+          })
+          clearTimeout(timer2)
+          if (htmlRes.ok) ddgResults = ddgHtmlFallback(await htmlRes.text(), max)
+        } catch (_) { /* fallback parse failed — continue to next provider */ }
+      }
       if (ddgResults.length) {
         return { ok: true, result: { query: q, results: ddgResults, source: 'duckduckgo-html' } }
       }
@@ -232,7 +434,15 @@ async function web_search({ query, maxResults, bus }) {
       }
     } catch (_) { /* DDG Lite unavailable — fall through */ }
 
-    // 4. Wikipedia OpenSearch
+    // 4. Jina AI search (free, no key)
+    try {
+      var jinaResults = await jinaSearch(q, max, bus)
+      if (jinaResults.length) {
+        return { ok: true, result: { query: q, results: jinaResults, source: 'jina' } }
+      }
+    } catch (_) { /* Jina unavailable — fall through */ }
+
+    // 5. Wikipedia OpenSearch
     try {
       var wikiResults = await wikiSearch(q, max, bus)
       if (wikiResults.length) {
@@ -252,6 +462,10 @@ module.exports = {
   _stripTags: stripTags,
   _unwrapDdgHref: unwrapDdgHref,
   _ddgHtml: ddgHtml,
+  _ddgHtmlFallback: ddgHtmlFallback,
   _ddgLite: ddgLite,
-  _wikiSearch: wikiSearch
+  _jinaSearch: jinaSearch,
+  _wikiSearch: wikiSearch,
+  _exaMcpSearch: exaMcpSearch,
+  _parseExaMcpText: parseExaMcpText
 }

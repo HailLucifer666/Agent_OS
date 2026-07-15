@@ -15,6 +15,7 @@
 #   { "cmd": "ui_type", "text": "hello world", "pid": 12345, "elementPath": ["0","2","1"] }
 #   { "cmd": "write_note", "text": "remember this", "title": "My Note" }
 #   { "cmd": "ping" }
+#   { "cmd": "send_key", "key": "enter" }
 #
 # Response shape:
 #   { "ok": true, "result": <any> }
@@ -163,6 +164,24 @@ function Send-UnicodeText($text) {
 
 function Handle-LaunchApp($name) {
     if (-not $name) { return 'App name is required.' }
+
+    # Special handling for Spotify - use URI scheme (works for Windows Store/UWP apps)
+    if ($name -eq 'spotify') {
+        # Use Spotify URI scheme - works for both desktop and Windows Store versions
+        try {
+            Start-Process 'spotify:' -ErrorAction Stop
+            Start-Sleep -Milliseconds 1500
+            # Try to get the PID after launch
+            $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($proc) {
+                return @{ pid = $proc.Id; name = $name; launched = $true }
+            }
+            return @{ name = $name; launched = $true; note = 'launched via URI scheme' }
+        } catch {
+            return ('Failed to launch Spotify via URI: ' + $_.Exception.Message)
+        }
+    }
+
     # Try Start-Process with the name
     try {
         $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
@@ -377,6 +396,100 @@ function Handle-UiType($text, $pid, $elementPath) {
     }
 }
 
+# VK codes for send_key — real virtual keystrokes for keys that Chromium/Electron
+# apps (Spotify, etc.) don't reliably accept as Unicode WM_CHAR events.
+$VK_CODES = @{
+    enter  = 0x0D
+    tab    = 0x09
+    escape = 0x1B
+    space  = 0x20
+    up     = 0x26
+    down   = 0x28
+    left   = 0x25
+    right  = 0x27
+}
+
+function Handle-SendKey($key) {
+    if (-not $key) { return 'Key name is required.' }
+    $vk = $VK_CODES[$key.ToLower()]
+    if (-not $vk) {
+        return @("Unknown key: $key. Valid: $($VK_CODES.Keys -join ', ')")
+    }
+    Send-VkKey $vk
+    return @{ key = $key; sent = $true }
+}
+
+function Handle-MediaStatus {
+    try {
+        # Try to use Windows SMTC API (Windows 10 1903+)
+        # This requires PowerShell 5.1+ with Windows Runtime support
+        if (-not ([System.Management.Automation.PSTypeName]'Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager').Type) {
+            # Type not available - likely older PowerShell/Windows
+            return @{ available = $false; error = 'SMTC API not available (requires Windows 10 1903+ and PowerShell 5.1+)' }
+        }
+
+        # Get the session manager
+        $managerType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]
+        $sessionManagerTask = $managerType::RequestAsync()
+        $sessionManagerTask.Wait()
+        if ($sessionManagerTask.Status -ne 'RanToCompletion') {
+            return @{ available = $true; playing = $false; error = 'Failed to get session manager' }
+        }
+        $sessionManager = $sessionManagerTask.Result
+
+        # Get current session
+        $currentSession = $sessionManager.GetCurrentSession()
+        if (-not $currentSession) {
+            return @{ available = $true; playing = $false; source = 'none' }
+        }
+
+        # Get playback info
+        $playbackInfo = $currentSession.GetPlaybackInfo()
+        $playbackStatus = $playbackInfo.PlaybackStatus
+
+        # Map SMTC status to simple boolean
+        $isPlaying = ($playbackStatus -eq 'Playing')
+
+        # Get media properties (title, artist, album, thumbnail)
+        $mediaPropsTask = $currentSession.TryGetMediaPropertiesAsync()
+        $mediaPropsTask.Wait()
+        $mediaProps = $mediaPropsTask.Result
+
+        $result = @{
+            available = $true
+            playing = $isPlaying
+            source = $currentSession.SourceAppUserModelId -replace '^.*\.', ''
+        }
+
+        if ($mediaProps) {
+            if ($mediaProps.Title) { $result.title = $mediaProps.Title }
+            if ($mediaProps.Artist) { $result.artist = $mediaProps.Artist }
+            if ($mediaProps.AlbumTitle) { $result.album = $mediaProps.AlbumTitle }
+
+            # Get thumbnail if available
+            if ($mediaProps.Thumbnail) {
+                $streamRef = $mediaProps.Thumbnail
+                if ($streamRef) {
+                    $streamTask = $streamRef.OpenReadAsync()
+                    $streamTask.Wait()
+                    if ($streamTask.Status -eq 'RanToCompletion') {
+                        $stream = $streamTask.Result
+                        $reader = [Windows.Storage.Streams.DataReader]::FromBuffer($stream.GetBuffer())
+                        $bytes = New-Object byte[] $stream.Size
+                        $reader.ReadBytes($bytes)
+                        $result.artBase64 = [Convert]::ToBase64String($bytes)
+                        $result.artMime = 'image/png'
+                    }
+                }
+            }
+        }
+
+        return $result
+    } catch {
+        return @{ available = $true; playing = $false; error = $_.Exception.Message }
+    }
+}
+
 function Resolve-UIAElement($pid, $elementPath) {
     try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -513,6 +626,12 @@ while ($true) {
         }
         'ui_type' {
             $result = Handle-UiType $cmd.text $cmd.pid $cmd.elementPath
+        }
+        'send_key' {
+            $result = Handle-SendKey $cmd.key
+        }
+        'media_status' {
+            $result = Handle-MediaStatus
         }
         'write_note' {
             $result = Handle-WriteNote $cmd.text $cmd.title

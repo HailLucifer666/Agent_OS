@@ -300,4 +300,45 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
   };
 }
 
-module.exports = { createEngagement };
+function createEngagementManager({ bus, config, memory, goals, leash, effectors, engagementStore }) {
+  // Create sub-components
+  var stateMachine = require('./state-machine').createStateMachine({ config: config });
+  var interview = require('./interview').createInterview({ config: config });
+  var specBuilder = require('./spec-builder').createSpecBuilder({ config: config });
+  var planBuilder = require('./plan-builder').createPlanBuilder({ config: config });
+  var recommendations = require('./recommendations').createRecommendations({ config: config });
+  var progress = require('./progress').createProgress({ bus: bus, config: config });
+
+  // Create the main engagement system
+  var engagement = createEngagement({
+    bus: bus,
+    config: config,
+    store: engagementStore,
+    stateMachine: stateMachine,
+    interview: interview,
+    specBuilder: specBuilder,
+    planBuilder: planBuilder,
+    recommendations: recommendations,
+    progress: progress
+  });
+
+  // Wire engagement manager to external systems
+  function handleEngagementAction(event, payload) {
+    // Route engagement actions to appropriate handlers
+    bus.emit('engagement.action.' + event, payload);
+  }
+
+  // Expose public API
+  return {
+    engagement: engagement,
+    interview: interview,
+    specBuilder: specBuilder,
+    planBuilder: planBuilder,
+    recommendations: recommendations,
+    progress: progress,
+    stateMachine: stateMachine,
+    handleEngagementAction: handleEngagementAction
+  };
+}
+
+module.exports = { createEngagement, createEngagementManager };

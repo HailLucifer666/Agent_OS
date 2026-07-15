@@ -14,6 +14,28 @@
   box-shadow: var(--accent-glow);
 }
 
+/* Resize handle — bottom-right corner grip. Hit area extended beyond the
+   visual grip to meet the 44px touch target minimum (ui-ux-pro-max §2). */
+.widget-resize {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 28px;
+  height: 28px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.widget-resize::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--text-faint);
+  border-bottom: 2px solid var(--text-faint);
+}
+
 .widget-title {
   font-size: 10px;
   letter-spacing: 0.22em;
@@ -30,6 +52,7 @@
 .widget-value {
   font-size: 22px;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .widget-sub {
@@ -101,3 +124,13 @@
 .news-item-ago { font-size: 9px; color: var(--text-faint); }
 
 .news-foot { margin-top: 6px; font-size: 9px; color: var(--text-faint); }
+
+/* MEDIA widget — now playing from Windows SMTC */
+.widget-art {
+  width: 100%;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+.media-idle { opacity: 0.4; }

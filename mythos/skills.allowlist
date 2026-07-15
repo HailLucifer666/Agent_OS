@@ -1,0 +1,25 @@
+# Mythos external skills allowlist.
+# One skill name per line (matching the directory name in ~/.zcode/skills/).
+# '#' lines are comments. Edit freely — no code changes needed to add/remove.
+# These are surfaced to the model in every prompt as one-liners; the model
+# calls use_skill(<name>) to load full guidance on demand.
+
+# Design / UI
+ui-ux-pro-max
+frontend-patterns
+frontend-ui-engineering
+design-system
+
+# Workflow / methodology
+using-superpowers
+spec-driven-development
+tdd-workflow
+
+# Research / planning
+deep-research
+brainstorming
+planning-and-task-breakdown
+
+# Quality
+code-review
+verification-before-completion

@@ -319,7 +319,7 @@
 .pipeline-btn-approve:hover {
   background: rgba(120, 200, 120, 0.16);
 }
-.pipeline-btn-icon {
+.pipeline-btn-delete {
   flex-shrink: 0;
   width: 34px;
   height: 34px;
@@ -334,7 +334,7 @@
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease);
 }
-.pipeline-btn-icon:hover {
+.pipeline-btn-delete:hover {
   background: rgba(224, 82, 82, 0.14);
 }
 .pipeline-btn-ship {

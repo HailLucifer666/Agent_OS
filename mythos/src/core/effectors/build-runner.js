@@ -180,6 +180,9 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
       job.status = 'done';
       job.stage = 'done';
       if (runResult && runResult.artifact) job.artifact = runResult.artifact;
+      // A4: surface research provenance on the job record so job_status can
+      // report whether the build was grounded in real web data or built blind.
+      if (runResult && runResult.researchStatus) job.researchStatus = runResult.researchStatus;
     } catch (err) {
       job.status = 'failed';
       job.stage = 'failed';

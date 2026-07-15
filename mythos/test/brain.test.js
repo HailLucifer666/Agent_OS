@@ -286,7 +286,10 @@ describe('brain/index — P8 identity persona injection', function() {
     return brain.think({ lane: 'voice', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
       chain.complete = origComplete;
       assert.equal(capturedMsgs[0].role, 'system');
-      assert.equal(capturedMsgs[0].content, 'You are GALACTUS. Eater of worlds. Be concise and actionable.');
+      // Persona prefix is injected verbatim; a version-context line is now
+      // appended (self-awareness feature) followed by the actionability clause.
+      assert.ok(capturedMsgs[0].content.startsWith('You are GALACTUS. Eater of worlds.'), 'persona prefix present');
+      assert.ok(capturedMsgs[0].content.indexOf('Be concise and actionable.') !== -1, 'actionability clause present');
     }).catch(function(err) {
       chain.complete = origComplete;
       throw err;
@@ -309,7 +312,9 @@ describe('brain/index — P8 identity persona injection', function() {
     return brain.think({ lane: 'voice', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
       chain.complete = origComplete;
       assert.equal(capturedMsgs[0].role, 'system');
-      assert.equal(capturedMsgs[0].content, 'You are MYTHOS. Be concise and actionable.');
+      // Fallback persona starts with the name; version context is appended.
+      assert.ok(capturedMsgs[0].content.startsWith('You are MYTHOS.'), 'name-based persona present');
+      assert.ok(capturedMsgs[0].content.indexOf('Be concise and actionable.') !== -1, 'actionability clause present');
     }).catch(function(err) {
       chain.complete = origComplete;
       throw err;

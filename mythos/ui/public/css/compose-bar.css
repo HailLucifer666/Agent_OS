@@ -1,0 +1,164 @@
+/* compose-bar.css — the bottom-center interaction surface.
+   Text input + voice toggle + send. Glassmorphic, matches the HUD language.
+   Replaces the bare mic ring with a full multimodal input bar. */
+
+#compose-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none; /* children re-enable */
+}
+
+/* The caption (heard/reply/error) sits above the bar */
+#compose-bar .mic-caption {
+  pointer-events: auto;
+}
+
+/* Example prompt chips — show when input is empty and conversation hasn't started */
+#compose-bar .compose-hints {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: min(80vw, 620px);
+  pointer-events: auto;
+  transition: opacity var(--dur-med) var(--ease);
+}
+#compose-bar .compose-hints.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+}
+.compose-hint {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  background: rgba(14, 22, 38, 0.55);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  backdrop-filter: blur(14px);
+  transition: border-color var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease),
+              box-shadow var(--dur-fast) linear;
+}
+.compose-hint:hover {
+  border-color: var(--accent-dim);
+  color: var(--text);
+  box-shadow: 0 0 8px rgba(79, 216, 255, 0.12);
+}
+.compose-hint:active {
+  transform: scale(0.97);
+}
+
+/* The main bar: glass pill with input + voice + send */
+.compose-pill {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: rgba(14, 22, 38, 0.65);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  backdrop-filter: blur(14px);
+  padding: 4px 6px 4px 4px;
+  min-width: 340px;
+  max-width: min(72vw, 620px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+  transition: border-color var(--dur-fast) var(--ease),
+              box-shadow var(--dur-fast) linear;
+}
+.compose-pill:focus-within {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 1px rgba(79, 216, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Voice toggle button (left side of pill) */
+.compose-voice-btn {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease),
+              background var(--dur-fast) var(--ease);
+}
+.compose-voice-btn:hover { color: var(--text-dim); }
+.compose-voice-btn svg { width: 18px; height: 18px; }
+
+/* Voice states mirror the mic ring colors */
+.compose-voice-btn.listening {
+  color: var(--accent);
+  background: rgba(79, 216, 255, 0.1);
+  animation: mic-breathe 2.4s var(--ease) infinite;
+}
+.compose-voice-btn.processing,
+.compose-voice-btn.downloading {
+  color: var(--accent-goals-purple, #a78bfa);
+}
+.compose-voice-btn.speaking {
+  color: var(--accent);
+}
+.compose-voice-btn.error { color: var(--status-warn); }
+
+/* Text input */
+.compose-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  padding: 0 12px;
+  min-width: 0;
+}
+.compose-input::placeholder {
+  color: var(--text-faint);
+}
+
+/* Send button (right side of pill) */
+.compose-send-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity var(--dur-fast) var(--ease),
+              transform var(--dur-fast) var(--ease);
+}
+.compose-send-btn svg { width: 16px; height: 16px; }
+.compose-send-btn.visible {
+  opacity: 1;
+  transform: scale(1);
+}
+.compose-send-btn:hover { filter: brightness(1.15); }
+.compose-send-btn:active { transform: scale(0.92); }
+
+/* Waveform — kept below the pill when listening */
+#compose-bar .mic-wave {
+  pointer-events: none;
+}

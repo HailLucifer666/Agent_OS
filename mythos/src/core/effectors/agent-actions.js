@@ -8,6 +8,7 @@
 // honestly flagged as "with-issues" rather than silently passing garbage.
 
 var path = require('path');
+var { execFile } = require('child_process');
 var designSystemEngine = require('../design/system');
 var personas = require('../agents/personas');
 
@@ -21,7 +22,15 @@ var DELIVERABLE_PREAMBLE = [
   'TITLE CONSTRAINT: the <title> or # heading MUST use words FROM the idea, describing',
   'what the deliverable IS. Do NOT invent a brand name, product name, or marketing title.',
   'If the idea is "a landing page for AI news", the title should be "AI News Landing Page"',
-  'or similar — never "The Applied Signal" or any other name you made up. Idea: '
+  'or similar — never "The Applied Signal" or any other name you made up.',
+  'EXTRACT the core topic from the idea text and use EXACTLY those words in the title.',
+  'Example: idea="landing page for News/Media Platform" → title="News Media Platform Landing Page"',
+  'STRICT REQUIREMENTS:',
+  '- Title MUST contain words from the spec: ',
+  '- Content MUST be about the spec topic, not a generic template',
+  '- NO invented brand names, NO generic templates',
+  '- Include hero section, CTA, animations as specified in the idea',
+  'Idea: '
 ].join(' ');
 
 var PLANNER_PREAMBLE = [
@@ -80,7 +89,7 @@ function extractJsonBlock(raw) {
 
 var riskClassifierLib = require('./risk-classifier');
 
-function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, webSearch, webFetch, browserAgent, evidenceValidator }) {
+function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, webSearch, webFetch, browserAgent, evidenceValidator, bus }) {
   if (!fs || typeof fs.writeText !== 'function' || typeof fs.exists !== 'function') {
     throw new Error('createAgentActions requires a vault fs-store with writeText/exists');
   }
@@ -139,6 +148,51 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       return brief;
     } catch (_) {
       return null; // research is best-effort — don't block builds on network issues
+    }
+  }
+
+  // ---- A3: Social-media research via agent-reach (optional, gracefully degrading) ----
+  // agent-reach (pip install agent-reach) provides CLIs for Twitter/Reddit/YouTube/
+  // GitHub reading that Mythos lacks natively. If installed, this enriches the
+  // research brief with social signals; if not, it returns null silently (same
+  // graceful-degradation pattern as the browser/vision checks). Never blocks a build.
+  var agentReachAvailable = null; // cached availability check
+  function isAgentReachAvailable() {
+    if (agentReachAvailable !== null) return Promise.resolve(agentReachAvailable);
+    return new Promise(function(resolve) {
+      execFile('agent-reach', ['--version'], { timeout: 3000, windowsHide: true }, function(err) {
+        agentReachAvailable = !err;
+        resolve(agentReachAvailable);
+      });
+    });
+  }
+
+  function runAgentReach(cmd, args, timeout) {
+    return new Promise(function(resolve) {
+      execFile(cmd, args, { timeout: timeout || 8000, windowsHide: true, maxBuffer: 1024 * 512 }, function(err, stdout) {
+        if (err) { resolve(''); return; }
+        resolve(String(stdout).trim());
+      });
+    });
+  }
+
+  async function socialResearchForBuild(topic) {
+    if (!await isAgentReachAvailable()) return null;
+    try {
+      // agent-reach exposes platform-specific CLIs. Query reddit + hackernews
+      // for community discussion on the topic (most useful for build grounding).
+      var results = [];
+      var reddit = await runAgentReach('agent-reach', ['reddit', '--query', topic, '--limit', '2']);
+      if (reddit) results.push({ source: 'reddit', text: reddit.slice(0, 600) });
+      var hn = await runAgentReach('agent-reach', ['hackernews', '--query', topic, '--limit', '2']);
+      if (hn) results.push({ source: 'hackernews', text: hn.slice(0, 600) });
+      if (!results.length) return null;
+      var lines = ['SOCIAL SIGNALS (community discussion — use for tone/relevance, verify facts):'];
+      results.forEach(function(r) { lines.push('[' + r.source + '] ' + r.text); });
+      var brief = lines.join('\n');
+      return brief.length > 1200 ? brief.slice(0, 1200) + '\n[...truncated]' : brief;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -227,6 +281,17 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       ? content.match(/<title>([^<]{1,60})<\/title>/i)
       : content.match(/^#\s+(.{1,60})/m);
     var title = titleMatch ? titleMatch[1].trim() : sourceText.slice(0, 60);
+
+    // VALIDATE: Title must contain words from the spec (for non-tiny-fix cards)
+    var specWords = sourceText.toLowerCase().split(/\s+/).filter(function(w) { return w.length > 3; });
+    var titleWords = title.toLowerCase().split(/\s+/);
+    var hasSpecWord = specWords.some(function(w) {
+      return titleWords.some(function(t) { return t.includes(w) || w.includes(t); });
+    });
+    if (!hasSpecWord) {
+      throw new Error('Title must contain words from the spec: "' + sourceText + '" — got "' + title + '"');
+    }
+
     var base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'deliverable';
     var name = base + '.' + ext;
     for (var i = 2; fs.exists(path.join('builds', kind, name)); i += 1) {
@@ -347,9 +412,24 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // The initial `raw` was generated without grounding; if research returns
         // a brief, regenerate with the grounded prompt for a properly sourced build.
         // P23: skip for tiny-fix and quick-win (low-risk work doesn't need web grounding)
+        // A4: track researchStatus — never fail silently. If research was required
+        // but returned nothing, flag the artifact so the model/operator knows it
+        // was built ungrounded. Previously this was invisible.
+        var researchStatus = needsResearch ? 'pending' : 'not-required';
         if (needsResearch) {
           var researchBrief = await researchForBuild(card.text, 5);
+          // A3: enrich with social signals if agent-reach is installed (optional)
+          var socialBrief = await socialResearchForBuild(String(card.text).slice(0, 120));
+          if (researchBrief && socialBrief) researchBrief += '\n\n' + socialBrief;
+          else if (!researchBrief && socialBrief) researchBrief = socialBrief;
+
+          // FOR FEATURE/ARCH-CHANGE: research is mandatory - throw if failed
+          if (!researchBrief) {
+            throw new Error('Research gate failed: unable to fetch live data for "' + card.text + '" (required for risk=' + risk + ')');
+          }
+
           if (researchBrief && brain) {
+            researchStatus = 'grounded';
             try {
               var grounded = await brain.think({
                 lane: 'build',
@@ -392,7 +472,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
         // Ship — with honest status flag
         var reviewed = review.verdict === 'approve';
-        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk };
+        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk, researchStatus: researchStatus };
         if (!reviewed) {
           shipMeta.reviewIssues = review.issues;
           shipMeta.reviewStatus = 'failed';
@@ -415,7 +495,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         }
 
         pipeline.moveCard(card.id, 'shipped', shipMeta);
-        return { artifact: artifact, review: review };
+        return { artifact: artifact, review: review, researchStatus: researchStatus };
       }
     });
     pipeline.moveCard(card.id, 'execute', { jobId: job.id, progress: 25 });
@@ -479,10 +559,17 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var needsReview = riskClassifierLib.requiresReview(risk);
 
         // P22: Research gate — gather real web data before committing to the build.
+        // A4: track researchStatus for observability (never fail silently).
+        var researchStatus = needsResearch ? 'pending' : 'not-required';
         if (needsResearch) {
           var researchTopic = card.title + ' ' + (card.detail || '');
           var researchBrief = await researchForBuild(researchTopic, 5);
+          // A3: enrich with social signals if agent-reach is installed (optional)
+          var socialBrief = await socialResearchForBuild(String(researchTopic).slice(0, 120));
+          if (researchBrief && socialBrief) researchBrief += '\n\n' + socialBrief;
+          else if (!researchBrief && socialBrief) researchBrief = socialBrief;
           if (researchBrief && brain) {
+            researchStatus = 'grounded';
             try {
               var grounded = await brain.think({
                 lane: 'build',
@@ -494,6 +581,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
                 raw = grounded.content;
               }
             } catch (_) { /* research/rebuild failed — use original raw */ }
+          } else {
+            researchStatus = 'skipped';
+            if (bus) bus.emit('health.anomaly', { kind: 'research-skipped', cardId: card.id, topic: String(researchTopic).slice(0, 100) });
           }
         }
 
@@ -524,7 +614,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         }
 
         var reviewed = review.verdict === 'approve';
-        var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact };
+        var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact, researchStatus: researchStatus };
         if (!reviewed) {
           patchMeta.reviewIssues = review.issues;
           patchMeta.reviewStatus = 'failed';
@@ -533,7 +623,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           if (review.visualDescription) patchMeta.visualReview = review.visualDescription;
         }
         kanban.patchCard(card.id, patchMeta);
-        return { artifact: artifact, review: review };
+        return { artifact: artifact, review: review, researchStatus: researchStatus };
       }
     });
     kanban.patchCard(card.id, { lane: 'building', jobId: job.id });

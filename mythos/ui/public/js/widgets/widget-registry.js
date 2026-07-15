@@ -11,6 +11,7 @@ import { mountTickRate } from './kinds/tick-rate.js';
 import { mountBreakers } from './kinds/breakers.js';
 import { mountTokens } from './kinds/tokens.js';
 import { mountNews } from './kinds/news.js';
+import { mountMedia } from './kinds/media.js';
 
 // defaultPos: {left|right, top|bottom} offsets in px — corners stay clear of the
 // central orb and the radial module ring.
@@ -24,6 +25,7 @@ export const WIDGETS = [
   { id: 'tick-rate', title: 'TICK RATE',   defaultPos: { left: 24, top: 208 },     mount: mountTickRate },
   { id: 'breakers',  title: 'BREAKERS',    defaultPos: { right: 24, bottom: 168 }, mount: mountBreakers },
   { id: 'news',      title: 'NEWS',        defaultPos: { right: 24, top: 232 },    mount: mountNews },
+  { id: 'media',     title: 'NOW PLAYING', defaultPos: { right: 24, bottom: 200 }, mount: mountMedia },
 ];
 
 export function widgetIds() {

@@ -13,6 +13,7 @@ export const PANELS = {
   conversation: { title: 'CONVERSATION', loader: () => import('/js/views/conversation.js'), mutating: false },
   engagements: { title: 'ENGAGEMENTS', loader: () => import('/js/views/engagements.js'), mutating: true },
   forge:    { title: 'BUILD',    loader: () => import('/js/views/forge.js'),    mutating: true },
+  web:       { title: 'WEB',       loader: () => import('/js/views/web-panel.js'),  mutating: false },
 };
 
 export function getPanel(id) {

@@ -40,6 +40,14 @@ function createBrain({ config, bus, identity }) {
   const registry = require('./registry');
   const chain = require('./chain');
   const spend = require('./spend');
+  const version = require('../identity/version');
+
+  // Resolve the version context line once: config override wins, else auto-detect.
+  // This runs at brain construction (boot), not per-call — the context is stable
+  // for the process lifetime. Call version.refresh() after a code update to reset.
+  var versionLine = (config && config.MYTHOS_VERSION)
+    ? 'MYTHOS v' + config.MYTHOS_VERSION + '.'
+    : version.contextLine();
 
   return {
     async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona }) {
@@ -63,11 +71,11 @@ function createBrain({ config, bus, identity }) {
         // changing the global identity. When persona is absent, keep the default.
         var personaLine;
         if (persona) {
-          personaLine = persona + ' Be concise and actionable.';
+          personaLine = persona + ' ' + versionLine + ' Be concise and actionable.';
         } else if (identity && typeof identity.persona === 'function') {
-          personaLine = identity.persona() + ' Be concise and actionable.';
+          personaLine = identity.persona() + ' ' + versionLine + ' Be concise and actionable.';
         } else {
-          personaLine = 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. Be concise and actionable.';
+          personaLine = 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. ' + versionLine + ' Be concise and actionable.';
         }
         msgs = [
           { role: 'system', content: personaLine },

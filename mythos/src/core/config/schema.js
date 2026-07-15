@@ -7,6 +7,8 @@
 const SCHEMA = {
   // MYTHOS entity
   MYTHOS_NAME:              { type: 'string', default: 'MYTHOS' },
+  // Optional version override; defaults to package.json version at boot.
+  MYTHOS_VERSION:           { type: 'string', default: '' },
   MYTHOS_PORT:              { type: 'number', default: 4478, min: 1024, max: 65535 },
   MYTHOS_BIND:              { type: 'string', default: '127.0.0.1' },
   MYTHOS_VAULT_ROOT:        { type: 'string', default: './vault' },

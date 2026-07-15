@@ -29,6 +29,8 @@ const TIER_TABLE = {
   'log_incident':          0,
   'reminder_add':          0,  // read-only — creates a local reminder record
   'reminder_list':         0,  // read-only — lists pending reminders
+  'use_skill':             0,  // read-only — loads a skill's guidance text from disk
+  'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
@@ -56,6 +58,13 @@ const TIER_TABLE = {
   'ask_agent':             2,
   'browser_navigate':      2,
   'browser_tabs':          2,
+  'spotify_play_pause':    2,
+  'spotify_next':          2,
+  'spotify_previous':      2,
+  'spotify_volume':        2,
+  'spotify_status':        2,
+  'send_key':              2,
+  'media_status':          0,
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,
@@ -74,6 +83,8 @@ const TIER_TABLE = {
   'ui_type':               3,  // ELEVATED — same reasoning
   'browser_click':         3,
   'browser_type':          3,
+  'spotify_play':          3,
+  'spotify_search':        3,
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,

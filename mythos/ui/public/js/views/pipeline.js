@@ -60,7 +60,10 @@ function captureCard(card) {
   return `
     <div class="pipeline-card fade-in" data-id="${card.id}" data-stage="capture">
       <div class="pipeline-card-title">${escapeHtml(card.text)}</div>
-      <button class="pipeline-btn pipeline-btn-shape" data-action="shape" type="button">Shape it &#8594;</button>
+      <div class="pipeline-card-actions">
+        <button class="pipeline-btn pipeline-btn-shape" data-action="shape" type="button">Shape it &#8594;</button>
+        <button class="pipeline-btn-icon pipeline-btn-delete" data-action="delete" type="button" aria-label="Delete" title="Delete">&#128465;</button>
+      </div>
       ${showNote ? '<div class="pipeline-shape-note">Auto-routing to Human Gate lands in Phase 2.</div>' : ''}
     </div>
   `;
@@ -94,7 +97,10 @@ function executeCard(card) {
         ${progressPill(card.progress)}
         ${tagPills(card.tags)}
       </div>
-      <button class="pipeline-btn pipeline-btn-ship" data-action="execute" type="button" ${busy ? 'disabled' : ''} title="Runs on your Claude Code CLI">&#9881; ${label}</button>
+      <div class="pipeline-card-actions">
+        <button class="pipeline-btn pipeline-btn-ship" data-action="execute" type="button" ${busy ? 'disabled' : ''} title="Runs on your Claude Code CLI">&#9881; ${label}</button>
+        <button class="pipeline-btn-icon pipeline-btn-delete" data-action="delete" type="button" aria-label="Delete" title="Delete">&#128465;</button>
+      </div>
       ${busy ? `<div class="pipeline-shape-note mono">agent: ${escapeHtml(job.stage)} &middot; runs on your Claude Code CLI</div>` : ''}
       ${failed ? `<div class="pipeline-shape-note">Build failed: ${escapeHtml(job.error || 'unknown error')}</div>` : ''}
     </div>
@@ -110,9 +116,12 @@ function shippedCard(card) {
         ${progressPill(card.progress)}
         ${tagPills(card.tags)}
       </div>
-      ${card.artifact && card.artifact.path
-        ? `<a class="pipeline-btn pipeline-btn-view" href="${escapeHtml(card.artifact.path)}" target="_blank" rel="noopener">&#9655; View what was built</a>`
-        : `<button class="pipeline-btn pipeline-btn-view" type="button" disabled title="Shipped before the build agent existed — no artifact on file">&#9655; View what was built</button>`}
+      <div class="pipeline-card-actions">
+        ${card.artifact && card.artifact.path
+          ? `<a class="pipeline-btn pipeline-btn-view" href="${escapeHtml(card.artifact.path)}" target="_blank" rel="noopener">&#9655; View what was built</a>`
+          : `<button class="pipeline-btn pipeline-btn-view" type="button" disabled title="Shipped before the build agent existed — no artifact on file">&#9655; View what was built</button>`}
+        <button class="pipeline-btn-icon pipeline-btn-delete" data-action="delete" type="button" aria-label="Delete" title="Delete artifact and card">&#128465;</button>
+      </div>
     </div>
   `;
 }
@@ -275,6 +284,17 @@ export async function render(mount) {
     }
   }
 
+  async function deleteCard(id) {
+    if (!confirm('Delete this card and its artifact (if any)? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/pipeline/${id}/delete`, { method: 'POST' });
+      const data = await res.json();
+      applyBoard(data.board);
+    } catch (err) {
+      console.error('delete failed', err);
+    }
+  }
+
   let jobTimer = null;
 
   function watchJobs() {
@@ -350,6 +370,7 @@ export async function render(mount) {
     if (e.target.closest('[data-action="approve"]')) approveCard(id);
     if (e.target.closest('[data-action="reject"]')) rejectCard(id);
     if (e.target.closest('[data-action="execute"]')) executeBuild(id);
+    if (e.target.closest('[data-action="delete"]')) deleteCard(id);
   });
 
   await load();

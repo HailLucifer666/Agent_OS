@@ -20,6 +20,7 @@ const { createConversationAnnouncer } = require('../src/core/conversation/announ
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
 const { createNewsFeed } = require('./news-feed');
+const pcChild = require('../adapters/pc-child');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -132,6 +133,21 @@ function createServer(deps) {
       res.json(await probes.getStatus());
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----
+  app.get('/api/media', async (req, res) => {
+    try {
+      if (!pcChild) return res.json({ ok: false, error: 'pc-child offline' });
+      const result = await pcChild.sendCommand({ cmd: 'media_status' });
+      if (result.ok) {
+        res.json({ ok: true, media: result.result });
+      } else {
+        res.json({ ok: false, error: result.result });
+      }
+    } catch (err) {
+      res.json({ ok: false, error: err.message });
     }
   });
 
@@ -263,6 +279,10 @@ function createServer(deps) {
     catch (err) { res.status(400).json({ error: err.message }); }
   });
   app.post('/api/pipeline/:id/reject', (req, res) => {
+    try { pipelineEffector.reject(req.params.id); res.json({ board: pipelineEffector.listAll() }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.post('/api/pipeline/:id/delete', (req, res) => {
     try { pipelineEffector.reject(req.params.id); res.json({ board: pipelineEffector.listAll() }); }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -999,6 +1019,12 @@ function createServer(deps) {
   // Close-panel events — relay to all clients to close panels.
   bus.subscribe('ui.close-panel', (e) => {
     broadcastAll({ type: 'close-panel', all: e.payload.all });
+  });
+
+  // Open-web events — relay web content payload (YouTube embed, weather, search
+  // cards, etc.) so the dashboard opens a panel or floating widget.
+  bus.subscribe('ui.open-web', (e) => {
+    broadcastAll({ type: 'open-web', payload: e.payload });
   });
 
   // health — synthesized snapshot per Ambiguity #4; triggered by 'perception.metric'

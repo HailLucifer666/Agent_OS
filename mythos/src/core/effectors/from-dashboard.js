@@ -81,6 +81,115 @@ function buildTools(ctx) {
     }
   }
 
+  // ---- open_web ----
+  // Opens web content on the dashboard: YouTube videos (embed), weather cards,
+  // search result cards, flight cards, or a general web page. The tool resolves
+  // the content (search for YouTube video ID, geocode weather location, etc.)
+  // and returns a payload the frontend renders as either an overlay panel
+  // (YouTube/web — needs iframe) or a floating widget (search/weather/flights —
+  // custom-rendered cards). No API keys needed: Exa MCP search + YouTube embed
+  // URLs + Open-Meteo are all free.
+  async function open_web({ type, query, url, title, location }) {
+    try {
+      var t = String(type || 'search').trim().toLowerCase();
+      var q = String(query || '').trim();
+
+      // YOUTUBE — search for the video, extract ID, build embed URL
+      if (t === 'youtube') {
+        if (!q) return fail('A search query is required for YouTube.');
+        var ytRes = await web_search({ query: q + ' site:youtube.com', maxResults: 3, bus: ctx.bus });
+        if (!ytRes.ok || !ytRes.result || !ytRes.result.results || !ytRes.result.results.length) {
+          return fail('No YouTube videos found for "' + q + '".');
+        }
+        // Extract video ID from the first youtube.com/watch?v= URL
+        var videoId = null;
+        var videoTitle = title || q;
+        for (var i = 0; i < ytRes.result.results.length; i++) {
+          var r = ytRes.result.results[i];
+          var idM = String(r.url).match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
+          if (idM) { videoId = idM[1]; if (r.title) videoTitle = r.title; break; }
+        }
+        if (!videoId) return fail('Found results but could not extract a YouTube video ID. Try rephrasing.');
+        return ok({ widgetType: 'youtube', embedUrl: 'https://www.youtube-nocookie.com/embed/' + videoId + '?autoplay=1&rel=0&modestbranding=1', title: videoTitle, videoId: videoId });
+      }
+
+      // WEATHER — geocode location, return the Open-Meteo URL for client-side fetch
+      if (t === 'weather') {
+        var loc = String(location || query || '').trim();
+        if (!loc) return fail('A location is required for weather.');
+        try {
+          var geoRes = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(loc));
+          if (!geoRes.ok) return fail('Could not resolve location "' + loc + '".');
+          var geoData = await geoRes.json();
+          if (!geoData.results || !geoData.results.length) return fail('No location found for "' + loc + '".');
+          var hit = geoData.results[0];
+          var weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit.latitude + '&longitude=' + hit.longitude +
+            '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
+          return ok({ widgetType: 'weather', weatherUrl: weatherUrl, title: 'Weather: ' + hit.name, location: hit.name });
+        } catch (e) { return fail('Weather lookup failed: ' + e.message); }
+      }
+
+      // FLIGHTS — search for flight info, return cards + Google Flights deep-link
+      if (t === 'flights') {
+        if (!q) return fail('A flight query is required (e.g., "New York to Tokyo").');
+        var flightRes = await web_search({ query: 'flights ' + q, maxResults: 5, bus: ctx.bus });
+        var cards = (flightRes.ok && flightRes.result && flightRes.result.results) ? flightRes.result.results.map(function(r) {
+          return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
+        }) : [];
+        var deepLink = 'https://www.google.com/travel/flights?q=' + encodeURIComponent('flights ' + q);
+        return ok({ widgetType: 'flights', cards: cards, deepLink: deepLink, title: 'Flights: ' + q, query: q });
+      }
+
+      // IMAGE — search for images, return URLs
+      if (t === 'image') {
+        if (!q) return fail('An image query is required.');
+        var imgRes = await web_search({ query: q, maxResults: 6, bus: ctx.bus });
+        var imgCards = (imgRes.ok && imgRes.result && imgRes.result.results) ? imgRes.result.results.map(function(r) {
+          return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 150) };
+        }) : [];
+        return ok({ widgetType: 'image', cards: imgCards, title: title || q, query: q });
+      }
+
+      // WEB — direct URL embed (validate https scheme).
+      // Sites that block framing (X-Frame-Options) get smart-routed instead:
+      //   news.google.com  -> existing NEWS widget (server-side RSS)
+      //   other blockers    -> open in new browser tab (no iframe attempt)
+      if (t === 'web') {
+        if (!url) return fail('A URL is required for web embedding.');
+        var parsed = null;
+        try { parsed = new URL(url); } catch (_) { return fail('Invalid URL: ' + url); }
+        if (parsed.protocol !== 'https:') return fail('Only https: URLs can be embedded (security).');
+        var host = parsed.hostname.toLowerCase();
+        if (host === 'news.google.com' || host === 'www.news.google.com') {
+          return ok({ widgetType: 'news', title: title || 'Google News' });
+        }
+        var NO_EMBED_DOMAINS = ['google.com','facebook.com','twitter.com','x.com',
+          'instagram.com','github.com','linkedin.com','reddit.com'];
+        for (var d = 0; d < NO_EMBED_DOMAINS.length; d++) {
+          if (host === NO_EMBED_DOMAINS[d] || host.endsWith('.' + NO_EMBED_DOMAINS[d])) {
+            return ok({ widgetType: 'newtab', url: url, title: title || parsed.hostname });
+          }
+        }
+        return ok({ widgetType: 'web', embedUrl: url, title: title || parsed.hostname });
+      }
+
+      // SEARCH (default) — return search result cards
+      if (!q) return fail('A search query is required.');
+      var searchRes = await web_search({ query: q, maxResults: 6, bus: ctx.bus });
+      if (!searchRes.ok || !searchRes.result || !searchRes.result.results || !searchRes.result.results.length) {
+        return fail('No results found for "' + q + '".');
+      }
+      var searchCards = searchRes.result.results.map(function(r) {
+        return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
+      });
+      return ok({ widgetType: 'search', cards: searchCards, title: title || q, query: q, source: searchRes.result.source });
+
+      return fail('Unknown web type: ' + t);
+    } catch (err) {
+      return fail('open_web failed: ' + err.message);
+    }
+  }
+
   // ---- open_artifact ----
 
   async function open_artifact({ path, title }) {
@@ -378,6 +487,15 @@ function buildTools(ctx) {
     try {
       const found = findPipelineCardByQuery(query);
       if (!found) return fail(`No pipeline card matching "${query}" found.`);
+
+      // Prevent duplicate builds: if card is already in execute with a running/queued job
+      if (found.card.stage === 'execute' && found.card.jobId) {
+        const job = buildRunner.getJob(found.card.jobId);
+        if (job && (job.status === 'running' || job.status === 'queued')) {
+          return fail('Build already in progress for this card. Wait for it to complete or fail before retrying.');
+        }
+      }
+
       // Phase 18: thread the cortex-active goal (if any) onto the enqueued job.
       const result = agentActions.executePipelineCard(found.card.id, runCtx && runCtx.goalId);
       return ok(result);
@@ -520,12 +638,13 @@ function buildTools(ctx) {
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top one.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
+    { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },
     { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch },
     { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); } },
-    { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted).', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
+    { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
     { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals },
     { name: 'toggle_goal', description: 'Toggle a goal done/undone by matching its text.', params: { query: 'string' }, danger: false, fn: toggle_goal },

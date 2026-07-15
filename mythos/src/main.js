@@ -16,6 +16,9 @@ const { createLeash } = require('./core/leash');
 const { createCheckpointRegistry } = require('./core/leash/checkpoints');
 const { createForge } = require('./core/effectors/forge');
 const { registerFromForge } = require('./core/effectors/from-forge');
+const { createEngagementStore } = require('./core/engagements/store');
+const { createEngagementManager } = require('./core/engagements');
+const { createConversationGateway } = require('./core/assistant/gateway');
 const { createTimerSensor } = require('./core/sensors/timer');
 const { createReminderSensor } = require('./core/sensors/reminder-sensor');
 const { createProbes } = require('./core/immune/probes');
@@ -45,6 +48,8 @@ const { registerFromSystem } = require('./core/effectors/from-system');
 const { registerFromGmail } = require('./core/effectors/from-gmail');
 const { registerFromMemory } = require('./core/effectors/from-memory');
 const { registerFromCalendar } = require('./core/effectors/from-calendar');
+const { registerFromSkills } = require('./core/effectors/from-skills');
+const { registerFromSpotify } = require('./core/effectors/from-spotify');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
@@ -119,6 +124,11 @@ async function main() {
   let checkpoints = null;          // P22 checkpoint approval registry
   let forge = null;                // P22 Forge multi-file build pipeline
   let checkpointSweepTimer = null;
+
+  // Engagement Layer
+  let engagementStore = null;
+  let engagementManager = null;
+  let conversationGateway = null;
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -241,6 +251,7 @@ async function main() {
         webFetch: require('./core/effectors/web-fetch').web_fetch,     // P22: research gate
         browserAgent: browserAgent,  // P22: visual verification (render + screenshot)
         evidenceValidator: evidenceValidator,  // P23: external ship gate
+        bus: bus,  // A4: research-skipped anomaly emission
       });
 
       // goals-effector: Goals.md <-> GoalSystem bridge (Spec Ambiguities #6), registered
@@ -268,6 +279,7 @@ async function main() {
       // is no dashboard process to monitor CLI sessions for yet.
       registerFromComputer(hub);
       registerFromPc(hub, { brain: brain });
+      registerFromSpotify(hub, { effectors: hub });
       registerFromBrowser(hub);
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
@@ -302,6 +314,7 @@ async function main() {
       registerFromMission(hub, { orchestrator: orchestrator });
       registerFromSystem(hub, { config: config });
       registerFromGmail(hub, { logger: logger });
+      registerFromSkills(hub);
       registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
 
@@ -323,6 +336,40 @@ async function main() {
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors, scanner: require('./core/effectors/credential-scanner').createCredentialScanner() });
       logger.info('leash.ready', {});
+    }},
+
+    { name: 'engagement-store', fail: 'degraded', fn: async function() {
+      // Engagement Layer: persistent store for engagement records
+      engagementStore = createEngagementStore({ fs: memory.fs, config, bus });
+      await engagementStore.init();
+      logger.info('engagement-store.ready', {});
+    }},
+
+    { name: 'engagement-manager', fail: 'degraded', fn: function() {
+      // Engagement Layer: manager orchestrates interview->spec->plan->execute->verify
+      engagementManager = createEngagementManager({
+        bus, config, memory, goals, leash, effectors, engagementStore
+      });
+      logger.info('engagement-manager.ready', {});
+    }},
+
+    { name: 'conversation-gateway', fail: 'degraded', fn: function() {
+      // Engagement Layer: gateway classifies intent and routes to engagement or cortex
+      conversationGateway = createConversationGateway({
+        bus, config, engagementManager, cortex
+      });
+      logger.info('conversation-gateway.ready', {});
+    }},
+
+    { name: 'engagement-immune-hooks', fail: 'degraded', fn: function() {
+      // Engagement Layer: wire engagement manager to immune watchdog
+      // Watchdog monitors for stuck engagements (engagement-stuck-interviewing, etc.)
+      if (immune && immune.watchdog && engagementManager) {
+        // Watchdog already monitors cortex; engagement hooks emit health.anomaly
+        // which watchdog will pick up via bus subscription
+        bus.emit('engagement.immune.hooks.registered', { ok: true });
+      }
+      logger.info('engagement-immune-hooks.ready', {});
     }},
 
     { name: 'recovery', fail: 'degraded', fn: function() {

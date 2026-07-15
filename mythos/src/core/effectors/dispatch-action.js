@@ -60,12 +60,15 @@ async function dispatchAction(decision, ctx) {
     } catch (_) {}
   }
 
-  // 6. UI-specific events (navigate, close_panel)
+  // 6. UI-specific events (navigate, close_panel, open_web)
   if (decision.tool === 'navigate' && result && result.ok && result.result && result.result.route) {
     bus.emit('ui.navigate', { route: result.result.route });
   }
   if (decision.tool === 'close_panel' && result && result.ok) {
     bus.emit('ui.close-panel', { all: result.result.all });
+  }
+  if (decision.tool === 'open_web' && result && result.ok && result.result) {
+    bus.emit('ui.open-web', result.result);
   }
 
   return result;
