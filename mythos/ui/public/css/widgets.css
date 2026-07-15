@@ -73,3 +73,31 @@
 .widget-chip.chip-open { color: var(--status-warn); border-color: var(--status-warn); }
 .widget-chip.chip-half-open { color: var(--status-degraded); border-color: var(--status-degraded); }
 .widget-chip.chip-closed { color: var(--status-ok); border-color: var(--status-ok); }
+
+/* NEWS widget — headline list from /api/news */
+.news-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+.news-list::-webkit-scrollbar { width: 4px; }
+.news-list::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 2px; }
+
+.news-item {
+  display: block;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.news-item:last-child { border-bottom: none; }
+.news-item:hover .news-item-title { color: var(--text); }
+
+.news-item-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-item-ago { font-size: 9px; color: var(--text-faint); }
+
+.news-foot { margin-top: 6px; font-size: 9px; color: var(--text-faint); }

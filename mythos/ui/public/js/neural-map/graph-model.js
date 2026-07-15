@@ -8,9 +8,11 @@ export const MODULE_IDS = ['goals', 'kanban', 'pipeline', 'memory', 'health', 'a
 const MEMORY_CLUSTERS = ['episodic', 'semantic', 'skills', 'identity'];
 
 // weight: 1 = baseline visual size; grows with sqrt so a 10x-lived vault reads
-// denser without any single node swallowing the screen.
+// denser without any single node swallowing the screen. Capped: a huge store
+// (10k+ semantic traces) previously grew a bubble big enough to cover the mic
+// indicator at bottom-center — growth saturates at ~55 entries.
 function weightFromCount(count) {
-  return 1 + Math.sqrt(Math.max(0, count)) * 0.35;
+  return 1 + Math.min(Math.sqrt(Math.max(0, count)) * 0.35, 2.6);
 }
 
 /**

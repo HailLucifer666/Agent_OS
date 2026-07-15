@@ -60,28 +60,67 @@
   min-height: 120px;
 }
 
-/* health view rows (new P9 view — no NOVA css to CV) */
-.health-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 12px;
+/* health view — three titled sections: breakers / providers / anomalies */
+.health-section { margin-bottom: 20px; }
+.health-section:last-child { margin-bottom: 0; }
+
+.health-section-title {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--text-faint);
+  padding: 0 0 8px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 13px;
+  margin-bottom: 6px;
 }
-.health-row .status-ok { color: var(--status-ok); }
-.health-row .status-degraded { color: var(--status-degraded); }
-.health-row .status-warn { color: var(--status-warn); }
-.health-providers { margin-top: 18px; }
-.health-anomalies { margin-top: 18px; }
-.health-anomaly-row {
-  padding: 6px 12px;
+
+.health-breakers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px 18px;
+}
+
+.health-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 4px;
   font-size: 12px;
+  color: var(--text);
+}
+
+.health-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  align-self: center;
+}
+.health-dot-ok { background: var(--status-ok); box-shadow: 0 0 6px var(--status-ok); }
+.health-dot-degraded { background: var(--status-degraded); box-shadow: 0 0 6px var(--status-degraded); }
+.health-dot-warn { background: var(--status-warn); box-shadow: 0 0 6px var(--status-warn); }
+
+.health-item-name { flex: 1; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-item-state { font-size: 10px; letter-spacing: 0.08em; flex-shrink: 0; }
+.health-item-detail { font-size: 10px; color: var(--text-faint); flex-shrink: 0; }
+.health-fails { font-size: 10px; color: var(--status-warn); }
+
+.health-item .status-ok { color: var(--status-ok); }
+.health-item .status-degraded { color: var(--status-degraded); }
+.health-item .status-warn { color: var(--status-warn); }
+
+.health-anomaly-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  font-size: 11px;
   color: var(--text-dim);
   border-left: 2px solid var(--status-degraded);
   margin-bottom: 4px;
-  word-break: break-all;
 }
+.health-anomaly-time { color: var(--text-faint); font-size: 10px; flex-shrink: 0; }
+.health-anomaly-kind { color: var(--status-degraded); flex-shrink: 0; }
+.health-anomaly-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* audit view rows (new P9 view) */
 .audit-row {

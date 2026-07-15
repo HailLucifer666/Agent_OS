@@ -34,11 +34,16 @@ const orb = mountCoreOrb(document.getElementById('core-orb'), {
   onClick: () => toggleVoice(),
 });
 
-// neural map
+// neural map — onPan keeps the DOM core-orb glued to the panned constellation
+// (hud.css centers it with translate(-50%,-50%); the pan offset is additive).
+const orbEl = document.getElementById('core-orb');
 mountHud(document.getElementById('hud-canvas'), {
   ...ctx,
   onNodeClick: (panelId) => overlays.openPanel(panelId),
   onAction: (category, ok) => orb.flashAction(category, ok),
+  onPan: (pan) => {
+    orbEl.style.transform = `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px))`;
+  },
 });
 
 // floating widgets

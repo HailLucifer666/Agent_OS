@@ -122,9 +122,9 @@ describe('graph-layout (pure)', () => {
 });
 
 describe('panel-registry (pure)', () => {
-  it('exposes the seven HUD panels with title + loader, no duplicates', () => {
+  it('exposes the HUD panels with title + loader, no duplicates', () => {
     const ids = panelRegistry.panelIds();
-    assert.deepEqual(new Set(ids), new Set(['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit', 'backend']));
+    assert.deepEqual(new Set(ids), new Set(['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit', 'backend', 'conversation', 'engagements', 'forge']));
     assert.equal(ids.length, new Set(ids).size, 'no duplicate panel ids');
     ids.forEach((id) => {
       const p = panelRegistry.getPanel(id);

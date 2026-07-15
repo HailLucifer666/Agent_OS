@@ -19,6 +19,7 @@ const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
+const { createNewsFeed } = require('./news-feed');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -172,6 +173,15 @@ function createServer(deps) {
   });
 
   app.get('/api/kanban', (req, res) => { res.json(kanbanEffector.listBoard()); });
+
+  // ---- /api/news — Google News RSS fetched server-side for the NEWS widget
+  // (browsers can't: CORS on the feed, X-Frame-Options on the site) ----
+  const newsFeed = createNewsFeed();
+  app.get('/api/news', (req, res) => {
+    newsFeed.fetchNews()
+      .then((r) => res.json(r))
+      .catch((err) => res.json({ ok: false, error: err.message, items: [] }));
+  });
 
   // ---- P22 — Forge build projects + checkpoint approval gates ----
   app.get('/api/forge/projects', (req, res) => { res.json({ projects: forge ? forge.listProjects() : [] }); });
@@ -901,7 +911,16 @@ function createServer(deps) {
     }
 
     function handleSubscribe(msg) {
-      (msg.types || []).forEach((t) => subscriptions.add(t));
+      (msg.types || []).forEach((t) => {
+        const isNew = !subscriptions.has(t);
+        subscriptions.add(t);
+        // Replay history only when the client asked for it (backend-terminal
+        // panel) — an unconditional replay would re-fire 200 'action' events
+        // into hud-canvas's burst FX on every page load.
+        if (msg.replay && isNew && replayBuffers[t]) {
+          replayBuffers[t].forEach((entry) => send(entry));
+        }
+      });
     }
 
     ws.on('message', (raw) => {
@@ -921,6 +940,18 @@ function createServer(deps) {
       // phase's scope (utterance/command are not streamed); reserved for parity.
     });
   });
+
+  // Replay buffers for the backend-terminal panel: it only sees LIVE broadcasts,
+  // so an idle entity leaves it permanently on "Awaiting…". Keep the last 200 of
+  // each stream; a {type:'subscribe', replay:true} message replays them to that
+  // one connection (oldest first) so the panel opens with history.
+  const REPLAY_MAX = 200;
+  const replayBuffers = { log: [], action: [], 'brain-spend': [] };
+  function pushReplay(type, payload) {
+    const buf = replayBuffers[type];
+    buf.push({ type, payload });
+    if (buf.length > REPLAY_MAX) buf.shift();
+  }
 
   // ---- Bus → WS v2 OUT relay (the anti-drift table, in code) ----
   // Every subscribe() below names the EXACT spec/shipped bus event string.
@@ -954,7 +985,9 @@ function createServer(deps) {
 
   // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
   bus.subscribe('action.*', (e) => {
-    broadcastAll({ type: 'action', payload: { tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId, reason: e.payload.reason } });
+    const payload = { tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId, reason: e.payload.reason };
+    pushReplay('action', payload);
+    broadcastAll({ type: 'action', payload });
   });
 
   // Navigate events — emitted by dispatchAction when a navigate effector call
@@ -981,11 +1014,11 @@ function createServer(deps) {
   // last-known provider status — the anomaly payload it exists to surface is
   // already in anomalyLog, no fresh probe needed. Both spec triggers preserved.
   const anomalyLog = [];
-  let lastProviders = {};
+  let lastStatus = null; // last probes.getStatus() result ({providers, quotas, probedAt})
   bus.subscribe('health.anomaly', (e) => {
     anomalyLog.push(e.payload);
     if (anomalyLog.length > 200) anomalyLog.shift();
-    broadcastHealth(lastProviders);
+    broadcastHealth(lastStatus);
     // B2: Persist anomalies to episodic memory for long-term health tracking.
     try {
       memory.episodic.write({
@@ -997,19 +1030,30 @@ function createServer(deps) {
     } catch (_) {}
   });
   bus.subscribe('perception.metric', () => {
-    probes.getStatus().then((providers) => {
-      lastProviders = providers;
-      broadcastHealth(providers);
+    probes.getStatus().then((status) => {
+      lastStatus = status;
+      broadcastHealth(status);
       // Token-usage snapshot for the widget — real per-provider token data,
       // piggybacked on the existing 4s metric tick so no new polling infra is needed.
       broadcastAll({ type: 'token-usage', payload: spend.getStats() });
     }).catch(() => {});
   });
 
-  function broadcastHealth(providers) {
+  function broadcastHealth(status) {
+    // `status` is probes.getStatus()'s { providers, quotas, probedAt } — unwrap
+    // here so the HUD gets flat `providers` + `quotas` instead of a nested blob
+    // (the old shape made views/health.js JSON-dump the whole object).
     const breakers = {};
     for (const [name, breaker] of effectors.breakers) breakers[name] = breaker.stats;
-    broadcastAll({ type: 'health', payload: { breakers, providers, anomalies: anomalyLog.slice(-20) } });
+    broadcastAll({
+      type: 'health',
+      payload: {
+        breakers,
+        providers: (status && status.providers) || {},
+        quotas: (status && status.quotas) || [],
+        anomalies: anomalyLog.slice(-20),
+      },
+    });
   }
 
   // audit.decision — exact string P5 emits alongside auditWriter.write() (Ambiguity #3).
@@ -1040,12 +1084,16 @@ function createServer(deps) {
 
   // brain-spend — exact string with hyphen (D-28 fixed).
   bus.subscribe('brain-spend', (e) => {
+    pushReplay('brain-spend', e.payload);
     broadcastAll({ type: 'brain-spend', payload: e.payload });
   });
 
   // log — NOT a bus event; a logger hook (see logger.js onLog(fn) diff).
   if (typeof logger.onLog === 'function') {
-    logger.onLog((line) => broadcastAll({ type: 'log', payload: line }));
+    logger.onLog((line) => {
+      pushReplay('log', line);
+      broadcastAll({ type: 'log', payload: line });
+    });
   }
 
   function stop() {

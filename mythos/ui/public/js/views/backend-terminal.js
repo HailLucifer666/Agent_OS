@@ -158,14 +158,15 @@ export async function render(mount) {
   // Subscribe to all backend activity streams
   var unsubs = [];
 
-  // System logs — the backend stdout/stderr stream
+  // System logs — the backend stdout/stderr stream (replay:true backfills the
+  // server's recent history so the panel isn't empty on an idle entity)
   unsubs.push(subscribe(['log'], function(msg) {
     var p = msg.payload || {};
     logs.push({ ts: p.ts || Date.now(), level: p.level || 'info', msg: p.msg || '' });
     if (logs.length > MAX_LINES) logs.shift();
     logCount++;
     renderLogs();
-  }));
+  }, { replay: true }));
 
   // Tool actions — what the cortex/voice is calling
   unsubs.push(subscribe(['action'], function(msg) {
@@ -174,7 +175,7 @@ export async function render(mount) {
     if (apiCalls.length > MAX_LINES) apiCalls.shift();
     apiCount++;
     renderApi();
-  }));
+  }, { replay: true }));
 
   // Brain spend — which provider/lane was called
   unsubs.push(subscribe(['brain-spend'], function(msg) {
@@ -183,7 +184,7 @@ export async function render(mount) {
     if (apiCalls.length > MAX_LINES) apiCalls.shift();
     apiCount++;
     renderApi();
-  }));
+  }, { replay: true }));
 
   // Health anomalies — errors and degraded states
   unsubs.push(subscribe(['health'], function(msg) {

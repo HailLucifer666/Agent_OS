@@ -10,6 +10,7 @@ import { mountWip } from './kinds/wip.js';
 import { mountTickRate } from './kinds/tick-rate.js';
 import { mountBreakers } from './kinds/breakers.js';
 import { mountTokens } from './kinds/tokens.js';
+import { mountNews } from './kinds/news.js';
 
 // defaultPos: {left|right, top|bottom} offsets in px — corners stay clear of the
 // central orb and the radial module ring.
@@ -22,6 +23,7 @@ export const WIDGETS = [
   { id: 'wip',       title: 'WORK IN PROGRESS', defaultPos: { right: 24, bottom: 24 }, mount: mountWip },
   { id: 'tick-rate', title: 'TICK RATE',   defaultPos: { left: 24, top: 208 },     mount: mountTickRate },
   { id: 'breakers',  title: 'BREAKERS',    defaultPos: { right: 24, bottom: 168 }, mount: mountBreakers },
+  { id: 'news',      title: 'NEWS',        defaultPos: { right: 24, top: 232 },    mount: mountNews },
 ];
 
 export function widgetIds() {

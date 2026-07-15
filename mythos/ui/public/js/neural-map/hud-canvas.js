@@ -97,6 +97,19 @@ function nodeReadout(node) {
   }
 }
 
+const PAN_KEY = 'mythos.hud.pan.v1';
+
+function loadPan() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PAN_KEY)) || {};
+    return { x: Number(p.x) || 0, y: Number(p.y) || 0 };
+  } catch { return { x: 0, y: 0 }; }
+}
+
+function savePan(pan) {
+  try { localStorage.setItem(PAN_KEY, JSON.stringify({ x: Math.round(pan.x), y: Math.round(pan.y) })); } catch { /* quota — non-fatal */ }
+}
+
 export function mountHud(canvas, ctx) {
   const c2d = canvas.getContext('2d');
   const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -114,6 +127,26 @@ export function mountHud(canvas, ctx) {
   let raf = null;
   let t = 0;
   let lastTime = 0;
+
+  // Constellation pan — drag empty canvas to move the ENTIRE node graph (core,
+  // modules, clusters, tendrils, ripples) so widgets get breathing room. The
+  // starfield, guide rings, and SYSTEM STATUS readout stay fixed. Persisted to
+  // localStorage (same pattern as widget-host positions); hit-testing and the
+  // DOM core-orb (via ctx.onPan) compensate with the same offset.
+  const pan = loadPan();
+  let panDrag = null;   // { sx, sy, ox, oy } while dragging empty canvas
+  let panMoved = false; // suppresses the click that follows a drag
+
+  function clampPan() {
+    if (!width || !height) return; // pre-layout 0x0 viewport — don't corner-lock the pan
+    const margin = 80; // keep the core at least this far inside the viewport
+    pan.x = Math.max(-(width / 2) + margin, Math.min(width / 2 - margin, pan.x));
+    pan.y = Math.max(-(height / 2) + margin, Math.min(height / 2 - margin, pan.y));
+  }
+
+  function notifyPan() {
+    if (ctx.onPan) ctx.onPan({ x: pan.x, y: pan.y });
+  }
 
   const ripples = [];        // expanding rings from core (tick FX)
   const bursts = [];         // event-driven bright particles { edgeKey, progress, speed, color }
@@ -308,20 +341,55 @@ export function mountHud(canvas, ctx) {
   }
 
   function onMove(e) {
-    hovered = nodeAt(e.clientX, e.clientY);
-    canvas.style.cursor = hovered ? 'pointer' : 'default';
+    if (panDrag) return; // cursor is owned by the drag while panning
+    hovered = nodeAt(e.clientX - pan.x, e.clientY - pan.y);
+    canvas.style.cursor = hovered ? 'pointer' : 'grab';
   }
 
   function onClick(e) {
-    const hit = nodeAt(e.clientX, e.clientY);
+    if (panMoved) { panMoved = false; return; } // this click ended a pan drag
+    const hit = nodeAt(e.clientX - pan.x, e.clientY - pan.y);
     if (!hit) return;
     if (hit.type === 'module') ctx.onNodeClick(hit.id);
     else if (hit.type === 'memory-cluster') ctx.onNodeClick('memory');
     else if (hit.type === 'breaker') ctx.onNodeClick('health');
   }
 
+  // Pan drag — starts only on empty canvas (a node hit falls through to click).
+  function onPointerDown(e) {
+    if (e.button !== 0) return;
+    if (nodeAt(e.clientX - pan.x, e.clientY - pan.y)) return;
+    panDrag = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
+    panMoved = false;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+  }
+
+  function onPointerMove(e) {
+    if (!panDrag) return;
+    const dx = e.clientX - panDrag.sx;
+    const dy = e.clientY - panDrag.sy;
+    if (!panMoved && Math.abs(dx) + Math.abs(dy) > 5) panMoved = true;
+    pan.x = panDrag.ox + dx;
+    pan.y = panDrag.oy + dy;
+    clampPan();
+    notifyPan();
+  }
+
+  function onPointerUp(e) {
+    if (!panDrag) return;
+    panDrag = null;
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    canvas.style.cursor = 'grab';
+    if (panMoved) savePan(pan);
+  }
+
   canvas.addEventListener('mousemove', onMove);
   canvas.addEventListener('click', onClick);
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
 
   // ---- line-icon glyphs (simple strokes, reference style) ----
   const ICONS = {
@@ -487,6 +555,10 @@ export function mountHud(canvas, ctx) {
       glowDot(d.u * width, d.v * height, d.r, COLORS.accent, a);
     });
 
+    // Everything from here to the node pass moves with the constellation pan.
+    c2d.save();
+    c2d.translate(pan.x, pan.y);
+
     // 2. tendrils: organic curve + branches + fading tail + tip dots
     graph.edges.forEach((edge) => {
       const key = `${edge.from}->${edge.to}`;
@@ -619,15 +691,19 @@ export function mountHud(canvas, ctx) {
       }
     });
 
+    c2d.restore(); // end constellation pan layer
+
     drawSystemStatus();
 
     c2d.restore();
     raf = requestAnimationFrame(frame);
   }
 
-  const onResize = () => resize();
+  const onResize = () => { resize(); clampPan(); notifyPan(); };
   window.addEventListener('resize', onResize);
   resize();
+  clampPan();
+  notifyPan(); // apply the persisted pan to the DOM core-orb on load
   resyncStats(); // initial density fetch — one-shot, not a poll
   raf = requestAnimationFrame(frame);
 
@@ -645,5 +721,9 @@ export function mountHud(canvas, ctx) {
     document.removeEventListener('visibilitychange', onVis);
     canvas.removeEventListener('mousemove', onMove);
     canvas.removeEventListener('click', onClick);
+    canvas.removeEventListener('pointerdown', onPointerDown);
+    canvas.removeEventListener('pointermove', onPointerMove);
+    canvas.removeEventListener('pointerup', onPointerUp);
+    canvas.removeEventListener('pointercancel', onPointerUp);
   };
 }

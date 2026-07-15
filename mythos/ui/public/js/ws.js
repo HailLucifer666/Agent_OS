@@ -90,11 +90,13 @@ export function offBroadcast(type, fn) {
   if (listeners.size === 0) broadcastHandlers.delete(type);
 }
 
-// NEW — subscribe(types, onEvent): sends {type:'subscribe', types} once and wires
-// onEvent as the onBroadcast handler for every type in the list, in one call.
-export function subscribe(types, onEvent) {
+// NEW — subscribe(types, onEvent, opts): sends {type:'subscribe', types} once and
+// wires onEvent as the onBroadcast handler for every type in the list, in one call.
+// opts.replay:true asks the server to replay its recent history for these types
+// (backend-terminal only — replaying 'action' everywhere would re-fire HUD FX).
+export function subscribe(types, onEvent, opts) {
   connect();
-  sendMessage({ type: 'subscribe', types });
+  sendMessage({ type: 'subscribe', types, replay: Boolean(opts && opts.replay) });
   types.forEach((t) => onBroadcast(t, onEvent));
   return () => types.forEach((t) => offBroadcast(t, onEvent));
 }
