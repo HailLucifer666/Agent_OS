@@ -24,3 +24,10 @@ graphify-out/
 
 # editor/planner scratch
 .kilo/
+
+# scratch test/debug scripts (root-level ps1 probing scripts)
+/check_*.ps1
+/test_*.ps1
+
+# zcode session plans
+.zcode/plans/
