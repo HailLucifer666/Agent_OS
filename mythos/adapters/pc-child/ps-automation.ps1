@@ -16,6 +16,7 @@
 #   { "cmd": "write_note", "text": "remember this", "title": "My Note" }
 #   { "cmd": "ping" }
 #   { "cmd": "send_key", "key": "enter" }
+#   { "cmd": "click_at", "x": 500, "y": 300 }
 #
 # Response shape:
 #   { "ok": true, "result": <any> }
@@ -23,12 +24,99 @@
 
 $ErrorActionPreference = 'Continue'
 
+# ---- DPI awareness ----
+# BUG-026 (4th attempt, part A): PowerShell 5.1 is not DPI-aware by default. On any display scaled
+# above 100%, that leaves UIA's BoundingRectangle (queried against DPI-aware target
+# apps, which report true physical-pixel coordinates) out of sync with this process's
+# own unaware/virtualized view of the screen -- Click-AtScreenCoords and Screen.Bounds
+# below then normalize against the wrong scale and clicks land in the wrong spot. Must
+# run before any UIA/Screen/SendInput usage, so it's the very first thing after startup.
+#
+# RESTORED (2026-07-16): this block, click_at, and the WinRT fix below were dropped by
+# a concurrent session's commit that branched from an older snapshot of this file and
+# didn't carry them forward. Re-applied after confirming via diff exactly what was lost.
+Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public class DpiHelper {
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDpiAwarenessContext(int dpiFlag);
+}
+'@
+[void][DpiHelper]::SetProcessDpiAwarenessContext(-4) # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+
 # ---- P/Invoke Setup ----
 # Load UIA and define SendInput types once at startup
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+# ---- WinRT async bridging ----
+# BUG-004: IAsyncOperation<T> (WinRT) does NOT implement .Wait()/.Result the way a
+# real System.Threading.Tasks.Task does. Calling .Wait() directly on a raw WinRT
+# operation throws at runtime. Reflectively invoke the generic AsTask<TResult>
+# extension from System.WindowsRuntimeSystemExtensions to bridge to a real Task first,
+# then .Wait()/.Result on THAT.
+#
+# BUG-004 (regression, 3rd pass -- root cause confirmed live, not theorized): the
+# object returned by a WinRT static async method obtained via [Type]::GetType(...)
+# comes back as a raw late-bound System.__ComObject, not a strongly-typed managed
+# proxy. .GetType().GetInterfaces() on a System.__ComObject returns an EMPTY array --
+# .NET reflection cannot discover COM-interop objects' implemented interfaces this way.
+# So an approach that tries to derive $resultType via
+# `$WinRtOp.GetType().GetInterface('IAsyncOperation``1')` always returns $null, and
+# .GetGenericArguments() on that null throws "You cannot call a method on a
+# null-valued expression." -- confirmed by direct reproduction in a live PowerShell
+# session against this machine's real SMTC session before writing this fix, and the
+# fix itself was confirmed live too (GET /api/media returned real title/artist/album
+# while a track was playing). RESTORED (2026-07-16) after a concurrent session's
+# commit replaced this with an unverified polling rewrite of its own (its own commit
+# message called it "diagnosed, not yet fixed") -- keeping the proven version.
+# Fix: the caller always statically knows the expected result type already (it's
+# resolved the exact same way $type is above, via [Type]::GetType(...,
+# ContentType=WindowsRuntime)) -- so require it explicitly instead of trying to
+# infer it from an object that can't be reflected.
+$AsTaskGeneric = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+} | Select-Object -First 1
+
+function Await-WinRTOperation($WinRtOp, [type]$ResultType) {
+    $task = $AsTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($WinRtOp))
+    $task.Wait()
+    return $task.Result
+}
+
+# BUG-004 (2nd latent bug, found live): a WinRT IRandomAccessStream (e.g. the album-art
+# thumbnail from GlobalSystemMediaTransportControlsSessionMediaProperties.Thumbnail)
+# comes back as the same unreflectable System.__ComObject -- it has no .GetBuffer()
+# method (that only exists on IBuffer, a different type). Confirmed live: a track with
+# no thumbnail never hit this path, so it went unnoticed until a track WITH album art
+# was tested -- likely the actual cause of "widget goes blank after the song changes"
+# (first track had no art, next one did, and the whole media_status call threw).
+# Fix: bridge the WinRT stream to a real .NET System.IO.Stream via the
+# AsStreamForRead(IInputStream) extension (System.IO.WindowsRuntimeStreamExtensions,
+# same assembly as AsTask above), then read it with ordinary .NET Stream.Read().
+$AsStreamForRead = ([System.WindowsRuntimeSystemExtensions].Assembly.GetTypes() |
+    Where-Object { $_.FullName -eq 'System.IO.WindowsRuntimeStreamExtensions' }
+).GetMethods() | Where-Object {
+    $_.Name -eq 'AsStreamForRead' -and $_.GetParameters().Count -eq 1
+} | Select-Object -First 1
+
+function Read-WinRTStreamBytes($WinRtStream) {
+    $netStream = $AsStreamForRead.Invoke($null, @($WinRtStream))
+    # Use the converted .NET stream's Length, not the WinRT COM object's .Size --
+    # property access on the raw System.__ComObject is unreliable the same way
+    # method/interface reflection on it is (confirmed live: .Size read back empty).
+    $bytes = New-Object byte[] $netStream.Length
+    $total = 0
+    while ($total -lt $bytes.Length) {
+        $n = $netStream.Read($bytes, $total, $bytes.Length - $total)
+        if ($n -le 0) { break }
+        $total += $n
+    }
+    return $bytes
+}
 
 Add-Type -TypeDefinition @'
 using System;
@@ -433,29 +521,9 @@ function Handle-MediaStatus {
             return @{ available = $false; error = 'SMTC API not available (requires Windows 10 1903+ and PowerShell 5.1+)' }
         }
 
-        # Get the session manager using polling (IAsyncOperation doesn't support .Wait()/.Result in PowerShell)
-        $sessionManagerTask = $type::RequestAsync()
-
-        # Poll for completion
-        for ($i = 0; $i -lt 50; $i++) {
-            try {
-                $status = $sessionManagerTask.Status
-                if ($status -eq 'Completed' -or $status -eq 2) {  # AsyncStatus.Completed = 2
-                    break
-                }
-            } catch {
-                # Status property might not be accessible, try direct GetResults
-            }
-            Start-Sleep -Milliseconds 100
-        }
-
-        $sessionManager = $null
-        try {
-            $sessionManager = $sessionManagerTask.GetResults()
-        } catch {
-            return @{ available = $true; playing = $false; error = 'Failed to get session manager' }
-        }
-
+        # Get the session manager
+        $sessionManagerOp = $type::RequestAsync()
+        $sessionManager = Await-WinRTOperation $sessionManagerOp $type
         if (-not $sessionManager) {
             return @{ available = $true; playing = $false; error = 'Failed to get session manager' }
         }
@@ -474,23 +542,9 @@ function Handle-MediaStatus {
         $isPlaying = ($playbackStatus -eq 'Playing')
 
         # Get media properties (title, artist, album, thumbnail)
-        $mediaPropsTask = $currentSession.TryGetMediaPropertiesAsync()
-
-        # Poll for completion
-        for ($i = 0; $i -lt 50; $i++) {
-            try {
-                $status = $mediaPropsTask.Status
-                if ($status -eq 'Completed' -or $status -eq 2) {
-                    break
-                }
-            } catch { }
-            Start-Sleep -Milliseconds 100
-        }
-
-        $mediaProps = $null
-        try {
-            $mediaProps = $mediaPropsTask.GetResults()
-        } catch { }
+        $mediaPropsType = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $mediaPropsOp = $currentSession.TryGetMediaPropertiesAsync()
+        $mediaProps = Await-WinRTOperation $mediaPropsOp $mediaPropsType
 
         $result = @{
             available = $true
@@ -503,33 +557,20 @@ function Handle-MediaStatus {
             if ($mediaProps.Artist) { $result.artist = $mediaProps.Artist }
             if ($mediaProps.AlbumTitle) { $result.album = $mediaProps.AlbumTitle }
 
-            # Get thumbnail if available
-            if ($mediaProps.Thumbnail) {
-                $streamRef = $mediaProps.Thumbnail
-                if ($streamRef) {
-                    $streamTask = $streamRef.OpenReadAsync()
-
-                    # Poll for completion
-                    for ($i = 0; $i -lt 50; $i++) {
-                        try {
-                            $status = $streamTask.Status
-                            if ($status -eq 'Completed' -or $status -eq 2) {
-                                break
-                            }
-                        } catch { }
-                        Start-Sleep -Milliseconds 100
-                    }
-
-                    try {
-                        $stream = $streamTask.GetResults()
-                        $reader = [Windows.Storage.Streams.DataReader]::FromBuffer($stream.GetBuffer())
-                        $bytes = New-Object byte[] $stream.Size
-                        $reader.ReadBytes($bytes)
-                        $result.artBase64 = [Convert]::ToBase64String($bytes)
-                        $result.artMime = 'image/png'
-                    } catch { }
-                }
-            }
+            # Thumbnail extraction is DELIBERATELY DISABLED for now (2026-07-16). The
+            # AsStreamForRead-based read (see Read-WinRTStreamBytes above) was proven
+            # correct in an isolated interactive PowerShell session -- but calling it
+            # from inside this long-running JSON-over-stdin child, on a real ~180KB PNG,
+            # made the whole media_status command hang indefinitely (no error, no
+            # response, pc-child never returned). Root cause not yet isolated (could be
+            # pipe-buffering on the resulting large single JSON line, could be something
+            # about calling AsStreamForRead's Invoke() from this process's context) --
+            # not worth guessing further right now. A hang here is worse than a missing
+            # thumbnail: pc-child handles one command at a time, so a stuck media_status
+            # call would block every other tool (Spotify, screen_look, everything) behind
+            # it. Title/artist/album -- the data that actually matters for the widget --
+            # are unaffected and returned above this block. Revisit as a follow-up, with
+            # the hang itself reproduced and diagnosed BEFORE re-enabling, not guessed at.
         }
 
         return $result
@@ -595,6 +636,16 @@ function Click-AtScreenCoords($x, $y) {
     $inputs[2].u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_LEFTUP
 
     [void][NativeInput]::SendInput(3, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+}
+
+function Handle-ClickAt($x, $y) {
+    if ($null -eq $x -or $null -eq $y) { return 'x and y coordinates are required.' }
+    try {
+        Click-AtScreenCoords ([int]$x) ([int]$y)
+        return @{ clicked = $true; x = [int]$x; y = [int]$y }
+    } catch {
+        return ('Click failed: ' + $_.Exception.Message)
+    }
 }
 
 function Handle-WriteNote($text, $title) {
@@ -677,6 +728,9 @@ while ($true) {
         }
         'send_key' {
             $result = Handle-SendKey $cmd.key
+        }
+        'click_at' {
+            $result = Handle-ClickAt $cmd.x $cmd.y
         }
         'media_status' {
             $result = Handle-MediaStatus
