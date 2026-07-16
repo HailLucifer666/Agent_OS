@@ -14,6 +14,7 @@ function fail(reason) {
 }
 
 var brain = null;
+var vaultFs = null;
 
 // Guard: pc-child must be ONLINE to send commands
 function requireOnline() {
@@ -117,9 +118,46 @@ async function send_key({ key }) {
   return delegate({ cmd: 'send_key', key });
 }
 
+async function click_at({ x, y }) {
+  if (typeof x !== 'number' || typeof y !== 'number') return fail('x and y coordinates are required (numbers).');
+  return delegate({ cmd: 'click_at', x, y });
+}
+
 async function write_note({ text, title }) {
   if (!text) return fail('Note text is required.');
   return delegate({ cmd: 'write_note', text, title: title || null });
+}
+
+async function capture_screenshot() {
+  const fs = require('fs');
+  const path = require('path');
+  var shot = await delegate({ cmd: 'screen_look' });
+  if (!shot.ok) return shot;
+  var b64 = shot.result && (shot.result.image || shot.result.png || shot.result);
+  if (!b64) return fail('Screenshot data not received from PC automation.');
+
+  // Get vault root and ensure Incidents directory exists
+  if (!vaultFs || typeof vaultFs.vaultPath !== 'function' || typeof vaultFs.ensureDir !== 'function') {
+    return fail('Vault filesystem unavailable — cannot save screenshot.');
+  }
+
+  try {
+    // Generate ISO timestamp with colons replaced (Windows-safe filename)
+    const now = new Date().toISOString().replace(/:/g, '-');
+    const filename = 'screenshot-' + now + '.png';
+    vaultFs.ensureDir('Incidents');
+    const filePath = vaultFs.vaultPath('Incidents', filename);
+
+    // Decode base64 to binary buffer
+    const buffer = Buffer.from(b64, 'base64');
+
+    // Write binary PNG directly to disk using raw fs
+    fs.writeFileSync(filePath, buffer, 'binary');
+
+    return ok({ savedTo: filePath, filename: filename, bytes: buffer.length });
+  } catch (err) {
+    return fail('Failed to save screenshot: ' + (err.message || err));
+  }
 }
 
 // ---- Tool catalog ----
@@ -131,15 +169,18 @@ const TOOLS = [
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },
   { name: 'media_key', description: 'Send a media key press (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute).', params: { key: 'string - media key name' }, danger: false, fn: media_key },
   { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
+  { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center.', params: { pid: 'number - window process ID', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
+  { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
 ];
 
 function registerFromPc(hub, opts) {
   brain = (opts && opts.brain) || null;
+  vaultFs = (opts && opts.fs) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -150,5 +191,5 @@ module.exports = {
   registerFromPc,
   TOOLS,
   launch_app, list_windows, focus_window, close_window, media_key,
-  screen_look, ui_elements, ui_click, ui_type, send_key, write_note,
+  screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
 };

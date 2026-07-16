@@ -9,6 +9,7 @@
 
 import { WIDGETS } from './widget-registry.js';
 import { mountWebResult } from './kinds/web-result.js';
+import { mountDynamicWidget } from './kinds/dynamic.js';
 
 const STORE_KEY = 'mythos.widgets.v1';
 
@@ -163,9 +164,16 @@ export function mountWidgets(root, ctx) {
     closeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
     closeBtn.addEventListener('click', teardown);
 
-    // Render content via the web-result kind module.
+    // Render content via the matching kind module — 'dynamic' (Item 11
+    // generative-UI, from the spawn_widget effector) gets its own fixed
+    // renderer; every other widgetType keeps going through web-result.js
+    // unchanged.
     try {
-      mountWebResult(card.querySelector('.web-result-body'), payload);
+      if (payload.widgetType === 'dynamic') {
+        mountDynamicWidget(card.querySelector('.web-result-body'), payload);
+      } else {
+        mountWebResult(card.querySelector('.web-result-body'), payload);
+      }
     } catch (err) {
       card.querySelector('.web-result-body').innerHTML = `<span class="widget-sub mono">failed: ${err.message}</span>`;
     }

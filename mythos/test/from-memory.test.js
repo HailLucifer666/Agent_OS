@@ -72,7 +72,7 @@ describe('from-memory: remember', () => {
   it('handles semantic store unavailable', async () => {
     const tools = buildTools({ fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'test' });
+    const result = await remember.fn({ text: 'remember this fact' });
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('unavailable'));
   });
@@ -80,7 +80,7 @@ describe('from-memory: remember', () => {
   it('handles semantic store with no write function', async () => {
     const tools = buildTools({ semantic: {}, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'test' });
+    const result = await remember.fn({ text: 'remember this fact' });
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('unavailable'));
   });
@@ -91,7 +91,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'test' });
+    const result = await remember.fn({ text: 'remember this fact' });
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('degraded'));
   });
@@ -102,7 +102,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'test' });
+    const result = await remember.fn({ text: 'remember this fact' });
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('disk full'));
   });
@@ -118,6 +118,173 @@ describe('from-memory: remember', () => {
     assert.equal(result.ok, true);
     assert.equal(result.result.remembered, 'spaced out');
     assert.equal(written[0], 'spaced out');
+  });
+
+  // BUG-022: preference detection and identity.learn() calling
+  describe('BUG-022: preference shape detection and identity.learn() integration', () => {
+    it('calls identity.learn() when text is preference-shaped (I like)', async () => {
+      let learned = null;
+      const mockSemantic = {
+        write: () => ({ ref: 'ref-pref' })
+      };
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: mockSemantic, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      const result = await remember.fn({ text: 'I like concise answers' });
+      assert.equal(result.ok, true);
+      assert.ok(learned !== null, 'identity.learn() should have been called');
+      assert.equal(learned.text, 'I like concise answers');
+      assert.equal(learned.sourceEpId, 'remember-tool');
+    });
+
+    it('calls identity.learn() when text is preference-shaped (I prefer)', async () => {
+      let learned = null;
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: 'I prefer dark mode on computers' });
+      assert.ok(learned !== null);
+      assert.equal(learned.text, 'I prefer dark mode on computers');
+    });
+
+    it('calls identity.learn() when text is preference-shaped (always)', async () => {
+      let learned = null;
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: 'always use two-factor authentication' });
+      assert.ok(learned !== null);
+      assert.equal(learned.text, 'always use two-factor authentication');
+    });
+
+    it('calls identity.learn() when text is preference-shaped (never)', async () => {
+      let learned = null;
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: 'never store passwords in plain text' });
+      assert.ok(learned !== null);
+    });
+
+    it('does NOT call identity.learn() for non-preference text', async () => {
+      let learned = null;
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      const result = await remember.fn({ text: 'the weather is sunny today' });
+      assert.equal(result.ok, true);
+      assert.equal(learned, null, 'identity.learn() should NOT have been called for non-preference text');
+    });
+
+    it('does NOT call identity.learn() for facts without preference keywords', async () => {
+      let learned = null;
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: 'my birthday is on January 15th' });
+      assert.equal(learned, null);
+    });
+
+    it('gracefully handles identity.learn() errors without failing remember()', async () => {
+      const mockIdentity = {
+        learn: async () => { throw new Error('identity store unavailable'); }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      const result = await remember.fn({ text: 'I prefer concise answers' });
+      assert.equal(result.ok, true, 'remember() should succeed even if identity.learn() fails');
+      assert.equal(result.result.remembered, 'I prefer concise answers');
+    });
+
+    it('handles missing identity gracefully (does not call learn)', async () => {
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {} });
+      const remember = tools.find(t => t.name === 'remember');
+      const result = await remember.fn({ text: 'I like coffee' });
+      assert.equal(result.ok, true, 'should succeed without identity');
+      assert.equal(result.result.remembered, 'I like coffee');
+    });
+
+    it('case-insensitive preference detection (uppercase)', async () => {
+      let learned = null;
+      const mockIdentity = {
+        learn: async (args) => { learned = args; return { ref: 'learned-ref' }; }
+      };
+      const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: 'I PREFER VERBOSE OUTPUT' });
+      assert.ok(learned !== null, 'Should detect preference in uppercase');
+    });
+  });
+
+  // BUG-014: STT noise rejection tests
+  describe('BUG-014: STT noise rejection', () => {
+    // Test table: [input, shouldReject, description]
+    const noiseTests = [
+      // Pure noise fragments (should reject)
+      ['the', true, 'single word "the"'],
+      ['a', true, 'single article "a"'],
+      ['uh', true, 'pure "uh"'],
+      ['uh...', true, '"uh" with ellipsis'],
+      ['um', true, 'pure "um"'],
+      ['umm', true, '"umm" with double m'],
+      ['hmm', true, 'pure "hmm"'],
+      ['hmmm...', true, '"hmm" extended with punctuation'],
+      ['that you like', true, 'common STT fragment "that you like"'],
+      ['that you like.', true, '"that you like" with period'],
+      ['that you like,', true, '"that you like" with comma'],
+      ['uh..', true, 'incomplete "uh" fragment'],
+      // Too short (< 10 chars) without meaningful content
+      ['call', true, 'single 4-letter word'],
+      ['x', true, 'single character'],
+      ['no math', true, '7 chars without 3+ letter sequence'],
+      // Valid short facts (10+ chars)
+      ['spaced out', false, 'exactly 10 chars, legitimate'],
+      ['call me soon', false, '12 chars, real instruction'],
+      ['I like jazz', false, '11 chars, real preference'],
+      // Valid longer facts
+      ['Remember I like jazz', false, '20 chars, full sentence'],
+      ['my favorite color is blue', false, 'longer multi-word fact'],
+      ['always use dark mode on computers', false, 'longer instruction'],
+      ['the weather is sunny today', false, 'longer statement'],
+      ['user prefers morning meetings', false, 'fact with 3+ letter words'],
+    ];
+
+    noiseTests.forEach(([input, shouldReject, desc]) => {
+      it(`rejects or accepts as expected: ${desc}`, async () => {
+        let written = null;
+        const mockSemantic = {
+          write: (topic, facts, opts) => { written = facts; return { ref: 'ref-test' }; }
+        };
+        const tools = buildTools({ semantic: mockSemantic, fs: {} });
+        const remember = tools.find(t => t.name === 'remember');
+        const result = await remember.fn({ text: input });
+
+        if (shouldReject) {
+          assert.equal(result.ok, false, `Expected rejection for: "${input}" (${desc})`);
+          assert.ok(
+            result.result.error.includes('Rejected'),
+            `Expected "Rejected" in error for: "${input}"`
+          );
+          assert.equal(written, null, `Memory should not be written for noise: "${input}"`);
+        } else {
+          assert.equal(result.ok, true, `Expected acceptance for: "${input}" (${desc})`);
+          assert.equal(result.result.remembered, input, `Remembered text should match input: "${input}"`);
+          assert.ok(written !== null, `Memory should be written for: "${input}"`);
+        }
+      });
+    });
   });
 });
 

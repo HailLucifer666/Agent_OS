@@ -56,6 +56,12 @@ function createBrain({ config, bus, identity }) {
         return { content: null, offline: true, lane };
       }
 
+      // 1b. Budget exhaustion check — defense-in-depth
+      if (budget && ((typeof budget.tokens === 'number' && budget.tokens <= 0) ||
+                     (typeof budget.actions === 'number' && budget.actions <= 0))) {
+        return { content: null, offline: true, lane, budgetExhausted: true };
+      }
+
       // 2. Add schemaHint + persona injection
       let msgs = messages;
       if (schemaHint) {

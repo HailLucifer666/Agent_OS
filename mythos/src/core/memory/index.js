@@ -31,6 +31,7 @@ function createMemory({ config, bus, logger, brain }) {
   // their shape); embedding happens fire-and-forget on write, and the async
   // recallHybrid() facade below fuses keyword + vector rankings. Embeddings
   // unavailable -> hybrid degrades to exactly the keyword behavior.
+  // Intentionally NOT indexed: skills/identity/audit are browsed, not searched (Phase 1 scope decision).
   const vecIndexes = {
     episodic: createVectorIndex({ fs, store: 'episodic' }),
     semantic: createVectorIndex({ fs, store: 'semantic' }),
@@ -160,6 +161,8 @@ function createMemory({ config, bus, logger, brain }) {
       const episodicResult = episodic.consolidate();
       const semanticResult = semantic.consolidate();
       identity.consolidate();
+      skills.consolidate();
+      audit.consolidate();
       if (episodicResult.archived > 0) {
         bus.emit('memory.decay', { pruned: episodicResult.archived });
       }

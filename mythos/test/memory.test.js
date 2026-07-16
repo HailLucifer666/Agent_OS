@@ -147,6 +147,66 @@ describe('fs-store', () => {
     fsStore.removeFile('del.txt');
     assert.equal(fsStore.exists('del.txt'), false);
   });
+
+  it('D-21 regression: withLock serializes overlapping ops on same path', async () => {
+    const order = [];
+    const path = 'test-lock.txt';
+    fsStore.writeText(path, '[]');
+    const arr = [];
+
+    // Fire two async ops staggered by a small delay
+    Promise.resolve().then(() => {
+      fsStore.withLock(path, function() {
+        order.push('a:start');
+        arr.push('a');
+        order.push('a:end');
+      });
+    });
+
+    // Stagger the second op
+    await new Promise(function(resolve) { setTimeout(resolve, 10); });
+
+    Promise.resolve().then(() => {
+      fsStore.withLock(path, function() {
+        order.push('b:start');
+        arr.push('b');
+        order.push('b:end');
+      });
+    });
+
+    // Wait for both to complete
+    await new Promise(function(resolve) { setTimeout(resolve, 100); });
+
+    // They should be serialized in call order
+    assert.deepEqual(order, ['a:start', 'a:end', 'b:start', 'b:end'], 'ops should serialize, not interleave');
+  });
+
+  it('D-21 regression: withLock continues after a rejecting step', async () => {
+    const order = [];
+    const path = 'test-reject.txt';
+
+    // First op rejects
+    const p1 = fsStore.withLock(path, function() {
+      order.push('first');
+      throw new Error('intentional rejection');
+    });
+
+    // Wait for first to settle
+    try { await p1; } catch (_) {}
+
+    // Second op should still queue and run
+    const p2 = fsStore.withLock(path, function() {
+      order.push('second');
+    });
+
+    try { await p2; } catch (_) {}
+
+    // Wait for second to complete
+    await new Promise(function(resolve) { setTimeout(resolve, 50); });
+
+    // Both should have run despite first throwing
+    assert.deepEqual(order, ['first', 'second'], 'rejection should not block next queued op');
+  });
 });
 
 // ---- Episodic Store Tests ----
@@ -352,13 +412,13 @@ describe('skills', () => {
     assert.equal(skill.when.length, 1);
   });
 
-  it('recordUse increments uses', () => {
+  it('recordUse increments uses', async () => {
     const { ref } = skills.write('count-me', {
       when: ['test'],
       steps: [{ tool: 'test', args: {} }],
       successCriteria: []
     });
-    skills.recordUse(ref, true);
+    await skills.recordUse(ref, true);
     const skill = skills.get(ref);
     assert.equal(skill.uses, 1);
   });
@@ -366,6 +426,12 @@ describe('skills', () => {
   it('stats returns count', () => {
     skills.write('a', { when: [], steps: [], successCriteria: [] });
     assert.equal(skills.stats().count, 1);
+  });
+
+  it('D-19 regression: consolidate returns correct shape', () => {
+    skills.write('a', { when: [], steps: [], successCriteria: [] });
+    const result = skills.consolidate();
+    assert.deepEqual(result, { moved: 0, distilled: 0, archived: 0 });
   });
 });
 
@@ -487,6 +553,12 @@ describe('audit-writer', () => {
     audit.write({ tool: 'b', tier: 0, decision: 'allow' });
     assert.equal(audit.stats().count, 2);
   });
+
+  it('D-19 regression: consolidate returns correct shape', () => {
+    audit.write({ tool: 'a', tier: 0, decision: 'allow' });
+    const result = audit.consolidate();
+    assert.deepEqual(result, { moved: 0, distilled: 0, archived: 0 });
+  });
 });
 
 // ---- Checkpoint Store Tests ----
@@ -582,6 +654,19 @@ describe('memory-facade', () => {
     assert.ok(hits.length > 0);
   });
 
+  it('recallHybrid fuses keyword hits through the facade and never crashes on an empty query', async () => {
+    memory.episodic.write({ tick: 1, summary: 'hybrid recall episodic seed', salience: 0.5 });
+    memory.semantic.write('hybrid-topic', ['hybrid recall semantic seed']);
+
+    const hits = await memory.recallHybrid('hybrid recall');
+    assert.ok(Array.isArray(hits));
+    assert.ok(hits.length > 0);
+
+    // Empty query must degrade gracefully (no embeddings call, keyword-only), not throw.
+    const emptyHits = await memory.recallHybrid('');
+    assert.ok(Array.isArray(emptyHits));
+  });
+
   it('skills write/recall works through facade', () => {
     memory.skills.write('facade-skill', { when: ['facade skill test'], steps: [{ tool: 'echo', args: {} }], successCriteria: [] });
     const hits = memory.skills.recall('facade skill test');
@@ -620,6 +705,15 @@ describe('memory-facade', () => {
     memory.working.tick = 1;
     const result = await memory.consolidate({});
     assert.equal(result.semantic.count, 0, 'low-confidence semantic fact should be archived by its own consolidate()');
+  });
+
+  it('D-19 regression: consolidate calls skills.consolidate() and audit.consolidate()', async () => {
+    memory.skills.write('skill1', { when: ['test'], steps: [{ tool: 'test', args: {} }], successCriteria: [] });
+    memory.audit.write({ tool: 'test-tool', tier: 0, decision: 'allow' });
+    // Should complete without throwing
+    const result = await memory.consolidate({});
+    assert.ok(result, 'consolidate should return a result');
+    // Both skills and audit consolidate should be called (they are no-ops, so no assertion on effects)
   });
 
   it('stats returns combined stats', () => {

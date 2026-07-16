@@ -11,6 +11,7 @@ const WebSocket = require('ws');
 const { createBus } = require('../src/core/bus');
 const path = require('path');
 const { createServer } = require('../server');
+const pcChild = require('../adapters/pc-child');
 
 // Minimal fs-store stand-in — the real one resolves paths under the vault
 // root; tests never touch the filesystem, so any deterministic join works.
@@ -269,4 +270,27 @@ test('verifyClient rejects a foreign Origin on WS upgrade (CSWSH guard)', async 
   ok.close();
 
   await server.stop();
+});
+
+test('GET /api/media propagates the real error string on a pc-child failure (BUG-004)', async () => {
+  const bus = createBus({ historySize: 50 });
+  const server = createServer(baseDeps(bus));
+
+  // pcChild is a module-level singleton required directly by server/index.js
+  // (not injected via deps), so we monkey-patch its sendCommand for this test
+  // and restore it afterward to avoid leaking state into other tests.
+  const originalSendCommand = pcChild.sendCommand;
+  pcChild.sendCommand = async () => ({ ok: false, error: 'Media session not found' });
+
+  try {
+    await server.ready; // address() is null until the listening event (async bind on Windows)
+    const { port } = server.httpServer.address();
+    const res = await httpGet(port, '/api/media');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.error, 'Media session not found', 'must be the real pc-child error, not undefined');
+  } finally {
+    pcChild.sendCommand = originalSendCommand;
+    await server.stop();
+  }
 });

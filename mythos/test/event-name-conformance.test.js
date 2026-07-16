@@ -60,6 +60,7 @@ const ALLOWED_EVENTS = new Set([
   'lifecycle.alive',
   'lifecycle.recovered',
   'lifecycle.boot.step',
+  'lifecycle.shutdown.step-failed', // D-07 (Phase 1) — a registered shutdown step threw; shutdown continues regardless
 
   // audit.*
   'audit.decision',
@@ -86,6 +87,9 @@ const ALLOWED_EVENTS = new Set([
 
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
+
+  // gmail.* (Item 7 — Gmail unread triage sensor, mirrors reminder-sensor)
+  'gmail.unread-batch',
 
   // checkpoint.* / forge.* (P22 — Forge build pipeline + approval gates)
   'checkpoint.created',

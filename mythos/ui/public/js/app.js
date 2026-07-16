@@ -2,7 +2,7 @@
 // Voice initializes on first pointerdown (Chrome's user-gesture policy for
 // mic/AudioContext); everything else mounts immediately.
 
-import { subscribe, visionQuery, registerReplyHandler, sendMessage } from './ws.js';
+import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance } from './ws.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
 import { mountCoreOrb } from './neural-map/core-orb.js';
@@ -22,6 +22,15 @@ subscribe(['entity-state'], (msg) => {
   const state = msg.state || msg.status || '';
   _brainOnline = state !== 'offline' && state !== 'error';
 });
+
+// BUG-020: VAD tuning fetched once at boot. Voice initializes lazily (first
+// mic click), so this almost always resolves first; if it hasn't, ensureVoice()
+// just falls back to voice-loop.js's built-in defaults — never blocks first use.
+let _vadOverrides = null;
+fetch('/api/config/vad')
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => { if (cfg) _vadOverrides = cfg; })
+  .catch(() => {});
 
 // overlays
 const overlays = createOverlayManager(document.getElementById('overlay-root'));
@@ -62,6 +71,7 @@ const compose = createComposeBar({
   onVoiceState: (s) => orb.setVoiceState(s),
   onCaption: (text, kind) => {},
   onActivity: () => {},
+  onSubmitText: sendTextMessage,
 });
 
 // mic indicator API still used by some caption calls below — keep a shim.
@@ -88,6 +98,7 @@ function ensureVoice() {
       onVisionQuery: (text) => describeScene(text),
       onActivity: (level) => compose.setActivity(level),
       brainOnline: () => _brainOnline,
+      vad: _vadOverrides || undefined,
     });
   }
   return voice;
@@ -127,6 +138,19 @@ function describeScene(text) {
   const session = v.beginTurn();
   visionQuery({
     image, text,
+    onChunk: (m) => v.onExternalChunk(m, session),
+    onDone: (msg) => v.deliverExternalReply(msg, session),
+  });
+}
+
+// Compose-bar text submit reuses the voice loop's own chunk-queue/barge-in
+// playback machinery (same pattern as describeScene() above) so a typed
+// message gets a spoken reply exactly like a voice utterance.
+function sendTextMessage(text) {
+  const v = ensureVoice();
+  const session = v.beginTurn();
+  utterance({
+    text,
     onChunk: (m) => v.onExternalChunk(m, session),
     onDone: (msg) => v.deliverExternalReply(msg, session),
   });
@@ -278,7 +302,15 @@ subscribe(['open-web'], (msg) => {
   }
   if (p.widgetType === 'youtube' || p.widgetType === 'web') {
     overlays.openPanel('web', p);
-  } else {
-    widgetApi.spawnWebWidget(p);
+    return;
   }
+  // dynamic — Item 11 generative UI (spawn_widget effector): declarative
+  // stat/list/table/text spec, rendered by kinds/dynamic.js. Same one-off
+  // floating-widget lifecycle as search/weather/flights/image below — just a
+  // distinct render path inside spawnWebWidget, not a different lifecycle.
+  if (p.widgetType === 'dynamic') {
+    widgetApi.spawnWebWidget(p);
+    return;
+  }
+  widgetApi.spawnWebWidget(p);
 });

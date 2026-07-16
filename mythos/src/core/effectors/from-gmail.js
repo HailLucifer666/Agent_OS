@@ -14,10 +14,13 @@ function buildTools(ctx) {
   var logger = (ctx && ctx.logger) || { warn: function() {} };
 
   // Lazy-construct adapter on first use so boot doesn't hang on DNS/OAuth if
-  // Google creds are misconfigured.
+  // Google creds are misconfigured. Only cache a *ready* adapter — caching the
+  // not-ready sentinel would make every call after the first return it as if
+  // it were truthy (bypassing the `if (!a)` guard below) and blow up with a
+  // cryptic "a.listUnread is not a function" instead of the clean config error.
   function ensureAdapter() {
-    if (_adapter) return _adapter;
-    var { createGoogleAdapter } = require('../../adapters/google');
+    if (_adapter && _adapter.ready) return _adapter;
+    var { createGoogleAdapter } = require('../../../adapters/google');
     _adapter = createGoogleAdapter({ logger: logger });
     if (!_adapter.ready) return null;
     return _adapter;
@@ -30,7 +33,7 @@ function buildTools(ctx) {
       var max = (args && args.max) ? Math.min(Number(args.max), 20) : 10;
       var msgs = await a.listUnread(max);
       if (!msgs.length) return ok({ count: 0, messages: [] });
-      var summary = msgs.slice(0, max).map(function(m) { return { from: m.from, subject: m.subject, snippet: (m.snippet || '').slice(0, 200), date: m.date }; });
+      var summary = msgs.slice(0, max).map(function(m) { return { id: m.id, from: m.from, subject: m.subject, snippet: (m.snippet || '').slice(0, 200), date: m.date }; });
       return ok({ count: msgs.length, messages: summary });
     } catch (err) {
       return fail('Gmail fetch failed: ' + (err.message || err));
@@ -42,7 +45,7 @@ function buildTools(ctx) {
       var id = (args && args.id) || '';
       if (!id) return fail('gmail_read requires an email id (from gmail_unread).');
       var a = ensureAdapter();
-      if (!a) return fail('Gmail is not configured.');
+      if (!a) return fail('Gmail is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.');
       var msg = await a.readMessage(id);
       var body = msg.bodyHtml || msg.bodyText || '';
       // Cap to avoid blowing the context window
@@ -60,7 +63,7 @@ function buildTools(ctx) {
       var body = (args && args.body) || '';
       if (!to || !subject || !body) return fail('gmail_send requires to, subject, and body.');
       var a = ensureAdapter();
-      if (!a) return fail('Gmail is not configured.');
+      if (!a) return fail('Gmail is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.');
       await a.send({ to: to, subject: subject, body: body, html: args.html || null });
       return ok({ sent: true, to: to, subject: subject });
     } catch (err) {
@@ -75,7 +78,7 @@ function buildTools(ctx) {
       var body = (args && args.body) || '';
       if (!to || !subject || !body) return fail('gmail_draft requires to, subject, and body.');
       var a = ensureAdapter();
-      if (!a) return fail('Gmail is not configured.');
+      if (!a) return fail('Gmail is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.');
       await a.draft({ to: to, subject: subject, body: body });
       return ok({ drafted: true, to: to, subject: subject });
     } catch (err) {

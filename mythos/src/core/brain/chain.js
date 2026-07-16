@@ -13,7 +13,7 @@ const cerebras = require('../../../providers/cerebras');
 const openrouter = require('../../../providers/openrouter');
 const ollama = require('../../../providers/ollama');
 
-const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter };
+const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, ollama };
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
 const ATTEMPT_TIMEOUT_MS = Number(process.env.CHAIN_ATTEMPT_TIMEOUT_MS) || 30000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
@@ -158,5 +158,5 @@ async function isAvailable() {
 module.exports = {
   complete,
   isAvailable,
-  _internal: { cooldowns, markCooldown, expand, toOllamaVisionMessages, _resetCooldowns: () => cooldowns.clear() },
+  _internal: { cooldowns, markCooldown, expand, toOllamaVisionMessages, _resetCooldowns: () => cooldowns.clear(), LANES },
 };

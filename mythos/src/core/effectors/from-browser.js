@@ -10,8 +10,21 @@ const { effectorFromTool } = require('./adapter');
 function ok(result) { return { ok: true, result }; }
 function fail(reason) { return { ok: false, result: reason }; }
 
-function requireOnline() {
-  const status = browserAgent.getStatus();
+// Set by registerFromBrowser() from ctx.config — used by requireOnline()'s lazy
+// auto-connect fallback to find BROWSER_CDP_URL when the env var isn't set.
+let config = null;
+
+// BUG-011 fix 1: lazy auto-connect. Previously this was synchronous and only ever
+// reported OFFLINE — nothing ever called browserAgent.ensureOnline(), so browser
+// tools stayed stuck OFFLINE forever even after running setup-chrome-debug.ps1.
+// Now: if not ONLINE, try ensureOnline() (CDP connect, per adapters/browser-agent's
+// own connect-then-launchLocal fallback) before giving up.
+async function requireOnline() {
+  let status = browserAgent.getStatus();
+  if (status.state !== 'ONLINE') {
+    try { await browserAgent.ensureOnline({ cdpUrl: process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) }); } catch { /* fall through to OFFLINE report below */ }
+    status = browserAgent.getStatus();
+  }
   if (status.state !== 'ONLINE') {
     return fail(`Browser automation is ${status.state}. ${status.hint || 'Run setup-chrome-debug.ps1 first.'}`);
   }
@@ -23,7 +36,7 @@ function requireOnline() {
 async function browser_navigate({ url }) {
   if (!url) return fail('URL is required.');
   try { new URL(url); } catch { return fail(`Invalid URL: "${url}"`); }
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -35,7 +48,7 @@ async function browser_navigate({ url }) {
 
 async function browser_click({ selector }) {
   if (!selector) return fail('CSS selector is required.');
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -47,7 +60,7 @@ async function browser_click({ selector }) {
 async function browser_type({ selector, text, clearFirst }) {
   if (!selector) return fail('CSS selector is required.');
   if (!text) return fail('Text is required.');
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -58,7 +71,7 @@ async function browser_type({ selector, text, clearFirst }) {
 }
 
 async function browser_screenshot() {
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -70,7 +83,7 @@ async function browser_screenshot() {
 }
 
 async function browser_get_title() {
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -80,7 +93,7 @@ async function browser_get_title() {
 }
 
 async function browser_get_text({ selector } = {}) {
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -102,7 +115,7 @@ async function browser_get_text({ selector } = {}) {
 async function browser_scroll({ direction }) {
   const dir = direction || 'down';
   if (!['up', 'down'].includes(dir)) return fail('Direction must be "up" or "down".');
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -116,7 +129,7 @@ async function browser_tabs({ action, index }) {
   const act = action || 'list';
   const validActions = ['list', 'new', 'switch', 'close'];
   if (!validActions.includes(act)) return fail(`Invalid tab action: "${act}". Valid: ${validActions.join(', ')}`);
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page, ctx) => {
@@ -157,7 +170,7 @@ async function browser_tabs({ action, index }) {
 }
 
 async function browser_go_back() {
-  const guard = requireOnline();
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -166,9 +179,13 @@ async function browser_go_back() {
   }).catch(err => fail(err.message));
 }
 
-async function browser_evaluate({ script }) {
-  if (!script) return fail('JavaScript expression is required.');
-  const guard = requireOnline();
+async function browser_evaluate({ script, expression, javascript, query }) {
+  // BUG-011 fix 2: param aliasing — callers (voice/dashboard) sometimes send
+  // "expression"/"javascript"/"query" instead of "script"; previously only
+  // "script" was read, so those calls silently failed with a missing-arg error.
+  const code = script || expression || javascript || query;
+  if (!code) return fail('JavaScript expression is required (pass as script, expression, javascript, or query).');
+  const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
@@ -180,7 +197,7 @@ async function browser_evaluate({ script }) {
       } catch (err) {
         return { error: err.message, ok: false };
       }
-    }, script);
+    }, code);
 
     if (result.ok) return ok({ value: result.value, url: page.url() });
     return fail(`Script error: ${result.error}`);
@@ -202,7 +219,8 @@ const TOOLS = [
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
 ];
 
-function registerFromBrowser(hub) {
+function registerFromBrowser(hub, ctx) {
+  config = (ctx && ctx.config) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }

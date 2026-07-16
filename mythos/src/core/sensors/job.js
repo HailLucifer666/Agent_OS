@@ -37,7 +37,11 @@ function createJobSensor({ bus, buildRunner }) {
       error: job.error,
       // artifact path — included so the conversation announcer and cortex know
       // WHAT to open/announce on completion, not just that "a job finished".
-      artifact: job.artifact || null
+      artifact: job.artifact || null,
+      // BUG-016: include review verdict and issues so announcer can notify the user
+      // if a build completed but failed review (as opposed to build execution failure)
+      reviewVerdict: job.reviewVerdict || null,
+      reviewIssues: job.reviewIssues || null
     });
   }
 

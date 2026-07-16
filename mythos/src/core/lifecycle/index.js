@@ -11,12 +11,19 @@ function createLifecycle({ bus, logger, config }) {
   let state = 'idle';  // idle | booting | alive | shutting-down | dead
   let shutdownTimer = null;
   let stopServerFn = null; // [Phase 9] registered by the 'server' boot step
+  let shutdownSteps = []; // [D-07] registered via registerShutdownStep(), run after stopServerFn()
   const entityName = (config && config.MYTHOS_NAME) || 'MYTHOS';
 
   // [Phase 9 — NEW] Server-close is shutdown step 0 (spec Ambiguity #5): stop
   // accepting new WS/HTTP connections and drain in-flight before anything else,
   // matching NOVA's own graceful order (wss.close() -> httpServer.close(cb)).
   function registerStopServer(fn) { stopServerFn = fn; }
+
+  // [D-07 — NEW] Register a named graceful-shutdown step (e.g. stop-loops,
+  // episodic-flush, checkpoint-write, audit-flush). Steps run in registration
+  // order, after stopServerFn(). A throwing step never blocks the rest of the
+  // sequence — it's logged/emitted as an anomaly and shutdown continues.
+  function registerShutdownStep(name, fn) { shutdownSteps.push({ name: name, fn: fn }); }
 
   function setSteps(stepList) {
     steps = stepList;
@@ -59,7 +66,7 @@ function createLifecycle({ bus, logger, config }) {
   }
 
   function shutdown(timeoutMs) {
-    timeoutMs = timeoutMs || 10000;
+    timeoutMs = timeoutMs || (config && config.SHUTDOWN_MS) || 10000;
     if (state === 'shutting-down' || state === 'dead') return;
 
     state = 'shutting-down';
@@ -78,13 +85,30 @@ function createLifecycle({ bus, logger, config }) {
     }
 
     // Graceful sequence. Step 0 (Phase 9): stop the HTTP/WS server first —
-    // open sockets would otherwise block a clean process.exit(0). Steps 1-5
-    // (sensors stop, cortex drain, working->episodic flush, checkpoint write,
-    // audit flush) are wired by the phases that own them (D-07 tracks the rest).
+    // open sockets would otherwise block a clean process.exit(0). Steps 1-N
+    // (D-07): registered shutdown steps (sensors stop, working->episodic
+    // flush, checkpoint write, audit flush) run in registration order — a
+    // throwing step is logged/emitted and never blocks the rest of the
+    // sequence or the final process exit.
     return (async function() {
       if (stopServerFn) {
         try { await stopServerFn(); } catch (_) { /* best-effort — never block exit */ }
       }
+
+      for (let i = 0; i < shutdownSteps.length; i++) {
+        const step = shutdownSteps[i];
+        try {
+          const result = step.fn();
+          if (result && typeof result.then === 'function') {
+            await result;
+          }
+          logger.info('lifecycle.shutdown.step', { step: step.name, status: 'ok' });
+        } catch (err) {
+          logger.error('lifecycle.shutdown.step', { step: step.name, status: 'error', error: err.message });
+          bus.emit('lifecycle.shutdown.step-failed', { name: step.name, error: err.message });
+        }
+      }
+
       await new Promise(function(resolve) { setImmediate(resolve); });
       cleanup();
     })();
@@ -103,7 +127,7 @@ function createLifecycle({ bus, logger, config }) {
 
   function getState() { return state; }
 
-  return { setSteps, boot, shutdown, registerShutdown, registerStopServer, getState };
+  return { setSteps, boot, shutdown, registerShutdown, registerStopServer, registerShutdownStep, getState };
 }
 
 module.exports = { createLifecycle };

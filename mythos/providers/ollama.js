@@ -127,4 +127,16 @@ async function listModels() {
   return models;
 }
 
-module.exports = { chat, listModels };
+function isAvailable() {
+  return true;
+}
+
+function getModel() {
+  return DEFAULT_MODEL;
+}
+
+function getStatus() {
+  return { ok: isAvailable(), model: getModel() };
+}
+
+module.exports = { name: 'ollama', chat, listModels, isAvailable, getModel, getStatus };

@@ -39,8 +39,12 @@ export async function render(body, payload) {
           referrerpolicy="strict-origin-when-cross-origin"
           loading="eager"></iframe>
       </div>
-      <div class="web-fallback text-faint mono" style="display:none;padding:12px 0;">
-        Embed unavailable. <a href="${fallbackUrl}" target="_blank" rel="noopener" class="gold">Open in new tab →</a>
+      <div class="web-fallback" style="display:none;padding:16px;text-align:center;">
+        ${payload.widgetType === 'youtube' && payload.videoId ? `
+          <img src="https://i.ytimg.com/vi/${payload.videoId}/hqdefault.jpg" style="max-width:100%;height:auto;border-radius:4px;margin-bottom:12px;" alt="video thumbnail" />
+          <div style="font-weight:500;margin-bottom:8px;color:#ccc;white-space:normal;">${payload.title || 'Video unavailable'}</div>
+        ` : ''}
+        <a href="${fallbackUrl}" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#d4af37;color:#1a1a1a;border-radius:4px;text-decoration:none;font-weight:500;margin-top:8px;">Open in new tab →</a>
       </div>
     `;
     const iframe = body.querySelector('.web-iframe-fill');

@@ -3,8 +3,6 @@
 // path as voice, so text and voice are equal citizens through the same brain.
 // Prompt chips provide discoverability when the input is empty.
 
-import { utterance } from './ws.js';
-
 const MIC_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>`;
 const SEND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 
@@ -16,7 +14,7 @@ const HINTS = [
   'Check the weather',
 ];
 
-export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity }) {
+export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText }) {
   const root = document.getElementById('compose-bar');
   let conversationStarted = false;
 
@@ -74,16 +72,10 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     sendBtn.classList.remove('visible');
 
     // Show the user's message as a "heard" caption
-    if (onCaption) onCaption(text, 'heard');
+    setCaption(text, 'heard');
 
-    // Send through the same WS utterance path as voice
-    utterance({
-      text,
-      onChunk: (msg) => {
-        if (onCaption && msg.text) onCaption(msg.text, 'reply');
-      },
-      onDone: () => {},
-    });
+    // Hand off to the caller's voice-loop-backed send path (mirrors describeScene()).
+    if (onSubmitText) onSubmitText(text);
   }
 
   // Show/hide send button based on input content

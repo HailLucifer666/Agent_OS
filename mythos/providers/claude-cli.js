@@ -143,4 +143,16 @@ async function chat(messages, opts = {}) {
   });
 }
 
-module.exports = { chat };
+function isAvailable() {
+  return true;
+}
+
+function getModel() {
+  return process.env.CLAUDE_MODEL || null;
+}
+
+function getStatus() {
+  return { ok: isAvailable(), model: getModel() };
+}
+
+module.exports = { name: 'claude-cli', chat, isAvailable, getModel, getStatus };

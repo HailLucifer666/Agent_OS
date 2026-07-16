@@ -63,4 +63,12 @@ async function chat(messages, opts = {}) {
   return full;
 }
 
-module.exports = { chat, isAvailable };
+function getModel() {
+  return null;
+}
+
+function getStatus() {
+  return { ok: isAvailable(), model: getModel() };
+}
+
+module.exports = { name: 'openrouter', chat, isAvailable, getModel, getStatus };

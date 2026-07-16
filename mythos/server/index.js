@@ -136,6 +136,18 @@ function createServer(deps) {
     }
   });
 
+  // ---- /api/config/vad — BUG-020: voice-loop.js VAD tuning, read once at HUD
+  // boot so mic sensitivity can be tuned via env without a client rebuild.
+  // Shape matches createVoiceLoop's `vad` option exactly (see voice-loop.js).
+  app.get('/api/config/vad', (req, res) => {
+    res.json({
+      speechRms: config.VAD_SPEECH_RMS,
+      minPeakRms: config.VAD_MIN_PEAK_RMS,
+      holdTicks: config.VAD_HOLD_TICKS,
+      silenceMs: config.VAD_SILENCE_MS,
+    });
+  });
+
   // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----
   app.get('/api/media', async (req, res) => {
     try {
@@ -144,7 +156,7 @@ function createServer(deps) {
       if (result.ok) {
         res.json({ ok: true, media: result.result });
       } else {
-        res.json({ ok: false, error: result.result });
+        res.json({ ok: false, error: result.error });
       }
     } catch (err) {
       res.json({ ok: false, error: err.message });
@@ -321,6 +333,17 @@ function createServer(deps) {
         }));
       }
       res.json({ store, entries });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ---- /api/audit/recent — BUG-019: fetch recent audit entries for panel history ----
+  app.get('/api/audit/recent', (req, res) => {
+    try {
+      const limit = Math.min(Number(req.query.limit) || 50, 200);
+      const entries = memory.audit.query({ limit });
+      res.json({ entries });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -506,7 +529,12 @@ function createServer(deps) {
   // app.listen() has already opened a socket nothing would ever close.
   let voiceAgent = null;
   try {
-    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus, config: config });
+    // BUG-017: pass the real effector hub so the voice catalog is built from
+    // actual registrations (see buildCatalogFromHub in voice-agent.js) instead
+    // of the hand-maintained CATALOG_RAW list alone — this is what makes a
+    // newly-registered effector (e.g. capture_screenshot) show up on the voice
+    // channel automatically.
+    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus, config: config, hub: effectors });
   } catch (err) {
     logger.warn('voice-agent.unavailable', { error: err.message });
   }
@@ -536,6 +564,20 @@ function createServer(deps) {
   // Calendar reminders — proactive speech when a reminder fires due.
   bus.subscribe('reminder.due', (e) => {
     if (e && e.payload && e.payload.text) proactiveSpeak('Reminder: ' + e.payload.text);
+  });
+
+  // Gmail triage — proactive speech when the gmail-sensor finds genuinely new
+  // unread mail. Mirrors the reminder.due wiring above: same bus.subscribe +
+  // proactiveSpeak() pattern, different event/payload shape.
+  bus.subscribe('gmail.unread-batch', (e) => {
+    if (!e || !e.payload || !e.payload.count) return;
+    const count = e.payload.count;
+    const messages = e.payload.messages || [];
+    const subjects = messages.slice(0, 3).map((m) => m.subject).filter(Boolean);
+    const noun = count === 1 ? 'email' : 'emails';
+    let text = `You have ${count} new ${noun}`;
+    if (subjects.length) text += `, including ${subjects.join(', ')}`;
+    proactiveSpeak(text);
   });
 
   // Live build-job progress relay ('job' OUT type). build-runner's onJobUpdate
@@ -664,20 +706,17 @@ function createServer(deps) {
         // Best-effort: failures degrade to no memory context (amnesia), never crash.
         var memoryContext = null;
         try {
-          var recalled = memory.episodic.recall(text, { limit: 8, windowDays: 7 });
-          // Also pull semantic user-facts for durable preferences
-          var semanticHits = memory.semantic.recall(text, { limit: 3 });
-          if (recalled.length > 0 || semanticHits.length > 0) {
+          var recalled = await memory.recallHybrid(text, { limit: 8 });
+          if (recalled.length > 0) {
             var parts = [];
             for (var i = 0; i < recalled.length; i++) {
-              parts.push(recalled[i].snippet || recalled[i].record.summary);
-            }
-            for (var j = 0; j < semanticHits.length; j++) {
-              if (semanticHits[j].snippet) parts.push('(fact) ' + semanticHits[j].snippet);
+              var r = recalled[i];
+              var snip = r.snippet || (r.record && r.record.summary) || '';
+              if (snip) parts.push(r.store === 'semantic' ? '(fact) ' + snip : snip);
             }
             if (parts.length > 0) memoryContext = parts.join('\n');
           }
-        } catch (err) { logger.warn('memory-recall-failed', { store: 'episodic+semantic', error: err.message }); }
+        } catch (err) { logger.warn('memory-recall-failed', { store: 'hybrid', error: err.message }); }
 
         // Surface pending thoughts from idle reasoning — if the entity formed a
         // thought during a quiet moment, inject it as context so it can be

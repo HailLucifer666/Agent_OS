@@ -39,6 +39,47 @@ function recordingAuditWriter(behavior) {
   };
 }
 
+describe('BUG-008 — open_artifact tiering', function() {
+  it('tierOf("open_artifact") resolves to the explicit T2 entry, not the T3 unmapped fallback', function() {
+    var { tierOf, TIER_TABLE } = require('../src/core/leash/tiers');
+    assert.equal(TIER_TABLE.open_artifact, 2);
+    assert.equal(tierOf('open_artifact'), 2);
+  });
+
+  it('leash.check() auto-allows open_artifact on the voice ctx shape ({}, no goalId)', function() {
+    var { createLeash } = require('../src/core/leash');
+    var leash = createLeash({
+      bus: fakeBus(), config: fakeConfig(), identity: noopIdentity(),
+      auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
+      effectors: noopEffectors()
+    });
+    // Mirrors voice-agent.js executeAction(): leash.check(decision, {}) — no goalId.
+    var result = leash.check({ tool: 'open_artifact', args: { path: '/vault/builds/x.html' } }, {});
+    assert.equal(result.allow, true);
+    assert.equal(result.requireConfirm, false);
+    assert.equal(result.tier, 2);
+    assert.equal(result.reason, 'within-autonomous-max');
+  });
+
+  it('leash.check() auto-allows open_artifact on the cortex ctx shape ({goalId}) identically to voice', function() {
+    var { createLeash } = require('../src/core/leash');
+    var leash = createLeash({
+      bus: fakeBus(), config: fakeConfig(), identity: noopIdentity(),
+      auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
+      effectors: noopEffectors()
+    });
+    // Mirrors cortex/index.js act(): leash.check(decision, { goalId: working.activeGoalId }).
+    var result = leash.check({ tool: 'open_artifact', args: { path: '/vault/builds/x.html' } }, { goalId: 'goal-1' });
+    assert.equal(result.allow, true);
+    assert.equal(result.requireConfirm, false);
+    assert.equal(result.tier, 2);
+    // Same outcome as the voice ctx shape above — confirms the goalId/{} ctx
+    // divergence between the two dispatch paths is inert for a T2 tool: the
+    // tier<=maxTier auto-allow branch resolves before goalCtx.goalId is ever
+    // consulted (that only happens in the T3 grant-check branch).
+  });
+});
+
 describe('leash/index — tier gates', function() {
   it('T0 tools auto-allow, no confirm', function() {
     var { createLeash } = require('../src/core/leash');

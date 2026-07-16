@@ -47,8 +47,8 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       status: opts.status || 'proposed',
       priority: typeof opts.priority === 'number' ? opts.priority : 0.5,
       budget: {
-        tokens: opts.budget && opts.budget.tokens || 50000,
-        actions: opts.budget && opts.budget.actions || 50,
+        tokens: opts.budget && opts.budget.tokens || (config && config.GOAL_TOKEN_BUDGET) || 20000,
+        actions: opts.budget && opts.budget.actions || (config && config.GOAL_ACTION_BUDGET) || 25,
         deadline: opts.budget && opts.budget.deadline || null
       },
       spent: { tokens: 0, actions: 0 },
@@ -141,9 +141,6 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     if (candidates.length === 0) return null;
 
     var maxActive = (config && config.MAX_ACTIVE_GOALS) || 5;
-    if (candidates.length > maxActive) {
-      candidates = candidates.slice(0, maxActive);
-    }
 
     var scored = candidates.map(function(g) {
       var driveWeight = DRIVE_WEIGHTS[g.drive] || 0;
@@ -181,6 +178,8 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     });
 
     scored.sort(function(a, b) { return b.score - a.score; });
+    // D-51: cap AFTER sorting — previously sliced by insertion order before scoring
+    if (scored.length > maxActive) scored = scored.slice(0, maxActive);
     return scored[0] ? scored[0].goal : null;
   }
 
@@ -240,13 +239,16 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       // planner can only choose real tools. Without this, the LLM hallucinated
       // names like 'clarify', 'ask_user', 'reason', 'search_files' that don't
       // exist — every one returned 'unknown-effector' and stalled the cortex.
+      // BUG-013: also filter out suppressed tools (circuit breaker opened).
       var toolList = '';
       if (ctx.effectors && typeof ctx.effectors.count === 'function') {
         var names = [];
         var iter = ctx.effectors.effectors;
         if (iter && typeof iter.keys === 'function') {
           names = Array.from(iter.keys()).filter(function(n) {
-            return AUTONOMOUS_EXCLUDED.indexOf(n) === -1;
+            // BUG-013: check if tool is suppressed via immune system
+            var healer = require('../immune/healer');
+            return AUTONOMOUS_EXCLUDED.indexOf(n) === -1 && !healer.isToolSuppressed(n);
           });
         }
         toolList = 'You may ONLY choose a tool from this list (use the exact name):\n' +
@@ -272,7 +274,8 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
             '\nRespond as JSON: {"tool": "<exact tool name from the list>", "args": {<required params>}}'
           }],
           schemaHint: '{ tool: string, args: object }',
-          source: 'goal:' + goal.id
+          source: 'goal:' + goal.id,
+          budget: { tokens: goal.budget.tokens - goal.spent.tokens, actions: goal.budget.actions - goal.spent.actions }
         });
         if (result && !result.offline && result.parsed && result.parsed.tool) {
           // RC#1 validation: reject hallucinated tool names before dispatching.
@@ -361,7 +364,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           if (data && data.id) {
             // B1: Normalize loaded goals to prevent crashes on corrupt/legacy files.
             data.spent = data.spent || { tokens: 0, actions: 0 };
-            data.budget = data.budget || { tokens: 50000, actions: 50, deadline: null };
+            data.budget = data.budget || { tokens: (config && config.GOAL_TOKEN_BUDGET) || 20000, actions: (config && config.GOAL_ACTION_BUDGET) || 25, deadline: null };
             data.plan = data.plan || [];
             data.childIds = data.childIds || [];
             data.grants = data.grants || {};

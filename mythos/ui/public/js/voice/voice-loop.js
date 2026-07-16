@@ -18,14 +18,25 @@ import { utterance } from '../ws.js';
 
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
-const SILENCE_MS = 1800;       // quiet gap that ends an utterance
-const SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
+// BUG-020: these four are `let`, not `const` — createVoiceLoop's optional
+// `vad` option can override them per-instance. Values below are the
+// unchanged defaults (zero behavior change unless a caller opts in).
+let SILENCE_MS = 1800;       // quiet gap that ends an utterance
+let SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
 const VAD_TICK_MS = 100;
-const SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
+let SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
 const MIN_CLIP_MS = 500;       // shorter clips are noise/mic-bumps, dropped — raised from 300; real utterances are longer
 const MIN_CLIP_BYTES = 800;
-const MIN_PEAK_RMS = 0.06;     // the loudest moment of the clip must clear this — raised from 0.035; real speech peaks well above ambient that merely brushed the old floor
+let MIN_PEAK_RMS = 0.06;     // the loudest moment of the clip must clear this — raised from 0.035; real speech peaks well above ambient that merely brushed the old floor
 const ECHO_GUARD_MS = 3000;    // after playback ends, keep rejecting transcripts matching what was just spoken — speakers bleed into the mic for a beat after TTS finishes
+// Item 8 (barge-in): a SECOND, higher, threshold used ONLY inside the
+// existing BUG-027 assistantSpeaking gate (see vadTick below) — it does not
+// replace or weaken that gate. Sustained loud audio while MYTHOS is talking
+// is treated as the user interrupting; anything quieter is left to the gate
+// exactly as BUG-027 fixed it. `let` (not const) so createVoiceLoop's `vad`
+// option can override per-instance, same convention as the four above.
+let BARGE_IN_RMS_MULT = 2.5;       // multiplied onto SPEECH_RMS for the barge-in floor
+let BARGE_IN_HOLD_TICKS_MULT = 2;  // multiplied onto SPEECH_HOLD_TICKS for the barge-in hold
 
 // voice-nav table — checked before falling through to the brain.
 // Patterns allow filler words (the/my/current/active) between verb and target.
@@ -70,7 +81,53 @@ function sanitizeForTts(text) {
     .trim();
 }
 
-export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline }) {
+// Item 8 (barge-in): pure VAD-level decision, no DOM/window/audio access —
+// this is what makes it unit-testable under plain node:test (see
+// test/voice-barge-in-decision.test.js). Groq STT has no streaming mode, so
+// this has to be threshold-based, not transcription-based: a sustained tick
+// louder than `thresholds.bargeThreshold` while MYTHOS is speaking means the
+// user is talking over it.
+//
+// SAFETY: when `assistantSpeaking` is false this is a pass-through no-op
+// (bargeAboveCount returned unchanged) — it never manufactures a barge-in
+// outside the gate. In the real vadTick below this function is only ever
+// called from inside the existing `if (assistantSpeaking)` block, so the
+// false branch here is a belt-and-suspenders guarantee for callers, not a
+// path vadTick exercises today.
+export function decideBargeIn({ level, assistantSpeaking, bargeAboveCount, thresholds }) {
+  if (!assistantSpeaking) return { shouldBargeIn: false, newBargeAboveCount: bargeAboveCount };
+  const { bargeThreshold, bargeHoldTicks } = thresholds;
+  if (level <= bargeThreshold) return { shouldBargeIn: false, newBargeAboveCount: 0 };
+  const newBargeAboveCount = bargeAboveCount + 1;
+  if (newBargeAboveCount >= bargeHoldTicks) return { shouldBargeIn: true, newBargeAboveCount: 0 };
+  return { shouldBargeIn: false, newBargeAboveCount };
+}
+
+export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline, vad }) {
+  // BUG-020: optional per-instance VAD tuning overrides — partial overrides
+  // only (unspecified fields keep the module-level defaults declared above).
+  if (vad) {
+    if (typeof vad.speechRms === 'number') SPEECH_RMS = vad.speechRms;
+    if (typeof vad.minPeakRms === 'number') MIN_PEAK_RMS = vad.minPeakRms;
+    if (typeof vad.holdTicks === 'number') SPEECH_HOLD_TICKS = vad.holdTicks;
+    if (typeof vad.silenceMs === 'number') SILENCE_MS = vad.silenceMs;
+    // Item 8 (barge-in): same partial-override convention as the four above.
+    if (typeof vad.bargeInRmsMult === 'number') BARGE_IN_RMS_MULT = vad.bargeInRmsMult;
+    if (typeof vad.bargeInHoldTicksMult === 'number') BARGE_IN_HOLD_TICKS_MULT = vad.bargeInHoldTicksMult;
+  }
+  // BUG-020 (optional): live client-side tuning without a server restart —
+  // wins over both the default and the `vad` option since it's the most
+  // specific/most recently set-by-the-user override.
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const lsRms = parseFloat(localStorage.getItem('MYTHOS_VAD_RMS'));
+      if (!Number.isNaN(lsRms)) SPEECH_RMS = lsRms;
+      // Item 8 (barge-in): dev-only override, same pattern as MYTHOS_VAD_RMS above.
+      const lsBargeMult = parseFloat(localStorage.getItem('MYTHOS_BARGE_RMS_MULT'));
+      if (!Number.isNaN(lsBargeMult)) BARGE_IN_RMS_MULT = lsBargeMult;
+    }
+  } catch { /* localStorage unavailable (privacy mode, etc.) — ignore */ }
+
   let active = false;
   let processing = false;
   let disposed = false;
@@ -82,6 +139,14 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   let lastSpokenText = '';   // what was just spoken — echo-guard reference (after playback ends)
   let lastSpokenAt = 0;      // when playback ended — used to expire the post-playback echo window
   let speakSession = 0;      // invalidates stale playback callbacks
+  // BUG-027: hard half-duplex gate — true from the moment TTS playback of a
+  // reply STARTS (first chunk begins playing, or the non-chunked fallback
+  // starts speaking) until the TTS queue is fully drained. While true, the
+  // VAD tick loop below refuses to arm a new recording — a mechanical gate,
+  // independent of the ECHO_GUARD_MS text-similarity heuristic (which only
+  // catches echo AFTER a transcript already came back). Fixes MYTHOS's own
+  // TTS output bleeding into the mic and getting transcribed as a new turn.
+  let assistantSpeaking = false;
 
   // ---- chunked playback (speech-chunk messages arrive before 'done') ----
   let chunkQueue = [];
@@ -99,6 +164,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   let silenceSince = null;
   let aboveCount = 0;        // consecutive above-threshold VAD ticks (see SPEECH_HOLD_TICKS)
   let peakRms = 0;           // loudest VAD tick seen during the current recording (see MIN_PEAK_RMS)
+  let bargeAboveCount = 0;   // Item 8: consecutive above-barge-threshold ticks while assistantSpeaking (see decideBargeIn)
 
   // Pre-roll ring buffer state — the fix for first-word clipping. The mic is
   // always feeding an AudioWorkletProcessor ring buffer (off main thread). When
@@ -242,6 +308,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     speakingText = '';
     chunkQueue = [];
     playing = false;
+    assistantSpeaking = false; // BUG-027: TTS queue fully drained (or force-stopped) — release the VAD gate
   }
 
   // ---- chunked playback (speech-chunk messages arrive before 'done') ----
@@ -256,6 +323,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     const chunk = chunkQueue.shift();
     if (!chunk) { playing = false; maybeFinishTurn(session); return; }
     playing = true;
+    assistantSpeaking = true; // BUG-027: chunk playback starting — arm the VAD gate
     processing = false;     // mic stays live during playback — barge-in
     setState('speaking');
     const isLast = chunk.index === chunk.total - 1;
@@ -321,6 +389,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   }
 
   function speakFallback(spoken, session) {
+    assistantSpeaking = true; // BUG-027: non-chunked reply starting to speak — arm the VAD gate
     const finish = () => {
       if (speakSession !== session) return;
       stopSpeaking();
@@ -603,6 +672,36 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     // fires while listening (not during processing/speaking/idle).
     if (onActivity && active && !processing && !speakingText) {
       onActivity(level);
+    }
+    // BUG-027: hard mechanical half-duplex gate — while MYTHOS's own TTS is
+    // playing (or queued to play), never arm a new recording. This is
+    // independent of isEcho()/ECHO_GUARD_MS (a fuzzy post-hoc text match on
+    // the transcript that already came back) — it stops the capture pipeline
+    // from ever starting on the assistant's own voice bleeding into the mic.
+    if (assistantSpeaking) {
+      aboveCount = 0;
+      // Item 8 (barge-in): ADDITIVE second, higher threshold INSIDE the
+      // BUG-027 gate — this does not open the gate for ordinary speech-level
+      // audio, only for sustained loud audio that looks like the user
+      // talking over MYTHOS. decideBargeIn is pure/stateless; the running
+      // count still lives here (bargeAboveCount) same as aboveCount does for
+      // the normal VAD path above.
+      const decision = decideBargeIn({
+        level,
+        assistantSpeaking,
+        bargeAboveCount,
+        thresholds: {
+          bargeThreshold: SPEECH_RMS * BARGE_IN_RMS_MULT,
+          bargeHoldTicks: SPEECH_HOLD_TICKS * BARGE_IN_HOLD_TICKS_MULT,
+        },
+      });
+      bargeAboveCount = decision.newBargeAboveCount;
+      if (decision.shouldBargeIn) {
+        stopSpeaking();      // cut TTS immediately — decision made at VAD level
+        aboveCount = 1;
+        startRecording();    // the loud tick IS the start of the user's utterance
+      }
+      return;
     }
     const speaking = level > SPEECH_RMS;
     if (speaking) {

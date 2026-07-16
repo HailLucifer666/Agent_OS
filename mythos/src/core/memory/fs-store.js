@@ -10,6 +10,7 @@ const zlib = require('zlib');
 
 function createFsStore(vaultRootFn, bus) {
   const root = typeof vaultRootFn === 'function' ? vaultRootFn : () => vaultRootFn;
+  const pathLocks = new Map(); // relPath -> tail promise (D-21)
 
   function vaultPath(...segments) {
     return path.resolve(root(), ...segments);
@@ -196,10 +197,20 @@ function createFsStore(vaultRootFn, bus) {
       String(d.getDate()).padStart(2, '0');
   }
 
+  // Per-path async mutex: serialize concurrent ops on the same file (D-21)
+  function withLock(relPath, fn) {
+    const prev = pathLocks.get(relPath) || Promise.resolve();
+    const run = prev.then(fn, fn);                      // a rejection never wedges the queue
+    const tail = run.then(function(){}, function(){});
+    pathLocks.set(relPath, tail);
+    tail.then(function() { if (pathLocks.get(relPath) === tail) pathLocks.delete(relPath); });
+    return run;
+  }
+
   return {
     vaultPath, ensureDir, readText, writeText, readJSON, writeJSON,
     listFiles, appendLine, readLines, readDirLines, pruneOldFiles,
-    exists, removeFile, todayKey, root
+    exists, removeFile, todayKey, withLock, root
   };
 }
 

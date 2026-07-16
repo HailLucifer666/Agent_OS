@@ -83,11 +83,16 @@ function createAuditWriter({ fs, config, bus, logger }) {
     return { count: count, files: files.length, lastWriteTs: lastWriteTs };
   }
 
+  function consolidate() {
+    // audit is append-only, retention out of scope
+    return { moved: 0, distilled: 0, archived: 0 };
+  }
+
   async function init() {
     fs.ensureDir(fs.vaultPath('Audit'));
   }
 
-  return { write, query, stats, init, redact };
+  return { write, query, stats, consolidate, init, redact };
 }
 
 module.exports = { createAuditWriter };

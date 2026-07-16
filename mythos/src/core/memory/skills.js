@@ -141,19 +141,25 @@ function createSkillsStore({ fs, config, bus, logger }) {
     return null;
   }
 
-  function recordUse(ref, success) {
+  async function recordUse(ref, success) {
     const files = fs.listFiles('Skills', '.md');
     for (let i = 0; i < files.length; i++) {
       const content = fs.readText(files[i].path, '');
       if (!content) continue;
       if (content.includes('"id":"' + ref + '"') || content.includes('"id": "' + ref + '"')) {
-        const parsed = parseSkill(content);
-        parsed.uses = (parsed.uses || 0) + 1;
-        // Update success rate as running average
-        const oldRate = parsed.successRate || 0;
-        const newRate = success ? 1 : 0;
-        parsed.successRate = oldRate === 0 ? newRate : (oldRate * 0.9 + newRate * 0.1);
-        write(files[i].name.replace('.md', ''), parsed);
+        const relPath = files[i].path;
+        await fs.withLock(relPath, function() {
+          // Re-read fresh data inside the lock
+          const freshContent = fs.readText(relPath, '');
+          if (!freshContent) return;
+          const parsed = parseSkill(freshContent);
+          parsed.uses = (parsed.uses || 0) + 1;
+          // Update success rate as running average
+          const oldRate = parsed.successRate || 0;
+          const newRate = success ? 1 : 0;
+          parsed.successRate = oldRate === 0 ? newRate : (oldRate * 0.9 + newRate * 0.1);
+          write(files[i].name.replace('.md', ''), parsed);
+        });
         return;
       }
     }
@@ -164,11 +170,16 @@ function createSkillsStore({ fs, config, bus, logger }) {
     return { count: files.length };
   }
 
+  function consolidate() {
+    // skills are curated/not time-decayed — no-op is correct, not a stub
+    return { moved: 0, distilled: 0, archived: 0 };
+  }
+
   async function init() {
     fs.ensureDir(fs.vaultPath('Skills'));
   }
 
-  return { write, recall, get, recordUse, parseSkill, stats, init };
+  return { write, recall, get, recordUse, parseSkill, stats, consolidate, init };
 }
 
 module.exports = { createSkillsStore };

@@ -94,7 +94,7 @@ function buildTools(ctx) {
       var t = String(type || 'search').trim().toLowerCase();
       var q = String(query || '').trim();
 
-      // YOUTUBE — search for the video, extract ID, build embed URL
+      // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
       if (t === 'youtube') {
         if (!q) return fail('A search query is required for YouTube.');
         var ytRes = await web_search({ query: q + ' site:youtube.com', maxResults: 3, bus: ctx.bus });
@@ -110,6 +110,11 @@ function buildTools(ctx) {
           if (idM) { videoId = idM[1]; if (r.title) videoTitle = r.title; break; }
         }
         if (!videoId) return fail('Found results but could not extract a YouTube video ID. Try rephrasing.');
+        // Check YOUTUBE_MODE config: if 'newtab', skip embed and open in new tab instead
+        var youtubeMode = (config && config.YOUTUBE_MODE) || 'embed';
+        if (youtubeMode === 'newtab') {
+          return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + videoId, title: videoTitle });
+        }
         return ok({ widgetType: 'youtube', embedUrl: 'https://www.youtube-nocookie.com/embed/' + videoId + '?autoplay=1&rel=0&modestbranding=1', title: videoTitle, videoId: videoId });
       }
 
@@ -118,14 +123,43 @@ function buildTools(ctx) {
         var loc = String(location || query || '').trim();
         if (!loc) return fail('A location is required for weather.');
         try {
-          var geoRes = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(loc));
-          if (!geoRes.ok) return fail('Could not resolve location "' + loc + '".');
-          var geoData = await geoRes.json();
-          if (!geoData.results || !geoData.results.length) return fail('No location found for "' + loc + '".');
-          var hit = geoData.results[0];
-          var weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit.latitude + '&longitude=' + hit.longitude +
-            '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
-          return ok({ widgetType: 'weather', weatherUrl: weatherUrl, title: 'Weather: ' + hit.name, location: hit.name });
+          // Helper: try a single geocode attempt, return the result or null if no results found
+          async function tryGeocode(searchLoc) {
+            var geoRes = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(searchLoc));
+            if (!geoRes.ok) return { error: 'network', msg: 'Could not resolve location "' + searchLoc + '".' };
+            var geoData = await geoRes.json();
+            if (geoData.results && geoData.results.length) return { ok: true, hit: geoData.results[0] };
+            return { error: 'noresults' };
+          }
+
+          // Try the full location string first
+          var attempt1 = await tryGeocode(loc);
+          if (attempt1.ok) {
+            var hit = attempt1.hit;
+            var weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit.latitude + '&longitude=' + hit.longitude +
+              '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
+            return ok({ widgetType: 'weather', weatherUrl: weatherUrl, title: 'Weather: ' + hit.name, location: hit.name });
+          }
+
+          // If network error on first attempt, fail immediately (don't retry on network failures)
+          if (attempt1.error === 'network') return fail(attempt1.msg);
+
+          // If zero results on first attempt, try stripping to just the city name (before first comma)
+          if (attempt1.error === 'noresults' && loc.includes(',')) {
+            var cityOnly = loc.split(',')[0].trim();
+            var attempt2 = await tryGeocode(cityOnly);
+            if (attempt2.ok) {
+              var hit2 = attempt2.hit;
+              var weatherUrl2 = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit2.latitude + '&longitude=' + hit2.longitude +
+                '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
+              return ok({ widgetType: 'weather', weatherUrl: weatherUrl2, title: 'Weather: ' + hit2.name, location: hit2.name });
+            }
+            // If second attempt also has a network error, fail with that
+            if (attempt2.error === 'network') return fail(attempt2.msg);
+          }
+
+          // Both attempts returned zero results, or there was no comma to retry on
+          return fail('No location found for "' + loc + '".');
         } catch (e) { return fail('Weather lookup failed: ' + e.message); }
       }
 
@@ -201,9 +235,11 @@ function buildTools(ctx) {
       // Reject shell metacharacters — this path becomes part of a shell command
       // (cmd /c start on Windows, xdg-open on Linux). Without this, an LLM or
       // attacker who controls the path can inject commands (&, |, ;, backticks,
-      // $() are all command separators/subshells). The voice path is incidentally
-      // gated by a T3 confirm, but the REST/dashboard path is not — defense in
-      // depth means rejecting metacharacters regardless of the caller.
+      // $() are all command separators/subshells). BUG-008: open_artifact is
+      // tiered T2 (leash/tiers.js) and auto-allows on every dispatch path, voice
+      // included — no confirm gate protects this call anywhere. This check (plus
+      // shell:false + explicit argv below) is the only line of defense, so it
+      // applies regardless of the caller.
       if (/[;&|`$()<>^]/.test(rawPath)) {
         return fail('Artifact path contains disallowed characters.');
       }

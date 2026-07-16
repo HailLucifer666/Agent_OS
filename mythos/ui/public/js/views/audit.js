@@ -13,12 +13,29 @@ export async function render(mount) {
       .join('') || '<div class="text-faint">No decisions yet.</div>';
   }
 
+  // Fetch historical audit entries on mount (BUG-019)
+  try {
+    const res = await fetch('/api/audit/recent?limit=50');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.entries && Array.isArray(data.entries)) {
+        // API returns newest-first; reverse to oldest-first so live events append correctly
+        rows.push(...data.entries.reverse());
+      }
+    }
+  } catch (err) {
+    console.warn('audit-fetch-failed', err.message);
+  }
+
+  // Render historical entries
+  renderList();
+
+  // Subscribe to live updates (appended in newest order, existing logic handles display)
   const unsub = subscribe(['audit'], (msg) => {
     rows.push(msg.payload);
     if (rows.length > 500) rows.shift();
     renderList();
   });
 
-  renderList();
   return unsub;
 }

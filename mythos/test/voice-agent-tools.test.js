@@ -406,3 +406,72 @@ describe('tiers.js consistency', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-007 regression: handleUtterance must not let a fabricated success claim
+// stand when the tool call it depended on actually failed. voice-agent.js's
+// corrective-pass mechanism (buildPrompt's corrective:true branch, and the
+// didRetry/allFailedActions bookkeeping in handleUtterance) is supposed to
+// catch this and overwrite finalSay. This locks that behavior in place.
+// ---------------------------------------------------------------------------
+describe('BUG-007: corrective pass overrides a fabricated success claim', () => {
+  const { createVoiceAgent } = require('../src/core/voice/voice-agent');
+
+  // Records whether each brain.think() call was the corrective pass (detected
+  // via the "CORRECTIVE PASS" marker buildPrompt injects) or the initial pass.
+  function makeBrain(firstReply, correctiveReply) {
+    const calls = [];
+    return {
+      calls,
+      think: async ({ messages }) => {
+        const prompt = messages[0].content;
+        const isCorrective = prompt.includes('CORRECTIVE PASS');
+        calls.push(isCorrective ? 'corrective' : 'first');
+        const reply = isCorrective ? correctiveReply : firstReply;
+        return { content: JSON.stringify(reply), parsed: reply, offline: false };
+      },
+    };
+  }
+
+  it('replaces a "Playing X now" claim with an honest admission when the tool call failed', async () => {
+    const firstReply = {
+      say: 'Playing Bohemian Rhapsody now.',
+      actions: [{ tool: 'get_time', args: {} }],
+      needs_result: false,
+    };
+    const correctiveReply = {
+      say: 'That failed — I could not reach the tool.',
+      actions: [],
+      needs_result: false,
+    };
+    const brain = makeBrain(firstReply, correctiveReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async () => ({ ok: false, result: 'boom' }); // tool call fails
+    const bus = { emit: () => {} };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
+    const result = await agent.handleUtterance({ text: 'play bohemian rhapsody', ctx: {} });
+
+    assert.deepEqual(brain.calls, ['first', 'corrective'], 'corrective pass must fire exactly once after a failed action');
+    assert.equal(result.say, correctiveReply.say);
+    assert.ok(!/playing|done|finished/i.test(result.say), 'say must not carry the fabricated success claim');
+  });
+
+  it('does not fire the corrective pass when every action succeeds', async () => {
+    const firstReply = {
+      say: 'Playing Bohemian Rhapsody now.',
+      actions: [{ tool: 'get_time', args: {} }],
+      needs_result: false,
+    };
+    const brain = makeBrain(firstReply, { say: 'unused', actions: [], needs_result: false });
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async () => ({ ok: true, result: { time: '12:00' } }); // tool call succeeds
+    const bus = { emit: () => {} };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
+    const result = await agent.handleUtterance({ text: 'play bohemian rhapsody', ctx: {} });
+
+    assert.deepEqual(brain.calls, ['first'], 'corrective pass must not fire when nothing failed');
+    assert.equal(result.say, firstReply.say);
+  });
+});

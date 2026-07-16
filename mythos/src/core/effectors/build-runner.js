@@ -16,6 +16,11 @@
 // shipped production code." recoveredJobs (below) surfaces goalId too, so crash
 // recovery can report which goal each recovered job belonged to.
 
+// fail() — same { ok, result } shape used throughout the effectors (see
+// from-dashboard.js, from-gmail.js, etc.). enqueue() uses this only for the
+// empty-prompt refusal below; the success path still returns the raw job record.
+function fail(reason) { return { ok: false, result: { error: reason } }; }
+
 function createBuildRunner({ config, brain, bus, vault, verifier }) {
   if (!brain || typeof brain.think !== 'function') {
     throw new Error('createBuildRunner requires a brain with think()');
@@ -93,6 +98,12 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
   }
 
   function enqueue({ kind, prompt, run, goalId, persona }) {
+    // BUG-025 defensive fallback: a build-kind job with no real prompt means the
+    // upstream card lost its spec (field-name mismatch, capture bug, etc.) — refuse
+    // to enqueue rather than silently sending "undefined" into brain.think().
+    if (!prompt || !String(prompt).trim()) {
+      return fail('No spec — card missing description');
+    }
     var job = {
       id: 'job-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       kind: kind,
@@ -183,6 +194,14 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
       // A4: surface research provenance on the job record so job_status can
       // report whether the build was grounded in real web data or built blind.
       if (runResult && runResult.researchStatus) job.researchStatus = runResult.researchStatus;
+      // BUG-016: capture review status and issues so the announcer can inform the user
+      // whether the build passed review or has issues that need attention
+      if (runResult && runResult.review) {
+        job.reviewVerdict = runResult.review.verdict;
+        if (runResult.review.issues && runResult.review.issues.length) {
+          job.reviewIssues = runResult.review.issues;
+        }
+      }
     } catch (err) {
       job.status = 'failed';
       job.stage = 'failed';

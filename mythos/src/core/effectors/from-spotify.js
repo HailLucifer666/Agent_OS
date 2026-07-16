@@ -68,6 +68,28 @@ async function clickElement(pid, elementPath) {
   return pcEffectors.invoke('ui_click', { pid, elementPath }, {});
 }
 
+async function clickAt(x, y) {
+  if (!pcEffectors) return fail('PC effectors not initialized');
+  return pcEffectors.invoke('click_at', { x, y }, {});
+}
+
+// Finds the play/pause control in a ui_elements tree by name/automationId,
+// preferring an actual Button control type when more than one candidate matches.
+// Returns the element (with its .rect) or null if nothing looks like a play control.
+function findPlayControl(elements) {
+  if (!Array.isArray(elements)) return null;
+  const candidates = elements.filter(el => {
+    if (!el || !el.rect || el.rect.width <= 0 || el.rect.height <= 0) return false;
+    const name = (el.name || '').toLowerCase();
+    const id = (el.automationId || '').toLowerCase();
+    return name.indexOf('play') !== -1 || name.indexOf('pause') !== -1 ||
+      id.indexOf('play') !== -1 || id.indexOf('pause') !== -1;
+  });
+  if (candidates.length === 0) return null;
+  const button = candidates.find(el => (el.type || '').toLowerCase().indexOf('button') !== -1);
+  return button || candidates[0];
+}
+
 async function typeText(pid, elementPath, text) {
   if (!pcEffectors) return fail('PC effectors not initialized');
   return pcEffectors.invoke('ui_type', { pid, elementPath, text }, {});
@@ -172,7 +194,6 @@ async function spotify_play({ query, trackId }) {
   if (!query) return fail('Either query or trackId is required');
 
   // spotify:search:<query> opens Spotify directly to search results page.
-  // The first track is auto-focused in the results list.
   const searchUri = `spotify:search:${encodeURIComponent(query)}`;
   const searchResult = await launchSpotifyUri(searchUri);
   if (!searchResult.ok) return searchResult;
@@ -180,10 +201,70 @@ async function spotify_play({ query, trackId }) {
   // Wait for the search results page to fully render.
   await new Promise(r => setTimeout(r, 2500));
 
+  // Focus the Spotify window before doing anything else — otherwise a click
+  // or keystroke can land on whatever window currently has OS focus instead
+  // of Spotify. Best-effort: if the window can't be found or focus_window
+  // itself fails, still fall through to the rest of the flow (matches the
+  // prior fire-and-hope behavior), but carry the focus problem in the result
+  // instead of hiding it.
+  let focusWarning = null;
+  const win = await getSpotifyWindow();
+  if (win.ok) {
+    const focusResult = await pcEffectors.invoke('focus_window', { pid: win.result.pid }, {});
+    if (!focusResult.ok) focusWarning = `focus_window failed: ${focusResult.result}`;
+  } else {
+    focusWarning = `could not focus Spotify before playback: ${win.result}`;
+  }
+
+  // BUG-026 (3rd attempt): the previous two fixes (focus+Enter, then
+  // focus+Tab+Enter) both used keystrokes to *guess* which UI element has
+  // focus — live testing showed Enter kept landing back in the search box
+  // instead of a result tile. A pixel-coordinate click doesn't guess: walk
+  // the UIA tree for the play/pause control's actual bounding rect and click
+  // its center directly via click_at.
+  if (win.ok) {
+    const elementsResult = await pcEffectors.invoke('ui_elements', { pid: win.result.pid, depth: 6 }, {});
+    if (elementsResult.ok) {
+      const elements = (elementsResult.result && elementsResult.result.elements) || [];
+      const playControl = findPlayControl(elements);
+      if (playControl) {
+        const cx = Math.round(playControl.rect.x + playControl.rect.width / 2);
+        const cy = Math.round(playControl.rect.y + playControl.rect.height / 2);
+        const clickResult = await clickAt(cx, cy);
+        if (clickResult.ok) {
+          const extra = (clickResult.result && typeof clickResult.result === 'object') ? clickResult.result : {};
+          return ok({ ...extra, method: 'click_at', x: cx, y: cy, focusWarning });
+        }
+        // click_at failed — fall through to the keystroke fallback below,
+        // carrying the failure reason instead of silently dropping it.
+        focusWarning = focusWarning
+          ? `${focusWarning}; click_at failed: ${clickResult.result}`
+          : `click_at failed: ${clickResult.result}`;
+      }
+    }
+  }
+
+  // Fallback: no identifiable play control was found via ui_elements (or
+  // ui_elements/click_at itself failed) — fall back to the prior keystroke
+  // path (Tab off the search box, then Enter) rather than failing outright.
+  // Same BUG-007 non-fabrication discipline as before: if send_key ultimately
+  // fails too, this still surfaces ok:false rather than claiming success.
+  const tabResult = await pcEffectors.invoke('send_key', { key: 'tab' }, {});
+  let tabWarning = null;
+  if (!tabResult.ok) tabWarning = `send_key(tab) failed: ${tabResult.result}`;
+
   // Send a real VK_RETURN keystroke (not Unicode char) — Chromium/Electron
   // apps like Spotify require a genuine virtual key, not a WM_CHAR event.
-  // This plays the first focused track in the results list.
-  return pcEffectors.invoke('send_key', { key: 'enter' }, {});
+  const keyResult = await pcEffectors.invoke('send_key', { key: 'enter' }, {});
+  const warnings = [focusWarning, tabWarning].filter(Boolean);
+  if (warnings.length === 0) {
+    if (!keyResult.ok) return keyResult;
+    const extra = (keyResult.result && typeof keyResult.result === 'object') ? keyResult.result : {};
+    return ok({ ...extra, method: 'keystroke_fallback' });
+  }
+  if (!keyResult.ok) return fail(`${keyResult.result} (also: ${warnings.join('; ')})`);
+  const extra = (keyResult.result && typeof keyResult.result === 'object') ? keyResult.result : {};
+  return ok({ ...extra, method: 'keystroke_fallback', focusWarning, tabWarning });
 }
 
 async function spotify_search({ query }) {

@@ -427,6 +427,27 @@ describe('goals/index', function() {
     assert.ok(goal.budget.tokens > 0, 'default budget.tokens should be set');
   });
 
+  it('D-47/D-49: create uses GOAL_TOKEN_BUDGET and GOAL_ACTION_BUDGET from config', function() {
+    makeGoals({ GOAL_TOKEN_BUDGET: 12345, GOAL_ACTION_BUDGET: 99 });
+    var goal = goals.create({ title: 'Budget Config Test' });
+    assert.equal(goal.budget.tokens, 12345, 'should use config GOAL_TOKEN_BUDGET');
+    assert.equal(goal.budget.actions, 99, 'should use config GOAL_ACTION_BUDGET');
+  });
+
+  it('D-47/D-49: create falls back to defaults when config not provided', function() {
+    makeGoals({}); // No budget config override
+    var goal = goals.create({ title: 'Default Budget' });
+    assert.equal(goal.budget.tokens, 20000, 'should use default GOAL_TOKEN_BUDGET of 20000');
+    assert.equal(goal.budget.actions, 25, 'should use default GOAL_ACTION_BUDGET of 25');
+  });
+
+  it('D-47/D-49: create budget override still wins over config', function() {
+    makeGoals({ GOAL_TOKEN_BUDGET: 12345, GOAL_ACTION_BUDGET: 99 });
+    var goal = goals.create({ title: 'Budget Override', budget: { tokens: 5000, actions: 10 } });
+    assert.equal(goal.budget.tokens, 5000, 'explicit budget.tokens should override config');
+    assert.equal(goal.budget.actions, 10, 'explicit budget.actions should override config');
+  });
+
   it('get by id returns goal', function() {
     makeGoals();
     var created = goals.create({ title: 'Find Me' });
@@ -593,6 +614,20 @@ describe('goals/index', function() {
     assert.equal(goals.arbitrate([], {}), null);
   });
 
+  it('D-51 regression: arbitrate scores ALL candidates before capping (not by insertion order)', function() {
+    makeGoals({ MAX_ACTIVE_GOALS: 2 });
+    // Create 3 active goals. First two have lower priority, third (created last) has highest priority.
+    // Pre-fix: third goal is never scored (sliced before scoring by insertion order).
+    // Post-fix: all three are scored, then sorted, then capped — third should win.
+    var g1 = goals.create({ title: 'First', drive: 'user-service', status: 'active', priority: 0.5 });
+    var g2 = goals.create({ title: 'Second', drive: 'user-service', status: 'active', priority: 0.6 });
+    var g3 = goals.create({ title: 'Third', drive: 'user-service', status: 'active', priority: 0.95 });
+
+    var winner = goals.arbitrate([], {});
+    assert.ok(winner, 'arbitrate should return a winner');
+    assert.equal(winner.id, g3.id, 'highest priority goal (created 3rd) should win even though MAX_ACTIVE_GOALS=2');
+  });
+
   // --- Planner ---
 
   it('plan returns pending step from existing plan', async function() {
@@ -605,7 +640,8 @@ describe('goals/index', function() {
         { tool: 'bash', args: { cmd: 'ls' }, status: 'pending' }
       ]
     });
-    var step = await goals.plan(goal, {});
+    var refreshed = goals.get(goal.id);
+    var step = await goals.plan(refreshed, {});
     assert.ok(step, 'plan should return a step');
     assert.equal(step.tool, 'write_file', 'should return first pending step');
     assert.equal(step.rationale, 'plan-step');
@@ -615,12 +651,42 @@ describe('goals/index', function() {
     makeGoals();
     var goal = goals.create({ title: 'Exhausted', status: 'active', budget: { tokens: 100, actions: 10 } });
     goals.update(goal.id, { spent: { tokens: 100, actions: 0 } });
-    var step = await goals.plan(goal, {});
+    var refreshed = goals.get(goal.id);
+    var step = await goals.plan(refreshed, {});
     assert.equal(step, null, 'plan should return null when budget exhausted');
     // Goal should be auto-paused
+    var refreshedAfter = goals.get(goal.id);
+    assert.equal(refreshedAfter.status, 'paused');
+    assert.equal(refreshedAfter.reason, 'budget-exhausted');
+  });
+
+  it('D-47/D-49: plan forwards remaining budget headroom to brain.think()', async function() {
+    makeGoals();
+    var goal = goals.create({ title: 'Budget Forward', status: 'active', budget: { tokens: 1000, actions: 10 } });
+    goals.update(goal.id, { spent: { tokens: 300, actions: 2 } });
     var refreshed = goals.get(goal.id);
-    assert.equal(refreshed.status, 'paused');
-    assert.equal(refreshed.reason, 'budget-exhausted');
+
+    // Stub brain to capture the think() call and verify budget parameter
+    var capturedBrainCall = null;
+    var stubBrain = {
+      think: async function(opts) {
+        capturedBrainCall = opts;
+        return { content: null, offline: true, parsed: null };
+      }
+    };
+
+    // Stub effectors to avoid the tool validation check
+    var stubEffectors = {
+      count: function() { return 1; },
+      effectors: new Map([['web_search', true]])
+    };
+
+    var step = await goals.plan(refreshed, { brain: stubBrain, effectors: stubEffectors });
+
+    assert.ok(capturedBrainCall, 'brain.think should be called');
+    assert.ok(capturedBrainCall.budget, 'think() call should include budget parameter');
+    assert.equal(capturedBrainCall.budget.tokens, 700, 'budget.tokens should be remaining (1000 - 300)');
+    assert.equal(capturedBrainCall.budget.actions, 8, 'budget.actions should be remaining (10 - 2)');
   });
 
   // --- Budget ---
@@ -710,6 +776,37 @@ describe('goals/index', function() {
     assert.ok(loaded, 'preloaded goal should be loaded from fs');
     assert.equal(loaded.title, 'Preloaded Goal');
     assert.equal(loaded.status, 'active');
+  });
+
+  it('D-47/D-49: init normalizes legacy goal budgets using GOAL_TOKEN_BUDGET and GOAL_ACTION_BUDGET', async function() {
+    bus = fakeBus();
+    fs = fakeFs();
+    // Pre-populate with goal file missing budget (legacy)
+    fs.writeJSON('Goals/goal-legacy.json', {
+      id: 'goal-legacy',
+      title: 'Legacy Goal',
+      status: 'active',
+      drive: 'user-service',
+      priority: 0.5,
+      // budget is missing — should be normalized
+      spent: { tokens: 0, actions: 0 },
+      parentId: null,
+      childIds: [],
+      plan: [],
+      grants: {},
+      reason: '',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActionAt: null
+    });
+    var cfg = fakeConfig({ GOAL_TOKEN_BUDGET: 54321, GOAL_ACTION_BUDGET: 77 });
+    var { createGoalSystem } = require('../src/core/goals');
+    goals = createGoalSystem({ fs: fs, config: cfg, bus: bus, memory: null, brain: null });
+    await goals.init();
+    var loaded = goals.get('goal-legacy');
+    assert.ok(loaded, 'legacy goal should be loaded');
+    assert.equal(loaded.budget.tokens, 54321, 'should normalize budget.tokens from config');
+    assert.equal(loaded.budget.actions, 77, 'should normalize budget.actions from config');
   });
 
   it('create persists to fs', function() {

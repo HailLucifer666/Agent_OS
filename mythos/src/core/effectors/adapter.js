@@ -13,6 +13,10 @@ function effectorFromTool(tool) {
     tier: tierOf(tool.name),
     dangerWhen: tool.dangerWhen,           // read by leash.check() at gate time — not here
     describe: function() { return tool.description; },
+    // BUG-017: expose the tool's real {name, description, params} so callers (the
+    // effector hub's catalog(), in turn the voice agent) can build a tool catalog
+    // from the actual registration instead of a hand-maintained copy that drifts.
+    describeMeta: function() { return { name: tool.name, description: tool.description, params: tool.params }; },
     validate: function(params) {
       // Presence-only validation: every required key in tool.params (a key whose
       // description string does NOT contain "(optional)") must be present and non-empty.

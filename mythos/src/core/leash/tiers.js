@@ -40,6 +40,7 @@ const TIER_TABLE = {
   'kanban_move_card':      1,
   'write_note':            1,
   'screen_look':           1,
+  'capture_screenshot':    1,
   'browser_screenshot':    1,
   'browser_get_text':      1,
   'browser_scroll':        1,
@@ -50,10 +51,16 @@ const TIER_TABLE = {
   'gmail_read':            1,
   'gmail_draft':           1,
   'reminder_cancel':       1,  // local write — cancels a pending reminder
+  'spawn_widget':          1,  // local write — spawns a floating dashboard widget from a
+                               // validated data-only spec (Item 11 generative UI)
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
   'launch_app':            2,
+  'open_artifact':         2,  // BUG-008 — opens a file/URL via the OS (cmd start/open/xdg-open),
+                               // read-only w.r.t. destructive risk; same category as open_folder/
+                               // launch_app above, not the T3 confirm tier. Was previously unmapped
+                               // and fell back to tierOf()'s T3 fail-safe.
   'media_key':             2,
   'ask_agent':             2,
   'browser_navigate':      2,
@@ -81,6 +88,7 @@ const TIER_TABLE = {
   'gmail_send':            3,
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable
   'ui_type':               3,  // ELEVATED — same reasoning
+  'click_at':              3,  // ELEVATED — autonomous clicking unpredictable
   'browser_click':         3,
   'browser_type':          3,
   'spotify_play':          3,

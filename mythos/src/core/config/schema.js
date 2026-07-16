@@ -32,6 +32,15 @@ const SCHEMA = {
   // Voice reply TTS (edge-tts Microsoft Neural voice id)
   VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-RyanNeural' },
 
+  // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
+  // thresholds; defaults match the previously-hardcoded constants exactly,
+  // zero behavior change until overridden). Exposed to the HUD via
+  // GET /api/config/vad so mic sensitivity can be tuned without a rebuild.
+  VAD_SPEECH_RMS:           { type: 'number', default: 0.035, min: 0, max: 1 },
+  VAD_MIN_PEAK_RMS:         { type: 'number', default: 0.06,  min: 0, max: 1 },
+  VAD_HOLD_TICKS:           { type: 'number', default: 3,     min: 1, max: 20 },
+  VAD_SILENCE_MS:           { type: 'number', default: 1800,  min: 100, max: 10000 },
+
   // get_weather tool default location ("lat,lon") when no location is spoken —
   // same Kolkata fallback the dashboard weather widget already uses.
   WEATHER_LOCATION:         { type: 'string', default: '22.57,88.36' },
@@ -66,6 +75,9 @@ const SCHEMA = {
   BREAKER_RESET_MS:         { type: 'number', default: 15000, min: 1000 },
   CHECKPOINT_EVERY_TICKS:   { type: 'number', default: 50, min: 1 },
 
+  // Lifecycle (D-07 — graceful shutdown hard-exit backstop)
+  SHUTDOWN_MS:              { type: 'number', default: 10000, min: 1000 },
+
   // Bus
   BUS_HISTORY_SIZE:          { type: 'number', default: 500, min: 10 },
   BUS_STORM_MAX:            { type: 'number', default: 400, min: 10 },
@@ -95,6 +107,10 @@ const SCHEMA = {
   GOOGLE_CLIENT_SECRET:        { type: 'string', default: '' },
   GOOGLE_REFRESH_TOKEN:       { type: 'string', default: '' },
 
+  // Gmail triage sensor (Item 7 — unread-mail polling, mirrors reminder-sensor)
+  GMAIL_TRIAGE_POLL_MS:        { type: 'number', default: 300000, min: 60000 },
+  GMAIL_TRIAGE_ENABLED:        { type: 'bool',   default: true },
+
   // Engagement Layer (Phase 17/18 — structured task lifecycle)
   ENGAGEMENT_TTL_MS:           { type: 'number', default: 604800000, min: 3600000 },
   ENGAGEMENT_MAX_REPAIRS:      { type: 'number', default: 3, min: 0, max: 10 },
@@ -108,6 +124,14 @@ const SCHEMA = {
   // Checkpoints (P22 — workflow approval gates, distinct from LEASH_CONFIRM_TTL_MS)
   CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
   CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },
+
+  // YouTube mode (BUG-006 escape hatch): 'embed' attempts iframe embed, 'newtab' opens in new browser tab
+  YOUTUBE_MODE:                { type: 'string', default: 'embed', enum: ['embed', 'newtab'] },
+
+  // MCP server (Item 10 — hand-rolled JSON-RPC 2.0 stdio server, mcp/server.js).
+  // Opt-in by design: exposing the hub's ~58-tool catalog over a new stdio
+  // surface is a trust-boundary expansion the operator must explicitly enable.
+  MCP_SERVER_ENABLED:          { type: 'bool', default: false },
 };
 
 module.exports = { SCHEMA };

@@ -16,6 +16,7 @@
 #   { "cmd": "write_note", "text": "remember this", "title": "My Note" }
 #   { "cmd": "ping" }
 #   { "cmd": "send_key", "key": "enter" }
+#   { "cmd": "click_at", "x": 500, "y": 300 }
 #
 # Response shape:
 #   { "ok": true, "result": <any> }
@@ -553,6 +554,16 @@ function Click-AtScreenCoords($x, $y) {
     [void][NativeInput]::SendInput(3, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
 }
 
+function Handle-ClickAt($x, $y) {
+    if ($null -eq $x -or $null -eq $y) { return 'x and y coordinates are required.' }
+    try {
+        Click-AtScreenCoords ([int]$x) ([int]$y)
+        return @{ clicked = $true; x = [int]$x; y = [int]$y }
+    } catch {
+        return ('Click failed: ' + $_.Exception.Message)
+    }
+}
+
 function Handle-WriteNote($text, $title) {
     if (-not $text) { return 'Note text is required.' }
     try {
@@ -633,6 +644,9 @@ while ($true) {
         }
         'send_key' {
             $result = Handle-SendKey $cmd.key
+        }
+        'click_at' {
+            $result = Handle-ClickAt $cmd.x $cmd.y
         }
         'media_status' {
             $result = Handle-MediaStatus

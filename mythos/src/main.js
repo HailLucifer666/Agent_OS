@@ -21,6 +21,7 @@ const { createEngagementManager } = require('./core/engagements');
 const { createConversationGateway } = require('./core/assistant/gateway');
 const { createTimerSensor } = require('./core/sensors/timer');
 const { createReminderSensor } = require('./core/sensors/reminder-sensor');
+const { createGmailSensor } = require('./core/sensors/gmail-sensor');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
 const { createHealer } = require('./core/immune/healer');
@@ -50,6 +51,7 @@ const { registerFromMemory } = require('./core/effectors/from-memory');
 const { registerFromCalendar } = require('./core/effectors/from-calendar');
 const { registerFromSkills } = require('./core/effectors/from-skills');
 const { registerFromSpotify } = require('./core/effectors/from-spotify');
+const { registerFromWidgets } = require('./core/effectors/from-widgets');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
@@ -121,6 +123,7 @@ async function main() {
   let jobSensor = null;
   let edgeTtsChild = null;
   let calendarWiring = null;
+  let gmailUnread = null;         // bound fn — goes through the hub, wired to gmail-sensor in the 'sensors' step
   let checkpoints = null;          // P22 checkpoint approval registry
   let forge = null;                // P22 Forge multi-file build pipeline
   let checkpointSweepTimer = null;
@@ -278,9 +281,9 @@ async function main() {
       // honest-inert (abtop.getState() reports enabled:false), which is correct: there
       // is no dashboard process to monitor CLI sessions for yet.
       registerFromComputer(hub);
-      registerFromPc(hub, { brain: brain });
+      registerFromPc(hub, { brain: brain, fs: memory.fs });
       registerFromSpotify(hub, { effectors: hub });
-      registerFromBrowser(hub);
+      registerFromBrowser(hub, { config: config });
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
@@ -314,9 +317,14 @@ async function main() {
       registerFromMission(hub, { orchestrator: orchestrator });
       registerFromSystem(hub, { config: config });
       registerFromGmail(hub, { logger: logger });
+      // Gmail triage sensor's bound fn — MUST go through the hub (breaker-gated),
+      // never call the gmail adapter directly. Constructed here (next to hub) but
+      // only started conditionally in the 'sensors' step below.
+      gmailUnread = function(args) { return hub.invoke('gmail_unread', args || {}, {}); };
       registerFromSkills(hub);
-      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs });
+      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
+      registerFromWidgets(hub, { bus: bus });
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
       // registry. checkpoints needs memory.audit + goals (both exist by now); forge
@@ -478,6 +486,17 @@ async function main() {
         logger.info('sensors.reminder.started', {});
       }
 
+      // Gmail unread triage sensor — polls gmail_unread via the hub every
+      // GMAIL_TRIAGE_POLL_MS so genuinely new unread mail emits 'gmail.unread-batch'
+      // for proactive speech. Only started when Gmail is actually configured AND
+      // triage is enabled — otherwise it would error-spam every poll cycle hitting
+      // an unconfigured Gmail API.
+      if (config.GOOGLE_REFRESH_TOKEN && config.GMAIL_TRIAGE_ENABLED) {
+        var gmailSensor = createGmailSensor({ gmailUnread: gmailUnread, bus: bus, pollMs: config.GMAIL_TRIAGE_POLL_MS });
+        gmailSensor.start();
+        logger.info('sensors.gmail.started', {});
+      }
+
       // [Phase 6 — NEW] metric sensor polls immune/probes.js every 4s and feeds
       // the cognitive OODA loop's perception queue.
       metricSensor = createMetricSensor({ bus, config, probes: immune.probes });
@@ -517,8 +536,8 @@ async function main() {
     }}
   ]);
 
-  // Stop running loops before the lifecycle's own shutdown/exit runs (full graceful
-  // shutdown sequencing — drain/flush/audit — is D-07, a non-blocking Known Deviation)
+  // Stop running loops — step 1 of the D-07 coordinated shutdown sequence
+  // (registered below via lifecycle.registerShutdownStep, run after server-close).
   function stopRunningLoops() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     pcChild.shutdownPcChild();
@@ -538,10 +557,27 @@ async function main() {
       immune.monitor.stop();
     }
   }
-  process.on('SIGINT', stopRunningLoops);
-  process.on('SIGTERM', stopRunningLoops);
 
-  // Register signal handlers
+  // D-07: full graceful shutdown sequence — server-close (step 0, registered
+  // separately via registerStopServer above) -> stop-loops -> episodic-flush
+  // -> checkpoint-write -> audit-flush -> exit 0, with SHUTDOWN_MS as the
+  // hard-exit(1) backstop if any step hangs. `memory` is closure-captured
+  // here (same pattern stopRunningLoops relies on for cortex/immune/etc.) and
+  // is populated by the 'memory' boot step before lifecycle.boot() resolves.
+  lifecycle.registerShutdownStep('stop-loops', stopRunningLoops);
+  lifecycle.registerShutdownStep('episodic-flush', function() {
+    if (memory) return memory.working.flushToEpisodic();
+  });
+  lifecycle.registerShutdownStep('checkpoint-write', function() {
+    if (memory) return memory.checkpoints.save(memory.working.snapshot());
+  });
+  lifecycle.registerShutdownStep('audit-flush', function() {
+    if (memory) return memory.audit.write({ tool: 'lifecycle', tier: 0, decision: 'shutdown', outcome: 'ok' });
+  });
+
+  // Register signal handlers — the ONE path that drives shutdown on SIGINT/SIGTERM
+  // (stopRunningLoops is no longer hooked to process.on() directly; it runs as the
+  // 'stop-loops' step above, coordinated through this same sequence).
   lifecycle.registerShutdown();
 
   // Boot

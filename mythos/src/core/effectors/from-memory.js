@@ -4,15 +4,32 @@ function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
 function buildTools(ctx){
-  var semantic=ctx&&ctx.semantic, fs=ctx&&ctx.fs;
+  var semantic=ctx&&ctx.semantic, fs=ctx&&ctx.fs, identity=ctx&&ctx.identity;
+
+  // Detect preference-shaped text: starts with "I like", "I prefer", "always", "never", etc.
+  function isPreferenceShape(text) {
+    var prefPattern = /^\s*(i\s+(?:like|prefer|want|enjoy|love|hate|dislike)|always|never|must|should)\b/i;
+    return prefPattern.test(text);
+  }
 
   async function remember(args){
     var text=(args&&(args.text||args.fact||args.note)||'').trim();
     if(!text) return fail('text required — the fact or instruction to remember');
+    var STT_NOISE = /^(that you like|the|a|uh+|um+|hmm+)[\s.,!?]*$/i;
+    if (text.length < 10 || STT_NOISE.test(text) || !/[a-z]{3,}/i.test(text)) {
+      return fail('Rejected: too short or looks like transcription noise.');
+    }
     if(!semantic||typeof semantic.write!=='function') return fail('memory store unavailable');
     try{
       var res=semantic.write('user-facts',[text],{confidence:0.9,append:true,sources:['voice-explicit']});
       if(res&&res.degraded) return fail('memory write degraded — disk error');
+      // If text looks like a stated preference, also populate Learned Preferences
+      if (isPreferenceShape(text) && identity && typeof identity.learn === 'function') {
+        identity.learn({ text: text, sourceEpId: 'remember-tool' }).catch(function(err) {
+          // Swallow learn() errors — don't fail the remember() call if identity write fails
+          console.warn('identity.learn() failed in remember:', err.message);
+        });
+      }
       return ok({remembered:text.slice(0,200),ref:res&&res.ref});
     }catch(err){return fail('remember failed: '+(err.message||err));}
   }

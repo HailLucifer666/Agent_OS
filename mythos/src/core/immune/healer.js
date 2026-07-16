@@ -37,6 +37,12 @@ const SEED_PLAYBOOKS = [
     when: { kind: 'budget-exhausted' },
     then: [{ do: 'pause-goal', args: { reason: 'budget-exhausted' } }],
     cooldownMs: 0 // no cooldown — immediate, every time
+  },
+  {
+    id: 'effector-flapping-breaker',
+    when: { kind: 'effector-flapping' },
+    then: [{ do: 'suppress-tool', args: { tool: '$target' } }],
+    cooldownMs: 60000
   }
 ];
 
@@ -91,6 +97,12 @@ function resolveArgs(args, diagnosis) {
 // RC#4: tracks degraded lanes with TTL so they auto-restore after the cooldown.
 // Keyed by lane name → { env: envVarName, restoreAt: timestamp }
 var degradedLanes = {};
+
+// BUG-013: tracks suppressed tools with TTL so they auto-restore after the cooldown.
+// Keyed by tool name → { restoreAt: timestamp }. When a tool flaps (circuit breaker opens),
+// the healer suppresses it from the planner's available-tool list, forcing the brain to
+// choose a different approach on the next decision cycle.
+var suppressedTools = {};
 
 function buildActions({ getCortex, getGoals, memory }) {
   const registry = require('../brain/registry');
@@ -172,6 +184,19 @@ function buildActions({ getCortex, getGoals, memory }) {
         goals.update(goalId, { status: 'paused', reason: args.reason || 'healer-pause' });
       }
       return { ok: true, result: { goalId: goalId, reason: args.reason || 'healer-pause' } };
+    },
+
+    // BUG-013: suppress a flapping tool for its cooldown window. When a tool's circuit
+    // breaker opens (repeated failures), the healer injects it into the suppressedTools
+    // map so the planner's next brain call excludes it from the available-tool list.
+    // The planner checks suppressedTools() (exported below) and filters them out.
+    'suppress-tool': async function(diagnosis, args) {
+      const toolName = args.tool;
+      if (!toolName) return { ok: false, reason: 'missing-arg:tool' };
+      // Track the suppression with a TTL (cooldown window from the playbook).
+      // The tick loop's restoreTimer (RC#4) also restores expired suppressions.
+      suppressedTools[toolName] = { restoreAt: Date.now() + 60000 };
+      return { ok: true, result: { tool: toolName, suppressedUntil: suppressedTools[toolName].restoreAt } };
     }
   };
 }
@@ -250,6 +275,7 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
     // RC#4: periodic check for expired lane degradations. Every 60s, if a
     // degraded lane's restoreAt has passed, clear the env override so the
     // registry falls back to the built-in preference list (re-adding groq etc.).
+    // Also restores suppressed tools (BUG-013) when their cooldown expires.
     restoreTimer = setInterval(function() {
       var now = Date.now();
       Object.keys(degradedLanes).forEach(function(lane) {
@@ -260,6 +286,16 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
           bus.emit('health.healed', {
             playbookId: 'lane-restore', kind: 'quota-recovered',
             target: lane, outcome: 'applied', detail: { restored: true }
+          });
+        }
+      });
+      // BUG-013: restore suppressed tools after cooldown expires
+      Object.keys(suppressedTools).forEach(function(toolName) {
+        if (suppressedTools[toolName].restoreAt <= now) {
+          delete suppressedTools[toolName];
+          bus.emit('health.healed', {
+            playbookId: 'tool-restore', kind: 'tool-unsuppressed',
+            target: toolName, outcome: 'applied', detail: { restored: true }
           });
         }
       });
@@ -278,7 +314,18 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
   };
 }
 
+function isToolSuppressed(toolName) {
+  if (!suppressedTools[toolName]) return false;
+  const now = Date.now();
+  if (suppressedTools[toolName].restoreAt <= now) {
+    delete suppressedTools[toolName];
+    return false;
+  }
+  return true;
+}
+
 module.exports = {
   createHealer: createHealer, SEED_PLAYBOOKS: SEED_PLAYBOOKS,
-  matchClause: matchClause, matches: matches, resolveArgs: resolveArgs, getPath: getPath
+  matchClause: matchClause, matches: matches, resolveArgs: resolveArgs, getPath: getPath,
+  isToolSuppressed: isToolSuppressed
 };

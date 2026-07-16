@@ -40,7 +40,7 @@ const skillsLoader = require('../skills/loader');
 // from-project.js). F3: danger is now computed dynamically from tierOf() at
 // buildPrompt time to prevent drift between the voice catalog and the tier table.
 const CATALOG_RAW = [
-  { name: 'navigate', description: 'Open a dashboard panel. route is one of: goals, kanban, pipeline, memory, health, audit.', params: { route: 'string' }, danger: false },
+  { name: 'navigate', description: 'Open a dashboard panel. route is one of: goals, kanban, pipeline, memory, health, audit. Note: there is no "news" route — news is a boot-time floating widget spawned separately, not a navigable dashboard panel. Never call navigate with route:"news".', params: { route: 'string' }, danger: false },
   { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top panel.', params: { all: 'boolean (optional)' }, danger: false },
   { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
   { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done and researchStatus (grounded/skipped) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false },
@@ -101,6 +101,47 @@ function buildCatalog() {
 }
 const CATALOG = buildCatalog();
 
+// F4 (BUG-017 fix): merge CATALOG_RAW with the effector hub's real registrations,
+// so the voice catalog can never drift from what's actually registered (the bug:
+// CATALOG_RAW is hand-maintained and a new effector — e.g. BUG-009's
+// capture_screenshot — silently never reaches the voice channel unless someone
+// remembers to add a matching line here).
+//
+// Hub-sourced params always win for a name the hub knows about — CATALOG_RAW's
+// copy of that tool becomes inert (kept only for hub-less fallback below, plus
+// the odd deliberate voice-facing description override, e.g. navigate's route
+// enum/"no news route" warning). Any hub-registered effector with no CATALOG_RAW
+// entry at all (a brand new tool) is added automatically. Any CATALOG_RAW entry
+// with no hub match (e.g. media_status, which is served via the PC-child/REST
+// path rather than the effector hub) passes through unchanged — it's a genuine
+// voice-only pseudo-tool, not drift.
+//
+// Deliberately additive: CATALOG_RAW itself is untouched (existing hub-less
+// tests and call sites that construct createVoiceAgent without a hub keep
+// getting today's exact CATALOG).
+function buildCatalogFromHub(hub) {
+  const overrides = new Map(CATALOG_RAW.map(function(entry) { return [entry.name, entry]; }));
+  const seen = new Set();
+  const merged = [];
+  const hubCatalog = (hub && typeof hub.catalog === 'function') ? hub.catalog() : [];
+  hubCatalog.forEach(function(meta) {
+    if (!meta || !meta.name) return;
+    const override = overrides.get(meta.name);
+    merged.push({
+      name: meta.name,
+      description: (override && override.description) || meta.description,
+      params: meta.params || {},
+      danger: tierOf(meta.name) >= 3,
+    });
+    seen.add(meta.name);
+  });
+  CATALOG_RAW.forEach(function(entry) {
+    if (seen.has(entry.name)) return; // real hub registration already supplied this tool
+    merged.push(Object.assign({}, entry, { danger: tierOf(entry.name) >= 3 }));
+  });
+  return merged;
+}
+
 // ---- prompt construction (DANGER TOOLS RULE + PROJECT INTAKE RULE are CA
 // from NOVA — the danger rule was validated by NOVA's day-one spike: without
 // it, 25% false-danger-invocation on ambiguous utterances; with it, 0%). ----
@@ -116,6 +157,8 @@ HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below all
 MEMORY RULE (prevents memory pollution): Only call remember when the user EXPLICITLY asks you to save something — they must say one of: "remember", "note that", "don't forget", "from now on", "keep in mind", "log this", "record this", or give a direct instruction to persist a fact. Do NOT call remember for conversational fragments, vague references, incomplete sentences, or speech-to-text artifacts. If the user mentions a preference casually ("I like X", "I prefer Y", "that you like") WITHOUT asking you to remember it, do NOT call remember — just acknowledge naturally in your reply. Never write a "the user mentioned..." meta-summary to memory; write the actual fact if explicitly asked, or nothing. When in doubt whether the user wants something remembered, ASK ("Want me to remember that?") instead of silently writing to memory.
 
 ARTIFACT RULE: NEVER fabricate or guess file paths. If the user asks to open/show/view a build or artifact, call pipeline_status (needs_result:true) FIRST to get the real artifact path from the result, THEN call open_artifact with that exact path. Do not invent paths based on the project description — they will be wrong and the user will see a 404 or the wrong page. Same for job_status if the user references a specific job.
+
+FRUSTRATION RULE: if the user expresses frustration ('not working', 'broken', 'doesn't work', 'failed', repeated complaints, or tone of exasperation), do NOT reply with templated empathy. Call read_status and list_goals (both tier-0, safe, no confirm needed) first with needs_result:true, check recent failures and active goals, and give a concrete diagnosis of what actually failed and why. Ground your answer in real data, not sympathy.
 
 DANGER TOOLS RULE (safety-critical, read carefully): each tool below is marked "danger": true or "danger": false. For a danger:true tool, you may ONLY put it in "actions" if the utterance itself clearly and specifically names the target (an exact goal/card/file described in THIS utterance, or an explicit direct confirmation like "yes, delete it" replying to a question YOU just asked in this same turn). If the utterance is vague about WHAT to act on (words like "it", "that", "this", "the thing") and nothing concrete is named anywhere else in this turn, that is NOT authorization: you MUST put "actions": [] and instead ask a clarifying question in "say". Never put a danger:true tool call in "actions" as a placeholder while you ask a clarifying question — asking a question and queuing the dangerous action in the same turn is always wrong. When genuinely unsure, prefer actions: [] and ask.
 
@@ -138,8 +181,8 @@ Your "say" follows the BREVITY rule: one short sentence for simple things (greet
 If you have nothing to do, or you are asking a clarifying question, "actions" MUST be [].
 Set "needs_result": true only when you need the result of an action (e.g. a job status or list) before you can give a final spoken answer.`;
 
-function toolCatalogJson() {
-  return JSON.stringify(CATALOG);
+function toolCatalogJson(catalog) {
+  return JSON.stringify(catalog || CATALOG);
 }
 
 // Compact self-awareness block: version + recent changes. Answers "what are
@@ -156,7 +199,7 @@ function buildSystemContext() {
   return lines.join('\n');
 }
 
-function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext }) {
+function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext, catalog }) {
   const now = new Date();
   const sysDate = now.toISOString().slice(0, 10);
   const sysTime = now.toLocaleTimeString('en-US', { hour12: false });
@@ -169,7 +212,7 @@ function buildPrompt({ text, history, toolResults, corrective, originalSay, memo
     '',
     skillsLoader.catalogBlock(),
     '',
-    `TOOLS: ${toolCatalogJson()}`,
+    `TOOLS: ${toolCatalogJson(catalog)}`,
   ];
   if (memoryContext) {
     parts.push('', 'RELEVANT MEMORIES (past conversations and actions — use naturally, do not recite verbatim):');
@@ -224,7 +267,7 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
-function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
+function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
   // F2: Use config-provided values if available, falling back to env-based defaults.
   const maxIterations = (config && config.VOICE_MAX_TOOL_ITERATIONS) || MAX_ITERATIONS;
   const maxSayChars = (config && config.VOICE_MAX_SAY_CHARS) || MAX_SAY_CHARS;
@@ -232,6 +275,12 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
   if (!leash || typeof leash.check !== 'function') throw new Error('createVoiceAgent requires leash');
   if (typeof dispatch !== 'function') throw new Error('createVoiceAgent requires dispatch(decision, ctx)');
   if (!bus) throw new Error('createVoiceAgent requires bus');
+
+  // BUG-017: when the real effector hub is available (always true at real boot —
+  // see server/index.js), build the catalog from it so every registered effector
+  // shows up with its real params, with zero manual duplication. Without a hub
+  // (existing hub-less callers/tests), fall back to the legacy module-level CATALOG.
+  const catalog = hub ? buildCatalogFromHub(hub) : CATALOG;
 
   async function callModel(prompt, { signal } = {}) {
     const result = await brain.think({
@@ -262,7 +311,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
 
   // ---- execution: leash gate first, then the server's dispatch path ----
 
-  const KNOWN = new Set(CATALOG.map((t) => t.name));
+  const KNOWN = new Set(catalog.map((t) => t.name));
 
   // Tools whose human gate is the PROJECT INTAKE RULE conversation itself
   // (clarify -> restate -> explicit go-ahead in a later turn). NOVA's
@@ -337,7 +386,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
       }
 
       iterations += 1;
-      const prompt = buildPrompt({ text, history: ctx.history, toolResults, memoryContext: ctx.memoryContext });
+      const prompt = buildPrompt({ text, history: ctx.history, toolResults, memoryContext: ctx.memoryContext, catalog });
       const parsed = await callAndParse(prompt, { signal });
       finalSay = parsed.say;
       if (parsed.offline) return { say: finalSay, actions: [], offline: true };
@@ -395,6 +444,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config }) {
           corrective: true,
           originalSay: finalSay,
           memoryContext: ctx.memoryContext,
+          catalog,
         });
         const corrective = await callAndParse(correctivePrompt, { signal });
         finalSay = corrective.say;
@@ -413,5 +463,6 @@ module.exports = {
   createVoiceAgent,
   CATALOG,
   MAX_ITERATIONS,
+  buildCatalogFromHub,
   _internal: { buildPrompt, normalizeParsed, stripThink },
 };

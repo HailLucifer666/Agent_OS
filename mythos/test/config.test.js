@@ -17,6 +17,7 @@ describe('config', () => {
     assert.equal(result.config.MYTHOS_DRY_RUN, false);
     assert.equal(result.config.LOG_LEVEL, 'info');
     assert.equal(result.config.AUTONOMOUS_MAX_TIER, 2);
+    assert.equal(result.config.SHUTDOWN_MS, 10000);
   });
 
   it('overrides defaults with env values', () => {

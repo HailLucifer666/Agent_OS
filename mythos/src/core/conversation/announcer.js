@@ -69,7 +69,7 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
 
   // ---- Event handlers ----
 
-  // Build job completion → "your X is done, want me to open it?"
+  // Build job completion → "your X is done, want me to open it?" OR "Build completed but review found issues..."
   function onJobPerception(event) {
     var p = event.payload;
     if (!p || p.status !== 'done') return;
@@ -85,17 +85,34 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
       artifactName = parts[parts.length - 1] || 'your build';
     }
 
-    generate(
-      'A build job just completed. The artifact is: ' + artifactName +
-      '. Say one natural, warm sentence to tell the operator it is done. ' +
-      'After stating what finished, optionally add ONE short offer for the most obvious next step ' +
-      '(e.g. "Want me to open it?" or "Shall I have the reviewer check it?"). Skip the offer if nothing obvious follows. ' +
-      'Never more than one offer. Do not be robotic. Speak plainly.',
-      'Your ' + artifactName + ' is ready. Want me to open it?'
-    ).then(function(text) {
-      if (!DRYRUN) speak(text);
-      bus.emit('conversation.announced', { key: key, text: text, kind: 'job-done' });
-    });
+    // BUG-016: Check if the review failed — if so, announce issues instead of success
+    if (p.reviewVerdict === 'reject' && Array.isArray(p.reviewIssues) && p.reviewIssues.length > 0) {
+      var issueList = p.reviewIssues.slice(0, 3).join('; '); // Limit to first 3 issues
+      generate(
+        'A build job completed but the review found issues that need fixing. ' +
+        'Artifact: ' + artifactName + '. Issues: ' + issueList +
+        '. Say one natural sentence informing the operator that the build has issues needing attention. ' +
+        'Do not say "finished" or "done" — say something like "completed but needs your attention" or "found some issues". ' +
+        'Be helpful, not robotic.',
+        artifactName + ' completed but review found issues that need attention.'
+      ).then(function(text) {
+        if (!DRYRUN) speak(text);
+        bus.emit('conversation.announced', { key: key, text: text, kind: 'job-done-with-issues' });
+      });
+    } else {
+      // Build passed review or didn't require review — announce as success
+      generate(
+        'A build job just completed. The artifact is: ' + artifactName +
+        '. Say one natural, warm sentence to tell the operator it is done. ' +
+        'After stating what finished, optionally add ONE short offer for the most obvious next step ' +
+        '(e.g. "Want me to open it?" or "Shall I have the reviewer check it?"). Skip the offer if nothing obvious follows. ' +
+        'Never more than one offer. Do not be robotic. Speak plainly.',
+        'Your ' + artifactName + ' is ready. Want me to open it?'
+      ).then(function(text) {
+        if (!DRYRUN) speak(text);
+        bus.emit('conversation.announced', { key: key, text: text, kind: 'job-done' });
+      });
+    }
     markAnnounced(key);
   }
 

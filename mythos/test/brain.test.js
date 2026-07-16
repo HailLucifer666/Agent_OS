@@ -227,6 +227,44 @@ describe('brain/index think', function() {
     assert.equal(result.lane, 'embed');
   });
 
+  it('D-47/D-49: think with budget.tokens=0 returns offline + budgetExhausted', async function() {
+    const brain = createBrain({ config: {}, bus: null });
+    const result = await brain.think({
+      lane: 'build',
+      messages: [{ role: 'user', content: 'test' }],
+      budget: { tokens: 0, actions: 5 }
+    });
+    assert.equal(result.content, null);
+    assert.equal(result.offline, true);
+    assert.equal(result.budgetExhausted, true);
+    assert.equal(result.lane, 'build');
+  });
+
+  it('D-47/D-49: think with budget.actions=0 returns offline + budgetExhausted', async function() {
+    const brain = createBrain({ config: {}, bus: null });
+    const result = await brain.think({
+      lane: 'voice',
+      messages: [{ role: 'user', content: 'test' }],
+      budget: { tokens: 100, actions: 0 }
+    });
+    assert.equal(result.content, null);
+    assert.equal(result.offline, true);
+    assert.equal(result.budgetExhausted, true);
+    assert.equal(result.lane, 'voice');
+  });
+
+  it('D-47/D-49: think with positive budget proceeds normally (or offline per chain)', async function() {
+    const brain = createBrain({ config: {}, bus: null });
+    const result = await brain.think({
+      lane: 'simple',
+      messages: [{ role: 'user', content: 'test' }],
+      budget: { tokens: 100, actions: 5 }
+    });
+    // Should not return budgetExhausted flag — may be offline due to chain but NOT due to budget
+    assert.ok(result.budgetExhausted !== true, 'budgetExhausted should not be set for positive budget');
+    assert.equal(result.lane, 'simple');
+  });
+
   it('think never throws on chainExhausted', async function() {
     // With no API keys set, chain.complete will throw chainExhausted → think degrades to offline
     // If a local provider (e.g. Ollama) is running, it may succeed — either outcome is valid
@@ -560,9 +598,30 @@ describe('providers/openai-compat', function() {
 describe('providers/ollama', function() {
   const ollama = require('../providers/ollama');
 
-  it('exports chat and listModels', function() {
+  it('exports canonical interface', function() {
+    assert.equal(ollama.name, 'ollama');
     assert.equal(typeof ollama.chat, 'function');
+    assert.equal(typeof ollama.isAvailable, 'function');
+    assert.equal(typeof ollama.getModel, 'function');
+    assert.equal(typeof ollama.getStatus, 'function');
     assert.equal(typeof ollama.listModels, 'function');
+  });
+
+  it('getModel returns DEFAULT_MODEL', function() {
+    const model = ollama.getModel();
+    assert.equal(typeof model, 'string');
+    assert.ok(model.length > 0);
+  });
+
+  it('isAvailable returns true', function() {
+    assert.equal(ollama.isAvailable(), true);
+  });
+
+  it('getStatus returns {ok, model}', function() {
+    const status = ollama.getStatus();
+    assert.equal(typeof status, 'object');
+    assert.equal(status.ok, true);
+    assert.equal(typeof status.model, 'string');
   });
 });
 
@@ -572,7 +631,85 @@ describe('providers/ollama', function() {
 describe('providers/openrouter', function() {
   const openrouter = require('../providers/openrouter');
 
-  it('exports chat', function() {
+  it('exports canonical interface', function() {
+    assert.equal(openrouter.name, 'openrouter');
     assert.equal(typeof openrouter.chat, 'function');
+    assert.equal(typeof openrouter.isAvailable, 'function');
+    assert.equal(typeof openrouter.getModel, 'function');
+    assert.equal(typeof openrouter.getStatus, 'function');
+  });
+
+  it('getModel returns null', function() {
+    assert.equal(openrouter.getModel(), null);
+  });
+
+  it('getStatus returns {ok, model}', function() {
+    const status = openrouter.getStatus();
+    assert.equal(typeof status, 'object');
+    assert.equal(typeof status.ok, 'boolean');
+    assert.equal(status.model, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claude-CLI provider structure
+// ---------------------------------------------------------------------------
+describe('providers/claude-cli', function() {
+  const claudeCli = require('../providers/claude-cli');
+
+  it('exports canonical interface', function() {
+    assert.equal(claudeCli.name, 'claude-cli');
+    assert.equal(typeof claudeCli.chat, 'function');
+    assert.equal(typeof claudeCli.isAvailable, 'function');
+    assert.equal(typeof claudeCli.getModel, 'function');
+    assert.equal(typeof claudeCli.getStatus, 'function');
+  });
+
+  it('isAvailable returns true', function() {
+    assert.equal(claudeCli.isAvailable(), true);
+  });
+
+  it('getModel returns CLAUDE_MODEL env var or null', function() {
+    const originalEnv = process.env.CLAUDE_MODEL;
+    try {
+      delete process.env.CLAUDE_MODEL;
+      assert.equal(claudeCli.getModel(), null);
+
+      process.env.CLAUDE_MODEL = 'test-model';
+      assert.equal(claudeCli.getModel(), 'test-model');
+    } finally {
+      if (originalEnv) process.env.CLAUDE_MODEL = originalEnv;
+      else delete process.env.CLAUDE_MODEL;
+    }
+  });
+
+  it('getStatus returns {ok, model}', function() {
+    const status = claudeCli.getStatus();
+    assert.equal(typeof status, 'object');
+    assert.equal(status.ok, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chain LANES exposure
+// ---------------------------------------------------------------------------
+describe('brain/chain — LANES exposure', function() {
+  const chain = require('../src/core/brain/chain');
+
+  it('_internal.LANES contains ollama', function() {
+    assert.ok(chain._internal.LANES);
+    assert.ok(chain._internal.LANES.ollama);
+    assert.equal(chain._internal.LANES.ollama.name, 'ollama');
+  });
+
+  it('_internal.LANES contains all expected providers', function() {
+    assert.ok(chain._internal.LANES.zcode);
+    assert.ok(chain._internal.LANES.nim);
+    assert.ok(chain._internal.LANES.nim2);
+    assert.ok(chain._internal.LANES.groq);
+    assert.ok(chain._internal.LANES.mistral);
+    assert.ok(chain._internal.LANES.cerebras);
+    assert.ok(chain._internal.LANES.openrouter);
+    assert.ok(chain._internal.LANES.ollama);
   });
 });

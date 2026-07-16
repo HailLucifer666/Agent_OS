@@ -103,6 +103,21 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     throw new Error('createAgentActions requires a buildRunner with enqueue()');
   }
 
+  // BUG-025: buildRunner.enqueue() refuses (returns { ok: false, result: { error } })
+  // instead of enqueueing when the assembled prompt is empty/undefined — a card that
+  // lost its spec upstream must never silently build garbage. Every call site below
+  // expects a job record with .id back; surface the refusal as a thrown Error so it
+  // flows into the existing try/catch -> fail() handling at the effector-tool boundary
+  // (from-dashboard.js's pipeline_execute/kanban_* wrappers), same as any other
+  // validation failure in this file.
+  function enqueueOrThrow(spec) {
+    var job = buildRunner.enqueue(spec);
+    if (job && job.ok === false) {
+      throw new Error((job.result && job.result.error) || 'build enqueue failed');
+    }
+    return job;
+  }
+
   // ---- P22: Research gate — grounds the builder with real web data ----
   // Calls web_search for the topic, then web_fetch on top results to get real
   // content. Returns a condensed brief injected into the builder's prompt so
@@ -314,7 +329,15 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       return { verdict: 'reject', issues: ['artifact file missing or empty'], visualDescription: '' };
     }
 
-    var specText = card.title + (card.detail ? ' — ' + card.detail : '');
+    // BUG-025 fix: fullReview() is shared between pipeline cards (shape { text, ... },
+    // set by pipeline.capture() in pipeline.js) and kanban cards (shape { title, detail,
+    // ... }, set by kanban.addCard()/addCards()). It used to unconditionally read
+    // card.title/card.detail — correct for kanban, but pipeline cards have neither field,
+    // so specText silently became the string "undefined" and every reviewer/vision prompt
+    // was built against a spec-less task. Read whichever shape the card actually has.
+    var specText = card.text
+      ? card.text
+      : card.title + (card.detail ? ' — ' + card.detail : '');
 
     // 1. Visual verification (if browser is online)
     var visual = await verifyBuildVisually(artifact.path, specText);
@@ -397,7 +420,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       return base;
     })();
 
-    var job = buildRunner.enqueue({
+    var job = enqueueOrThrow({
       kind: 'pipeline-execute',
       goalId: goalId,
       prompt: basePrompt,
@@ -494,7 +517,14 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           shipMeta.evidence = { pass: true, phases: riskClassifierLib.gatePath(risk) };
         }
 
-        pipeline.moveCard(card.id, 'shipped', shipMeta);
+        // BUG-016 FIX: Only move to 'shipped' when review passed. If review failed,
+        // move back to 'execute' with failure metadata so the user can see issues
+        // and take action, rather than silently advancing to shipped.
+        if (reviewed) {
+          pipeline.moveCard(card.id, 'shipped', shipMeta);
+        } else {
+          pipeline.moveCard(card.id, 'execute', shipMeta);
+        }
         return { artifact: artifact, review: review, researchStatus: researchStatus };
       }
     });
@@ -504,7 +534,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
   function assembleKanbanPlan(goal, goalId) {
     if (!goal || !goal.trim()) throw new Error('goal required');
-    var job = buildRunner.enqueue({
+    var job = enqueueOrThrow({
       kind: 'kanban-plan',
       goalId: goalId,
       prompt: PLANNER_PREAMBLE + goal.trim(),
@@ -545,7 +575,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       return base;
     })();
 
-    var job = buildRunner.enqueue({
+    var job = enqueueOrThrow({
       kind: 'kanban-build',
       goalId: goalId,
       prompt: basePrompt,
@@ -641,7 +671,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     var content = fs.readText(rel, '');
     if (!content) throw new Error('artifact file missing or empty: ' + rel);
 
-    var job = buildRunner.enqueue({
+    var job = enqueueOrThrow({
       kind: 'kanban-review',
       goalId: goalId,
       prompt: REVIEWER_PREAMBLE +

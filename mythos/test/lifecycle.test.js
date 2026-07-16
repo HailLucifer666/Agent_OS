@@ -90,4 +90,49 @@ describe('lifecycle', () => {
     await lc.shutdown(1000);
     assert.equal(lc.getState(), 'dead');
   });
+
+  it('registered shutdown steps run in registration order after stopServerFn', async () => {
+    const { bus, logger } = makeCtx();
+    const lc = createLifecycle({ bus, logger });
+    const order = [];
+
+    lc.registerStopServer(function() { order.push('server'); });
+    lc.registerShutdownStep('one', function() { order.push('one'); });
+    lc.registerShutdownStep('two', async function() { order.push('two'); });
+    lc.registerShutdownStep('three', function() { order.push('three'); });
+
+    await lc.shutdown(1000);
+    assert.deepEqual(order, ['server', 'one', 'two', 'three']);
+    assert.equal(lc.getState(), 'dead');
+  });
+
+  it('a throwing shutdown step does not block later steps or completion', async () => {
+    const { bus, logger } = makeCtx();
+    const lc = createLifecycle({ bus, logger });
+    const order = [];
+    const failed = [];
+    bus.subscribe('lifecycle.shutdown.step-failed', function(e) { failed.push(e.payload); });
+
+    lc.registerShutdownStep('ok-before', function() { order.push('ok-before'); });
+    lc.registerShutdownStep('boom', function() { order.push('boom'); throw new Error('nope'); });
+    lc.registerShutdownStep('ok-after', function() { order.push('ok-after'); });
+
+    await lc.shutdown(1000);
+    assert.deepEqual(order, ['ok-before', 'boom', 'ok-after']);
+    assert.equal(lc.getState(), 'dead');
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].name, 'boom');
+    assert.equal(failed[0].error, 'nope');
+  });
+
+  it('shutdown uses config.SHUTDOWN_MS as the hard-exit backstop when no timeoutMs is passed', async () => {
+    const { bus, logger } = makeCtx();
+    const lc = createLifecycle({ bus, logger, config: { SHUTDOWN_MS: 5000 } });
+    lc.registerShutdownStep('quick', function() {});
+
+    // Verify only that the coordinated sequence completes normally within the
+    // backstop window — the real hard-exit timer must never fire in-process.
+    await lc.shutdown();
+    assert.equal(lc.getState(), 'dead');
+  });
 });

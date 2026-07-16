@@ -193,3 +193,223 @@ describe('Spotify effector integration with tier table', () => {
     assert.equal(allKeys.length, uniqueKeys.size, 'TIER_TABLE has duplicate keys');
   });
 });
+
+describe('BUG-001: spotify_play focuses the Spotify window before send_key', () => {
+  let dir, fs, hub, bus, callOrder;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    callOrder = [];
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        callOrder.push(tool);
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        // No identifiable play control -- forces the click_at path to bail
+        // and fall back to the keystroke path this test is asserting on.
+        if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
+        if (tool === 'send_key') return { ok: true, result: { sent: true } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('invokes focus_window (with the matched pid) before send_key', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Bohemian Rhapsody' }, {});
+    assert.equal(result.ok, true);
+
+    const focusIdx = callOrder.indexOf('focus_window');
+    const sendKeyIdx = callOrder.indexOf('send_key');
+    assert.ok(focusIdx !== -1, 'focus_window was invoked');
+    assert.ok(sendKeyIdx !== -1, 'send_key was invoked');
+    assert.ok(focusIdx < sendKeyIdx, 'focus_window must be invoked before send_key');
+  });
+});
+
+describe('BUG-026: spotify_play sends Tab before Enter (focus-shift off the search box)', () => {
+  // NOTE ON VERIFICATION: this is a call-order/call-args regression guard only.
+  // BUG-026 itself was a *previous* call-order-only mock "passing" while real
+  // playback still failed (Enter was landing in the search box, not a result
+  // tile) -- a mock like this one cannot detect that class of failure. This
+  // test only guards against the Tab-before-Enter code path regressing; it is
+  // NOT a substitute for live verification against the real Spotify client.
+  let dir, fs, hub, bus, sendKeyCalls;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    sendKeyCalls = [];
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        if (tool === 'send_key') sendKeyCalls.push(args.key);
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        // No identifiable play control -- forces the click_at path to bail
+        // and fall back to the keystroke path this test is asserting on.
+        if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
+        if (tool === 'send_key') return { ok: true, result: { sent: true, key: args.key } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('sends tab, then enter (in that order) after focusing the window', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Moods Mild Oranges' }, {});
+    assert.equal(result.ok, true);
+    assert.deepEqual(sendKeyCalls, ['tab', 'enter'], 'must send tab before enter, not enter alone');
+  });
+});
+
+describe('BUG-026 (3rd attempt): spotify_play clicks the play control via click_at when ui_elements finds one', () => {
+  let dir, fs, hub, bus, callOrder, clickAtArgs;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    callOrder = [];
+    clickAtArgs = null;
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        callOrder.push(tool);
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        if (tool === 'ui_elements') {
+          return {
+            ok: true,
+            result: {
+              elements: [
+                {
+                  name: 'Play',
+                  type: 'ControlType.Button',
+                  automationId: 'play-button',
+                  rect: { x: 100, y: 200, width: 40, height: 40 }
+                }
+              ]
+            }
+          };
+        }
+        if (tool === 'click_at') {
+          clickAtArgs = args;
+          return { ok: true, result: { clicked: true, x: args.x, y: args.y } };
+        }
+        if (tool === 'send_key') return { ok: true, result: { sent: true, key: args.key } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('computes the play control center and calls click_at instead of send_key', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Bohemian Rhapsody' }, {});
+    assert.equal(result.ok, true);
+    assert.ok(clickAtArgs, 'click_at was invoked');
+    assert.equal(clickAtArgs.x, 120, 'center x = rect.x + rect.width/2');
+    assert.equal(clickAtArgs.y, 220, 'center y = rect.y + rect.height/2');
+    assert.ok(!callOrder.includes('send_key'), 'send_key must not be used when click_at succeeds');
+  });
+});
+
+describe('BUG-026 (3rd attempt): spotify_play falls back to the keystroke path when ui_elements finds no play control', () => {
+  let dir, fs, hub, bus, sendKeyCalls, clickAtCalled;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    sendKeyCalls = [];
+    clickAtCalled = false;
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        if (tool === 'send_key') sendKeyCalls.push(args.key);
+        if (tool === 'click_at') clickAtCalled = true;
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        // Empty tree -- no name/automationId contains "play" or "pause".
+        if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
+        if (tool === 'send_key') return { ok: true, result: { sent: true, key: args.key } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('does not fail outright -- falls back to send_key(tab) then send_key(enter)', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Moods Mild Oranges' }, {});
+    assert.equal(result.ok, true);
+    assert.equal(clickAtCalled, false, 'click_at must not be called when no play control was found');
+    assert.deepEqual(sendKeyCalls, ['tab', 'enter']);
+  });
+});
+
+describe('BUG-007 discipline: spotify_play does not fabricate success when every path fails', () => {
+  let dir, fs, hub, bus;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
+        // Both keystroke steps fail too -- the tool must surface ok:false,
+        // never fabricate a success.
+        if (tool === 'send_key') return { ok: false, result: `send_key(${args.key}) failed: no target window` };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('returns ok:false rather than claiming playback started', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Moods Mild Oranges' }, {});
+    assert.equal(result.ok, false);
+  });
+});

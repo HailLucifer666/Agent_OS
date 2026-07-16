@@ -70,6 +70,20 @@ function createEffectorHub({ bus, config }) {
     namedServices.set(id, obj);
   }
 
+  // BUG-017: real tool catalog derived from the actual registrations — the
+  // single source of truth callers (voice-agent's buildCatalogFromHub) merge
+  // against, instead of a hand-maintained list that silently drifts out of
+  // sync with what's really registered. Guarded per-entry since a future
+  // effector shape might not implement describeMeta(); danger-flag computation
+  // is left to the caller so this module doesn't have to depend on tiers.js.
+  function catalog() {
+    var out = [];
+    effectors.forEach(function(e) {
+      if (typeof e.describeMeta === 'function') out.push(e.describeMeta());
+    });
+    return out;
+  }
+
   async function invoke(name, params, ctx) {
     var effector = effectors.get(name);
     if (!effector) return { ok: false, result: 'unknown-effector' };
@@ -103,6 +117,7 @@ function createEffectorHub({ bus, config }) {
     registerNamed: registerNamed,
     get: get,
     invoke: invoke,
+    catalog: catalog,
     get effectors() { return effectors; },
     get breakers() { return breakers; },
     count: function() { return effectors.size; }
