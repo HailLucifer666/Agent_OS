@@ -426,12 +426,126 @@ describe('from-memory: log_incident', () => {
 });
 
 // ---------------------------------------------------------------------------
+// recall_memory tool (Item C — RAG follow-up: explicit mid-conversation recall)
+// ---------------------------------------------------------------------------
+describe('from-memory: recall_memory', () => {
+  it('returns error when query is empty', async () => {
+    const tools = buildTools({ memory: { recallHybrid: async () => [] } });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({});
+    assert.equal(result.ok, false);
+    assert.ok(result.result.error.includes('query required'));
+  });
+
+  it('handles memory facade unavailable', async () => {
+    const tools = buildTools({});
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'coffee preferences' });
+    assert.equal(result.ok, false);
+    assert.ok(result.result.error.includes('unavailable'));
+  });
+
+  it('handles memory with no recallHybrid function', async () => {
+    const tools = buildTools({ memory: {} });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'coffee preferences' });
+    assert.equal(result.ok, false);
+    assert.ok(result.result.error.includes('unavailable'));
+  });
+
+  it('calls memory.recallHybrid with the query and default limit 8', async () => {
+    let calledWith = null;
+    const mockMemory = {
+      recallHybrid: async (query, opts) => { calledWith = { query, opts }; return []; }
+    };
+    const tools = buildTools({ memory: mockMemory });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    await recall.fn({ query: 'what coffee do I like' });
+    assert.equal(calledWith.query, 'what coffee do I like');
+    assert.equal(calledWith.opts.limit, 8);
+  });
+
+  it('forwards an explicit limit to recallHybrid', async () => {
+    let calledWith = null;
+    const mockMemory = {
+      recallHybrid: async (query, opts) => { calledWith = { query, opts }; return []; }
+    };
+    const tools = buildTools({ memory: mockMemory });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    await recall.fn({ query: 'coffee', limit: 3 });
+    assert.equal(calledWith.opts.limit, 3);
+  });
+
+  it('maps recallHybrid hits to {store, snippet, score} results', async () => {
+    const mockMemory = {
+      recallHybrid: async () => [
+        { ref: 'ep-9', score: 0.9, snippet: 'keyword hit about coffee', store: 'episodic' },
+        { ref: 'sem-1', score: 0.8, snippet: 'user prefers dark roast', store: 'semantic' },
+      ]
+    };
+    const tools = buildTools({ memory: mockMemory });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'coffee' });
+    assert.equal(result.ok, true);
+    assert.equal(result.result.count, 2);
+    assert.deepEqual(result.result.results[0], { store: 'episodic', snippet: 'keyword hit about coffee', score: 0.9 });
+    assert.deepEqual(result.result.results[1], { store: 'semantic', snippet: 'user prefers dark roast', score: 0.8 });
+  });
+
+  it('falls back to record.summary when snippet is missing', async () => {
+    const mockMemory = {
+      recallHybrid: async () => [
+        { ref: 'ep-9', score: 0.7, store: 'episodic', record: { summary: 'from record.summary' } },
+      ]
+    };
+    const tools = buildTools({ memory: mockMemory });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'coffee' });
+    assert.equal(result.result.results[0].snippet, 'from record.summary');
+  });
+
+  it('filters out hits with no usable snippet', async () => {
+    const mockMemory = {
+      recallHybrid: async () => [
+        { ref: 'ep-9', score: 0.7, store: 'episodic' }, // no snippet, no record
+        { ref: 'sem-1', score: 0.6, store: 'semantic', snippet: 'real hit' },
+      ]
+    };
+    const tools = buildTools({ memory: mockMemory });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'coffee' });
+    assert.equal(result.result.count, 1);
+    assert.equal(result.result.results[0].snippet, 'real hit');
+  });
+
+  it('returns an empty result set when nothing matches (never an error)', async () => {
+    const tools = buildTools({ memory: { recallHybrid: async () => [] } });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'something nobody ever said' });
+    assert.equal(result.ok, true);
+    assert.equal(result.result.count, 0);
+    assert.deepEqual(result.result.results, []);
+  });
+
+  it('handles recallHybrid throwing', async () => {
+    const mockMemory = {
+      recallHybrid: async () => { throw new Error('embeddings down'); }
+    };
+    const tools = buildTools({ memory: mockMemory });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    const result = await recall.fn({ query: 'coffee' });
+    assert.equal(result.ok, false);
+    assert.ok(result.result.error.includes('embeddings down'));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // tool structure invariants
 // ---------------------------------------------------------------------------
 describe('from-memory: tool structure', () => {
-  it('exports exactly 2 tools', () => {
-    const tools = buildTools({ semantic: { write: () => ({}) }, fs: { ensureDir: () => {}, appendLine: () => {} } });
-    assert.equal(tools.length, 2);
+  it('exports exactly 3 tools', () => {
+    const tools = buildTools({ semantic: { write: () => ({}) }, fs: { ensureDir: () => {}, appendLine: () => {} }, memory: { recallHybrid: async () => [] } });
+    assert.equal(tools.length, 3);
   });
 
   it('remember tool has correct metadata', () => {
@@ -452,5 +566,21 @@ describe('from-memory: tool structure', () => {
     assert.ok(typeof log.description === 'string');
     assert.ok(log.description.length > 0);
     assert.ok(typeof log.fn === 'function');
+  });
+
+  it('recall_memory tool has correct metadata', () => {
+    const tools = buildTools({ memory: { recallHybrid: async () => [] } });
+    const recall = tools.find(t => t.name === 'recall_memory');
+    assert.equal(recall.name, 'recall_memory');
+    assert.equal(recall.danger, false);
+    assert.ok(typeof recall.description === 'string');
+    assert.ok(recall.description.length > 0);
+    assert.ok(typeof recall.fn === 'function');
+  });
+
+  it('recall_memory is registered as tier 0 (read-only) in TIER_TABLE', () => {
+    const { tierOf, TIER_TABLE } = require('../src/core/leash/tiers');
+    assert.equal(TIER_TABLE.recall_memory, 0);
+    assert.equal(tierOf('recall_memory'), 0);
   });
 });

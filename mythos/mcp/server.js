@@ -304,7 +304,7 @@ if (require.main === module) {
     registerFromPc(hub, { brain: brain, fs: memory.fs });
     registerFromBrowser(hub, { config: config });
     registerFromSkills(hub);
-    registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity });
+    registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
     registerFromCalendar(hub, { fs: memory.fs, bus: bus });
     registerFromWidgets(hub, { bus: bus });
     registerFromSpotify(hub, { effectors: hub });

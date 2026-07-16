@@ -31,6 +31,7 @@ const TIER_TABLE = {
   'reminder_list':         0,  // read-only — lists pending reminders
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
+  'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,

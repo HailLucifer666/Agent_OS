@@ -35,6 +35,27 @@ function isLoopback(req) {
   return LOOPBACK.has(ip);
 }
 
+// Item A (Phase-1 hardening): memory.recallHybrid() embeds the query via
+// providers/embeddings.js's Ollama-then-Mistral chain, each attempt bounded by
+// its own 8s TIMEOUT_MS — a provider that HANGS (not errors) can stack up to
+// ~16s of latency onto a live voice turn before the user hears anything.
+// This bound is independent and tighter, applied only at this hot-path call
+// site (Promise.race below): a slow/hung recall degrades to no memory context,
+// never a stalled turn. recallHybrid()/embeddings.js's own timeouts are left
+// untouched for other callers (e.g. memory.reindex()'s batch backfill), which
+// have no such latency budget.
+const RECALL_TIMEOUT_MS = Number(process.env.VOICE_RECALL_TIMEOUT_MS) || 3500;
+const RECALL_TIMED_OUT = Symbol('recall-timed-out');
+function recallWithTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      const t = setTimeout(() => resolve(RECALL_TIMED_OUT), ms);
+      if (t.unref) t.unref();
+    }),
+  ]);
+}
+
 function createServer(deps) {
   const bus = deps.bus;
   const config = deps.config;
@@ -56,6 +77,13 @@ function createServer(deps) {
   // Server-initiated camera look: broadcast a frame request; any connected UI
   // with the camera actively watching answers with one JPEG frame. 8s timeout.
   const pendingFrames = new Map(); // frameReqId -> { resolve, timer }
+
+  // Item B (barge-in stretch): AbortController per in-flight TTS synthesis
+  // request, keyed by reqId. sendSpokenReply()'s and proactiveSpeak()'s
+  // chunk-synthesis loops register here; the WS 'stop' handler aborts by
+  // reqId when the client barges in, so not-yet-sent chunks stop synthesizing
+  // (previously the loop kept calling edge-tts for audio nobody would hear).
+  const inflightSpeech = new Map(); // reqId -> AbortController
   function requestCameraFrame() {
     return new Promise(function(resolve) {
       const id = 'frame-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -476,20 +504,34 @@ function createServer(deps) {
       // deliver the done message so the client falls back to speechSynthesis.
       logger.warn('edge-tts.proactive-availability-probe-failed', { error: err.message });
     }
-    if (ttsUp) {
-      const chunks = splitSentences(speak);
-      for (let i = 0; i < chunks.length; i++) {
-        let audioB64 = null;
-        try {
-          const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
-          audioB64 = buf.toString('base64');
-        } catch (err) {
-          logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+    // Item B: register an abort controller so a 'stop' for this reqId (barge-in
+    // mid-proactive-speech) can cancel remaining chunk synthesis below.
+    const ctrl = new AbortController();
+    inflightSpeech.set(reqId, ctrl);
+    try {
+      if (ttsUp) {
+        const chunks = splitSentences(speak);
+        for (let i = 0; i < chunks.length; i++) {
+          if (ctrl.signal.aborted) break;
+          let audioB64 = null;
+          try {
+            const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
+            audioB64 = buf.toString('base64');
+          } catch (err) {
+            logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+          }
+          if (ctrl.signal.aborted) break;
+          broadcastAll({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
         }
-        broadcastAll({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
       }
+      // chunked forced true on abort (even with zero chunks sent): routes the
+      // client's 'done' handling through the session-checked chunk-queue path,
+      // never the non-chunked speechSynthesis fallback (which would otherwise
+      // speak the just-barged-in-on reply after the fact).
+      broadcastAll({ type: 'done', reqId, say: text, speak, chunked: ctrl.signal.aborted ? true : ttsUp, proactive: true });
+    } finally {
+      inflightSpeech.delete(reqId);
     }
-    broadcastAll({ type: 'done', reqId, say: text, speak, chunked: ttsUp, proactive: true });
     // B6: Persist proactive speech to episodic memory for conversation continuity.
     try {
       memory.episodic.write({
@@ -674,19 +716,35 @@ function createServer(deps) {
       const speak = sanitizeSpoken(say);
       const ttsUp = await edgeTts.isAvailable();
       const chunks = ttsUp ? splitSentences(speak) : [];
-      if (ttsUp && chunks.length) {
-        for (let i = 0; i < chunks.length; i++) {
-          let audioB64 = null;
-          try {
-            const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
-            audioB64 = buf.toString('base64');
-          } catch (err) {
-            logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+      // Item B: register an abort controller so a 'stop' for this reqId
+      // (barge-in) can cancel remaining chunk synthesis below — otherwise
+      // edge-tts keeps synthesizing chunks nobody will hear after the client
+      // has already stopped playback locally.
+      const ctrl = new AbortController();
+      inflightSpeech.set(reqId, ctrl);
+      try {
+        if (ttsUp && chunks.length) {
+          for (let i = 0; i < chunks.length; i++) {
+            if (ctrl.signal.aborted) break;
+            let audioB64 = null;
+            try {
+              const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
+              audioB64 = buf.toString('base64');
+            } catch (err) {
+              logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+            }
+            if (ctrl.signal.aborted) break;
+            send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
           }
-          send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
         }
+        // chunked forced true on abort (even with zero chunks sent): routes the
+        // client's 'done' handling through the session-checked chunk-queue path,
+        // never the non-chunked speechSynthesis fallback (which would otherwise
+        // speak the just-barged-in-on reply after the fact).
+        send({ type: 'done', reqId, say, speak, chunked: ctrl.signal.aborted ? true : (ttsUp && chunks.length > 0), ...meta });
+      } finally {
+        inflightSpeech.delete(reqId);
       }
-      send({ type: 'done', reqId, say, speak, chunked: ttsUp && chunks.length > 0, ...meta });
     }
 
     async function handleUtterance(msg) {
@@ -706,7 +764,11 @@ function createServer(deps) {
         // Best-effort: failures degrade to no memory context (amnesia), never crash.
         var memoryContext = null;
         try {
-          var recalled = await memory.recallHybrid(text, { limit: 8 });
+          var recalled = await recallWithTimeout(memory.recallHybrid(text, { limit: 8 }), RECALL_TIMEOUT_MS);
+          if (recalled === RECALL_TIMED_OUT) {
+            logger.warn('memory-recall-timeout', { store: 'hybrid', timeoutMs: RECALL_TIMEOUT_MS });
+            recalled = [];
+          }
           if (recalled.length > 0) {
             var parts = [];
             for (var i = 0; i < recalled.length; i++) {
@@ -995,8 +1057,13 @@ function createServer(deps) {
         const p = pendingFrames.get(msg.frameReqId);
         if (p) { clearTimeout(p.timer); pendingFrames.delete(msg.frameReqId); p.resolve(String(msg.image || '') || null); }
       }
-      // 'stop' — no in-flight per-connection controllers to abort yet in this
-      // phase's scope (utterance/command are not streamed); reserved for parity.
+      // Item B: barge-in cancel — abort not-yet-sent TTS synthesis for this
+      // reqId (sendSpokenReply's or proactiveSpeak's chunk loop). A stop for
+      // an already-finished or unknown reqId is a harmless no-op.
+      else if (msg.type === 'stop') {
+        const ctrl = inflightSpeech.get(msg.reqId);
+        if (ctrl) ctrl.abort();
+      }
     });
   });
 

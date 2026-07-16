@@ -268,10 +268,10 @@ describe('P22: Quality Gate — web_search/web_fetch tiering', () => {
     assert.equal(tierOf('web_fetch'), 0, 'web_fetch should be tier 0');
   });
 
-  it('gmail_read and camera_look are tier 0', () => {
+  it('gmail_read/gmail_unread are tier 1 (local write w/ side effects), camera_look is tier 0', () => {
     const { tierOf } = require('../src/core/leash/tiers');
-    assert.equal(tierOf('gmail_unread'), 0);
-    assert.equal(tierOf('gmail_read'), 0);
+    assert.equal(tierOf('gmail_unread'), 1);
+    assert.equal(tierOf('gmail_read'), 1);
     assert.equal(tierOf('camera_look'), 0);
   });
 });

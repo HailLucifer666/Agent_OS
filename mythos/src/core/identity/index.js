@@ -79,7 +79,12 @@ function createIdentity({ bus, config, fs, identityStore }) {
 
     // exact name/arity from §11 — do not paraphrase
     persona() {
-      return 'You are ' + (self.persona || config.MYTHOS_NAME || 'MYTHOS') + '. ' + (self.values || '');
+      var p = self.persona || config.MYTHOS_NAME || 'MYTHOS';
+      // self.md's default seeded Persona section is already a full sentence
+      // starting with "You are X." — only wrap bare names (e.g. a custom
+      // writeHeader({persona}) override) to avoid "You are You are X."
+      var body = /^You are\b/i.test(p) ? p : 'You are ' + p + '.';
+      return body + ' ' + (self.values || '');
     },
 
     // Added by this phase — not in spec's literal §11 code block. Exposes the

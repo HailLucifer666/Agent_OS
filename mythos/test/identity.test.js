@@ -27,7 +27,7 @@ describe('identity store', () => {
   it('seeds self.md on init', () => {
     assert.ok(fsStore.exists('Identity/self.md'));
     const raw = store.readRaw();
-    assert.match(raw, /## Persona\nMYTHOS/);
+    assert.match(raw, /## Persona\nYou are MYTHOS/);
   });
 
   it('writes and recalls a learned preference', () => {
@@ -41,7 +41,7 @@ describe('identity store', () => {
   it('preserves header when writing a preference', () => {
     store.write('Prefers concise answers', { source: 'ep-2' });
     const raw = store.readRaw();
-    assert.match(raw, /## Purpose\nAn autonomous entity/);
+    assert.match(raw, /## Purpose\nYou are MYTHOS/);
   });
 
   it('consolidate archives low-confidence prefs instead of deleting', () => {

@@ -136,11 +136,12 @@ function describeScene(text) {
   mic.setCaption('👁 looking…', 'info');
   const v = ensureVoice();
   const session = v.beginTurn();
-  visionQuery({
+  const req = visionQuery({
     image, text,
     onChunk: (m) => v.onExternalChunk(m, session),
     onDone: (msg) => v.deliverExternalReply(msg, session),
   });
+  v.setActiveReqId(req.reqId); // Item B: barge-in can cancel this turn's TTS synthesis too
 }
 
 // Compose-bar text submit reuses the voice loop's own chunk-queue/barge-in
@@ -149,11 +150,12 @@ function describeScene(text) {
 function sendTextMessage(text) {
   const v = ensureVoice();
   const session = v.beginTurn();
-  utterance({
+  const req = utterance({
     text,
     onChunk: (m) => v.onExternalChunk(m, session),
     onDone: (msg) => v.deliverExternalReply(msg, session),
   });
+  v.setActiveReqId(req.reqId); // Item B: barge-in can cancel this turn's TTS synthesis too
 }
 
 // Debug-only live preview (not part of the shipped P16 UI — see voice.css's
@@ -264,7 +266,7 @@ subscribe(['job'], (msg) => {
 // flashes so the user knows MYTHOS is speaking on its own initiative.
 subscribe(['proactive-speech'], (msg) => {
   const v = ensureVoice();
-  const session = v.beginTurn();
+  const session = v.beginTurn(msg.reqId); // reqId known upfront — barge-in can cancel this turn's TTS synthesis too (Item B)
   mic.setCaption(msg.text || msg.speak || '', 'reply');
   if (orb.flashAction) orb.flashAction('proactive', true);
   registerReplyHandler(msg.reqId, {

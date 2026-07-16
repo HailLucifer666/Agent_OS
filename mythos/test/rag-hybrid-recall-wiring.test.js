@@ -118,3 +118,64 @@ test('handleUtterance recalls via memory.recallHybrid, not direct episodic/seman
   ws.close();
   await server.stop();
 });
+
+// Item A (Phase-1 hardening follow-up): recallHybrid() embeds the query via
+// providers/embeddings.js's Ollama-then-Mistral chain, each attempt bounded by
+// its own 8s timeout — a provider that HANGS (never resolves, doesn't error)
+// can stack up to ~16s onto a live voice turn before recallHybrid() itself
+// would ever settle. handleUtterance now wraps that call in a tighter,
+// independent Promise.race timeout (VOICE_RECALL_TIMEOUT_MS, default 3500ms)
+// so a hung embed provider degrades to no-memory-context instead of stalling
+// the whole turn. This proves the bound holds even when recallHybrid() never
+// resolves at all.
+test('handleUtterance does not stall past the recall timeout when recallHybrid hangs (Item A)', async () => {
+  const bus = createBus({ historySize: 50 });
+
+  const fakeMemory = {
+    working: { tick: 0, activeGoalId: null },
+    fs: fakeFs(),
+    episodic: { write: async () => ({ ref: 'ep-1' }), recall: () => [] },
+    semantic: { recall: () => [] },
+    // Simulates a provider that hangs rather than erroring or timing out on
+    // its own — recallHybrid() would never settle on its own in this case.
+    recallHybrid: () => new Promise(() => {}),
+  };
+  const fakeBrain = {
+    think: async () => ({
+      content: JSON.stringify({ say: 'Noted.', actions: [], needs_result: false }),
+      parsed: { say: 'Noted.', actions: [], needs_result: false },
+      offline: false,
+    }),
+  };
+  const fakeLeash = {
+    check: () => ({ allow: true, tier: 0, requireConfirm: false }),
+    confirm: { create: () => 'cf-1', accept: () => null, reject: () => true },
+  };
+
+  const server = createServer(baseDeps(bus, { memory: fakeMemory, brain: fakeBrain, leash: fakeLeash }));
+
+  await server.ready; // address() is null until the listening event (async bind on Windows)
+  const addr = server.httpServer.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await new Promise((resolve) => ws.on('open', resolve));
+
+  const done = new Promise((resolve) => {
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'done') resolve(msg);
+    });
+  });
+
+  const start = Date.now();
+  ws.send(JSON.stringify({ type: 'utterance', reqId: 'r1', text: 'hello' }));
+  const reply = await done;
+  const elapsedMs = Date.now() - start;
+
+  // Comfortably above the ~3.5s recall timeout (headroom for edge-tts/CI jitter)
+  // and well under the old worst case (~16s: two chained 8s provider attempts).
+  assert.ok(elapsedMs < 7000, `turn should resolve well under the old ~16s stall, took ${elapsedMs}ms`);
+  assert.equal(reply.say, 'Noted.', 'the turn still completes normally — recall just degrades to no context');
+
+  ws.close();
+  await server.stop();
+});

@@ -73,7 +73,7 @@ function sendMessage(payload) {
 
 export { sendMessage };
 
-function stopRequest(reqId) {
+export function stopRequest(reqId) {
   sendMessage({ type: 'stop', reqId });
 }
 
@@ -116,7 +116,7 @@ export function utterance({ text, onDone, onChunk }) {
   const reqId = nextReqId();
   handlers.set(reqId, makeReplyHandler(reqId, { onDone, onChunk }));
   sendMessage({ type: 'utterance', reqId, text });
-  return { stop: () => stopRequest(reqId) };
+  return { reqId, stop: () => stopRequest(reqId) };
 }
 
 export function visionQuery({ image, text, onDone, onChunk }) {
@@ -124,7 +124,7 @@ export function visionQuery({ image, text, onDone, onChunk }) {
   const reqId = nextReqId();
   handlers.set(reqId, makeReplyHandler(reqId, { onDone, onChunk }));
   sendMessage({ type: 'vision-query', reqId, image, text });
-  return { stop: () => stopRequest(reqId) };
+  return { reqId, stop: () => stopRequest(reqId) };
 }
 
 export function checkpointReply(id, accept, feedback) {

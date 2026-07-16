@@ -322,7 +322,7 @@ async function main() {
       // only started conditionally in the 'sensors' step below.
       gmailUnread = function(args) { return hub.invoke('gmail_unread', args || {}, {}); };
       registerFromSkills(hub);
-      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity });
+      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
 

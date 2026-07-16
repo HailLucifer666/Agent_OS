@@ -14,7 +14,7 @@
 //
 // States: idle -> listening -> processing -> speaking -> listening.
 
-import { utterance } from '../ws.js';
+import { utterance, stopRequest } from '../ws.js';
 
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
@@ -139,6 +139,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   let lastSpokenText = '';   // what was just spoken — echo-guard reference (after playback ends)
   let lastSpokenAt = 0;      // when playback ended — used to expire the post-playback echo window
   let speakSession = 0;      // invalidates stale playback callbacks
+  let activeReqId = null;    // Item B: server reqId of the turn currently playing —
+                             // stopSpeaking() sends {type:'stop', reqId} so the server
+                             // cancels not-yet-synthesized TTS chunks on barge-in.
   // BUG-027: hard half-duplex gate — true from the moment TTS playback of a
   // reply STARTS (first chunk begins playing, or the non-chunked fallback
   // starts speaking) until the TTS queue is fully drained. While true, the
@@ -238,7 +241,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
         finishTurn();
       }
     }, 35000);
-    utterance({
+    const req = utterance({
       text: command,
       onChunk: (msg) => enqueueChunk(msg, session),
       onDone: (msg) => {
@@ -248,17 +251,22 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
         deliverReply(msg, session);
       },
     });
+    activeReqId = req.reqId; // Item B: barge-in (stopSpeaking) needs this to send 'stop'
   }
 
   // Reserves a fresh session token for a turn whose reply may stream
   // speech-chunk messages before 'done' arrives. Shared by handleCommand
-  // (voice) and the external vision-query path (Part B / app.js).
-  function beginTurn() {
+  // (voice) and the external vision-query path (Part B / app.js). reqId is
+  // known upfront for server-initiated turns (proactive speech); local
+  // dispatch (handleCommand, or app.js callers of utterance()/visionQuery())
+  // learns it only once the WS call returns, and sets activeReqId directly.
+  function beginTurn(reqId) {
     const session = ++speakSession;
     doneReceived = false;
     lastChunkPlayed = false;
     chunkQueue = [];
     playing = false;
+    activeReqId = reqId || null;
     return session;
   }
 
@@ -302,6 +310,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   // are still caught by isEcho() within ECHO_GUARD_MS.
   function stopSpeaking() {
     speakSession++;
+    // Item B: tell the server to stop synthesizing any not-yet-sent chunks for
+    // the turn we just cut off client-side — otherwise edge-tts keeps running
+    // in the background for audio nobody will hear. Harmless no-op server-side
+    // if the turn already finished (reqId not found).
+    if (activeReqId) { stopRequest(activeReqId); activeReqId = null; }
     if (currentAudio) { try { currentAudio.pause(); } catch { /* ok */ } currentAudio = null; }
     if (window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch { /* ok */ } }
     if (speakingText) { lastSpokenText = speakingText; lastSpokenAt = Date.now(); }
@@ -777,5 +790,10 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     beginTurn,
     onExternalChunk: enqueueChunk,
     deliverExternalReply: deliverReply,
+    // Item B: external callers (visionQuery/utterance return {reqId, stop} only
+    // after beginTurn() already reserved the session) report the reqId back so
+    // barge-in (stopSpeaking) can cancel synthesis for THEIR turns too, not
+    // just handleCommand's own.
+    setActiveReqId(reqId) { activeReqId = reqId || null; },
   };
 }
