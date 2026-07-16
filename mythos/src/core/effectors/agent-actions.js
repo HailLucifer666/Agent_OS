@@ -10,6 +10,7 @@
 var path = require('path');
 var { execFile } = require('child_process');
 var designSystemEngine = require('../design/system');
+var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
 
 var DELIVERABLE_PREAMBLE = [
@@ -410,6 +411,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
     var basePrompt = (function() {
       var base = DELIVERABLE_PREAMBLE + card.text;
+      // Skill-pack essences (P3 Jarvis upgrade): anti-slop discipline for the
+      // free build models — UI pack or code pack chosen by deliverable text.
+      try {
+        var skillBlock = buildPack.packBlock(card.text);
+        if (skillBlock) base = skillBlock + '\n\n' + base;
+      } catch (_) { /* essence injection is best-effort */ }
       if (designSystem) {
         try {
           var ds = designSystemEngine.generateDesignSystem(card.text);
@@ -565,6 +572,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     var builderPersona = personas.loadPersona(builderPersonaRole);
     var basePrompt = (function() {
       var base = BUILDER_PREAMBLE + card.title + '\n' + (card.detail || '');
+      // Skill-pack essences (P3 Jarvis upgrade) — same injection as
+      // executePipelineCard above, keyed off the card title+detail.
+      try {
+        var skillBlock = buildPack.packBlock(card.title + ' ' + (card.detail || ''));
+        if (skillBlock) base = skillBlock + '\n\n' + base;
+      } catch (_) { /* essence injection is best-effort */ }
       if (designSystem) {
         try {
           var ds = designSystemEngine.generateDesignSystem(card.title + ' ' + (card.detail || ''));

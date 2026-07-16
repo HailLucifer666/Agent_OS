@@ -43,6 +43,11 @@ const { registerFromComputer } = require('./core/effectors/from-computer');
 const { registerFromPc } = require('./core/effectors/from-pc');
 const { registerFromBrowser } = require('./core/effectors/from-browser');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
+const { registerFromPersona } = require('./core/effectors/from-persona');
+const { createReflection } = require('./core/identity/reflection');
+const capabilities = require('./core/identity/capabilities');
+const { createExplainer } = require('./core/immune/explainer');
+const { registerFromHermes } = require('./core/effectors/from-hermes');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
@@ -109,6 +114,8 @@ async function main() {
   let memory = null;
   let brain = null;
   let identity = null;
+  let reflection = null;
+  let immuneExplainer = null;
   let goals = null;
   let effectors = null;
   let leash = null;
@@ -324,6 +331,8 @@ async function main() {
       gmailUnread = function(args) { return hub.invoke('gmail_unread', args || {}, {}); };
       registerFromSkills(hub);
       registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
+      registerFromPersona(hub, { identity: identity });
+      registerFromHermes(hub);
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
 
@@ -412,6 +421,11 @@ async function main() {
       if (!kanbanEffector) throw new Error("server boot: effectors.get('kanban-effector') missing — P7 must register it before P9 can serve /api/kanban");
       if (!pipelineEffector) throw new Error("server boot: effectors.get('pipeline-effector') missing — P7 must register it before P9 can serve /api/pipeline");
 
+      // P4 Jarvis upgrade: the learning loop — extracts operator preferences +
+      // speaking style from conversation episodics every ~15 turns and at
+      // graceful shutdown. Best-effort: constructor deps all exist by now.
+      reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger });
+
       var serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
         goalsEffector: goalsEffector,
@@ -421,6 +435,7 @@ async function main() {
         brain: brain, buildRunner: buildRunner,
         agentActions: agentActionsEffector,
         checkpoints: checkpoints, forge: forge,
+        reflection: reflection,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.
@@ -460,6 +475,41 @@ async function main() {
       // spotify_play() falls back to the existing UIA/keystroke path unchanged.
       cuaDriver.startCuaDriver();
       logger.info('cua-driver.starting', {});
+    }},
+
+    { name: 'capabilities-manifest', fail: 'degraded', fn: function() {
+      // P5 Jarvis upgrade: regenerate vault/Identity/capabilities.md from the
+      // live hub catalog + adapter states every boot — the entity's grounded
+      // answer to "what can you do" / "what's new". Adapters spawn async just
+      // above, so write once now (may show STARTING) and refresh once after
+      // they settle.
+      function adapterStatuses() {
+        var out = [];
+        try { out.push(Object.assign({ name: 'pc-child' }, pcChild.getStatus())); } catch (_) {}
+        try { out.push(Object.assign({ name: 'cua-driver' }, cuaDriver.getStatus())); } catch (_) {}
+        try { out.push(Object.assign({ name: 'browser-agent' }, browserAgent.getStatus())); } catch (_) {}
+        return out;
+      }
+      function writeIt() {
+        try {
+          capabilities.writeManifest(memory.fs, effectors, adapterStatuses());
+        } catch (err) {
+          logger.warn('capabilities-manifest.write-failed', { error: err.message });
+        }
+      }
+      writeIt();
+      var settleTimer = setTimeout(writeIt, 10000);
+      if (settleTimer.unref) settleTimer.unref();
+      logger.info('capabilities-manifest.written', { tools: effectors.count() });
+    }},
+
+    { name: 'immune-explainer', fail: 'degraded', fn: function() {
+      // P6 Jarvis upgrade: plain-language explanation + safe-menu remedy for
+      // anomalies no playbook matches, spoken via proactive speech. Pure bus
+      // subscriber — no healer coupling.
+      immuneExplainer = createExplainer({ bus: bus, brain: brain, memory: memory, config: config, logger: logger });
+      immuneExplainer.start();
+      logger.info('immune-explainer.ready', {});
     }},
 
     { name: 'cortex', fn: function() {
@@ -557,6 +607,7 @@ async function main() {
     if (fileSensor) fileSensor.stop();
     if (wsSensor) wsSensor.stop();
     if (jobSensor) jobSensor.stop();
+    if (immuneExplainer) immuneExplainer.stop();
     if (cortex) cortex.stop();
     if (immune) {
       immune.watchdog.stop();
@@ -574,6 +625,11 @@ async function main() {
   // here (same pattern stopRunningLoops relies on for cortex/immune/etc.) and
   // is populated by the 'memory' boot step before lifecycle.boot() resolves.
   lifecycle.registerShutdownStep('stop-loops', stopRunningLoops);
+  lifecycle.registerShutdownStep('reflection-final-pass', function() {
+    // P4: one last learning pass over the session's conversations. Bounded by
+    // the brain's own timeouts; skips silently when brain is offline.
+    if (reflection) return reflection.runNow('shutdown');
+  });
   lifecycle.registerShutdownStep('episodic-flush', function() {
     if (memory) return memory.working.flushToEpisodic();
   });

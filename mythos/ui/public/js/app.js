@@ -290,6 +290,12 @@ subscribe(['close-panel'], (msg) => {
   else overlays.closeTop();
 });
 
+// Widget-command — voice-driven HUD widget hide/show (manage_widget effector).
+// Payload {mode, targets} is resolved server-side; widget-host applies + persists.
+subscribe(['widget-command'], (msg) => {
+  if (msg.payload) widgetApi.applyWidgetCommand(msg.payload);
+});
+
 // Open-web — emitted by dispatchAction when an open_web effector call succeeds.
 // Routes rich media (YouTube, direct URLs) to the overlay panel; compact results
 // (search, weather, flights, images) to floating widgets; iframe-blocking sites

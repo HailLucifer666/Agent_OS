@@ -488,10 +488,21 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
     if (!didRetry && allFailedActions.some((a) => a && a.ok === false && !a.confirmPending)) {
       didRetry = true;
       try {
+        // P6 Jarvis upgrade: give the corrective pass the failing tool's
+        // breaker state so the spoken explanation can cite the actual cause
+        // ("spotify_play's circuit is open after repeated failures") instead
+        // of a vague apology. Best-effort — a missing breaker adds nothing.
         const correctivePrompt = buildPrompt({
           text,
           history: ctx.history,
-          toolResults: allFailedActions.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
+          toolResults: allFailedActions.map((a) => {
+            const entry = { tool: a.tool, ok: a.ok, summary: a.summary };
+            try {
+              const breaker = hub && hub.breakers && typeof hub.breakers.get === 'function' ? hub.breakers.get(a.tool) : null;
+              if (breaker && breaker.stats) entry.breaker = { state: breaker.stats.state, failCount: breaker.stats.failCount };
+            } catch (_) {}
+            return entry;
+          }),
           corrective: true,
           originalSay: finalSay,
           memoryContext: ctx.memoryContext,

@@ -21,6 +21,8 @@ const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
 const { createNewsFeed } = require('./news-feed');
 const pcChild = require('../adapters/pc-child');
+const version = require('../src/core/identity/version');
+const { isProviderDown } = require('../src/core/immune/probes');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -73,6 +75,7 @@ function createServer(deps) {
   const agentActions = deps.agentActions;         // P7 agent-actions — assemble/build/review kanban agents
   const checkpoints = deps.checkpoints;           // P22 checkpoint approval registry (may be undefined in tests)
   const forge = deps.forge;                       // P22 Forge build pipeline (may be undefined in tests)
+  const reflection = deps.reflection;             // P4 learning loop — .noteTurn() per conversation turn (may be undefined in tests)
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
   // with the camera actively watching answers with one JPEG frame. 8s timeout.
@@ -629,6 +632,103 @@ function createServer(deps) {
     if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
   });
 
+  // ---- Boot greeting (JARVIS-style) ----
+  // Fired once per boot, on the FIRST dashboard connection: a persona-voiced
+  // spoken greeting with a one-line situational brief, delivered through the
+  // same proactiveSpeak() path as every other entity-initiated speech. The
+  // "upgraded since last boot" check compares the current git ref against
+  // Identity/last-boot.json (written at construction, so the diff survives
+  // even if the brain is offline when the client connects).
+  // Disable with BOOT_GREETING=false (env, same passthrough convention as
+  // VOICE_INTAKE_IDLE_MS above). Also suppressed under the node test runner
+  // (NODE_TEST_CONTEXT): the greeting fires 2.5s after a WS connection and
+  // its TTS-probe/brain fetches leave sockets open past the last test, which
+  // wedges the test-file child process (the runner then waits forever).
+  let bootGreetingFired = process.env.BOOT_GREETING === 'false' || !!process.env.NODE_TEST_CONTEXT;
+  const LAST_BOOT_PATH = 'Identity/last-boot.json';
+  const bootUpgrade = { upgraded: false, changes: [] };
+  try {
+    const v = version.getVersion();
+    const prev = memory.fs.readJSON(LAST_BOOT_PATH, null);
+    if (prev && prev.gitRef && prev.gitRef !== v.gitRef) {
+      bootUpgrade.upgraded = true;
+      // Commit subjects newer than the previous boot's ref (newest first,
+      // capped at 3). If the old ref scrolled out of the 15-line window,
+      // fall back to the newest 3.
+      const prevHash = String(prev.gitRef).replace(/-dirty$/, '');
+      let cut = v.recentChanges.length;
+      for (let i = 0; i < v.recentChanges.length; i++) {
+        if (prevHash && v.recentChanges[i].indexOf(prevHash) === 0) { cut = i; break; }
+      }
+      bootUpgrade.changes = v.recentChanges
+        .slice(0, Math.min(cut, 3))
+        .map((line) => line.replace(/^\S+\s+/, ''));
+    }
+    memory.fs.writeJSON(LAST_BOOT_PATH, { gitRef: v.gitRef, bootDate: v.bootDate });
+  } catch (err) {
+    logger.warn('boot-greeting.version-check-failed', { error: err.message });
+  }
+
+  async function deliverBootGreeting() {
+    const hour = new Date().getHours();
+    const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+    const facts = [];
+    try {
+      facts.push('Local time: ' + new Date().toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' }));
+    } catch (_) {}
+    try {
+      if (goalsEffector && typeof goalsEffector.stats === 'function') {
+        const gs = goalsEffector.stats();
+        facts.push('Goals: ' + gs.active + ' active, ' + gs.done + ' done');
+      }
+    } catch (_) {}
+    try {
+      if (probes) {
+        const st = await probes.getStatus();
+        const down = ['nim', 'groq', 'mistral'].filter((id) => {
+          try { return isProviderDown(id, st.providers); } catch (_) { return false; }
+        });
+        facts.push(down.length ? 'AI providers down: ' + down.join(', ') : 'All AI providers online');
+      }
+    } catch (_) {}
+    if (bootUpgrade.upgraded) {
+      facts.push('You received a code upgrade since your last boot' +
+        (bootUpgrade.changes.length ? ' — recent changes: ' + bootUpgrade.changes.join('; ') : ''));
+    }
+    let text = null;
+    try {
+      const result = await Promise.race([
+        brain.think({
+          lane: 'simple',
+          messages: [{
+            role: 'user',
+            content: 'You just finished booting and your operator opened the dashboard. ' +
+              'Greet them aloud the way JARVIS greets Tony Stark: brief, in character, ' +
+              'with a one-line situational status woven in naturally. Facts you may use:\n- ' +
+              facts.join('\n- ') + '\n' +
+              'Reply with ONLY the spoken greeting: one to three short sentences, plain natural speech, no markdown, no quotes.',
+          }],
+          source: 'boot-greeting',
+        }),
+        new Promise((resolve) => {
+          const t = setTimeout(() => resolve(null), 12000);
+          if (t.unref) t.unref();
+        }),
+      ]);
+      if (result && !result.offline && result.content) {
+        text = String(result.content).trim().replace(/^["']+|["']+$/g, '').slice(0, 400);
+      }
+    } catch (err) {
+      logger.warn('boot-greeting.brain-failed', { error: err.message });
+    }
+    if (!text) {
+      // Canned persona fallback — the greeting must never depend on the brain.
+      text = salutation + ', sir. ' + (config.MYTHOS_NAME || 'MYTHOS') + ' online.' +
+        (bootUpgrade.upgraded ? ' I have received an upgrade since we last spoke.' : ' All systems nominal.');
+    }
+    await proactiveSpeak(text);
+  }
+
   // Calendar reminders — proactive speech when a reminder fires due.
   bus.subscribe('reminder.due', (e) => {
     if (e && e.payload && e.payload.text) proactiveSpeak('Reminder: ' + e.payload.text);
@@ -725,6 +825,17 @@ function createServer(deps) {
     // Initial entity-state snapshot: lifecycle.* events are broadcast-only, so a
     // client connecting AFTER boot would otherwise sit on 'booting' forever.
     send({ type: 'entity-state', payload: { name: config.MYTHOS_NAME, status: entityStatus, tick: memory.working.tick } });
+
+    // First dashboard connection this boot → spoken greeting + status brief.
+    // Small delay so the client finishes wiring its WS handlers and voice
+    // machinery before the proactive-speech broadcast lands.
+    if (!bootGreetingFired) {
+      bootGreetingFired = true;
+      const greetTimer = setTimeout(() => {
+        deliverBootGreeting().catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
+      }, 2500);
+      if (greetTimer.unref) greetTimer.unref();
+    }
 
     // CONSISTENCY FIX (spec vs shipped brain, documented in ROADMAP.md P9): the
     // spec's handleUtterance calls brain.interpret(), which no shipped phase ever
@@ -865,6 +976,12 @@ function createServer(deps) {
             salience: 0.6, channel: 'voice'
           });
         } catch (_) { /* persistence is best-effort */ }
+
+        // P4 learning loop — count the completed turn; every ~15th fires a
+        // background reflection pass (never blocks the reply).
+        if (reflection && typeof reflection.noteTurn === 'function') {
+          try { reflection.noteTurn(); } catch (_) {}
+        }
 
         const meta = {
           actions: (result.actions || []).map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
@@ -1157,6 +1274,13 @@ function createServer(deps) {
   // cards, etc.) so the dashboard opens a panel or floating widget.
   bus.subscribe('ui.open-web', (e) => {
     broadcastAll({ type: 'open-web', payload: e.payload });
+  });
+
+  // Widget commands — voice-driven HUD widget hide/show (manage_widget
+  // effector, from-widgets.js). Payload is a pre-resolved {mode, targets}
+  // list; widget-host.js applies it verbatim and persists visibility.
+  bus.subscribe('ui.widget-command', (e) => {
+    broadcastAll({ type: 'widget-command', payload: e.payload });
   });
 
   // health — synthesized snapshot per Ambiguity #4; triggered by 'perception.metric'

@@ -93,7 +93,86 @@ function summaryLine(manifest) {
   return 'MYTHOS v' + m.version + ' — ' + parts.join(', ') + '.';
 }
 
+// ---- P5 Jarvis upgrade: boot-written markdown manifest ---------------------
+// Renders the REAL hub catalog (names + descriptions, grouped by leash tier)
+// plus adapter states and recent git changes into vault/Identity/
+// capabilities.md. Regenerated every boot, so "what can you do?" and "what's
+// new?" are answered from live truth — including right after a code update.
+// Read back by the self_capabilities tool (effectors/from-memory.js).
+
+var tiers = require('../leash/tiers');
+
+var TIER_LABELS = {
+  0: 'Tier 0 — read-only (autonomous)',
+  1: 'Tier 1 — local writes (autonomous, audited)',
+  2: 'Tier 2 — local actions (autonomous within ceiling)',
+  3: 'Tier 3 — needs operator confirmation',
+  4: 'Tier 4 — always confirmed, never cached'
+};
+
+function generateMarkdown(hub, adapterStatuses) {
+  var v = version.getVersion();
+  var cat = (hub && typeof hub.catalog === 'function') ? hub.catalog() : [];
+  var byTier = {};
+  cat.forEach(function(tool) {
+    var tier = tiers.tierOf(tool.name);
+    (byTier[tier] = byTier[tier] || []).push(tool);
+  });
+
+  var lines = [
+    '# MYTHOS Capabilities',
+    '',
+    'Auto-generated at boot — do not edit. Version ' + v.version + ' (' + v.gitRef + '), ' + cat.length + ' tools.',
+    ''
+  ];
+
+  if (adapterStatuses && adapterStatuses.length) {
+    lines.push('## Adapters');
+    adapterStatuses.forEach(function(a) {
+      lines.push('- ' + a.name + ': ' + (a.state || a.mode || 'unknown') + (a.hint ? ' (' + a.hint + ')' : ''));
+    });
+    lines.push('');
+  }
+
+  Object.keys(byTier).sort().forEach(function(tier) {
+    lines.push('## ' + (TIER_LABELS[tier] || 'Tier ' + tier));
+    byTier[tier]
+      .sort(function(a, b) { return a.name.localeCompare(b.name); })
+      .forEach(function(tool) {
+        var desc = String(tool.description || '').split('\n')[0].slice(0, 160);
+        lines.push('- ' + tool.name + ' — ' + desc);
+      });
+    lines.push('');
+  });
+
+  var skills = skillsLoader.loadCatalog();
+  if (skills.length) {
+    lines.push('## Skills (use_skill loads full guidance)');
+    skills.forEach(function(s) {
+      lines.push('- ' + s.name + ' — ' + String(s.description || '').slice(0, 120));
+    });
+    lines.push('');
+  }
+
+  if (v.recentChanges && v.recentChanges.length) {
+    lines.push('## Recent changes (git)');
+    v.recentChanges.slice(0, 10).forEach(function(line) { lines.push('- ' + line); });
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// Render + write vault/Identity/capabilities.md via the vault fs-store.
+function writeManifest(fs, hub, adapterStatuses) {
+  var text = generateMarkdown(hub, adapterStatuses);
+  fs.writeText('Identity/capabilities.md', text);
+  return text;
+}
+
 module.exports = {
   buildCapabilities: buildCapabilities,
   summaryLine: summaryLine,
+  generateMarkdown: generateMarkdown,
+  writeManifest: writeManifest,
 };

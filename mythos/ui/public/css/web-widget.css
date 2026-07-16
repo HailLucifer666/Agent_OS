@@ -60,20 +60,40 @@
 }
 .web-widget-close:hover { color: var(--status-warn); }
 
-.web-widget-card .widget-title {
+.web-widget-card .widget-title,
+.widget-card .widget-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   /* Fix drag: children (span, button) get pointer-events:none so pointerdown
      fires on the .widget-title div itself, not a child. setPointerCapture
      then correctly captures subsequent moves to the title. The close button
-     re-enables pointer-events above. */
+     re-enables pointer-events above. Applies to boot widgets too now that
+     their titles carry a hover-reveal hide button. */
 }
-.web-widget-card .widget-title > * {
+.web-widget-card .widget-title > *,
+.widget-card .widget-title > * {
   pointer-events: none;
 }
-.web-widget-card .widget-title .web-widget-close {
+.web-widget-card .widget-title .web-widget-close,
+.widget-card .widget-title .web-widget-close {
   pointer-events: auto;
+}
+
+/* Boot-widget hide button: invisible until the card is hovered, so the HUD
+   stays clean. Voice ("close the news widget") and this ✕ share one path. */
+.widget-card .widget-hide {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.widget-card:hover .widget-hide,
+.widget-card .widget-hide:focus-visible {
+  opacity: 1;
+}
+
+/* Hidden widgets stay mounted (state, subscriptions persist) — just not shown. */
+.widget-card.widget-hidden {
+  display: none;
 }
 
 .web-result-body {

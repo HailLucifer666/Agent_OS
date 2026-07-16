@@ -79,16 +79,28 @@ function makeResizable(card, handle) {
   });
 }
 
+// Update one widget's stored entry without clobbering the rest of it —
+// position, size, and the hidden flag are written by different code paths.
+function patchStored(id, patch) {
+  const positions = loadPositions();
+  positions[id] = Object.assign({}, positions[id], patch);
+  savePositions(positions);
+}
+
 export function mountWidgets(root, ctx) {
   const saved = loadPositions();
   const cleanups = [];
+  const cards = new Map(); // boot widget id -> card element
 
   WIDGETS.forEach((widget) => {
     const card = document.createElement('div');
     card.className = 'widget-card glass';
     card.dataset.widgetId = widget.id;
     card.innerHTML = `
-      <div class="widget-title mono">${widget.title}</div>
+      <div class="widget-title mono">
+        <span>${widget.title}</span>
+        <button class="web-widget-close widget-hide" aria-label="Hide">&times;</button>
+      </div>
       <div class="widget-body"></div>
       <div class="widget-resize" aria-label="Resize"></div>
     `;
@@ -97,7 +109,11 @@ export function mountWidgets(root, ctx) {
     const sv = saved[widget.id];
     if (sv && sv.width) card.style.width = sv.width + 'px';
     if (sv && sv.height) card.style.height = sv.height + 'px';
+    // Restore hidden state — voice "open <widget>" (or the ✕ hover button)
+    // toggles it; nothing is ever unrecoverable.
+    if (sv && sv.hidden) card.classList.add('widget-hidden');
     root.appendChild(card);
+    cards.set(widget.id, card);
 
     const title = card.querySelector('.widget-title');
     makeDraggable(card, title);
@@ -105,15 +121,19 @@ export function mountWidgets(root, ctx) {
     // Persist position + size for boot widgets (they reload on refresh).
     const persist = () => {
       const rect = card.getBoundingClientRect();
-      const positions = loadPositions();
-      positions[widget.id] = {
+      patchStored(widget.id, {
         left: Math.round(rect.left), top: Math.round(rect.top),
         width: Math.round(rect.width), height: Math.round(rect.height),
-      };
-      savePositions(positions);
+      });
     };
     title.addEventListener('pointerup', persist);
     card.querySelector('.widget-resize').addEventListener('pointerup', persist);
+
+    // Hover ✕ — hides (never destroys) the widget; same stopPropagation
+    // pattern as the spawned web-widget close button so drag doesn't hijack.
+    const hideBtn = card.querySelector('.widget-hide');
+    hideBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    hideBtn.addEventListener('click', () => setWidgetHidden(widget.id, true));
 
     let cleanup = null;
     try {
@@ -126,6 +146,27 @@ export function mountWidgets(root, ctx) {
       card.remove();
     });
   });
+
+  function setWidgetHidden(id, hidden) {
+    const card = cards.get(id);
+    if (!card) return;
+    card.classList.toggle('widget-hidden', hidden);
+    patchStored(id, { hidden: !!hidden });
+  }
+
+  // Voice-driven widget command (manage_widget effector → 'widget-command'
+  // WS broadcast → app.js). Payload is pre-resolved server-side:
+  // {mode:'close'|'open', targets:[ids]} or {mode:'solo', targets:[keepId]}.
+  function applyWidgetCommand(payload) {
+    if (!payload || !payload.mode || !Array.isArray(payload.targets)) return;
+    if (payload.mode === 'solo') {
+      const keep = payload.targets[0];
+      cards.forEach((_, id) => setWidgetHidden(id, id !== keep));
+      return;
+    }
+    const hidden = payload.mode === 'close';
+    payload.targets.forEach((id) => setWidgetHidden(id, hidden));
+  }
 
   // Stash the spawn function on root so app.js can call it via the returned API.
   const spawnedCleanups = [];
@@ -183,5 +224,6 @@ export function mountWidgets(root, ctx) {
   return {
     cleanup: () => { cleanups.forEach((fn) => fn()); spawnedCleanups.forEach((fn) => fn()); },
     spawnWebWidget,
+    applyWidgetCommand,
   };
 }

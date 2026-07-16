@@ -324,8 +324,17 @@ function isToolSuppressed(toolName) {
   return true;
 }
 
+// P6 Jarvis upgrade: lets immune/explainer.js apply the same suppression the
+// 'suppress-tool' playbook action uses (same map, same TTL semantics, same
+// restore path via the tick loop) without reaching into the ACTIONS closure.
+function suppressTool(toolName, ttlMs) {
+  if (!toolName) return false;
+  suppressedTools[toolName] = { restoreAt: Date.now() + (ttlMs || 60000) };
+  return true;
+}
+
 module.exports = {
   createHealer: createHealer, SEED_PLAYBOOKS: SEED_PLAYBOOKS,
   matchClause: matchClause, matches: matches, resolveArgs: resolveArgs, getPath: getPath,
-  isToolSuppressed: isToolSuppressed
+  isToolSuppressed: isToolSuppressed, suppressTool: suppressTool
 };

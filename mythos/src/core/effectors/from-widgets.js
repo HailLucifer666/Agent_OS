@@ -29,6 +29,29 @@ const MAX_ITEMS = 8;
 const MAX_TITLE_LEN = 60;
 const VALID_TONES = ['gold', 'dim', 'warn'];
 
+// manage_widget — voice control over the boot HUD widgets. Mirrors the
+// ui/public/js/widgets/widget-registry.js ids (keep in sync when adding a
+// widget there). The server resolves spoken names/synonyms to explicit id
+// lists so the client-side handler stays dumb: {mode:'close'|'open',
+// targets:[ids]} applied verbatim by widget-host.js.
+const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media'];
+const WIDGET_SYNONYMS = {
+  'clock': 'clock', 'time': 'clock', 'local time': 'clock',
+  'weather': 'weather',
+  'agents': 'agents', 'agent actions': 'agents', 'actions': 'agents',
+  'spend': 'spend', 'brain spend': 'spend', 'spending': 'spend',
+  'tokens': 'tokens', 'token usage': 'tokens', 'token': 'tokens',
+  'wip': 'wip', 'work in progress': 'wip',
+  'tick-rate': 'tick-rate', 'tick rate': 'tick-rate', 'ticks': 'tick-rate',
+  'breakers': 'breakers', 'circuit breakers': 'breakers',
+  'news': 'news', 'headlines': 'news',
+  'media': 'media', 'now playing': 'media', 'music': 'media', 'player': 'media', 'spotify': 'media', 'music player': 'media',
+  'all': 'all', 'everything': 'all', 'all widgets': 'all',
+  'telemetry': 'telemetry', 'stats': 'telemetry', 'system stats': 'telemetry', 'metrics': 'telemetry'
+};
+// The clutter: internal telemetry, hidden as a set by "declutter".
+const TELEMETRY_SET = ['tokens', 'spend', 'tick-rate', 'breakers', 'wip', 'agents'];
+
 function ok(result) {
   return { ok: true, result: result };
 }
@@ -98,7 +121,63 @@ function buildTools(ctx) {
     }
   }
 
+  function manage_widget(args) {
+    try {
+      const rawAction = String((args && args.action) || '').trim().toLowerCase();
+      const rawName = String((args && args.name) || '').trim().toLowerCase();
+      // Spoken-verb synonyms → canonical action.
+      const action = { close: 'close', hide: 'close', remove: 'close', dismiss: 'close',
+                       open: 'open', show: 'open', restore: 'open', 'bring back': 'open',
+                       solo: 'solo', only: 'solo',
+                       declutter: 'declutter', 'clean up': 'declutter', cleanup: 'declutter', minimal: 'declutter' }[rawAction];
+      if (!action) {
+        return fail('action must be one of: close|open|solo|declutter (got "' + rawAction + '").');
+      }
+
+      let mode, targets;
+      if (action === 'declutter') {
+        mode = 'close';
+        targets = TELEMETRY_SET.slice();
+      } else {
+        const resolved = WIDGET_SYNONYMS[rawName] || null;
+        if (!resolved) {
+          return fail('Unknown widget "' + rawName + '". Known: ' + BOOT_WIDGET_IDS.join(', ') + ' (or "telemetry"/"all").');
+        }
+        if (action === 'solo') {
+          if (resolved === 'all' || resolved === 'telemetry') {
+            return fail('solo needs a single widget name.');
+          }
+          mode = 'solo';
+          targets = [resolved];
+        } else {
+          mode = action; // close | open
+          targets = resolved === 'all' ? BOOT_WIDGET_IDS.slice()
+            : resolved === 'telemetry' ? TELEMETRY_SET.slice()
+            : [resolved];
+        }
+      }
+
+      const payload = { mode: mode, targets: targets };
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('ui.widget-command', payload);
+      }
+      return ok(payload);
+    } catch (err) {
+      return fail('manage_widget failed: ' + (err.message || err));
+    }
+  }
+
   const TOOLS = [
+    {
+      name: 'manage_widget',
+      description: 'Hide or show dashboard HUD widgets by voice. action: close (hide a widget), open (bring it back), solo (hide everything except the named widget), declutter (hide all telemetry widgets — tokens, spend, tick rate, breakers, WIP, agent actions — in one go). name: clock|weather|agents|spend|tokens|wip|tick-rate|breakers|news|media, or "telemetry"/"all" (not needed for declutter). Hidden widgets are always recoverable with open.',
+      params: {
+        action: 'string - close|open|solo|declutter',
+        name: 'string (optional for declutter) - which widget',
+      },
+      danger: false,
+      fn: manage_widget,
+    },
     {
       name: 'spawn_widget',
       description: 'Spawn a floating dashboard widget from a declarative data spec (data only, never markup). layout must be one of stat|list|table|text. items is an array of up to 8 {label, value, tone?} entries (tone: gold|dim|warn). Use to surface structured data (a stat, a short list, a small table, or a few lines of text) without opening a full web panel.',

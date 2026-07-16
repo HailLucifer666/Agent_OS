@@ -85,6 +85,15 @@ const ALLOWED_EVENTS = new Set([
   // ui.close-panel — emitted when close_panel effector succeeds, relayed to clients
   'ui.close-panel',
 
+  // ui.open-web — emitted when open_web/spawn_widget effectors succeed (dispatch-action.js,
+  // from-widgets.js), relayed to clients as the 'open-web' broadcast. Was shipping
+  // unregistered — the long-standing known failure of this test, registered deliberately.
+  'ui.open-web',
+
+  // ui.widget-command — emitted by manage_widget (from-widgets.js), relayed as the
+  // 'widget-command' broadcast; widget-host.js hides/shows boot HUD widgets.
+  'ui.widget-command',
+
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
 

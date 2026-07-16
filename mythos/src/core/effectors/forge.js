@@ -12,6 +12,7 @@
 //   final-review reject → applyRevision(feedback). Crash mid-flight → interrupted.
 
 const prompts = require('./forge-prompts');
+const buildPack = require('../skills/build-pack');
 const validate = require('./forge-validate');
 
 const FILE = 'Checkpoints/forge-projects.json';
@@ -166,11 +167,21 @@ function createForge({ config, brain, bus, vault, checkpoints }) {
   async function generateOneFile(p, file) {
     file.status = 'generating'; file.error = null; notify(p, file.path);
     const attemptsAllowed = FILE_RETRY + 1;
+    // Skill-pack essences (P3 Jarvis upgrade): anti-slop discipline prepended
+    // to every file-generation prompt. Pack chosen from the file's own path +
+    // the project kind (websites and .html/.css files get the UI pack; the
+    // rest get the code pack). Best-effort — a missing essence injects nothing.
+    let skillBlock = '';
+    try {
+      const packKind = (p.kind === 'website' || /\.(html|css)$/i.test(file.path)) ? 'ui' : 'code';
+      skillBlock = buildPack.packBlockFor(packKind);
+    } catch (_) { /* essence injection is best-effort */ }
     for (let attempt = 1; attempt <= attemptsAllowed; attempt += 1) {
       file.attempts = attempt;
-      const prompt = attempt === 1
+      let prompt = attempt === 1
         ? prompts.buildFilePrompt(p.manifest, file, doneSummaries(p))
         : prompts.buildRetryPrompt(p.manifest, file, doneSummaries(p), file.error);
+      if (skillBlock) prompt = skillBlock + '\n\n' + prompt;
       const result = await think(prompt, null, 'file:' + file.path, p);
       if (!result || result.offline) { file.error = 'brain offline'; continue; }
       if (result.aborted) { file.error = 'aborted'; continue; }

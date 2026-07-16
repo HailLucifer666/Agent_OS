@@ -67,7 +67,25 @@ function buildTools(ctx){
     }catch(err){return fail('recall_memory failed: '+(err.message||err));}
   }
 
+  // P5 Jarvis upgrade: grounded self-knowledge. Reads the boot-generated
+  // manifest (vault/Identity/capabilities.md, written by main.js's
+  // capabilities-manifest step) — optionally filtered to the sections/lines
+  // matching a topic — so "what exactly can you do with Spotify?" cites real
+  // registered tools instead of vibes.
+  function self_capabilities(args){
+    if(!fs||typeof fs.readText!=='function') return fail('fs store unavailable');
+    var manifest=fs.readText('Identity/capabilities.md','').trim();
+    if(!manifest) return fail('capabilities manifest not generated yet — it is written at boot');
+    var topic=(args&&args.topic||'').trim().toLowerCase();
+    if(!topic) return ok({manifest:manifest.slice(0,6000)});
+    var lines=manifest.split('\n');
+    var matched=lines.filter(function(l){return l.toLowerCase().indexOf(topic)!==-1;});
+    if(!matched.length) return ok({topic:topic,matches:0,manifest:manifest.slice(0,3000)});
+    return ok({topic:topic,matches:matched.length,lines:matched.slice(0,40)});
+  }
+
   return [
+    {name:'self_capabilities',description:'Read your own capabilities manifest (tools, tiers, adapters, skills, recent code changes — regenerated every boot). Use when the user asks "what can you do", "what are your capabilities", "what tools do you have for X", or "what\'s new/changed". Pass topic to filter (e.g. "spotify").',params:{topic:'string (optional) — filter lines matching this word'},danger:false,fn:self_capabilities},
     {name:'remember',description:'Save a durable fact, preference, or instruction to permanent memory. Use when user says "remember","note that","don\'t forget","from now on","keep in mind", or states a standing rule. Persists across restarts.',params:{text:'string — the fact/preference/instruction'},danger:false,fn:remember},
     {name:'log_incident',description:'Record an error/bug/incident the user flags. Use when user says "log this","this is wrong","you hallucinated","log this as an error". Persists to durable incident log.',params:{text:'string — describe the incident',severity:'string (optional) — info|warn|error (default warn)'},danger:false,fn:log_incident},
     {name:'recall_memory',description:'Search past conversations and remembered facts for something relevant. Use when the user references something from earlier that you don\'t have in front of you, or directly asks "what did I say about X" / "do you remember X". Read-only.',params:{query:'string — what to search memory for',limit:'number (optional) — max results, default 8'},danger:false,fn:recall_memory}

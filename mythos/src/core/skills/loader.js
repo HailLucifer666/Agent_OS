@@ -20,6 +20,11 @@ var path = require('path');
 
 var ALLOWLIST_PATH = path.join(__dirname, '..', '..', '..', 'skills.allowlist');
 
+// Repo-local vendored skills (mythos/skills/<name>/SKILL.md) — resolved FIRST
+// so a fresh clone works with zero external installs (open-source portability).
+// ~/.zcode/skills remains the fallback for skills not vendored into the repo.
+var REPO_SKILLS_DIR = path.join(__dirname, '..', '..', '..', 'skills');
+
 function zcodeRoot() {
   var home = process.env.USERPROFILE || process.env.HOME || '';
   return home ? path.join(home, '.zcode') : '';
@@ -69,6 +74,8 @@ function parseFrontmatter(text) {
 }
 
 function skillPath(name) {
+  var local = path.join(REPO_SKILLS_DIR, name, 'SKILL.md');
+  if (fs.existsSync(local)) return local;
   return path.join(skillsDir(), name, 'SKILL.md');
 }
 
@@ -111,6 +118,20 @@ function loadContent(name) {
   }
 }
 
+// Load the condensed essence (SKILL-CORE.md, repo-local vendored skills only).
+// Build-lane prompts inject essences, not full skills — the free/low-context
+// brain models can't afford 80KB of guidance per call. Returns null when the
+// skill has no essence (callers skip it — never a hard failure).
+function loadEssence(name) {
+  if (!name) return null;
+  try {
+    var raw = fs.readFileSync(path.join(REPO_SKILLS_DIR, name, 'SKILL-CORE.md'), 'utf8');
+    return raw.trim();
+  } catch (_) {
+    return null;
+  }
+}
+
 // Compact one-line-per-skill block for prompt injection.
 function catalogBlock() {
   var cat = loadCatalog();
@@ -132,6 +153,7 @@ function refresh() {
 module.exports = {
   loadCatalog: loadCatalog,
   loadContent: loadContent,
+  loadEssence: loadEssence,
   catalogBlock: catalogBlock,
   refresh: refresh,
   // Exports for testing

@@ -32,6 +32,8 @@ const TIER_TABLE = {
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
+  'persona_status':        0,  // read-only — reports current personality dial settings
+  'self_capabilities':     0,  // read-only — reports the boot-generated capabilities manifest
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
@@ -54,6 +56,8 @@ const TIER_TABLE = {
   'reminder_cancel':       1,  // local write — cancels a pending reminder
   'spawn_widget':          1,  // local write — spawns a floating dashboard widget from a
                                // validated data-only spec (Item 11 generative UI)
+  'set_persona_level':     1,  // local write — adjusts a personality dial in Identity/persona.json
+  'manage_widget':         1,  // local write — hides/shows dashboard widgets (state in browser localStorage)
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
@@ -94,6 +98,7 @@ const TIER_TABLE = {
   'browser_type':          3,
   'spotify_play':          3,
   'spotify_search':        3,
+  'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,
