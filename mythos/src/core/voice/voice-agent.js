@@ -40,8 +40,8 @@ const skillsLoader = require('../skills/loader');
 // from-project.js). F3: danger is now computed dynamically from tierOf() at
 // buildPrompt time to prevent drift between the voice catalog and the tier table.
 const CATALOG_RAW = [
-  { name: 'navigate', description: 'Open a dashboard panel. route is one of: goals, kanban, pipeline, memory, health, audit. Note: there is no "news" route — news is a boot-time floating widget spawned separately, not a navigable dashboard panel. Never call navigate with route:"news".', params: { route: 'string' }, danger: false },
-  { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top panel.', params: { all: 'boolean (optional)' }, danger: false },
+  { name: 'navigate', description: 'Open/show a dashboard panel. This IS the "open panel" tool — there is no open_panel tool, use navigate. route is one of: goals, kanban, pipeline, memory, health, audit, backend, conversation, engagements. Note: there is no "news" route — use open_web for news. Never call navigate with route:"news".', params: { route: 'string' }, danger: false },
+  { name: 'close_panel', description: 'Close dashboard panel(s). This is the inverse of navigate (open). Pass all:true to close all open panels, omit to close just the top panel. There is no open_panel tool — to open a panel, use navigate.', params: { all: 'boolean (optional)' }, danger: false },
   { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
   { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done and researchStatus (grounded/skipped) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false },
   { name: 'open_artifact', description: 'Open a built artifact (a file under vault/builds) in the browser so the human can see it.', params: { path: 'string', title: 'string (optional)' }, danger: false },
@@ -142,6 +142,51 @@ function buildCatalogFromHub(hub) {
   return merged;
 }
 
+// Fuzzy tool-name suggestion for hallucinated tool calls. Uses Levenshtein
+// distance for typo-level fixes (spotify_play/play_spotify) plus semantic
+// aliases for known confusion patterns (open_panel -> navigate).
+const TOOL_ALIASES = {
+  'open_panel': 'navigate',
+  'open_view': 'navigate',
+  'show_panel': 'navigate',
+  'play_music': 'spotify_play',
+  'play_spotify': 'spotify_play',
+  'play_track': 'spotify_play',
+  'search_web': 'web_search',
+  'open_url': 'open_web',
+  'open_tab': 'open_web',
+};
+function levenshtein(a, b) {
+  var m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  var prev = [];
+  var curr = [];
+  for (var j = 0; j <= n; j++) prev[j] = j;
+  for (var i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (var j = 1; j <= n; j++) {
+      var cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (var j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+  return prev[n];
+}
+function suggestTool(name, catalog) {
+  var lower = String(name || '').toLowerCase().trim();
+  // Exact alias hit
+  if (TOOL_ALIASES[lower]) return TOOL_ALIASES[lower];
+  var names = catalog.map(function(t) { return t.name; });
+  // Closest Levenshtein match within 2 edits
+  var best = null, bestDist = 3;
+  for (var i = 0; i < names.length; i++) {
+    var d = levenshtein(lower, names[i].toLowerCase());
+    if (d < bestDist) { bestDist = d; best = names[i]; }
+  }
+  return best;
+}
+
 // ---- prompt construction (DANGER TOOLS RULE + PROJECT INTAKE RULE are CA
 // from NOVA — the danger rule was validated by NOVA's day-one spike: without
 // it, 25% false-danger-invocation on ambiguous utterances; with it, 0%). ----
@@ -163,6 +208,7 @@ FRUSTRATION RULE: if the user expresses frustration ('not working', 'broken', 'd
 DANGER TOOLS RULE (safety-critical, read carefully): each tool below is marked "danger": true or "danger": false. For a danger:true tool, you may ONLY put it in "actions" if the utterance itself clearly and specifically names the target (an exact goal/card/file described in THIS utterance, or an explicit direct confirmation like "yes, delete it" replying to a question YOU just asked in this same turn). If the utterance is vague about WHAT to act on (words like "it", "that", "this", "the thing") and nothing concrete is named anywhere else in this turn, that is NOT authorization: you MUST put "actions": [] and instead ask a clarifying question in "say". Never put a danger:true tool call in "actions" as a placeholder while you ask a clarifying question — asking a question and queuing the dangerous action in the same turn is always wrong. When genuinely unsure, prefer actions: [] and ask.
 
 PROJECT INTAKE RULE: when the user asks you to build/make/create something open-ended (a game, a landing page, an app), do NOT start immediately. Ask ALL your clarifying questions in ONE turn as a short list (2-3 questions max, covering the essentials: what kind, what style, what audience). After the user answers, you may ask at most ONE more round of questions ONLY if an answer is genuinely ambiguous and blocks you from building. NEVER ask a third round of questions — by then you have enough to build. Once you have style/topic/audience, restate the plan in one sentence and ask for an explicit go-ahead. Call start_project ONLY after the user clearly says to proceed in a LATER turn, with the full accumulated spec as description. Never call start_project on the same turn you first proposed the plan.
+AFFIRMATION RESOLUTION RULE: when the user says "go ahead", "proceed", "yes", "do it", "sure", or "okay", they are confirming whatever YOU proposed or offered in YOUR most recent reply — NOT authorizing a build. Read RECENT EXCHANGES to find your last offer. If you offered to search, play music, open a website, or look something up, do THAT action. Only call start_project / build_project / run_mission on an affirmation if YOU explicitly proposed building something specific in the immediately preceding turn AND the user is confirming that build. A bare "go ahead" after "want me to search the web for that?" means SEARCH, not BUILD.
 IDEA SPARRING: you are a creative partner, not a form. When you ask intake questions, ALSO propose — offer 1-2 concrete opinionated suggestions with each round ("I could give it a dark hero section with a live demo embed — want that?"). When the user describes requirements, volunteer one improvement or addition they did not ask for, phrased as an offer ("Shall I also add X?"), never silently included. If the user rejects a suggestion, drop it and do not re-propose it. Suggestions ride along with your questions in the same turn — they never add extra rounds beyond the two the PROJECT INTAKE RULE allows.
 
 INFORMATIONAL TOOLS RULE: danger:false read-only lookups (read_status, list_goals, job_status, pipeline_status, kanban_status, mission_status, get_time, get_weather, etc.) are never build/create requests and never need the PROJECT INTAKE RULE's clarify-first dance — call them in the SAME turn the user asks, even with no arguments (all their params are optional or have sensible defaults). Only ask first when the utterance is genuinely ambiguous about which optional argument to use AND the answer would change the result the user actually wants (e.g. they said "the weather" while mid-conversation about two different cities). Simply not having every optional argument filled in is never a reason to ask instead of calling the tool. If the user says "I don't know" or "I don't care" about an OPTIONAL parameter, that is NOT a reason to abandon the task — call the tool with its default (omit the arg) and proceed with the result. Only abandon if a REQUIRED parameter is missing and the user cannot provide it.
@@ -334,7 +380,12 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
       action.args = clean;
     }
     if (!KNOWN.has(action.tool)) {
-      return { tool: action.tool, args: action.args, ok: false, summary: `Unknown tool "${action.tool}".` };
+      // Fuzzy-match against known tools so the corrective pass can suggest
+      // the right tool instead of just saying "unknown". Catches common
+      // hallucinations like open_panel -> navigate, play_spotify -> spotify_play.
+      var suggestion = suggestTool(action.tool, catalog);
+      var hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
+      return { tool: action.tool, args: action.args, ok: false, summary: `Unknown tool "${action.tool}".${hint}` };
     }
     const decision = { tool: action.tool, args: action.args || {} };
     const verdict = leash.check(decision, {});

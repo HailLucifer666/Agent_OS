@@ -47,6 +47,10 @@ export function mountCoreOrb(canvas, ctx) {
   const DANGER = cssVar('--danger', '#ff5f66');
   const WARN = cssVar('--status-degraded', '#eab308');
   const THINKING = cssVar('--accent-goals-purple', '#a78bfa'); // matches mic-processing (voice.css)
+  // Orb glow colors per user spec:
+  //   idle = cyan, listening = green, speaking = yellow, error = red
+  const LISTENING = '#43e5a0';   // green
+  const SPEAKING = '#f5d020';    // warm yellow, readable on dark navy
 
   const ACTION_COLORS = {
     goals: THINKING,
@@ -88,12 +92,12 @@ export function mountCoreOrb(canvas, ctx) {
   // ---- unified state resolution — one hue, one priority chain ----
   const STATE_COLOR = {
     offline: DIM, booting: DIM, confirm: WARN, degraded: DANGER,
-    thinking: THINKING, listening: ACCENT, online: ACCENT,
+    thinking: THINKING, listening: LISTENING, speaking: SPEAKING, online: ACCENT,
   };
   const STATE_LINE = {
     offline: 'ENTITY OFFLINE', booting: 'ENTITY BOOTING', confirm: 'AWAITING CONFIRM',
-    degraded: 'ENTITY DEGRADED', thinking: 'PROCESSING VOICE', listening: 'LISTENING',
-    online: 'ENTITY ONLINE',
+    degraded: 'ENTITY DEGRADED', thinking: 'PROCESSING', listening: 'LISTENING',
+    speaking: 'SPEAKING', online: 'ENTITY ONLINE',
   };
 
   function resolveState() {
@@ -101,6 +105,7 @@ export function mountCoreOrb(canvas, ctx) {
     if (entityStatus !== 'alive') return 'booting';
     if (confirmPending) return 'confirm';
     if (degraded) return 'degraded';
+    if (voiceState === 'speaking') return 'speaking';
     if (voiceState === 'processing') return 'thinking';
     if (voiceState === 'listening') return 'listening';
     return 'online';
@@ -215,8 +220,8 @@ export function mountCoreOrb(canvas, ctx) {
     // listening: slow breathing alpha on the base ring stroke (texture, not a
     // different hue — the entity genuinely still reads as "online").
     const breathe = (state === 'listening' && !reduced) ? 0.88 + 0.12 * Math.sin(t * 2.618) : 1;
-    // thinking: additive shimmer on glow intensity, independent of tick heartbeat.
-    const shimmer = (state === 'thinking' && !reduced) ? 0.5 + 0.5 * Math.sin(t * 3.4) : 0;
+    // thinking/speaking: additive shimmer on glow intensity, independent of tick heartbeat.
+    const shimmer = ((state === 'thinking' || state === 'speaking') && !reduced) ? 0.5 + 0.5 * Math.sin(t * 3.4) : 0;
 
     // thin base ring
     c2d.beginPath();
@@ -397,13 +402,11 @@ export function mountCoreOrb(canvas, ctx) {
   return {
     setDegraded(v) { degraded = !!v; },
     notifyConfirmResolved() { confirmPending = false; },
-    // voice-loop states (idle|listening|processing|speaking) — 'speaking' shares
-    // the processing/thinking visual; hardware states (downloading/disabled/
-    // error/unsupported) collapse to idle; those are mic-indicator's job, not
-    // the entity-cognition orb's.
+    // voice-loop states (idle|listening|processing|speaking) — each has its own
+    // glow color: idle=cyan, listening=green, processing=purple, speaking=yellow.
+    // Hardware states (downloading/disabled/error/unsupported) collapse to idle.
     setVoiceState(s) {
-      voiceState = s === 'speaking' ? 'processing'
-        : (s === 'listening' || s === 'processing') ? s : 'idle';
+      voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle';
     },
     // category comes from hud-canvas.js's toolTarget() — single source of
     // truth for tool->category mapping, never re-derived here.

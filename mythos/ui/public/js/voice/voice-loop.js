@@ -39,17 +39,19 @@ let BARGE_IN_RMS_MULT = 2.5;       // multiplied onto SPEECH_RMS for the barge-i
 let BARGE_IN_HOLD_TICKS_MULT = 2;  // multiplied onto SPEECH_HOLD_TICKS for the barge-in hold
 
 // voice-nav table — checked before falling through to the brain.
-// Patterns allow filler words (the/my/current/active) between verb and target.
+// Leading-edge only (no $ anchor) so compound utterances like
+// "pipeline dashboard and open the ACDC video" still match the nav
+// clause and open the panel client-side before hitting the brain.
 const NAV_COMMANDS = [
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*goals?(?:\s+(?:panel|tab|view))?$/i, 'goals'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*kanban(?:\s+board)?(?:\s+(?:panel|tab|view))?$/i, 'kanban'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*pipeline(?:\s+(?:panel|tab|view))?$/i, 'pipeline'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?memor(?:y|ies)(?:\s+(?:panel|tab|view))?$/i, 'memory'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?health(?:\s+(?:panel|tab|view))?$/i, 'health'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?audit(?:\s+(?:log|trail))?(?:\s+(?:panel|tab|view))?$/i, 'audit'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:backend|terminal|system\s+logs?)(?:\s+(?:panel|tab|view))?$/i, 'backend'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:conversation|chat|transcript|history)(?:\s+(?:panel|tab|view))?$/i, 'conversation'],
-  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?engagements?(?:\s+(?:panel|tab|view))?$/i, 'engagements'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*goals?(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'goals'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*kanban(?:\s+board)?(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'kanban'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+|current\s+|active\s+)*pipeline(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'pipeline'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?memor(?:y|ies)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'memory'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?health(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'health'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?audit(?:\s+(?:log|trail))?(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'audit'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:backend|terminal|system\s+logs?)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'backend'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:conversation|chat|transcript|history)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'conversation'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?engagements?(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'engagements'],
 ];
 
 // Close commands — close the top panel or all panels.

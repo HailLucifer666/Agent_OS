@@ -18,10 +18,14 @@ export async function render(mount) {
     const res = await fetch('/api/audit/recent?limit=50');
     if (res.ok) {
       const data = await res.json();
-      if (data.entries && Array.isArray(data.entries)) {
+      if (data.error) {
+        console.warn('audit-api-error', data.error);
+      } else if (data.entries && Array.isArray(data.entries)) {
         // API returns newest-first; reverse to oldest-first so live events append correctly
         rows.push(...data.entries.reverse());
       }
+    } else {
+      console.warn('audit-fetch-status', res.status, await res.text().catch(() => ''));
     }
   } catch (err) {
     console.warn('audit-fetch-failed', err.message);

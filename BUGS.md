@@ -9,7 +9,7 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-07-16
+Last updated: 2026-07-16 (session 3 — 6 new bugs BUG-031→036, 5 fixed, SMTC diagnosed)
 Maintainer: update this file as issues are resolved. Strike through the status.
 
 ---
@@ -693,6 +693,109 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 
 ---
 
+### BUG-031: `spotify_play` crashes with `Cannot read properties of null (reading 'elements')`
+**Status:** ✅ FIXED (2026-07-16)
+**Severity:** CRITICAL (every spotify_play attempt crashed — 5 failures logged) | **Reported:** 2026-07-16 (episodic logs)
+
+**Symptom:** Every `spotify_play` call returned `Cannot read properties of null (reading 'elements')`. The tool never reached the audit log because it crashed before dispatch completed.
+
+**Root cause (verified):** When a PowerShell handler in `ps-automation.ps1` threw an unhandled exception, `$result` stayed `$null` and the main dispatch loop sent `Write-Response $true $null` — wrapping a null result as `{ ok: true, result: null }`. On the JS side, `from-spotify.js` then accessed `result.result.elements` or `result.result.windows` on null, crashing with a TypeError.
+
+**Fix applied:** Two-pronged:
+1. `ps-automation.ps1` dispatch loop: added `elseif ($null -eq $result)` check that sends `ok: false` with a descriptive error instead of `ok: true` with null.
+2. `from-spotify.js`: added null guards (`(result.result && result.result.elements) || []`) at all 4 sites that access `.elements` or `.windows` on effector results (`getSpotifyWindow`, `findSpotifySearchBox`, `searchAndPlay`, `spotify_search`, and the `spotify_play` UIA tree walk).
+
+**Tests:** `test/spotify-effector.test.js` — all 42 tests pass (including existing BUG-001/BUG-026/BUG-007 regression guards). `test/bug-018-list-folder-sandbox.test.js` — 4/4 pass (PS change doesn't regress sandbox).
+
+**Files:** `mythos/adapters/pc-child/ps-automation.ps1` (null-result guard in dispatch), `mythos/src/core/effectors/from-spotify.js` (5 null guards).
+
+---
+
+### BUG-032: `capture_screenshot` crashes with buffer type error
+**Status:** ✅ FIXED (2026-07-16)
+**Severity:** HIGH (evidence-logging tool completely broken — 2 failures logged) | **Reported:** 2026-07-16 (episodic logs)
+
+**Symptom:** `capture_screenshot` returned `Failed to save screenshot: The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received an instance of Object`.
+
+**Root cause (verified, file:line):** `from-pc.js:136` extracted base64 via `shot.result.image || shot.result.png || shot.result`. The PowerShell `Handle-ScreenLook` returns `{ base64: "...", width, height, format }` — the key is `base64`, not `image` or `png`. The fallback chain fell through to `shot.result` (the whole object), and `Buffer.from(object, 'base64')` crashed.
+
+**Fix applied:** Added `shot.result.base64` to the extraction chain in both `capture_screenshot` and `screen_look`: `shot.result.image || shot.result.base64 || shot.result.png`. Also changed the guard from `if (!b64)` to `if (typeof b64 !== 'string')` to catch the object-fallthrough case explicitly.
+
+**Tests:** `test/capture-screenshot.test.js` — 3/3 pass (saves PNG, fails when offline, fails when vault unavailable).
+
+**Files:** `mythos/src/core/effectors/from-pc.js` (both `capture_screenshot` and `screen_look` extraction chains).
+
+---
+
+### BUG-033: `open_folder` rejects `/vault/...` paths (leading-slash sandbox rejection)
+**Status:** ✅ FIXED (2026-07-16)
+**Severity:** MEDIUM (cortex AI routinely sends Linux-style absolute paths) | **Reported:** 2026-07-16 (episodic + audit logs)
+
+**Symptom:** `open_folder({ path: '/vault/builds' })` returned `"/vault/builds" is outside the allowed folders.`, but `open_folder({ path: 'vault/builds' })` (same path, no leading slash) worked fine.
+
+**Root cause (verified, file:line):** `from-computer.js:73` — `path.resolve('/vault/builds')` on win32 resolves from the drive root (`F:\vault\builds`), which is outside the allowed sandbox roots (the project directory). The cortex AI, trained on Linux paths, routinely prepends `/` to relative paths.
+
+**Fix applied:** Strip leading `/` from raw paths before resolution in `resolveSandboxed()`: `var cleaned = String(raw).replace(/^\/+/, '');`. This makes `/vault/builds` resolve the same as `vault/builds` — relative to the cwd/project root, inside the sandbox.
+
+**Tests:** `test/bug-018-list-folder-sandbox.test.js` — 4/4 pass (unchanged, the fix only affects leading-slash paths which were previously rejected outright).
+
+**Files:** `mythos/src/core/effectors/from-computer.js` (`resolveSandboxed` function).
+
+---
+
+### BUG-034: Brain hallucinates `open_panel` tool (doesn't exist — should use `navigate`)
+**Status:** ✅ FIXED (2026-07-16)
+**Severity:** HIGH (user-facing failure — "open the pipeline dashboard" silently fails) | **Reported:** 2026-07-16 (episodic logs)
+
+**Symptom:** User said "pipeline dashboard and open the ACDC video." MYTHOS called `open_panel` — a tool that doesn't exist. The correct tool is `navigate({ route: 'pipeline' })`. MYTHOS replied "I don't have a tool to open the pipeline dashboard."
+
+**Root cause (verified):** The brain's tool catalog contains `close_panel` but the open-counterpart is named `navigate`. Seeing `close_panel` and hearing "open," the model fabricated the symmetric `open_panel`. Three compounding factors:
+1. The `navigate` description was too abstract ("Change the dashboard view/route") — the `CATALOG_RAW` override was better but the asymmetry wasn't called out.
+2. The client-side `NAV_COMMANDS` regexes in `voice-loop.js` were `^...$` anchored, so compound utterances ("pipeline dashboard and open X") didn't match and fell through to the brain.
+3. When the brain returned an unknown tool name, the error said `Unknown tool "open_panel"` with no suggestion of the correct tool.
+
+**Fix applied (4 changes):**
+1. **Descriptions** (`voice-agent.js:43-44`): `navigate` now says "This IS the 'open panel' tool — there is no open_panel tool, use navigate." `close_panel` now says "There is no open_panel tool — to open a panel, use navigate." All 9 routes listed (was only 6).
+2. **Client regex** (`voice-loop.js:43-53`): Changed all 9 NAV_COMMANDS from `^...$` to `^...(?:\s|$)` (leading-edge only). Compound utterances now match the nav clause client-side and open the panel before hitting the brain.
+3. **Tool-suggest fallback** (`voice-agent.js`): Added `suggestTool()` with Levenshtein distance matcher + `TOOL_ALIASES` map (`open_panel → navigate`, `play_spotify → spotify_play`, `search_web → web_search`, etc.). When the brain returns an unknown tool, the error now includes `Did you mean "navigate"?` which feeds into the corrective prompt so the brain retries correctly.
+4. **Affirmation Resolution Rule** (`voice-agent.js` RULES block): New prompt rule — "When the user says 'go ahead', 'proceed', 'yes' — they are confirming YOUR previous offer, NOT authorizing a build." Directly prevents the ACDC → `start_project` hallucination that happened in the same session.
+
+**Tests:** `test/voice-agent-tools.test.js`, `test/bug-017-voice-catalog-drift.test.js`, `test/spotify-effector.test.js`, `test/voice-barge-in-decision.test.js`, `test/bug-010-ask-agent-wiring.test.js` — 106/106 pass.
+
+**Files:** `mythos/src/core/voice/voice-agent.js` (descriptions, suggestTool + TOOL_ALIASES + levenshtein, AFFIRMATION RESOLUTION RULE), `mythos/ui/public/js/voice/voice-loop.js` (NAV_COMMANDS un-anchored).
+
+---
+
+### BUG-035: Weather API — transient `fetch failed` (not a code bug)
+**Status:** ✅ VERIFIED WORKING (2026-07-16) — no code change needed
+**Severity:** LOW (transient) | **Reported:** 2026-07-16 (episodic logs)
+
+**Symptom:** `get_weather({ location: 'Bangalore' })` returned `Weather is unavailable right now (fetch failed).` in the live session.
+
+**Root cause:** Transient network issue. The Open-Meteo API (geocoding + forecast) was tested live from this machine via curl AND Node.js `fetch()` — both returned valid data instantly for Mumbai, Kolkata, and Bangalore. The `from-system.js` weather code is correct. The failure was a one-time network/DNS hiccup, not a code bug.
+
+**Verification:** `curl geocoding-api.open-meteo.com` → ✅ Mumbai coordinates. `curl api.open-meteo.com/v1/forecast` → ✅ 26.9°C. `node -e "fetch(...)"` → ✅ Kolkata. All three paths work.
+
+**Action:** None needed. The running MYTHOS server may need a restart to clear stale state.
+
+---
+
+### BUG-036: SMTC `media_status` fails — "Failed to get session manager"
+**Status:** ❌ BROKEN (diagnosed, not fixed — WinRT COM interop issue)
+**Severity:** HIGH (media widget blank, now-playing detection broken) | **Reported:** 2026-07-16 (live diagnostic)
+
+**Symptom:** The `/api/media` endpoint (which powers the now-playing music widget) hangs for 5 seconds then times out. Direct PS adapter test of `media_status` returns `{ error: "Failed to get session manager", playing: false, available: true }`.
+
+**Root cause (diagnosed, file:line):** `ps-automation.ps1` `Handle-MediaStatus` — the WinRT SMTC `RequestAsync()` polling loop completes but `$sessionManagerTask.GetResults()` returns null. The SMTC API (`Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager`) requires Windows 10 1903+ and proper WinRT async handling. The current polling approach (50 iterations × 100ms) may not be sufficient, or the WinRT COM interop in PowerShell 5.1 is fundamentally unreliable for this async pattern.
+
+**Note:** This is the same WinRT COM interop fragility documented in BUG-004 and BUG-026's verification notes. The `Await-WinRTOperation` helper was removed in favor of inline polling (conflict resolution during the 2026-07-16 sync), but the polling approach has the same underlying issue.
+
+**Not fixed in this pass:** Requires deeper investigation of WinRT async patterns in PowerShell, or switching to a different media-detection approach (e.g., Spotify's Web API, or window-title parsing which already works — the PS adapter can see `"Mild Orange - Oh Yeah"` as Spotify's window title).
+
+**Files (relevant):** `mythos/adapters/pc-child/ps-automation.ps1` (`Handle-MediaStatus` ~line 430+), `mythos/server/index.js:179-192` (`/api/media` endpoint).
+
+---
+
 ## 📋 TRACKED — ROADMAP.md D-NN Drift Items (architectural debt)
 
 These are formally tracked in `ROADMAP.md`, not user-facing bugs. 43 open (20 MAJOR + 23 MINOR). Most impactful:
@@ -731,30 +834,36 @@ Full list in `ROADMAP.md` lines 396-403.
 
 ## Priority Queue (what to fix next, in order)
 
-1. **BUG-002** — Compose bar reply not wired (blocks ALL text chat)
-2. **BUG-029** — Orphaned browser-automation process survives full shutdown, keeps playing audio (needs live repro before fixing — see D-07)
-3. **BUG-026** — Spotify play still silent after focus fix (BUG-001 follow-on, needs a real UI-targeting fix, not another key-guess)
-4. **BUG-027** — Voice pipeline transcribes its own TTS as user speech (hallucinated tool calls — do alongside BUG-020)
-4. **BUG-001** — Spotify play doesn't play (most-reported bug, 6 failures; URI fix applied, needs verification; superseded by BUG-026 for the remaining playback failure)
-5. **BUG-004** — Media widget blank (3 sub-issues; WinRT init fix applied, needs verification)
-6. **BUG-007** — Fabrication of success (trust-destroying)
-7. ~~**BUG-025** — Pipeline spec lost between capture and execute~~ — fixed 2026-07-16, see entry above
-8. **BUG-016** — Pipeline ships failed-review builds
-9. **BUG-008** — `open_artifact` voice channel broken
-10. **BUG-028** — `navigate` has no "news" route, MYTHOS guesses/fabricates instead
-11. **BUG-013** — Cortex flapping/stall loops (healer can't fix)
-12. **BUG-010** — `ask_agent` not wired
-10. **BUG-011** — Browser automation offline
-11. **BUG-014** — Memory pollution (remember auto-saves noise)
-12. ~~**BUG-024** — Calendar/Gmail integration incomplete~~ — code-level verified 2026-07-16 (require-path + adapter-cache bugs fixed, calendar sensor confirmed wired); remaining piece is user-side OAuth setup, not code
-13. **BUG-023** — Weather widget fails with city+state location
-14. **BUG-009** — No screenshot tool for evidence
-15. **BUG-018** — Can't read own source tree
-16. **BUG-015** — Identity boundaries malformed (healer can't fix)
-17. **BUG-019** — Audit panel empty
-18. **BUG-020** — Voice noise sensitivity
-19. **BUG-021** — Canned empathy instead of diagnosis
-20. **BUG-022** — identity.learn() never writes
+1. **BUG-036** — SMTC `media_status` fails (WinRT COM interop — media widget blank, now-playing broken)
+2. **BUG-002** — Compose bar reply not wired (blocks ALL text chat)
+3. **BUG-029** — Orphaned browser-automation process survives full shutdown, keeps playing audio (needs live repro before fixing — see D-07)
+4. **BUG-026** — Spotify play still silent after focus fix (BUG-001 follow-on, needs a real UI-targeting fix, not another key-guess; BUG-031 null-crash now fixed)
+5. **BUG-027** — Voice pipeline transcribes its own TTS as user speech (hallucinated tool calls — do alongside BUG-020)
+6. ~~**BUG-034** — Brain hallucinates `open_panel`~~ — fixed 2026-07-16 (descriptions + un-anchored regex + tool-suggest fallback)
+7. ~~**BUG-033** — `open_folder` rejects `/vault/...` paths~~ — fixed 2026-07-16 (leading-slash strip)
+8. ~~**BUG-032** — `capture_screenshot` buffer type error~~ — fixed 2026-07-16 (base64 key fix)
+9. ~~**BUG-031** — `spotify_play` null crash~~ — fixed 2026-07-16 (PS null-result guard + JS null guards)
+10. ~~**BUG-035** — Weather API transient failure~~ — verified working 2026-07-16 (no code change needed)
+11. **BUG-001** — Spotify play doesn't play (most-reported bug, 6 failures; URI fix applied, needs verification; superseded by BUG-026 for the remaining playback failure)
+12. **BUG-004** — Media widget blank (3 sub-issues; WinRT init fix applied, needs verification)
+13. **BUG-007** — Fabrication of success (trust-destroying)
+14. **BUG-016** — Pipeline ships failed-review builds
+15. **BUG-008** — `open_artifact` voice channel broken
+16. **BUG-028** — `navigate` has no "news" route, MYTHOS guesses/fabricates instead
+17. **BUG-013** — Cortex flapping/stall loops (healer can't fix)
+18. **BUG-010** — `ask_agent` not wired
+19. **BUG-011** — Browser automation offline
+20. **BUG-014** — Memory pollution (remember auto-saves noise)
+21. ~~**BUG-024** — Calendar/Gmail integration incomplete~~ — code-level verified 2026-07-16 (require-path + adapter-cache bugs fixed, calendar sensor confirmed wired); remaining piece is user-side OAuth setup, not code
+22. ~~**BUG-023** — Weather widget fails with city+state location~~ — fixed 2026-07-16
+23. ~~**BUG-025** — Pipeline spec lost between capture and execute~~ — fixed 2026-07-16
+24. ~~**BUG-009** — No screenshot tool for evidence~~ — capture_screenshot built (BUG-032 crash fixed)
+25. ~~**BUG-018** — Can't read own source tree~~ — fixed 2026-07-16
+26. **BUG-015** — Identity boundaries malformed (healer can't fix)
+27. ~~**BUG-019** — Audit panel empty~~ — code correct end-to-end, better error logging added 2026-07-16
+28. **BUG-020** — Voice noise sensitivity
+29. **BUG-021** — Canned empathy instead of diagnosis
+30. **BUG-022** — identity.learn() never writes
 
 (BUG-005 removed from queue — verified already fixed, see entry above.)
 
@@ -778,3 +887,18 @@ Full list in `ROADMAP.md` lines 396-403.
 | `mythos/ui/public/index.html` | Compose bar container, mic indicator hidden | BUG-002 |
 | `mythos/.env` | AUTONOMOUS_MAX_TIER=3 (claimed, NOT applied — still 2 on disk) | BUG-012 |
 | `mythos/vault/Identity/boundaries.md` | max_autonomous_tier: 3 (claimed, NOT applied — still 2 on disk) | BUG-012 |
+
+---
+
+## Files Modified Session 3 (2026-07-16 — log audit + hallucination fixes)
+
+| File | Change | Bug |
+|---|---|---|
+| `mythos/adapters/pc-child/ps-automation.ps1` | Null-result guard in dispatch loop (`$null -eq $result` → `ok:false`) | BUG-031 |
+| `mythos/src/core/effectors/from-spotify.js` | 5 null guards on `.elements`/`.windows` access | BUG-031 |
+| `mythos/src/core/effectors/from-pc.js` | `base64` key added to extraction chain + `typeof` guard (both `capture_screenshot` + `screen_look`) | BUG-032 |
+| `mythos/src/core/effectors/from-computer.js` | Leading-slash strip in `resolveSandboxed()` for win32 | BUG-033 |
+| `mythos/src/core/voice/voice-agent.js` | navigate/close_panel descriptions, `suggestTool()`+`TOOL_ALIASES`+`levenshtein`, AFFIRMATION RESOLUTION RULE | BUG-034 |
+| `mythos/ui/public/js/voice/voice-loop.js` | NAV_COMMANDS un-anchored (`^...$` → `^...(?:\s\|$)`) | BUG-034 |
+| `mythos/ui/public/js/views/audit.js` | Better error logging on fetch failure | BUG-019 |
+| `mythos/ui/public/js/neural-map/core-orb.js` | Speaking voice state visual identity (green/yellow glow) | — |

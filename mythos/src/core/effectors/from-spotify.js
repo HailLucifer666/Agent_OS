@@ -37,7 +37,7 @@ async function getSpotifyWindow() {
   if (!pcEffectors) return fail('PC effectors not initialized');
   const result = await pcEffectors.invoke('list_windows', {}, {});
   if (!result.ok) return fail(result.result);
-  const windows = result.result.windows || [];
+  const windows = (result.result && result.result.windows) || [];
   const spotifyWindow = windows.find(w =>
     w.processName && w.processName.toLowerCase().includes('spotify')
   );
@@ -55,7 +55,7 @@ async function findSpotifySearchBox(pid) {
   const result = await pcEffectors.invoke('ui_elements', { pid, depth: 4 }, {});
   if (!result.ok) return fail(result.result);
 
-  const elements = result.result.elements || [];
+  const elements = (result.result && result.result.elements) || [];
   // Find search box - typically an Edit control with "Search" in name/automationId
   const searchBox = elements.find(el =>
     el.type === 'Edit' && (
@@ -121,7 +121,7 @@ async function searchAndPlay({ query, pid }) {
   const resultsResult = await pcEffectors.invoke('ui_elements', { pid, depth: 5 }, {});
   if (!resultsResult.ok) return resultsResult;
 
-  const elements = resultsResult.result.elements || [];
+  const elements = (resultsResult.result && resultsResult.result.elements) || [];
   // Look for track items - typically ListItem or DataItem with track info
   const trackItems = elements.filter(el =>
     el.type === 'ListItem' || el.type === 'DataItem'
@@ -320,7 +320,7 @@ async function spotify_search({ query }) {
   const resultsResult = await pcEffectors.invoke('ui_elements', { pid, depth: 5 }, {});
   if (!resultsResult.ok) return resultsResult;
 
-  const elements = resultsResult.result.elements || [];
+  const elements = (resultsResult.result && resultsResult.result.elements) || [];
   const tracks = elements
     .filter(el => el.type === 'ListItem' || el.type === 'DataItem')
     .slice(0, 10)

@@ -73,7 +73,9 @@ async function media_key({ key }) {
 async function screen_look({ query }) {
   var shot = await delegate({ cmd: 'screen_look' });
   if (!shot.ok) return shot;
-  var b64 = shot.result && (shot.result.image || shot.result.png || shot.result);
+  // PS adapter returns { base64, width, height, format }
+  var b64 = shot.result && (shot.result.image || shot.result.base64 || shot.result.png);
+  if (typeof b64 !== 'string') return fail('Screenshot data not received from PC automation.');
   if (!brain || typeof brain.think !== 'function') {
     return fail('Screenshot captured but no vision brain is available to describe it.');
   }
@@ -133,8 +135,9 @@ async function capture_screenshot() {
   const path = require('path');
   var shot = await delegate({ cmd: 'screen_look' });
   if (!shot.ok) return shot;
-  var b64 = shot.result && (shot.result.image || shot.result.png || shot.result);
-  if (!b64) return fail('Screenshot data not received from PC automation.');
+  // PS adapter returns { base64, width, height, format }
+  var b64 = shot.result && (shot.result.image || shot.result.base64 || shot.result.png);
+  if (typeof b64 !== 'string') return fail('Screenshot data not received from PC automation.');
 
   // Get vault root and ensure Incidents directory exists
   if (!vaultFs || typeof vaultFs.vaultPath !== 'function' || typeof vaultFs.ensureDir !== 'function') {

@@ -69,7 +69,11 @@ function resolveSandboxed(raw) {
     if (!raw || !String(raw).trim()) return { ok: false, reason: 'A path is required.' };
     if (isUncPath(raw)) return { ok: false, reason: 'Network (UNC) paths are not allowed.' };
 
-    const expanded = String(raw).replace(/%USERPROFILE%/gi, os.homedir());
+    // On win32, a leading "/" is almost always a Linux-trained AI mistake
+    // (e.g. "/vault/builds" instead of "vault/builds"). Strip it so
+    // path.resolve treats it as relative, not as drive-root absolute.
+    var cleaned = String(raw).replace(/^\/+/, '');
+    const expanded = cleaned.replace(/%USERPROFILE%/gi, os.homedir());
     const resolved = path.resolve(expanded);
     if (hasReservedDeviceName(resolved)) {
       return { ok: false, reason: 'That path name is reserved by Windows and cannot be used.' };
