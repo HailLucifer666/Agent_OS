@@ -344,38 +344,38 @@ function Handle-ListWindows {
     return @{ windows = $windows; total = $all.Count }
 }
 
-function Handle-FocusWindow($pid) {
-    if (-not $pid) { return 'PID is required.' }
+function Handle-FocusWindow($TargetPid) {
+    if (-not $TargetPid) { return 'PID is required.' }
     try {
-        $proc = Get-Process -Id $pid -ErrorAction Stop
+        $proc = Get-Process -Id $TargetPid -ErrorAction Stop
         $hwnd = $proc.MainWindowHandle
         if ($hwnd -eq [IntPtr]::Zero) {
-            return ('Process ' + $pid + ' has no main window.')
+            return ('Process ' + $TargetPid + ' has no main window.')
         }
         # Restore if minimized, then bring to foreground
         [NativeInput]::ShowWindow($hwnd, [NativeInput]::SW_RESTORE) | Out-Null
         Start-Sleep -Milliseconds 100
         [NativeInput]::SetForegroundWindow($hwnd) | Out-Null
-        return @{ pid = $pid; focused = $true }
+        return @{ pid = $TargetPid; focused = $true }
     } catch {
-        return ('Cannot focus PID ' + $pid + ': ' + $_.Exception.Message)
+        return ('Cannot focus PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
 }
 
-function Handle-CloseWindow($pid) {
-    if (-not $pid) { return 'PID is required.' }
+function Handle-CloseWindow($TargetPid) {
+    if (-not $TargetPid) { return 'PID is required.' }
     try {
-        $proc = Get-Process -Id $pid -ErrorAction Stop
+        $proc = Get-Process -Id $TargetPid -ErrorAction Stop
         $proc.CloseMainWindow() | Out-Null
         # Wait briefly for graceful close
         $closed = $proc.WaitForExit(3000)
         if ($closed) {
-            return @{ pid = $pid; closed = $true; graceful = $true }
+            return @{ pid = $TargetPid; closed = $true; graceful = $true }
         } else {
-            return @{ pid = $pid; closed = $false; note = 'Window did not close gracefully in 3s' }
+            return @{ pid = $TargetPid; closed = $false; note = 'Window did not close gracefully in 3s' }
         }
     } catch {
-        return ('Cannot close PID ' + $pid + ': ' + $_.Exception.Message)
+        return ('Cannot close PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
 }
 
@@ -407,28 +407,28 @@ function Handle-ScreenLook($query) {
     }
 }
 
-function Handle-UiElements($pid, $depth) {
+function Handle-UiElements($TargetPid, $depth) {
     if (-not $depth) { $depth = 2 }
     try {
-        $proc = Get-Process -Id $pid -ErrorAction Stop
+        $proc = Get-Process -Id $TargetPid -ErrorAction Stop
         $hwnd = $proc.MainWindowHandle
         if ($hwnd -eq [IntPtr]::Zero) {
-            return ('Process ' + $pid + ' has no main window.')
+            return ('Process ' + $TargetPid + ' has no main window.')
         }
         # Get the window element from UIA
         $root = [System.Windows.Automation.AutomationElement]::RootElement
         $condition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $pid
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid
         )
         $windowEl = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
         if (-not $windowEl) {
-            return ('No UIA window found for PID ' + $pid)
+            return ('No UIA window found for PID ' + $TargetPid)
         }
         $elements = @()
         Walk-UIA -Element $windowEl -Depth 0 -MaxDepth $depth -Elements ([ref]$elements) -Path @()
-        return @{ elements = $elements; pid = $pid }
+        return @{ elements = $elements; pid = $TargetPid }
     } catch {
-        return ('UIA tree walk failed for PID ' + $pid + ': ' + $_.Exception.Message)
+        return ('UIA tree walk failed for PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
 }
 
@@ -464,10 +464,10 @@ function Walk-UIA($Element, $Depth, $MaxDepth, [ref]$Elements, $Path) {
     }
 }
 
-function Handle-UiClick($pid, $elementPath) {
+function Handle-UiClick($TargetPid, $elementPath) {
     if (-not $elementPath) { return 'elementPath is required.' }
     try {
-        $element = Resolve-UIAElement -Pid $pid -ElementPath $elementPath
+        $element = Resolve-UIAElement -TargetPid $TargetPid -ElementPath $elementPath
         if ($element.error) { return $element.error }
         $el = $element.element
 
@@ -495,12 +495,12 @@ function Handle-UiClick($pid, $elementPath) {
     }
 }
 
-function Handle-UiType($text, $pid, $elementPath) {
+function Handle-UiType($text, $TargetPid, $elementPath) {
     if (-not $text) { return 'Text is required.' }
     try {
         # If a target element is specified, try to set focus there first
-        if ($pid -and $elementPath) {
-            $element = Resolve-UIAElement -Pid $pid -ElementPath $elementPath
+        if ($TargetPid -and $elementPath) {
+            $element = Resolve-UIAElement -TargetPid $TargetPid -ElementPath $elementPath
             if (-not $element.error) {
                 $element.element.SetFocus()
                 Start-Sleep -Milliseconds 50
@@ -622,15 +622,15 @@ function Handle-MediaStatus {
     }
 }
 
-function Resolve-UIAElement($pid, $elementPath) {
+function Resolve-UIAElement($TargetPid, $elementPath) {
     try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
         $condition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $pid
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid
         )
         $windowEl = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
         if (-not $windowEl) {
-            return @{ error = ('No UIA window found for PID ' + $pid) }
+            return @{ error = ('No UIA window found for PID ' + $TargetPid) }
         }
         $current = $windowEl
         $treeCondition = [System.Windows.Automation.Condition]::TrueCondition

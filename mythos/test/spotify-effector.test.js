@@ -379,8 +379,8 @@ describe('BUG-026 (3rd attempt): spotify_play falls back to the keystroke path w
   });
 });
 
-describe('BUG-026 (4th attempt) part B: spotify_play prefers cua-driver over click_at when the adapter is online', () => {
-  let dir, fs, hub, bus, callOrder, cuaDriver, originalGetStatus, originalInvoke, cuaInvokeArgs;
+describe('BUG-026 (5th attempt): spotify_play prefers the cua-driver element-addressed path when the adapter is online', () => {
+  let dir, fs, hub, bus, callOrder, cuaDriver, originalGetStatus, originalInvoke, cuaCalls;
 
   before(() => {
     dir = tempVaultDir();
@@ -388,18 +388,40 @@ describe('BUG-026 (4th attempt) part B: spotify_play prefers cua-driver over cli
     bus = fakeBus();
     hub = createEffectorHub({ bus, config: {} });
     callOrder = [];
-    cuaInvokeArgs = null;
+    cuaCalls = [];
 
     // The cua-driver adapter is a singleton required directly by from-spotify.js
     // (not ctx-injected — matches from-pc.js's own pcChild require style), so we
     // stub its exported methods in place rather than re-requiring a mock module.
+    // The stub mirrors cua-driver-rs 0.8.3's real MCP result shape
+    // ({ content, structuredContent, isError }) as confirmed by live probe.
     cuaDriver = require('../adapters/cua-driver');
     originalGetStatus = cuaDriver.getStatus;
     originalInvoke = cuaDriver.invoke;
     cuaDriver.getStatus = () => ({ state: 'ONLINE', hint: null, queueDepth: 0 });
+    let clickHappened = false;
     cuaDriver.invoke = async (toolName, args) => {
-      cuaInvokeArgs = { toolName, args };
-      return { ok: true, result: { clicked: true } };
+      cuaCalls.push({ toolName, args });
+      if (toolName === 'list_windows') {
+        // Window title flips to "Artist - Track" after the click — mirrors the
+        // real playback oracle cuaPlayViaDriver verifies against.
+        return { ok: true, result: { structuredContent: { windows: [
+          { app_name: 'Spotify.exe', pid: 4242, window_id: 987, title: clickHappened ? 'Queen - Bohemian Rhapsody' : 'Spotify Premium', minimized: false }
+        ] } } };
+      }
+      if (toolName === 'bring_to_front') return { ok: true, result: { content: [] } };
+      if (toolName === 'get_window_state') {
+        return { ok: true, result: { structuredContent: { elements: [
+          ...Array.from({ length: 30 }, (_, i) => ({ element_index: i, role: 'Text', label: `filler ${i}` })),
+          { element_index: 30, role: 'Button', label: 'Play Bohemian Rhapsody by Queen' },
+          { element_index: 31, role: 'Button', label: 'Play' }
+        ] } } };
+      }
+      if (toolName === 'click') {
+        clickHappened = true;
+        return { ok: true, result: { content: [], structuredContent: { verified: true, effect: 'invoked' } } };
+      }
+      return { ok: false, result: `unexpected cua tool: ${toolName}` };
     };
 
     const mockPcEffectors = {
@@ -441,13 +463,18 @@ describe('BUG-026 (4th attempt) part B: spotify_play prefers cua-driver over cli
     cleanupVaultDir(dir);
   });
 
-  it('calls cua-driver at the play control center and reports method: cua-driver, skipping click_at/send_key', async () => {
+  it('clicks the matching track play button by element_index and reports method: cua-driver, skipping click_at/send_key', async () => {
     const result = await hub.invoke('spotify_play', { query: 'Bohemian Rhapsody' }, {});
     assert.equal(result.ok, true);
     assert.equal(result.result.method, 'cua-driver');
-    assert.ok(cuaInvokeArgs, 'cua-driver.invoke was called');
-    assert.equal(cuaInvokeArgs.args.x, 120);
-    assert.equal(cuaInvokeArgs.args.y, 220);
+    const clickCall = cuaCalls.find(c => c.toolName === 'click');
+    assert.ok(clickCall, 'cua-driver click was called');
+    assert.equal(clickCall.args.element_index, 30, 'clicks the query-matched track play button, not the bare transport Play');
+    assert.equal(clickCall.args.pid, 4242);
+    assert.equal(clickCall.args.window_id, 987);
+    assert.equal(result.result.clickedElement, 'Play Bohemian Rhapsody by Queen');
+    assert.equal(result.result.verified, true, 'window-title oracle confirmed playback');
+    assert.equal(result.result.nowPlaying, 'Queen - Bohemian Rhapsody');
     assert.ok(!callOrder.includes('click_at'), 'click_at must not be used when cua-driver succeeds');
     assert.ok(!callOrder.includes('send_key'), 'send_key must not be used when cua-driver succeeds');
   });

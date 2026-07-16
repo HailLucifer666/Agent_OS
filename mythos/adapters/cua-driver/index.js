@@ -12,18 +12,21 @@
 // to a keystroke guess. cua-driver UIA-hit-tests the exact pixel and invokes whatever
 // control sits there, which can succeed even when the element has no matching name.
 //
-// KNOWN GAP (do not remove this comment until resolved): the plan this adapter was
-// built from could not confirm cua-driver's exact MCP tool names/params from public
-// docs alone (its README does not fully document the tools/list response). This file
-// therefore assumes the standard MCP stdio JSON-RPC framing (one JSON-RPC message per
-// line, per the MCP spec) for the transport, but the *tool name* passed to invoke() by
-// callers is a PLACEHOLDER — see from-spotify.js's call site. Before this is trusted in
-// production: install cua-driver, run `cua-driver doctor`, start `cua-driver mcp`, and
-// inspect its real tools/list response; update the placeholder tool name + arg shape
-// to match. Until then this adapter degrades cleanly (getStatus() never reports ONLINE
-// unless it genuinely completed the MCP initialize handshake against a real process).
+// TOOL SURFACE CONFIRMED (2026-07-17, cua-driver-rs 0.8.3 installed + probed live
+// via MCP tools/list): 39 tools. The ones this codebase uses:
+//   list_windows                      — top-level windows w/ HWNDs
+//   get_window_state {pid, window_id} — UIA tree as structuredContent.elements[]
+//                                       (each actionable element has element_index)
+//   click {pid, window_id, element_index, delivery_mode?} — element-addressed click;
+//       'background' (default) uses UIA Invoke/PostMessage without fronting; returns
+//       a structured background_unavailable error for Chromium/Electron surfaces →
+//       re-issue the SAME click with delivery_mode:'foreground' (brief SetForeground
+//       swap + SendInput, prior foreground restored).
+// Responses: JSON-RPC result = { content: [...], structuredContent: {...}, isError }.
 
 const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const { createLogger } = require('../../src/core/logger');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
@@ -33,6 +36,20 @@ const RESTART_BACKOFF_MS = [2000, 5000];
 const COMMAND_TIMEOUT_MS = 15000;
 const STARTUP_TIMEOUT_MS = 5000;
 const BINARY_NAME = 'cua-driver';
+
+// The official installer puts the binary here and adds it to the USER PATH — but a
+// server process started before the PATH change (or from a non-login context) won't
+// see it. Prefer the absolute install location when it exists.
+function resolveBinary() {
+  const installed = path.join(
+    process.env.LOCALAPPDATA || '',
+    'Programs', 'Cua', 'cua-driver', 'bin', 'cua-driver.exe'
+  );
+  try {
+    if (process.env.LOCALAPPDATA && fs.existsSync(installed)) return installed;
+  } catch (_) { /* fall through to PATH lookup */ }
+  return BINARY_NAME;
+}
 
 // Module-level singleton state
 let child = null;
@@ -139,8 +156,10 @@ function sendRequest(method, params) {
   });
 }
 
-// Call a cua-driver MCP tool. toolName/args are caller-supplied — see the
-// KNOWN GAP note above: names are unconfirmed against a real install.
+// Call a cua-driver MCP tool (names confirmed against 0.8.3 — see header).
+// Returns { ok, result } where result is the FULL MCP tool result object
+// ({ content, structuredContent, isError }) so callers can read
+// structuredContent.elements etc.; on failure result is an error string.
 async function invoke(toolName, args) {
   if (state !== 'ONLINE') {
     return { ok: false, result: hint || 'cua-driver unavailable' };
@@ -151,7 +170,7 @@ async function invoke(toolName, args) {
       return { ok: false, result: resp.error.message || 'cua-driver tool call failed' };
     }
     const result = resp.result || {};
-    return { ok: !result.isError, result: result.content !== undefined ? result.content : result };
+    return { ok: !result.isError, result };
   } catch (err) {
     return { ok: false, result: err.message };
   }
@@ -164,7 +183,7 @@ function spawnChild() {
 
   let proc;
   try {
-    proc = spawn(BINARY_NAME, ['mcp'], { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    proc = spawn(resolveBinary(), ['mcp'], { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     state = 'OFFLINE';
     hint = `Failed to spawn ${BINARY_NAME}: ${err.message}`;
@@ -235,6 +254,9 @@ function spawnChild() {
     clientInfo: { name: 'mythos', version: '1.0.0' }
   }).then((resp) => {
     if (resp && resp.result && state !== 'OFFLINE') {
+      // MCP spec: client must send the initialized notification (no id, no
+      // response expected) before issuing tools/* requests.
+      try { child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n'); } catch (_) {}
       state = 'ONLINE';
       log.info('cua-driver.online', {});
     } else if (state !== 'OFFLINE') {

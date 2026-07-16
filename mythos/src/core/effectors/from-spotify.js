@@ -6,8 +6,8 @@
 
 const path = require('path');
 const { effectorFromTool } = require('./adapter');
-// BUG-026 (4th attempt) part B — see adapters/cua-driver/index.js for the KNOWN GAP note (tool
-// name below is a placeholder pending real discovery against an installed binary).
+// BUG-026: cua-driver tool surface confirmed live against cua-driver-rs 0.8.3
+// (2026-07-17) — see adapters/cua-driver/index.js header for the tool list.
 // Direct require (not ctx-injected), matching from-pc.js's own pcChild require style.
 const cuaDriver = require('../../../adapters/cua-driver');
 
@@ -97,6 +97,145 @@ function findPlayControl(elements) {
 async function typeText(pid, elementPath, text) {
   if (!pcEffectors) return fail('PC effectors not initialized');
   return pcEffectors.invoke('ui_type', { pid, elementPath, text }, {});
+}
+
+// ---- cua-driver element-addressed play path (BUG-026, verified against 0.8.3) ----
+
+function cuaSC(result) {
+  return (result && typeof result === 'object' && result.structuredContent) || {};
+}
+
+function cuaErrText(result) {
+  if (typeof result === 'string') return result;
+  if (result && Array.isArray(result.content) && result.content[0] && result.content[0].text) {
+    return result.content[0].text.slice(0, 300);
+  }
+  try { return JSON.stringify(result).slice(0, 300); } catch (_) { return 'unknown cua error'; }
+}
+
+function cuaQueryTerms(query) {
+  return String(query || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
+}
+
+// Rank the play controls from a get_window_state elements array against the
+// query. Spotify's search page exposes one "Play <label>" button per result
+// row (tracks, playlists, albums, artists all mixed in one grid — confirmed
+// live: no section info survives into the accessibility tree). Score = query
+// terms matched in the label; ties break toward the SHORTER label (the bare
+// canonical track beats "<something> — <track>" compilation/playlist cards).
+// Selection alone cannot reliably separate a track from a same-named playlist,
+// so the caller click-verifies each candidate in order (see cuaPlayViaDriver).
+function rankCuaPlayCandidates(elements, query) {
+  if (!Array.isArray(elements)) return [];
+  const playButtons = elements.filter(e =>
+    e && (e.role || '').toLowerCase() === 'button' && /^play\b/i.test(e.label || '')
+  );
+  const terms = cuaQueryTerms(query);
+  if (!terms.length) return playButtons;
+  return playButtons
+    .map(b => ({
+      b,
+      score: terms.filter(t => (b.label || '').toLowerCase().includes(t)).length,
+      len: (b.label || '').length
+    }))
+    .filter(s => s.score > 0)
+    .sort((a, z) => (z.score - a.score) || (a.len - z.len))
+    .map(s => s.b);
+}
+
+// Read Spotify's window title via cua-driver — when a track is playing the
+// title becomes "Artist - Track", which makes it a cheap playback oracle.
+async function cuaSpotifyWindowTitle() {
+  const lw = await cuaDriver.invoke('list_windows', {});
+  if (!lw.ok) return null;
+  const wins = cuaSC(lw.result).windows || [];
+  const w = wins.find(x => (x.app_name || '').toLowerCase().includes('spotify'));
+  return w ? (w.title || null) : null;
+}
+
+// Full cua-driver play flow: find Spotify's window, front it (Chromium only
+// exposes its accessibility tree once rendered — confirmed live: minimized
+// Spotify returns a 1-element tree, fronted returns 350+), walk the tree with
+// warm-up retries (Chromium builds the a11y tree lazily on first UIA query),
+// click the play control by element_index (background delivery first; the
+// driver returns a structured background_unavailable error for surfaces that
+// need real input, in which case the SAME click is re-issued as foreground).
+async function cuaPlayViaDriver(query) {
+  const lw = await cuaDriver.invoke('list_windows', {});
+  if (!lw.ok) return fail(`cua list_windows: ${cuaErrText(lw.result)}`);
+  const wins = cuaSC(lw.result).windows || [];
+  const w = wins.find(x => (x.app_name || '').toLowerCase().includes('spotify'));
+  if (!w) return fail('cua: no Spotify window found');
+
+  await cuaDriver.invoke('bring_to_front', { pid: w.pid, window_id: w.window_id });
+
+  // Walk the tree until QUERY-MATCHED play buttons appear — not merely until the
+  // tree is non-trivial. Two live-confirmed reasons a walk comes back useless:
+  // (a) Chromium builds its accessibility tree lazily on the first UIA query
+  // (minimized Spotify exposes 1 element, fronted 350+), and (b) back-to-back
+  // searches can serve the PREVIOUS query's still-rendered results page for a
+  // couple seconds — its buttons exist but don't match this query.
+  let elements = [];
+  let candidates = [];
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await new Promise(r => setTimeout(r, attempt === 0 ? 1200 : 2000));
+    const gws = await cuaDriver.invoke('get_window_state', {
+      pid: w.pid, window_id: w.window_id, include_screenshot: false, max_elements: 5000
+    });
+    if (!gws.ok) continue;
+    elements = cuaSC(gws.result).elements || [];
+    candidates = rankCuaPlayCandidates(elements, query);
+    if (candidates.length) break;
+  }
+  if (!elements.length) return fail('cua: empty accessibility tree from Spotify window');
+  if (!candidates.length) return fail(`cua: no play control matching the query among ${elements.length} elements`);
+
+  // Click-verify loop (confirmed live 2026-07-17): selection alone can pick a
+  // same-named playlist over the track, so after each click the window title
+  // ("Artist - Track" while playing) is checked against the query; a mismatch
+  // moves on to the next-best candidate. Max 3 attempts keeps voice latency
+  // bounded (~15s worst case) while self-correcting the playlist-vs-track case.
+  const terms = cuaQueryTerms(query);
+  // Strict-majority term match — anything laxer is fooled by the artist name
+  // alone (live-confirmed twice: "Queen - Somebody To Love" passed for
+  // "Bohemian Rhapsody Queen" at 1-of-3, and "The Weeknd - Cry For Me" passed
+  // for "Starboy Weeknd" at 1-of-2, both because a same-named playlist started
+  // a different song by the right artist). ceil(0.6n): 1→1, 2→2, 3→2, 4→3 —
+  // the playing window title ("Artist - Track") carries both artist and track,
+  // so a correct play always clears this bar.
+  const requiredMatches = Math.max(1, Math.ceil(terms.length * 0.6));
+  let lastClicked = null;
+  for (const target of candidates.slice(0, 4)) {
+    const clickArgs = { pid: w.pid, window_id: w.window_id, element_index: target.element_index };
+    let click = await cuaDriver.invoke('click', clickArgs);
+    // Escalate to foreground on either signal (confirmed live against Spotify):
+    // (a) a structured background_unavailable error, or (b) an "ok" response
+    // whose structuredContent says verified:false — Chromium silently DROPS
+    // posted background clicks (Spotify's play buttons are hover-rendered DOM),
+    // so an unverified background post means nothing happened. The foreground
+    // SendInput click is what actually starts playback (SMTC-oracle proven).
+    const bgUnverified = click.ok && cuaSC(click.result).verified === false;
+    if (bgUnverified || (!click.ok && /background_unavailable/i.test(cuaErrText(click.result)))) {
+      click = await cuaDriver.invoke('click', { ...clickArgs, delivery_mode: 'foreground' });
+    }
+    if (!click.ok) continue;
+    lastClicked = target;
+
+    await new Promise(r => setTimeout(r, 2500));
+    const title = (await cuaSpotifyWindowTitle()) || '';
+    const matched = terms.filter(t => title.toLowerCase().includes(t)).length;
+    if (matched >= requiredMatches) {
+      return ok({ clickedElement: target.label || null, verified: true, nowPlaying: title });
+    }
+  }
+  if (!lastClicked) return fail('cua: every candidate click failed');
+  // Clicked but the playing title never matched the query — report honestly
+  // (BUG-007 discipline) instead of claiming the requested song is on.
+  return ok({
+    clickedElement: lastClicked.label || null,
+    verified: false,
+    note: 'clicked a play control but the playing title did not match the query'
+  });
 }
 
 async function searchAndPlay({ query, pid }) {
@@ -220,6 +359,22 @@ async function spotify_play({ query, trackId }) {
     focusWarning = `could not focus Spotify before playback: ${win.result}`;
   }
 
+  // BUG-026 (5th attempt, 2026-07-17): cua-driver element-addressed click, fully
+  // independent of the legacy ui_elements walk below. The driver walks Spotify's
+  // real Chromium accessibility tree (with warm-up retries) and clicks the
+  // per-track "Play <title> by <artist>" button by element_index — no pixel
+  // guessing, no focus guessing. Adapter OFFLINE (binary absent) skips this
+  // block entirely; any cua failure falls through to the click_at tier unchanged.
+  if (cuaDriver.getStatus().state === 'ONLINE') {
+    const cuaResult = await cuaPlayViaDriver(query);
+    if (cuaResult.ok) {
+      return ok({ ...cuaResult.result, method: 'cua-driver', focusWarning });
+    }
+    focusWarning = focusWarning
+      ? `${focusWarning}; cua-driver path failed: ${cuaResult.result}`
+      : `cua-driver path failed: ${cuaResult.result}`;
+  }
+
   // BUG-026 (3rd attempt): the previous two fixes (focus+Enter, then
   // focus+Tab+Enter) both used keystrokes to *guess* which UI element has
   // focus — live testing showed Enter kept landing back in the search box
@@ -234,25 +389,6 @@ async function spotify_play({ query, trackId }) {
       if (playControl) {
         const cx = Math.round(playControl.rect.x + playControl.rect.width / 2);
         const cy = Math.round(playControl.rect.y + playControl.rect.height / 2);
-
-        // BUG-026 (4th attempt) part B: try cua-driver first — it UIA-hit-tests the exact pixel
-        // and invokes whatever control is found there, which is more robust than a
-        // raw SendInput click_at against Chromium/CEF UIs. Purely additive: if the
-        // adapter was never started (not installed / user hasn't opted in yet),
-        // getStatus().state stays 'OFFLINE' and this block is skipped entirely,
-        // falling straight through to the existing click_at path below unchanged.
-        if (cuaDriver.getStatus().state === 'ONLINE') {
-          // PLACEHOLDER tool name — confirm against real cua-driver tools/list
-          // output once installed (see adapters/cua-driver/index.js KNOWN GAP note).
-          const cuaResult = await cuaDriver.invoke('click_at_uia_hittest', { x: cx, y: cy });
-          if (cuaResult.ok) {
-            const extra = (cuaResult.result && typeof cuaResult.result === 'object') ? cuaResult.result : {};
-            return ok({ ...extra, method: 'cua-driver', x: cx, y: cy, focusWarning });
-          }
-          focusWarning = focusWarning
-            ? `${focusWarning}; cua-driver click failed: ${cuaResult.result}`
-            : `cua-driver click failed: ${cuaResult.result}`;
-        }
 
         const clickResult = await clickAt(cx, cy);
         if (clickResult.ok) {
