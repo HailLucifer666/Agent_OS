@@ -24,12 +24,60 @@
 
 $ErrorActionPreference = 'Continue'
 
+# ---- DPI awareness ----
+# BUG-026 (4th attempt, part A): PowerShell 5.1 is not DPI-aware by default. On any display scaled
+# above 100%, that leaves UIA's BoundingRectangle (queried against DPI-aware target
+# apps, which report true physical-pixel coordinates) out of sync with this process's
+# own unaware/virtualized view of the screen -- Click-AtScreenCoords and Screen.Bounds
+# below then normalize against the wrong scale and clicks land in the wrong spot. Must
+# run before any UIA/Screen/SendInput usage, so it's the very first thing after startup.
+Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public class DpiHelper {
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDpiAwarenessContext(int dpiFlag);
+}
+'@
+[void][DpiHelper]::SetProcessDpiAwarenessContext(-4) # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+
 # ---- P/Invoke Setup ----
 # Load UIA and define SendInput types once at startup
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+# ---- WinRT async bridging ----
+# BUG-004: IAsyncOperation<T> (WinRT) does NOT implement .Wait()/.Result the way a
+# real System.Threading.Tasks.Task does. Calling .Wait() directly on a raw WinRT
+# operation throws at runtime. Reflectively invoke the generic AsTask<TResult>
+# extension from System.WindowsRuntimeSystemExtensions to bridge to a real Task first,
+# then .Wait()/.Result on THAT.
+#
+# BUG-004 (regression, 3rd pass -- root cause confirmed live, not theorized): the
+# object returned by a WinRT static async method obtained via [Type]::GetType(...)
+# comes back as a raw late-bound System.__ComObject, not a strongly-typed managed
+# proxy. .GetType().GetInterfaces() on a System.__ComObject returns an EMPTY array --
+# .NET reflection cannot discover COM-interop objects' implemented interfaces this way.
+# So the previous version's attempt to derive $resultType via
+# `$WinRtOp.GetType().GetInterface('IAsyncOperation``1')` always returned $null, and
+# .GetGenericArguments() on that null threw "You cannot call a method on a
+# null-valued expression." -- confirmed by direct reproduction in a live PowerShell
+# session against this machine's real SMTC session before writing this fix.
+# Fix: the caller always statically knows the expected result type already (it's
+# resolved the exact same way $type is above, via [Type]::GetType(...,
+# ContentType=WindowsRuntime)) -- so require it explicitly instead of trying to
+# infer it from an object that can't be reflected.
+$AsTaskGeneric = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
+} | Select-Object -First 1
+
+function Await-WinRTOperation($WinRtOp, [type]$ResultType) {
+    $task = $AsTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($WinRtOp))
+    $task.Wait()
+    return $task.Result
+}
 
 Add-Type -TypeDefinition @'
 using System;
@@ -435,12 +483,11 @@ function Handle-MediaStatus {
         }
 
         # Get the session manager
-        $sessionManagerTask = $type::RequestAsync()
-        $sessionManagerTask.Wait()
-        if ($sessionManagerTask.Status -ne 'RanToCompletion') {
+        $sessionManagerOp = $type::RequestAsync()
+        $sessionManager = Await-WinRTOperation $sessionManagerOp $type
+        if (-not $sessionManager) {
             return @{ available = $true; playing = $false; error = 'Failed to get session manager' }
         }
-        $sessionManager = $sessionManagerTask.Result
 
         # Get current session
         $currentSession = $sessionManager.GetCurrentSession()
@@ -456,9 +503,9 @@ function Handle-MediaStatus {
         $isPlaying = ($playbackStatus -eq 'Playing')
 
         # Get media properties (title, artist, album, thumbnail)
-        $mediaPropsTask = $currentSession.TryGetMediaPropertiesAsync()
-        $mediaPropsTask.Wait()
-        $mediaProps = $mediaPropsTask.Result
+        $mediaPropsType = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $mediaPropsOp = $currentSession.TryGetMediaPropertiesAsync()
+        $mediaProps = Await-WinRTOperation $mediaPropsOp $mediaPropsType
 
         $result = @{
             available = $true
@@ -475,10 +522,15 @@ function Handle-MediaStatus {
             if ($mediaProps.Thumbnail) {
                 $streamRef = $mediaProps.Thumbnail
                 if ($streamRef) {
-                    $streamTask = $streamRef.OpenReadAsync()
-                    $streamTask.Wait()
-                    if ($streamTask.Status -eq 'RanToCompletion') {
-                        $stream = $streamTask.Result
+                    # NOTE: not live-verified against a track that actually has a
+                    # thumbnail (current test track had none) -- resolved via the
+                    # same [Type]::GetType(...,ContentType=WindowsRuntime) pattern
+                    # proven to work for the two calls above; same mechanism, not
+                    # a new assumption.
+                    $streamType = [Type]::GetType('Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+                    $streamOp = $streamRef.OpenReadAsync()
+                    $stream = Await-WinRTOperation $streamOp $streamType
+                    if ($stream) {
                         $reader = [Windows.Storage.Streams.DataReader]::FromBuffer($stream.GetBuffer())
                         $bytes = New-Object byte[] $stream.Size
                         $reader.ReadBytes($bytes)

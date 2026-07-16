@@ -61,6 +61,7 @@ const { createServer } = require('../server');
 const fs = require('fs');
 const browserAgent = require('../adapters/browser-agent');
 const pcChild = require('../adapters/pc-child');
+const cuaDriver = require('../adapters/cua-driver');
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
@@ -452,6 +453,13 @@ async function main() {
       // Start PC child (PowerShell automation daemon) for desktop control tools.
       pcChild.startPcChild();
       logger.info('pc-child.starting', {});
+
+      // BUG-026 (4th attempt) part B — optional cua-driver adapter for the Spotify click path.
+      // Degraded, not fatal: if the binary isn't installed, spawn ENOENT is caught
+      // inside the adapter itself and getStatus() just stays OFFLINE forever, so
+      // spotify_play() falls back to the existing UIA/keystroke path unchanged.
+      cuaDriver.startCuaDriver();
+      logger.info('cua-driver.starting', {});
     }},
 
     { name: 'cortex', fn: function() {
@@ -541,6 +549,7 @@ async function main() {
   function stopRunningLoops() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     pcChild.shutdownPcChild();
+    cuaDriver.shutdownCuaDriver();
     browserAgent.disconnect();
     if (edgeTtsChild) edgeTtsChild.stop();
     if (timerSensor) timerSensor.stop();

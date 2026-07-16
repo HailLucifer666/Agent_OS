@@ -379,6 +379,132 @@ describe('BUG-026 (3rd attempt): spotify_play falls back to the keystroke path w
   });
 });
 
+describe('BUG-026 (4th attempt) part B: spotify_play prefers cua-driver over click_at when the adapter is online', () => {
+  let dir, fs, hub, bus, callOrder, cuaDriver, originalGetStatus, originalInvoke, cuaInvokeArgs;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    callOrder = [];
+    cuaInvokeArgs = null;
+
+    // The cua-driver adapter is a singleton required directly by from-spotify.js
+    // (not ctx-injected — matches from-pc.js's own pcChild require style), so we
+    // stub its exported methods in place rather than re-requiring a mock module.
+    cuaDriver = require('../adapters/cua-driver');
+    originalGetStatus = cuaDriver.getStatus;
+    originalInvoke = cuaDriver.invoke;
+    cuaDriver.getStatus = () => ({ state: 'ONLINE', hint: null, queueDepth: 0 });
+    cuaDriver.invoke = async (toolName, args) => {
+      cuaInvokeArgs = { toolName, args };
+      return { ok: true, result: { clicked: true } };
+    };
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        callOrder.push(tool);
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        if (tool === 'ui_elements') {
+          return {
+            ok: true,
+            result: {
+              elements: [
+                {
+                  name: 'Play',
+                  type: 'ControlType.Button',
+                  automationId: 'play-button',
+                  rect: { x: 100, y: 200, width: 40, height: 40 }
+                }
+              ]
+            }
+          };
+        }
+        // click_at/send_key must never fire once cua-driver succeeds.
+        if (tool === 'click_at') return { ok: true, result: { clicked: true, x: args.x, y: args.y } };
+        if (tool === 'send_key') return { ok: true, result: { sent: true, key: args.key } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => {
+    cuaDriver.getStatus = originalGetStatus;
+    cuaDriver.invoke = originalInvoke;
+    cleanupVaultDir(dir);
+  });
+
+  it('calls cua-driver at the play control center and reports method: cua-driver, skipping click_at/send_key', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Bohemian Rhapsody' }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.method, 'cua-driver');
+    assert.ok(cuaInvokeArgs, 'cua-driver.invoke was called');
+    assert.equal(cuaInvokeArgs.args.x, 120);
+    assert.equal(cuaInvokeArgs.args.y, 220);
+    assert.ok(!callOrder.includes('click_at'), 'click_at must not be used when cua-driver succeeds');
+    assert.ok(!callOrder.includes('send_key'), 'send_key must not be used when cua-driver succeeds');
+  });
+});
+
+describe('BUG-026 (4th attempt) part B: spotify_play falls back to click_at when cua-driver is offline (regression — default/unmodified adapter)', () => {
+  let dir, fs, hub, bus, clickAtArgs;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    clickAtArgs = null;
+
+    // Deliberately does NOT stub adapters/cua-driver — the real singleton's
+    // getStatus() stays OFFLINE (side-effect-free require, start() never
+    // called in the test process), so this exercises the untouched fallback.
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        if (tool === 'ui_elements') {
+          return {
+            ok: true,
+            result: {
+              elements: [
+                { name: 'Play', type: 'ControlType.Button', automationId: 'play-button', rect: { x: 100, y: 200, width: 40, height: 40 } }
+              ]
+            }
+          };
+        }
+        if (tool === 'click_at') {
+          clickAtArgs = args;
+          return { ok: true, result: { clicked: true, x: args.x, y: args.y } };
+        }
+        if (tool === 'send_key') return { ok: true, result: { sent: true, key: args.key } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('uses click_at with method: click_at when cua-driver is unavailable', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Bohemian Rhapsody' }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.method, 'click_at');
+    assert.ok(clickAtArgs, 'click_at was invoked as the fallback');
+  });
+});
+
 describe('BUG-007 discipline: spotify_play does not fabricate success when every path fails', () => {
   let dir, fs, hub, bus;
 

@@ -629,6 +629,31 @@ describe('immune/announcer', function() {
     await sleep(10);
     announcer.stop();
   });
+
+  it('BUG-030: dedups repeated health.diagnosed for the same kind+target within the cooldown, re-speaks after it elapses', async function() {
+    var bus = fakeBus();
+    var spoken = [];
+    var { createAnnouncer } = require('../src/core/immune/announcer');
+    var announcer = createAnnouncer({
+      bus: bus,
+      config: { ANNOUNCER_REANNOUNCE_MS: 30 }, // short cooldown so the test doesn't wait 10 real minutes
+      speak: function(text) { spoken.push(text); return Promise.resolve(); }
+    });
+    announcer.start();
+
+    // probes.js re-emits every 4s with no dedup by design — simulate two rapid repeats.
+    bus.emit('health.diagnosed', { kind: 'provider-down', target: 'mistral', severity: 'major' });
+    bus.emit('health.diagnosed', { kind: 'provider-down', target: 'mistral', severity: 'major' });
+    await sleep(10);
+    assert.equal(spoken.length, 1, 'second announcement within the cooldown window must be suppressed');
+
+    await sleep(30); // let the cooldown elapse
+    bus.emit('health.diagnosed', { kind: 'provider-down', target: 'mistral', severity: 'major' });
+    await sleep(10);
+    assert.equal(spoken.length, 2, 'a repeat after the cooldown window elapses should speak again');
+
+    announcer.stop();
+  });
 });
 
 // ---------------------------------------------------------------------------

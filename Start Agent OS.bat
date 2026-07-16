@@ -1,8 +1,18 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 title MYTHOS — Personal AI OS
 chcp 65001 >nul
 cd /d "%~dp0mythos"
+
+REM --- Free up MYTHOS ports from any previous run before starting -----------
+REM 4478 = main server, 5050 = edge-tts sidecar, 9222 = browser CDP debug port.
+echo Freeing previous MYTHOS ports (4478, 5050, 9222) if occupied...
+for %%P in (4478 5050 9222) do (
+    for /f "tokens=5" %%A in ('netstat -aon ^| findstr ":%%P " ^| findstr "LISTENING"') do (
+        echo   - port %%P held by PID %%A, killing...
+        taskkill /F /PID %%A >nul 2>nul
+    )
+)
 
 if not exist ".env" (
     if exist ".env.example" (

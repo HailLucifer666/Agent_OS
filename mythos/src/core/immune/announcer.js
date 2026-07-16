@@ -12,9 +12,20 @@
 
 const SEVERITY_TO_ANNOUNCE = ['critical', 'major'];
 
+// BUG-030: probes.js re-emits 'health.anomaly' every 4s (no dedup by design — healer.js's
+// cooldown depends on anomalies flowing freely) so a standing condition (e.g.
+// provider-down) reaches this announcer repeatedly. probes.js/diagnostician.js stay
+// untouched; the cooldown belongs here, at the speech point, keyed by kind+target.
+// No schema.js key for this (same precedent as breakers.js's maxResetMs) — config
+// override exists solely so tests don't have to wait out a real 10-minute window.
+const DEFAULT_REANNOUNCE_MS = 10 * 60 * 1000; // re-speak the same standing issue at most once per 10 min
+
 function createAnnouncer({ bus, config, speak }) {
   if (!bus) throw new Error('createAnnouncer requires bus');
   if (typeof speak !== 'function') throw new Error('createAnnouncer requires speak(text)');
+
+  const REANNOUNCE_MS = (config && config.ANNOUNCER_REANNOUNCE_MS) || DEFAULT_REANNOUNCE_MS;
+  const spoken = new Map(); // `${kind}:${target}` -> lastSpokenTs
 
   async function say(text) {
     try {
@@ -27,6 +38,11 @@ function createAnnouncer({ bus, config, speak }) {
   function onDiagnosed(event) {
     const d = event.payload;
     if (SEVERITY_TO_ANNOUNCE.indexOf(d.severity) === -1) return;
+    const key = d.kind + ':' + (d.target || '');
+    const now = Date.now();
+    const last = spoken.get(key);
+    if (last && now - last < REANNOUNCE_MS) return; // already said this recently — skip
+    spoken.set(key, now);
     say('Health alert: ' + d.kind + (d.target ? ' on ' + d.target : '') + '.');
   }
 

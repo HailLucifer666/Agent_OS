@@ -6,6 +6,10 @@
 
 const path = require('path');
 const { effectorFromTool } = require('./adapter');
+// BUG-026 (4th attempt) part B — see adapters/cua-driver/index.js for the KNOWN GAP note (tool
+// name below is a placeholder pending real discovery against an installed binary).
+// Direct require (not ctx-injected), matching from-pc.js's own pcChild require style.
+const cuaDriver = require('../../../adapters/cua-driver');
 
 function ok(result) {
   return { ok: true, result };
@@ -230,6 +234,26 @@ async function spotify_play({ query, trackId }) {
       if (playControl) {
         const cx = Math.round(playControl.rect.x + playControl.rect.width / 2);
         const cy = Math.round(playControl.rect.y + playControl.rect.height / 2);
+
+        // BUG-026 (4th attempt) part B: try cua-driver first — it UIA-hit-tests the exact pixel
+        // and invokes whatever control is found there, which is more robust than a
+        // raw SendInput click_at against Chromium/CEF UIs. Purely additive: if the
+        // adapter was never started (not installed / user hasn't opted in yet),
+        // getStatus().state stays 'OFFLINE' and this block is skipped entirely,
+        // falling straight through to the existing click_at path below unchanged.
+        if (cuaDriver.getStatus().state === 'ONLINE') {
+          // PLACEHOLDER tool name — confirm against real cua-driver tools/list
+          // output once installed (see adapters/cua-driver/index.js KNOWN GAP note).
+          const cuaResult = await cuaDriver.invoke('click_at_uia_hittest', { x: cx, y: cy });
+          if (cuaResult.ok) {
+            const extra = (cuaResult.result && typeof cuaResult.result === 'object') ? cuaResult.result : {};
+            return ok({ ...extra, method: 'cua-driver', x: cx, y: cy, focusWarning });
+          }
+          focusWarning = focusWarning
+            ? `${focusWarning}; cua-driver click failed: ${cuaResult.result}`
+            : `cua-driver click failed: ${cuaResult.result}`;
+        }
+
         const clickResult = await clickAt(cx, cy);
         if (clickResult.ok) {
           const extra = (clickResult.result && typeof clickResult.result === 'object') ? clickResult.result : {};
