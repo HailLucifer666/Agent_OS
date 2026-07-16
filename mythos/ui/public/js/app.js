@@ -271,7 +271,12 @@ subscribe(['proactive-speech'], (msg) => {
   if (orb.flashAction) orb.flashAction('proactive', true);
   registerReplyHandler(msg.reqId, {
     onChunk: (m) => v.onExternalChunk(m, session),
-    onDone: () => v.deliverExternalReply({ say: msg.text, speak: msg.speak }, session),
+    // Pass the real 'done' message through (same as the other reply handlers
+    // above) — it carries the `chunked` flag. Rebuilding {say, speak} here
+    // dropped that flag, so the voice loop played the streamed edge-tts
+    // chunks AND the speechSynthesis fallback at once: two different voices
+    // speaking the same greeting simultaneously.
+    onDone: (m) => v.deliverExternalReply({ ...m, say: m.say || msg.text, speak: m.speak || msg.speak }, session),
   });
 });
 
