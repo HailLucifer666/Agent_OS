@@ -41,6 +41,24 @@ function createLeash(deps) {
 
   var confirmRegistry = createConfirmRegistry({ config: config });
 
+  // BUG-012: session-scoped T3 grants for GOAL-LESS actions. The per-goal grant
+  // check below (goal.grants['3']) can never engage on the voice/conversation
+  // path — those actions always carry goalId:null — so every T3 voice action
+  // popped a confirm every single time. Accepting a confirm for one of the
+  // tools below now also grants THAT SPECIFIC TOOL for SESSION_GRANT_TTL_MS.
+  // Deliberately narrow: only repetitive local UI-interaction tools are
+  // eligible. Outward-facing or destructive T3 tools (gmail_send,
+  // compose_email, delete_goal, build/pipeline execution) stay
+  // confirm-every-time by design — do NOT widen this list without a safety
+  // review (see BUGS.md BUG-012: raising AUTONOMOUS_MAX_TIER globally was
+  // evaluated and rejected as a safety regression). In-memory only.
+  var SESSION_GRANT_TTL_MS = 15 * 60 * 1000;
+  var SESSION_GRANTABLE = {
+    spotify_play: 1, spotify_search: 1, ui_click: 1, ui_type: 1,
+    click_at: 1, send_key: 1, focus_window: 1
+  };
+  var sessionGrants = new Map(); // tool -> expiresAt (ms epoch)
+
   // Builds the Audit Trail schema entry (MYTHOS-ARCHITECTURE.md §9) and writes it.
   // Fields NOT set here (id, ts, actor) are auto-filled by memory/audit-writer.js.
   //
@@ -147,6 +165,14 @@ function createLeash(deps) {
         var grantedWrite = writeAudit(action, goalCtx.goalId, tier, 'allow', { granted: true, reason: 'goal-granted' });
         return failClosedIfUnwritable(tier, grantedWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'goal-granted' });
       }
+      // BUG-012: session grant for eligible goal-less tools (see map above).
+      if (SESSION_GRANTABLE[toolName]) {
+        var sessionExpiry = sessionGrants.get(toolName);
+        if (sessionExpiry && Date.now() < sessionExpiry) {
+          var sessionWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'allow', { granted: true, reason: 'session-granted' });
+          return failClosedIfUnwritable(tier, sessionWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'session-granted' });
+        }
+      }
       var confirm3Write = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'confirm', { reason: 'tier-3-requires-confirm' });
       return failClosedIfUnwritable(tier, confirm3Write, { allow: false, requireConfirm: true, tier: tier, reason: 'tier-3-requires-confirm' });
     }
@@ -156,9 +182,23 @@ function createLeash(deps) {
     return failClosedIfUnwritable(tier, confirm4Write, { allow: false, requireConfirm: true, tier: tier, reason: 'tier-4-always-confirm' });
   }
 
+  // BUG-012: wrap accept() so a successful T3 confirm ALSO records a session
+  // grant for eligible tools — the one place every confirm resolution flows
+  // through, regardless of which surface (WS modal, gesture, cortex) accepted.
+  var confirmApi = Object.assign({}, confirmRegistry, {
+    accept: function(confirmId, connectionId) {
+      var acceptedAction = confirmRegistry.accept(confirmId, connectionId);
+      if (acceptedAction && acceptedAction.tool &&
+          SESSION_GRANTABLE[acceptedAction.tool] && TIER_TABLE[acceptedAction.tool] === 3) {
+        sessionGrants.set(acceptedAction.tool, Date.now() + SESSION_GRANT_TTL_MS);
+      }
+      return acceptedAction;
+    }
+  });
+
   return {
     check: check,
-    confirm: confirmRegistry
+    confirm: confirmApi
   };
 }
 

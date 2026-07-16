@@ -80,6 +80,51 @@ describe('BUG-008 — open_artifact tiering', function() {
   });
 });
 
+describe('BUG-012 — session-scoped T3 grants for goal-less (voice) actions', function() {
+  function makeLeash() {
+    var { createLeash } = require('../src/core/leash');
+    return createLeash({
+      bus: fakeBus(), config: fakeConfig(), identity: noopIdentity(),
+      auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
+      effectors: noopEffectors()
+    });
+  }
+
+  it('first goal-less spotify_play requires confirm; after accept, the next one is session-granted', function() {
+    var leash = makeLeash();
+    var first = leash.check({ tool: 'spotify_play', args: { query: 'x' } }, {});
+    assert.equal(first.requireConfirm, true);
+    assert.equal(first.reason, 'tier-3-requires-confirm');
+
+    // Simulate the user accepting the confirm (same flow as handleConfirmReply).
+    var confirmId = leash.confirm.create('play x', { tool: 'spotify_play', args: { query: 'x' } }, 'conn-1');
+    var accepted = leash.confirm.accept(confirmId, 'conn-1');
+    assert.ok(accepted, 'confirm accept returns the action');
+
+    var second = leash.check({ tool: 'spotify_play', args: { query: 'y' } }, {});
+    assert.equal(second.allow, true);
+    assert.equal(second.requireConfirm, false);
+    assert.equal(second.reason, 'session-granted');
+  });
+
+  it('outward-facing T3 tools (gmail_send) are NOT session-grantable — confirm every time', function() {
+    var leash = makeLeash();
+    var confirmId = leash.confirm.create('send mail', { tool: 'gmail_send', args: {} }, 'conn-1');
+    leash.confirm.accept(confirmId, 'conn-1');
+    var next = leash.check({ tool: 'gmail_send', args: {} }, {});
+    assert.equal(next.requireConfirm, true, 'gmail_send must keep asking even after a prior accept');
+    assert.equal(next.reason, 'tier-3-requires-confirm');
+  });
+
+  it('a session grant for one tool does not leak to another tool', function() {
+    var leash = makeLeash();
+    var confirmId = leash.confirm.create('play x', { tool: 'spotify_play', args: {} }, 'conn-1');
+    leash.confirm.accept(confirmId, 'conn-1');
+    var other = leash.check({ tool: 'ui_click', args: {} }, {});
+    assert.equal(other.requireConfirm, true, 'ui_click was never individually accepted');
+  });
+});
+
 describe('leash/index — tier gates', function() {
   it('T0 tools auto-allow, no confirm', function() {
     var { createLeash } = require('../src/core/leash');

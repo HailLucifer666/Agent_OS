@@ -28,7 +28,7 @@ Maintainer: update this file as issues are resolved. Strike through the status.
 ## CRITICAL — User-Facing Breakage
 
 ### BUG-001: Spotify play doesn't play the song
-**Status:** 🔧 CODED — item 1 (URI launch guard) was already fixed in code prior to this pass; item 2 (focus window before Enter) fixed this pass with a passing regression test; item 3 (fabrication) covered separately by BUG-007, confirmed already-fixed.
+**Status:** ✅ CLOSED via BUG-026's 5th-attempt fix (2026-07-17) — playback live-verified working; see BUG-026 for the full mechanism. (Historic sub-items: URI launch guard fixed earlier; focus fix superseded — focus_window itself was broken by the `$pid` bug, see BUG-031.)
 **Severity:** CRITICAL (high-severity incident logged)
 **First reported:** 2026-07-15 | **Last seen:** 2026-07-16
 
@@ -56,7 +56,7 @@ if ($name -eq 'spotify')    # ← exact string match ONLY
 ---
 
 ### BUG-002: Text compose bar sends but reply never appears
-**Status:** 🔧 CODED — fixed per the recommended approach below; no headless DOM harness exists for this UI, so this needs a manual browser check (see verification note).
+**Status:** ✅ VERIFIED (2026-07-17) — live browser check done: typed "what day is it today?" into the real compose bar, reply caption rendered "It's Friday, July 17th." Full path proven: compose → WS utterance → voice-agent → brain (groq) → reply caption + speech chunks. (Server side additionally verified with a raw WS client: utterance → correct answer in 4.3s.)
 **Severity:** CRITICAL (blocks all text chat)
 **First reported:** 2026-07-15 (this session)
 
@@ -88,7 +88,7 @@ Route text input through the voice loop's `beginTurn()/onExternalChunk()/deliver
 ---
 
 ### BUG-004: Music/media widget shows nothing when Spotify is playing
-**Status:** 🔧 CODED (2026-07-16) — WinRT `.Wait()` bug fixed via `AsTask()` reflection bridge; NOT yet live-verified (needs a real Windows session playing something)
+**Status:** ✅ FIXED & LIVE-VERIFIED (2026-07-17) — full chain proven in the running HUD: title/artist/album/300×300 album art rendering across multiple real track changes, curly-quote titles intact. Three stacked root causes fixed along the way: (1) WinRT `.Wait()`/COM-reflection bug (explicit-type `Await-WinRTOperation`, 2026-07-16), (2) OEM-codepage JSON corruption + queue starvation (see BUG-038, the actual cause of "blank no matter what"), (3) art moved to a temp-file + `/api/media/art` route instead of base64-in-JSON.
 **Severity:** HIGH | **First reported:** 2026-07-15
 
 **Symptom:** The "NOW PLAYING" widget is blank when a song is playing on Spotify.
@@ -284,7 +284,7 @@ Ran `node --test mythos/test/capture-screenshot.test.js` — **3/3 pass**.
 ---
 
 ### BUG-012: Approval popup on every action
-**Status:** ❌ NOT FIXED — re-opened 2026-07-16 (previously marked ✅ FIXED 2026-07-15; that status was false)
+**Status:** ✅ FIXED (2026-07-17) — root cause: T3's "confirm-once-per-goal" grant lives on the goal record (`goal.grants['3']`), but the voice/conversation path always carries `goalId:null`, so the grant cache could never engage there — every T3 voice action asked every time (live audit entries confirmed: `"tool":"spotify_play","tier":3,"decision":"confirm","goalId":null`). Fix (NOT a global ceiling raise — that stays rejected as a safety regression, see analysis below): **session-scoped per-tool grants** in `leash/index.js`. Accepting a confirm for an eligible tool grants THAT tool for 15 minutes. Eligible list is deliberately narrow (spotify_play, spotify_search, ui_click, ui_type, click_at, send_key, focus_window); outward-facing/destructive T3 tools (gmail_send, compose_email, delete_goal, build/pipeline execution) still confirm every time by design. 3 regression tests added (grant engages, gmail_send never grantable, no cross-tool leakage) — 20/20 leash tests pass. Live voice-flow check pending the user's next session.
 **Severity:** HIGH | **Re-investigated:** 2026-07-16
 
 **Root cause:** `AUTONOMOUS_MAX_TIER=2` + `max_autonomous_tier: 2`. Many common actions are T3 (ui_click, ui_type, spotify_play, compose_email, build_project). T3 > ceiling(2) → popup.
@@ -433,7 +433,7 @@ Ran `node --test mythos/test/bug-016-failed-review-not-shipped.test.js` — **2/
 ## LOW — Quality / Polish
 
 ### BUG-019: Audit panel shows no audits
-**Status:** 🔧 CODED — fetch-on-mount endpoint added; headless DOM verification pending
+**Status:** ✅ VERIFIED (2026-07-17) — `GET /api/audit/recent` returns real entries live (spotify_play tier-3 confirm/completed records observed).
 **Severity:** LOW | **Reported:** 07-16
 
 **Symptom:** User opened the audit panel — it was empty, even though incident logs were being written to disk.
@@ -609,7 +609,7 @@ Run: `node --test test/bug-024-gmail-calendar.test.js` → 5 pass, 0 fail.
 ---
 
 ### BUG-026: Spotify play still doesn't start playback after the focus fix (BUG-001 follow-on)
-**Status:** 🔧 CODED (4th attempt, 2026-07-16) — DPI-awareness fix (part A) + optional cua-driver adapter (part B) added; unit-tested, NOT yet live-verified against the real Spotify install (part B additionally needs the user to install cua-driver themselves — see note below). Do not mark this ✅ until a human confirms a 10/10 live play-through.
+**Status:** ✅ FIXED & LIVE-VERIFIED (5th attempt, 2026-07-17, commit `756966e`) — **music actually plays**; user confirmed live. cua-driver-rs 0.8.3 installed (user-approved), real MCP tool surface probed (`list_windows` / `get_window_state` / `click` — the old placeholder name is gone). New flow: walk Spotify's real Chromium accessibility tree until QUERY-MATCHED "Play <track>" buttons appear (the tree builds lazily — a minimized Spotify exposes 1 element, fronted 350+, which alone explains every earlier "cannot see, cannot click" failure), click by `element_index` with background→foreground escalation (Chromium silently drops posted background clicks — driver reports `verified:false`), then verify via the window-title oracle ("Artist - Track") with a strict-majority term match and retry the next candidate when a same-named playlist starts the wrong song. Oracle-verified across ~19 live play-throughs during development (17 pass, final code passing every retest). ALSO fixed here: the `$pid` parameter bug (see BUG-031 update) that had silently broken focus_window/ui_click/ui_elements/ui_type/close_window since they were written.
 **Severity:** CRITICAL | **Reported:** 2026-07-16 (live session, post BUG-001 fix)
 
 **Symptom:** User: "play Led Zeppelin" → Spotify opens, search runs, MYTHOS claims "Playing Led Zeppelin on Spotify now" — nothing plays. User confirms live: "it can open Spotify, but it cannot play the song. It searches for the song, it shows up, it cannot navigate to that particular tile... there is no key action." Repeated with a second track ("Moods Mild Oranges") — same result.
@@ -680,7 +680,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-029: Orphaned browser-automation Chrome process keeps playing audio after MYTHOS + browser are fully closed
-**Status:** ❌ BROKEN — root cause is a grounded hypothesis from code, not yet live-confirmed
+**Status:** 🔧 CODED (2026-07-17) — mitigation shipped, live repro still pending. `adapters/browser-agent/index.js` now writes the launched browser's PID to `mythos/.browser-agent.pid` on launch (cleared on clean close/disconnect), and `Start Agent OS.bat` kills any PID found in that file (with `/T` for the tree) before booting — so even if Windows swallows the shutdown signal (mechanism 1 below), the orphan dies on the NEXT launch instead of surviving forever. The proper D-07 graceful-shutdown fix and a live reproduction remain open.
 **Severity:** HIGH (survives full app shutdown, invisible in Task Manager, only recoverable by restarting) | **Reported:** 2026-07-16 (live session)
 
 **Symptom:** A YouTube video MYTHOS opened for "news" kept playing audio in the background after the user closed the browser window AND closed the terminal running `start.bat`. Checked Task Manager — nothing obviously identifiable was running. Only fix was to run `start.bat` again, reopen the HUD, and ask MYTHOS by voice to close the news panel — which worked.
@@ -713,7 +713,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-031: `spotify_play` crashes with `Cannot read properties of null (reading 'elements')`
-**Status:** ✅ FIXED (2026-07-16)
+**Status:** ✅ FIXED (2026-07-16 guards; REAL root cause found + fixed 2026-07-17) — the null guards treated the symptom. The actual cause: `ps-automation.ps1` handlers declared a parameter named `$pid`, which is PowerShell's READ-ONLY automatic variable — parameter binding throws `"Cannot overwrite variable pid because it is read-only or constant"` before the function body runs, so the handler returns null. **focus_window, close_window, ui_elements, ui_click, and ui_type were all broken this way since they were written.** All renamed to `$TargetPid` (commit `756966e`); focus_window + ui_elements verified working live for the first time ever through the pipeline.
 **Severity:** CRITICAL (every spotify_play attempt crashed — 5 failures logged) | **Reported:** 2026-07-16 (episodic logs)
 
 **Symptom:** Every `spotify_play` call returned `Cannot read properties of null (reading 'elements')`. The tool never reached the audit log because it crashed before dispatch completed.
@@ -812,7 +812,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-037: Concurrent sessions editing the same file can silently undo each other's verified fixes on `git pull`/fast-forward
-**Status:** ❌ PROCESS GAP — happened once, reconciled by hand, not systemically prevented
+**Status:** ⚠️ MITIGATED (2026-07-17) — repo-level `CLAUDE.md` now carries binding rules for every AI session: pull+diff against BUGS.md claims before editing recently-verified files, commit verified fixes immediately, and a checklist of load-bearing pieces in `ps-automation.ps1` to re-verify after any pull. Not systemically enforced (git can't be), but no longer undocumented.
 **Severity:** HIGH (can silently erase live-verified work with zero git-level warning) | **Reported:** 2026-07-16 (live session)
 
 **Symptom:** This session live-verified a fix to `mythos/adapters/pc-child/ps-automation.ps1` (BUG-004's WinRT bridging + BUG-026's DPI-awareness + `click_at`), then pushed it to `origin/main`. A different, concurrent session had branched from an *older* snapshot of that same file, made its own (different, ultimately also-not-fully-working) fix attempt, and pushed its own commit. When this session later ran `git pull --ff-only origin main`, the pull succeeded cleanly — a normal fast-forward, zero conflicts — but the resulting file on disk had lost the DPI-awareness block, the entire `click_at` command, and the proven WinRT fix, replaced by the other session's untested rewrite.
@@ -828,7 +828,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-038: `Handle-MediaStatus` hangs indefinitely when a track has album art (thumbnail extraction)
-**Status:** ❌ BROKEN — root cause of the underlying method-not-found error is confirmed; root cause of the HANG in the fix attempt is NOT yet diagnosed; thumbnail extraction disabled as a stopgap
+**Status:** ✅ FIXED (2026-07-17) — the "hang" was never a hang. REAL root cause, confirmed byte-exact: PowerShell 5.1 writes stdout in the OEM codepage, which best-fits curly Unicode quotes (U+201C/U+201D — present in this user's ENTIRE playlist, e.g. every track "From “Cocktail 2”") down to raw ASCII `"`. ConvertTo-Json legally leaves curly quotes unescaped, so VALID JSON left the child and INVALID JSON reached Node; Node dropped each response as noise, every media_status burned its 15s timeout, and the widget's 5s polls permanently jammed the serial queue — starving ALL pc-child tools. Fixed (commit `f5f6856`): UTF-8 console encoding + blanket `\uXXXX` non-ASCII escaping in `Write-Response` (survives ANY pipe encoding), command-id echo for response correlation (a late response can no longer resolve the NEXT command), thumbnail re-enabled via a temp-FILE design (`/api/media/art` route streams it; no 240KB base64 JSON lines ever). Live-verified: 3 consecutive track changes with art, 62–85ms per call, art rendering 300×300 in the HUD.
 **Severity:** HIGH (a hang here can block every other pc-child-backed tool, not just the media widget — pc-child processes one command at a time) | **Reported:** 2026-07-16 (live diagnostic, same session as BUG-004's timeline)
 
 **Symptom:** With a track that has album art actively playing, `GET /api/media` fails with `"[System.__ComObject] does not contain a method named 'GetBuffer'."` A fix attempt for that specific error introduced a full request timeout (20s+, no response, no error, no new server log lines) instead.
@@ -919,10 +919,16 @@ Full list in `ROADMAP.md` lines 396-403.
 
 (BUG-005 removed from queue — verified already fixed, see entry above.)
 
-**New items from the 2026-07-16 live-diagnosis session (add to queue, highest priority — active hang risk):**
-31. **BUG-038** — `Handle-MediaStatus` hangs indefinitely on tracks with album art (thumbnail extraction) — a hang here can block every other pc-child tool, not just media. Root cause of the hang not diagnosed. Thumbnail extraction disabled as a stopgap; title/artist/album unaffected. **Likely explains the earlier "widget blank after song change" report.**
-32. **BUG-037** — Process gap: concurrent sessions editing the same file can silently undo each other's live-verified fixes on a clean `git pull --ff-only` (no conflict, no warning). Happened once today on `ps-automation.ps1`, reconciled by hand. No systemic fix yet.
-33. **BUG-026** (re-flagged) — the Spotify 10/10 live play-through verification is still outstanding; today's work only reconciled the DPI-awareness/click_at/cua-driver code back to intact after BUG-037's conflict, it did not re-run the actual play-through test.
+**2026-07-17 stabilization session — queue status after the full pass:**
+
+CLOSED this session: ~~BUG-038~~ (OEM-codepage JSON corruption — the real "nothing works" root cause), ~~BUG-004~~ (media widget fully live-verified incl. album art), ~~BUG-026/BUG-001~~ (Spotify actually plays — cua-driver 0.8.3 element clicks + verify-retry; user confirmed), ~~BUG-031~~ (real root cause: `$pid` read-only parameter — focus_window/ui_click/ui_elements/ui_type/close_window were ALL broken by it), ~~BUG-002~~ (compose bar live-verified), ~~BUG-019~~ (audit endpoint live-verified), ~~BUG-012~~ (session-scoped T3 grants; live voice check pending).
+
+Still open, in priority order:
+31. **BUG-029** — orphaned automation browser: pidfile mitigation shipped (kills orphans on next launch); proper D-07 graceful shutdown + live repro still open.
+32. **BUG-027 / BUG-020 / BUG-021 / BUG-028** — voice-only checks that need the user in a live session (TTS echo, mic noise, conversation tone, "news" ask) — see the guided acceptance list in the session notes.
+33. **BUG-037** — mitigated via repo CLAUDE.md rules; unenforceable by git, keep the discipline.
+34. **BUG-011** — browser automation lazy auto-connect coded; standby confirmed at boot, on-demand launch not yet live-tested (deliberately — avoids creating a BUG-029 orphan before its mitigation was in).
+35. **BUG-024** — Gmail/Calendar: needs user's Google OAuth setup (code-level done).
 
 ---
 

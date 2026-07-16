@@ -14,6 +14,19 @@ for %%P in (4478 5050 9222) do (
     )
 )
 
+REM --- BUG-029: kill any orphaned automation browser from a previous run ----
+REM The browser-agent writes its launched Chrome/Edge PID to .browser-agent.pid.
+REM If MYTHOS died without a clean shutdown (terminal closed), that browser
+REM survives invisibly and keeps playing audio — kill it before booting.
+if exist ".browser-agent.pid" (
+    set /p ORPHAN_PID=<".browser-agent.pid"
+    if defined ORPHAN_PID (
+        echo   - orphaned automation browser PID !ORPHAN_PID!, killing...
+        taskkill /F /T /PID !ORPHAN_PID! >nul 2>nul
+    )
+    del /f /q ".browser-agent.pid" >nul 2>nul
+)
+
 if not exist ".env" (
     if exist ".env.example" (
         echo Creating .env from .env.example ...

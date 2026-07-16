@@ -15,12 +15,40 @@
 //          launchLocal(userDataDir), ensureOnline({ cdpUrl, userDataDir })
 
 const { chromium } = require('playwright-core');
+const fs = require('fs');
+const path = require('path');
 const { createLogger } = require('../../src/core/logger');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const CONNECT_TIMEOUT_MS = 10000;
 const PAGE_TIMEOUT_MS = 15000;
 const NAVIGATE_TIMEOUT_MS = 30000;
+
+// BUG-029: the launched browser is a real OS process MYTHOS owns. If the app
+// dies without a clean shutdown (Windows terminal closed — SIGINT never
+// delivered, see main.js), that Chrome survives invisibly and keeps playing
+// audio. Track its PID in a file so the NEXT launch (Start Agent OS.bat's
+// cleanup step) can kill any orphan before booting.
+const BROWSER_PID_FILE = path.join(__dirname, '..', '..', '.browser-agent.pid');
+
+function writeBrowserPidFile(ctx) {
+  try {
+    // launchPersistentContext exposes the browser process via the context's
+    // browser() (null for persistent contexts on some versions) — fall back to
+    // the private _browser process handle when needed. Best-effort only.
+    const proc = (ctx.browser() && ctx.browser().process && ctx.browser().process())
+      || (ctx._browser && ctx._browser._process) || null;
+    if (proc && proc.pid) {
+      fs.writeFileSync(BROWSER_PID_FILE, String(proc.pid), 'utf8');
+      return proc.pid;
+    }
+  } catch (_) { /* best-effort */ }
+  return null;
+}
+
+function clearBrowserPidFile() {
+  try { fs.unlinkSync(BROWSER_PID_FILE); } catch (_) { /* already gone */ }
+}
 
 // Module-level singleton state
 let browser = null;      // CDP-connected Browser instance
@@ -111,7 +139,8 @@ async function launchLocal(userDataDir) {
     launched = true;
     mode = 'launched';
     state = 'ONLINE';
-    log.info('browser-agent launched local browser', { userDataDir, pages: context.pages().length });
+    const browserPid = writeBrowserPidFile(context); // BUG-029
+    log.info('browser-agent launched local browser', { userDataDir, pages: context.pages().length, browserPid });
 
     context.on('close', function() {
       if (!intentionalDisconnect) {
@@ -119,6 +148,7 @@ async function launchLocal(userDataDir) {
         hint = 'Launched browser closed unexpectedly.';
         log.warn('browser-agent launched browser closed unexpectedly');
       }
+      clearBrowserPidFile(); // BUG-029: browser gone — pidfile no longer needed
       context = null;
       launched = false;
     });
@@ -161,6 +191,7 @@ async function disconnect() {
     try {
       await context.close();
     } catch { /* best-effort */ }
+    clearBrowserPidFile(); // BUG-029
     context = null;
     launched = false;
     mode = null;
