@@ -516,11 +516,18 @@ function createServer(deps) {
   // utterance. Falls back gracefully if edge-tts is down (client uses
   // speechSynthesis). Never throws — proactive speech is best-effort.
   let proactiveSeq = 0;
-  async function proactiveSpeak(text) {
+  async function proactiveSpeak(text, targetWs) {
     if (!text || !wss) return;
+    // Optional single-client delivery: the boot greeting passes the connection
+    // that triggered it, so a second open dashboard tab doesn't ALSO play the
+    // same audio (two overlapping voices). If that client is gone by the time
+    // we fire, fall back to the normal broadcast so the speech isn't lost.
+    const sendOut = (targetWs && targetWs.readyState === 1)
+      ? (msg) => { try { targetWs.send(JSON.stringify(msg)); } catch (_) { /* client vanished mid-send */ } }
+      : broadcastAll;
     const reqId = 'proactive-' + Date.now() + '-' + (++proactiveSeq);
     const speak = sanitizeSpoken(text);
-    broadcastAll({ type: 'proactive-speech', reqId, text, speak });
+    sendOut({ type: 'proactive-speech', reqId, text, speak });
     let ttsUp = false;
     try {
       ttsUp = await edgeTts.isAvailable();
@@ -550,14 +557,14 @@ function createServer(deps) {
             logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
           }
           if (ctrl.signal.aborted) break;
-          broadcastAll({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
+          sendOut({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
         }
       }
       // chunked forced true on abort (even with zero chunks sent): routes the
       // client's 'done' handling through the session-checked chunk-queue path,
       // never the non-chunked speechSynthesis fallback (which would otherwise
       // speak the just-barged-in-on reply after the fact).
-      broadcastAll({ type: 'done', reqId, say: text, speak, chunked: ctrl.signal.aborted ? true : ttsUp, proactive: true });
+      sendOut({ type: 'done', reqId, say: text, speak, chunked: ctrl.signal.aborted ? true : ttsUp, proactive: true });
     } finally {
       inflightSpeech.delete(reqId);
     }
@@ -669,7 +676,7 @@ function createServer(deps) {
     logger.warn('boot-greeting.version-check-failed', { error: err.message });
   }
 
-  async function deliverBootGreeting() {
+  async function deliverBootGreeting(targetWs) {
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
     const facts = [];
@@ -726,7 +733,7 @@ function createServer(deps) {
       text = salutation + ', sir. ' + (config.MYTHOS_NAME || 'MYTHOS') + ' online.' +
         (bootUpgrade.upgraded ? ' I have received an upgrade since we last spoke.' : ' All systems nominal.');
     }
-    await proactiveSpeak(text);
+    await proactiveSpeak(text, targetWs);
   }
 
   // Calendar reminders — proactive speech when a reminder fires due.
@@ -832,7 +839,9 @@ function createServer(deps) {
     if (!bootGreetingFired) {
       bootGreetingFired = true;
       const greetTimer = setTimeout(() => {
-        deliverBootGreeting().catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
+        // Deliver to THIS connection only — with two dashboard tabs open, a
+        // broadcast greeting plays twice in overlap ("two voices").
+        deliverBootGreeting(ws).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
       }, 2500);
       if (greetTimer.unref) greetTimer.unref();
     }
