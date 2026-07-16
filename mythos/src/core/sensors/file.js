@@ -56,7 +56,7 @@ function createFileSensor({ bus, config, vault }) {
   function watchDir(dir) {
     if (!fs.existsSync(dir)) return null;
     // Windows/libuv fix: os.tmpdir() (and some HOME/profile paths) can resolve to an
-    // 8.3 short-name form (e.g. "ARGHYA~1"). Watching that short-name path crashes
+    // 8.3 short-name form (e.g. "USERNA~1"). Watching that short-name path crashes
     // node with a native `fs-event.c` assertion the moment a second watcher is opened
     // in-process, because ReadDirectoryChangesW reports back the long-form path and
     // libuv's internal prefix check (`_wcsnicmp`) never matches. Resolving to the real

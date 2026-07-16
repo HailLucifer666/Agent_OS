@@ -1,5 +1,26 @@
 # Agent OS / MYTHOS — repo rules for AI sessions
 
+## Open-source portability (binding for all code changes)
+
+This is an open-source project. Anyone who supplies their own API keys
+(brain/coding LLMs, STT, TTS — see `mythos/.env.example`) must be able to run
+it on their machine. Therefore:
+
+- **Never hardcode user-specific or machine-specific absolute paths** in
+  tracked files. Derive everything from the environment:
+  `%LOCALAPPDATA%`/`%USERPROFILE%`/`$env:TEMP` (PowerShell/batch),
+  `os.homedir()`/`os.tmpdir()`/`process.env.*` (Node), `%~dp0`-relative
+  paths (batch).
+- **External binaries are optional**: cua-driver (and anything similar) must
+  degrade gracefully when absent — spawn ENOENT → adapter stays OFFLINE →
+  fallback paths take over. Never make boot or a core feature depend on an
+  uninstalled binary.
+- **All secrets and provider keys live in `mythos/.env`** (gitignored), with
+  every supported key documented in `mythos/.env.example`. No key, no
+  hardcoded default — features degrade honestly instead.
+- Keep personal identifiers (usernames, local folder names) out of code
+  comments, docs, and examples — use generic placeholders.
+
 ## Concurrent-session safety (BUG-037)
 
 A concurrent session once silently reverted live-verified fixes in

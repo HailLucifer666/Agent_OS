@@ -577,7 +577,7 @@ Run: `node --test test/bug-024-gmail-calendar.test.js` → 5 pass, 0 fail.
 
 **What remains unverifiable without real credentials:** No code path here has ever executed a real OAuth token exchange or a real Gmail/Calendar API call — these tests only prove the code-level contract (clean errors, sensor wiring), not that Gmail/Calendar actually work end-to-end. That requires real `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REFRESH_TOKEN`, which only the user can obtain.
 
-**User action required (not automatable — Arghya only):**
+**User action required (not automatable — must be done by whoever runs the instance, with their own Google account):**
 1. Go to Google Cloud Console (console.cloud.google.com/apis/credentials), create a new OAuth 2.0 Client ID of type **"Desktop app"** (not "Web app") in a project of your choice. Note the Client ID and Client Secret.
 2. In the same project, under APIs & Services → Library, enable both the **Gmail API** and the **Google Calendar API**.
 3. From `mythos/`, run: `GOOGLE_CLIENT_ID=xxx GOOGLE_CLIENT_SECRET=xxx node scripts/google-auth.js` (substituting the real values from step 1). This opens a browser consent screen — sign in and approve. The script prints a refresh token to stdout on success.
