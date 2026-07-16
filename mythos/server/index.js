@@ -177,18 +177,44 @@ function createServer(deps) {
   });
 
   // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----
+  // BUG-004/BUG-038: album art travels as a temp FILE written by the PS child
+  // (never as base64 inside the JSON pipe). This route remembers the server-side
+  // artPath from the child's own response; /api/media/art below streams it. The
+  // client only ever sees a boolean + mime — no client-supplied paths are read.
+  let lastArtPath = null;
+  let lastArtMime = 'image/png';
   app.get('/api/media', async (req, res) => {
     try {
       if (!pcChild) return res.json({ ok: false, error: 'pc-child offline' });
       const result = await pcChild.sendCommand({ cmd: 'media_status' });
       if (result.ok) {
-        res.json({ ok: true, media: result.result });
+        const media = { ...result.result };
+        if (media.artPath && path.basename(media.artPath) === 'mythos-media-art.bin') {
+          lastArtPath = media.artPath;
+          lastArtMime = media.artMime || 'image/png';
+          media.art = true;
+        } else {
+          lastArtPath = null;
+          media.art = false;
+        }
+        delete media.artPath;
+        res.json({ ok: true, media });
       } else {
         res.json({ ok: false, error: result.error });
       }
     } catch (err) {
       res.json({ ok: false, error: err.message });
     }
+  });
+
+  app.get('/api/media/art', (req, res) => {
+    if (!lastArtPath) return res.status(404).end();
+    require('fs').readFile(lastArtPath, (err, buf) => {
+      if (err) return res.status(404).end();
+      res.set('Content-Type', lastArtMime);
+      res.set('Cache-Control', 'no-store');
+      res.send(buf);
+    });
   });
 
   // CONSISTENCY FIX (P7 vs NOVA UI, documented in ROADMAP.md P9): the byte-identical

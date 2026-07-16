@@ -24,6 +24,21 @@
 
 $ErrorActionPreference = 'Continue'
 
+# ---- Console I/O encoding ----
+# BUG-038 (real root cause, confirmed byte-exact 2026-07-17): PowerShell 5.1 writes
+# stdout in the OEM codepage by default. That codepage "best-fits" curly Unicode
+# quotes (U+201C/U+201D -- common in Spotify/browser metadata) down to the ASCII
+# double-quote (0x22) in transit. ConvertTo-Json legally leaves curly quotes
+# unescaped, so a VALID JSON line leaves this process but arrives at the Node parent
+# as INVALID JSON (unescaped " inside a string value). Node drops the line as
+# diagnostic noise, the command burns its full 15s timeout, and -- because this child
+# processes one command at a time -- the media widget's 5s polling permanently jams
+# the queue and starves every other PC tool. This was previously misdiagnosed as a
+# thumbnail-extraction "hang" (BUG-038). Fix layer 1: emit UTF-8 so nothing is
+# best-fitted. (Layer 2 is ASCII-safe escaping in Write-Response below.)
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try { [Console]::InputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
 # ---- DPI awareness ----
 # BUG-026 (4th attempt, part A): PowerShell 5.1 is not DPI-aware by default. On any display scaled
 # above 100%, that leaves UIA's BoundingRectangle (queried against DPI-aware target
@@ -178,13 +193,25 @@ public static class NativeInput {
 # ---- Helpers ----
 
 function Write-Response($ok, $resultOrError) {
+    # Echo the current command's id (set by the main loop) so the Node parent can
+    # correlate responses to commands — a late response from a timed-out command
+    # must never be matched to the next command in flight.
     if ($ok) {
-        $json = ConvertTo-Json -Depth 8 -Compress @{ ok = $true; result = $resultOrError }
+        $payload = @{ ok = $true; result = $resultOrError }
     } else {
-        $json = ConvertTo-Json -Depth 8 -Compress @{ ok = $false; error = $resultOrError }
+        $payload = @{ ok = $false; error = $resultOrError }
     }
+    if ($null -ne $script:CurrentCmdId) { $payload.id = $script:CurrentCmdId }
+    $json = ConvertTo-Json -Depth 8 -Compress $payload
     # Ensure single line output (no newlines from ConvertTo-Json)
     $json = $json -replace "`r`n", ' ' -replace "`n", ' '
+    # BUG-038 fix layer 2: escape every non-ASCII char as \uXXXX so the emitted line
+    # is pure ASCII and survives ANY console/pipe encoding intact. \uXXXX inside JSON
+    # strings is always valid, and non-ASCII never appears in JSON structural syntax,
+    # so a blanket replace on the serialized text is safe.
+    $json = [System.Text.RegularExpressions.Regex]::Replace($json, '[^\x20-\x7E]', {
+        param($m) '\u{0:x4}' -f [int][char]$m.Value
+    })
     [Console]::Out.WriteLine($json)
     [Console]::Out.Flush()
 }
@@ -557,20 +584,36 @@ function Handle-MediaStatus {
             if ($mediaProps.Artist) { $result.artist = $mediaProps.Artist }
             if ($mediaProps.AlbumTitle) { $result.album = $mediaProps.AlbumTitle }
 
-            # Thumbnail extraction is DELIBERATELY DISABLED for now (2026-07-16). The
-            # AsStreamForRead-based read (see Read-WinRTStreamBytes above) was proven
-            # correct in an isolated interactive PowerShell session -- but calling it
-            # from inside this long-running JSON-over-stdin child, on a real ~180KB PNG,
-            # made the whole media_status command hang indefinitely (no error, no
-            # response, pc-child never returned). Root cause not yet isolated (could be
-            # pipe-buffering on the resulting large single JSON line, could be something
-            # about calling AsStreamForRead's Invoke() from this process's context) --
-            # not worth guessing further right now. A hang here is worse than a missing
-            # thumbnail: pc-child handles one command at a time, so a stuck media_status
-            # call would block every other tool (Spotify, screen_look, everything) behind
-            # it. Title/artist/album -- the data that actually matters for the widget --
-            # are unaffected and returned above this block. Revisit as a follow-up, with
-            # the hang itself reproduced and diagnosed BEFORE re-enabling, not guessed at.
+            # Thumbnail (album art). RE-ENABLED 2026-07-17: the earlier "indefinite
+            # hang" (BUG-038) turned out not to be a hang at all -- the response line
+            # was silently corrupted in transit by the OEM console codepage best-fitting
+            # curly quotes in the title down to raw ASCII '"', producing invalid JSON
+            # that the Node parent dropped, so the command just timed out. Fixed at the
+            # top of this file (UTF-8 console encoding) and in Write-Response (ASCII-safe
+            # \uXXXX escaping). Design change on top of that: the art bytes go to a temp
+            # FILE and only the path travels over the pipe -- no ~240KB base64 JSON
+            # lines through stdout, ever. Failure here is non-fatal: title/artist/album
+            # above are already in $result.
+            if ($mediaProps.Thumbnail) {
+                try {
+                    $streamType = [Type]::GetType('Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+                    $streamOp = $mediaProps.Thumbnail.OpenReadAsync()
+                    $artStream = Await-WinRTOperation $streamOp $streamType
+                    if ($artStream) {
+                        $bytes = Read-WinRTStreamBytes $artStream
+                        if ($bytes -and $bytes.Length -gt 0) {
+                            $artPath = Join-Path $env:TEMP 'mythos-media-art.bin'
+                            [System.IO.File]::WriteAllBytes($artPath, $bytes)
+                            $result.artPath = $artPath
+                            $mime = [string]$artStream.ContentType
+                            $result.artMime = if ($mime) { $mime } else { 'image/png' }
+                        }
+                    }
+                } catch {
+                    # Art is best-effort -- never fail the whole media_status over it.
+                    $result.artError = $_.Exception.Message
+                }
+            }
         }
 
         return $result
@@ -679,12 +722,16 @@ while ($true) {
     if ($line.Length -eq 0) { continue }
 
     $cmd = $null
+    $script:CurrentCmdId = $null
     try {
         $cmd = ConvertFrom-Json -InputObject $line -ErrorAction Stop
     } catch {
         Write-Response $false ('Invalid JSON: ' + $_.Exception.Message)
         continue
     }
+
+    # Correlation id from the Node parent (see Write-Response). Optional field.
+    if ($null -ne $cmd.id) { $script:CurrentCmdId = $cmd.id }
 
     $command = $cmd.cmd
     if (-not $command) {

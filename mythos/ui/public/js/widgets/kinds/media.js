@@ -36,10 +36,17 @@ export function mountMedia(el) {
         return;
       }
       const m = data.media;
-      // Album art
-      if (m.artBase64) {
-        artEl.innerHTML = `<img src="data:${m.artMime || 'image/png'};base64,${escapeHtml(m.artBase64)}" alt="" class="widget-art-img">`;
+      // Album art — served from /api/media/art (BUG-038: art travels as a file,
+      // never base64-in-JSON). Only swap the <img> when the track changes so the
+      // 5s poll doesn't flicker the image.
+      if (m.art) {
+        const key = `${m.title || ''}|${m.artist || ''}`;
+        if (artEl.dataset.trackKey !== key) {
+          artEl.dataset.trackKey = key;
+          artEl.innerHTML = `<img src="/api/media/art?ts=${Date.now()}" alt="" class="widget-art-img">`;
+        }
       } else {
+        artEl.dataset.trackKey = '';
         artEl.innerHTML = '';
       }
       // Track info

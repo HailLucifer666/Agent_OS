@@ -41,7 +41,12 @@ let restartTimer = null;
 
 // Command queue — ensures only one command in-flight at a time
 let commandQueue = [];
-let commandInFlight = null; // { resolve, reject, timer }
+let commandInFlight = null; // { resolve, reject, timer, id, cmdName, sentAt }
+// Monotonic id stamped onto every command and echoed back by ps-automation.ps1.
+// Without it, a slow command's late response (arriving after its 15s timeout)
+// gets matched to whatever command is in-flight NEXT — a permanent off-by-one
+// under queue pressure (found live 2026-07-17 while chasing BUG-038).
+let nextCommandId = 1;
 
 // stdout line buffer (incomplete lines accumulate here)
 let stdoutBuf = '';
@@ -86,13 +91,25 @@ function handleStdoutChunk(chunk) {
       // This line is the response to the current command
       try {
         const parsed = JSON.parse(line);
+        // Correlate by id: a late response from an already-timed-out command must
+        // NOT resolve the next command. Responses without an id (old script) are
+        // accepted for compatibility; mismatched ids are logged and dropped.
+        if (parsed && parsed.id !== undefined && parsed.id !== commandInFlight.id) {
+          log.warn('pc-child stale response dropped', { expected: commandInFlight.id, got: parsed.id });
+          pushRingLine(`[stale-response id=${parsed.id}] ${line.slice(0, 200)}`);
+          continue;
+        }
         clearTimeout(commandInFlight.timer);
         const resolve = commandInFlight.resolve;
+        const elapsedMs = Date.now() - commandInFlight.sentAt;
+        log.info('pc-child response', { cmd: commandInFlight.cmdName, ok: parsed.ok !== false, elapsedMs, queueDepth: commandQueue.length });
         commandInFlight = null;
         resolve(parsed);
+        processQueue();
       } catch {
         // Not valid JSON — treat as diagnostic
         pushRingLine(line);
+        log.warn('pc-child unparseable line', { preview: line.slice(0, 200) });
       }
     } else {
       // No command in flight — diagnostic line
@@ -114,11 +131,14 @@ function processQueue() {
   if (commandInFlight || commandQueue.length === 0 || !child) return;
 
   const { cmd, resolve, reject } = commandQueue.shift();
-  commandInFlight = { resolve, reject, timer: null };
+  const id = nextCommandId++;
+  const cmdName = cmd && cmd.cmd;
+  commandInFlight = { resolve, reject, timer: null, id, cmdName, sentAt: Date.now() };
 
   const timer = setTimeout(() => {
-    if (commandInFlight === null) return; // already resolved
+    if (commandInFlight === null || commandInFlight.id !== id) return; // already resolved
     const rejectFn = commandInFlight.reject;
+    log.warn('pc-child command timeout', { cmd: cmdName, id, timeoutMs: COMMAND_TIMEOUT_MS, queueDepth: commandQueue.length });
     commandInFlight = null;
     rejectFn(new Error('PC automation command timed out'));
     processQueue(); // process next
@@ -127,7 +147,7 @@ function processQueue() {
   commandInFlight.timer = timer;
 
   try {
-    const jsonStr = JSON.stringify(cmd);
+    const jsonStr = JSON.stringify({ ...cmd, id });
     child.stdin.write(jsonStr + '\n');
   } catch (err) {
     clearTimeout(timer);
@@ -139,6 +159,13 @@ function processQueue() {
 
 function sendCommand(cmdObj) {
   return new Promise((resolve, reject) => {
+    // Hard-offline guard: with no child and no restart pending, a queued command
+    // would sit forever (queued commands carry no timeout — the 15s timer only
+    // starts when a command goes in-flight). Reject fast instead.
+    if (!child && !restartTimer && state === 'OFFLINE') {
+      reject(new Error('PC automation offline'));
+      return;
+    }
     commandQueue.push({ cmd: cmdObj, resolve, reject });
     processQueue();
   });
@@ -172,17 +199,23 @@ function spawnChild() {
   });
   child = proc;
 
-  if (proc.stdout) proc.stdout.on('data', handleStdoutChunk);
-  if (proc.stderr) proc.stderr.on('data', handleStderrChunk);
+  // Guard both streams by identity: an orphaned previous child must never feed
+  // the shared line buffer / in-flight state once a newer child owns them.
+  if (proc.stdout) proc.stdout.on('data', (c) => { if (proc === child) handleStdoutChunk(c); });
+  if (proc.stderr) proc.stderr.on('data', (c) => { if (proc === child) handleStderrChunk(c); });
 
   proc.on('error', (err) => {
     pushRingLine(`[pc-child] spawn error: ${err.message}`);
+    if (proc !== child) return; // stale process — a newer child already replaced it
     state = 'OFFLINE';
     hint = `Failed to start PowerShell: ${err.message}`;
     child = null;
   });
 
   proc.on('exit', (code, signal) => {
+    // A previous child's late exit event must not clobber the state of a newer
+    // child that already replaced it (restart races).
+    if (proc !== child) return;
     child = null;
     // Reject any in-flight command
     if (commandInFlight) {
