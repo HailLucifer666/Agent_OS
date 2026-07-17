@@ -32,7 +32,17 @@ describe('persona levels', () => {
 
   it('defaults to the blend levels when persona.json is absent', () => {
     assert.deepEqual(identity.getPersonaLevels(), {
-      humor: 6, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5
+      humor: 6, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5, strictness: 4
+    });
+  });
+
+  it('legacy persona.json files without strictness merge in the default for the missing key', () => {
+    // Simulates a persona.json written before this phase (no strictness key).
+    fsStore.writeJSON('Identity/persona.json', { humor: 9, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5 });
+    const identity2 = createIdentity({ bus, config, fs: fsStore, identityStore: store });
+    return identity2.init().then(() => {
+      assert.equal(identity2.getPersonaLevels().humor, 9); // stored value preserved
+      assert.equal(identity2.getPersonaLevels().strictness, 4); // missing key defaulted
     });
   });
 
@@ -68,6 +78,17 @@ describe('persona levels', () => {
     const identity2 = createIdentity({ bus, config, fs: fsStore, identityStore: store });
     await identity2.init();
     assert.equal(identity2.getPersonaLevels().formality, 9);
+  });
+
+  it('strictness dial shapes the style directive at each band boundary', () => {
+    identity.setPersonaLevel('strictness', 8);
+    assert.match(identity.persona(), /Drill-sergeant accountability/);
+    identity.setPersonaLevel('strictness', 5);
+    assert.match(identity.persona(), /Hold the user to their plan/);
+    identity.setPersonaLevel('strictness', 3);
+    assert.match(identity.persona(), /Gentle nudges only/);
+    identity.setPersonaLevel('strictness', 0);
+    assert.doesNotMatch(identity.persona(), /Drill-sergeant|Hold the user to their plan|Gentle nudges only/);
   });
 
   it('persona() folds in the newest learned preferences (max 5)', async () => {
@@ -132,5 +153,14 @@ describe('from-persona voice tools', () => {
   it('unknown trait fails honestly', () => {
     const res = toolByName('set_persona_level').fn({ trait: 'chaos', value: 5 });
     assert.equal(res.ok, false);
+  });
+
+  it('strictness synonyms resolve to the canonical trait', () => {
+    for (const syn of ['strict', 'strictness', 'coach', 'drill sergeant', 'accountability']) {
+      const res = toolByName('set_persona_level').fn({ trait: syn, value: 7 });
+      assert.equal(res.ok, true, syn + ' should resolve');
+      assert.equal(res.result.trait, 'strictness');
+      assert.equal(res.result.value, 7);
+    }
   });
 });

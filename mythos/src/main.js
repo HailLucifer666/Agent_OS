@@ -23,6 +23,7 @@ const { createTimerSensor } = require('./core/sensors/timer');
 const { createReminderSensor } = require('./core/sensors/reminder-sensor');
 const { createGmailSensor } = require('./core/sensors/gmail-sensor');
 const { createScreenSensor } = require('./core/sensors/screen-sensor');
+const { createDailyPlanner } = require('./core/planner/daily');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
 const { createHealer } = require('./core/immune/healer');
@@ -139,6 +140,7 @@ async function main() {
   let checkpointSweepTimer = null;
   let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
   let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
+  let dailyPlanner = null;         // Phase 3 Jarvis upgrade — daily planning + accountability
 
   // Engagement Layer
   let engagementStore = null;
@@ -617,6 +619,27 @@ async function main() {
       logger.info('sensors.ws.started', {});
     }},
 
+    { name: 'planner', fail: 'degraded', fn: function() {
+      // [Phase 3 Jarvis upgrade — NEW] daily planning + accountability: morning
+      // brief / stall check-ins / evening review, layered on the existing
+      // Goals system (goals.arbitrate/list are reused, never reimplemented).
+      // Positioned after 'sensors' (needs goals+brain+memory, all ready by
+      // now). Degraded, not fatal: a missing planner is a smaller entity, not
+      // a broken one. Always constructed (so the daily_plan tool's status/
+      // replan/skip_today work even with the automatic scheduler off) — only
+      // start() (the scheduler) is gated by PLANNER_ENABLED, mirroring how
+      // the 'sensors' step above gates screenSensor.start() on
+      // SCREEN_AWARENESS_ENABLED.
+      dailyPlanner = createDailyPlanner({ bus: bus, config: config, memory: memory, goals: goals, brain: brain, identity: identity, logger: logger });
+      if (config.PLANNER_ENABLED !== false) {
+        dailyPlanner.start();
+      }
+      if (dashboardWiring && typeof dashboardWiring.setPlannerHandle === 'function') {
+        dashboardWiring.setPlannerHandle(dailyPlanner);
+      }
+      logger.info('planner.ready', { enabled: config.PLANNER_ENABLED !== false });
+    }},
+
     { name: 'edge-tts', fail: 'degraded', fn: function() {
       // Local Microsoft Neural TTS service (free, no key) — voice replies get
       // synthesized server-side (server/index.js handleUtterance) and shipped
@@ -638,6 +661,7 @@ async function main() {
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
     if (screenSensor) screenSensor.stop();
+    if (dailyPlanner) dailyPlanner.stop();
     if (fileSensor) fileSensor.stop();
     if (wsSensor) wsSensor.stop();
     if (jobSensor) jobSensor.stop();

@@ -87,4 +87,32 @@ describe('config', () => {
     assert.equal(tooHigh.ok, false);
     assert.ok(tooHigh.errors.some((e) => e.includes('above maximum')));
   });
+
+  it('planner keys default to enabled with documented hours/cadence', () => {
+    const result = validate({}, SCHEMA);
+    assert.equal(result.ok, true);
+    assert.equal(result.config.PLANNER_ENABLED, true);
+    assert.equal(result.config.PLANNER_MORNING_HOUR, 9);
+    assert.equal(result.config.PLANNER_EVENING_HOUR, 21);
+    assert.equal(result.config.PLANNER_CHECKIN_EVERY_MS, 10800000);
+  });
+
+  it('planner keys accept env overrides within range', () => {
+    const result = validate({ PLANNER_ENABLED: 'false', PLANNER_MORNING_HOUR: '7', PLANNER_EVENING_HOUR: '22', PLANNER_CHECKIN_EVERY_MS: '3600000' }, SCHEMA);
+    assert.equal(result.ok, true);
+    assert.equal(result.config.PLANNER_ENABLED, false);
+    assert.equal(result.config.PLANNER_MORNING_HOUR, 7);
+    assert.equal(result.config.PLANNER_EVENING_HOUR, 22);
+    assert.equal(result.config.PLANNER_CHECKIN_EVERY_MS, 3600000);
+  });
+
+  it('rejects PLANNER_MORNING_HOUR outside its 0-23 range and PLANNER_CHECKIN_EVERY_MS below its floor', () => {
+    const badHour = validate({ PLANNER_MORNING_HOUR: '24' }, SCHEMA);
+    assert.equal(badHour.ok, false);
+    assert.ok(badHour.errors.some((e) => e.includes('above maximum')));
+
+    const badCadence = validate({ PLANNER_CHECKIN_EVERY_MS: '1000' }, SCHEMA);
+    assert.equal(badCadence.ok, false);
+    assert.ok(badCadence.errors.some((e) => e.includes('below minimum')));
+  });
 });

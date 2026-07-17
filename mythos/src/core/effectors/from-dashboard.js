@@ -671,6 +671,37 @@ function buildTools(ctx) {
     }
   }
 
+  // ---- daily_plan (Phase 3 Jarvis upgrade — daily planning + accountability) ----
+  // Injected after construction, same setter-injection pattern as
+  // setAskAgentDispatch/setCameraFrameProvider above (and setScreenSensorHandle
+  // in from-pc.js): main.js constructs the planner in a boot step AFTER the
+  // 'leash' step that registers this file's tools, so the real instance can't
+  // be a constructor dependency here.
+  let plannerHandle = null;
+  function setPlannerHandle(handle) {
+    plannerHandle = handle;
+  }
+
+  async function daily_plan({ action }) {
+    try {
+      if (!plannerHandle) return fail('Daily planner is not available in this session.');
+      const act = String(action || 'status').trim().toLowerCase();
+      if (act === 'status') {
+        return ok({ day: plannerHandle.status() });
+      }
+      if (act === 'replan') {
+        const result = await plannerHandle.runMorning();
+        return ok(result);
+      }
+      if (act === 'skip_today') {
+        return ok({ day: plannerHandle.skipToday() });
+      }
+      return fail('Unknown action "' + action + '". Use status|replan|skip_today.');
+    } catch (err) {
+      return fail(err.message);
+    }
+  }
+
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top one.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
@@ -701,9 +732,10 @@ function buildTools(ctx) {
     { name: 'monitor_snapshot', description: 'Read the live agent monitor snapshot (running CLI sessions).', params: {}, danger: false, fn: monitor_snapshot },
     { name: 'kill_session', description: 'Kill a running agent CLI session by PID. Irreversible.', params: { pid: 'number', agentCli: 'string' }, danger: true, fn: kill_session },
     { name: 'camera_look', description: 'Capture a frame from the dashboard camera and describe what is visible. Use when you need to see the user, their environment, or objects they are showing.', params: { query: 'string (optional) — what specifically to look for' }, danger: false, fn: camera_look },
+    { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];
 
-  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setPlannerHandle };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -713,7 +745,10 @@ function registerFromDashboard(hub, ctx) {
   }
   // Return the count AND the ask_agent dispatch injector so main.js can wire it.
   // Previously the injector was discarded here, leaving ask_agent permanently null.
-  return { count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch, setCameraFrameProvider: built.setCameraFrameProvider };
+  return {
+    count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch,
+    setCameraFrameProvider: built.setCameraFrameProvider, setPlannerHandle: built.setPlannerHandle
+  };
 }
 
 module.exports = { registerFromDashboard, buildTools };

@@ -834,6 +834,19 @@ function createServer(deps) {
     if (e && e.payload && e.payload.text) proactiveSpeak('Reminder: ' + e.payload.text);
   });
 
+  // Daily planner (Phase 3 Jarvis upgrade) — proactive speech for the morning
+  // brief, stall check-ins, and evening review. Same bus.subscribe +
+  // proactiveSpeak() pattern as reminder.due above.
+  bus.subscribe('plan.morning-brief', (e) => {
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+  });
+  bus.subscribe('plan.checkin', (e) => {
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+  });
+  bus.subscribe('plan.evening-review', (e) => {
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+  });
+
   // Gmail triage — proactive speech when the gmail-sensor finds genuinely new
   // unread mail. Mirrors the reminder.due wiring above: same bus.subscribe +
   // proactiveSpeak() pattern, different event/payload shape.

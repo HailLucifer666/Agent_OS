@@ -57,6 +57,15 @@ const SCHEMA = {
   SCREEN_AWARENESS_POLL_MS:  { type: 'number', default: 30000, min: 10000, max: 600000 },
   SCREEN_AWARENESS_SALIENCE: { type: 'number', default: 0.3, min: 0, max: 1 },
 
+  // Daily planning + accountability (hands-free morning brief / stall
+  // check-ins / evening review — src/core/planner/daily.js). On by default
+  // (unlike wake-word/screen-awareness, this touches no camera/mic/screen
+  // capture — it only reads the existing Goals system).
+  PLANNER_ENABLED:           { type: 'bool',   default: true },
+  PLANNER_MORNING_HOUR:      { type: 'number', default: 9,  min: 0, max: 23 },
+  PLANNER_EVENING_HOUR:      { type: 'number', default: 21, min: 0, max: 23 },
+  PLANNER_CHECKIN_EVERY_MS:  { type: 'number', default: 10800000, min: 1800000 },
+
   // get_weather tool default location ("lat,lon") when no location is spoken —
   // same Kolkata fallback the dashboard weather widget already uses.
   WEATHER_LOCATION:         { type: 'string', default: '22.57,88.36' },

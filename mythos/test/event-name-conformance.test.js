@@ -136,6 +136,11 @@ const ALLOWED_EVENTS = new Set([
   'checkpoint.created',
   'checkpoint.resolved',
   'forge.update',
+
+  // plan.* (Phase 3 Jarvis upgrade — daily planning + accountability)
+  'plan.morning-brief',
+  'plan.checkin',
+  'plan.evening-review',
 ]);
 
 // -- Static scan -------------------------------------------------------------

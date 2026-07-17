@@ -22,7 +22,7 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // concrete style directives every brain call sees. Defaults = the "blend"
   // the operator chose: warm, lightly witty, a touch of sass, proactive.
   var DEFAULT_LEVELS = {
-    humor: 6, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5
+    humor: 6, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5, strictness: 4
   };
   var TRAITS = Object.keys(DEFAULT_LEVELS);
 
@@ -71,6 +71,9 @@ function createIdentity({ bus, config, fs, identityStore }) {
     if (l.terseness >= 8) parts.push('Be caveman-terse: drop articles and filler, fragments are fine, short synonyms, technical terms exact, pattern "[thing] [action] [reason]. [next step]." Two sentences at most.');
     else if (l.terseness >= 5) parts.push('Keep replies short; expand only when the matter is complex.');
     else parts.push('Explain thoroughly; detail is welcome.');
+    if (l.strictness >= 8) parts.push('Drill-sergeant accountability: call out slippage bluntly, demand a committed next step and a time.');
+    else if (l.strictness >= 5) parts.push('Hold the user to their plan — firm, specific reminders when goals stall.');
+    else if (l.strictness >= 3) parts.push('Gentle nudges only.');
     return parts.join(' ');
   }
 

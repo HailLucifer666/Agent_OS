@@ -19,7 +19,8 @@ var TRAIT_SYNONYMS = {
   formality: 'formality', formal: 'formality', polite: 'formality', politeness: 'formality',
   sass: 'sass', sassy: 'sass', sarcasm: 'sass', attitude: 'sass', snark: 'sass',
   proactivity: 'proactivity', proactive: 'proactivity', initiative: 'proactivity',
-  terseness: 'terseness', terse: 'terseness', brevity: 'terseness', brief: 'terseness', concise: 'terseness'
+  terseness: 'terseness', terse: 'terseness', brevity: 'terseness', brief: 'terseness', concise: 'terseness',
+  strict: 'strictness', strictness: 'strictness', coach: 'strictness', 'drill sergeant': 'strictness', accountability: 'strictness'
 };
 // Words that mean the INVERSE of a trait: "be more verbose" = terseness down.
 var INVERSE_SYNONYMS = {
@@ -55,7 +56,7 @@ function buildTools(ctx) {
         inverted = true;
       }
       if (!canonical) {
-        return fail('Unknown trait "' + rawTrait + '". Valid: humor, warmth, formality, sass, proactivity, terseness.');
+        return fail('Unknown trait "' + rawTrait + '". Valid: humor, warmth, formality, sass, proactivity, terseness, strictness.');
       }
       var levels = identity.getPersonaLevels();
       var value = args && args.value;
@@ -76,8 +77,8 @@ function buildTools(ctx) {
   }
 
   return [
-    { name: 'persona_status', description: 'Read the current personality settings (humor, warmth, formality, sass, proactivity, terseness — each 0-10). Use when the user asks how your personality is configured.', params: {}, danger: false, fn: persona_status },
-    { name: 'set_persona_level', description: 'Adjust a personality trait. Use when the user says things like "dial up the humor", "be more formal", "less sass", "be brief". trait: humor|warmth|formality|sass|proactivity|terseness (synonyms OK). value: a number 0-10, or "up"/"down" to nudge from the current setting.', params: { trait: 'string — the trait to adjust', value: 'number 0-10, or "up"/"down"' }, danger: false, fn: set_persona_level }
+    { name: 'persona_status', description: 'Read the current personality settings (humor, warmth, formality, sass, proactivity, terseness, strictness — each 0-10). Use when the user asks how your personality is configured.', params: {}, danger: false, fn: persona_status },
+    { name: 'set_persona_level', description: 'Adjust a personality trait. Use when the user says things like "dial up the humor", "be more formal", "less sass", "be brief", "be stricter with me", "hold me accountable". trait: humor|warmth|formality|sass|proactivity|terseness|strictness (synonyms OK). value: a number 0-10, or "up"/"down" to nudge from the current setting.', params: { trait: 'string — the trait to adjust', value: 'number 0-10, or "up"/"down"' }, danger: false, fn: set_persona_level }
   ];
 }
 
