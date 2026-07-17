@@ -661,14 +661,13 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
         body: blob,
       });
       if (disposed || !active) return; // stopped while the request was in flight — drop it
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        caption(err.error || 'Speech-to-text unavailable.', 'error');
+      const body = await res.json().catch(() => ({}));
+      if (disposed || !active) return;
+      if (!res.ok || body.ok === false || typeof body.text !== 'string') {
+        caption(body.message || body.error || 'Speech-to-text unavailable.', 'error');
         return;
       }
-      const { text } = await res.json();
-      if (disposed || !active) return;
-      processTranscript(text);
+      processTranscript(body.text);
     } catch (err) {
       if (disposed || !active) return;
       console.warn('[voice] transcription request failed:', err);

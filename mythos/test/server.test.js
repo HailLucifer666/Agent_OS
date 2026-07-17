@@ -12,6 +12,7 @@ const { createBus } = require('../src/core/bus');
 const path = require('path');
 const { createServer } = require('../server');
 const pcChild = require('../adapters/pc-child');
+const groqStt = require('../providers/groq-stt');
 
 // Minimal fs-store stand-in — the real one resolves paths under the vault
 // root; tests never touch the filesystem, so any deterministic join works.
@@ -48,6 +49,18 @@ function httpGet(port, pathName) {
       res.on('data', (c) => { body += c; });
       res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
     }).on('error', reject);
+  });
+}
+
+function httpPost(port, pathName, body, headers) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: pathName, method: 'POST', headers: headers || {} }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(data) }));
+    });
+    req.on('error', reject);
+    req.end(body);
   });
 }
 
@@ -291,6 +304,31 @@ test('GET /api/media propagates the real error string on a pc-child failure (BUG
     assert.equal(res.body.error, 'Media session not found', 'must be the real pc-child error, not undefined');
   } finally {
     pcChild.sendCommand = originalSendCommand;
+    await server.stop();
+  }
+});
+
+test('POST /api/voice/transcribe surfaces a Groq failure as a real HTTP 503, never a 200 masquerade', async () => {
+  const bus = createBus({ historySize: 50 });
+  const server = createServer(baseDeps(bus));
+
+  // groq-stt is a module-level singleton required directly by server/index.js
+  // (not injected via deps), same monkey-patch pattern as pcChild above.
+  const originalIsAvailable = groqStt.isAvailable;
+  const originalTranscribe = groqStt.transcribe;
+  groqStt.isAvailable = () => true;
+  groqStt.transcribe = async () => { throw new Error('groq transcription failed: 500 boom'); };
+
+  try {
+    await server.ready;
+    const { port } = server.httpServer.address();
+    const res = await httpPost(port, '/api/voice/transcribe', Buffer.from('fake-audio'), { 'Content-Type': 'audio/webm' });
+    assert.equal(res.status, 503, 'a Groq failure must be a real HTTP error, never HTTP 200 with ok:false hidden in the body');
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.error, 'stt-down');
+  } finally {
+    groqStt.isAvailable = originalIsAvailable;
+    groqStt.transcribe = originalTranscribe;
     await server.stop();
   }
 });

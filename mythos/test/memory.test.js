@@ -120,6 +120,23 @@ describe('fs-store', () => {
     assert.equal(entries.length, 2);
   });
 
+  it('readDirLinesReverse returns newest-first and short-circuits once limit is satisfied', () => {
+    fsStore.appendLine('Episodic/2026-01-01.jsonl', { id: 'oldest' });
+    fsStore.appendLine('Episodic/2026-01-02.jsonl', { id: 'middle' });
+    fsStore.appendLine('Episodic/2026-01-03.jsonl', { id: 'newest' });
+    const entries = fsStore.readDirLinesReverse('Episodic', { limit: 2 });
+    assert.equal(entries.length, 2, 'must stop after satisfying limit, not read every file');
+    assert.deepEqual(entries.map(function(e) { return e.id; }), ['newest', 'middle']);
+  });
+
+  it('readDirLinesReverse applies a match predicate while walking newest-first', () => {
+    fsStore.appendLine('Episodic/2026-01-01.jsonl', { id: 'a', tool: 'x' });
+    fsStore.appendLine('Episodic/2026-01-02.jsonl', { id: 'b', tool: 'y' });
+    fsStore.appendLine('Episodic/2026-01-03.jsonl', { id: 'c', tool: 'x' });
+    const entries = fsStore.readDirLinesReverse('Episodic', { limit: 5, match: function(e) { return e.tool === 'x'; } });
+    assert.deepEqual(entries.map(function(e) { return e.id; }), ['c', 'a']);
+  });
+
   it('exists returns true for existing file', () => {
     fsStore.writeText('test.txt', 'x');
     assert.equal(fsStore.exists('test.txt'), true);

@@ -139,6 +139,34 @@ function createFsStore(vaultRootFn, bus) {
     return entries;
   }
 
+  // Bounded newest-first read: walks files in reverse-chronological order and
+  // stops as soon as `limit` entries satisfy `match`. Never loads the whole
+  // directory history (vault/Audit grows unbounded — reading it all froze the
+  // event loop for seconds per panel open).
+  function readDirLinesReverse(relDir, opts) {
+    opts = opts || {};
+    const limit = opts.limit || 100;
+    const match = opts.match || function() { return true; };
+    const files = listFiles(relDir, '.jsonl');
+    files.sort(function(a, b) { return b.name.localeCompare(a.name); }); // newest first
+    const out = [];
+    for (let i = 0; i < files.length && out.length < limit; i++) {
+      const raw = readText(files[i].path, '');
+      if (!raw) continue;
+      const lines = raw.split('\n');
+      for (let j = lines.length - 1; j >= 0 && out.length < limit; j--) {
+        if (!lines[j].trim()) continue;
+        try {
+          const entry = JSON.parse(lines[j]);
+          if (match(entry)) out.push(entry);
+        } catch (_) {
+          if (bus) bus.emit('health.anomaly', { kind: 'corrupt-line', path: files[i].path, line: j });
+        }
+      }
+    }
+    return out; // already newest-first
+  }
+
   // Archive one file to <relDir>/_archive/<name>.md.gz: gzip of a markdown digest
   // wrapping the raw content, then remove the original — no permanent deletion.
   function archiveFile(fileEntry) {
@@ -209,7 +237,7 @@ function createFsStore(vaultRootFn, bus) {
 
   return {
     vaultPath, ensureDir, readText, writeText, readJSON, writeJSON,
-    listFiles, appendLine, readLines, readDirLines, pruneOldFiles,
+    listFiles, appendLine, readLines, readDirLines, readDirLinesReverse, pruneOldFiles,
     exists, removeFile, todayKey, withLock, root
   };
 }

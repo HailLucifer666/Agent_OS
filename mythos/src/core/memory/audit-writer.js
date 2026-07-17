@@ -50,26 +50,37 @@ function createAuditWriter({ fs, config, bus, logger }) {
     }
   }
 
+  // Builds a single predicate from the goalId/tool/decision/tier filters so
+  // both the bounded (limit) and unbounded scan paths apply identically.
+  function buildMatcher(opts) {
+    return function(e) {
+      if (!e) return false;
+      if (opts.goalId && e.goalId !== opts.goalId) return false;
+      if (opts.tool && e.tool !== opts.tool) return false;
+      if (opts.decision && e.decision !== opts.decision) return false;
+      if (opts.tier !== undefined && e.tier !== opts.tier) return false;
+      return true;
+    };
+  }
+
   function query(opts) {
     opts = opts || {};
+
+    // Bounded newest-first walk whenever a limit is present (the panel
+    // always passes one) — never loads the whole Audit directory history.
+    // Falls back to the full scan only for since/until-windowed queries
+    // (no known UI caller combines those with limit today) or truly
+    // unbounded queries (none exist in the UI path).
+    if (opts.limit && !opts.since && !opts.until) {
+      return fs.readDirLinesReverse('Audit', { limit: opts.limit, match: buildMatcher(opts) });
+    }
+
     const entries = fs.readDirLines('Audit', {
       since: opts.since,
       until: opts.until
     });
 
-    let filtered = entries.filter(Boolean);
-    if (opts.goalId) {
-      filtered = filtered.filter(function(e) { return e.goalId === opts.goalId; });
-    }
-    if (opts.tool) {
-      filtered = filtered.filter(function(e) { return e.tool === opts.tool; });
-    }
-    if (opts.decision) {
-      filtered = filtered.filter(function(e) { return e.decision === opts.decision; });
-    }
-    if (opts.tier !== undefined) {
-      filtered = filtered.filter(function(e) { return e.tier === opts.tier; });
-    }
+    let filtered = entries.filter(buildMatcher(opts));
 
     // Newest first
     filtered.reverse();

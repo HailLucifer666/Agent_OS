@@ -453,10 +453,12 @@ function createServer(deps) {
       try {
         text = await groqStt.transcribe(req.body, req.headers['content-type']);
       } catch (groqErr) {
-        // Groq failed — try browser fallback hint
-        return res.status(200).json({ ok: false, error: 'stt-down', fallback: 'browser', message: 'Speech-to-text service is temporarily unavailable. Use browser speech recognition.' });
+        // Groq failed — surface it honestly; the UI shows a caption and the
+        // operator knows to retry instead of hearing dead silence.
+        bus.emit('health.anomaly', { kind: 'stt-failed', error: String(groqErr && groqErr.message || groqErr) });
+        return res.status(503).json({ ok: false, error: 'stt-down', fallback: 'browser', message: 'Speech-to-text service is temporarily unavailable. Use browser speech recognition.' });
       }
-      res.json({ text });
+      res.json({ ok: true, text });
     } catch (err) {
       res.status(502).json({ error: err.message });
     }
