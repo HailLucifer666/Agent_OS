@@ -99,6 +99,8 @@
   --accent: #4fd8ff;
   --accent-dim: rgba(79, 216, 255, 0.3);
   --accent-glow: 0 0 12px rgba(79, 216, 255, 0.3);
+  --glow-accent: 0 0 18px rgba(79, 216, 255, 0.22);
+  --glow-soft: 0 0 32px rgba(79, 216, 255, 0.10);
   --danger: #ff5f66;
   --ok: #43e5a0;
   --hairline: rgba(120, 200, 255, 0.14);
@@ -126,6 +128,17 @@ body {
     radial-gradient(circle at 15% -10%, rgba(79, 216, 255, 0.04), transparent 40%),
     radial-gradient(circle at 85% 0%, rgba(79, 216, 255, 0.02), transparent 35%);
   background-attachment: fixed;
+}
+
+/* page vignette — pure CSS, zero canvas cost. z-index 4: above widgets'
+   z3, below overlays' z50. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(2, 4, 8, 0.55) 100%);
 }
 
 h1, h2, h3 {

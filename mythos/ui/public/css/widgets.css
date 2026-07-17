@@ -7,11 +7,40 @@
   padding: 0 0 12px;
   pointer-events: auto;
   user-select: none;
+  border-color: rgba(120, 200, 255, 0.10); /* quieter than .glass's default hairline */
+  transition: box-shadow var(--dur-fast) var(--ease);
 }
 
 .widget-card.dragging {
   opacity: 0.85;
   box-shadow: var(--accent-glow);
+}
+
+.widget-card:hover {
+  box-shadow: var(--glow-soft), 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* corner brackets — subtle L-shaped accents, top-left + bottom-right */
+.widget-card::before,
+.widget-card::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+.widget-card::before {
+  top: 0;
+  left: 0;
+  border-top: 1px solid var(--hairline);
+  border-left: 1px solid var(--hairline);
+}
+.widget-card::after {
+  bottom: 0;
+  right: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-right: 1px solid var(--hairline);
 }
 
 /* Resize handle — bottom-right corner grip. Hit area extended beyond the
@@ -38,7 +67,9 @@
 
 .widget-title {
   font-size: 10px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.29em; /* ADAPT: spec's 0.14em was lower than this file's
+    existing 0.22em — increased ~30% from the current value instead, per
+    handoff's ADAPT note (never shrink below 10px; already at the floor). */
   color: var(--text-faint);
   padding: 10px 14px 6px;
   cursor: grab;
