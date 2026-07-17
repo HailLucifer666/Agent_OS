@@ -35,14 +35,23 @@ async function launchSpotify() {
 
 async function getSpotifyWindow() {
   if (!pcEffectors) return fail('PC effectors not initialized');
-  const result = await pcEffectors.invoke('list_windows', {}, {});
-  if (!result.ok) return fail(result.result);
-  const windows = (result.result && result.result.windows) || [];
-  const spotifyWindow = windows.find(w =>
-    w.processName && w.processName.toLowerCase().includes('spotify')
-  );
-  if (!spotifyWindow) return fail('Spotify window not found. Is Spotify running?');
-  return ok(spotifyWindow);
+  // Cold-launched Spotify (Chromium) creates its window lazily — a single-shot
+  // list_windows right after launch_app races it. Same retry/backoff the
+  // cua-driver path uses (cuaPlayViaDriver below); keeps working when
+  // cua-driver is OFFLINE.
+  const ATTEMPTS = 4;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const result = await pcEffectors.invoke('list_windows', {}, {});
+    if (result.ok) {
+      const windows = (result.result && result.result.windows) || [];
+      const spotifyWindow = windows.find(w =>
+        w.processName && w.processName.toLowerCase().includes('spotify')
+      );
+      if (spotifyWindow) return ok(spotifyWindow);
+    }
+    if (attempt < ATTEMPTS) await new Promise(r => setTimeout(r, 1200 + attempt * 400));
+  }
+  return fail('Spotify window not found after ' + ATTEMPTS + ' attempts. Is Spotify running?');
 }
 
 async function sendMediaKey(key) {
@@ -487,28 +496,28 @@ async function spotify_status() {
 const TOOLS = [
   {
     name: 'spotify_play_pause',
-    description: 'Toggle play/pause on Spotify.',
+    description: 'Pause or resume Spotify playback. Use for "pause", "pause the music", "stop the song", "resume", "unpause", or "play" when no new track is named.',
     params: {},
     danger: false,
     fn: spotify_play_pause
   },
   {
     name: 'spotify_next',
-    description: 'Skip to next track on Spotify.',
+    description: 'Skip to the next track on Spotify. Use for "next track", "skip", "next song", "skip this one".',
     params: {},
     danger: false,
     fn: spotify_next
   },
   {
     name: 'spotify_previous',
-    description: 'Go to previous track on Spotify.',
+    description: 'Go back to the previous track on Spotify. Use for "previous track", "go back", "last song", "play that again".',
     params: {},
     danger: false,
     fn: spotify_previous
   },
   {
     name: 'spotify_volume',
-    description: 'Adjust Spotify volume.',
+    description: 'Adjust Spotify volume. Use for "volume up", "volume down", "louder", "quieter", "turn it up", "turn it down", "mute".',
     params: { direction: 'string - up, down, or mute' },
     danger: false,
     fn: spotify_volume

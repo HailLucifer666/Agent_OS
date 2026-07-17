@@ -117,7 +117,12 @@ describe('Spotify tool parameter validation', () => {
     mockPcEffectors = {
       invoke: async (tool, args) => {
         if (tool === 'launch_app') return { ok: true, result: { launched: true } };
-        if (tool === 'list_windows') return { ok: true, result: { windows: [] } };
+        // Non-empty so spotify_status resolves on the first getSpotifyWindow()
+        // attempt — an empty windows:[] here would now retry 4x with real
+        // backoff delays (Phase 2a's cold-launch retry loop), needlessly
+        // slowing this param-validation suite, which isn't testing the
+        // not-found/retry path at all.
+        if (tool === 'list_windows') return { ok: true, result: { windows: [{ pid: 1, processName: 'Spotify.exe', title: 'Spotify' }] } };
         if (tool === 'media_key') return { ok: true, result: { sent: true } };
         if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
         if (tool === 'ui_click') return { ok: true, result: { clicked: true } };
