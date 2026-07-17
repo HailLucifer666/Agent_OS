@@ -60,6 +60,7 @@ const { registerFromCalendar } = require('./core/effectors/from-calendar');
 const { registerFromSkills } = require('./core/effectors/from-skills');
 const { registerFromSpotify } = require('./core/effectors/from-spotify');
 const { registerFromWidgets } = require('./core/effectors/from-widgets');
+const { registerFromDocs } = require('./core/effectors/from-docs');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
@@ -341,6 +342,8 @@ async function main() {
       registerFromHermes(hub);
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
+      // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.
+      registerFromDocs(hub, { vault: memory.fs });
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
       // registry. checkpoints needs memory.audit + goals (both exist by now); forge

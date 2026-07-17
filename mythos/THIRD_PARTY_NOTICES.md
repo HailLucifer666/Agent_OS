@@ -44,3 +44,18 @@ Licensed under the Apache License, Version 2.0
 - **License:** Apache License 2.0
 - Vendored via npm, served locally at `/vendor/mediapipe` — never loaded from
   a CDN. (Predates this file; documented here for completeness.)
+
+## exceljs / pptxgenjs (document generation — Phase 2)
+
+- **exceljs** — https://github.com/exceljs/exceljs — MIT. Used by the
+  `generate_spreadsheet` effector (xlsx output sandboxed under
+  `vault/builds/docs/`).
+- **pptxgenjs** — https://github.com/gitbrent/pptxgenjs — MIT. Used by the
+  `generate_deck` effector (pptx output sandboxed under `vault/builds/docs/`).
+- The third Phase 2 effector, `generate_pdf`, adds **no new dependency**: it
+  renders styled HTML and invokes the locally-installed Chrome/Chromium in
+  headless `--print-to-pdf` mode, degrading honestly to an HTML file when
+  Chrome is absent. No runtime CDN or network fetch is introduced.
+
+All npm dependency licenses are repeated here only for the Phase 2 additions
+that motivated this entry; the canonical license list remains `package.json`.

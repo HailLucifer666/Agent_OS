@@ -17,6 +17,7 @@ const { registerFromBrowser } = require('../src/core/effectors/from-browser');
 const { registerFromDashboard, buildTools: buildDashboardTools } = require('../src/core/effectors/from-dashboard');
 const { registerFromProject, buildTools: buildProjectTools } = require('../src/core/effectors/from-project');
 const { registerFromGmail } = require('../src/core/effectors/from-gmail');
+const { registerFromDocs } = require('../src/core/effectors/from-docs');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
 const { createAgentActions } = require('../src/core/effectors/agent-actions');
@@ -113,8 +114,8 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 61 registered count', () => {
-  it('booting a hub with all register* functions (incl. gmail) against the real TOOLS arrays yields correct count', () => {
+describe('gate: 64 registered count', () => {
+  it('booting a hub with all register* functions (incl. gmail + docs) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
     const hub = createEffectorHub({ bus, config: {} });
@@ -125,18 +126,20 @@ describe('gate: 61 registered count', () => {
     registerFromDashboard(hub, ctx);
     registerFromProject(hub, ctx);
     registerFromGmail(hub, { logger: console });
+    registerFromDocs(hub, { vault: ctx.vault });
 
     // 54 base + open_web (from-dashboard) + send_key (from-pc) + capture_screenshot
     // (from-pc, BUG-009 — 2026-07-16) = 57, + click_at (from-pc, Item 12 —
     // 2026-07-16) = 58, + browser_launch_debug (from-browser, Phase 6 on-demand
     // launcher) = 59, + ambient_awareness (from-pc, Phase 2 Jarvis upgrade —
     // ambient screen awareness toggle) = 60, + daily_plan (from-dashboard,
-    // Phase 3 Jarvis upgrade — daily planning + accountability tool) = 61.
+    // Phase 3 Jarvis upgrade — daily planning + accountability tool) = 61,
+    // + 3 doc tools (generate_spreadsheet/deck/pdf, Phase 2 — 2026-07-17) = 64.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 61);
+    assert.equal(hub.count(), 64);
   });
 });
 
@@ -157,6 +160,7 @@ function buildRealCtxForGateTests() {
   const goalsEffector = createGoalsMdBridge({ fs, goalSystem: fakeGoalSystem, bus: fakeBus() });
   return {
     goalsEffector, pipeline, kanban, agentActions, buildRunner,
+    vault: fs,
     probes: { getStatus: async () => ({}) },
     abtop: { getState: () => ({}), killSession: async () => {} },
     config: {}

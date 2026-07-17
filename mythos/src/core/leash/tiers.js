@@ -97,6 +97,10 @@ const TIER_TABLE = {
   'kanban_build_card':     2,
   'start_project':         2,
   'run_mission':           2,
+  // Phase 2 docs-gen — sandboxed vault writes under builds/docs/, no destructive risk.
+  'generate_spreadsheet':  2,  // .xlsx via exceljs
+  'generate_deck':         2,  // .pptx via pptxgenjs
+  'generate_pdf':          2,  // .pdf via headless Chrome print-to-pdf; honest HTML fallback when absent
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,
