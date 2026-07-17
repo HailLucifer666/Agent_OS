@@ -39,6 +39,15 @@ fetch('/api/config/vad')
   .then((cfg) => { if (cfg) _vadOverrides = cfg; })
   .catch(() => {});
 
+// Wake-word ("hey jarvis") config, fetched once at boot alongside VAD tuning
+// above. armOnce (below) lazily imports wakeword.js only when enabled AND the
+// models are actually present on disk.
+let _wakewordCfg = null;
+fetch('/api/config/wakeword')
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => { if (cfg) _wakewordCfg = cfg; })
+  .catch(() => {});
+
 // overlays
 const overlays = createOverlayManager(document.getElementById('overlay-root'));
 
@@ -93,8 +102,15 @@ const mic = {
 };
 
 let voice = null;
+let wakeword = null;
+// Last-known voice-loop state — createVoiceLoop's returned API has no state
+// getter, so onVoiceState (called on every transition, including 'speaking'
+// during TTS playback) is the only way to know it here. Used by wake-word's
+// onWake below to avoid re-triggering while MYTHOS is talking.
+let _voiceState = 'idle';
 
 function onVoiceState(s) {
+  _voiceState = s;
   compose.setVoiceState(s);
   orb.setVoiceState(s);
   hud.setVoiceState(s);
@@ -213,8 +229,39 @@ subscribe(['camera-frame-request'], (msg) => {
 const armOnce = () => {
   document.removeEventListener('pointerdown', armOnce);
   ensureVoice();
+  ensureWakeWord();
 };
 document.addEventListener('pointerdown', armOnce);
+
+// Wake-word ("hey jarvis") — hands-free activation. Lazily imported (like
+// voice-loop.js above) only on the same first-gesture arm, and only when the
+// server reports it enabled AND the on-device models are actually present
+// (scripts/setup-wakeword.js). Deliberately NOT paused on visibilitychange —
+// unlike hud-canvas.js's render-pause pattern, always-on standby listening is
+// the entire point of this feature, so a backgrounded tab must keep listening.
+function ensureWakeWord() {
+  if (wakeword) return;
+  if (!_wakewordCfg || !_wakewordCfg.enabled) return;
+  if (!_wakewordCfg.modelsPresent) {
+    mic.setCaption('Wake word enabled but models missing — run scripts/setup-wakeword.js', 'error');
+    return;
+  }
+  import('./voice/wakeword.js').then(({ createWakeWord }) => {
+    wakeword = createWakeWord({
+      threshold: _wakewordCfg.threshold,
+      onWake: () => {
+        if (voice && voice.isActive()) return;   // already in a conversation
+        if (_voiceState === 'speaking') return;   // MYTHOS is talking — no re-trigger
+        if (orb.flashAction) orb.flashAction('wake', true);
+        toggleVoice();                             // same path as clicking the orb
+      },
+      onStatus: (s, msg) => { if (s === 'error') mic.setCaption('Wake word offline: ' + msg, 'error'); },
+    });
+    wakeword.start();
+  }).catch((err) => {
+    mic.setCaption('Wake word failed to load: ' + (err && err.message || err), 'error');
+  });
+}
 
 // Live build-job progress ('job' WS broadcasts from build-runner): auto-open
 // the pipeline panel when a build starts, narrate stage transitions in the

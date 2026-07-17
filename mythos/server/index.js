@@ -159,6 +159,11 @@ function createServer(deps) {
   // node_modules so the app never loads from a CDN).
   app.use('/vendor/mediapipe', express.static(path.join(__dirname, '..', 'node_modules', '@mediapipe', 'tasks-vision'), { etag: false, maxAge: 0, lastModified: false }));
 
+  // onnxruntime-web WASM runtime + ESM bundle (wake-word detection runs fully
+  // client-side; served from node_modules so the app never loads from a CDN —
+  // same convention as the mediapipe mount above).
+  app.use('/vendor/onnxruntime', express.static(path.join(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist'), { etag: false, maxAge: 0, lastModified: false }));
+
   app.use('/api', globalLimit);
   app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
 
@@ -180,6 +185,20 @@ function createServer(deps) {
       holdTicks: config.VAD_HOLD_TICKS,
       silenceMs: config.VAD_SILENCE_MS,
     });
+  });
+
+  // ---- /api/config/wakeword — hands-free "hey jarvis" activation. modelsPresent
+  // is a live statSync check (not a cached boot-time flag) so running
+  // scripts/setup-wakeword.js and reloading the HUD picks it up without a
+  // server restart. Models are CC BY-NC-SA and gitignored — see
+  // scripts/setup-wakeword.js and THIRD_PARTY_NOTICES.md.
+  app.get('/api/config/wakeword', (req, res) => {
+    const dir = path.join(__dirname, '..', 'ui', 'public', 'models', 'wakeword');
+    const files = ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx'];
+    const modelsPresent = files.every((f) => {
+      try { return require('fs').statSync(path.join(dir, f)).size > 0; } catch { return false; }
+    });
+    res.json({ enabled: config.WAKEWORD_ENABLED, threshold: config.WAKEWORD_THRESHOLD, modelsPresent });
   });
 
   // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----

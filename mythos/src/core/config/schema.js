@@ -41,6 +41,13 @@ const SCHEMA = {
   VAD_HOLD_TICKS:           { type: 'number', default: 3,     min: 1, max: 20 },
   VAD_SILENCE_MS:           { type: 'number', default: 1800,  min: 100, max: 10000 },
 
+  // Wake-word (hands-free "hey jarvis" — ui/public/js/voice/wakeword.js).
+  // Opt-in: models are CC BY-NC-SA and fetched by scripts/setup-wakeword.js,
+  // never committed (see .gitignore, THIRD_PARTY_NOTICES.md). Off by default
+  // even when the models happen to be present.
+  WAKEWORD_ENABLED:         { type: 'bool',   default: false },
+  WAKEWORD_THRESHOLD:       { type: 'number', default: 0.5, min: 0.1, max: 0.95 },
+
   // get_weather tool default location ("lat,lon") when no location is spoken —
   // same Kolkata fallback the dashboard weather widget already uses.
   WEATHER_LOCATION:         { type: 'string', default: '22.57,88.36' },

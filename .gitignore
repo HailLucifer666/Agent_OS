@@ -7,6 +7,10 @@ _devtools/
 app/vault/
 mythos/vault/
 
+# openWakeWord pretrained models (CC BY-NC-SA — fetched by scripts/setup-wakeword.js,
+# never committed; see THIRD_PARTY_NOTICES.md)
+mythos/ui/public/models/wakeword/
+
 # secrets
 app/.env
 .env
@@ -31,3 +35,4 @@ graphify-out/
 
 # zcode session plans
 .zcode/plans/
+.gstack/
