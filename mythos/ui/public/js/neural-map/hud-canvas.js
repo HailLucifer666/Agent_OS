@@ -50,6 +50,12 @@ function cssVar(name, fallback) {
   return v || fallback;
 }
 
+// hex '#rrggbb' -> 'rgba(r,g,b,a)' — canvas gradients need explicit alpha stops
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
 // mulberry32 — tiny seeded PRNG so starfield/branch geometry is stable across
 // frames and re-renders (flicker-free), yet organic.
 function mulberry32(seed) {
@@ -127,6 +133,8 @@ export function mountHud(canvas, ctx) {
   let raf = null;
   let t = 0;
   let lastTime = 0;
+  let voiceState = 'idle';   // idle | listening | processing | speaking (from app.js)
+  let activity = 0;          // live voice amplitude 0..1 — drives ambient bloom boost
 
   // Constellation pan — drag empty canvas to move the ENTIRE node graph (core,
   // modules, clusters, tendrils, ripples) so widgets get breathing room. The
@@ -523,6 +531,25 @@ export function mountHud(canvas, ctx) {
     c2d.fillText(value.split('').join(' '), width / 2, 44);
   }
 
+  // ---- ambient bloom — full-viewport voice-state wash, drawn first (behind
+  // the starfield/tendrils/nodes) so listening/speaking/thinking read as an
+  // atmosphere shift, not just an orb-local effect ----
+  function drawBloom() {
+    const HUES = { speaking: '#f5d020', listening: '#43e5a0', processing: '#a78bfa' };
+    const hue = HUES[voiceState] || COLORS.accent;
+    const boost = voiceState === 'speaking' ? 0.55 + activity * 0.45
+      : voiceState === 'listening' ? 0.40
+      : voiceState === 'processing' ? 0.45 : 0.25;
+    const pulse = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 1.4);
+    const rad = Math.min(width, height) * (0.28 + 0.05 * boost * pulse);
+    const g = c2d.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, rad);
+    g.addColorStop(0, hexA(hue, 0.055 * boost + 0.02));
+    g.addColorStop(0.6, hexA(hue, 0.025 * boost));
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    c2d.fillStyle = g;
+    c2d.fillRect(0, 0, width, height);
+  }
+
   function drawFaintHudRings() {
     // large concentric guide rings framing the whole scene (reference backdrop)
     const cx = width / 2, cy = height / 2;
@@ -547,12 +574,14 @@ export function mountHud(canvas, ctx) {
     c2d.scale(dpr, dpr);
     c2d.clearRect(0, 0, width, height);
 
+    drawBloom();
     drawFaintHudRings();
 
-    // 1. ambient starfield (fixed positions, gentle twinkle)
+    // 1. ambient starfield (fixed positions, gentle twinkle) — dimmed slightly
+    // so the bloom wash reads through instead of competing with it
     bgDots.forEach((d) => {
       const a = d.a * (reduced ? 1 : 0.75 + 0.25 * Math.sin(t * d.tws + d.tw));
-      glowDot(d.u * width, d.v * height, d.r, COLORS.accent, a);
+      glowDot(d.u * width, d.v * height, d.r, COLORS.accent, a * 0.8);
     });
 
     // Everything from here to the node pass moves with the constellation pan.
@@ -713,17 +742,21 @@ export function mountHud(canvas, ctx) {
   };
   document.addEventListener('visibilitychange', onVis);
 
-  return () => {
-    if (raf) cancelAnimationFrame(raf);
-    unsub();
-    offRefresh();
-    window.removeEventListener('resize', onResize);
-    document.removeEventListener('visibilitychange', onVis);
-    canvas.removeEventListener('mousemove', onMove);
-    canvas.removeEventListener('click', onClick);
-    canvas.removeEventListener('pointerdown', onPointerDown);
-    canvas.removeEventListener('pointermove', onPointerMove);
-    canvas.removeEventListener('pointerup', onPointerUp);
-    canvas.removeEventListener('pointercancel', onPointerUp);
+  return {
+    cleanup() {
+      if (raf) cancelAnimationFrame(raf);
+      unsub();
+      offRefresh();
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVis);
+      canvas.removeEventListener('mousemove', onMove);
+      canvas.removeEventListener('click', onClick);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointercancel', onPointerUp);
+    },
+    setVoiceState(s) { voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle'; },
+    setActivity(v) { activity = Math.max(0, Math.min(1, Number(v) || 0)); },
   };
 }

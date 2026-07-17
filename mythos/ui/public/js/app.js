@@ -45,8 +45,11 @@ const orb = mountCoreOrb(document.getElementById('core-orb'), {
 
 // neural map — onPan keeps the DOM core-orb glued to the panned constellation
 // (hud.css centers it with translate(-50%,-50%); the pan offset is additive).
+// mountHud's return shape changed from a bare cleanup fn to { cleanup,
+// setVoiceState, setActivity } (Orb 2.0 ambient bloom needs the same
+// voice-state/activity feed the orb gets) — captured here, was discarded before.
 const orbEl = document.getElementById('core-orb');
-mountHud(document.getElementById('hud-canvas'), {
+const hud = mountHud(document.getElementById('hud-canvas'), {
   ...ctx,
   onNodeClick: (panelId) => overlays.openPanel(panelId),
   onAction: (category, ok) => orb.flashAction(category, ok),
@@ -68,9 +71,9 @@ mountConfirmModal(document.getElementById('confirm-root'), {
 // (text + voice); the old standalone mic indicator is hidden.
 const compose = createComposeBar({
   onVoiceToggle: () => toggleVoice(),
-  onVoiceState: (s) => orb.setVoiceState(s),
+  onVoiceState: (s) => { orb.setVoiceState(s); hud.setVoiceState(s); },
   onCaption: (text, kind) => {},
-  onActivity: () => {},
+  onActivity: (level) => { orb.setActivity(level); hud.setActivity(level); },
   onSubmitText: sendTextMessage,
 });
 
@@ -86,6 +89,7 @@ let voice = null;
 function onVoiceState(s) {
   compose.setVoiceState(s);
   orb.setVoiceState(s);
+  hud.setVoiceState(s);
 }
 
 function ensureVoice() {
@@ -96,7 +100,7 @@ function ensureVoice() {
       closePanel: () => overlays.closeAll(),
       onCaption: (text, kind) => compose.setCaption(text, kind),
       onVisionQuery: (text) => describeScene(text),
-      onActivity: (level) => compose.setActivity(level),
+      onActivity: (level) => { compose.setActivity(level); orb.setActivity(level); hud.setActivity(level); },
       brainOnline: () => _brainOnline,
       vad: _vadOverrides || undefined,
     });

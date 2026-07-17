@@ -24,6 +24,12 @@ function cssVar(name, fallback) {
   return v || fallback;
 }
 
+// hex '#rrggbb' -> 'rgba(r,g,b,a)' — canvas gradients need explicit alpha stops
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
 // mulberry32 — local seeded PRNG (same convention as hud-canvas.js's own copy)
 // so the ambient particle ring is stable across frames/resizes, never flickering.
 function mulberry32(seed) {
@@ -72,6 +78,7 @@ export function mountCoreOrb(canvas, ctx) {
   let degraded = false;
   let confirmPending = false;
   let voiceState = 'idle';      // idle | listening | processing (from voice-loop, via app.js)
+  let activity = 0;             // live voice amplitude 0..1 (speaking halo waves)
   let ringR = 46;                // updated each frame; sparks/particles read this
   let actionFlash = null;        // { color, ok, decay }
   let sparks = [];               // { angle, life, len, color }
@@ -113,12 +120,12 @@ export function mountCoreOrb(canvas, ctx) {
   function statusColor() { return STATE_COLOR[resolveState()]; }
   function statusLine() { return STATE_LINE[resolveState()]; }
 
-  // ---- ambient particles orbiting just outside the ring ----
+  // ---- halo particles orbiting just outside the ring (depth-sorted, state-reactive) ----
   const orbRand = mulberry32(0xA11CE0DE);
-  const particles = Array.from({ length: 16 }, () => ({
+  const particles = Array.from({ length: 48 }, () => ({
     angle0: orbRand() * TAU, band: orbRand(), dir: orbRand() < 0.5 ? 1 : -1,
-    speed: 0.08 + orbRand() * 0.14, r: 0.6 + orbRand() * 0.7,
-    phase: orbRand() * TAU, tws: 0.3 + orbRand() * 0.5,
+    speed: 0.06 + orbRand() * 0.16, r: 0.5 + orbRand() * 0.9,
+    phase: orbRand() * TAU, tws: 0.3 + orbRand() * 0.5, depth: orbRand(), // 0 far .. 1 near
   }));
 
   function glowDot(x, y, r, color, alpha) {
@@ -134,16 +141,177 @@ export function mountCoreOrb(canvas, ctx) {
     c2d.globalAlpha = 1;
   }
 
-  function drawAmbientParticles(c, R, color) {
+  function drawHaloParticles(c, R, color, state) {
     particles.forEach((p) => {
       const angle = reduced ? p.angle0 : p.angle0 + t * p.speed * p.dir;
-      const bob = reduced ? 0 : Math.sin(t * p.tws + p.phase) * 0.035;
-      const rad = R * (1.08 + p.band * 0.34 + bob);
-      const x = c + Math.cos(angle) * rad;
-      const y = c + Math.sin(angle) * rad;
-      const alpha = reduced ? 0.18 : 0.15 + 0.15 * (0.5 + 0.5 * Math.sin(t * p.tws * 1.3 + p.phase));
-      glowDot(x, y, p.r, color, alpha);
+      let radMul = 1.10 + p.band * 0.42;
+      if (!reduced && state === 'listening') {
+        radMul *= 1 - 0.05 * (0.5 + 0.5 * Math.sin(t * 2.618));               // inhale, breathe-synced
+      } else if (!reduced && state === 'speaking') {
+        radMul *= 1 + 0.10 * activity * Math.sin(t * 7 + p.phase);            // rhythmic outward waves
+      } else if (!reduced) {
+        radMul *= 1 + Math.sin(t * p.tws + p.phase) * 0.03;                   // calm drift
+      }
+      const x = c + Math.cos(angle) * R * radMul;
+      const y = c + Math.sin(angle) * R * radMul;
+      const alpha = (0.08 + p.depth * 0.22) * (reduced ? 1 : 0.7 + 0.3 * Math.sin(t * p.tws + p.phase));
+      glowDot(x, y, p.r * (0.6 + p.depth * 0.7), color, alpha);
     });
+  }
+
+  // ---- plasma core — drifting additive radial gradients, bloom rides state + activity ----
+  function drawPlasmaCore(c, R, color, state) {
+    const boost = state === 'speaking' ? 0.5 + activity * 0.6
+      : state === 'thinking' ? 0.45
+      : state === 'listening' ? 0.35 : 0.25;
+    c2d.save();
+    c2d.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      const a = reduced ? i * 2.1 : t * (0.30 + i * 0.17) + i * 2.1;
+      const ox = Math.cos(a) * R * 0.10, oy = Math.sin(a * 1.31) * R * 0.10;
+      const rad = R * (0.50 + i * 0.14);
+      const g = c2d.createRadialGradient(c + ox, c + oy, 0, c + ox, c + oy, rad);
+      g.addColorStop(0, hexA(color, 0.10 + boost * 0.12));
+      g.addColorStop(0.55, hexA(color, 0.04 + boost * 0.05));
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c2d.fillStyle = g;
+      c2d.beginPath(); c2d.arc(c, c, R * 0.98, 0, TAU); c2d.fill();
+    }
+    // chromatic rim: violet outer wash for depth (fixed, not state-colored)
+    const rim = c2d.createRadialGradient(c, c, R * 0.86, c, c, R);
+    rim.addColorStop(0, 'rgba(0,0,0,0)');
+    rim.addColorStop(1, 'rgba(140, 120, 255, 0.06)');
+    c2d.fillStyle = rim;
+    c2d.beginPath(); c2d.arc(c, c, R, 0, TAU); c2d.fill();
+    c2d.restore();
+  }
+
+  // ---- orbital system — tilted ellipses + comet tracers with tails ----
+  const ORBITS = [
+    { rx: 1.30, ry: 0.40, tilt: -0.55, speed: 0.22, dir: 1 },
+    { rx: 1.46, ry: 0.34, tilt: 0.85, speed: 0.15, dir: -1 },
+    { rx: 1.64, ry: 0.48, tilt: 0.15, speed: 0.09, dir: 1, minSize: 280 }, // desktop only
+  ];
+  function drawOrbitals(c, R, color) {
+    ORBITS.forEach((o) => {
+      if (o.minSize && size < o.minSize) return;
+      c2d.save();
+      c2d.translate(c, c);
+      c2d.rotate(o.tilt);
+      c2d.beginPath();
+      c2d.ellipse(0, 0, R * o.rx, R * o.rx * o.ry, 0, 0, TAU);
+      c2d.strokeStyle = color;
+      c2d.globalAlpha = 0.09;
+      c2d.lineWidth = 1;
+      c2d.stroke();
+      c2d.globalAlpha = 1;
+      if (!reduced) {
+        const a = t * o.speed * o.dir * TAU * 0.16 + o.tilt * 7; // deterministic phase spread
+        for (let k = 5; k >= 0; k--) {                            // tail first, head last
+          const ak = a - o.dir * k * 0.06;
+          const px = Math.cos(ak) * R * o.rx, py = Math.sin(ak) * R * o.rx * o.ry;
+          glowDot(px, py, k === 0 ? 1.7 : 1.1, color, (1 - k / 6) * (k === 0 ? 0.9 : 0.35));
+        }
+      }
+      c2d.restore();
+    });
+  }
+
+  // ---- arc rings — two counter-rotating broken arcs just outside the base ring ----
+  const ARC_RINGS = [
+    { r: 1.09, w: 1.6, speed: 0.55, dir: 1, segs: [[0.0, 1.35], [2.1, 0.55], [3.3, 1.85], [5.6, 0.4]] },
+    { r: 1.15, w: 0.9, speed: 0.34, dir: -1, segs: [[0.5, 2.2], [3.2, 0.5], [4.4, 1.15]] },
+  ];
+  function arcSpeedMul(state) {
+    if (state === 'thinking') return 1.8;
+    if (state === 'speaking') return 1.0 + activity * 1.4;
+    if (state === 'listening') return 0.55;
+    return 1;
+  }
+  function drawArcRings(c, R, color, state) {
+    const mul = arcSpeedMul(state);
+    ARC_RINGS.forEach((ring) => {
+      const rot = reduced ? 0 : t * ring.speed * ring.dir * mul;
+      c2d.save();
+      c2d.strokeStyle = color;
+      c2d.lineWidth = ring.w;
+      c2d.lineCap = 'round';
+      c2d.globalAlpha = 0.55;
+      c2d.shadowBlur = 6;
+      c2d.shadowColor = color;
+      ring.segs.forEach(([a0, len]) => {
+        c2d.beginPath();
+        c2d.arc(c, c, R * ring.r, a0 + rot, a0 + rot + len);
+        c2d.stroke();
+      });
+      c2d.restore();
+    });
+  }
+
+  // ---- neural web — fibonacci-sphere nodes rotating inside the orb, synapse
+  // edges, traveling firing pulses (independent of the synapse-spark radial FX) ----
+  const WEB_NODES = Array.from({ length: 24 }, (_, i) => {
+    const y = 1 - (i / 23) * 2;
+    const rXZ = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = i * Math.PI * (3 - Math.sqrt(5)); // golden angle
+    return { x: Math.cos(theta) * rXZ, y, z: Math.sin(theta) * rXZ };
+  });
+  // precompute: each node's 2 nearest neighbors -> unique edge list
+  const WEB_EDGES = (() => {
+    const edges = new Set();
+    WEB_NODES.forEach((n, i) => {
+      const near = WEB_NODES.map((m, j) => ({ j, d: (n.x - m.x) ** 2 + (n.y - m.y) ** 2 + (n.z - m.z) ** 2 }))
+        .filter((e) => e.j !== i).sort((a, b) => a.d - b.d).slice(0, 2);
+      near.forEach((e) => edges.add(i < e.j ? `${i}-${e.j}` : `${e.j}-${i}`));
+    });
+    return [...edges].map((k) => k.split('-').map(Number));
+  })();
+  let firings = [];      // { edgeIdx, prog }  cap 6
+  let fireTimer = 0.6;
+
+  function webProject(n, rot, R) {
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const x = n.x * cos - n.z * sin;
+    const z = n.x * sin + n.z * cos;
+    return { sx: x * R * 0.58, sy: n.y * R * 0.42, depth: (z + 1) / 2 }; // depth 0(back)..1(front)
+  }
+  function drawNeuralWeb(c, R, color, state, dt) {
+    const rot = reduced ? 0.8 : t * 0.25;
+    const pts = WEB_NODES.map((n) => webProject(n, rot, R));
+    // edges (behind nodes)
+    WEB_EDGES.forEach(([a, b]) => {
+      const d = (pts[a].depth + pts[b].depth) / 2;
+      c2d.beginPath();
+      c2d.moveTo(c + pts[a].sx, c + pts[a].sy);
+      c2d.lineTo(c + pts[b].sx, c + pts[b].sy);
+      c2d.strokeStyle = color;
+      c2d.globalAlpha = 0.05 + d * 0.10;
+      c2d.lineWidth = 0.7;
+      c2d.stroke();
+      c2d.globalAlpha = 1;
+    });
+    // firing pulses — spawn cadence: thinking 3x faster
+    if (!reduced) {
+      fireTimer -= dt * (state === 'thinking' ? 3 : 1);
+      if (fireTimer <= 0) {
+        firings.push({ edgeIdx: Math.floor(Math.random() * WEB_EDGES.length), prog: 0 });
+        if (firings.length > 6) firings.shift();
+        fireTimer = 0.5 + Math.random() * 1.2;
+      }
+    }
+    for (let i = firings.length - 1; i >= 0; i--) {
+      const f = firings[i];
+      f.prog += dt * 1.8;
+      if (f.prog >= 1) { firings.splice(i, 1); continue; }
+      const [a, b] = WEB_EDGES[f.edgeIdx];
+      const e = f.prog < 0.5 ? 2 * f.prog * f.prog : 1 - Math.pow(-2 * f.prog + 2, 2) / 2; // easeInOut
+      const x = c + pts[a].sx + (pts[b].sx - pts[a].sx) * e;
+      const y = c + pts[a].sy + (pts[b].sy - pts[a].sy) * e;
+      glowDot(x, y, 1.4, color, 0.85 * Math.sin(f.prog * Math.PI));
+      if (f.prog > 0.85) glowDot(c + pts[b].sx, c + pts[b].sy, 2.2, color, (f.prog - 0.85) * 5); // arrival flare
+    }
+    // nodes (front)
+    pts.forEach((p) => glowDot(c + p.sx, c + p.sy, 0.8 + p.depth * 0.9, color, 0.10 + p.depth * 0.30));
   }
 
   // ---- firing synapses — short sparks radiating from the ring edge ----
@@ -207,11 +375,12 @@ export function mountCoreOrb(canvas, ctx) {
 
   // ---- drawing ----
   function drawRing(c, R, color, state) {
-    // faint fill disc — a touch lighter than the page, glassy
+    // faint fill disc — a touch lighter than the page, glassy (alphas trimmed
+    // ~15%: the plasma core now provides the orb's body underneath this)
     const disc = c2d.createRadialGradient(c, c - R * 0.5, R * 0.1, c, c, R);
-    disc.addColorStop(0, 'rgba(30, 45, 70, 0.55)');
-    disc.addColorStop(0.7, 'rgba(12, 20, 34, 0.75)');
-    disc.addColorStop(1, 'rgba(6, 10, 18, 0.9)');
+    disc.addColorStop(0, 'rgba(30, 45, 70, 0.47)');
+    disc.addColorStop(0.7, 'rgba(12, 20, 34, 0.64)');
+    disc.addColorStop(1, 'rgba(6, 10, 18, 0.77)');
     c2d.beginPath();
     c2d.arc(c, c, R, 0, TAU);
     c2d.fillStyle = disc;
@@ -288,7 +457,7 @@ export function mountCoreOrb(canvas, ctx) {
     c2d.textBaseline = 'middle';
     const spaced = name.split('').join('  '); // hair-space tracking
     c2d.fillStyle = TEXT;
-    c2d.shadowBlur = 14;
+    c2d.shadowBlur = 10;
     c2d.shadowColor = 'rgba(180, 225, 255, 0.6)';
     c2d.fillText(spaced, c, c - R * 0.06);
     c2d.shadowBlur = 0;
@@ -314,15 +483,15 @@ export function mountCoreOrb(canvas, ctx) {
       const frac = i / steps;
       const x = c - half + frac * half * 2;
       // periodic EKG-ish shape: sparse sharp spikes over a soft wiggle
-      const beat = Math.pow(Math.max(0, Math.sin(frac * Math.PI * 6 - phase)), 9);
+      const beat = Math.pow(Math.max(0, Math.sin(frac * Math.PI * 4 - phase)), 9);
       const wig = Math.sin(frac * Math.PI * 26 - phase * 3) * 0.18;
       const y = wy - (beat * 2.4 + wig) * amp;
       if (i === 0) c2d.moveTo(x, y);
       else c2d.lineTo(x, y);
     }
     c2d.strokeStyle = color;
-    c2d.globalAlpha = 0.75;
-    c2d.lineWidth = 1.2;
+    c2d.globalAlpha = 0.65;
+    c2d.lineWidth = 1.0;
     c2d.shadowBlur = 5 + level * 8;
     c2d.shadowColor = color;
     c2d.stroke();
@@ -355,8 +524,12 @@ export function mountCoreOrb(canvas, ctx) {
     ringR = R;
     const state = resolveState();
     const color = STATE_COLOR[state];
-    drawAmbientParticles(c, R, color);
+    drawPlasmaCore(c, R, color, state);      // behind everything
+    drawOrbitals(c, R, color);               // tilted ellipses + comets
+    drawHaloParticles(c, R, color, state);
     drawRing(c, R, color, state);
+    drawArcRings(c, R, color, state);        // Jarvis broken arcs
+    drawNeuralWeb(c, R, color, state, dt);   // internal synapse web
     drawSynapseSparks(c, dt);
     drawGlyph(c, R, color);
     drawWordmark(c, R);
@@ -408,6 +581,9 @@ export function mountCoreOrb(canvas, ctx) {
     setVoiceState(s) {
       voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle';
     },
+    // live voice amplitude 0..1 — drives the speaking-state plasma boost, arc
+    // speed, and outward halo waves. Harmless no-op at other states.
+    setActivity(v) { activity = Math.max(0, Math.min(1, Number(v) || 0)); },
     // category comes from hud-canvas.js's toolTarget() — single source of
     // truth for tool->category mapping, never re-derived here.
     flashAction(category, ok) {
