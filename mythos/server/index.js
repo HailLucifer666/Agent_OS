@@ -220,6 +220,22 @@ function createServer(deps) {
     });
   });
 
+  // Media transport — buttons on the media widget. media_key is Tier 2
+  // (auto-allowed); the leash check still writes the audit line.
+  const MEDIA_KEYS = ['play_pause', 'next_track', 'prev_track', 'volume_up', 'volume_down', 'volume_mute'];
+  app.post('/api/media/control', express.json(), async (req, res) => {
+    try {
+      const key = req.body && req.body.key;
+      if (!MEDIA_KEYS.includes(key)) return res.status(400).json({ ok: false, error: 'invalid media key' });
+      const decision = leash.check({ tool: 'media_key', args: { key } }, { goalId: null });
+      if (!decision.allow) return res.status(403).json({ ok: false, error: decision.reason });
+      const result = await effectors.invoke('media_key', { key }, {});
+      res.json({ ok: !!result.ok });
+    } catch (err) {
+      res.status(502).json({ ok: false, error: err.message });
+    }
+  });
+
   // CONSISTENCY FIX (P7 vs NOVA UI, documented in ROADMAP.md P9): the byte-identical
   // NOVA goals view renders stats.{total,active,completed,progress} (app/lib/goals.js
   // shape), but the P7 goals-effector bridge ships stats() -> {total,done,active}.

@@ -203,6 +203,7 @@ button {
 .text-dim { color: var(--text-dim); }
 .text-faint { color: var(--text-faint); }
 .text-gold { color: var(--gold); }
+.text-warn { color: var(--status-warn); }
 
 /* gold divider with sparkle, used across headers/sections */
 .gold-divider {

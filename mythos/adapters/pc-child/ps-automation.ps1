@@ -616,6 +616,16 @@ function Handle-MediaStatus {
             }
         }
 
+        # Timeline (position/duration) — synchronous properties; guard separately
+        # so a timeline failure never degrades the rest of media_status.
+        try {
+            $timeline = $currentSession.GetTimelineProperties()
+            if ($timeline) {
+                $result.positionSec = [int]$timeline.Position.TotalSeconds
+                $result.durationSec = [int]$timeline.EndTime.TotalSeconds
+            }
+        } catch { }
+
         return $result
     } catch {
         return @{ available = $true; playing = $false; error = $_.Exception.Message }

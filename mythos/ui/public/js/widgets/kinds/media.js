@@ -12,13 +12,40 @@ export function mountMedia(el) {
     <div class="widget-value" data-role="media-title">—</div>
     <div class="widget-sub" data-role="media-artist">no media playing</div>
     <div class="widget-sub" data-role="media-status"></div>
+    <div class="media-progress" data-role="media-progress" hidden><div class="media-progress-fill" data-role="media-progress-fill"></div></div>
+    <div class="media-controls" data-role="media-controls">
+      <button data-key="prev_track" title="Previous" aria-label="Previous track">⏮</button>
+      <button data-key="play_pause" title="Play/Pause" aria-label="Play or pause">⏯</button>
+      <button data-key="next_track" title="Next" aria-label="Next track">⏭</button>
+      <button data-key="volume_down" title="Volume down" aria-label="Volume down">🔉</button>
+      <button data-key="volume_up" title="Volume up" aria-label="Volume up">🔊</button>
+    </div>
   `;
   const artEl = el.querySelector('[data-role="media-art"]');
   const titleEl = el.querySelector('[data-role="media-title"]');
   const artistEl = el.querySelector('[data-role="media-artist"]');
   const statusEl = el.querySelector('[data-role="media-status"]');
+  const progressEl = el.querySelector('[data-role="media-progress"]');
+  const progressFillEl = el.querySelector('[data-role="media-progress-fill"]');
+  const controlsEl = el.querySelector('[data-role="media-controls"]');
   let disposed = false;
   let timer = null;
+
+  // One delegated listener for all 5 buttons — posts the key, then refreshes
+  // shortly after so the widget reflects the new state fast (5s poll alone
+  // would feel laggy right after a click).
+  controlsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-key]');
+    if (!btn) return;
+    const key = btn.dataset.key;
+    fetch('/api/media/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    }).then((res) => {
+      if (res.ok) setTimeout(load, 400);
+    }).catch(() => {});
+  });
 
   async function load() {
     try {
@@ -33,6 +60,7 @@ export function mountMedia(el) {
         artistEl.textContent = 'no media playing';
         statusEl.textContent = data.error ? `error: ${escapeHtml(data.error)}` : '';
         statusEl.classList.add('media-idle');
+        progressEl.hidden = true;
         return;
       }
       const m = data.media;
@@ -60,6 +88,15 @@ export function mountMedia(el) {
         statusEl.textContent = '⏸ paused';
         statusEl.classList.add('media-idle');
       }
+      // Progress bar — 5s poll granularity only, no client-side interpolation
+      // (keep it honest: the bar reflects the last known position, not a guess).
+      if (m.durationSec > 0) {
+        progressEl.hidden = false;
+        const pct = Math.max(0, Math.min(100, (m.positionSec / m.durationSec) * 100));
+        progressFillEl.style.width = pct + '%';
+      } else {
+        progressEl.hidden = true;
+      }
     } catch {
       if (disposed) return;
       artEl.innerHTML = '';
@@ -67,6 +104,7 @@ export function mountMedia(el) {
       artistEl.textContent = 'no media playing';
       statusEl.textContent = '';
       statusEl.classList.add('media-idle');
+      progressEl.hidden = true;
     }
   }
 

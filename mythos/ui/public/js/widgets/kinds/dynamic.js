@@ -36,7 +36,7 @@ export function mountDynamicWidget(el, payload) {
 }
 
 function toneClass(tone) {
-  if (tone === 'gold') return 'gold';
+  if (tone === 'gold') return 'text-gold';
   if (tone === 'warn') return 'text-warn';
   return 'text-dim';
 }

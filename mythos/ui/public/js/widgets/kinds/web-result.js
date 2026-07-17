@@ -20,7 +20,7 @@ export function mountWebResult(el, payload) {
     html += '</div>';
     // Flights get a deep-link button
     if (payload.widgetType === 'flights' && payload.deepLink) {
-      html += '<a class="web-result-action gold" href="' + escapeAttr(payload.deepLink) + '" target="_blank" rel="noopener">Search on Google Flights →</a>';
+      html += '<a class="web-result-action text-gold" href="' + escapeAttr(payload.deepLink) + '" target="_blank" rel="noopener">Search on Google Flights →</a>';
     }
     el.innerHTML = html;
     return;
@@ -46,7 +46,7 @@ export function mountWebResult(el, payload) {
         var wind = cur.wind_speed_10m !== undefined ? Math.round(cur.wind_speed_10m) + ' km/h' : '—';
         el.innerHTML =
           '<div class="weather-widget-card">' +
-            '<div class="weather-widget-temp gold">' + temp + '</div>' +
+            '<div class="weather-widget-temp text-gold">' + temp + '</div>' +
             '<div class="weather-widget-cond">' + cond + '</div>' +
             '<div class="weather-widget-sub text-dim">Humidity ' + humid + ' · Wind ' + wind + '</div>' +
           '</div>';

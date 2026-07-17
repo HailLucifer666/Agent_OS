@@ -17,7 +17,6 @@ const HINTS = [
 
 export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle }) {
   const root = document.getElementById('compose-bar');
-  let conversationStarted = false;
 
   root.innerHTML = `
     <div id="compose-caption"></div>
@@ -61,7 +60,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     hintsEl.classList.add('hidden');
   }
   function showHints() {
-    if (!conversationStarted && !input.value.trim()) {
+    if (!input.value.trim()) {
       hintsEl.classList.remove('hidden');
     }
   }
@@ -69,7 +68,6 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   function submit() {
     const text = input.value.trim();
     if (!text) return;
-    conversationStarted = true;
     hideHints();
     input.value = '';
     sendBtn.classList.remove('visible');
@@ -79,6 +77,10 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
 
     // Hand off to the caller's voice-loop-backed send path (mirrors describeScene()).
     if (onSubmitText) onSubmitText(text);
+
+    // Persistent quick-action chips: input is empty again, so the hints
+    // reappear immediately — permanent quick actions, not a one-time intro.
+    showHints();
   }
 
   // Show/hide send button based on input content
