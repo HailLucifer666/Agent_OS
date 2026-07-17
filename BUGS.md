@@ -9,7 +9,7 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-07-16 (session 3 — 6 new bugs BUG-031→036, 5 fixed, SMTC diagnosed)
+Last updated: 2026-07-18 (session 4 — core-repair pass, jarvis-class upgrade: wake-word/ambient-awareness/daily-planner shipped, CODED not yet live-verified)
 Maintainer: update this file as issues are resolved. Strike through the status.
 
 ---
@@ -965,3 +965,31 @@ Still open, in priority order:
 | `mythos/ui/public/js/voice/voice-loop.js` | NAV_COMMANDS un-anchored (`^...$` → `^...(?:\s\|$)`) | BUG-034 |
 | `mythos/ui/public/js/views/audit.js` | Better error logging on fetch failure | BUG-019 |
 | `mythos/ui/public/js/neural-map/core-orb.js` | Speaking voice state visual identity (green/yellow glow) | — |
+
+---
+
+## Session 4 (2026-07-17/18) — core repair + jarvis-class upgrade
+
+Two separate build passes, both phase-gated (test-suite hold + commit + restart + live-verify per phase where possible):
+
+**Core repair** (commits `53f96ee`..`2d8992a`): STT-failure honesty, audit-panel sync-read freeze fix, Spotify window retry backport, risk-tiered auto-approval (benign actions no longer confirm) + per-connection session grants, media widget transport controls + progress bar + art sizing, persistent quick-action chips, Engagements subsystem wired end-to-end (interview→spec→plan state machine only — stage-EXECUTION engine intentionally NOT built, flagged as follow-up), on-demand browser launcher, honest degradation warnings. All live-verified against a running server except two-tab confirm-isolation/proactive-speech-targeting and live voice/mic turns (code + new regression tests cover those instead).
+
+**Jarvis-class upgrade** (commits `10ad982`, `72f36f5`, `da25c36`) — clean-room built in MYTHOS's own stack (Node/vanilla ESM), NOT copied from github.com/vierisid/jarvis (incompatible source-available license + unrelated stack). Independently gap-audited against the build spec after landing; all three genuinely implemented, no stubs, no fabricated logic:
+
+36. **BUG-039 — Wake-word ("hey jarvis")** 🔧 CODED, not yet live-verified. Real 3-stage ONNX pipeline (melspectrogram→embedding→classifier) in `wakeword.js`, tensor shapes (1280-sample frames, 32 mel bins, 76-frame/stride-8 embedding window, 96-dim output) byte-verified against openWakeWord's actual `utils.py` source. Models are CC BY-NC-SA — fetched by `scripts/setup-wakeword.js`, never committed (gitignored same-commit as the script); `WAKEWORD_ENABLED=false` by default. Needs a live mic session: say "hey jarvis," confirm activation with no click and no re-trigger during TTS playback.
+37. **BUG-040 — Ambient screen awareness** 🔧 CODED, not yet live-verified. Hash-gated vision sensor (`screen-sensor.js`) — identical screen skips the brain call entirely; privacy-audited paranoid-level, zero raw image/base64 ever touches disk. `ambient_awareness` voice tool (on/off/status) really toggles the running sensor. `SCREEN_AWARENESS_ENABLED=false` by default. Needs live verification: enable, change what's on screen, confirm a description-based answer and confirm the hash-skip holds in logs on an unchanged screen.
+38. **BUG-041 — Daily planning + accountability** 🔧 CODED, not yet live-verified. Morning brief / stalled-goal check-in / evening review (`planner/daily.js`) built entirely on the existing Goals API (`goals.arbitrate`/`goals.list`, no reimplemented ranking); day-file idempotence line-traced and test-verified — a mid-day restart cannot re-fire the morning brief (fired-flags persisted in `vault/Plans/YYYY-MM-DD.json`, read fresh every tick). New 7th persona dial `strictness` (drill-sergeant tone at high values); pre-existing `persona.json` files missing the key are safely defaulted via the existing `loadLevels()` merge. Needs live verification: a real morning-brief firing, a stalled-goal check-in, and a restart mid-day to confirm no double-brief in practice (not just in the test harness).
+
+| File | Change | Bug |
+|---|---|---|
+| `mythos/ui/public/js/voice/wakeword.js` | NEW — on-device wake-word detector, 3-stage ONNX pipeline | BUG-039 |
+| `mythos/ui/public/js/voice/wakeword-worklet.js` | NEW — AudioWorklet, 1280-sample frame posting | BUG-039 |
+| `mythos/scripts/setup-wakeword.js` | NEW — downloads CC BY-NC-SA models, never vendored | BUG-039 |
+| `mythos/THIRD_PARTY_NOTICES.md` | Apache-2.0 attribution for ported openWakeWord pipeline | BUG-039 |
+| `mythos/src/core/sensors/screen-sensor.js` | NEW — hash-gated ambient vision sensor | BUG-040 |
+| `mythos/src/core/planner/daily.js` | NEW — morning brief / check-in / evening review scheduler | BUG-041 |
+| `mythos/src/core/identity/index.js` | 7th persona dial `strictness` + DEFAULT_LEVELS merge | BUG-041 |
+| `mythos/src/core/effectors/from-persona.js` | strictness trait synonyms | BUG-041 |
+| `mythos/src/core/effectors/from-dashboard.js` | `daily_plan` tool (status/replan/skip_today) | BUG-041 |
+| `mythos/src/core/leash/tiers.js` | +3 tools (`ambient_awareness`, `daily_plan`, plus core-repair's `browser_launch_debug`) | — |
+| `MYTHOS-ARCHITECTURE.md` | §9 tier table resynced, byte-for-byte verified | — |
