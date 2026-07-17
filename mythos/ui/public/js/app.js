@@ -75,6 +75,7 @@ const compose = createComposeBar({
   onCaption: (text, kind) => {},
   onActivity: (level) => { orb.setActivity(level); hud.setActivity(level); },
   onSubmitText: sendTextMessage,
+  onCamToggle: () => ensureCamera().toggle(),
 });
 
 // mic indicator API still used by some caption calls below — keep a shim.
@@ -117,7 +118,8 @@ function toggleVoice() {
 
 // camera + hand-gesture control (Part A/B, P16). Camera is OFF by default,
 // same privacy posture as the mic — only starts on an explicit toggle click.
-const camEl = document.getElementById('camera-indicator');
+// State renders through the compose-bar's cam button (compose.setCamState);
+// the old standalone floating ring is gone.
 let camera = null;
 
 // Gesture -> action map. Confirm accept/reject reuse the LIVE modal buttons
@@ -173,8 +175,7 @@ function ensureCamera() {
   if (!camera) {
     camera = createCameraLoop({
       onState: (s) => {
-        camEl.className = `cam-${s}`;
-        camEl.title = `camera ${s}`;
+        compose.setCamState(s);
         camPreviewEl.className = s === 'watching' ? '' : 'cam-preview-hidden';
       },
       onGesture: (name) => { const fn = GESTURE_ACTIONS[name]; if (fn) fn(); },
@@ -189,8 +190,6 @@ function ensureCamera() {
   }
   return camera;
 }
-
-camEl.addEventListener('click', () => ensureCamera().toggle());
 
 // Server-initiated camera look: when the entity asks to see, answer with
 // one frame if the camera is actively watching. Privacy-safe: camera off = silent.

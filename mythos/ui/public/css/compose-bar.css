@@ -5,13 +5,13 @@
 #compose-bar {
   position: fixed;
   left: 50%;
-  bottom: 18px;
+  bottom: 26px;
   transform: translateX(-50%);
   z-index: 60;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   pointer-events: none; /* children re-enable */
 }
 
@@ -20,29 +20,36 @@
   pointer-events: auto;
 }
 
-/* Example prompt chips — show when input is empty and conversation hasn't started */
+/* Example prompt chips — show when input is empty and conversation hasn't
+   started. flex-wrap: nowrap + a horizontal scroll (masked at the edges)
+   keeps this to one quiet row instead of wrapping into a cluttered block. */
 #compose-bar .compose-hints {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  max-width: min(80vw, 620px);
+  max-width: min(78vw, 560px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
   pointer-events: auto;
   transition: opacity var(--dur-med) var(--ease);
 }
+#compose-bar .compose-hints::-webkit-scrollbar { display: none; }
 #compose-bar .compose-hints.hidden {
   opacity: 0;
   pointer-events: none;
   transform: translateY(4px);
 }
 .compose-hint {
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.02em;
-  color: var(--text-dim);
+  color: var(--text-faint);
   background: rgba(14, 22, 38, 0.55);
   border: 1px solid var(--hairline);
   border-radius: 999px;
-  padding: 6px 14px;
+  padding: 5px 12px;
   cursor: pointer;
   white-space: nowrap;
   backdrop-filter: blur(14px);
@@ -51,16 +58,18 @@
               box-shadow var(--dur-fast) linear;
 }
 .compose-hint:hover {
+  color: var(--text-dim);
   border-color: var(--accent-dim);
-  color: var(--text);
   box-shadow: 0 0 8px rgba(79, 216, 255, 0.12);
 }
 .compose-hint:active {
   transform: scale(0.97);
 }
 
-/* The main bar: glass pill with input + voice + send */
+/* The main bar: glass pill with input + voice + cam + send.
+   position: relative anchors the absolutely-positioned wave line below. */
 .compose-pill {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0;
@@ -132,6 +141,29 @@
   color: var(--text-faint);
 }
 
+/* Camera toggle button (between input and send) — reuses voice.css's
+   mic-breathe keyframe for the watching pulse, same idle/error/disabled
+   states the old floating ring used to render. */
+.compose-cam-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.compose-cam-btn svg { width: 16px; height: 16px; }
+.compose-cam-btn:hover { color: var(--text-dim); }
+.compose-cam-btn.cam-watching { color: var(--accent); animation: mic-breathe 2.4s var(--ease) infinite; }
+.compose-cam-btn.cam-error { color: var(--status-warn); }
+.compose-cam-btn.cam-disabled { color: var(--text-faint); opacity: 0.4; }
+
 /* Send button (right side of pill) */
 .compose-send-btn {
   flex-shrink: 0;
@@ -158,7 +190,14 @@
 .compose-send-btn:hover { filter: brightness(1.15); }
 .compose-send-btn:active { transform: scale(0.92); }
 
-/* Waveform — kept below the pill when listening */
-#compose-bar .mic-wave {
+/* Waveform — thin line inset along the pill's own bottom edge (replaces the
+   bar-meter that used to float below the pill as a separate element). */
+.compose-wave-line {
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  bottom: 1px;
+  width: 72%;
+  height: 4px;
   pointer-events: none;
 }

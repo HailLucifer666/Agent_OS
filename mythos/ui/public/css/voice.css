@@ -135,53 +135,11 @@
   50% { opacity: 0.9; }
 }
 
-/* #camera-indicator — clones #mic-indicator's ring look. Placed to the side
-   of the mic cluster; distinct accent (--accent-memory) while watching so
-   mic and camera states are never confusable. Indicator only, no preview
-   pane (deliberate — see ROADMAP.md P16 non-goals). */
-#camera-indicator {
-  position: fixed;
-  left: calc(50% + 90px);
-  bottom: 24px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1.5px solid var(--text-faint);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-faint);
-  background: rgba(8, 14, 24, 0.7);
-  z-index: 60;
-  cursor: pointer;
-  pointer-events: auto;
-  user-select: none;
-  transition: border-color var(--dur-med) var(--ease), color var(--dur-med) var(--ease), box-shadow var(--dur-fast) linear;
-}
-#camera-indicator svg { width: 18px; height: 18px; }
-
-#camera-indicator.cam-watching {
-  border-color: var(--accent-memory);
-  color: var(--accent-memory);
-  box-shadow: 0 0 12px rgba(96, 165, 250, 0.5);
-  animation: mic-breathe 2.4s var(--ease) infinite;
-}
-#camera-indicator.cam-disabled,
-#camera-indicator.cam-unsupported {
-  border-color: var(--status-offline);
-  color: var(--status-offline);
-  opacity: 0.55;
-}
-#camera-indicator.cam-error {
-  border-color: var(--status-warn);
-  color: var(--status-warn);
-}
-
 /* #camera-preview — TESTING WIDGET ONLY, not part of the P16 spec's shipped
    UI (that deliberately omits a preview pane). Shows the raw feed + live
    top-1 gesture guess so detection can be visually confirmed against a real
-   camera during hardware verification. Toggled by the camera indicator's
-   watching state, not a separate control. */
+   camera during hardware verification. Toggled by the compose-bar cam
+   button's watching state, not a separate control. */
 #camera-preview {
   position: fixed;
   left: calc(50% + 90px);

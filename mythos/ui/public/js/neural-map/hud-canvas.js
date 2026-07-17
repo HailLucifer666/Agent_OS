@@ -493,6 +493,14 @@ export function mountHud(canvas, ctx) {
     else if (ux < -0.35) align = 'right';
     if (Math.abs(uy) > 0.8) { ty += uy * 8; }
 
+    // Bottom-center dock exclusion: flip the label to the node's inward side
+    // instead of letting it render behind the compose dock. Screen-y is
+    // ty + pan.y (this whole pass runs inside the pan translate) — a hard
+    // clamp would make the label overlap its own node, so flip instead.
+    if (ty + pan.y > height - 150 && Math.abs(p.x + pan.x - width / 2) < 360) {
+      ty = p.y - (gap + 16);
+    }
+
     const { value, ratio, danger } = nodeReadout(node);
     const isHovered = hovered && hovered.id === node.id;
     c2d.textAlign = align;
@@ -698,7 +706,14 @@ export function mountHud(canvas, ctx) {
         c2d.font = '9px "JetBrains Mono", monospace';
         c2d.textAlign = 'center';
         c2d.fillStyle = isHovered ? COLORS.text : COLORS.faint;
-        c2d.fillText(`${node.label} ${node.meta && node.meta.count ? node.meta.count : ''}`.trim(), p.x, p.y + R + 12);
+        // Bottom-center dock exclusion: flip above the node instead of
+        // rendering the label behind the compose dock (screen-y is p.y +
+        // pan.y since this pass runs inside the pan translate) — the
+        // "EPISODIC 458" stray-label bug.
+        const labelY = (p.y + pan.y + R + 12 > height - 150 && Math.abs(p.x + pan.x - width / 2) < 360)
+          ? p.y - R - 8
+          : p.y + R + 12;
+        c2d.fillText(`${node.label} ${node.meta && node.meta.count ? node.meta.count : ''}`.trim(), p.x, labelY);
       } else if (node.type === 'breaker') {
         const R = Math.max(6, p.r) * breathe;
         const color = BREAKER_COLOR[node.state] || COLORS.warn;
