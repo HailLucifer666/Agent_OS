@@ -436,6 +436,8 @@ async function main() {
         agentActions: agentActionsEffector,
         checkpoints: checkpoints, forge: forge,
         reflection: reflection,
+        engagementStore: engagementStore, engagementManager: engagementManager,
+        conversationGateway: conversationGateway,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.

@@ -104,7 +104,12 @@ function createConversationGateway({ bus, config, engagementManager, cortex }) {
       /^approved?/,
       /^reject/,
       /^start.*interview/,
-      /^skip.*interview/
+      /^skip.*interview/,
+      // Not anchored like the others: a real request always leads with the
+      // ask ("build me a todo app", "I want to...") before this trigger
+      // phrase, so requiring start-of-string would never match natural
+      // phrasing — only "interview me" itself is a reliable signal.
+      /interview me/
     ];
     return actionPatterns.some(function(p) { return p.test(text); });
   }
@@ -131,6 +136,7 @@ function createConversationGateway({ bus, config, engagementManager, cortex }) {
     if (/show.*engagement/.test(text)) return 'show';
     if (/approved?/.test(text)) return 'approve';
     if (/reject/.test(text)) return 'reject';
+    if (/interview me/.test(text)) return 'startInterview';
     if (/start.*interview/.test(text)) return 'startInterview';
     if (/skip.*interview/.test(text)) return 'skip';
     return 'unknown';

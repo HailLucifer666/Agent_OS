@@ -18,7 +18,16 @@ function createEngagementStore({ fs, config, bus }) {
   // Async init creates vault/Engagements directory
   async function init() {
     try {
-      fs.ensureDir(vaultPath());
+      // BUG: vaultPath() returns the bare relative string 'Engagements', and
+      // fs-store's ensureDir() (unlike its readJSON/writeJSON/listFiles,
+      // which resolve internally) takes its argument literally — every other
+      // fs-store caller resolves via fs.vaultPath() first, then calls
+      // ensureDir on the absolute path. This call site skipped that step, so
+      // mkdirSync('Engagements') created the directory relative to
+      // process.cwd() instead of inside the vault — engagementStore.init()
+      // "succeeded" every boot while vault/Engagements/ silently never
+      // existed (the dishonest-ok this whole handoff targets).
+      fs.ensureDir(fs.vaultPath(vaultPath()));
       if (bus) bus.emit('engagement.store.init', { ok: true });
     } catch (err) {
       if (bus) bus.emit('health.anomaly', {

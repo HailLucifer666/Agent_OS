@@ -76,7 +76,38 @@ const ALLOWED_EVENTS = new Set([
 
   // conversation.* + cortex.thought (conversational brain — proactive speech + idle reasoning)
   'conversation.announced',
+  'conversation.intent',   // Phase 5a — conversation-gateway.js's non-engagement route() fallback
   'cortex.thought',
+
+  // engagement.* (Phase 5a — engagement layer wired end-to-end: store, state
+  // machine transitions, gateway action routing, immune hooks). The two
+  // trailing-dot entries are literal string-concatenation prefixes
+  // (`'engagement.action.' + action`, `'engagement.progress.' + ...`) — the
+  // static scanner records the quoted prefix, not the full runtime name.
+  'engagement.draft',
+  'engagement.interviewing',
+  'engagement.spec_ready',
+  'engagement.plan_ready',
+  'engagement.approval_requested',
+  'engagement.approved',
+  'engagement.stage_started',
+  'engagement.stage_completed',
+  'engagement.stage_failed',
+  'engagement.repairing',
+  'engagement.verification_passed',
+  'engagement.verification_failed',
+  'engagement.blocked',
+  'engagement.failed',
+  'engagement.completed',
+  'engagement.artifact_created',
+  'engagement.deleted',
+  'engagement.executing',
+  'engagement.saved',
+  'engagement.removed',
+  'engagement.store.init',
+  'engagement.immune.hooks.registered',
+  'engagement.action.',    // gateway.js route(), index.js handleEngagementAction
+  'engagement.progress.',  // progress.js
 
   // ui.navigate — emitted by dispatchAction when a navigate effector call succeeds,
   // relayed to clients so the panel actually opens (FIX 2: dashboard wiring).

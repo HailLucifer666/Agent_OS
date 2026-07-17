@@ -76,6 +76,9 @@ function createServer(deps) {
   const checkpoints = deps.checkpoints;           // P22 checkpoint approval registry (may be undefined in tests)
   const forge = deps.forge;                       // P22 Forge build pipeline (may be undefined in tests)
   const reflection = deps.reflection;             // P4 learning loop — .noteTurn() per conversation turn (may be undefined in tests)
+  const engagementStore = deps.engagementStore;         // Engagement layer — persistent record store (may be undefined in tests)
+  const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction
+  const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
   // with the camera actively watching answers with one JPEG frame. 8s timeout.
@@ -419,6 +422,49 @@ function createServer(deps) {
       res.json({ entries });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ---- /api/engagements — Engagement layer REST surface (Phase 5a wiring).
+  // engagementManager/engagementStore may be undefined (boot-degraded or
+  // test deps without them) — every route below answers honest JSON rather
+  // than throwing, matching the rest of this file's degraded-dependency style.
+  app.get('/api/engagements', async (req, res) => {
+    try {
+      if (!engagementManager) return res.status(503).json({ ok: false, error: 'engagement layer offline' });
+      const records = await engagementManager.engagement.list();
+      res.json({ ok: true, engagements: records });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // NOTE: unlike the list route above, engagements.js's loadEngagementDetail()
+  // and transitionEngagement() both use the response body AS the record
+  // directly (`return data`, `state.engagements[idx] = data`) — no {ok,
+  // engagement} wrapper. Matching the UI's actual contract, not this file's
+  // usual {ok, ...} envelope, since these two routes were derived from the
+  // view's own fetch() call sites, not invented fresh.
+  app.get('/api/engagements/:id', async (req, res) => {
+    try {
+      if (!engagementManager) return res.status(503).json({ ok: false, error: 'engagement layer offline' });
+      const record = await engagementManager.engagement.findById(req.params.id);
+      if (!record) return res.status(404).json({ ok: false, error: 'engagement not found' });
+      res.json(record);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post('/api/engagements/:id/transition', express.json(), async (req, res) => {
+    try {
+      if (!engagementManager) return res.status(503).json({ ok: false, error: 'engagement layer offline' });
+      const event = req.body && req.body.event;
+      if (!event) return res.status(400).json({ ok: false, error: 'event is required' });
+      const result = await engagementManager.engagement.transition(req.params.id, event, req.body && req.body.payload);
+      res.json(result.record);
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err.message });
     }
   });
 
@@ -921,6 +967,38 @@ function createServer(deps) {
       }
     }
 
+    // Engagement gateway wiring (Phase 5a): creates a new engagement record
+    // from the utterance's text as its initial intent, then immediately
+    // transitions it DRAFT -> INTERVIEWING so the first question is ready.
+    // engagement.draft / engagement.interviewing bus events (emitted inside
+    // create()/transition()) relay to WS clients via the engagement.* bus
+    // subscriptions below, so the dashboard Engagements view picks this up
+    // live with no extra plumbing here. Mirrors voiceAgent.handleUtterance's
+    // return shape ({say, actions}) so the rest of handleUtterance (history,
+    // episodic write, sendSpokenReply) needs no special-casing.
+    async function startEngagementInterview(text) {
+      try {
+        const record = engagementManager.engagement.create({ initialIntent: text, goalId: null });
+        const started = await engagementManager.engagement.transition(record.id, 'startInterview', {});
+        // transition()'s own event payload carries the first question, but
+        // that payload isn't threaded back through its return value — reuse
+        // the same interview sub-module (pure/stateless given the record) to
+        // get it here too, for the spoken reply.
+        const int = engagementManager.interview.start({ id: record.id, initialIntent: text });
+        const question = engagementManager.interview.getNextQuestion(int);
+        const say = question
+          ? `Got it — I've started an engagement to build this. First question: ${question.prompt}`
+          : `Got it — I've started an engagement to build this.`;
+        return {
+          say,
+          actions: [{ tool: 'engagement_start', args: {}, ok: true, summary: `engagement ${started.record.id} started` }],
+        };
+      } catch (err) {
+        logger.warn('engagement-interview-start-failed', { error: err.message });
+        return { say: `I couldn't start that engagement: ${sanitizeErrorForClient(err)}`, actions: [] };
+      }
+    }
+
     async function handleUtterance(msg) {
       if (!voiceAgent) {
         send({ type: 'done', reqId: msg.reqId, say: 'Brain is offline.', offline: true });
@@ -968,11 +1046,20 @@ function createServer(deps) {
           }
         } catch (err) { logger.warn('memory-recall-failed', { store: 'thoughts', error: err.message }); }
 
-        const result = await voiceAgent.handleUtterance({
-          text,
-          ctx: { history: historyGet(), connectionId, memoryContext: memoryContext },
-          signal: ctrl.signal,
-        });
+        // Engagement gateway (Phase 5a wiring): classify before handing off
+        // to the general voice-agent/cortex path. "Build me X, interview me"
+        // style utterances create an engagement record and start its
+        // interview instead of being treated as ad-hoc chat/tool-calling.
+        // Everything else — small talk, existing tool calls — is completely
+        // unaffected and falls through to voiceAgent exactly as before.
+        const gwClassification = conversationGateway ? conversationGateway.classify(text) : null;
+        const result = (gwClassification && gwClassification.type === 'action' && gwClassification.action === 'startInterview' && engagementManager)
+          ? await startEngagementInterview(text)
+          : await voiceAgent.handleUtterance({
+              text,
+              ctx: { history: historyGet(), connectionId, memoryContext: memoryContext },
+              signal: ctrl.signal,
+            });
         clearTimeout(timer);
         if (result.offline) {
           send({ type: 'done', reqId: msg.reqId, say: result.say || 'All providers are offline right now.', offline: true });
@@ -1383,6 +1470,28 @@ function createServer(deps) {
   // audit.decision — exact string P5 emits alongside auditWriter.write() (Ambiguity #3).
   bus.subscribe('audit.decision', (e) => {
     broadcastAll({ type: 'audit', payload: { tool: e.payload.tool, tier: e.payload.tier, decision: e.payload.decision } });
+  });
+
+  // Engagement layer WS relay (Phase 5a wiring): ui/public/js/views/engagements.js
+  // calls ws.js's subscribe([...these exact 16 names], handleEngagementEvent) and
+  // reads fields directly off the message (msg.engagementId, msg.status, ...) —
+  // no {type, payload} envelope like most of this file's other relays, and the
+  // WS message `type` must be the literal dotted event name itself so the
+  // client's per-type broadcastHandlers map matches it. Every emit site for
+  // these names already includes engagementId in its payload (index.js,
+  // events.js, store.js), so spreading the payload onto the message is enough.
+  // List matches ui/public/js/views/engagements.js's subscribe() call exactly.
+  const ENGAGEMENT_WS_EVENTS = [
+    'engagement.draft', 'engagement.interviewing', 'engagement.spec_ready',
+    'engagement.plan_ready', 'engagement.approval_requested', 'engagement.approved',
+    'engagement.stage_started', 'engagement.stage_completed', 'engagement.stage_failed',
+    'engagement.repairing', 'engagement.verification_passed', 'engagement.verification_failed',
+    'engagement.blocked', 'engagement.failed', 'engagement.completed', 'engagement.artifact_created',
+  ];
+  ENGAGEMENT_WS_EVENTS.forEach((name) => {
+    bus.subscribe(name, (e) => {
+      broadcastAll(Object.assign({ type: name }, e.payload));
+    });
   });
 
   // confirm-request — exact string, cortex act() (Ambiguity #2: P9's cortex diff embeds confirmId).

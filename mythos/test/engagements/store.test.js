@@ -30,10 +30,17 @@ function fakeBus() {
 
 function createTestFsStore(root) {
   return {
-    vaultPath: function() { return root; },
-    ensureDir: function(relPath) {
-      var full = path.join(root, relPath || '');
-      fs.mkdirSync(full, { recursive: true });
+    // Mirrors the real fs-store.js contract: vaultPath(...segments) resolves
+    // segments against root; ensureDir(absPath) takes an ALREADY-resolved
+    // path literally (every real caller resolves via vaultPath() first, then
+    // calls ensureDir — this mock previously took ensureDir's arg as
+    // relative-to-root instead, which produced a doubled/bogus path once
+    // the real store.js started actually calling fs.vaultPath(vaultPath())).
+    vaultPath: function() {
+      return path.join.apply(path, [root].concat(Array.prototype.slice.call(arguments)));
+    },
+    ensureDir: function(absPath) {
+      fs.mkdirSync(absPath, { recursive: true });
     },
     writeJSON: function(relPath, data) {
       var full = path.join(root, relPath);
@@ -95,7 +102,7 @@ describe('engagements/store', () => {
   describe('create and read', () => {
     it('creates an engagement record', async () => {
       const record = {
-        id: 'eng-test-1',
+        id: 'eng-a1b2c3',
         version: 1,
         status: 'DRAFT',
         createdAt: Date.now(),
@@ -103,9 +110,9 @@ describe('engagements/store', () => {
         ttlMs: 604800000
       };
       await store.create(record);
-      const read = store.read('eng-test-1');
+      const read = store.read('eng-a1b2c3');
       assert.ok(read);
-      assert.equal(read.id, 'eng-test-1');
+      assert.equal(read.id, 'eng-a1b2c3');
       assert.equal(read.status, 'DRAFT');
     });
 
@@ -118,7 +125,7 @@ describe('engagements/store', () => {
   describe('update', () => {
     it('updates record immutably', async () => {
       const record = {
-        id: 'eng-test-2',
+        id: 'eng-d4e5f6',
         version: 1,
         status: 'DRAFT',
         createdAt: Date.now(),
@@ -126,7 +133,7 @@ describe('engagements/store', () => {
         ttlMs: 604800000
       };
       await store.create(record);
-      const updated = await store.update('eng-test-2', { status: 'INTERVIEWING' });
+      const updated = await store.update('eng-d4e5f6', { status: 'INTERVIEWING' });
 
       assert.equal(updated.status, 'INTERVIEWING');
       assert.equal(updated.version, 2);
@@ -152,17 +159,27 @@ describe('engagements/store', () => {
     });
 
     it('queues concurrent mutex requests', async () => {
-      const lock1 = store.acquireMutex('eng-test-4');
-      const lock2 = store.acquireMutex('eng-test-4');
+      // A second acquire on the SAME id can only resolve after the first is
+      // released (that's the entire point of a mutex) — awaiting both via
+      // Promise.all() before releasing either is a deadlock by construction,
+      // not a real concurrency test. Acquire the first, confirm the second
+      // stays pending, release the first, then confirm the second resolves.
+      const release1 = await store.acquireMutex('eng-test-4');
+      assert.equal(typeof release1, 'function');
 
-      // Both promises should resolve
-      const releases = await Promise.all([lock1, lock2]);
-      assert.equal(releases.length, 2);
-      assert.equal(typeof releases[0], 'function');
-      assert.equal(typeof releases[1], 'function');
+      let secondResolved = false;
+      const lock2Promise = store.acquireMutex('eng-test-4').then((release) => {
+        secondResolved = true;
+        return release;
+      });
 
-      releases[0]();
-      releases[1]();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(secondResolved, false, 'second acquire must stay queued while the first still holds the mutex');
+
+      release1();
+      const release2 = await lock2Promise;
+      assert.equal(typeof release2, 'function');
+      release2();
     });
   });
 
@@ -183,9 +200,9 @@ describe('engagements/store', () => {
 
   describe('remove', () => {
     it('removes an engagement', async () => {
-      await store.create({ id: 'eng-del', version: 1, status: 'DRAFT', createdAt: Date.now(), updatedAt: Date.now(), ttlMs: 604800000 });
-      await store.remove('eng-del');
-      assert.equal(store.read('eng-del'), null);
+      await store.create({ id: 'eng-fade01', version: 1, status: 'DRAFT', createdAt: Date.now(), updatedAt: Date.now(), ttlMs: 604800000 });
+      await store.remove('eng-fade01');
+      assert.equal(store.read('eng-fade01'), null);
     });
   });
 
