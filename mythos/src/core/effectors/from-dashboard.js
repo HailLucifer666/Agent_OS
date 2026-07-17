@@ -91,7 +91,17 @@ function buildTools(ctx) {
   // URLs + Open-Meteo are all free.
   async function open_web({ type, query, url, title, location }) {
     try {
-      var t = String(type || 'search').trim().toLowerCase();
+      // Fail loud on an unrecognized/omitted type. Previously this silently
+      // defaulted to 'search', turning an ambiguous "open <url>" into a quiet
+      // search widget instead of surfacing the misuse. Valid types only.
+      var ALLOWED_TYPES = ['youtube', 'weather', 'search', 'flights', 'image', 'web'];
+      var t = String(type || '').trim().toLowerCase();
+      if (!t) {
+        return fail('open_web requires a type. Use one of: ' + ALLOWED_TYPES.join('|') + '. To open or control the real browser, use browser_navigate or browser_tabs instead — open_web only renders content inside the MYTHOS dashboard.');
+      }
+      if (ALLOWED_TYPES.indexOf(t) === -1) {
+        return fail('open_web type must be one of ' + ALLOWED_TYPES.join('|') + ' (got "' + t + '"). To open or control the real browser, use browser_navigate or browser_tabs instead.');
+      }
       var q = String(query || '').trim();
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
@@ -218,7 +228,7 @@ function buildTools(ctx) {
       });
       return ok({ widgetType: 'search', cards: searchCards, title: title || q, query: q, source: searchRes.result.source });
 
-      return fail('Unknown web type: ' + t);
+      // Unreachable: the ALLOWED_TYPES guard at the top rejects all other types.
     } catch (err) {
       return fail('open_web failed: ' + err.message);
     }
@@ -705,7 +715,7 @@ function buildTools(ctx) {
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top one.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
-    { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
+    { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Renders content INSIDE the MYTHOS dashboard, NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },

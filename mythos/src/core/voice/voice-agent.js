@@ -145,6 +145,11 @@ function buildCatalogFromHub(hub) {
 // Fuzzy tool-name suggestion for hallucinated tool calls. Uses Levenshtein
 // distance for typo-level fixes (spotify_play/play_spotify) plus semantic
 // aliases for known confusion patterns (open_panel -> navigate).
+//
+// 'open_url'/'open_tab' previously aliased to open_web — a stale pre-browser-tools
+// mapping that silently routed real-browser intents ("open a browser tab") to the
+// dashboard widget renderer. They now point at the real browser tools; the prompt
+// (BROWSER CONTROL RULE) steers the model to them in the first place.
 const TOOL_ALIASES = {
   'open_panel': 'navigate',
   'open_view': 'navigate',
@@ -153,8 +158,33 @@ const TOOL_ALIASES = {
   'play_spotify': 'spotify_play',
   'play_track': 'spotify_play',
   'search_web': 'web_search',
-  'open_url': 'open_web',
-  'open_tab': 'open_web',
+  'open_url': 'browser_navigate',
+  'open_tab': 'browser_tabs',
+};
+// Sane default args applied when an alias remap fires, so the corrected tool
+// call validates instead of failing on missing required args. Keys mirror
+// TOOL_ALIASES values. Each fn receives the original (sanitized) args and may
+// return a fail() result to surface an honest "missing URL" error rather than
+// firing an empty call.
+const ALIAS_DEFAULT_ARGS = {
+  // "open a browser tab" -> open a NEW tab (most common intent for open_tab)
+  'browser_tabs': function (args) {
+    return Object.assign({}, args, { action: args.action || 'new' });
+  },
+  // "open a url" -> navigate. If the model gave a bare/url-like string but no
+  // url field, lift it. If no URL at all, fail honestly asking for one.
+  'browser_navigate': function (args) {
+    var merged = Object.assign({}, args);
+    if (!merged.url) {
+      // The brain sometimes emits the URL in a stray 'query' or 'target' field
+      if (merged.query) { merged.url = merged.query; delete merged.query; }
+      else if (merged.target) { merged.url = merged.target; delete merged.target; }
+      else {
+        return { __fail: 'I need a URL to navigate to. Which site should I open?' };
+      }
+    }
+    return merged;
+  },
 };
 function levenshtein(a, b) {
   var m = a.length, n = b.length;
@@ -175,8 +205,12 @@ function levenshtein(a, b) {
 }
 function suggestTool(name, catalog) {
   var lower = String(name || '').toLowerCase().trim();
-  // Exact alias hit
-  if (TOOL_ALIASES[lower]) return TOOL_ALIASES[lower];
+  // Exact alias hit — return both the target name and (if present) a default-args
+  // applier so executeAction can produce a valid corrected call instead of a
+  // bare name that fails validation.
+  if (TOOL_ALIASES[lower]) {
+    return { name: TOOL_ALIASES[lower], applyArgs: ALIAS_DEFAULT_ARGS[TOOL_ALIASES[lower]] || null };
+  }
   var names = catalog.map(function(t) { return t.name; });
   // Closest Levenshtein match within 2 edits
   var best = null, bestDist = 3;
@@ -184,7 +218,7 @@ function suggestTool(name, catalog) {
     var d = levenshtein(lower, names[i].toLowerCase());
     if (d < bestDist) { bestDist = d; best = names[i]; }
   }
-  return best;
+  return best ? { name: best, applyArgs: null } : null;
 }
 
 // ---- prompt construction (DANGER TOOLS RULE + PROJECT INTAKE RULE are CA
@@ -219,7 +253,9 @@ WEB GROUNDING RULE (critical for accuracy): For ANY question about current event
 
 SKILLS RULE: You have SKILLS available (methodology and design guides listed in the SKILLS AVAILABLE block). When a task fits a skill — building a UI (ui-ux-pro-max, frontend-ui-engineering), starting a project (spec-driven-development), writing tests (tdd-workflow), doing research (deep-research), or reviewing code (code-review) — call use_skill with that skill's name to load its full guidance, then apply it. Proactively use skills rather than working from general knowledge alone. If asked "what can you do?", mention your skills alongside your tools.
 
-WEB PANEL RULE: When the user asks to watch, play, or show a video on YouTube, see weather for a location, or view search results visually ("show me flights", "play X on YouTube", "show me pictures of Y", "search for Z and show me"), call open_web with the appropriate type. For YouTube: type:"youtube", query:"<song or topic>". For weather: type:"weather", location:"<city>". For flights: type:"flights", query:"<origin to destination>". For images: type:"image", query:"<topic>". For visual search results: type:"search", query:"<topic>". This opens a dashboard panel (video/web) or floating widget (results) — say briefly what you're showing in your reply. Do NOT call open_web for a purely conversational question that doesn't need a visual ("what's the capital of France" needs an answer, not a widget).`;
+WEB PANEL RULE: When the user asks to watch, play, or show a video on YouTube, see weather for a location, or view search results visually ("show me flights", "play X on YouTube", "show me pictures of Y", "search for Z and show me"), call open_web with the appropriate type. For YouTube: type:"youtube", query:"<song or topic>". For weather: type:"weather", location:"<city>". For flights: type:"flights", query:"<origin to destination>". For images: type:"image", query:"<topic>". For visual search results: type:"search", query:"<topic>". This opens a dashboard panel (video/web) or floating widget (results) — say briefly what you're showing in your reply. Do NOT call open_web for a purely conversational question that doesn't need a visual ("what's the capital of France" needs an answer, not a widget).
+
+BROWSER CONTROL RULE: When the user wants to CONTROL a real browser — "open the browser", "open a new tab", "go to <url>", "browse to X", "navigate to X", "close that tab" — call browser_tabs (action:'new') for a new tab or browser_navigate to go to a URL. These drive the real browser (a separate debug-profile Chrome session). If a browser_* call returns OFFLINE, the browser auto-launches on demand — simply retry the same call and it will connect. open_web is ONLY for rendering content INSIDE the MYTHOS dashboard (search results, YouTube, weather cards) — NEVER for opening or controlling the actual browser. The single deciding question: does the user want to SEE something on the dashboard (open_web), or DRIVE their real browser (browser_tabs / browser_navigate)?`;
 
 const OUTPUT_CONTRACT = `Respond with ONLY a single JSON object, no markdown fence, no commentary, matching exactly:
 {"say": "<your natural spoken reply>", "actions": [{"tool": "<tool name>", "args": {}}], "needs_result": false}
@@ -383,9 +419,26 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
       // Fuzzy-match against known tools so the corrective pass can suggest
       // the right tool instead of just saying "unknown". Catches common
       // hallucinations like open_panel -> navigate, play_spotify -> spotify_play.
+      // For aliased browser intents (open_url/open_tab), AUTO-REMAP to the real
+      // browser tool with sane default args rather than bouncing back as a
+      // failure — without this, "open a browser tab" dead-ends.
       var suggestion = suggestTool(action.tool, catalog);
-      var hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
-      return { tool: action.tool, args: action.args, ok: false, summary: `Unknown tool "${action.tool}".${hint}` };
+      var hint = suggestion ? ` Did you mean "${suggestion.name || suggestion}"?` : '';
+      if (suggestion && suggestion.name && KNOWN.has(suggestion.name)) {
+        var remappedArgs = action.args || {};
+        if (suggestion.applyArgs) {
+          var applied = suggestion.applyArgs(remappedArgs);
+          if (applied && applied.__fail) {
+            return { tool: action.tool, args: action.args, ok: false, summary: applied.__fail };
+          }
+          remappedArgs = applied;
+        }
+        action.tool = suggestion.name;
+        action.args = remappedArgs;
+        // Fall through to dispatch below with the corrected tool/args.
+      } else {
+        return { tool: action.tool, args: action.args, ok: false, summary: `Unknown tool "${action.tool}".${hint}` };
+      }
     }
     const decision = { tool: action.tool, args: action.args || {} };
     // BUG-012 per-connection grants: thread connectionId through so a T3
