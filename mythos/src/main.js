@@ -510,8 +510,11 @@ async function main() {
       // 5 of 16 allowlisted packs (mythos/skills/), the rest need ~/.zcode/skills/
       // and were missing with zero signal anywhere. Same boot pass as the
       // capabilities manifest, so the warning lands in the same place an
-      // operator already looks for "what's actually available."
-      skillsLoader.loadCatalog({ logger: logger });
+      // operator already looks for "what's actually available." refresh()
+      // (not loadCatalog()) forces a real computation regardless of whether
+      // an earlier boot step already warmed the module-level cache — the
+      // missing-pack tracking only runs on an actual (non-cached) load.
+      skillsLoader.refresh({ logger: logger });
     }},
 
     { name: 'immune-explainer', fail: 'degraded', fn: function() {

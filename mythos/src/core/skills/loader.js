@@ -161,9 +161,9 @@ function catalogBlock() {
   return lines.join('\n');
 }
 
-function refresh() {
+function refresh(opts) {
   cachedCatalog = null;
-  return loadCatalog();
+  return loadCatalog(opts);
 }
 
 module.exports = {
