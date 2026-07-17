@@ -90,18 +90,22 @@ describe('BUG-012 — session-scoped T3 grants for goal-less (voice) actions', f
     });
   }
 
-  it('first goal-less spotify_play requires confirm; after accept, the next one is session-granted', function() {
+  it('first goal-less ui_click requires confirm; after accept, the next one on the SAME connection is session-granted', function() {
+    // ui_click is the worked example here (not spotify_play — spotify_play/
+    // spotify_search were re-tiered T3 -> T2 in the confirmation-policy pass
+    // and now auto-allow before this branch is ever reached; ui_click stays
+    // T3 and session-grantable).
     var leash = makeLeash();
-    var first = leash.check({ tool: 'spotify_play', args: { query: 'x' } }, {});
+    var first = leash.check({ tool: 'ui_click', args: { x: 1 } }, { connectionId: 'conn-1' });
     assert.equal(first.requireConfirm, true);
     assert.equal(first.reason, 'tier-3-requires-confirm');
 
     // Simulate the user accepting the confirm (same flow as handleConfirmReply).
-    var confirmId = leash.confirm.create('play x', { tool: 'spotify_play', args: { query: 'x' } }, 'conn-1');
+    var confirmId = leash.confirm.create('click x', { tool: 'ui_click', args: { x: 1 } }, 'conn-1');
     var accepted = leash.confirm.accept(confirmId, 'conn-1');
     assert.ok(accepted, 'confirm accept returns the action');
 
-    var second = leash.check({ tool: 'spotify_play', args: { query: 'y' } }, {});
+    var second = leash.check({ tool: 'ui_click', args: { x: 2 } }, { connectionId: 'conn-1' });
     assert.equal(second.allow, true);
     assert.equal(second.requireConfirm, false);
     assert.equal(second.reason, 'session-granted');
@@ -111,17 +115,42 @@ describe('BUG-012 — session-scoped T3 grants for goal-less (voice) actions', f
     var leash = makeLeash();
     var confirmId = leash.confirm.create('send mail', { tool: 'gmail_send', args: {} }, 'conn-1');
     leash.confirm.accept(confirmId, 'conn-1');
-    var next = leash.check({ tool: 'gmail_send', args: {} }, {});
+    var next = leash.check({ tool: 'gmail_send', args: {} }, { connectionId: 'conn-1' });
     assert.equal(next.requireConfirm, true, 'gmail_send must keep asking even after a prior accept');
     assert.equal(next.reason, 'tier-3-requires-confirm');
   });
 
-  it('a session grant for one tool does not leak to another tool', function() {
+  it('a session grant for one tool does not leak to another tool on the same connection', function() {
     var leash = makeLeash();
-    var confirmId = leash.confirm.create('play x', { tool: 'spotify_play', args: {} }, 'conn-1');
+    var confirmId = leash.confirm.create('click x', { tool: 'ui_click', args: {} }, 'conn-1');
     leash.confirm.accept(confirmId, 'conn-1');
-    var other = leash.check({ tool: 'ui_click', args: {} }, {});
-    assert.equal(other.requireConfirm, true, 'ui_click was never individually accepted');
+    var other = leash.check({ tool: 'click_at', args: {} }, { connectionId: 'conn-1' });
+    assert.equal(other.requireConfirm, true, 'click_at was never individually accepted');
+  });
+
+  it('a session grant on connection A does not satisfy the same tool on connection B (per-connection scoping)', function() {
+    var leash = makeLeash();
+    var confirmId = leash.confirm.create('click x', { tool: 'ui_click', args: {} }, 'conn-A');
+    leash.confirm.accept(confirmId, 'conn-A');
+
+    // conn-A itself is now granted...
+    var sameConn = leash.check({ tool: 'ui_click', args: {} }, { connectionId: 'conn-A' });
+    assert.equal(sameConn.requireConfirm, false, 'conn-A accepted its own confirm — must be session-granted');
+
+    // ...but conn-B (a second open tab) never accepted anything and must still confirm.
+    var otherConn = leash.check({ tool: 'ui_click', args: {} }, { connectionId: 'conn-B' });
+    assert.equal(otherConn.requireConfirm, true, 'conn-B must not inherit conn-A\'s grant');
+    assert.equal(otherConn.reason, 'tier-3-requires-confirm');
+  });
+
+  it('a goal-less check with no connectionId (autonomous/cortex path) never matches any session grant', function() {
+    var leash = makeLeash();
+    var confirmId = leash.confirm.create('click x', { tool: 'ui_click', args: {} }, 'conn-1');
+    leash.confirm.accept(confirmId, 'conn-1');
+
+    // Autonomous/cortex calls pass {goalId} with no connectionId at all.
+    var autonomous = leash.check({ tool: 'ui_click', args: {} }, { goalId: 'goal-9' });
+    assert.equal(autonomous.requireConfirm, true, 'no connectionId must never match a connection-scoped grant');
   });
 });
 

@@ -512,16 +512,26 @@ function createServer(deps) {
   }
 
   // Proactive speech — the entity speaks without an inbound utterance.
-  // Synthesizes via edge-tts (same as reactive sendSpokenReply) and broadcasts
-  // to ALL connected clients as a synthetic reqId'd turn. The browser
-  // voice-loop treats 'proactive-speech' like a turn start without a user
-  // utterance. Falls back gracefully if edge-tts is down (client uses
-  // speechSynthesis). Never throws — proactive speech is best-effort.
+  // Synthesizes via edge-tts (same as reactive sendSpokenReply) and delivers
+  // to a single connection as a synthetic reqId'd turn (see targeting below).
+  // The browser voice-loop treats 'proactive-speech' like a turn start
+  // without a user utterance. Falls back gracefully if edge-tts is down
+  // (client uses speechSynthesis). Never throws — proactive speech is
+  // best-effort.
   let proactiveSeq = 0;
+  // Targeted delivery (same bug class as 27b2115/0af423f's boot-greeting
+  // fix, generalized): tracks the most-recently-active WS connection (last
+  // inbound message, set in ws.on('message') below) so reminders/nudges/
+  // health speech reach the tab the operator is actually using instead of
+  // every open tab at once. Explicit targetWs callers (the boot greeting)
+  // are unaffected.
+  let lastActiveWs = null;
   async function proactiveSpeak(text, targetWs) {
     if (!text || !wss) return;
+    targetWs = targetWs || lastActiveWs;
     // Optional single-client delivery: the boot greeting passes the connection
-    // that triggered it, so a second open dashboard tab doesn't ALSO play the
+    // that triggered it, and every other caller now defaults to the last
+    // active connection, so a second open dashboard tab doesn't ALSO play the
     // same audio (two overlapping voices). If that client is gone by the time
     // we fire, fall back to the normal broadcast so the speech isn't lost.
     const sendOut = (targetWs && targetWs.readyState === 1)
@@ -1201,6 +1211,11 @@ function createServer(deps) {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
+      // Targeted proactive speech (Phase 3c): the most-recently-active
+      // connection is whichever tab last sent ANY message, not just an
+      // utterance — keeps a silently-idle-but-focused tab as the target
+      // over a tab that's just replaying subscriptions on load.
+      lastActiveWs = ws;
       if (msg.type === 'utterance') queueTurn(function() { return handleUtterance(msg); });
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);

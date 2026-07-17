@@ -388,7 +388,11 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
       return { tool: action.tool, args: action.args, ok: false, summary: `Unknown tool "${action.tool}".${hint}` };
     }
     const decision = { tool: action.tool, args: action.args || {} };
-    const verdict = leash.check(decision, {});
+    // BUG-012 per-connection grants: thread connectionId through so a T3
+    // session grant (leash/index.js) is scoped to the WS connection that
+    // actually accepted the confirm — was silently dropped here before,
+    // so leash could never tell which connection was asking.
+    const verdict = leash.check(decision, { connectionId });
 
     if (verdict.requireConfirm && !INTAKE_GATED.has(decision.tool)) {
       const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${humanizeArgs(decision.args)})` : ''}`;

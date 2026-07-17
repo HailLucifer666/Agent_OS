@@ -33,7 +33,9 @@ describe('capabilities manifest (P5)', () => {
     assert.match(md, /3 tools/);
     assert.match(md, /## Adapters\n- pc-child: ONLINE/);
     assert.match(md, /Tier 0 — read-only[\s\S]*list_goals/);
-    assert.match(md, /Tier 3[\s\S]*spotify_play — Play a song on Spotify\./);
+    // spotify_play was re-tiered T3 -> T2 in the confirmation-policy pass —
+    // the manifest groups by live tierOf(), so it now falls under Tier 2.
+    assert.match(md, /Tier 2[\s\S]*spotify_play — Play a song on Spotify\./);
     assert.match(md, /Tier 4[\s\S]*kill_session/);
     assert.doesNotMatch(md, /Second line ignored/);
   });

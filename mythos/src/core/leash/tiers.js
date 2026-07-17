@@ -77,16 +77,26 @@ const TIER_TABLE = {
   'spotify_status':        2,
   'send_key':              2,
   'media_status':          0,
+  // Re-tiered T3 -> T2 (confirmation-policy pass): these write only to the
+  // sandboxed vault/builds/ tree or drive Spotify locally — no destructive or
+  // outward-facing risk, so a confirm popup on every "play a song"/"build me
+  // a landing page" was pure friction, not safety. See BUGS.md for the audit
+  // that identified them; the T3/T4 security-invariant tools below (compose_email,
+  // gmail_send, delete_goal, close_window, hermes_task, ui_click, ui_type,
+  // click_at, browser_click, browser_type, kill_session, browser_evaluate) are
+  // deliberately untouched.
+  'spotify_play':          2,
+  'spotify_search':        2,
+  'build_project':         2,  // P22 Forge — multi-file build, sandboxed to vault/builds/
+  'revise_project':        2,  // P22 Forge — targeted regen, sandboxed to vault/builds/
+  'pipeline_execute':      2,
+  'kanban_assemble':       2,
+  'kanban_build_card':     2,
+  'start_project':         2,
+  'run_mission':           2,
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,
-  'pipeline_execute':      3,
-  'kanban_assemble':       3,
-  'kanban_build_card':     3,
-  'start_project':         3,
-  'run_mission':           3,
-  'build_project':         3,  // P22 Forge — multi-file build
-  'revise_project':        3,  // P22 Forge — targeted regen
   'project_status':        0,  // P22 Forge — read-only build status (tier 0; flat table, position cosmetic)
   'compose_email':         3,
   'close_window':          3,
@@ -96,8 +106,6 @@ const TIER_TABLE = {
   'click_at':              3,  // ELEVATED — autonomous clicking unpredictable
   'browser_click':         3,
   'browser_type':          3,
-  'spotify_play':          3,
-  'spotify_search':        3,
   'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)

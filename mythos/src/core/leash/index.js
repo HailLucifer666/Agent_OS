@@ -53,11 +53,18 @@ function createLeash(deps) {
   // review (see BUGS.md BUG-012: raising AUTONOMOUS_MAX_TIER globally was
   // evaluated and rejected as a safety regression). In-memory only.
   var SESSION_GRANT_TTL_MS = 15 * 60 * 1000;
+  // spotify_play/spotify_search were re-tiered T3 -> T2 (confirmation-policy
+  // pass) and now auto-allow before this branch is ever reached — pruned here
+  // since they can no longer match a T3 grant check.
   var SESSION_GRANTABLE = {
-    spotify_play: 1, spotify_search: 1, ui_click: 1, ui_type: 1,
+    ui_click: 1, ui_type: 1,
     click_at: 1, send_key: 1, focus_window: 1
   };
-  var sessionGrants = new Map(); // tool -> expiresAt (ms epoch)
+  // Keyed by connectionId + ':' + tool (BUG-012 follow-up, security HIGH):
+  // was keyed by bare tool name, so an accept on one WS connection granted
+  // EVERY connection (including the autonomous goal loop, which passes no
+  // connectionId at all). Scoping to the accepting connection closes that.
+  var sessionGrants = new Map(); // 'connectionId:tool' -> expiresAt (ms epoch)
 
   // Builds the Audit Trail schema entry (MYTHOS-ARCHITECTURE.md §9) and writes it.
   // Fields NOT set here (id, ts, actor) are auto-filled by memory/audit-writer.js.
@@ -165,9 +172,13 @@ function createLeash(deps) {
         var grantedWrite = writeAudit(action, goalCtx.goalId, tier, 'allow', { granted: true, reason: 'goal-granted' });
         return failClosedIfUnwritable(tier, grantedWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'goal-granted' });
       }
-      // BUG-012: session grant for eligible goal-less tools (see map above).
-      if (SESSION_GRANTABLE[toolName]) {
-        var sessionExpiry = sessionGrants.get(toolName);
+      // BUG-012 (per-connection follow-up): session grant for eligible
+      // goal-less tools, scoped to the calling connection. No connectionId
+      // (autonomous/cortex calls pass none) -> never matches any grant, which
+      // is the desired containment — only the WS connection that actually
+      // accepted the confirm gets the session grant.
+      if (SESSION_GRANTABLE[toolName] && goalCtx && goalCtx.connectionId) {
+        var sessionExpiry = sessionGrants.get(goalCtx.connectionId + ':' + toolName);
         if (sessionExpiry && Date.now() < sessionExpiry) {
           var sessionWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'allow', { granted: true, reason: 'session-granted' });
           return failClosedIfUnwritable(tier, sessionWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'session-granted' });
@@ -188,9 +199,9 @@ function createLeash(deps) {
   var confirmApi = Object.assign({}, confirmRegistry, {
     accept: function(confirmId, connectionId) {
       var acceptedAction = confirmRegistry.accept(confirmId, connectionId);
-      if (acceptedAction && acceptedAction.tool &&
+      if (acceptedAction && acceptedAction.tool && connectionId &&
           SESSION_GRANTABLE[acceptedAction.tool] && TIER_TABLE[acceptedAction.tool] === 3) {
-        sessionGrants.set(acceptedAction.tool, Date.now() + SESSION_GRANT_TTL_MS);
+        sessionGrants.set(connectionId + ':' + acceptedAction.tool, Date.now() + SESSION_GRANT_TTL_MS);
       }
       return acceptedAction;
     }

@@ -89,19 +89,24 @@ describe('gate: Spotify tier mapping', () => {
     assert.equal(tierOf('spotify_status'), 2);
   });
 
-  it('play and search are T3 (confirm-once-per-goal)', () => {
-    assert.equal(tierOf('spotify_play'), 3);
-    assert.equal(tierOf('spotify_search'), 3);
+  it('play and search are T2 (re-tiered from T3 — confirmation-policy pass)', () => {
+    // Was T3 confirm-once-per-goal; local Spotify playback carries no
+    // destructive/outward-facing risk, so a confirm popup on "play a song"
+    // was pure friction. See leash/tiers.js's T2 block comment.
+    assert.equal(tierOf('spotify_play'), 2);
+    assert.equal(tierOf('spotify_search'), 2);
   });
 
-  it('danger flag matches tier >= 3 for all Spotify T3', () => {
-    // The voice agent computes danger from tierOf at runtime
-    // T2 tools should have danger: false, T3+ should have danger: true
-    const playPauseTier = tierOf('spotify_play_pause');
-    const playTier = tierOf('spotify_play');
-
-    assert.equal(playPauseTier >= 3, false); // T2 -> danger: false
-    assert.equal(playTier >= 3, true); // T3 -> danger: true
+  it('no Spotify tool requires a T3+ confirm anymore', () => {
+    // The voice agent computes danger from tierOf at runtime — every
+    // Spotify tool (transport controls, play, search, status) is now T2.
+    const spotifyToolNames = [
+      'spotify_play_pause', 'spotify_next', 'spotify_previous',
+      'spotify_volume', 'spotify_status', 'spotify_play', 'spotify_search',
+    ];
+    for (const name of spotifyToolNames) {
+      assert.equal(tierOf(name) >= 3, false, `${name} should no longer require a confirm`);
+    }
   });
 });
 

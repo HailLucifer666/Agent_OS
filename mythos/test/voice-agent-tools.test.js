@@ -160,16 +160,16 @@ describe('voice-agent CATALOG (runtime)', () => {
     assert.equal(tool.danger, false);
   });
 
-  it('start_project is danger:true (tier 3)', () => {
+  it('start_project is danger:false (tier 2 — re-tiered from T3)', () => {
     const tool = CATALOG.find(t => t.name === 'start_project');
     assert.ok(tool, 'start_project not in CATALOG');
-    assert.equal(tool.danger, true);
+    assert.equal(tool.danger, false);
   });
 
-  it('run_mission is danger:true (tier 3)', () => {
+  it('run_mission is danger:false (tier 2 — re-tiered from T3)', () => {
     const tool = CATALOG.find(t => t.name === 'run_mission');
     assert.ok(tool, 'run_mission not in CATALOG');
-    assert.equal(tool.danger, true);
+    assert.equal(tool.danger, false);
   });
 
   it('delete_goal is danger:true (tier 3)', () => {
@@ -369,12 +369,12 @@ describe('tiers.js consistency', () => {
     assert.equal(tierOf('reminder_list'), 0);
   });
 
-  it('start_project is tier 3', () => {
-    assert.equal(tierOf('start_project'), 3);
+  it('start_project is tier 2 (re-tiered from T3 — confirmation-policy pass)', () => {
+    assert.equal(tierOf('start_project'), 2);
   });
 
-  it('run_mission is tier 3', () => {
-    assert.equal(tierOf('run_mission'), 3);
+  it('run_mission is tier 2 (re-tiered from T3 — confirmation-policy pass)', () => {
+    assert.equal(tierOf('run_mission'), 2);
   });
 
   it('delete_goal is tier 3', () => {

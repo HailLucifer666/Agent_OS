@@ -688,12 +688,15 @@ function buildTools(ctx) {
     { name: 'capture_idea', description: 'Capture a new idea into the pipeline inbox.', params: { text: 'string' }, danger: false, fn: capture_idea },
     { name: 'pipeline_status', description: 'Read the pipeline board (capture/human-gate/execute/shipped).', params: {}, danger: false, fn: pipeline_status },
     { name: 'pipeline_advance', description: 'Approve or reject a pipeline card by matching its text.', params: { query: 'string', action: '"approve" | "reject"' }, danger: false, fn: pipeline_advance, dangerWhen: (args) => args && args.action === 'reject' },
-    { name: 'pipeline_execute', description: 'Run the build agent for a pipeline card in the Execute stage.', params: { query: 'string' }, danger: true, fn: pipeline_execute },
+    // pipeline_execute/kanban_assemble/kanban_build_card: re-tiered T3 -> T2
+    // (confirmation-policy pass, sandboxed to vault/builds/) — danger:false
+    // to stay consistent with tierOf(); see leash/tiers.js's T2 block comment.
+    { name: 'pipeline_execute', description: 'Run the build agent for a pipeline card in the Execute stage.', params: { query: 'string' }, danger: false, fn: pipeline_execute },
     { name: 'kanban_status', description: 'Read the kanban board.', params: {}, danger: false, fn: kanban_status },
     { name: 'kanban_add_card', description: 'Add a new kanban card to a lane.', params: { title: 'string', lane: 'string (optional)' }, danger: false, fn: kanban_add_card },
     { name: 'kanban_move_card', description: 'Move a kanban card to a different lane by matching its title.', params: { query: 'string', lane: 'string' }, danger: false, fn: kanban_move_card },
-    { name: 'kanban_assemble', description: 'Run the planner agent to break a goal into several kanban cards.', params: { goal: 'string' }, danger: true, fn: kanban_assemble },
-    { name: 'kanban_build_card', description: 'Run the builder agent on a kanban card, producing a deliverable.', params: { query: 'string' }, danger: true, fn: kanban_build_card },
+    { name: 'kanban_assemble', description: 'Run the planner agent to break a goal into several kanban cards.', params: { goal: 'string' }, danger: false, fn: kanban_assemble },
+    { name: 'kanban_build_card', description: 'Run the builder agent on a kanban card, producing a deliverable.', params: { query: 'string' }, danger: false, fn: kanban_build_card },
     { name: 'ask_agent', description: 'Ask a specific agent seat a question and get a short reply.', params: { seat: 'string', prompt: 'string' }, danger: false, fn: ask_agent },
     { name: 'monitor_snapshot', description: 'Read the live agent monitor snapshot (running CLI sessions).', params: {}, danger: false, fn: monitor_snapshot },
     { name: 'kill_session', description: 'Kill a running agent CLI session by PID. Irreversible.', params: { pid: 'number', agentCli: 'string' }, danger: true, fn: kill_session },
