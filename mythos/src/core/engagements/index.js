@@ -2,10 +2,18 @@
 
 // Main entry point - creates and manages engagement instances
 // ENGAGEMENT-SPEC section 1.1 index.js interface
+//
+// Phase 1 (agentic-execution): the manager now constructs an executor and fires
+// it on approve→EXECUTING. emitTransitionEvent() uses the real events.js
+// builders (events.js was previously dead code); the orphan engagement.executing
+// placeholder is retired in favor of engagement.approved + the executor's
+// granular stage_started/stage_completed events.
 
 var crypto = require('crypto');
+var events = require('./events');
+var dispatchActionFn = require('../effectors/dispatch-action').dispatchAction;
 
-function createEngagement({ bus, config, store, stateMachine, interview, specBuilder, planBuilder, recommendations, progress }) {
+function createEngagement({ bus, config, store, stateMachine, interview, specBuilder, planBuilder, recommendations, progress, onExecute }) {
   if (!bus) throw new Error('bus required');
   if (!config) throw new Error('config required');
   if (!store) throw new Error('store required');
@@ -13,6 +21,17 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
 
   // Lazy-load optional dependencies to avoid circular references
   interview = interview || require('./interview').createInterview({ config: config });
+
+  // onExecute(engagementId) — Phase 1 hook the manager installs so transition()
+  // can fire-and-forget the executor on approve→EXECUTING without creating a
+  // circular dep (executor needs this module's transition fn). Optional: when
+  // unset, approve→EXECUTING simply sets the status (legacy behavior).
+  function fireExecutor(engagementId) {
+    if (typeof onExecute === 'function') {
+      try { onExecute(engagementId); } catch (_) { /* executor is fire-and-forget */ }
+    }
+  }
+  function setOnExecute(fn) { onExecute = fn; }
 
   // Create new engagement
   function create(opts) {
@@ -155,7 +174,14 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
     store.write(updated);
 
     // Emit appropriate events
-    emitTransitionEvent(record.status, result.state, id, payload);
+    emitTransitionEvent(record.status, result.state, id, payload, updated);
+
+    // Phase 1: on approve→EXECUTING (from AWAITING_APPROVAL or
+    // AWAITING_STAGE_APPROVAL) fire-and-forget the executor. The executor drives
+    // the stage loop and emits its own granular progress events.
+    if (event === 'approve' && result.state === 'EXECUTING') {
+      fireExecutor(id);
+    }
 
     return Promise.resolve({
       ok: true,
@@ -221,71 +247,83 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
     return updated;
   }
 
-  // Emit events for transition
-  function emitTransitionEvent(fromState, toState, engagementId, payload) {
+  // Emit events for transition. Phase 1: uses the real events.js builders with
+  // the LIVE record's data (replaces the hardcoded placeholder payloads that
+  // previously shipped here — {spec:{markdown:'Spec generated'}}, etc.). The
+  // executor emits the granular stage_* events during execution; this function
+  // emits the transition-level ones.
+  function emitTransitionEvent(fromState, toState, engagementId, payload, record) {
+    var rec = record || store.read(engagementId) || {};
     switch (toState) {
       case 'INTERVIEWING':
-        // Interview was started - emit with first question
         var int = interview.start({ id: engagementId });
-        bus.emit('engagement.interviewing', {
+        events.createEngagementInterviewing({
           engagementId: engagementId,
           question: interview.getNextQuestion(int),
-          timestamp: Date.now()
+          bus: bus
         });
         break;
       case 'SPEC_READY':
-        bus.emit('engagement.spec_ready', {
+        events.createEngagementSpecReady({
           engagementId: engagementId,
-          spec: {
-            markdown: 'Spec generated',
-            schema: {}
-          },
-          timestamp: Date.now()
+          spec: (rec.spec && rec.spec.markdown) ? rec.spec : { markdown: '', schema: {} },
+          bus: bus
         });
         break;
       case 'PLAN_READY':
-        bus.emit('engagement.plan_ready', {
+        events.createEngagementPlanReady({
           engagementId: engagementId,
-          plan: { stages: [] },
-          timestamp: Date.now()
+          plan: rec.plan || { stages: [] },
+          bus: bus
         });
         break;
       case 'AWAITING_APPROVAL':
-        bus.emit('engagement.approval_requested', {
+        events.createEngagementApprovalRequested({
           engagementId: engagementId,
-          plan: { stages: [] },
-          timestamp: Date.now()
+          plan: rec.plan || { stages: [] },
+          bus: bus
         });
         break;
       case 'EXECUTING':
-        bus.emit('engagement.executing', {
-          engagementId: engagementId,
-          timestamp: Date.now()
-        });
+        // Retired the orphan 'engagement.executing' placeholder. Entering
+        // EXECUTING from AWAITING_APPROVAL emits the real approved event; the
+        // executor emits stage_started/completed as it runs. (Entering from
+        // AWAITING_STAGE_APPROVAL is a stage-level resume — no approved event.)
+        if (fromState === 'AWAITING_APPROVAL') {
+          events.createEngagementApproved({
+            engagementId: engagementId,
+            stageIndex: (rec.plan && rec.plan.currentStageIndex) || 0,
+            bus: bus
+          });
+        }
         break;
       case 'COMPLETED':
-        bus.emit('engagement.completed', {
+        // The executor's completeEngagement() emits the canonical
+        // engagement.completed with real completion data. This transition-level
+        // emit is a fallback for the rare path where the transition happens
+        // outside the executor (e.g. a manual test harness) — use real data
+        // when present, honest defaults otherwise.
+        events.createEngagementCompleted({
           engagementId: engagementId,
-          completion: {
-            artifactRefs: [],
-            reportMarkdown: 'Done',
-            summary: 'Engagement completed'
+          completion: (rec.completion && rec.completion.reportMarkdown) ? rec.completion : {
+            artifactRefs: [], reportMarkdown: '', summary: 'Engagement completed'
           },
-          timestamp: Date.now()
+          bus: bus
         });
         break;
       case 'BLOCKED':
-        bus.emit('engagement.blocked', {
+        events.createEngagementBlocked({
           engagementId: engagementId,
-          reason: payload && payload.reason || 'No reason provided',
-          timestamp: Date.now()
+          reason: (payload && payload.reason) || 'No reason provided',
+          stageId: (payload && payload.stageId) || undefined,
+          bus: bus
         });
         break;
       case 'FAILED':
-        bus.emit('engagement.failed', {
+        events.createEngagementFailed({
           engagementId: engagementId,
-          error: payload && payload.error || 'Unknown error',
-          timestamp: Date.now()
+          error: (payload && payload.error) || 'Unknown error',
+          bus: bus
         });
         break;
     }
@@ -296,11 +334,12 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
     findById: findById,
     list: list,
     transition: transition,
-    delete: remove
+    delete: remove,
+    setOnExecute: setOnExecute
   };
 }
 
-function createEngagementManager({ bus, config, memory, goals, leash, effectors, engagementStore }) {
+function createEngagementManager({ bus, config, memory, goals, leash, effectors, engagementStore, brain, checkpoints }) {
   // Create sub-components
   var stateMachine = require('./state-machine').createStateMachine({ config: config });
   var interview = require('./interview').createInterview({ config: config });
@@ -322,6 +361,31 @@ function createEngagementManager({ bus, config, memory, goals, leash, effectors,
     progress: progress
   });
 
+  // Phase 1: construct the stage-execution engine. The executor receives the
+  // shared dispatchAction fn (every action routes through it after a leash
+  // check — never raw effectors.invoke) and the engagement module's transition
+  // fn so it can drive the state machine. brain/checkpoints/vault are optional
+  // (build/research stages + stage-approval gates degrade gracefully without).
+  var executor = require('./executor').createEngagementExecutor({
+    bus: bus,
+    config: config,
+    dispatchAction: dispatchActionFn,
+    leash: leash,
+    brain: brain,
+    checkpoints: checkpoints,
+    store: engagement,
+    engagementStore: engagementStore,
+    vault: memory && memory.fs,
+    logger: null
+  });
+
+  // Wire the executor into the engagement module's approve→EXECUTING hook.
+  // runEngagement is fire-and-forget and never throws (it surfaces failures as
+  // health.anomaly internally), so this is safe to call from transition().
+  engagement.setOnExecute(function (engagementId) {
+    executor.runEngagement(engagementId);
+  });
+
   // Wire engagement manager to external systems
   function handleEngagementAction(event, payload) {
     // Route engagement actions to appropriate handlers
@@ -337,7 +401,8 @@ function createEngagementManager({ bus, config, memory, goals, leash, effectors,
     recommendations: recommendations,
     progress: progress,
     stateMachine: stateMachine,
-    handleEngagementAction: handleEngagementAction
+    handleEngagementAction: handleEngagementAction,
+    executor: executor
   };
 }
 

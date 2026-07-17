@@ -77,7 +77,7 @@ function createServer(deps) {
   const forge = deps.forge;                       // P22 Forge build pipeline (may be undefined in tests)
   const reflection = deps.reflection;             // P4 learning loop — .noteTurn() per conversation turn (may be undefined in tests)
   const engagementStore = deps.engagementStore;         // Engagement layer — persistent record store (may be undefined in tests)
-  const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction
+  const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction; Phase 1 executor lives on it (may be undefined in tests)
   const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
@@ -323,6 +323,67 @@ function createServer(deps) {
     if (!c) return res.status(404).json({ error: 'not found' });
     res.json({ checkpoint: c });
   });
+
+  // ---- /api/engagements ---- Engagement Layer (Phase 1)
+  // UI contract (ui/public/js/views/engagements.js): list returns a JSON array
+  // OR {engagements:[...]}; get returns the record; transition body is
+  // {event, payload} and returns the updated record (UI does
+  // state.engagements[idx]=data). All routes degrade to 404 when the manager
+  // isn't wired (tests) rather than crashing.
+  app.get('/api/engagements', async (req, res) => {
+    if (!engagementManager || !engagementManager.engagement) {
+      return res.json({ engagements: [] });
+    }
+    try {
+      const records = await engagementManager.engagement.list();
+      res.json(records);
+    } catch (err) {
+      res.status(500).json({ error: sanitizeErrorForClient(err) });
+    }
+  });
+  app.get('/api/engagements/:id', async (req, res) => {
+    if (!engagementManager || !engagementManager.engagement) {
+      return res.status(404).json({ error: 'engagements unavailable' });
+    }
+    try {
+      const r = await engagementManager.engagement.findById(req.params.id);
+      if (!r) return res.status(404).json({ error: 'not found' });
+      res.json(r);
+    } catch (err) {
+      res.status(500).json({ error: sanitizeErrorForClient(err) });
+    }
+  });
+  app.post('/api/engagements/:id/transition', async (req, res) => {
+    if (!engagementManager || !engagementManager.engagement) {
+      return res.status(404).json({ error: 'engagements unavailable' });
+    }
+    const { event, payload } = req.body || {};
+    if (!event) return res.status(400).json({ error: 'event required' });
+    try {
+      const result = await engagementManager.engagement.transition(req.params.id, event, payload);
+      res.json(result.record);
+    } catch (err) {
+      res.status(400).json({ error: sanitizeErrorForClient(err) });
+    }
+  });
+  app.post('/api/engagements', async (req, res) => {
+    // Create flow: the UI primarily creates engagements via voice/intent (the
+    // conversation gateway), but this route exists for direct API/testing use.
+    if (!engagementManager || !engagementManager.engagement) {
+      return res.status(404).json({ error: 'engagements unavailable' });
+    }
+    const { initialIntent, goalId } = req.body || {};
+    if (!initialIntent || !String(initialIntent).trim()) {
+      return res.status(400).json({ error: 'initialIntent required' });
+    }
+    try {
+      const record = engagementManager.engagement.create({ initialIntent: initialIntent, goalId: goalId });
+      res.json(record);
+    } catch (err) {
+      res.status(400).json({ error: sanitizeErrorForClient(err) });
+    }
+  });
+
   app.post('/api/kanban/cards', (req, res) => {
     const { title, lane } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: 'title required' });

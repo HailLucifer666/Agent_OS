@@ -118,13 +118,18 @@ const ALLOWED_EVENTS = new Set([
   'ui.close-panel',
 
   // ui.open-web — emitted when open_web/spawn_widget effectors succeed (dispatch-action.js,
-  // from-widgets.js), relayed to clients as the 'open-web' broadcast. Was shipping
-  // unregistered — the long-standing known failure of this test, registered deliberately.
+  // from-widgets.js), relayed to clients as the 'open-web' broadcast. Client-side
+  // routing in app.js subscribes to 'open-web'. Pre-existing shipped event, now
+  // registered (was the long-standing known failure of this test).
   'ui.open-web',
 
   // ui.widget-command — emitted by manage_widget (from-widgets.js), relayed as the
   // 'widget-command' broadcast; widget-host.js hides/shows boot HUD widgets.
   'ui.widget-command',
+
+  // conversation.intent — assistant/gateway emits this for cortex to handle
+  // non-engagement intents after the conversation classifier routes the message.
+  'conversation.intent',
 
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
@@ -141,6 +146,38 @@ const ALLOWED_EVENTS = new Set([
   'plan.morning-brief',
   'plan.checkin',
   'plan.evening-review',
+
+  // engagement.* (Phase 1 — Engagement Layer: interview→spec→plan→EXECUTE→verify)
+  // The 16 progress events the UI subscribes to (ui/public/js/views/
+  // engagements.js) + the lifecycle/persistence/bus-taxonomy events emitted by
+  // the engagement subsystem. engagement.action.* / engagement.progress.* are
+  // channel-prefix passthroughs (event name is built dynamically).
+  'engagement.draft',
+  'engagement.interviewing',
+  'engagement.spec_ready',
+  'engagement.plan_ready',
+  'engagement.approval_requested',
+  'engagement.approved',
+  'engagement.stage_started',
+  'engagement.stage_completed',
+  'engagement.stage_failed',
+  'engagement.repairing',
+  'engagement.blocked',
+  'engagement.failed',
+  'engagement.completed',
+  'engagement.artifact_created',
+  'engagement.verification_passed',
+  'engagement.verification_failed',
+  'engagement.deleted',
+  // channel-prefix passthroughs (the literal captured ends with the dot — the
+  // full event name is built by string concatenation at the call site):
+  'engagement.action.',
+  'engagement.progress.',
+  // persistence / lifecycle signals from the engagement store + boot wiring:
+  'engagement.store.init',
+  'engagement.saved',
+  'engagement.removed',
+  'engagement.immune.hooks.registered',
 ]);
 
 // -- Static scan -------------------------------------------------------------

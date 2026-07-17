@@ -112,8 +112,12 @@ function validateEngagement(record) {
         record.plan.stages.forEach(function(s, i) {
           if (!s.id) errors.push('plan.stages[' + i + '].id is required');
           if (!s.name) errors.push('plan.stages[' + i + '].name is required');
-          if (!s.type || !/^(build|research)$/.test(s.type)) {
-            errors.push('plan.stages[' + i + '].type must be build or research');
+          // Phase 1: 'action' is a valid stage kind alongside build|research.
+          // `kind` is the new preferred field; `type` is the legacy alias.
+          // Either is acceptable; coerce to whichever is present.
+          var stageKind = s.kind || s.type;
+          if (!stageKind || !/^(build|research|action)$/.test(stageKind)) {
+            errors.push('plan.stages[' + i + '].type must be build, research, or action');
           }
         });
       }

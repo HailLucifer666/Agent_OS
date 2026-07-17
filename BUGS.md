@@ -848,6 +848,69 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 
 ---
 
+## Phase 1 — Engagement Execution Engine (cherry-picked from 8706ccc)
+
+### P1-001: command-type stage verification is SKIPPED, not run
+
+**Where:** `src/core/engagements/executor.js` `verifyStage()` (type === 'command').
+
+**What:** Stages with `verification: { type: 'command', cmd, expectedExitCode }`
+are NOT executed. The executor emits `health.anomaly` with kind
+`engagement-command-verification-skipped` and treats the stage as
+`verified: true, skipped: true`.
+
+**Why deferred:** there is no safe sandboxed shell runner in the codebase.
+Shelling out to `child_process.exec` from inside the engagement executor would
+run arbitrary `cmd` strings (often model-generated, e.g. `npm test`, `rm -rf`)
+without a container, jail, or cwd guard — an unacceptable RCE surface for a
+voice/agent-driven system. The cortex loop itself never shells out either
+(effectors are typed tools, not raw shells).
+
+**Honest behavior shipped:** skipped + anomaly. A stage that declares a command
+verification is marked complete; the anomaly is observable in the HUD/health
+channel so an operator knows the command was never actually run. When a
+sandboxed runner lands (planned: a WASM or container-isolated `run_command`
+effector gated by leash tier 4 — see MYTHOS_Gap-Close_Upgrade task-957 §26
+Phase 3), `verifyStage()` should route command checks through it instead of
+skipping.
+
+**Test:** `test/phase1-engagement-executor.test.js` "emits health.anomaly and
+does NOT shell out".
+
+### P1-002: stage-approval checkpoint closures do not survive restart
+
+**Where:** `src/core/engagements/executor.js` `init()` + `parkForStageApproval()`.
+
+**What:** in-memory `approvedStages` Set tracks which stages have been
+approved this process so a resumed run does not re-park. On restart the Set is
+empty; `init()` re-arms the checkpoint for AWAITING_STAGE_APPROVAL engagements,
+and approval sets the flag before resuming — so the resume path is correct.
+However, an engagement that was approved but crashed BEFORE the stage ran would
+re-park on restart (the approval is lost). This mirrors the inherent limitation
+documented in `src/core/leash/checkpoints.js` (closures cannot be serialized).
+
+**Why accepted:** matches the forge.js precedent (honest-inert: never fakes
+resume of half-done work). A double-approval prompt is a safe failure mode; a
+silently-skipped approval is not.
+
+### P1-003: build-stage file output is best-effort, not Forge-coupled
+
+**Where:** `src/core/engagements/executor.js` `runBuildStage()`.
+
+**What:** build stages use `brain.think({lane:'build'})` directly and write a
+single file under `vault/builds/engagements/<id>/`. The richer Forge pipeline
+(manifest → per-file generation → final review) is NOT invoked — the executor
+and Forge do not share a clean integration point yet.
+
+**Why deferred:** Forge's API (`createProject(spec, kind)`) is fire-and-forget
+with its own checkpoint-gated flow; wiring it as a synchronous stage step would
+require a blocking adapter that doesn't exist. The brain-driven single-file
+write is a viable v1 that still produces a real artifact and emits
+`engagement.artifact_created`. Defer full Forge coupling to a follow-up that
+introduces a `runForgeStage` kind.
+
+---
+
 ## 📋 TRACKED — ROADMAP.md D-NN Drift Items (architectural debt)
 
 These are formally tracked in `ROADMAP.md`, not user-facing bugs. 43 open (20 MAJOR + 23 MINOR). Most impactful:

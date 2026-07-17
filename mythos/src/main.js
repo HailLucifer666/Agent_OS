@@ -370,10 +370,21 @@ async function main() {
     }},
 
     { name: 'engagement-manager', fail: 'degraded', fn: function() {
-      // Engagement Layer: manager orchestrates interview->spec->plan->execute->verify
+      // Engagement Layer: manager orchestrates interview->spec->plan->execute->verify.
+      // Phase 1: brain + checkpoints threaded in so the executor can drive
+      // build/research stages via brain.think and park stage-level approvals
+      // on the checkpoint registry (forge pattern). executor.init() re-arms
+      // interrupted/AWAITING_STAGE_APPROVAL engagements from persisted state.
       engagementManager = createEngagementManager({
-        bus, config, memory, goals, leash, effectors, engagementStore
+        bus, config, memory, goals, leash, effectors, engagementStore,
+        brain: brain, checkpoints: checkpoints
       });
+      try {
+        var execInit = engagementManager && engagementManager.executor && engagementManager.executor.init();
+        if (execInit) logger.info('engagement-executor.init', execInit);
+      } catch (e) {
+        logger.warn('engagement-executor.init-failed', { error: e.message });
+      }
       logger.info('engagement-manager.ready', {});
     }},
 
