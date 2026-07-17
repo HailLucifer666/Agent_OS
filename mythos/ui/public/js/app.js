@@ -12,8 +12,15 @@ import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
 import { createCameraLoop } from './vision/camera.js';
 import { createComposeBar } from './compose-bar.js';
+import { mountInitScreen } from './init-screen.js';
 
 const ctx = { subscribe, onRefresh };
+
+// Cinematic boot overlay — mounted before anything else so the HUD build-up
+// (orb/widgets/panels initializing underneath) is hidden behind it. Skips
+// itself once the entity reports alive (or after a hard timeout if the
+// server never answers) — see init-screen.js for the reveal timing.
+mountInitScreen({ subscribe });
 
 // D5: Track brain availability from entity-state broadcasts.
 // When entity reports offline/degraded, voice loop skips transcription to save API calls.

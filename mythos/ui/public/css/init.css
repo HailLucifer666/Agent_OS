@@ -1,0 +1,48 @@
+#init-screen {
+  position: fixed; inset: 0; z-index: 300;
+  background: #030509;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: opacity 0.7s var(--ease), transform 0.7s var(--ease);
+}
+#init-screen.init-out { opacity: 0; transform: scale(1.06); pointer-events: none; }
+
+.init-center { position: relative; text-align: center; }
+.init-wordmark {
+  font-family: var(--font-sans); font-weight: 300; font-size: clamp(28px, 5vw, 46px);
+  letter-spacing: 0.35em; color: var(--text);
+  text-shadow: 0 0 24px rgba(79, 216, 255, 0.45);
+  animation: init-wordmark-in 1.1s var(--ease) both;
+}
+@keyframes init-wordmark-in { from { opacity: 0; letter-spacing: 0.6em; } to { opacity: 1; letter-spacing: 0.35em; } }
+
+.init-lines { margin-top: 28px; min-height: 96px; font-size: 11px; letter-spacing: 0.12em; }
+.init-line { color: var(--text-faint); opacity: 0; animation: init-line-in 0.3s var(--ease) forwards; }
+.init-line.ok { color: var(--status-ok, #43e5a0); }
+.init-line.warn { color: var(--status-degraded, #eab308); }
+@keyframes init-line-in { to { opacity: 1; } }
+
+.init-sweep {
+  position: absolute; left: 50%; top: 50%; width: 72vmin; height: 72vmin;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, rgba(79, 216, 255, 0.10) 24deg, transparent 60deg);
+  animation: init-sweep-rot 2.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes init-sweep-rot { to { transform: translate(-50%, -50%) rotate(360deg); } }
+
+.init-scanline {
+  position: absolute; left: 0; right: 0; top: -4px; height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(79, 216, 255, 0.5), transparent);
+  animation: init-scan 2.2s var(--ease) 0.3s 1 both;
+  pointer-events: none;
+}
+@keyframes init-scan { from { top: -4px; } to { top: 100%; opacity: 0; } }
+
+.init-skip { position: absolute; bottom: 22px; right: 26px; font-size: 10px; letter-spacing: 0.2em; color: var(--text-faint); opacity: 0.6; }
+
+@media (prefers-reduced-motion: reduce) {
+  .init-sweep, .init-scanline { display: none; }
+  .init-wordmark { animation: none; }
+}
