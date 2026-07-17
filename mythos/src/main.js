@@ -42,6 +42,7 @@ const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { registerFromComputer } = require('./core/effectors/from-computer');
 const { registerFromPc } = require('./core/effectors/from-pc');
 const { registerFromBrowser } = require('./core/effectors/from-browser');
+const skillsLoader = require('./core/skills/loader');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
 const { registerFromPersona } = require('./core/effectors/from-persona');
 const { createReflection } = require('./core/identity/reflection');
@@ -503,6 +504,14 @@ async function main() {
       var settleTimer = setTimeout(writeIt, 10000);
       if (settleTimer.unref) settleTimer.unref();
       logger.info('capabilities-manifest.written', { tools: effectors.count() });
+
+      // Honest-degradation sweep (Phase 6): the skill-pack allowlist silently
+      // dropped any pack that failed to resolve — a fresh clone only vendors
+      // 5 of 16 allowlisted packs (mythos/skills/), the rest need ~/.zcode/skills/
+      // and were missing with zero signal anywhere. Same boot pass as the
+      // capabilities manifest, so the warning lands in the same place an
+      // operator already looks for "what's actually available."
+      skillsLoader.loadCatalog({ logger: logger });
     }},
 
     { name: 'immune-explainer', fail: 'degraded', fn: function() {

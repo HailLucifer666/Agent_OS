@@ -18,6 +18,8 @@
 // fallback.
 
 var { spawn } = require('child_process');
+var { createLogger } = require('../../src/core/logger');
+var logger = createLogger(process.env.LOG_LEVEL || 'info');
 
 var state = 'OFFLINE';       // OFFLINE | ONLINE
 var mode = null;             // 'http' | 'cli' when ONLINE
@@ -42,6 +44,17 @@ async function probe(force) {
     if (res.ok) {
       state = 'ONLINE'; mode = 'http'; hint = 'gateway at ' + apiUrl();
       return true;
+    }
+    // Reachable but rejected. Previously this fell through to the CLI probe
+    // silently, indistinguishable from "nothing is listening" — if there's
+    // no API key configured, that's the far more likely explanation and
+    // worth a distinct warning instead of being merged into the generic
+    // not-installed/not-running hint below.
+    if (!apiKey()) {
+      logger.warn('hermes-agent.auth-unconfigured', {
+        status: res.status,
+        hint: 'gateway responded at ' + apiUrl() + ' but HERMES_API_KEY is unset — set it in mythos/.env if the gateway requires auth',
+      });
     }
   } catch (_) { /* gateway not running — try CLI */ }
 

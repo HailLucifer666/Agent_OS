@@ -1023,6 +1023,7 @@ const TIER_TABLE = {
   'ask_agent':             2,
   'browser_navigate':      2,
   'browser_tabs':          2,
+  'browser_launch_debug':  2,  // Phase 6 — on-demand debug-browser launch, local action, no destructive risk
   'spotify_play_pause':    2,
   'spotify_next':          2,
   'spotify_previous':      2,

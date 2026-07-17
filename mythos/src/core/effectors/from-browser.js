@@ -6,6 +6,9 @@
 
 const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 function ok(result) { return { ok: true, result }; }
 function fail(reason) { return { ok: false, result: reason }; }
@@ -204,6 +207,58 @@ async function browser_evaluate({ script, expression, javascript, query }) {
   }).catch(err => fail(err.message));
 }
 
+// BUG (on-demand launcher, Phase 6a): mirrors scripts/setup-chrome-debug.ps1's
+// exact search order and launch flags so this tool and the manual script agree
+// on where the debug browser lives. Chrome first, then Edge; portability rule
+// (repo CLAUDE.md) — the profile dir is derived from process.env.LOCALAPPDATA,
+// never a hardcoded path.
+function findBrowserExecutable() {
+  const candidates = [
+    process.env['ProgramFiles'] && path.join(process.env['ProgramFiles'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    process.env['ProgramFiles'] && path.join(process.env['ProgramFiles'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ].filter(Boolean);
+  return candidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || null;
+}
+
+// On-demand debug-browser launcher (Phase 6a, user-approved). Boot never
+// auto-launches Chrome (main.js's browser-automation step — launching a real
+// browser at boot steals the mic/audio device on Windows) — this is the tool
+// that turns that CDP-connect-only standby into an actually-online browser
+// when the user asks for one, without touching the boot-time prohibition.
+async function browser_launch_debug() {
+  if (browserAgent.getStatus().state === 'ONLINE') return ok({ alreadyOnline: true });
+
+  const exe = findBrowserExecutable();
+  if (!exe) return fail('No Chrome or Edge installation found. Install Google Chrome or Microsoft Edge.');
+
+  const profileDir = path.join(process.env.LOCALAPPDATA, 'MYTHOS', 'chrome-debug-profile');
+  try { fs.mkdirSync(profileDir, { recursive: true }); } catch (err) { return fail(`Could not create debug profile directory: ${err.message}`); }
+
+  const cdpUrl = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
+  try {
+    const child = spawn(exe, [
+      '--remote-debugging-port=9222',
+      `--user-data-dir=${profileDir}`,
+    ], { detached: true, stdio: 'ignore' });
+    child.unref();
+  } catch (err) {
+    return fail(`Failed to launch browser: ${err.message}`);
+  }
+
+  // Give Chrome/Edge a moment to open its debug port before the first CDP
+  // connect attempt — ensureOnline() itself has its own connect timeout, this
+  // is just the cold-start window before the port exists at all.
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const connected = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
+  if (!connected) return fail('Browser launched but CDP connect did not come online — it may still be starting; try again in a moment.');
+  const status = browserAgent.getStatus();
+  return ok({ launched: true, mode: status.mode, pageCount: status.pageCount });
+}
+
 // ---- Tool catalog ----
 
 const TOOLS = [
@@ -217,6 +272,7 @@ const TOOLS = [
   { name: 'browser_tabs', description: 'Manage browser tabs. Actions: list (default), new, switch (needs index), close (needs index).', params: { action: 'string (optional) - list, new, switch, close', index: 'number (optional) - tab index for switch/close' }, danger: false, fn: browser_tabs, needs_result: true },
   { name: 'browser_go_back', description: 'Navigate back to the previous page in history.', params: {}, danger: false, fn: browser_go_back },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
+  { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE.', params: {}, danger: false, fn: browser_launch_debug },
 ];
 
 function registerFromBrowser(hub, ctx) {
@@ -232,4 +288,5 @@ module.exports = {
   TOOLS,
   browser_navigate, browser_click, browser_type, browser_screenshot, browser_get_title,
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
+  browser_launch_debug,
 };

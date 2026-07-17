@@ -113,7 +113,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 58 registered count', () => {
+describe('gate: 59 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -128,11 +128,12 @@ describe('gate: 58 registered count', () => {
 
     // 54 base + open_web (from-dashboard) + send_key (from-pc) + capture_screenshot
     // (from-pc, BUG-009 — 2026-07-16) = 57, + click_at (from-pc, Item 12 —
-    // 2026-07-16) = 58. spawn_widget (Item 11) lives in from-widgets.js, wired
+    // 2026-07-16) = 58, + browser_launch_debug (from-browser, Phase 6 on-demand
+    // launcher) = 59. spawn_widget (Item 11) lives in from-widgets.js, wired
     // via a separate registerFromWidgets() this gate test does not call, so it
     // is NOT counted here.
     // use_skill is registered separately via registerFromSkills (not called here).
-    assert.equal(hub.count(), 58);
+    assert.equal(hub.count(), 59);
   });
 });
 

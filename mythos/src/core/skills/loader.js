@@ -84,10 +84,20 @@ function skillPath(name) {
 // is advisory, not a hard contract — a skill may be removed upstream).
 var cachedCatalog = null;
 
-function loadCatalog() {
+// Names from the allowlist that failed to resolve on the most recent
+// loadCatalog() call (fresh clones commonly miss the ~/.zcode/skills/*
+// fallback packs — 11 of 16 today, since only 5 are vendored into the repo).
+// Not an error per-file (the allowlist is advisory), but silently dropping
+// two-thirds of it with no signal anywhere is the dishonest-ok pattern this
+// handoff targets — callers that have a logger can surface it (see
+// loadCatalog(opts.logger) below; main.js's boot sequence is the one that does).
+var lastMissing = [];
+
+function loadCatalog(opts) {
   if (cachedCatalog) return cachedCatalog;
   var dir = skillsDir();
   var catalog = [];
+  var missing = [];
   readAllowlist().forEach(function(name) {
     var p = skillPath(name);
     try {
@@ -98,9 +108,15 @@ function loadCatalog() {
         description: fm.description || '(no description available)'
       });
     } catch (_) {
-      // Skill missing or unreadable — skip. Not an error condition.
+      // Skill missing or unreadable — skip. Not an error condition, but
+      // recorded so a caller with a logger can warn about the gap.
+      missing.push(name);
     }
   });
+  lastMissing = missing;
+  if (opts && opts.logger && missing.length) {
+    opts.logger.warn('skills.loader.missing-packs', { missing: missing, resolved: catalog.length, allowlisted: catalog.length + missing.length });
+  }
   cachedCatalog = catalog;
   return catalog;
 }
