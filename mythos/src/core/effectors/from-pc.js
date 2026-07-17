@@ -42,6 +42,45 @@ async function delegate(cmdObj) {
   }
 }
 
+// Phase 3 hardening: bounded retry for pc commands that race window/element
+// creation (click_at, ui_click, move/snap on a freshly-launched window). Mirrors
+// the getSpotifyWindow backport's discipline: N attempts with backoff, resolves
+// on first ok, fails clean on exhaustion. No signature change to callers — the
+// retry is internal. attempts defaults to 3, backoff 250ms (unref'd).
+async function delegateWithRetry(cmdObj, opts) {
+  const attempts = (opts && opts.attempts) || 3;
+  const backoffMs = (opts && opts.backoffMs) || 250;
+  let lastResult = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    lastResult = await delegate(cmdObj);
+    if (lastResult.ok) {
+      if (attempt > 1) lastResult.retries = attempt - 1;
+      return lastResult;
+    }
+    if (attempt < attempts) {
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, backoffMs);
+        if (t && typeof t.unref === 'function') t.unref();
+      });
+    }
+  }
+  lastResult.retries = attempts - 1;
+  return lastResult;
+}
+
+// Phase 3 hardening: foreground escalation. For ui_click/click_at on an element
+// whose window may not be foreground, focus the window first, then retry. The
+// focus is best-effort (a focus failure does NOT abort the click — the original
+// window may still be clickable). Reused by both desktop and browser click paths
+// (browser applies it via its own focus step).
+async function foregroundThenRetry(pid, cmdObj, opts) {
+  if (pid) {
+    try { await delegate({ cmd: 'focus_window', pid: pid }); }
+    catch (_) { /* best-effort focus — proceed to the action regardless */ }
+  }
+  return delegateWithRetry(cmdObj, opts);
+}
+
 // ---- Tool implementations ----
 
 async function launch_app({ name }) {
@@ -128,7 +167,9 @@ async function ui_elements({ pid, depth }) {
 async function ui_click({ pid, elementPath }) {
   if (!pid) return fail('PID is required.');
   if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
-  return delegate({ cmd: 'ui_click', pid, elementPath });
+  // Phase 3 hardening: focus the target window first, then retry on failure —
+  // a flaky ui_click often lands once the window is foregrounded.
+  return foregroundThenRetry(pid, { cmd: 'ui_click', pid, elementPath }, { attempts: 3 });
 }
 
 async function ui_type({ text, pid, elementPath }) {
@@ -148,7 +189,51 @@ async function send_key({ key }) {
 
 async function click_at({ x, y }) {
   if (typeof x !== 'number' || typeof y !== 'number') return fail('x and y coordinates are required (numbers).');
-  return delegate({ cmd: 'click_at', x, y });
+  // Phase 3 hardening: coordinate clicks are inherently racy (window may have
+  // moved between screen_look and click). Retry bounds the flakiness.
+  return delegateWithRetry({ cmd: 'click_at', x, y }, { attempts: 3 });
+}
+
+// ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
+
+async function move_window({ pid, x, y, width, height }) {
+  if (!pid) return fail('PID is required.');
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof width !== 'number' || typeof height !== 'number') {
+    return fail('move_window requires x, y, width, and height (numbers).');
+  }
+  return delegate({ cmd: 'move_window', pid: Number(pid), x, y, width, height });
+}
+
+async function snap_window({ pid, position }) {
+  if (!pid) return fail('PID is required.');
+  const validPositions = ['left', 'right', 'maximize', 'minimize', 'restore'];
+  if (!position || validPositions.indexOf(position) === -1) {
+    return fail('snap_window requires position: ' + validPositions.join(', ') + '.');
+  }
+  return delegate({ cmd: 'snap_window', pid: Number(pid), position });
+}
+
+async function scroll_at({ x, y, amount, direction }) {
+  if (typeof x !== 'number' || typeof y !== 'number') return fail('scroll_at requires x and y coordinates (numbers).');
+  const cmdObj = { cmd: 'scroll_at', x, y };
+  if (amount != null) cmdObj.amount = amount;
+  if (direction) {
+    if (direction !== 'up' && direction !== 'down') return fail('scroll_at direction must be "up" or "down".');
+    cmdObj.direction = direction;
+  }
+  return delegate(cmdObj);
+}
+
+async function right_click_at({ x, y }) {
+  if (typeof x !== 'number' || typeof y !== 'number') return fail('right_click_at requires x and y coordinates (numbers).');
+  return delegateWithRetry({ cmd: 'right_click_at', x, y }, { attempts: 2 });
+}
+
+async function drag({ x1, y1, x2, y2 }) {
+  if (typeof x1 !== 'number' || typeof y1 !== 'number' || typeof x2 !== 'number' || typeof y2 !== 'number') {
+    return fail('drag requires x1, y1, x2, y2 coordinates (numbers).');
+  }
+  return delegate({ cmd: 'drag', x1, y1, x2, y2 });
 }
 
 async function write_note({ text, title }) {
@@ -204,6 +289,11 @@ const TOOLS = [
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
+  { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
+  { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },
+  { name: 'scroll_at', description: 'Scroll the mouse wheel at a screen coordinate. Moves to (x,y) first, then scrolls. Defaults: amount 3 ticks, direction down.', params: { x: 'number - absolute screen x', y: 'number - absolute screen y', amount: 'number (optional) - ticks to scroll, default 3', direction: 'string (optional) - up or down, default down' }, danger: false, fn: scroll_at },
+  { name: 'right_click_at', description: 'Right-click at an absolute screen coordinate (x, y) using a native mouse click.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: right_click_at },
+  { name: 'drag', description: 'Drag the mouse from (x1,y1) to (x2,y2) — left button down, stepped move, up. Used for drag-and-drop and slider adjustment.', params: { x1: 'number - start x', y1: 'number - start y', x2: 'number - end x', y2: 'number - end y' }, danger: true, fn: drag },
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
   { name: 'ambient_awareness', description: "Turn ambient screen awareness on or off, or report its status. Use for 'watch my screen', 'stop watching my screen', 'are you watching?'.", params: { action: 'string - on|off|status' }, danger: false, fn: ambient_awareness, needs_result: true },
 ];
@@ -227,4 +317,5 @@ module.exports = {
   launch_app, list_windows, focus_window, close_window, media_key,
   screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
   ambient_awareness, setScreenSensorHandle,
+  move_window, snap_window, scroll_at, right_click_at, drag,
 };

@@ -173,6 +173,7 @@ public static class NativeInput {
     public const uint MOUSEEVENTF_LEFTUP = 0x0004;
     public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
     public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+    public const uint MOUSEEVENTF_WHEEL = 0x0800;
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
@@ -186,7 +187,36 @@ public static class NativeInput {
     [DllImport("user32.dll")]
     public static extern short VkKeyScan(char ch);
 
+    // Phase 3: window move/resize/snap. SetWindowPos is the lower-level call
+    // (flags control what changes); MoveWindow is a convenience wrapper. Both
+    // repaint after the move.
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, [MarshalAs(UnmanagedType.Bool)] bool bRepaint);
+
+    // GetWindowRect fills a RECT with the window's screen coordinates. Used by
+    // snap_window to compute half-rect targets and by the test oracle.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
     public const int SW_RESTORE = 9;
+    public const int SW_MINIMIZE = 6;
+    public const int SW_MAXIMIZE = 3;
+    public const uint SWP_NOZORDER = 0x0004;
+    public const uint SWP_NOACTIVATE = 0x0010;
+    public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 }
 '@ -Language CSharp
 
@@ -377,6 +407,182 @@ function Handle-CloseWindow($TargetPid) {
     } catch {
         return ('Cannot close PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
+}
+
+# ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
+# NOTE: every handler takes the target PID as a parameter named $TargetPid (NOT
+# $pid — $pid is the PowerShell automatic variable for THIS shell's process,
+# a classic wrong-target bug). We resolve $proc from $TargetPid and act on
+# $proc.MainWindowHandle. Click-style handlers take screen coords, not a PID.
+
+function Resolve-TargetWindow($TargetPid) {
+    # Shared guard: PID -> process with a non-zero MainWindowHandle.
+    # Returns @{ ok=$true; proc=$proc; hwnd=$hwnd } or @{ ok=$false; error=$msg }.
+    if (-not $TargetPid) { return @{ ok = $false; error = 'PID is required.' } }
+    try {
+        $proc = Get-Process -Id $TargetPid -ErrorAction Stop
+    } catch {
+        return @{ ok = $false; error = ('Cannot find PID ' + $TargetPid + ': ' + $_.Exception.Message) }
+    }
+    $hwnd = $proc.MainWindowHandle
+    if ($hwnd -eq [IntPtr]::Zero) {
+        return @{ ok = $false; error = ('Process ' + $TargetPid + ' has no main window.') }
+    }
+    return @{ ok = $true; proc = $proc; hwnd = $hwnd }
+}
+
+function Handle-MoveWindow($TargetPid, $x, $y, $width, $height) {
+    $w = Resolve-TargetWindow $TargetPid
+    if (-not $w.ok) { return $w.error }
+    if ($null -eq $x -or $null -eq $y -or $null -eq $width -or $null -eq $height) {
+        return 'move_window requires x, y, width, height.'
+    }
+    $ok = [NativeInput]::MoveWindow($w.hwnd, [int]$x, [int]$y, [int]$width, [int]$height, $true)
+    if (-not $ok) { return ('MoveWindow failed for PID ' + $TargetPid) }
+    return @{ pid = $TargetPid; moved = $true; x = [int]$x; y = [int]$y; width = [int]$width; height = [int]$height }
+}
+
+function Handle-SnapWindow($TargetPid, $position) {
+    $w = Resolve-TargetWindow $TargetPid
+    if (-not $w.ok) { return $w.error }
+    $pos = "$position".ToLowerInvariant()
+    # Work area = the screen minus the taskbar.
+    $wa = [System.Windows.Forms.SystemInformation]::WorkingArea
+    $halfW = [int]($wa.Width / 2)
+    $fullW = [int]$wa.Width
+    $fullH = [int]$wa.Height
+    switch ($pos) {
+        'left' {
+            $ok = [NativeInput]::MoveWindow($w.hwnd, $wa.X, $wa.Y, $halfW, $fullH, $true)
+        }
+        'right' {
+            $ok = [NativeInput]::MoveWindow($w.hwnd, $wa.X + $halfW, $wa.Y, $halfW, $fullH, $true)
+        }
+        'maximize' {
+            [NativeInput]::ShowWindow($w.hwnd, [NativeInput]::SW_MAXIMIZE) | Out-Null
+            $ok = $true
+        }
+        'minimize' {
+            [NativeInput]::ShowWindow($w.hwnd, [NativeInput]::SW_MINIMIZE) | Out-Null
+            $ok = $true
+        }
+        'restore' {
+            [NativeInput]::ShowWindow($w.hwnd, [NativeInput]::SW_RESTORE) | Out-Null
+            $ok = $true
+        }
+        default { return ('Unknown snap position: ' + $position + '. Use left, right, maximize, minimize, or restore.') }
+    }
+    if (-not $ok) { return ('snap_window (' + $pos + ') failed for PID ' + $TargetPid) }
+    return @{ pid = $TargetPid; snapped = $true; position = $pos }
+}
+
+function Handle-ScrollAt($x, $y, $amount, $direction) {
+    if ($null -eq $x -or $null -eq $y) { return 'scroll_at requires x and y coordinates.' }
+    $amt = if ($amount) { [int]$amount } else { 3 }
+    # direction defaults to 'down'; negative wheel delta = scroll down.
+    $dir = if ($direction) { "$direction".ToLowerInvariant() } else { 'down' }
+    if ($dir -eq 'down') { $delta = -[int]($amt * 120) }
+    elseif ($dir -eq 'up') { $delta = [int]($amt * 120) }
+    else { return ('Unknown scroll direction: ' + $direction + '. Use up or down.') }
+
+    # Move to the point first, then send the wheel event there.
+    $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+    $screenH = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+    $normX = [int]($x * 65535 / $screenW)
+    $normY = [int]($y * 65535 / $screenH)
+
+    $move = New-Object 'NativeInput+INPUT'
+    $move.type = [NativeInput]::INPUT_MOUSE
+    $move.u.mi.dx = $normX
+    $move.u.mi.dy = $normY
+    $move.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_MOVE -bor [NativeInput]::MOUSEEVENTF_ABSOLUTE
+
+    $wheel = New-Object 'NativeInput+INPUT'
+    $wheel.type = [NativeInput]::INPUT_MOUSE
+    $wheel.u.mi.dx = 0
+    $wheel.u.mi.dy = 0
+    $wheel.u.mi.mouseData = [uint32]$delta
+    $wheel.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_WHEEL
+
+    $inputs = @($move, $wheel)
+    [void][NativeInput]::SendInput(2, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+    return @{ scrolled = $true; x = [int]$x; y = [int]$y; amount = $amt; direction = $dir }
+}
+
+function Handle-RightClickAt($x, $y) {
+    if ($null -eq $x -or $null -eq $y) { return 'right_click_at requires x and y coordinates.' }
+    $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+    $screenH = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+    $normX = [int]($x * 65535 / $screenW)
+    $normY = [int]($y * 65535 / $screenH)
+
+    $inputs = @(
+        (New-Object 'NativeInput+INPUT'),   # move
+        (New-Object 'NativeInput+INPUT'),   # right down
+        (New-Object 'NativeInput+INPUT')    # right up
+    )
+    $inputs[0].type = [NativeInput]::INPUT_MOUSE
+    $inputs[0].u.mi.dx = $normX
+    $inputs[0].u.mi.dy = $normY
+    $inputs[0].u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_MOVE -bor [NativeInput]::MOUSEEVENTF_ABSOLUTE
+
+    $inputs[1].type = [NativeInput]::INPUT_MOUSE
+    $inputs[1].u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_RIGHTDOWN
+
+    $inputs[2].type = [NativeInput]::INPUT_MOUSE
+    $inputs[2].u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_RIGHTUP
+
+    [void][NativeInput]::SendInput(3, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+    return @{ rightClicked = $true; x = [int]$x; y = [int]$y }
+}
+
+function Handle-Drag($x1, $y1, $x2, $y2) {
+    if ($null -eq $x1 -or $null -eq $y1 -or $null -eq $x2 -or $null -eq $y2) {
+        return 'drag requires x1, y1, x2, y2 coordinates.'
+    }
+    $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+    $screenH = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+    function NormXY($sx, $sy) {
+        return @([int]($sx * 65535 / $screenW), [int]($sy * 65535 / $screenH))
+    }
+    $start = NormXY $x1 $y1
+    $end = NormXY $x2 $y2
+
+    # MOVE to start, LEFTDOWN, stepped MOVEs to end (so the OS registers a drag,
+    # not a teleport), LEFTUP. 8 steps is enough for a smooth-enough drag.
+    $steps = 8
+    $inputs = @()
+    $mv0 = New-Object 'NativeInput+INPUT'
+    $mv0.type = [NativeInput]::INPUT_MOUSE
+    $mv0.u.mi.dx = $start[0]
+    $mv0.u.mi.dy = $start[1]
+    $mv0.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_MOVE -bor [NativeInput]::MOUSEEVENTF_ABSOLUTE
+    $inputs += $mv0
+
+    $down = New-Object 'NativeInput+INPUT'
+    $down.type = [NativeInput]::INPUT_MOUSE
+    $down.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_LEFTDOWN
+    $inputs += $down
+
+    for ($i = 1; $i -le $steps; $i++) {
+        $t = $i / $steps
+        $ix = [int]($start[0] + ($end[0] - $start[0]) * $t)
+        $iy = [int]($start[1] + ($end[1] - $start[1]) * $t)
+        $step = New-Object 'NativeInput+INPUT'
+        $step.type = [NativeInput]::INPUT_MOUSE
+        $step.u.mi.dx = $ix
+        $step.u.mi.dy = $iy
+        $step.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_MOVE -bor [NativeInput]::MOUSEEVENTF_ABSOLUTE
+        $inputs += $step
+    }
+
+    $up = New-Object 'NativeInput+INPUT'
+    $up.type = [NativeInput]::INPUT_MOUSE
+    $up.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_LEFTUP
+    $inputs += $up
+
+    [void][NativeInput]::SendInput($inputs.Count, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+    return @{ dragged = $true; from = @{ x = [int]$x1; y = [int]$y1 }; to = @{ x = [int]$x2; y = [int]$y2 }; steps = $steps }
 }
 
 function Handle-MediaKey($key) {
@@ -767,6 +973,21 @@ while ($true) {
         }
         'close_window' {
             $result = Handle-CloseWindow $cmd.pid
+        }
+        'move_window' {
+            $result = Handle-MoveWindow $cmd.pid $cmd.x $cmd.y $cmd.width $cmd.height
+        }
+        'snap_window' {
+            $result = Handle-SnapWindow $cmd.pid $cmd.position
+        }
+        'scroll_at' {
+            $result = Handle-ScrollAt $cmd.x $cmd.y $cmd.amount $cmd.direction
+        }
+        'right_click_at' {
+            $result = Handle-RightClickAt $cmd.x $cmd.y
+        }
+        'drag' {
+            $result = Handle-Drag $cmd.x1 $cmd.y1 $cmd.x2 $cmd.y2
         }
         'media_key' {
             $result = Handle-MediaKey $cmd.key

@@ -114,7 +114,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 64 registered count', () => {
+describe('gate: 69 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -134,12 +134,14 @@ describe('gate: 64 registered count', () => {
     // launcher) = 59, + ambient_awareness (from-pc, Phase 2 Jarvis upgrade —
     // ambient screen awareness toggle) = 60, + daily_plan (from-dashboard,
     // Phase 3 Jarvis upgrade — daily planning + accountability tool) = 61,
-    // + 3 doc tools (generate_spreadsheet/deck/pdf, Phase 2 — 2026-07-17) = 64.
+    // + 3 doc tools (generate_spreadsheet/deck/pdf, Phase 2 — 2026-07-17) = 64,
+    // + 5 desktop tools (move_window/snap_window/scroll_at/right_click_at/drag,
+    // Phase 3 — 2026-07-17) = 69.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 64);
+    assert.equal(hub.count(), 69);
   });
 });
 

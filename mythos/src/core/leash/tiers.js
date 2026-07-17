@@ -101,6 +101,10 @@ const TIER_TABLE = {
   'generate_spreadsheet':  2,  // .xlsx via exceljs
   'generate_deck':         2,  // .pptx via pptxgenjs
   'generate_pdf':          2,  // .pdf via headless Chrome print-to-pdf; honest HTML fallback when absent
+  // Phase 3 desktop control — non-destructive window ops; right_click/drag are T3 below.
+  'move_window':           2,  // non-destructive window move/resize
+  'snap_window':           2,  // non-destructive window snap/min/max/restore
+  'scroll_at':             2,  // non-destructive wheel scroll at a point
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,
@@ -111,6 +115,8 @@ const TIER_TABLE = {
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable
   'ui_type':               3,  // ELEVATED — same reasoning
   'click_at':              3,  // ELEVATED — autonomous clicking unpredictable
+  'right_click_at':        3,  // Phase 3 — autonomous right-click, context menus unpredictable
+  'drag':                  3,  // Phase 3 — autonomous drag, drop targets unpredictable
   'browser_click':         3,
   'browser_type':          3,
   'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
