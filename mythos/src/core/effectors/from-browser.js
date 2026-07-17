@@ -54,7 +54,11 @@ async function browser_click({ selector }) {
   const guard = await requireOnline();
   if (guard) return guard;
 
+  // Phase 4 hardening: implicit waitForSelector before click so a not-yet-rendered
+  // element doesn't fail the whole click. waitForSelector rejects on timeout, which
+  // the .catch turns into a clean fail — no silent retry storm.
   return browserAgent.withPage(async (page) => {
+    try { await page.waitForSelector(selector, { timeout: 5000 }); } catch (_) { /* fall through to click, which will fail honestly */ }
     await page.click(selector);
     return ok({ clicked: selector, url: page.url() });
   }).catch(err => fail(err.message));
@@ -67,9 +71,64 @@ async function browser_type({ selector, text, clearFirst }) {
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
+    // Phase 4 hardening: implicit waitForSelector before typing.
+    try { await page.waitForSelector(selector, { timeout: 5000 }); } catch (_) {}
     if (clearFirst) await page.fill(selector, text);
     else await page.type(selector, text);
     return ok({ typed: text.length, into: selector, url: page.url() });
+  }).catch(err => fail(err.message));
+}
+
+// ---- Phase 4: wait-for-element + form-fill ----
+
+async function browser_wait_for({ selector, timeoutMs }) {
+  if (!selector) return fail('CSS selector is required.');
+  const guard = await requireOnline();
+  if (guard) return guard;
+  const timeout = (typeof timeoutMs === 'number' && timeoutMs > 0) ? Math.min(timeoutMs, 30000) : 10000;
+
+  return browserAgent.withPage(async (page) => {
+    try {
+      await page.waitForSelector(selector, { timeout: timeout });
+      // Confirm the element is actually present (waitForSelector resolves on visibility too).
+      const count = await page.locator(selector).count();
+      return ok({ selector: selector, present: true, matched: count, waitedMs: timeout });
+    } catch (err) {
+      // Honest fail on timeout — do NOT claim the element appeared.
+      return fail('Element "' + selector + '" did not appear within ' + timeout + 'ms.');
+    }
+  }).catch(err => fail(err.message));
+}
+
+async function browser_fill_form({ fields }) {
+  if (!fields || !Array.isArray(fields) || !fields.length) {
+    return fail('fields array is required: [{selector, value}].');
+  }
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    // Fill each field in sequence. A bad selector reports that field's failure
+    // WITHOUT aborting the rest — a form with one missing field still fills the
+    // others, and the result reports per-field outcome.
+    const results = [];
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      if (!f || !f.selector || f.value === undefined || f.value === null) {
+        results.push({ index: i, selector: f && f.selector, ok: false, error: 'missing selector or value' });
+        continue;
+      }
+      try {
+        // Wait briefly for the field, then fill (replace existing content).
+        try { await page.waitForSelector(f.selector, { timeout: 4000 }); } catch (_) {}
+        await page.fill(f.selector, String(f.value));
+        results.push({ index: i, selector: f.selector, ok: true });
+      } catch (err) {
+        results.push({ index: i, selector: f.selector, ok: false, error: (err && err.message) || 'fill failed' });
+      }
+    }
+    const filled = results.filter((r) => r.ok).length;
+    return ok({ fields: results, filled: filled, total: fields.length, url: page.url() });
   }).catch(err => fail(err.message));
 }
 
@@ -271,6 +330,8 @@ const TOOLS = [
   { name: 'browser_scroll', description: 'Scroll the page up or down by 600 pixels.', params: { direction: 'string - "up" or "down" (default: down)' }, danger: false, fn: browser_scroll },
   { name: 'browser_tabs', description: 'Manage browser tabs. Actions: list (default), new, switch (needs index), close (needs index).', params: { action: 'string (optional) - list, new, switch, close', index: 'number (optional) - tab index for switch/close' }, danger: false, fn: browser_tabs, needs_result: true },
   { name: 'browser_go_back', description: 'Navigate back to the previous page in history.', params: {}, danger: false, fn: browser_go_back },
+  { name: 'browser_wait_for', description: 'Wait for an element matching a CSS selector to appear on the page. Fails honestly if it does not appear within the timeout. Use before reading or interacting with a dynamically-loaded element.', params: { selector: 'string - CSS selector to wait for', timeoutMs: 'number (optional) - max wait in ms, default 10000, capped at 30000' }, danger: false, fn: browser_wait_for, needs_result: true },
+  { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{selector, value}]. Each field is filled (replacing existing content); a bad selector reports that field failure without aborting the rest.', params: { fields: 'array - [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE.', params: {}, danger: false, fn: browser_launch_debug },
 ];
@@ -289,4 +350,5 @@ module.exports = {
   browser_navigate, browser_click, browser_type, browser_screenshot, browser_get_title,
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
   browser_launch_debug,
+  browser_wait_for, browser_fill_form,
 };

@@ -48,6 +48,7 @@ const TIER_TABLE = {
   'browser_get_text':      1,
   'browser_scroll':        1,
   'browser_go_back':       1,
+  'browser_wait_for':      1,  // Phase 4 — read-only wait for an element to appear
   'focus_window':          1,
   'pipeline_advance':      1,  // approve only — dangerWhen handles reject
   'gmail_unread':          1,
@@ -119,6 +120,7 @@ const TIER_TABLE = {
   'drag':                  3,  // Phase 3 — autonomous drag, drop targets unpredictable
   'browser_click':         3,
   'browser_type':          3,
+  'browser_fill_form':     3,  // Phase 4 — autonomous multi-field typing
   'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
