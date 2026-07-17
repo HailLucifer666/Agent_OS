@@ -58,6 +58,7 @@ const TIER_TABLE = {
                                // validated data-only spec (Item 11 generative UI)
   'set_persona_level':     1,  // local write — adjusts a personality dial in Identity/persona.json
   'manage_widget':         1,  // local write — hides/shows dashboard widgets (state in browser localStorage)
+  'ambient_awareness':     1,  // local toggle — turns the ambient screen-awareness sensor on/off/status
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,

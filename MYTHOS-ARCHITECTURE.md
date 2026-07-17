@@ -1011,6 +1011,7 @@ const TIER_TABLE = {
                                // validated data-only spec (Item 11 generative UI)
   'set_persona_level':     1,  // local write — adjusts a personality dial in Identity/persona.json
   'manage_widget':         1,  // local write — hides/shows dashboard widgets (state in browser localStorage)
+  'ambient_awareness':     1,  // local toggle — turns the ambient screen-awareness sensor on/off/status
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
@@ -1034,10 +1035,11 @@ const TIER_TABLE = {
   // Re-tiered T3 -> T2 (confirmation-policy pass): these write only to the
   // sandboxed vault/builds/ tree or drive Spotify locally — no destructive or
   // outward-facing risk, so a confirm popup on every "play a song"/"build me
-  // a landing page" was pure friction, not safety. The T3/T4 security-invariant
-  // tools below (compose_email, gmail_send, delete_goal, close_window,
-  // hermes_task, ui_click, ui_type, click_at, browser_click, browser_type,
-  // kill_session, browser_evaluate) are deliberately untouched.
+  // a landing page" was pure friction, not safety. See BUGS.md for the audit
+  // that identified them; the T3/T4 security-invariant tools below (compose_email,
+  // gmail_send, delete_goal, close_window, hermes_task, ui_click, ui_type,
+  // click_at, browser_click, browser_type, kill_session, browser_evaluate) are
+  // deliberately untouched.
   'spotify_play':          2,
   'spotify_search':        2,
   'build_project':         2,  // P22 Forge — multi-file build, sandboxed to vault/builds/

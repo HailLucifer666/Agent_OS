@@ -22,6 +22,7 @@ const { createConversationGateway } = require('./core/assistant/gateway');
 const { createTimerSensor } = require('./core/sensors/timer');
 const { createReminderSensor } = require('./core/sensors/reminder-sensor');
 const { createGmailSensor } = require('./core/sensors/gmail-sensor');
+const { createScreenSensor } = require('./core/sensors/screen-sensor');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
 const { createHealer } = require('./core/immune/healer');
@@ -136,6 +137,8 @@ async function main() {
   let checkpoints = null;          // P22 checkpoint approval registry
   let forge = null;                // P22 Forge multi-file build pipeline
   let checkpointSweepTimer = null;
+  let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
+  let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
 
   // Engagement Layer
   let engagementStore = null;
@@ -290,7 +293,7 @@ async function main() {
       // honest-inert (abtop.getState() reports enabled:false), which is correct: there
       // is no dashboard process to monitor CLI sessions for yet.
       registerFromComputer(hub);
-      registerFromPc(hub, { brain: brain, fs: memory.fs });
+      pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
       registerFromSpotify(hub, { effectors: hub });
       registerFromBrowser(hub, { config: config });
       dashboardWiring = registerFromDashboard(hub, {
@@ -575,6 +578,22 @@ async function main() {
       metricSensor.start();
       logger.info('sensors.metric.started', {});
 
+      // [Phase 2 Jarvis upgrade — NEW] ambient screen awareness: hash-gated
+      // screen_look -> vision-description sensor. Opt-in (SCREEN_AWARENESS_ENABLED
+      // defaults false) and only constructed when pc-child is present — otherwise
+      // every poll would just be a silent no-op forever, which is honest but
+      // pointless. The ambient_awareness voice tool (from-pc.js) can only flip a
+      // sensor that was actually constructed here; when disabled at boot it
+      // reports unavailable rather than throwing.
+      if (config.SCREEN_AWARENESS_ENABLED && pcChild) {
+        screenSensor = createScreenSensor({ bus: bus, config: config, brain: brain, pcChild: pcChild, logger: logger });
+        screenSensor.start();
+        if (pcToolsWiring && typeof pcToolsWiring.setScreenSensorHandle === 'function') {
+          pcToolsWiring.setScreenSensorHandle(screenSensor);
+        }
+        logger.info('sensors.screen.started', { pollMs: config.SCREEN_AWARENESS_POLL_MS });
+      }
+
       // [Phase 7 — NEW] file/job sensors start immediately; ws sensor's start() is a
       // no-op until Phase 9 owns real connections, but it's still started so
       // isRunning()/stop() behave consistently through shutdown.
@@ -618,6 +637,7 @@ async function main() {
     if (edgeTtsChild) edgeTtsChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
+    if (screenSensor) screenSensor.stop();
     if (fileSensor) fileSensor.stop();
     if (wsSensor) wsSensor.stop();
     if (jobSensor) jobSensor.stop();

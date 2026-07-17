@@ -48,6 +48,15 @@ const SCHEMA = {
   WAKEWORD_ENABLED:         { type: 'bool',   default: false },
   WAKEWORD_THRESHOLD:       { type: 'number', default: 0.5, min: 0.1, max: 0.95 },
 
+  // Ambient screen awareness (hash-gated vision sensor — src/core/sensors/
+  // screen-sensor.js). Opt-in and off by default: periodically screen_look's
+  // the desktop, skips the vision call entirely when the screen is unchanged
+  // (sha1 hash gate), and feeds a one-sentence description into the perception
+  // loop. Never persists raw screenshot bytes — descriptions only.
+  SCREEN_AWARENESS_ENABLED:  { type: 'bool',   default: false },
+  SCREEN_AWARENESS_POLL_MS:  { type: 'number', default: 30000, min: 10000, max: 600000 },
+  SCREEN_AWARENESS_SALIENCE: { type: 'number', default: 0.3, min: 0, max: 1 },
+
   // get_weather tool default location ("lat,lon") when no location is spoken —
   // same Kolkata fallback the dashboard weather widget already uses.
   WEATHER_LOCATION:         { type: 'string', default: '22.57,88.36' },

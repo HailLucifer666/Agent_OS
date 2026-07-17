@@ -38,6 +38,7 @@ const ALLOWED_EVENTS = new Set([
   'perception.metric',
   'perception.voice',
   'perception.coalesced',
+  'perception.screen',     // Phase 2 Jarvis upgrade — ambient screen awareness sensor
 
   // action.*
   'action.completed',

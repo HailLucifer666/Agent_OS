@@ -94,6 +94,32 @@ async function screen_look({ query }) {
   return ok({ description: String(result.content).trim().slice(0, 600) });
 }
 
+// ---- ambient_awareness (screen-sensor toggle) ----
+// Handle injected by main.js after the sensor is constructed in the 'sensors'
+// boot step — mirrors from-dashboard.js's setAskAgentDispatch/
+// setCameraFrameProvider closure-wiring precedent. Stays null when
+// SCREEN_AWARENESS_ENABLED is false or pc-child isn't present (main.js only
+// constructs+wires the sensor when both hold), so the tool fails honestly
+// instead of throwing.
+var screenSensorHandle = null;
+function setScreenSensorHandle(handle) {
+  screenSensorHandle = handle;
+}
+
+async function ambient_awareness({ action }) {
+  var act = String(action || 'status').trim().toLowerCase();
+  if (act !== 'on' && act !== 'off' && act !== 'status') {
+    return fail('Invalid action "' + action + '". Use on, off, or status.');
+  }
+  if (!screenSensorHandle) {
+    if (act === 'status') return ok({ enabled: false, running: false, hint: 'Ambient screen awareness is disabled (SCREEN_AWARENESS_ENABLED=false or pc-child unavailable).' });
+    return fail('Ambient screen awareness is not available in this session — set SCREEN_AWARENESS_ENABLED=true in .env and restart.');
+  }
+  if (act === 'on') screenSensorHandle.start();
+  if (act === 'off') screenSensorHandle.stop();
+  return ok({ running: screenSensorHandle.isRunning() });
+}
+
 async function ui_elements({ pid, depth }) {
   if (!pid) return fail('PID is required.');
   return delegate({ cmd: 'ui_elements', pid, depth: depth || 2 });
@@ -179,6 +205,7 @@ const TOOLS = [
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
+  { name: 'ambient_awareness', description: "Turn ambient screen awareness on or off, or report its status. Use for 'watch my screen', 'stop watching my screen', 'are you watching?'.", params: { action: 'string - on|off|status' }, danger: false, fn: ambient_awareness, needs_result: true },
 ];
 
 function registerFromPc(hub, opts) {
@@ -187,7 +214,11 @@ function registerFromPc(hub, opts) {
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
-  return TOOLS.length;
+  // Return an object (not the old bare TOOLS.length) so main.js can also reach
+  // the ambient_awareness screen-sensor injector, matching from-dashboard.js's
+  // registerFromDashboard() return-shape precedent. `count` preserves the old
+  // TOOLS.length value for any caller that still wants it.
+  return { count: TOOLS.length, setScreenSensorHandle: setScreenSensorHandle };
 }
 
 module.exports = {
@@ -195,4 +226,5 @@ module.exports = {
   TOOLS,
   launch_app, list_windows, focus_window, close_window, media_key,
   screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
+  ambient_awareness, setScreenSensorHandle,
 };
