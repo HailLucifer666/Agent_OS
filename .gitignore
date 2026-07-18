@@ -35,4 +35,6 @@ graphify-out/
 
 # zcode session plans
 .zcode/plans/
+# zcode session logs/scratch (never publish)
+.zcode/tmp/
 .gstack/
