@@ -81,11 +81,11 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
     store.write(record);
 
     // Emit draft event
-    bus.emit('engagement.draft', {
+    events.createEngagementDrafted({
       engagementId: record.id,
       intent: opts.initialIntent,
       goalId: opts.goalId || undefined,
-      timestamp: now
+      bus: bus
     });
 
     return record;
