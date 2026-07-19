@@ -133,6 +133,27 @@ function createServer(deps) {
   const globalLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_GLOBAL) || 240, scope: 'global-api' });
   const expensiveLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_EXPENSIVE) || 8, scope: 'expensive' });
 
+  // W4 (Phase 2 — Wiring Integrity): audit helper for REST mutations. Every
+  // POST/DELETE on /api/goals, /api/kanban, /api/pipeline, /api/engagements
+  // writes an audit line via this helper so REST mutations leave a trace
+  // (task-957 §24 W4). tool:'rest.<route>' so the audit panel can distinguish
+  // REST-driven mutations from cortex/voice dispatches. tier:1 — these are
+  // local writes, no leash check added here (the broader auth story is P1,
+  // Phase 5). Best-effort: a failure to audit never blocks the response.
+  function auditRest(tool, args, outcome) {
+    if (!memory || !memory.audit || typeof memory.audit.write !== 'function') return;
+    try {
+      memory.audit.write({
+        tool: tool,
+        tier: 1,
+        decision: 'completed',
+        outcome: outcome || 'ok',
+        args: args || {},
+        source: 'rest',
+      });
+    } catch (_) { /* best-effort — never block a REST response on audit */ }
+  }
+
   app.use('/api', (req, res, next) => {
     const origin = req.headers.origin;
     if (origin && ALLOWED_ORIGINS.has(origin)) {
@@ -284,14 +305,17 @@ function createServer(deps) {
     const { text, category } = req.body || {};
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
     const list = goalsEffector.addGoal(text, category);
+    auditRest('rest.goals.add', { text: String(text).slice(0, 80), category }, 'ok');
     res.json({ goals: list, stats: novaGoalsStats() });
   });
   app.post('/api/goals/:id/toggle', (req, res) => {
     const list = goalsEffector.toggleGoal(req.params.id);
+    auditRest('rest.goals.toggle', { id: req.params.id }, 'ok');
     res.json({ goals: list, stats: novaGoalsStats() });
   });
   app.delete('/api/goals/:id', (req, res) => {
     const list = goalsEffector.deleteGoal(req.params.id);
+    auditRest('rest.goals.delete', { id: req.params.id }, 'ok');
     res.json({ goals: list, stats: novaGoalsStats() });
   });
 
@@ -388,16 +412,19 @@ function createServer(deps) {
     const { title, lane } = req.body || {};
     if (!title || !title.trim()) return res.status(400).json({ error: 'title required' });
     res.json({ card: kanbanEffector.addCard(title, lane), board: kanbanEffector.listBoard() });
+    auditRest('rest.kanban.addCard', { title: String(title).slice(0, 80), lane }, 'ok');
   });
   app.post('/api/kanban/cards/:id/move', (req, res) => {
     try {
       const card = kanbanEffector.moveCard(req.params.id, req.body.lane);
       res.json({ card, board: kanbanEffector.listBoard() });
+      auditRest('rest.kanban.moveCard', { id: req.params.id, lane: req.body.lane }, 'ok');
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
   app.delete('/api/kanban/cards/:id', (req, res) => {
     kanbanEffector.deleteCard(req.params.id);
     res.json({ board: kanbanEffector.listBoard() });
+    auditRest('rest.kanban.deleteCard', { id: req.params.id }, 'ok');
   });
 
   // ---- kanban agent routes: assemble / build / review / accept + job polling ----
@@ -406,18 +433,21 @@ function createServer(deps) {
     if (!goal || !goal.trim()) return res.status(400).json({ error: 'goal required' });
     try {
       res.json(agentActions.assembleKanbanPlan(goal.trim()));
+      auditRest('rest.kanban.assemble', { goal: String(goal).slice(0, 80) }, 'ok');
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
   app.post('/api/kanban/cards/:id/build', (req, res) => {
     try {
       res.json(agentActions.buildKanbanCard(req.params.id));
+      auditRest('rest.kanban.buildCard', { id: req.params.id }, 'ok');
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
   app.post('/api/kanban/cards/:id/review', (req, res) => {
     try {
       res.json(agentActions.reviewKanbanCard(req.params.id));
+      auditRest('rest.kanban.reviewCard', { id: req.params.id }, 'ok');
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
@@ -427,6 +457,7 @@ function createServer(deps) {
       kanbanEffector.moveCard(req.params.id, lane);
       kanbanEffector.patchCard(req.params.id, { reviewVerdict: null, reviewNotes: null });
       res.json({ board: kanbanEffector.listBoard() });
+      auditRest('rest.kanban.acceptCard', { id: req.params.id, lane }, 'ok');
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
@@ -441,22 +472,27 @@ function createServer(deps) {
     const { text } = req.body || {};
     if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
     res.json({ card: pipelineEffector.capture(text), board: pipelineEffector.listAll() });
+    auditRest('rest.pipeline.capture', { text: String(text).slice(0, 80) }, 'ok');
   });
   app.post('/api/pipeline/:id/approve', (req, res) => {
     try { res.json({ card: pipelineEffector.approve(req.params.id), board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    catch (err) { res.status(400).json({ error: err.message }); return; }
+    auditRest('rest.pipeline.approve', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/reject', (req, res) => {
     try { pipelineEffector.reject(req.params.id); res.json({ board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    catch (err) { res.status(400).json({ error: err.message }); return; }
+    auditRest('rest.pipeline.reject', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/delete', (req, res) => {
     try { pipelineEffector.reject(req.params.id); res.json({ board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    catch (err) { res.status(400).json({ error: err.message }); return; }
+    auditRest('rest.pipeline.delete', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/ship', (req, res) => {
     try { res.json({ card: pipelineEffector.ship(req.params.id), board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); }
+    catch (err) { res.status(400).json({ error: err.message }); return; }
+    auditRest('rest.pipeline.ship', { id: req.params.id }, 'ok');
   });
 
   // ---- /api/memory/:store — spec-mandated route ("omitted above for space"),
@@ -543,6 +579,7 @@ function createServer(deps) {
       if (!event) return res.status(400).json({ ok: false, error: 'event is required' });
       const result = await engagementManager.engagement.transition(req.params.id, event, req.body && req.body.payload);
       res.json(result.record);
+      auditRest('rest.engagements.transition', { id: req.params.id, event }, 'ok');
     } catch (err) {
       res.status(400).json({ ok: false, error: err.message });
     }
