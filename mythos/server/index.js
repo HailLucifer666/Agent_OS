@@ -19,7 +19,7 @@ const { createVoiceAgent } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
-const { createNewsFeed } = require('./news-feed');
+// createNewsFeed moved to routes/news.js (W9 god-file decomposition).
 const pcChild = require('../adapters/pc-child');
 const version = require('../src/core/identity/version');
 const { isProviderDown } = require('../src/core/immune/probes');
@@ -321,14 +321,10 @@ function createServer(deps) {
 
   app.get('/api/kanban', (req, res) => { res.json(kanbanEffector.listBoard()); });
 
-  // ---- /api/news — Google News RSS fetched server-side for the NEWS widget
-  // (browsers can't: CORS on the feed, X-Frame-Options on the site) ----
-  const newsFeed = createNewsFeed();
-  app.get('/api/news', (req, res) => {
-    newsFeed.fetchNews()
-      .then((r) => res.json(r))
-      .catch((err) => res.json({ ok: false, error: err.message, items: [] }));
-  });
+  // ---- W9 (Phase 2 — Wiring Integrity): REST families extracted to
+  // server/routes/<family>.js factories. Each factory mounts its routes on
+  // `app` and pulls only what it needs from `deps`. See routes/*.js. ----
+  require('./routes/news').mountNewsRoutes(app);
 
   // ---- P22 — Forge build projects + checkpoint approval gates ----
   app.get('/api/forge/projects', (req, res) => { res.json({ projects: forge ? forge.listProjects() : [] }); });
