@@ -291,15 +291,7 @@ function createServer(deps) {
 
   // ---- P22 — Forge build projects + checkpoint approval gates (W9: extracted) ----
   require('./routes/forge').mountForgeRoutes(app, { forge });
-  app.get('/api/checkpoints', (req, res) => {
-    res.json({ checkpoints: checkpoints ? checkpoints.list({ status: req.query.status }) : [] });
-  });
-  app.get('/api/checkpoints/:id', (req, res) => {
-    if (!checkpoints) return res.status(404).json({ error: 'checkpoints unavailable' });
-    const c = checkpoints.get(req.params.id);
-    if (!c) return res.status(404).json({ error: 'not found' });
-    res.json({ checkpoint: c });
-  });
+  require('./routes/checkpoints').mountCheckpointsRoutes(app, { checkpoints });
 
   // ---- /api/engagements ---- Engagement Layer (Phase 1)
   // UI contract (ui/public/js/views/engagements.js): list returns a JSON array
@@ -307,6 +299,9 @@ function createServer(deps) {
   // {event, payload} and returns the updated record (UI does
   // state.engagements[idx]=data). All routes degrade to 404 when the manager
   // isn't wired (tests) rather than crashing.
+  // (W9/engagements extraction deferred to a follow-up commit — these 4 routes
+  // landed inline in Phase 1; extracting them is its own family commit so the
+  // diff stays reviewable.)
   app.get('/api/engagements', async (req, res) => {
     if (!engagementManager || !engagementManager.engagement) {
       return res.json({ engagements: [] });
