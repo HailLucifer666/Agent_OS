@@ -157,6 +157,68 @@ const SCHEMA = {
   // Opt-in by design: exposing the hub's ~58-tool catalog over a new stdio
   // surface is a trust-boundary expansion the operator must explicitly enable.
   MCP_SERVER_ENABLED:          { type: 'bool', default: false },
+
+  // ---- W8 (Phase 2 — Wiring Integrity): previously-bypassed env keys now
+  // schema-defined + documented. task-957 §24 W8: ~30 keys were read via
+  // process.env.X without schema validation; ~22 schema keys were missing
+  // from .env.example. Each key here is read live (config.X at call time,
+  // never cached at construction) per the D-46 class discipline. Some
+  // callers still read process.env.X directly at module-load (chain.js,
+  // registry.js) — they see the same value either way; the schema entry
+  // makes the key visible + validated when explicitly set. ----
+
+  // Brain chain (per-attempt timeout, distinct from ACTION_TIMEOUT_MS which
+  // bounds the whole dispatch; ollama keep-alive for vision lane)
+  CHAIN_ATTEMPT_TIMEOUT_MS:    { type: 'number', default: 30000, min: 1000 },
+  VOICE_OLLAMA_KEEP_ALIVE:     { type: 'string', default: '10m' },
+
+  // Voice loop tuning
+  VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply
+  VOICE_INTAKE_IDLE_MS:        { type: 'number', default: 600000, min: 10000 }, // idle history retention
+  VOICE_MAX_TOOL_ITERATIONS:   { type: 'number', default: 4, min: 1, max: 20 },
+  VOICE_EMAIL_MODE:            { type: 'string', default: 'gmail', enum: ['gmail', 'mailto'] },
+  VOICE_ALLOWED_DIRS:          { type: 'string', default: '%USERPROFILE%' },    // comma-sep list_folder whitelist
+
+  // Identity / reflection / immune speech
+  BOOT_GREETING:               { type: 'string', default: '' },    // '' = on; 'false' = off
+  REFLECTION_EVERY_TURNS:      { type: 'number', default: 15, min: 1 },
+  IMMUNE_EXPLAIN:              { type: 'string', default: 'true' }, // 'false' disables anomaly speech
+  ANNOUNCER_REANNOUNCE_MS:     { type: 'number', default: 600000, min: 10000 },
+
+  // Server rate limiting + WS origin allowlist
+  RATE_LIMIT_GLOBAL:           { type: 'number', default: 240, min: 1 },
+  RATE_LIMIT_EXPENSIVE:        { type: 'number', default: 8,   min: 1 },
+  ALLOWED_ORIGINS:             { type: 'string', default: '' }, // comma-sep WS/CORS allowlist
+
+  // Cortex drain cap per tick (the 50-per-tick perception cap, §11.1)
+  MAX_DRAIN_PER_TICK:          { type: 'number', default: 50, min: 1, max: 500 },
+
+  // Pretty TTY logging ('force' = on even when piped, 'false' = off)
+  MYTHOS_LOG_PRETTY:           { type: 'string', default: '' },
+
+  // Edge-TTS child service
+  EDGE_TTS_URL:                { type: 'string', default: 'http://127.0.0.1:5050' },
+  EDGE_TTS_PORT:               { type: 'number', default: 5050, min: 1024, max: 65535 },
+  EDGE_TTS_AUTOSTART:          { type: 'string', default: '' },  // 'false' = don't spawn at boot
+
+  // Hermes sidecar (T3 task delegation)
+  HERMES_ENABLED:              { type: 'bool', default: false },
+  HERMES_URL:                  { type: 'string', default: 'http://127.0.0.1:8082' },
+
+  // Embeddings / STT model overrides (free-tier default models)
+  OLLAMA_EMBED_MODEL:          { type: 'string', default: 'nomic-embed-text' },
+  MISTRAL_EMBED_MODEL:         { type: 'string', default: 'mistral-embed' },
+  GROQ_STT_MODEL:              { type: 'string', default: 'whisper-large-v3-turbo' },
+
+  // Provider URL overrides (default to the official endpoints)
+  NIM_API_URL:                 { type: 'string', default: 'https://integrate.api.nvidia.com/v1' },
+  GROQ_API_URL:                { type: 'string', default: 'https://api.groq.com/openai/v1' },
+  MISTRAL_API_URL:             { type: 'string', default: 'https://api.mistral.ai/v1' },
+  CEREBRAS_API_URL:            { type: 'string', default: 'https://api.cerebras.ai/v1' },
+
+  // Agent monitor (abtop — deliberately honest-inert until a dashboard owns it)
+  AGENT_MONITOR_ENABLED:       { type: 'string', default: '' },   // 'false' = force-off
+  AGENT_MONITOR_POLL_MS:       { type: 'number', default: 5000, min: 1000 },
 };
 
 module.exports = { SCHEMA };
