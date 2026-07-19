@@ -1061,14 +1061,21 @@ Two separate build passes, both phase-gated (test-suite hold + commit + restart 
 
 ## Phase 2 — Wiring Integrity (task-957 §24 W1–W9 + D)
 
-Landed on `phase2/wiring-integrity` (branched off `main` @ `685dbaa`, the pre-Phase-1 state — Phase 1's `merge/engagement-executor` is not in this clone). 10 W-fixes + dead-code decisions + the W9 god-file decomposition. Each item its own commit + regression test. Suite 1097 → 1121 pass (the 2 baseline fails unchanged: `boot.test.js` SIGINT env + `eval/memory-impact` data-dependent).
+Landed on `phase2/wiring-integrity`, rebased onto `main` @ `66cb7e8` (Phase 1). 20 commits: 9 W-fixes + dead-code decisions + the W9 god-file decomposition (10 family commits) + a rebase-resolution commit. Each W-fix its own commit + regression test. Suite 1160 (Phase 1 baseline) → 1180 pass (the 2 baseline fails unchanged: `boot.test.js` SIGINT env + `eval/memory-impact` data-dependent).
 
-### Deferred / blocked-on-Phase-1 (this clone)
+**Rebase note:** Phase 2 was initially built against `main` @ `685dbaa` (pre-Phase-1) because the working clone's last `git fetch` predated Phase 1's push. After the operator flagged this, a `git fetch` confirmed Phase 1 was on `origin/main`, and the branch was rebased. The pre-rebase backup is at `phase2/pre-rebase-backup` @ `c9a9247`. Conflicts in `server/index.js` (W4 + W9 checkpoints/kanban/engagements) and the W7 skip (Phase 1 superseded it — see below) were resolved in the rebase.
+
+### Resolved by Phase 1 (was "blocked-on-Phase-1" pre-rebase)
+
+| Item | Status |
+|---|---|
+| W7 (engagement events via builders + executor dispatch) | **Phase 1 already did it.** Phase 1's `emitTransitionEvent` uses the real `events.js` builders with live record data, and the executor emits granular `stage_*` events. My W7 was redundant post-Phase-1 — correctly skipped on the rebase. |
+| W9 engagements Phase-1 extras | **Resolved.** Phase 1's 4 engagement routes (list/get/transition/create) are extracted into the engagements factory with Phase 1's exact UI contract. The `phase5-merge-invariants` guard was updated to scan both `server/index.js` and `server/routes/engagements.js`. |
+
+### Still deferred (post-rebase)
 
 | Item | Why deferred | Resumes when |
 |---|---|---|
-| W7 executor-dispatch portion | `engagements/executor.js` doesn't exist on main (Phase 1 branch). The events.js-builder portion of W7 landed; "action stages route through dispatchAction" needs the executor. | Phase 1's `8706ccc` lands |
-| W9 engagements-route Phase-1 extras | Only the 3 engagement routes on main were extracted. Phase 1 adds 4 more (draft/interview/approve/etc.) — those become their own family commit at rebase. | Phase 1 lands |
 | D — `assistant/{intent-router,response-planner,style,summary}` (~470 lines) | Test-only today, but Phase 4 autonomy may want them. | Phase 4 evaluation |
 | D — `sensors/ws.js .ingest()` | Zero callers, but the module IS constructed in main.js. Pure deletion unwinds wiring; wiring the ingestion path is Phase 4 conversation-subscriber work (the W5-unblocked gateway emit is the natural subscriber). | Phase 4 |
 | D — orphan `conversation.intent` event | W5 just unblocked the emit (it was permanently dead pre-W5). Removing it now would undo W5. | Phase 4 decides whether to subscribe |
@@ -1078,7 +1085,7 @@ Landed on `phase2/wiring-integrity` (branched off `main` @ `685dbaa`, the pre-Ph
 
 - **`test/engagements/events.test.js:43`** — `assert.equal(event.timestamp, Date.now() || event.timestamp > 0)`. The `||` short-circuits on truthy `Date.now()` and compares `event.timestamp` against a fresh `Date.now()` call that's 0–1ms different. Flakes ~1/3 runs. Independent of Phase 2 (passes in isolation). Fix: `assert.ok(event.timestamp > 0)` — separate cleanup.
 
-### W9 acceptance against main (honest residual)
+### W9 acceptance (post-rebase, honest residual)
 
-server/index.js shrank 1618 → 1288 lines across 10 family extractions. The §4.3 "~600 line" target assumed Phase 1's 4 engagement routes + the docs-gen/desktop/browser extras would also be extracted; against main alone, the 1288 residual is the WS layer + voice turns + vision + proactive speech + TTS + camera broker + confirm/checkpoint flows + middleware + `/health` + `/api/status` — all mandated to STAY by W9 rule §4.2 #5/#9. The 14 remaining `app.*` calls are the must-stay set (6 middleware + identity routes + voice transcribe + 404/SPA/error). This is the honest floor for the W9 scope on main.
+server/index.js shrank from 1674 lines (Phase 1's version, which grew the god-file slightly with its 4 engagement routes) to 1295 lines across the 10 family extractions; 49 → 14 `app.*` calls. The residual is the WS layer + voice turns + vision + proactive speech + TTS + camera broker + confirm/checkpoint flows + middleware + `/health` + `/api/status` — all mandated to STAY by W9 rule §4.2 #5/#9. The remaining `app.*` calls are the must-stay set (middleware + identity routes + voice transcribe + 404/SPA/error). This is the honest floor for the W9 scope. The §4.3 "~600 line" target would require extracting the WS layer too, which §4.2 #5 explicitly forbids in Phase 2.
 

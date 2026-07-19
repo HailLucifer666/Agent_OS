@@ -206,11 +206,13 @@ Per task-957 §26:
 
 ## 7. Phase 2 — completion notes (laptop side, 2026-07-19)
 
-Landed on `phase2/wiring-integrity` off `main` @ `685dbaa` (the pre-Phase-1 state — Phase 1's `merge/engagement-executor` was not in the working clone, so Phase 2 proceeded against current main per the operator's call). 21 commits, all green.
+**Final state:** `phase2/wiring-integrity` rebased onto `main` @ `66cb7e8` (Phase 1). 20 commits on top of Phase 1, all green. Suite 1160 → 1180 pass (+20 net tests from the W-fixes; W9 is pure refactor). The 2 baseline fails unchanged: `boot.test.js` Windows SIGINT env + `eval/memory-impact` data-dependent.
+
+**Initial framing corrected:** Phase 2 was originally built against `main` @ `685dbaa` (pre-Phase-1) because the working clone's last `git fetch` predated Phase 1's push. The operator flagged this; after `git fetch` confirmed Phase 1 was on `origin/main`, the branch was rebased onto `66cb7e8`. Conflicts resolved in `server/index.js` (W4 + W9 checkpoints/kanban/engagements families) and `engagements/index.js` (W7 — see below). A backup of the pre-rebase branch is at `phase2/pre-rebase-backup` @ `c9a9247`.
 
 ### What landed
 
-**10 W-fixes** (each = one commit + one regression test, all in `mythos/test/w*-*.test.js`):
+**9 W-fixes** (each = one commit + one regression test, all in `mythos/test/w*-*.test.js`):
 
 | W | Fix | Test |
 |---|---|---|
@@ -219,7 +221,7 @@ Landed on `phase2/wiring-integrity` off `main` @ `685dbaa` (the pre-Phase-1 stat
 | W5 | conversation-gateway `getCortex()` thunk (cortex-fallback route unblocked) | `w5-gateway-getcortex-thunk.test.js` (4) |
 | W2 | spotify inner T3 invokes (`ui_click`/`ui_type`/`click_at`) route through `dispatchAction` | `w2-spotify-tier-laundering.test.js` (3) |
 | W3 | `gmailUnread` routes through `dispatchAction` (audit on every poll) | `w3-gmail-unread-audit.test.js` (3) |
-| W7 | engagements emit via `events.js` builders (no more stub payloads) | `w7-engagements-builder-events.test.js` (3) |
+| W7 | **SKIPPED — Phase 1 already did it.** Phase 1's `emitTransitionEvent` uses the real `events.js` builders with live record data, and the executor emits granular `stage_*` events. My W7 was now redundant; skipping it was correct. The "blocked-on-Phase-1" caveat from the pre-rebase handoff is resolved by Phase 1 itself. | — |
 | W4 | REST mutations write audit entries (16 routes across goals/kanban/pipeline/engagements) | `w4-rest-mutation-audit.test.js` (5) |
 | W8 | ~30 previously-bypassed env keys schema-defined + ~22 schema keys documented in `.env.example` | `w8-config-schema-consolidation.test.js` (5) |
 | D | dead-code: `daily-note.js` + `claude-cli.js` deleted, plus the claude-cli test block | suite green |
@@ -248,26 +250,26 @@ server/index.js: **1618 → 1288 lines, 49 → 14 `app.*` calls**. The 14 residu
 
 ### Honest caveats (full detail in `BUGS.md` "Phase 2" section)
 
-- **W7 executor-dispatch + W9 engagements Phase-1 extras** — blocked on Phase 1 (the `merge/engagement-executor` branch is not in this clone). When Phase 1 lands, both inherit cleanly.
+- **W7 superseded by Phase 1** — Phase 1's engagements/index.js `emitTransitionEvent` already uses the real `events.js` builders with live record data, and the executor emits the granular `stage_*` events. My W7 (events-builder portion) was redundant post-Phase-1; the executor-dispatch portion I'd flagged as blocked-on-Phase-1 is also done. Skipped on the rebase. The `phase5-merge-invariants.test.js` guard already pins the events-builder contract.
 - **D deferrals** — `assistant/{intent-router,response-planner,style,summary}` (~470 lines) kept for Phase 4 evaluation; `sensors/ws.js .ingest()` kept (deletion unwinds main.js wiring, wiring is Phase 4 work); `conversation.intent` event kept (W5 just unblocked the emit — removing would undo W5).
 - **W10** deliberately deferred per W9 §4.4 (extraction-only in W9/media).
 - **Pre-existing flake found** at `test/engagements/events.test.js:43` (`assert.equal(event.timestamp, Date.now() || ...)` — buggy time comparison). Not introduced by Phase 2; separate cleanup.
-- **W9 line-count target** — the §4.3 "~600 lines" assumed Phase 1's extras would also be extracted; against main alone the 1288 residual is the honest floor (all must-stay per §4.2 #5/#9).
+- **W9 line-count residual** — server/index.js shrank from 1674 (Phase 1's version) to 1295 lines across the 10 family extractions; 49 → 14 `app.*` calls. The residual is the WS layer + voice turns + vision + proactive speech + TTS + camera broker + confirm/checkpoint + middleware + `/health` + `/api/status` — all mandated to STAY per W9 rule §4.2 #5/#9.
 
-### Verification
+### Verification (on the rebased branch)
 
 ```bash
-git checkout phase2/wiring-integrity
-cd mythos && node --test        # expect 1121/1124
-node src/main.js                # expect MYTHOS ALIVE
-curl http://127.0.0.1:4478/health   # expect {ok:true,uptime:...}
+git checkout phase2/wiring-integrity     # already on top of main @ 66cb7e8
+cd mythos && npm install                 # exceljs + pptxgenjs (Phase 1 deps)
+cd mythos && node --test                 # expect 1180/1183 (2 documented baseline fails)
+node src/main.js                         # expect MYTHOS ALIVE, effectors.ready count:99
+curl http://127.0.0.1:4478/health        # expect {ok:true,uptime:...}
 ```
 
-Spot-check the extracted routes per family: `GET /api/news`, `GET /api/goals`, `GET /api/kanban`, `GET /api/pipeline`, `GET /api/forge/projects`, `GET /api/checkpoints`, `GET /api/memory/audit`, `GET /api/engagements`, `GET /api/config/vad`, `GET /api/stats`.
+Spot-check the extracted routes per family: `GET /api/news`, `GET /api/goals`, `GET /api/kanban`, `GET /api/pipeline`, `GET /api/forge/projects`, `GET /api/checkpoints`, `GET /api/memory/audit`, `GET /api/engagements`, `POST /api/engagements` (Phase 1's create route), `GET /api/config/vad`, `GET /api/stats`.
 
 ### Operator's next call
 
-1. **Merge or rebase:** fast-forward `main` to `phase2/wiring-integrity` when ready, OR rebase on top of Phase 1 first. The two W9 engagement-route families + the W7 executor portion are the only seams with Phase 1 (documented above).
-2. **Push** when happy (operator reviews + pushes — house rule §24.2).
+1. **Merge:** `phase2/wiring-integrity` is on top of Phase 1 — fast-forward `main` to it when ready (`git checkout main && git merge --ff-only phase2/wiring-integrity`). The rebase already reconciled the W4/W9 conflicts against Phase 1's code; no further merge work needed.
+2. **Push** when happy (operator reviews + pushes — house rule §24.2). The pre-rebase backup is `phase2/pre-rebase-backup` @ `c9a9247` if you want to compare.
 3. **Phase 3** per `MYTHOS_Gap-Close_Upgrade_task-957.md` §26: T3 `run_command` effector + engagement/Forge wiring (V7), live-verification passes, BUG-029 proper fix, BUG-024 OAuth docs.
-
