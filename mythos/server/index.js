@@ -280,51 +280,14 @@ function createServer(deps) {
   });
 
   // CONSISTENCY FIX (P7 vs NOVA UI, documented in ROADMAP.md P9): the byte-identical
-  // NOVA goals view renders stats.{total,active,completed,progress} (app/lib/goals.js
-  // shape), but the P7 goals-effector bridge ships stats() -> {total,done,active}.
-  // The REST seam translates so the copied view needs zero changes (Ambiguity #1's
-  // own promise). Translation lives HERE, never inside the effector — the bridge's
-  // shape is already consumed by from-dashboard.js tools.
-  function novaGoalsStats() {
-    const s = goalsEffector.stats();
-    const completed = s.done || 0;
-    const total = s.total || 0;
-    return {
-      total: total,
-      active: s.active || 0,
-      completed: completed,
-      progress: total === 0 ? 0 : Math.round((completed / total) * 100),
-    };
-  }
-
-  // ---- goals / kanban / pipeline REST — CA, unchanged surface, see Ambiguity #1 ----
-  app.get('/api/goals', (req, res) => {
-    res.json({ goals: goalsEffector.listGoals(), stats: novaGoalsStats() });
-  });
-  app.post('/api/goals', (req, res) => {
-    const { text, category } = req.body || {};
-    if (!text || !text.trim()) return res.status(400).json({ error: 'text required' });
-    const list = goalsEffector.addGoal(text, category);
-    auditRest('rest.goals.add', { text: String(text).slice(0, 80), category }, 'ok');
-    res.json({ goals: list, stats: novaGoalsStats() });
-  });
-  app.post('/api/goals/:id/toggle', (req, res) => {
-    const list = goalsEffector.toggleGoal(req.params.id);
-    auditRest('rest.goals.toggle', { id: req.params.id }, 'ok');
-    res.json({ goals: list, stats: novaGoalsStats() });
-  });
-  app.delete('/api/goals/:id', (req, res) => {
-    const list = goalsEffector.deleteGoal(req.params.id);
-    auditRest('rest.goals.delete', { id: req.params.id }, 'ok');
-    res.json({ goals: list, stats: novaGoalsStats() });
-  });
-
-  app.get('/api/kanban', (req, res) => { res.json(kanbanEffector.listBoard()); });
-
   // ---- W9 (Phase 2 — Wiring Integrity): REST families extracted to
   // server/routes/<family>.js factories. Each factory mounts its routes on
   // `app` and pulls only what it needs from `deps`. See routes/*.js. ----
+  const { novaGoalsStats } = require('./routes/goals');
+  require('./routes/goals').mountGoalsRoutes(app, { goalsEffector, auditRest });
   require('./routes/news').mountNewsRoutes(app);
+
+  app.get('/api/kanban', (req, res) => { res.json(kanbanEffector.listBoard()); });
 
   // ---- P22 — Forge build projects + checkpoint approval gates ----
   app.get('/api/forge/projects', (req, res) => { res.json({ projects: forge ? forge.listProjects() : [] }); });
@@ -586,7 +549,7 @@ function createServer(deps) {
   app.get('/api/stats', (req, res) => {
     try {
       const m = memory.stats();
-      const g = novaGoalsStats();
+      const g = novaGoalsStats(goalsEffector);
       const board = kanbanEffector.listBoard();
       const byLane = {};
       (board.cards || []).forEach((c) => { byLane[c.lane] = (byLane[c.lane] || 0) + 1; });
