@@ -113,10 +113,20 @@ describe('Phase 1 merge invariants (task-957 §26)', () => {
     // require() would pull in express + ws and is heavier than needed; a
     // source scan is sufficient because adding a route means adding the
     // app.METHOD('/api/engagements...') line.
+    //
+    // W9 (Phase 2 — Wiring Integrity): the engagement routes moved from
+    // server/index.js inline to server/routes/engagements.js factory. The
+    // contract is preserved (same routes, same UI contract) — scan BOTH
+    // files so this guard stays satisfied after the god-file decomposition.
     const fs = require('node:fs');
     const path = require('node:path');
-    const src = fs.readFileSync(
+    const indexSrc = fs.readFileSync(
       path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+    const engagementsFactorySrc = fs.existsSync(
+      path.join(__dirname, '..', 'server', 'routes', 'engagements.js'))
+      ? fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'engagements.js'), 'utf8')
+      : '';
+    const src = indexSrc + '\n' + engagementsFactorySrc;
     assert.ok(/app\.get\(['"]\/api\/engagements['"]/.test(src),
       'GET /api/engagements route missing — engagement UI contract broken');
     assert.ok(/app\.get\(['"]\/api\/engagements\/:id['"]/.test(src),

@@ -215,73 +215,6 @@ function createServer(deps) {
   require('./routes/forge').mountForgeRoutes(app, { forge });
   require('./routes/checkpoints').mountCheckpointsRoutes(app, { checkpoints });
 
-  // ---- /api/engagements ---- Engagement Layer (Phase 1)
-  // UI contract (ui/public/js/views/engagements.js): list returns a JSON array
-  // OR {engagements:[...]}; get returns the record; transition body is
-  // {event, payload} and returns the updated record (UI does
-  // state.engagements[idx]=data). All routes degrade to 404 when the manager
-  // isn't wired (tests) rather than crashing.
-  // (W9/engagements extraction deferred to a follow-up commit — these 4 routes
-  // landed inline in Phase 1; extracting them is its own family commit so the
-  // diff stays reviewable.)
-  app.get('/api/engagements', async (req, res) => {
-    if (!engagementManager || !engagementManager.engagement) {
-      return res.json({ engagements: [] });
-    }
-    try {
-      const records = await engagementManager.engagement.list();
-      res.json(records);
-    } catch (err) {
-      res.status(500).json({ error: sanitizeErrorForClient(err) });
-    }
-  });
-  app.get('/api/engagements/:id', async (req, res) => {
-    if (!engagementManager || !engagementManager.engagement) {
-      return res.status(404).json({ error: 'engagements unavailable' });
-    }
-    try {
-      const r = await engagementManager.engagement.findById(req.params.id);
-      if (!r) return res.status(404).json({ error: 'not found' });
-      res.json(r);
-    } catch (err) {
-      res.status(500).json({ error: sanitizeErrorForClient(err) });
-    }
-  });
-  app.post('/api/engagements/:id/transition', async (req, res) => {
-    if (!engagementManager || !engagementManager.engagement) {
-      return res.status(404).json({ error: 'engagements unavailable' });
-    }
-    const { event, payload } = req.body || {};
-    if (!event) return res.status(400).json({ error: 'event required' });
-    try {
-      const result = await engagementManager.engagement.transition(req.params.id, event, payload);
-      res.json(result.record);
-    } catch (err) {
-      res.status(400).json({ error: sanitizeErrorForClient(err) });
-    }
-  });
-  app.post('/api/engagements', async (req, res) => {
-    // Create flow: the UI primarily creates engagements via voice/intent (the
-    // conversation gateway), but this route exists for direct API/testing use.
-    if (!engagementManager || !engagementManager.engagement) {
-      return res.status(404).json({ error: 'engagements unavailable' });
-    }
-    const { initialIntent, goalId } = req.body || {};
-    if (!initialIntent || !String(initialIntent).trim()) {
-      return res.status(400).json({ error: 'initialIntent required' });
-    }
-    try {
-      const record = engagementManager.engagement.create({ initialIntent: initialIntent, goalId: goalId });
-      res.json(record);
-    } catch (err) {
-      res.status(400).json({ error: sanitizeErrorForClient(err) });
-    }
-  });
-
-  // ---- kanban + kanban agent routes (W9: extracted to routes/kanban.js) ----
-  require('./routes/kanban').mountKanbanRoutes(app, { kanbanEffector, agentActions, auditRest });
-
-
   // ---- kanban + kanban agent routes (W9: extracted to routes/kanban.js) ----
   require('./routes/kanban').mountKanbanRoutes(app, { kanbanEffector, agentActions, auditRest });
 
@@ -291,8 +224,15 @@ function createServer(deps) {
   // ---- /api/memory + /api/audit/recent (W9: extracted to routes/memory.js) ----
   require('./routes/memory').mountMemoryRoutes(app, { memory });
 
-  // ---- /api/engagements — Engagement layer REST surface (W9: extracted) ----
-  require('./routes/engagements').mountEngagementsRoutes(app, { engagementManager, auditRest });
+  // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
+  // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
+  // engagements.js): list returns a JSON array OR {engagements:[...]}; get
+  // returns the record; transition body is {event, payload} and returns the
+  // updated record; create takes {initialIntent, goalId}. All routes degrade
+  // to 404 when the manager isn't wired. sanitizeErrorForClient passed via deps.
+  require('./routes/engagements').mountEngagementsRoutes(app, {
+    engagementManager, auditRest, sanitizeErrorForClient
+  });
 
   // Speech-to-text — Groq Whisper transcribes audio recorded client-side.
   // Replaces the browser's own SpeechRecognition: Google's cloud speech backend
