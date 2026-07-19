@@ -552,7 +552,7 @@ Ran `node --test test/bug-023-weather-fallback.test.js`: 7/7 pass.
 ---
 
 ### BUG-024: Calendar and Gmail integration never completed
-**Status:** ⚠️ CODE-LEVEL VERIFIED (session 2026-07-16) — clean errors and calendar sensor wiring proven by test; real Gmail/Calendar functionality still un-verifiable without user-supplied Google OAuth credentials
+**Status:** ⚠️ CODE-LEVEL VERIFIED (session 2026-07-16) — clean errors and calendar sensor wiring proven by test; real Gmail/Calendar functionality still un-verifiable without user-supplied Google OAuth credentials. **Phase 3 (2026-07-19) update:** scripts/google-auth.js now requests `calendar.readonly` (was Gmail-only — operators' existing tokens would 403 on Calendar reads); full operator walkthrough at `mythos/docs/google-oauth-setup.md`. The live OAuth pass remains operator-hardware work.
 **Severity:** HIGH (user expectation) | **Reported:** 07-12, 07-14
 
 **Symptom:** User repeatedly asked about calendar integration ("calendar phase is still left to add to integrate") and Gmail. MYTHOS correctly said it doesn't have those tools — but this is a stated user expectation that remained unfulfilled across the entire dataset.
@@ -680,7 +680,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-029: Orphaned browser-automation Chrome process keeps playing audio after MYTHOS + browser are fully closed
-**Status:** 🔧 CODED (2026-07-17) — mitigation shipped, live repro still pending. `adapters/browser-agent/index.js` now writes the launched browser's PID to `mythos/.browser-agent.pid` on launch (cleared on clean close/disconnect), and `Start Agent OS.bat` kills any PID found in that file (with `/T` for the tree) before booting — so even if Windows swallows the shutdown signal (mechanism 1 below), the orphan dies on the NEXT launch instead of surviving forever. The proper D-07 graceful-shutdown fix and a live reproduction remain open.
+**Status:** 🔧 CODED (2026-07-17, hardened 2026-07-19 Phase 3) — mitigation shipped + hardened. `adapters/browser-agent/index.js` writes the launched browser's PID to `mythos/.browser-agent.pid` on launch (cleared on clean close/disconnect); `Start Agent OS.bat` kills any PID found in that file (with `/T` for the tree) before booting. **Phase 3 hardening (2026-07-19):** (a) the pidfile now ALSO covers `from-browser.js` `browser_launch_debug`'s detached spawn (previously the orphan gap — those browsers didn't write the pidfile, so `.bat` cleanup missed them); (b) the `.bat` now verifies the PID's command line contains `MYTHOS` or `chrome-debug-profile` before tree-killing — belt-and-suspenders so a wrong PID in the file can't close the operator's own Chrome. The proper D-07 graceful-shutdown fix and a live reproduction remain open.
 **Severity:** HIGH (survives full app shutdown, invisible in Task Manager, only recoverable by restarting) | **Reported:** 2026-07-16 (live session)
 
 **Symptom:** A YouTube video MYTHOS opened for "news" kept playing audio in the background after the user closed the browser window AND closed the terminal running `start.bat`. Checked Task Manager — nothing obviously identifiable was running. Only fix was to run `start.bat` again, reopen the HUD, and ask MYTHOS by voice to close the news panel — which worked.
@@ -1088,4 +1088,50 @@ Landed on `phase2/wiring-integrity`, rebased onto `main` @ `66cb7e8` (Phase 1). 
 ### W9 acceptance (post-rebase, honest residual)
 
 server/index.js shrank from 1674 lines (Phase 1's version, which grew the god-file slightly with its 4 engagement routes) to 1295 lines across the 10 family extractions; 49 → 14 `app.*` calls. The residual is the WS layer + voice turns + vision + proactive speech + TTS + camera broker + confirm/checkpoint flows + middleware + `/health` + `/api/status` — all mandated to STAY by W9 rule §4.2 #5/#9. The remaining `app.*` calls are the must-stay set (middleware + identity routes + voice transcribe + 404/SPA/error). This is the honest floor for the W9 scope. The §4.3 "~600 line" target would require extracting the WS layer too, which §4.2 #5 explicitly forbids in Phase 2.
+
+---
+
+## Phase 3 — run_command (V7) + Engagement/Forge Wiring + BUG-029/024
+
+Landed on `phase3/run-command-and-cleanup`, branched off `phase2/wiring-integrity` @ `2714407`. 7 commits: run_command effector (V7 core) + executor verify wiring (with a pre-existing-bug fix split out) + Forge verify wiring + BUG-029 hardening + BUG-024 OAuth docs + this docs commit. Suite 1180 (Phase 1+2 baseline) → 1197 pass (+17 net tests; the 4 baseline fails unchanged — boot.test.js SIGINT env + 3 eval/memory-impact data-dependent, all confirmed pre-existing on main).
+
+### What landed (per piece)
+
+| Piece | Commit | What |
+|---|---|---|
+| 1 — run_command effector | `62c69f4` | T3 effector: 5-layer safety (allowlist, shell-metachar reject, cwd pin, env scrub, timeout). New `from-runner.js` + `adapters/command-runner/`. Count gate 71 → 72. |
+| 2a — makeDispatchCtx fix | `0c60a12` | Pre-existing Phase 1 bug surfaced by Phase 3: executor's dispatch ctx hardcoded `effectors: null`, would have NPE'd on any T3 action-stage dispatch. Threaded the real hub through. |
+| 2b — executor verify-stage | `2fba6ed` | Replace the SKIPPED-command branch with a real run_command dispatch (allowlist-gated, leash-checked). Empty allowlist preserves pre-Phase-3 behavior. |
+| 3 — Forge verify-stage | `7b1ab4e` | `finishGenerateStage` runs `manifest.verify.command` via run_command before arming final-review. Failure routes into mid-build-decision. |
+| 4a — BUG-029 hardening | `9a4f5ea` | `browser_launch_debug` now records its PID (was the orphan gap); `.bat` verifies launch provenance before tree-kill. |
+| 4b — BUG-024 docs | `48b3684` | Added `calendar.readonly` scope to `google-auth.js`; new `docs/google-oauth-setup.md` operator walkthrough. |
+
+### Honest caveats
+
+- **run_command is v1, not a sandbox.** Per task-957 handoff: allowlist + timeout + shell-metachar reject. A malicious allowlisted command can still do damage inside its cwd — the allowlist is the trust boundary. A real sandbox (seccomp, seatbelt, container) is a later phase.
+- **Live OAuth pass still operator work.** This commit ships the doc + the scope fix; the operator must actually run `scripts/google-auth.js` and verify Gmail/Calendar work end-to-end.
+- **Live verification of BUG-029 hardening still operator work.** The pidfile write + `.bat` provenance check are coded; the operator should force-kill MYTHOS mid-browser-session and confirm the next boot cleans up the orphan without touching their own Chrome.
+- **The eval/memory-impact baseline fails** are still pending — those are data-dependent tests that need a populated vault. Not Phase 3's scope.
+- **The Phase 3 scope excluded the operator-hardware live passes** for BUG-039/040/041 + barge-in + BUG-020/014/027/028/006 (per the task-957 §26 Phase 3 list). Those are tracked separately.
+
+### Verification
+
+```bash
+git checkout phase3/run-command-and-cleanup
+cd mythos && npm install                # exceljs + pptxgenjs (Phase 1) + the existing deps
+cd mythos && node --test                # expect 1197/1202 (4 documented baseline fails)
+node src/main.js                        # expect MYTHOS ALIVE, effectors.ready count:100
+```
+
+`effectors.ready count` rose from 99 (Phase 1+2) to **100** — the new run_command effector.
+
+### Phase 4 preview (per task-957 §26)
+
+Phase 4 is autonomy advancement (biggest leverage first, all respecting idle-skip):
+- Execution→learning loop — `skills.recordUse()` in the dispatchAction completion path; goal-completion/consolidate-time procedure distillation into Skills; `plan()` consults procedures with real successRate, executes multi-step procedures, persists brain plans into `goal.plan` (V2, V3 — the deepest cut).
+- Memory on the autonomous path — orient→recallHybrid for high-salience perceptions; hybrid skill recall; consolidate dedup/contradiction (V1, V10).
+- Proactivity that acts — `mull()` → `propose_goal` suggestions; calendar-event perception; opt-in active-window sensor (V5, V8).
+- `reflect()` analyzes last-N outcomes → recurring failures to diagnostician, successes to Skills (V9).
+- Brain-driven interview/spec/plan with template fallback (V6 cognition).
+
 
