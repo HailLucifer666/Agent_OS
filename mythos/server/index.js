@@ -310,51 +310,8 @@ function createServer(deps) {
   // ---- pipeline + jobs (W9: extracted to routes/pipeline.js) ----
   require('./routes/pipeline').mountPipelineRoutes(app, { pipelineEffector, buildRunner, auditRest });
 
-  // ---- /api/memory/:store — spec-mandated route ("omitted above for space"),
-  // backed by each store's real browse surface: episodic.tail, semantic/skills/
-  // identity recall('') (empty query matches every entry — verified against the
-  // shipped scorers), audit.query. Entries are normalized to {ts, summary, kind}
-  // so the memory view renders every store identically. ----
-  const MEMORY_STORES = new Set(['episodic', 'semantic', 'skills', 'identity', 'audit']);
-  app.get('/api/memory/:store', (req, res) => {
-    const store = req.params.store;
-    if (!MEMORY_STORES.has(store)) return res.status(404).json({ error: `unknown store: ${store}` });
-    const limit = Math.min(Number(req.query.limit) || 100, 500);
-    try {
-      let entries = [];
-      if (store === 'episodic') {
-        entries = memory.episodic.tail(limit).filter(Boolean).map((e) => ({
-          ts: e.ts, summary: e.summary || '', kind: e.kind || 'episode',
-        }));
-      } else if (store === 'audit') {
-        // Not every audit entry is a leash decision — immune heal records carry
-        // no tier/tool, so both fields degrade to placeholders, never 'undefined'.
-        entries = memory.audit.query({ limit }).map((e) => ({
-          ts: e.ts, summary: `T${e.tier !== undefined && e.tier !== null ? e.tier : '-'} ${e.decision || '?'} ${e.tool || ''}`.trim(), kind: 'decision',
-        }));
-      } else {
-        entries = memory[store].recall('', { limit }).map((r) => ({
-          ts: (r.record && (r.record.ts || (r.record.sidecar && r.record.sidecar.updated))) || null,
-          summary: (r.record && r.record.topic ? r.record.topic + ': ' : '') + (r.snippet || ''),
-          kind: store,
-        }));
-      }
-      res.json({ store, entries });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ---- /api/audit/recent — BUG-019: fetch recent audit entries for panel history ----
-  app.get('/api/audit/recent', (req, res) => {
-    try {
-      const limit = Math.min(Number(req.query.limit) || 50, 200);
-      const entries = memory.audit.query({ limit });
-      res.json({ entries });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  // ---- /api/memory + /api/audit/recent (W9: extracted to routes/memory.js) ----
+  require('./routes/memory').mountMemoryRoutes(app, { memory });
 
   // ---- /api/engagements — Engagement layer REST surface (Phase 5a wiring).
   // engagementManager/engagementStore may be undefined (boot-degraded or
