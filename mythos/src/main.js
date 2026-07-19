@@ -392,9 +392,14 @@ async function main() {
     }},
 
     { name: 'conversation-gateway', fail: 'degraded', fn: function() {
-      // Engagement Layer: gateway classifies intent and routes to engagement or cortex
+      // Engagement Layer: gateway classifies intent and routes to engagement or cortex.
+      // W5: `cortex` is `null` here — cortex is boot step 19, this is step 12. Pass a
+      // getCortex thunk (same pattern as healer/watchdog in step 5) so the gateway's
+      // cortex-fallback route resolves cortex lazily at first route() call, instead of
+      // capturing null forever.
       conversationGateway = createConversationGateway({
-        bus, config, engagementManager, cortex
+        bus, config, engagementManager,
+        getCortex: function() { return cortex; }
       });
       logger.info('conversation-gateway.ready', {});
     }},

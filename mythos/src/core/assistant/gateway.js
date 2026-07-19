@@ -2,11 +2,24 @@
 
 // Conversation Gateway - intent classification and routing
 // ENGAGEMENT-SPEC section 1.2 gateway.js interface
+//
+// W5 (Phase 2 — Wiring Integrity): this module is constructed at boot step 12
+// (conversation-gateway), BEFORE cortex exists (cortex is boot step 19). Passing
+// `cortex` directly captured the null forever — the cortex-fallback route in
+// route() was permanently dead. The fix mirrors the immune system's healer/
+// watchdog pattern (boot step 5): accept a `getCortex` thunk that resolves
+// cortex lazily at first route() call. Backward-compat: a directly-passed
+// `cortex` is still accepted (unit tests / older callers).
 
-function createConversationGateway({ bus, config, engagementManager, cortex }) {
+function createConversationGateway({ bus, config, engagementManager, cortex, getCortex }) {
   if (!bus) throw new Error('bus required');
   if (!config) throw new Error('config required');
-  // engagementManager and cortex are optional but recommended
+  // engagementManager and cortex are optional but recommended.
+  // W5: prefer getCortex thunk; fall back to a directly-passed cortex for
+  // backward compatibility. resolveCortex() returns whatever cortex is live
+  // at call time (null until the cortex boot step assigns it).
+  var cortexThunk = typeof getCortex === 'function' ? getCortex : function() { return cortex; };
+  function resolveCortex() { return cortexThunk(); }
 
   // Receive incoming message
   function receive(message) {
@@ -83,8 +96,11 @@ function createConversationGateway({ bus, config, engagementManager, cortex }) {
       }
     }
 
-    // Emit for cortex to handle other intents
-    if (!result.handled && cortex) {
+    // Emit for cortex to handle other intents. W5: resolve cortex lazily so the
+    // fallback route fires once the cortex boot step has run (this gateway is
+    // constructed at step 12, cortex at step 19 — pre-W5 the captured `cortex`
+    // was null forever and this branch was permanently dead).
+    if (!result.handled && resolveCortex()) {
       bus.emit('conversation.intent', {
         type: classification.type,
         message: message
