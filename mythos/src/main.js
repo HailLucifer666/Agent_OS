@@ -32,6 +32,7 @@ const { createAnnouncer } = require('./core/immune/announcer');
 const { createMonitor, recoverFromCrash } = require('./core/immune/monitor');
 const { createMetricSensor } = require('./core/sensors/metric');
 const { createEffectorHub } = require('./core/effectors/hub');
+const { dispatchAction } = require('./core/effectors/dispatch-action');
 const { createBuildRunner } = require('./core/effectors/build-runner');
 const { createPipelineEffector } = require('./core/effectors/pipeline');
 const { createRiskClassifier } = require('./core/effectors/risk-classifier');
@@ -335,7 +336,18 @@ async function main() {
       // Gmail triage sensor's bound fn — MUST go through the hub (breaker-gated),
       // never call the gmail adapter directly. Constructed here (next to hub) but
       // only started conditionally in the 'sensors' step below.
-      gmailUnread = function(args) { return hub.invoke('gmail_unread', args || {}, {}); };
+      // W3 (Phase 2 — Wiring Integrity): route through dispatchAction instead of raw
+      // hub.invoke() so each gmail_unread poll writes an audit line + episodic entry
+      // (gmail_unread is T1, auto-allow — audit-only, no new confirm gate). Same
+      // return shape ({ok, result}) the gmail-sensor consumes, so the sensor is
+      // unchanged. task-957 §24 W3.
+      gmailUnread = function(args) {
+        return dispatchAction(
+          { tool: 'gmail_unread', args: args || {} },
+          { effectors: hub, bus: bus, memory: memory, goals: goals, config: config,
+            goalId: null, tier: 1, channel: 'gmail-sensor' }
+        );
+      };
       registerFromSkills(hub);
       registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
       registerFromPersona(hub, { identity: identity });
