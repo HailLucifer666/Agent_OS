@@ -52,6 +52,7 @@ const { createReflection } = require('./core/identity/reflection');
 const capabilities = require('./core/identity/capabilities');
 const { createExplainer } = require('./core/immune/explainer');
 const { registerFromHermes } = require('./core/effectors/from-hermes');
+const { registerFromRunner } = require('./core/effectors/from-runner');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
@@ -352,6 +353,9 @@ async function main() {
       registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
       registerFromPersona(hub, { identity: identity });
       registerFromHermes(hub);
+      // Phase 3 (V7): allow-listed shell runner for engagement/Forge verify-stages.
+      // Fail-closed when RUN_COMMAND_ALLOWLIST is empty — honest-inert.
+      registerFromRunner(hub, { vault: memory.fs, config: config });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
       // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.

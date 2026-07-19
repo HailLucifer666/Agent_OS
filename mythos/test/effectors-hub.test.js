@@ -18,6 +18,7 @@ const { registerFromDashboard, buildTools: buildDashboardTools } = require('../s
 const { registerFromProject, buildTools: buildProjectTools } = require('../src/core/effectors/from-project');
 const { registerFromGmail } = require('../src/core/effectors/from-gmail');
 const { registerFromDocs } = require('../src/core/effectors/from-docs');
+const { registerFromRunner } = require('../src/core/effectors/from-runner');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
 const { createAgentActions } = require('../src/core/effectors/agent-actions');
@@ -114,8 +115,8 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 71 registered count', () => {
-  it('booting a hub with all register* functions (incl. gmail + docs) against the real TOOLS arrays yields correct count', () => {
+describe('gate: 72 registered count', () => {
+  it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
     const hub = createEffectorHub({ bus, config: {} });
@@ -127,6 +128,7 @@ describe('gate: 71 registered count', () => {
     registerFromProject(hub, ctx);
     registerFromGmail(hub, { logger: console });
     registerFromDocs(hub, { vault: ctx.vault });
+    registerFromRunner(hub, { vault: ctx.vault, config: {} });
 
     // 54 base + open_web (from-dashboard) + send_key (from-pc) + capture_screenshot
     // (from-pc, BUG-009 — 2026-07-16) = 57, + click_at (from-pc, Item 12 —
@@ -137,12 +139,13 @@ describe('gate: 71 registered count', () => {
     // + 3 doc tools (generate_spreadsheet/deck/pdf, Phase 2 — 2026-07-17) = 64,
     // + 5 desktop tools (move_window/snap_window/scroll_at/right_click_at/drag,
     // Phase 3 — 2026-07-17) = 69, + 2 browser tools (browser_wait_for/
-    // browser_fill_form, Phase 4 — 2026-07-17) = 71.
+    // browser_fill_form, Phase 4 — 2026-07-17) = 71,
+    // + 1 run_command (from-runner, Phase 3 V7 — 2026-07-19) = 72.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 71);
+    assert.equal(hub.count(), 72);
   });
 });
 

@@ -219,6 +219,15 @@ const SCHEMA = {
   // Agent monitor (abtop — deliberately honest-inert until a dashboard owns it)
   AGENT_MONITOR_ENABLED:       { type: 'string', default: '' },   // 'false' = force-off
   AGENT_MONITOR_POLL_MS:       { type: 'number', default: 5000, min: 1000 },
+
+  // Phase 3 (V7) — run_command effector (allow-listed shell commands for build
+  // verification). v1 is allowlist + timeout, NOT a full sandbox. Empty
+  // allowlist → fail-closed ('run_command disabled — set RUN_COMMAND_ALLOWLIST').
+  // Format: 'cmd:flag,flag;cmd2:flag;cmd3' (semicolons between commands, colon
+  // precedes a command's allowed flags, commas between flags). Keep minimal;
+  // never allow sh/bash/cmd/powershell.
+  RUN_COMMAND_ALLOWLIST:       { type: 'string', default: '' },
+  RUN_COMMAND_TIMEOUT_MS:      { type: 'number', default: 60000, min: 1000 },
 };
 
 module.exports = { SCHEMA };
