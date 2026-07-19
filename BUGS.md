@@ -1056,3 +1056,29 @@ Two separate build passes, both phase-gated (test-suite hold + commit + restart 
 | `mythos/src/core/effectors/from-dashboard.js` | `daily_plan` tool (status/replan/skip_today) | BUG-041 |
 | `mythos/src/core/leash/tiers.js` | +3 tools (`ambient_awareness`, `daily_plan`, plus core-repair's `browser_launch_debug`) | — |
 | `MYTHOS-ARCHITECTURE.md` | §9 tier table resynced, byte-for-byte verified | — |
+
+---
+
+## Phase 2 — Wiring Integrity (task-957 §24 W1–W9 + D)
+
+Landed on `phase2/wiring-integrity` (branched off `main` @ `685dbaa`, the pre-Phase-1 state — Phase 1's `merge/engagement-executor` is not in this clone). 10 W-fixes + dead-code decisions + the W9 god-file decomposition. Each item its own commit + regression test. Suite 1097 → 1121 pass (the 2 baseline fails unchanged: `boot.test.js` SIGINT env + `eval/memory-impact` data-dependent).
+
+### Deferred / blocked-on-Phase-1 (this clone)
+
+| Item | Why deferred | Resumes when |
+|---|---|---|
+| W7 executor-dispatch portion | `engagements/executor.js` doesn't exist on main (Phase 1 branch). The events.js-builder portion of W7 landed; "action stages route through dispatchAction" needs the executor. | Phase 1's `8706ccc` lands |
+| W9 engagements-route Phase-1 extras | Only the 3 engagement routes on main were extracted. Phase 1 adds 4 more (draft/interview/approve/etc.) — those become their own family commit at rebase. | Phase 1 lands |
+| D — `assistant/{intent-router,response-planner,style,summary}` (~470 lines) | Test-only today, but Phase 4 autonomy may want them. | Phase 4 evaluation |
+| D — `sensors/ws.js .ingest()` | Zero callers, but the module IS constructed in main.js. Pure deletion unwinds wiring; wiring the ingestion path is Phase 4 conversation-subscriber work (the W5-unblocked gateway emit is the natural subscriber). | Phase 4 |
+| D — orphan `conversation.intent` event | W5 just unblocked the emit (it was permanently dead pre-W5). Removing it now would undo W5. | Phase 4 decides whether to subscribe |
+| W10 — `/api/media/control` raw invoke | Deliberately deferred per W9 §4.4 — extraction-only in W9/media; the leash-check-but-no-audit fix is its own item. | Next pass |
+
+### Pre-existing flakes found during Phase 2 (NOT introduced by Phase 2)
+
+- **`test/engagements/events.test.js:43`** — `assert.equal(event.timestamp, Date.now() || event.timestamp > 0)`. The `||` short-circuits on truthy `Date.now()` and compares `event.timestamp` against a fresh `Date.now()` call that's 0–1ms different. Flakes ~1/3 runs. Independent of Phase 2 (passes in isolation). Fix: `assert.ok(event.timestamp > 0)` — separate cleanup.
+
+### W9 acceptance against main (honest residual)
+
+server/index.js shrank 1618 → 1288 lines across 10 family extractions. The §4.3 "~600 line" target assumed Phase 1's 4 engagement routes + the docs-gen/desktop/browser extras would also be extracted; against main alone, the 1288 residual is the WS layer + voice turns + vision + proactive speech + TTS + camera broker + confirm/checkpoint flows + middleware + `/health` + `/api/status` — all mandated to STAY by W9 rule §4.2 #5/#9. The 14 remaining `app.*` calls are the must-stay set (6 middleware + identity routes + voice transcribe + 404/SPA/error). This is the honest floor for the W9 scope on main.
+
