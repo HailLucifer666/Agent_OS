@@ -29,6 +29,7 @@ function createEngagementExecutor(deps) {
   const config = deps.config;
   const dispatchAction = deps.dispatchAction;
   const leash = deps.leash;
+  const effectors = deps.effectors;                 // hub — required for dispatchAction (Phase 3 fix; was missing → NPE on action-stage dispatch)
   const brain = deps.brain;                       // optional — build/research stages degrade gracefully
   const checkpoints = deps.checkpoints;           // optional — stage-approval gates
   const store = deps.store;                       // engagement module: { transition(id,event,payload), findById(id) }
@@ -574,7 +575,14 @@ function createEngagementExecutor(deps) {
   // ---- helpers ----
   function makeDispatchCtx(record) {
     return {
-      effectors: null, // dispatchAction reads effectors from ctx; tests inject a fake.
+      // Phase 3 fix: this was `null`, which NPE'd at dispatch-action.js's
+      // `effectors.breakers.allow` on any action-stage dispatch in production
+      // (the unit tests' fake dispatchAction never dereferenced ctx.effectors,
+      // so the bug was latent). Now the manager threads the real hub through
+      // (engagements/index.js -> createEngagementExecutor deps.effectors).
+      // Tests that inject their own dispatchAction fake can omit effectors
+      // and still work — their fake doesn't read ctx.effectors.
+      effectors: effectors || null,
       bus: bus,
       goals: null,
       memory: null,

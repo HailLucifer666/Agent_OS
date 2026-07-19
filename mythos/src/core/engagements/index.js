@@ -371,6 +371,7 @@ function createEngagementManager({ bus, config, memory, goals, leash, effectors,
     config: config,
     dispatchAction: dispatchActionFn,
     leash: leash,
+    effectors: effectors,         // Phase 3: thread the hub so action-stage dispatch works (was missing → NPE)
     brain: brain,
     checkpoints: checkpoints,
     store: engagement,
