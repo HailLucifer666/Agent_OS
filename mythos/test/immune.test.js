@@ -592,17 +592,19 @@ describe('immune/announcer', function() {
     assert.throws(function() { createAnnouncer({ bus: fakeBus() }); }, /speak/);
   });
 
-  it('announces major/critical health.diagnosed, ignores minor', async function() {
+  it('W6: does NOT announce health.diagnosed (conversation/announcer owns that now)', async function() {
     var bus = fakeBus();
     var spoken = [];
     var { createAnnouncer } = require('../src/core/immune/announcer');
     var announcer = createAnnouncer({ bus: bus, speak: function(text) { spoken.push(text); return Promise.resolve(); } });
     announcer.start();
+    // Pre-W6 both immune/announcer and conversation/announcer spoke on health.diagnosed
+    // (double-speak). W6 removes the subscription here — conversation/announcer is the
+    // single speaker. Emit at every severity; none should be spoken by THIS announcer.
     bus.emit('health.diagnosed', { kind: 'cortex-stall', target: null, severity: 'critical' });
     bus.emit('health.diagnosed', { kind: 'quota-low', target: 'groq', severity: 'minor' });
     await sleep(10);
-    assert.equal(spoken.length, 1);
-    assert.ok(spoken[0].indexOf('cortex-stall') !== -1);
+    assert.equal(spoken.length, 0, 'immune/announcer must not speak on health.diagnosed after W6');
     announcer.stop();
   });
 
@@ -630,30 +632,12 @@ describe('immune/announcer', function() {
     announcer.stop();
   });
 
-  it('BUG-030: dedups repeated health.diagnosed for the same kind+target within the cooldown, re-speaks after it elapses', async function() {
-    var bus = fakeBus();
-    var spoken = [];
-    var { createAnnouncer } = require('../src/core/immune/announcer');
-    var announcer = createAnnouncer({
-      bus: bus,
-      config: { ANNOUNCER_REANNOUNCE_MS: 30 }, // short cooldown so the test doesn't wait 10 real minutes
-      speak: function(text) { spoken.push(text); return Promise.resolve(); }
-    });
-    announcer.start();
-
-    // probes.js re-emits every 4s with no dedup by design — simulate two rapid repeats.
-    bus.emit('health.diagnosed', { kind: 'provider-down', target: 'mistral', severity: 'major' });
-    bus.emit('health.diagnosed', { kind: 'provider-down', target: 'mistral', severity: 'major' });
-    await sleep(10);
-    assert.equal(spoken.length, 1, 'second announcement within the cooldown window must be suppressed');
-
-    await sleep(30); // let the cooldown elapse
-    bus.emit('health.diagnosed', { kind: 'provider-down', target: 'mistral', severity: 'major' });
-    await sleep(10);
-    assert.equal(spoken.length, 2, 'a repeat after the cooldown window elapses should speak again');
-
-    announcer.stop();
-  });
+  // W6 removed the health.diagnosed subscription from immune/announcer (single-speaker
+  // fix — conversation/announcer now owns diagnosis speech). The BUG-030 dedup test
+  // that previously lived here pinned dedup behavior on a subscription that no longer
+  // exists; the dedup map is retained in source for any future health-channel sub, but
+  // with no subscriber there is no path to exercise. The W6 regression test
+  // (test/w6-single-announcer.test.js) pins the new end-to-end single-speaker contract.
 });
 
 // ---------------------------------------------------------------------------
