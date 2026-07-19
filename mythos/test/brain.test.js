@@ -654,41 +654,11 @@ describe('providers/openrouter', function() {
 // ---------------------------------------------------------------------------
 // Claude-CLI provider structure
 // ---------------------------------------------------------------------------
-describe('providers/claude-cli', function() {
-  const claudeCli = require('../providers/claude-cli');
-
-  it('exports canonical interface', function() {
-    assert.equal(claudeCli.name, 'claude-cli');
-    assert.equal(typeof claudeCli.chat, 'function');
-    assert.equal(typeof claudeCli.isAvailable, 'function');
-    assert.equal(typeof claudeCli.getModel, 'function');
-    assert.equal(typeof claudeCli.getStatus, 'function');
-  });
-
-  it('isAvailable returns true', function() {
-    assert.equal(claudeCli.isAvailable(), true);
-  });
-
-  it('getModel returns CLAUDE_MODEL env var or null', function() {
-    const originalEnv = process.env.CLAUDE_MODEL;
-    try {
-      delete process.env.CLAUDE_MODEL;
-      assert.equal(claudeCli.getModel(), null);
-
-      process.env.CLAUDE_MODEL = 'test-model';
-      assert.equal(claudeCli.getModel(), 'test-model');
-    } finally {
-      if (originalEnv) process.env.CLAUDE_MODEL = originalEnv;
-      else delete process.env.CLAUDE_MODEL;
-    }
-  });
-
-  it('getStatus returns {ok, model}', function() {
-    const status = claudeCli.getStatus();
-    assert.equal(typeof status, 'object');
-    assert.equal(status.ok, true);
-  });
-});
+// D (Phase 2 — Wiring Integrity): providers/claude-cli.js was dead code (zero
+// production callers, only this test block referenced it). Both the module
+// and this describe block were removed together. If a future phase reintroduces
+// a Claude CLI provider, restore its tests alongside it.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Chain LANES exposure
