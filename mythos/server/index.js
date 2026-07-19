@@ -222,62 +222,8 @@ function createServer(deps) {
     res.json({ enabled: config.WAKEWORD_ENABLED, threshold: config.WAKEWORD_THRESHOLD, modelsPresent });
   });
 
-  // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----
-  // BUG-004/BUG-038: album art travels as a temp FILE written by the PS child
-  // (never as base64 inside the JSON pipe). This route remembers the server-side
-  // artPath from the child's own response; /api/media/art below streams it. The
-  // client only ever sees a boolean + mime — no client-supplied paths are read.
-  let lastArtPath = null;
-  let lastArtMime = 'image/png';
-  app.get('/api/media', async (req, res) => {
-    try {
-      if (!pcChild) return res.json({ ok: false, error: 'pc-child offline' });
-      const result = await pcChild.sendCommand({ cmd: 'media_status' });
-      if (result.ok) {
-        const media = { ...result.result };
-        if (media.artPath && path.basename(media.artPath) === 'mythos-media-art.bin') {
-          lastArtPath = media.artPath;
-          lastArtMime = media.artMime || 'image/png';
-          media.art = true;
-        } else {
-          lastArtPath = null;
-          media.art = false;
-        }
-        delete media.artPath;
-        res.json({ ok: true, media });
-      } else {
-        res.json({ ok: false, error: result.error });
-      }
-    } catch (err) {
-      res.json({ ok: false, error: err.message });
-    }
-  });
-
-  app.get('/api/media/art', (req, res) => {
-    if (!lastArtPath) return res.status(404).end();
-    require('fs').readFile(lastArtPath, (err, buf) => {
-      if (err) return res.status(404).end();
-      res.set('Content-Type', lastArtMime);
-      res.set('Cache-Control', 'no-store');
-      res.send(buf);
-    });
-  });
-
-  // Media transport — buttons on the media widget. media_key is Tier 2
-  // (auto-allowed); the leash check still writes the audit line.
-  const MEDIA_KEYS = ['play_pause', 'next_track', 'prev_track', 'volume_up', 'volume_down', 'volume_mute'];
-  app.post('/api/media/control', express.json(), async (req, res) => {
-    try {
-      const key = req.body && req.body.key;
-      if (!MEDIA_KEYS.includes(key)) return res.status(400).json({ ok: false, error: 'invalid media key' });
-      const decision = leash.check({ tool: 'media_key', args: { key } }, { goalId: null });
-      if (!decision.allow) return res.status(403).json({ ok: false, error: decision.reason });
-      const result = await effectors.invoke('media_key', { key }, {});
-      res.json({ ok: !!result.ok });
-    } catch (err) {
-      res.status(502).json({ ok: false, error: err.message });
-    }
-  });
+  // ---- /api/media — Windows SMTC now-playing (W9: extracted to routes/media.js) ----
+  require('./routes/media').mountMediaRoutes(app, { pcChild, leash, effectors });
 
   // CONSISTENCY FIX (P7 vs NOVA UI, documented in ROADMAP.md P9): the byte-identical
   // ---- W9 (Phase 2 — Wiring Integrity): REST families extracted to
