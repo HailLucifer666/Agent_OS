@@ -14,17 +14,23 @@
 const prompts = require('./forge-prompts');
 const buildPack = require('../skills/build-pack');
 const validate = require('./forge-validate');
+const { dispatchAction } = require('./dispatch-action');   // Phase 3 (V7) — Forge verify-stage runs commands via run_command
 
 const FILE = 'Checkpoints/forge-projects.json';
 const MAX_PERSISTED = 100;
 
-function createForge({ config, brain, bus, vault, checkpoints }) {
+function createForge({ config, brain, bus, vault, checkpoints, effectors, leash }) {
   if (!brain || typeof brain.think !== 'function') throw new Error('createForge requires brain.think');
   if (!vault || typeof vault.writeText !== 'function' || typeof vault.readJSON !== 'function') {
     throw new Error('createForge requires a vault fs-store');
   }
   if (!bus) throw new Error('createForge requires bus');
   if (!checkpoints || typeof checkpoints.create !== 'function') throw new Error('createForge requires checkpoints');
+  // Phase 3 (V7): effectors + leash are OPTIONAL — Forge degrades to the
+  // pre-Phase-3 'no command verification' path when either is missing
+  // (unit tests, partial boot). When both are present AND the operator has
+  // set RUN_COMMAND_ALLOWLIST, the verify stage runs build commands (e.g.
+  // 'npm test') before arming the final-review checkpoint.
 
   const MAX_FILES = (config && config.FORGE_MAX_FILES) || 12;
   const FILE_RETRY = (config && config.FORGE_FILE_RETRY != null) ? config.FORGE_FILE_RETRY : 2;
@@ -204,7 +210,100 @@ function createForge({ config, brain, bus, vault, checkpoints }) {
       p.status = 'failed'; p.error = 'all files failed to generate'; p.finishedAt = Date.now(); notify(p); return;
     }
     if (failed > 0) { p.status = 'awaiting-mid-build-decision'; notify(p); armMidBuildCheckpoint(p); return; }
+    // Phase 3 (V7): run a command-verify stage before the final-review
+    // checkpoint IF the project plan has a verify command AND the operator
+    // has enabled RUN_COMMAND_ALLOWLIST. Failure routes into the same
+    // mid-build-decision state as a failed file (revision feedback path).
+    // No verify command OR allowlist unset → straight to final-review
+    // (pre-Phase-3 behavior preserved).
+    var verifyCmd = p.manifest && p.manifest.verify && p.manifest.verify.command;
+    var allowlist = (config && config.RUN_COMMAND_ALLOWLIST) || process.env.RUN_COMMAND_ALLOWLIST || '';
+    if (verifyCmd && allowlist && effectors && leash) {
+      var v = await runVerifyStage(p, verifyCmd);
+      if (!v.ok) {
+        // Verification failed (allowlist-deny, nonzero exit, timeout). Route
+        // into mid-build-decision with the verify error as feedback — same
+        // shape as a failed file, the operator can revise or abandon.
+        p.status = 'awaiting-mid-build-decision';
+        p.error = 'verify failed: ' + (v.error || 'unknown');
+        notify(p);
+        armMidBuildCheckpoint(p);
+        return;
+      }
+      // Verify ok — fall through to final-review with the verify stdout
+      // attached (informative for the operator at review time).
+      p.verifyResult = { stdout: v.stdout, exitCode: v.exitCode };
+    }
     p.status = 'awaiting-final-review'; p.error = null; notify(p); armFinalCheckpoint(p);
+  }
+
+  // Phase 3 (V7): run a build-verification command (e.g. 'npm test') via the
+  // run_command effector, gated by the leash (T3 + credential scan). cwd is
+  // pinned to the project's vault/builds/projects/<slug> by the effector
+  // itself (caller passes projectSlug). Returns {ok, stdout?, exitCode?,
+  // error?}. Never throws — every failure path returns {ok:false,...}.
+  async function runVerifyStage(p, verifyCmd) {
+    // Parse verifyCmd the same way the engagement executor does: split into
+    // command + args via a minimal shell-like parse (the run_command effector
+    // re-validates each arg for shell metachars + allowlist compliance).
+    var parsed = parseVerifyCmd(verifyCmd);
+    if (!parsed) return { ok: false, error: 'unparseable verify command' };
+    var decision = {
+      tool: 'run_command',
+      args: {
+        command: parsed.command,
+        args: parsed.args,
+        projectSlug: p.slug            // pins cwd to vault/builds/projects/<slug>
+      }
+    };
+    try {
+      // Leash check (mandatory). T3 confirm-once-per-goal + credential scan
+      // run on the run_command args. We do NOT auto-approve — the operator
+      // sees the confirm popup just like any T3 autonomous action.
+      var lr = leash.check(decision, { goalId: p.goalId });
+      if (!lr.allow) {
+        return { ok: false, error: 'leash-denied: ' + (lr.reason || 'requires-confirm') };
+      }
+      var result = await dispatchAction(decision, {
+        effectors: effectors, bus: bus, goals: null, memory: null,
+        config: config, goalId: p.goalId, tier: lr.tier || 3, channel: 'forge-verify'
+      });
+      if (result && result.ok) {
+        return { ok: true, stdout: result.result && result.result.stdout, exitCode: result.result && result.result.exitCode };
+      }
+      return { ok: false, error: (result && result.result && result.result.error) || 'verify command failed' };
+    } catch (err) {
+      return { ok: false, error: 'verify-threw: ' + ((err && err.message) || String(err)) };
+    }
+  }
+
+  // Minimal shell-like split for verify commands — mirrors the engagement
+  // executor's parseVerifyCmd. Respects single/double quotes + backslash
+  // escapes. Returns null if the command parses to nothing or has an
+  // unterminated quote.
+  function parseVerifyCmd(cmd) {
+    if (!cmd || typeof cmd !== 'string') return null;
+    var tokens = [];
+    var cur = '';
+    var quote = null;
+    for (var i = 0; i < cmd.length; i++) {
+      var c = cmd[i];
+      if (quote) {
+        if (c === '\\' && i + 1 < cmd.length) { cur += cmd[++i]; continue; }
+        if (c === quote) { quote = null; continue; }
+        cur += c;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (/\s/.test(c)) {
+        if (cur) { tokens.push(cur); cur = ''; }
+      } else {
+        cur += c;
+      }
+    }
+    if (cur) tokens.push(cur);
+    if (quote) return null;
+    if (!tokens.length) return null;
+    return { command: tokens[0], args: tokens.slice(1) };
   }
 
   // ---- revision ----
@@ -308,7 +407,14 @@ function createForge({ config, brain, bus, vault, checkpoints }) {
     return { loaded: projects.size };
   }
 
-  return { init, createProject, getProject, listProjects, resumeProject, applyRevision };
+  // Phase 3 (V7): the leash isn't available at Forge construction time
+  // (main.js builds Forge inside the 'leash' boot step but creates the
+  // leash AFTER createForge). Set it once the boot step finishes so
+  // runVerifyStage can gate run_command dispatches.
+  function setLeash(_leash) { leash = _leash; }
+  function setEffectors(_effectors) { effectors = _effectors; }
+
+  return { init, createProject, getProject, listProjects, resumeProject, applyRevision, setLeash, setEffectors };
 }
 
 module.exports = { createForge };

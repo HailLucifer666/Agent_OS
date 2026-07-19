@@ -368,7 +368,7 @@ async function main() {
       checkpoints.init();
       checkpointSweepTimer = setInterval(function() { checkpoints.sweep(); }, config.CHECKPOINT_SWEEP_MS);
       if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
-      forge = createForge({ config: config, brain: brain, bus: bus, vault: memory.fs, checkpoints: checkpoints });
+      forge = createForge({ config: config, brain: brain, bus: bus, vault: memory.fs, checkpoints: checkpoints, effectors: hub, leash: leash });
       forge.init();
       registerFromForge(hub, { forge: forge });
 
@@ -378,6 +378,10 @@ async function main() {
       logger.info('effectors.ready', { count: effectors.count() });
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors, scanner: require('./core/effectors/credential-scanner').createCredentialScanner() });
+      // Phase 3 (V7): Forge's runVerifyStage needs the leash to gate run_command
+      // dispatches. The leash wasn't available at createForge time (above), so
+      // hand it over now via the setter.
+      if (forge && typeof forge.setLeash === 'function') forge.setLeash(leash);
       logger.info('leash.ready', {});
     }},
 
