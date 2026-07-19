@@ -3,6 +3,7 @@
 // Reentrancy guard + generation token prevent overrun. Timer unref'd.
 
 const ooda = require('./ooda');
+const { dispatchAction } = require('../effectors/dispatch-action');
 
 // Confirm-popup text — plain "key: value" pairs instead of a raw JSON dump
 // (which rendered braces/quotes verbatim to the user). Same fix as voice-agent.js.
@@ -214,33 +215,26 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       return;
     }
 
-    // 2. Breaker check
-    if (effectors.breakers && typeof effectors.breakers.allow === 'function') {
-      if (!effectors.breakers.allow(decision.tool)) {
-        bus.emit('action.blocked', Object.assign({}, decision, { reason: 'circuit-open' }));
-        return;
-      }
-    }
-
-    // 3. Dispatch — mandatory, fail-closed (createCortex requires effectors to construct)
-    var signal = AbortSignal.timeout(ACTION_TIMEOUT_MS);
-    var result = await effectors.invoke(decision.tool, decision.args, { signal: signal, bus: bus, goalId: working.activeGoalId });
-
-    // 4. Record outcome
-    await memory.episodic.write({
-      kind: 'action', channel: 'cortex',
-      summary: decision.tool + '(' + JSON.stringify(decision.args || {}).slice(0, 80) + ')',
-      detail: result,
-      outcome: result && result.ok ? 'ok' : 'fail',
-      tokensSpent: working.spendThisTick
+    // 2-7. Dispatch via the shared dispatchAction() — single execution surface
+    // shared with the server's voice/confirm-accept path (Anti-Drift invariant #1).
+    // Replaces the inline copy that had drifted: this call now also writes the
+    // audit line (memory.audit.write) and emits the ui.navigate/close-panel/
+    // open-web relays that the inline copy was missing (W1). The leash check +
+    // confirm-request gate above are cortex-specific and stay here; everything
+    // from the breaker check onward is delegated. spentTokens flows the cortex's
+    // per-tick spend ledger through to episodic + budget accounting.
+    await dispatchAction(decision, {
+      effectors: effectors,
+      bus: bus,
+      goals: goals,
+      memory: memory,
+      config: config,
+      goalId: working.activeGoalId,
+      tier: leashResult.tier || 0,
+      channel: 'cortex',
+      spentTokens: working.spendThisTick,
+      signal: AbortSignal.timeout(ACTION_TIMEOUT_MS),
     });
-
-    // 5. Debit goal budget
-    if (working.activeGoalId && goals && typeof goals.debitBudget === 'function') {
-      goals.debitBudget(working.activeGoalId, { tokens: working.spendThisTick, actions: 1 });
-    }
-
-    bus.emit('action.completed', { tool: decision.tool, ok: result && result.ok, goalId: working.activeGoalId });
   }
 
   function reflect(working, memory, bus) {

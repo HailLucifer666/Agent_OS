@@ -15,6 +15,10 @@ async function dispatchAction(decision, ctx) {
   const { effectors, bus, goals, memory, config } = ctx;
   const goalId = ctx.goalId || null;
   const tier = ctx.tier || 0;
+  // W1: callers that track per-call token spend (the cortex autonomous loop,
+  // via working.spendThisTick) pass it through here. Voice/confirm-accept
+  // callers omit it → defaults to 0, preserving their existing behavior.
+  const spentTokens = ctx.spentTokens || 0;
   const signal = ctx.signal || AbortSignal.timeout((config && config.ACTION_TIMEOUT_MS) || 30000);
 
   // 1. Breaker check
@@ -36,14 +40,14 @@ async function dispatchAction(decision, ctx) {
         summary: decision.tool + '(' + JSON.stringify(decision.args || {}).slice(0, 80) + ')',
         detail: result,
         outcome: result && result.ok ? 'ok' : 'fail',
-        tier: tier, tokensSpent: 0,
+        tier: tier, tokensSpent: spentTokens,
       });
     } catch (_) { /* persistence is best-effort */ }
   }
 
   // 4. Budget debit
   if (goalId && goals && typeof goals.debitBudget === 'function') {
-    goals.debitBudget(goalId, { tokens: 0, actions: 1 });
+    goals.debitBudget(goalId, { tokens: spentTokens, actions: 1 });
   }
 
   // 5. Emit completion event
