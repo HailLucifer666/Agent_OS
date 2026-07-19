@@ -303,6 +303,13 @@ async function browser_launch_debug() {
       `--user-data-dir=${profileDir}`,
     ], { detached: true, stdio: 'ignore' });
     child.unref();
+    // BUG-029 (Phase 3 hardening): this detached spawn is the orphan risk.
+    // Record the PID the same way launchLocal() does, so Start Agent OS.bat's
+    // cleanup step catches it on the next boot if Windows swallows the
+    // shutdown signal. Best-effort — recordLaunchedPid never throws.
+    if (child && child.pid && typeof browserAgent.recordLaunchedPid === 'function') {
+      browserAgent.recordLaunchedPid(child.pid);
+    }
   } catch (err) {
     return fail(`Failed to launch browser: ${err.message}`);
   }

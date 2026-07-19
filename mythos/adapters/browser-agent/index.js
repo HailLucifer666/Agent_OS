@@ -50,6 +50,19 @@ function clearBrowserPidFile() {
   try { fs.unlinkSync(BROWSER_PID_FILE); } catch (_) { /* already gone */ }
 }
 
+// BUG-029 (Phase 3 hardening): from-browser.js's browser_launch_debug spawns
+// a detached Chrome via raw child_process.spawn — that path does NOT go
+// through launchLocal(), so it never wrote the pidfile. The .bat cleanup
+// therefore missed those orphans. Expose a recorder so the effector can
+// pin the PID the same way launchLocal does. Best-effort: never throws.
+function recordLaunchedPid(pid) {
+  if (!pid) return false;
+  try {
+    fs.writeFileSync(BROWSER_PID_FILE, String(pid), 'utf8');
+    return true;
+  } catch (_) { return false; }
+}
+
 // Module-level singleton state
 let browser = null;      // CDP-connected Browser instance
 let context = null;      // launchPersistentContext BrowserContext instance
@@ -238,4 +251,5 @@ module.exports = {
   withPage,
   launchLocal,
   ensureOnline,
+  recordLaunchedPid,   // BUG-029 Phase 3 — for from-browser.js browser_launch_debug
 };

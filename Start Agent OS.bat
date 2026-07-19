@@ -15,14 +15,41 @@ for %%P in (4478 5050 9222) do (
 )
 
 REM --- BUG-029: kill any orphaned automation browser from a previous run ----
-REM The browser-agent writes its launched Chrome/Edge PID to .browser-agent.pid.
-REM If MYTHOS died without a clean shutdown (terminal closed), that browser
-REM survives invisibly and keeps playing audio — kill it before booting.
+REM The browser-agent writes its launched Chrome/Edge PID to .browser-agent.pid
+REM (both launchLocal in the adapter AND browser_launch_debug in from-browser.js
+REM as of Phase 3 hardening). If MYTHOS died without a clean shutdown (terminal
+REM closed), that browser survives invisibly and keeps playing audio — kill it
+REM before booting.
+REM
+REM PHASE 3 HARDENING: before tree-killing, verify the PID's command line
+REM actually looks like a MYTHOS-launched browser (contains "MYTHOS" or
+REM "chrome-debug-profile"). This is a belt-and-suspenders check so that even
+REM if something ever writes a wrong PID into the file (a bug, a stale file
+REM from a different machine, an operator's own Chrome PID), this script will
+REM NOT kill the operator's browser — it logs + skips instead.
 if exist ".browser-agent.pid" (
     set /p ORPHAN_PID=<".browser-agent.pid"
     if defined ORPHAN_PID (
-        echo   - orphaned automation browser PID !ORPHAN_PID!, killing...
-        taskkill /F /T /PID !ORPHAN_PID! >nul 2>nul
+        REM Verify the PID's command line via wmic. delayed-expansion !ORPHAN_PID!
+        REM is needed because we're inside an if-block.
+        set "ORPHAN_CMD="
+        for /f "tokens=2 delims==" %%C in ('wmic process where "ProcessId=!ORPHAN_PID!" get CommandLine /value 2^>nul ^| findstr "CommandLine"') do (
+            set "ORPHAN_CMD=%%C"
+        )
+        set "PROVENANCE_OK=0"
+        if defined ORPHAN_CMD (
+            echo !ORPHAN_CMD! | findstr /i /c:"MYTHOS" >nul && set "PROVENANCE_OK=1"
+            echo !ORPHAN_CMD! | findstr /i /c:"chrome-debug-profile" >nul && set "PROVENANCE_OK=1"
+        )
+        if "!PROVENANCE_OK!"=="1" (
+            echo   - orphaned automation browser PID !ORPHAN_PID!, killing...
+            taskkill /F /T /PID !ORPHAN_PID! >nul 2>nul
+        ) else (
+            echo   - NOTE: PID !ORPHAN_PID! in .browser-agent.pid does not look like a
+            echo     MYTHOS-launched browser (command line did not contain "MYTHOS" or
+            echo     "chrome-debug-profile"). Skipping kill to protect the operator's
+            echo     own browser. Delete .browser-agent.pid manually if it is stale.
+        )
     )
     del /f /q ".browser-agent.pid" >nul 2>nul
 )
