@@ -16,9 +16,11 @@
 //    BLOCKED, no infinite execution loop.
 //  - Checkpoint closures re-armed in init() (they cannot survive a restart —
 //    they hold live function refs).
-//  - Command-type verification NEVER shells out — there is no safe sandboxed
-//    runner. We mark it SKIPPED HONESTLY with a health.anomaly and treat the
-//    stage as verified:true,skipped:true. (Filed as follow-up in BUGS.md.)
+//  - Command-type verification (Phase 3 / V7): runs via the run_command
+//    effector when RUN_COMMAND_ALLOWLIST is set (leash-gated T3 + the
+//    effector's 5-layer safety model). Empty allowlist → still SKIPPED
+//    HONESTLY (unchanged deployments keep the pre-Phase-3 'mark verified,
+//    move on' behavior rather than suddenly shelling out).
 //  - All emits use the events.js builders (this file makes events.js live).
 
 const events = require('./events');
@@ -323,10 +325,13 @@ function createEngagementExecutor(deps) {
   }
 
   // ---- verification ----
-  // file  → vault.exists(path) when vault present; else treated as skipped.
-  // command → MARKED SKIPPED HONESTLY (no safe sandboxed runner). health.anomaly
-  //           fires; we return ok:true, skipped:true so the stage advances
-  //           rather than dead-ending on an unverifiable command.
+  // file    → vault.exists(path) when vault present; else treated as skipped.
+  // command → Phase 3 (V7): runs via the run_command effector IF the operator
+  //           has set RUN_COMMAND_ALLOWLIST. Empty allowlist → still SKIPPED
+  //           HONESTLY (unchanged deployments don't suddenly shell out). The
+  //           run_command effector enforces its 5-layer safety model (allowlist,
+  //           shell-metachar reject, cwd pin, env scrub, timeout) and the leash
+  //           gates the dispatch (T3 confirm + credential scan).
   // research → brain sanity-check of claims; offline → skipped.
   async function verifyStage(record, stage) {
     var v = stage.verification || {};
@@ -339,11 +344,7 @@ function createEngagementExecutor(deps) {
       return { ok: true, skipped: true };
     }
     if (v.type === 'command') {
-      // HONEST SKIPPED: no sandboxed runner exists. Do NOT shell out.
-      anomaly('engagement-command-verification-skipped', {
-        engagementId: record.id, stageId: stage.id, cmd: v.cmd
-      });
-      return { ok: true, skipped: true };
+      return await runCommandVerification(record, stage, v);
     }
     if (v.type === 'research') {
       // Claims check via brain; offline → skipped (honest).
@@ -361,6 +362,105 @@ function createEngagementExecutor(deps) {
     // Unknown verification type — honest pass-through (no failure on shape we
     // don't recognize; future types flagged as skipped).
     return { ok: true, skipped: true };
+  }
+
+  // Phase 3 (V7): run a command-type verification through the run_command
+  // effector via the shared dispatchAction (after a leash.check — mirror
+  // runActionStage at L258-287). Honest-degrade to SKIPPED when the operator
+  // hasn't enabled the allowlist, so an unchanged deployment keeps the
+  // pre-Phase-3 'mark verified, move on' behavior rather than suddenly
+  // shelling out.
+  async function runCommandVerification(record, stage, v) {
+    var allowlist = (config && config.RUN_COMMAND_ALLOWLIST) || process.env.RUN_COMMAND_ALLOWLIST || '';
+    if (!allowlist) {
+      // Unchanged deployment — preserve the pre-Phase-3 behavior exactly.
+      anomaly('engagement-command-verification-skipped', {
+        engagementId: record.id, stageId: stage.id, cmd: v.cmd,
+        reason: 'RUN_COMMAND_ALLOWLIST unset'
+      });
+      return { ok: true, skipped: true };
+    }
+    // Parse v.cmd ("npm test" → command='npm', args=['test']). Whitespace-split,
+    // preserve quoted substrings as single args via a minimal shell-like parse.
+    var parsed = parseVerifyCmd(v.cmd);
+    if (!parsed) {
+      anomaly('engagement-command-verification-skipped', {
+        engagementId: record.id, stageId: stage.id, cmd: v.cmd, reason: 'unparseable'
+      });
+      return { ok: false, skipped: false };
+    }
+    var decision = {
+      tool: 'run_command',
+      args: {
+        command: parsed.command,
+        args: parsed.args,
+        engagementId: record.id        // pins cwd to vault/builds/engagements/<id>
+      }
+    };
+    // 1. Leash check (mandatory, fail-closed — cortex/action-stage pattern).
+    if (leash && typeof leash.check === 'function') {
+      var lr = leash.check(decision, { goalId: record.goalId });
+      if (!lr.allow && lr.requireConfirm) {
+        // T3 confirm-once-per-goal: park until the operator accepts. The
+        // stage result carries parked:true so the executor loop pauses.
+        var parked = await parkActionForConfirm(record, stage, decision, lr, makeDispatchCtx(record));
+        if (parked) return { ok: false, skipped: false, parked: true };
+      }
+      if (!lr.allow) {
+        anomaly('engagement-command-verification-denied', {
+          engagementId: record.id, stageId: stage.id, reason: lr.reason || 'leash'
+        });
+        return { ok: false, skipped: false };
+      }
+    }
+    // 2. Dispatch via the shared sequence (breaker→invoke→episodic→audit).
+    var result;
+    try {
+      result = await dispatchAction(decision, makeDispatchCtx(record));
+    } catch (err) {
+      anomaly('engagement-command-verification-threw', {
+        engagementId: record.id, stageId: stage.id, error: (err && err.message) || String(err)
+      });
+      return { ok: false, skipped: false };
+    }
+    if (result && result.ok) {
+      return { ok: true, skipped: false, stdout: result.result && result.result.stdout };
+    }
+    anomaly('engagement-command-verification-failed', {
+      engagementId: record.id, stageId: stage.id,
+      error: result && result.result && result.result.error,
+      exitCode: result && result.result && result.result.exitCode
+    });
+    return { ok: false, skipped: false };
+  }
+
+  // Minimal shell-like split for v.cmd: respects single + double quotes,
+  // backslash escapes. Returns null if the command parses to nothing.
+  // (The run_command effector re-checks each arg for shell metachars and
+  // allowlist compliance — this parser is just for splitting.)
+  function parseVerifyCmd(cmd) {
+    if (!cmd || typeof cmd !== 'string') return null;
+    var tokens = [];
+    var cur = '';
+    var quote = null;
+    for (var i = 0; i < cmd.length; i++) {
+      var c = cmd[i];
+      if (quote) {
+        if (c === '\\' && i + 1 < cmd.length) { cur += cmd[++i]; continue; }
+        if (c === quote) { quote = null; continue; }
+        cur += c;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (/\s/.test(c)) {
+        if (cur) { tokens.push(cur); cur = ''; }
+      } else {
+        cur += c;
+      }
+    }
+    if (cur) tokens.push(cur);
+    if (quote) return null;          // unterminated quote → unparseable
+    if (!tokens.length) return null;
+    return { command: tokens[0], args: tokens.slice(1) };
   }
 
   // ---- repair ----
