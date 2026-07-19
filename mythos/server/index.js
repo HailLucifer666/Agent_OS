@@ -289,14 +289,8 @@ function createServer(deps) {
 
   app.get('/api/kanban', (req, res) => { res.json(kanbanEffector.listBoard()); });
 
-  // ---- P22 — Forge build projects + checkpoint approval gates ----
-  app.get('/api/forge/projects', (req, res) => { res.json({ projects: forge ? forge.listProjects() : [] }); });
-  app.get('/api/forge/projects/:id', (req, res) => {
-    if (!forge) return res.status(404).json({ error: 'forge unavailable' });
-    const project = forge.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: 'not found' });
-    res.json({ project });
-  });
+  // ---- P22 — Forge build projects + checkpoint approval gates (W9: extracted) ----
+  require('./routes/forge').mountForgeRoutes(app, { forge });
   app.get('/api/checkpoints', (req, res) => {
     res.json({ checkpoints: checkpoints ? checkpoints.list({ status: req.query.status }) : [] });
   });
