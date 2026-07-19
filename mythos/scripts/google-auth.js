@@ -26,10 +26,15 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 }
 
 var REDIRECT_PORT = 4848;
+// Phase 3 (BUG-024): added the Calendar readonly scope. Without it the
+// refresh token this script mints works for Gmail tools but fails on real
+// Calendar reads (the reminder-sensor polls calendar.fireDueReminders()).
+// See docs/google-oauth-setup.md for the full operator walkthrough.
 var SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.compose',
-  'https://www.googleapis.com/auth/gmail.send'
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/calendar.readonly'
 ].join(' ');
 
 var AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth?' +
