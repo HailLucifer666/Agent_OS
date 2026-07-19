@@ -297,7 +297,7 @@ async function main() {
       // is no dashboard process to monitor CLI sessions for yet.
       registerFromComputer(hub);
       pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
-      registerFromSpotify(hub, { effectors: hub });
+      registerFromSpotify(hub, { effectors: hub, bus: bus, memory: memory, goals: goals, config: config });
       registerFromBrowser(hub, { config: config });
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,

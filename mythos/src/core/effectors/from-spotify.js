@@ -3,9 +3,23 @@
 // effectors/from-spotify.js — Spotify desktop app control effector.
 // Wraps the existing PC automation layer (launch_app, media_key, ui_elements, ui_click, ui_type)
 // into a clean Spotify-specific API: play_track, search, play_pause, next, previous, volume.
+//
+// W2 (Phase 2 — Wiring Integrity): the T3 inner invokes this effector drives
+// (ui_click, ui_type, click_at) used to go through raw pcEffectors.invoke() —
+// breaker-gated but NO leash check, NO audit trail, NO goal context (task-957
+// §24 W2). A T2 spotify_play was silently driving T3 effectors with zero
+// traceability. The fix routes those three T3 inner invokes through
+// dispatchAction (the shared dispatch surface, Anti-Drift invariant #1) so
+// each one writes an audit line. spotify_play's own T2 authorization covers
+// the chain — the inner calls do NOT re-trigger a confirm gate (that would
+// make every "play me a song" popup a ui_click confirm, which is absurd);
+// they only gain the audit + breaker + episodic recording. The T0/T1/T2
+// inner invokes (list_windows, ui_elements, media_key, launch_app,
+// focus_window, send_key) stay raw — reads shouldn't audit.
 
 const path = require('path');
 const { effectorFromTool } = require('./adapter');
+const { dispatchAction } = require('./dispatch-action');
 // BUG-026: cua-driver tool surface confirmed live against cua-driver-rs 0.8.3
 // (2026-07-17) — see adapters/cua-driver/index.js header for the tool list.
 // Direct require (not ctx-injected), matching from-pc.js's own pcChild require style.
@@ -18,8 +32,38 @@ function fail(reason) {
   return { ok: false, result: reason };
 }
 
-// PC effectors will be injected via ctx in registerFromSpotify
+// PC effectors + dispatch ctx injected via registerFromSpotify ctx.
+// dispatchCtx holds the {bus, memory, goals, config} needed by dispatchAction;
+// it stays null in unit tests that only exercise the raw helpers (pre-W2 shape).
 let pcEffectors = null;
+let dispatchCtx = null;
+
+// W2: route a T3 inner invoke through dispatchAction so it gets an audit line.
+// Falls back to raw pcEffectors.invoke when dispatchCtx isn't configured (unit
+// tests, or a partial boot), preserving the pre-W2 behavior in those contexts.
+async function dispatchInner(tool, args) {
+  if (!pcEffectors) return fail('PC effectors not initialized');
+  if (dispatchCtx && dispatchCtx.bus && dispatchCtx.memory) {
+    try {
+      return await dispatchAction(
+        { tool, args },
+        {
+          effectors: pcEffectors,
+          bus: dispatchCtx.bus,
+          goals: dispatchCtx.goals || null,
+          memory: dispatchCtx.memory,
+          config: dispatchCtx.config || {},
+          goalId: dispatchCtx.goalId || null,
+          tier: dispatchCtx.tier || null,
+          channel: 'spotify-inner',
+        }
+      );
+    } catch (_) {
+      // fall through to raw invoke — never break playback on a dispatch error
+    }
+  }
+  return pcEffectors.invoke(tool, args, {});
+}
 
 async function launchSpotifyUri(uri) {
   if (!pcEffectors) return fail('PC effectors not initialized');
@@ -77,13 +121,16 @@ async function findSpotifySearchBox(pid) {
 }
 
 async function clickElement(pid, elementPath) {
+  // W2: ui_click is T3 — route through dispatchAction so the inner invoke gets
+  // an audit line (pre-W2 this was raw pcEffectors.invoke with no leash/audit).
   if (!pcEffectors) return fail('PC effectors not initialized');
-  return pcEffectors.invoke('ui_click', { pid, elementPath }, {});
+  return dispatchInner('ui_click', { pid, elementPath });
 }
 
 async function clickAt(x, y) {
+  // W2: click_at is T3 — route through dispatchAction for the audit trail.
   if (!pcEffectors) return fail('PC effectors not initialized');
-  return pcEffectors.invoke('click_at', { x, y }, {});
+  return dispatchInner('click_at', { x, y });
 }
 
 // Finds the play/pause control in a ui_elements tree by name/automationId,
@@ -104,8 +151,9 @@ function findPlayControl(elements) {
 }
 
 async function typeText(pid, elementPath, text) {
+  // W2: ui_type is T3 — route through dispatchAction for the audit trail.
   if (!pcEffectors) return fail('PC effectors not initialized');
-  return pcEffectors.invoke('ui_type', { pid, elementPath, text }, {});
+  return dispatchInner('ui_type', { pid, elementPath, text });
 }
 
 // ---- cua-driver element-addressed play path (BUG-026, verified against 0.8.3) ----
@@ -551,6 +599,16 @@ const TOOLS = [
 function registerFromSpotify(hub, ctx) {
   // Store PC effectors reference for delegation
   pcEffectors = ctx.effectors;
+  // W2: capture the dispatch deps (bus, memory, goals, config) so inner T3
+  // invokes can route through dispatchAction and leave an audit trail.
+  // Older callers that omit these fall back to raw pcEffectors.invoke
+  // (the pre-W2 behavior) — see dispatchInner above.
+  dispatchCtx = {
+    bus: ctx.bus || null,
+    memory: ctx.memory || null,
+    goals: ctx.goals || null,
+    config: ctx.config || null,
+  };
 
   for (let i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
