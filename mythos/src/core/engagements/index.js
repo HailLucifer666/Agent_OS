@@ -340,11 +340,15 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
 }
 
 function createEngagementManager({ bus, config, memory, goals, leash, effectors, engagementStore, brain, checkpoints }) {
-  // Create sub-components
+  // Create sub-components. V6 (Phase 4): thread `brain` into interview +
+  // specBuilder + planBuilder so they can use brain-driven methods with
+  // template fallback when the brain is offline. The transition handler
+  // stays synchronous (calls the canned paths); the brain-driven methods
+  // are available for cortex / gateway / future orchestrator consumption.
   var stateMachine = require('./state-machine').createStateMachine({ config: config });
-  var interview = require('./interview').createInterview({ config: config });
-  var specBuilder = require('./spec-builder').createSpecBuilder({ config: config });
-  var planBuilder = require('./plan-builder').createPlanBuilder({ config: config });
+  var interview = require('./interview').createInterview({ config: config, brain: brain });
+  var specBuilder = require('./spec-builder').createSpecBuilder({ config: config, brain: brain });
+  var planBuilder = require('./plan-builder').createPlanBuilder({ config: config, brain: brain });
   var recommendations = require('./recommendations').createRecommendations({ config: config });
   var progress = require('./progress').createProgress({ bus: bus, config: config });
 

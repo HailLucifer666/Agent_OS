@@ -3,8 +3,10 @@
 // Spec generation from interview answers
 // ENGAGEMENT-SPEC section 1.1 spec-builder interface
 
-function createSpecBuilder({ config }) {
+function createSpecBuilder({ config, brain }) {
   if (!config) throw new Error('config required');
+  // V6 (Phase 4): brain is optional. When absent or offline, build() falls
+  // back to the deterministic markdown template (honest-inert).
 
   // Build spec from interview answers
   function build(interview) {
@@ -35,6 +37,48 @@ function createSpecBuilder({ config }) {
     };
 
     return Promise.resolve(spec);
+  }
+
+  // V6 (Phase 4): brain-driven spec generation. Asks the brain to compose a
+  // richer markdown spec from the interview answers — one that captures
+  // non-obvious requirements, edge cases, and a coherent narrative. The
+  // canned template above remains the fallback (and still runs first so we
+  // always have SOMETHING to show even if the brain is slow / offline).
+  //
+  // Honest-inert: on any failure returns the canned build() output. The
+  // recommendations list stays template-generated either way (it drives the
+  // downstream recommendation UI and shouldn't drift).
+  async function buildBrain(interview) {
+    var fallback = await build(interview);
+    if (!brain || typeof brain.think !== 'function') return fallback;
+    if (!interview || !interview.questions) return fallback;
+    var answerLines = interview.questions
+      .filter(function (q) { return q.answer; })
+      .map(function (q) { return '- ' + q.prompt + ': ' + q.answer; });
+    if (answerLines.length === 0) return fallback;
+    try {
+      var result = await brain.think({
+        lane: 'build',
+        messages: [{ role: 'user', content:
+          'You are writing a project specification from interview answers.\n' +
+          'Answers:\n' + answerLines.join('\n') + '\n\n' +
+          'Write a clear, structured markdown spec (## sections, bullet lists). Cover:\n' +
+          '- Deliverable (what we are building)\n' +
+          '- Scope (what is in and out)\n' +
+          '- Key technical decisions + rationale\n' +
+          '- Edge cases / failure modes the build should handle\n' +
+          '- Acceptance criteria (how we know it is done)\n' +
+          'Do NOT invent answers that contradict the interview. Keep it under 600 words.'
+        }],
+        source: 'engagement:spec'
+      });
+      if (!result || result.offline || result.aborted || !result.content) return fallback;
+      var enrichedMarkdown = String(result.content).trim();
+      if (enrichedMarkdown.length < 50) return fallback;   // brain returned garbage
+      return Object.assign({}, fallback, { markdown: enrichedMarkdown });
+    } catch (_) {
+      return fallback;
+    }
   }
 
   // Generate markdown from answers
@@ -129,6 +173,7 @@ function createSpecBuilder({ config }) {
 
   return {
     build: build,
+    buildBrain: buildBrain,       // V6 (Phase 4)
     toMarkdown: toMarkdown,
     toJsonSchema: toJsonSchema
   };

@@ -3,10 +3,12 @@
 // Interview orchestration
 // ENGAGEMENT-SPEC section 1.1 interview interface
 
-function createInterview({ config }) {
+function createInterview({ config, brain }) {
   if (!config) throw new Error('config required');
 
   var maxQuestions = (config.ENGAGEMENT_INTERVIEW_MAX_Q || 5);
+  // V6 (Phase 4): brain is optional. When absent or offline, every method
+  // falls back to the canned DEFAULT_QUESTIONS template (honest-inert).
 
   // Default questions for engagement intake
   var DEFAULT_QUESTIONS = [
@@ -50,6 +52,56 @@ function createInterview({ config }) {
         options: q.options ? q.options.slice(0) : undefined
       };
     });
+  }
+
+  // V6 (Phase 4): brain-driven question generation. Asks the brain to tailor
+  // the interview questions to the engagement's initial intent — e.g. a
+  // "spotify integration" engagement gets questions about OAuth + audio APIs,
+  // not the generic stack/scope defaults.
+  //
+  // Honest-inert fallback: on any failure (no brain, brain offline, parse
+  // fail, brain returns garbage), returns the canned DEFAULT_QUESTIONS so the
+  // engagement can still proceed. The brain is an enhancement, never a gate.
+  async function generateQuestionsBrain(intent) {
+    if (!brain || typeof brain.think !== 'function') return generateQuestions(intent);
+    var intentText = (intent && typeof intent === 'string') ? intent :
+                     (intent && intent.text) || '';
+    if (!intentText.trim()) return generateQuestions(intent);
+    try {
+      var result = await brain.think({
+        lane: 'simple',
+        messages: [{ role: 'user', content:
+          'You are scoping a software engagement. The operator said: "' + intentText + '".\n' +
+          'Generate ' + maxQuestions + ' targeted interview questions that will clarify the ' +
+          'deliverable, scope, and constraints SPECIFIC to this intent. Don\'t ask generic ' +
+          'questions — tailor them to what you already know about the domain.\n' +
+          'Respond as JSON: {"questions": [{"id":"q-kebab-name","prompt":"the question",' +
+          '"type":"text|choice","options":["a","b"]}, ...]}\n' +
+          'type:choice must include options. Max ' + maxQuestions + ' questions.'
+        }],
+        schemaHint: '{ questions: Array<{id:string,prompt:string,type:string,options?:string[]}> }',
+        source: 'engagement:interview'
+      });
+      if (!result || result.offline || result.aborted || !result.parsed) {
+        return generateQuestions(intent);
+      }
+      var qs = Array.isArray(result.parsed.questions) ? result.parsed.questions : [];
+      // Validate + cap. Each question needs id + prompt; type defaults to text.
+      var validated = qs.filter(function (q) {
+        return q && q.id && String(q.prompt || '').trim();
+      }).slice(0, maxQuestions).map(function (q, i) {
+        return {
+          id: String(q.id),
+          prompt: String(q.prompt),
+          type: q.type === 'choice' ? 'choice' : 'text',
+          options: Array.isArray(q.options) ? q.options.slice(0, 6) : undefined
+        };
+      });
+      if (validated.length === 0) return generateQuestions(intent);
+      return validated;
+    } catch (_) {
+      return generateQuestions(intent);
+    }
   }
 
   // Start interview - returns questions array
@@ -160,7 +212,8 @@ function createInterview({ config }) {
     complete: complete,
     getNextQuestion: getNextQuestion,
     getQuestion: getQuestion,
-    generateQuestions: generateQuestions
+    generateQuestions: generateQuestions,
+    generateQuestionsBrain: generateQuestionsBrain   // V6 (Phase 4)
   };
 }
 
