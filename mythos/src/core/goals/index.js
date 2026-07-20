@@ -110,6 +110,105 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     return true;
   }
 
+  // Phase 4 / Area A (V3): autonomous goal completion + procedure distillation.
+  //
+  // Pre-Phase-4: the cortex never marked a goal done. Status transitions to
+  // 'done' happened only via the human-facing bridge (toggleGoal, Goals.md
+  // checkbox sync). No 'goal.completed' event existed. Distilling a successful
+  // execution into a reusable Skill was impossible — the raw material (action
+  // episodics) sat in memory with no producer to read it.
+  //
+  // complete(id, opts?) is the autonomous path. It:
+  //   1. sets status:'done' + reason + completedAt
+  //   2. emits 'goal.completed' (new event name — conforms to bus naming)
+  //   3. distills the goal's action history into a Skill via ONE bounded brain
+  //      call on the 'simple' lane (idle-skip: skipped when no brain, no
+  //      memory.skills, < 2 action episodics, or distillation fails — honest
+  //      fallback, never fabricates a skill)
+  //
+  // Distillation is fire-and-forget (no await from the caller's perspective):
+  // it must not block goal completion. Returns the updated goal synchronously.
+  function complete(id, opts) {
+    var goal = goals.get(id);
+    if (!goal) return null;
+    opts = opts || {};
+    var prevStatus = goal.status;
+    goal.status = 'done';
+    goal.reason = opts.reason || 'completed';
+    goal.completedAt = Date.now();
+    saveGoal(id);
+    if (bus) bus.emit('goal.completed', {
+      id: id, title: goal.title, prevStatus: prevStatus,
+      spent: goal.spent, budget: goal.budget
+    });
+    // Kick off distillation asynchronously — the caller doesn't wait on it.
+    if (brain && memory && memory.skills && memory.episodic) {
+      distillIntoSkill(goal).catch(function (err) {
+        if (bus) bus.emit('health.anomaly', {
+          kind: 'goal-distill-failed', target: id, error: err && err.message
+        });
+      });
+    }
+    return goal;
+  }
+
+  // Distill a completed goal's action history into a reusable Skill.
+  // Reads the goal's action episodics, asks the brain for a compact procedure,
+  // writes it via memory.skills.write(). Best-effort for local fs / parse
+  // failures (silent null), but brain.think THROWS are propagated to the
+  // caller (complete()'s .catch) — operators should know when distillation
+  // infrastructure is broken, not just silently absent.
+  async function distillIntoSkill(goal) {
+    if (!brain || !memory || !memory.skills || !memory.episodic) return null;
+    // Pull the goal's action history. We can't filter by goalId in episodic
+    // directly (action episodics don't carry it today), so we use the recent
+    // action window + the goal's title as a semantic filter.
+    var actions = [];
+    try {
+      actions = memory.episodic.recall(goal.title, { kind: 'action', limit: 20 }) || [];
+    } catch (_) { return null; }
+    if (!actions || actions.length < 2) return null;   // not enough to distill
+
+    // Compact the action trace for the brain prompt.
+    var trace = actions.map(function (a, i) {
+      var rec = a.record || a;
+      var okFlag = rec.outcome === 'ok' ? 'ok' : 'FAIL';
+      return (i + 1) + '. [' + okFlag + '] ' + (rec.summary || rec.tool || 'unknown');
+    }).join('\n');
+
+    // brain.think can throw on real infrastructure errors (provider misconfig,
+    // network). The brain itself returns {offline:true} for routine offline —
+    // those are silent. A throw propagates so complete()'s .catch emits an
+    // anomaly. Don't wrap this call.
+    var result = await brain.think({
+      lane: 'simple',
+      messages: [{ role: 'user', content:
+        'A goal just completed successfully. Distill the action trace into a reusable procedure.\n' +
+        'Goal: ' + goal.title + '\n' +
+        'Action trace:\n' + trace + '\n\n' +
+        'Respond as JSON: {"name": "<short-kebab-name>", "when": "<one-line trigger condition>", ' +
+        '"steps": [{"tool": "<tool-name>", "args": {<required-params>}}, ...]}\n' +
+        'Only include steps that SUCCEEDED. Skip exploration/probing steps. Keep it to 2-6 steps.'
+      }],
+      schemaHint: '{ name: string, when: string, steps: Array<{tool:string,args:object}> }',
+      source: 'goal-distill:' + goal.id
+    });
+    if (!result || result.offline || result.aborted || !result.parsed) return null;
+    var p = result.parsed;
+    if (!p.name || !Array.isArray(p.steps) || p.steps.length === 0) return null;
+
+    try {
+      return memory.skills.write(p.name, {
+        when: [p.when || goal.title],
+        steps: p.steps,
+        successCriteria: [],
+        uses: 0,
+        successRate: 0
+      });
+    } catch (_) { return null; }
+  }
+
+
   function list(filter) {
     filter = filter || {};
     var all = Array.from(goals.values());
@@ -503,7 +602,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     create, get, update, remove, list,
     getActive, hasActive, getActiveGoals,
     arbitrate, plan, debitBudget, grantTier,
-    markPlanStepDone,
+    complete, markPlanStepDone,
     init, stats,
     _internal: { DRIVE_WEIGHTS, goalRelevance, goals: function() { return goals; } }
   };
