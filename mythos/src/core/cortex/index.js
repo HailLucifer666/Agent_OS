@@ -69,6 +69,38 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         }
       }
 
+      // V1 (Phase 4): memory consultation on the autonomous path. When ANY
+      // high-salience perception arrives, hydrate the per-tick recall cache
+      // ONCE — the cache lives in working memory, cleared at the top of the
+      // next tick (zero leak). decide()/plan() can consult it without
+      // re-running recallHybrid (which fires an embeddings call).
+      //
+      // Gating: top-ranked perception above ORIENT_RECALL_MIN_SALIENCE only.
+      // Below that the cortex shouldn't act anyway, so a recall would be wasted
+      // cost (idle-skip). Cost: 1 embeddings call per NON-IDLE tick, exactly
+      // matching the spec's idle-skip principle (zero cost when idle). Offline
+      // brain → recallHybrid degrades to keyword-only, still useful.
+      var orientMinSalience = (config && typeof config.ORIENT_RECALL_MIN_SALIENCE === 'number')
+        ? config.ORIENT_RECALL_MIN_SALIENCE : 0.5;
+      var orientLimit = (config && typeof config.ORIENT_RECALL_LIMIT === 'number')
+        ? config.ORIENT_RECALL_LIMIT : 5;
+      if (ranked.length > 0 && ranked[0].rankedSalience > orientMinSalience &&
+          memory && typeof memory.recallHybrid === 'function') {
+        try {
+          var topQuery = ranked[0].perception.summary ||
+                         (ranked[0].perception.channel || '') + ' perception';
+          var hits = await memory.recallHybrid(topQuery, { limit: orientLimit });
+          if (hits && hits.length > 0) {
+            working.setRecallCache(hits);
+            bus.emit('cortex.recall', {
+              tick: working.tick,
+              query: topQuery.slice(0, 80),
+              hits: hits.length
+            });
+          }
+        } catch (_) { /* recall is best-effort — orient proceeds regardless */ }
+      }
+
       // -- IDLE CHECK (cost lever #1: zero Brain calls on MOST idle ticks) --
       // Idle ticks still skip the brain entirely EXCEPT for the throttled "mull"
       // below — a periodic background reasoning pass that lets the entity form
@@ -163,7 +195,17 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
 
     // Planner: procedural recall first, then brain
     if (typeof goals.plan === 'function') {
-      var plan = await goals.plan(best, { memory: memory, brain: brain, effectors: effectors });
+      // V1 (Phase 4): pass the per-tick recall cache into the plan ctx so the
+      // planner's brain prompt can ground its decision in relevant memory
+      // (cheap — already hydrated by orient once this tick, no second call).
+      var recallCache = null;
+      if (working && typeof working.getRecallCache === 'function') {
+        recallCache = working.getRecallCache();
+      }
+      var plan = await goals.plan(best, {
+        memory: memory, brain: brain, effectors: effectors,
+        recallCache: recallCache
+      });
       if (!plan) return null;
       return plan;
     }

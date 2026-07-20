@@ -7,6 +7,11 @@ function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints })
   let activeGoalId = null;
   const context = new Map();
   let spendThisTick = 0;
+  // V1 (Phase 4): per-tick recall cache. orient() hydrates this once per
+  // tick when a high-salience perception arrives; decide()/plan() can read
+  // it without re-running recallHybrid (which does an embeddings call). The
+  // cache clears in resetTickState() so it never leaks across ticks.
+  let recallCache = null;
 
   function drainPerceptions() {
     const drained = perceptionQueue;
@@ -21,6 +26,7 @@ function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints })
   function resetTickState() {
     lastModel = null;
     spendThisTick = 0;
+    recallCache = null;   // V1 (Phase 4): invalidate per-tick
   }
 
   function snapshot() {
@@ -43,6 +49,13 @@ function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints })
   function addSpend(tokens) {
     spendThisTick += tokens;
   }
+
+  // V1 (Phase 4): per-tick recall cache accessors. orient() sets this once
+  // when it observes a high-salience perception; later OODA stages read it.
+  // Set returns the value passed in so orient can chain it through to the
+  // decide() stage without a second read.
+  function setRecallCache(hits) { recallCache = hits || null; return recallCache; }
+  function getRecallCache() { return recallCache; }
 
   async function flushToEpisodic() {
     // Persist a working-memory snapshot so recovery can rebuild context on restart
@@ -117,7 +130,8 @@ function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints })
 
     // Methods
     drainPerceptions, pushPerception, resetTickState, snapshot,
-    set, get, addSpend, flushToEpisodic, rebuildFromEpisodic, stats, init
+    set, get, addSpend, setRecallCache, getRecallCache,
+    flushToEpisodic, rebuildFromEpisodic, stats, init
   };
 }
 

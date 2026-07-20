@@ -86,6 +86,11 @@ const SCHEMA = {
   // V3 (Phase 4): procedural-skill gate. Skills with uses>0 below this
   // successRate are not replayed by plan() — they keep failing.
   SKILL_MIN_SUCCESS_RATE:   { type: 'number', default: 0.5, min: 0, max: 1 },
+  // V1 (Phase 4): orient→recall gate. Only perceptions above this salience
+  // trigger a recallHybrid call on the autonomous path (idle-skip: 0 cost
+  // when nothing salient arrives). ORIENT_RECALL_LIMIT caps the cache size.
+  ORIENT_RECALL_MIN_SALIENCE: { type: 'number', default: 0.5, min: 0, max: 1 },
+  ORIENT_RECALL_LIMIT:      { type: 'number', default: 5, min: 1, max: 20 },
 
   // Leash (Phase 5)
   LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },
