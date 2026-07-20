@@ -211,6 +211,19 @@ public static class NativeInput {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+    // V8 (Phase 4): active-window sensor. GetForegroundWindow returns the HWND
+    // of the window the user is currently interacting with; GetWindowText reads
+    // its title; GetWindowThreadProcessId gives us the PID so we can resolve
+    // the process name via Get-Process.
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
     public const int SW_RESTORE = 9;
     public const int SW_MINIMIZE = 6;
     public const int SW_MAXIMIZE = 3;
@@ -372,6 +385,37 @@ function Handle-ListWindows {
         }
     }
     return @{ windows = $windows; total = $all.Count }
+}
+
+# V8 (Phase 4): active-window sensor handler. Returns the foreground window's
+# {pid, processName, title, hwnd}. Used by the window-sensor to emit
+# perception.window events with structured app/title metadata (distinct from
+# screen-sensor which produces free-text vision captions).
+function Handle-ActiveWindow {
+    $hwnd = [NativeInput]::GetForegroundWindow()
+    if ($hwnd -eq [IntPtr]::Zero) {
+        return @{ app = ''; title = ''; pid = 0; hwnd = '0' }
+    }
+    # Title (max 512 chars — generous, the sensor slices to 120 anyway)
+    $sb = New-Object System.Text.StringBuilder 512
+    [void][NativeInput]::GetWindowText($hwnd, $sb, 512)
+    $title = $sb.ToString()
+    # PID → process name
+    $pidVal = 0
+    [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$pidVal)
+    $procName = 'unknown'
+    if ($pidVal -gt 0) {
+        try {
+            $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
+            if ($proc) { $procName = $proc.ProcessName }
+        } catch { }
+    }
+    return @{
+        app = $procName
+        title = $title
+        pid = $pidVal
+        hwnd = $hwnd.ToString()
+    }
 }
 
 function Handle-FocusWindow($TargetPid) {
@@ -967,6 +1011,9 @@ while ($true) {
         }
         'list_windows' {
             $result = Handle-ListWindows
+        }
+        'active_window' {
+            $result = Handle-ActiveWindow
         }
         'focus_window' {
             $result = Handle-FocusWindow $cmd.pid

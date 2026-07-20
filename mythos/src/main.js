@@ -24,6 +24,7 @@ const { createReminderSensor } = require('./core/sensors/reminder-sensor');
 const { createCalendarUpcomingSensor } = require('./core/sensors/calendar-upcoming-sensor');
 const { createGmailSensor } = require('./core/sensors/gmail-sensor');
 const { createScreenSensor } = require('./core/sensors/screen-sensor');
+const { createWindowSensor } = require('./core/sensors/window-sensor');
 const { createDailyPlanner } = require('./core/planner/daily');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
@@ -143,6 +144,7 @@ async function main() {
   let forge = null;                // P22 Forge multi-file build pipeline
   let checkpointSweepTimer = null;
   let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
+  let windowSensor = null;         // V8 (Phase 4) — opt-in active-window perception
   let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
   let dailyPlanner = null;         // Phase 3 Jarvis upgrade — daily planning + accountability
 
@@ -647,6 +649,17 @@ async function main() {
           pcToolsWiring.setScreenSensorHandle(screenSensor);
         }
         logger.info('sensors.screen.started', { pollMs: config.SCREEN_AWARENESS_POLL_MS });
+      }
+
+      // V8 (Phase 4): opt-in active-window perception sensor. Mirrors the
+      // screen-sensor gate (opt-in, default false — same privacy surface).
+      // Reads the foreground window's app/title via pc-child 'active_window'
+      // and emits perception.window for the OODA loop. Distinct from screen-
+      // sensor: structured {app,title,pid} metadata, NOT vision captions.
+      if (config.WINDOW_AWARENESS_ENABLED && pcChild) {
+        windowSensor = createWindowSensor({ bus: bus, config: config, pcChild: pcChild, logger: logger });
+        windowSensor.start();
+        logger.info('sensors.window.started', { pollMs: config.WINDOW_AWARENESS_POLL_MS });
       }
 
       // [Phase 7 — NEW] file/job sensors start immediately; ws sensor's start() is a

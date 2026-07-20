@@ -39,6 +39,8 @@ const ALLOWED_EVENTS = new Set([
   'perception.voice',
   'perception.coalesced',
   'perception.screen',     // Phase 2 Jarvis upgrade — ambient screen awareness sensor
+  'perception.calendar',   // V8 (Phase 4): upcoming-event perception (calendar-upcoming-sensor)
+  'perception.window',     // V8 (Phase 4): opt-in active-window perception (window-sensor)
 
   // action.*
   'action.completed',
