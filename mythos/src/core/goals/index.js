@@ -210,15 +210,32 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     }
 
     // 2. Procedural recall from Skills store
+    // V3 (Phase 4): also gate on successRate so we don't keep replaying a
+    // procedure that fails more often than it succeeds (threshold 0.5 = at
+    // least as many successes as failures, weighted by the EMA in recordUse).
+    // SKILL_MIN_SUCCESS_RATE lives in schema; default 0.5.
     if (ctx && ctx.memory && ctx.memory.skills) {
       try {
-        var skills = await ctx.memory.skills.recall({ query: goal.title, limit: 1 });
-        if (skills.length > 0 && skills[0].score > 0.6) {
-          var skill = skills[0].record;
-          if (skill.steps && skill.steps.length > 0) {
-            var step = skill.steps[0];
-            return { tool: step.tool, args: step.args, rationale: 'procedural-skill', offline: true };
-          }
+        // B-1 fix: recall() signature is (query, opts) — it called
+        // .toLowerCase() on the first arg, so passing {query,limit} as the
+        // first arg threw TypeError inside the try/catch, silently killing
+        // the procedural-skill branch since the goal system shipped.
+        var minSuccess = (config && config.SKILL_MIN_SUCCESS_RATE) || 0.5;
+        var skills = await ctx.memory.skills.recall(goal.title, { limit: 3 });
+        for (var si = 0; si < skills.length; si++) {
+          if (skills[si].score <= 0.6) continue;
+          var skillRec = skills[si].record;
+          if (!skillRec.steps || skillRec.steps.length === 0) continue;
+          // B-2 fix: respect the tracked successRate. Brand-new skills
+          // (uses===0) pass through — they get a chance to prove themselves.
+          if (skillRec.uses > 0 && (skillRec.successRate || 0) < minSuccess) continue;
+          var sref = skillRec.id || skills[si].ref;
+          var step0 = skillRec.steps[0];
+          return {
+            tool: step0.tool, args: step0.args,
+            rationale: 'procedural-skill', offline: true,
+            skillRef: sref            // V2: carried into dispatchAction for recordUse
+          };
         }
       } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'skills-recall-failed', error: err.message }); }
     }

@@ -83,6 +83,9 @@ const SCHEMA = {
   GOAL_ACTION_BUDGET:       { type: 'number', default: 25, min: 0 },
   MAX_ACTIVE_GOALS:         { type: 'number', default: 5, min: 1, max: 20 },
   CURIOSITY_MIN_INTERVAL_MS: { type: 'number', default: 600000, min: 0 },
+  // V3 (Phase 4): procedural-skill gate. Skills with uses>0 below this
+  // successRate are not replayed by plan() — they keep failing.
+  SKILL_MIN_SUCCESS_RATE:   { type: 'number', default: 0.5, min: 0, max: 1 },
 
   // Leash (Phase 5)
   LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },
