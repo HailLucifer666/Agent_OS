@@ -1135,3 +1135,38 @@ Phase 4 is autonomy advancement (biggest leverage first, all respecting idle-ski
 - Brain-driven interview/spec/plan with template fallback (V6 cognition).
 
 
+## Phase 4 — Autonomy Advancement (task-957 §26)
+
+**Status:** ✅ CODED (2026-07-20) — 13 commits on `phase4/autonomy-advancement`, 1290/1295 tests pass (4 baseline fails unchanged). Full vision-gap close-out in `MYTHOS_Phase4-Autonomy_Handoff.md`. Live operator verification still pending per task-957 §26.
+
+### Latent bugs surfaced + fixed (Area A foundation)
+
+Three bugs had silently disabled the execution→learning loop since the goal system shipped. The closing integration test (`test/phase4a-loop-integration.test.js`) would have caught all three in one run if it had existed:
+
+- **B-1 (goals/index.js:215)** — `skills.recall({query,limit})` passed an object where the signature expected a string (`recall(query, opts)`). `query.toLowerCase()` → TypeError → swallowed by the surrounding try/catch → procedural-skill branch silently dead since day one. The "V3 plan() consults Skills" feature looked shipped but had never fired once.
+- **B-2 (goals/index.js:216)** — `skill.successRate` was tracked by recordUse() but no planner ever read it. plan() gated purely on keyword-overlap score, so a procedure that consistently failed would be replayed forever.
+- **B-3 (goals/index.js:57)** — `goal.plan: []` initialized + read but never written to. The plan-step reader at the top of plan() was dead code; procedural-skill recall returned ONLY step[0] every tick.
+
+Fix shipped in commit `6505f93` (B-1 + B-2 + skills.recall signature) + `03c4eb7` (B-3 + multi-step plan persistence).
+
+### What landed (per vision gap)
+
+| Gap | Spec text | Commit | Status |
+|---|---|---|---|
+| V1 | orient→recallHybrid + per-tick cache | `055d408` | ✅ Cortex consults memory on the autonomous path; 1 embeddings call per non-idle tick, zero when idle |
+| V2 | skills.recordUse() in dispatchAction | `f475307` | ✅ Loop closed: planner picks skill → dispatch records outcome → EMA successRate updates → next plan call respects new rate |
+| V3 | plan() consults successRate, multi-step procedures, goal.plan, completion distill | `03c4eb7` + `b2e70c8` | ✅ Multi-step procedures advance; successful goals distill into Skills |
+| V5 | propose_goal + one-tap acceptance | `a27b980` | ✅ Cortex SUGGESTS goals; operator accepts/rejects via dashboard; never auto-activates |
+| V6 | brain-driven interview/spec/plan | `6abd921` | ✅ All three builders have brain seams with honest-inert fallback |
+| V8 | mull→propose_goal + calendar perception + opt-in window sensor | `2c5f969` + `19a8925` + `cf3406c` | ✅ Cortex acts during idle; events enter OODA; opt-in window-title sensor |
+| V9 | reflect() → diagnostician + Skills | `bc64aa0` | ✅ Action-outcome reflection on its own cadence |
+| V10 | consolidate dedup + contradiction | `c7a2379` | ✅ One bounded brain call merges accumulated consolidated-* topics |
+
+### Honest caveats
+
+- **No autonomous goal-completion trigger** — `goals.complete(id)` API exists but no cortex path calls it autonomously yet. Deciding when the cortex is allowed to declare success is a Phase 4.5 design call.
+- **No engagement-transition brain driving** — the transition handler stays synchronous (canned paths). The brain-driven methods are surfaces for cortex/gateway/future orchestrator; this keeps the existing phase1-engagement-executor.test.js harness (which bypasses interview/spec) working unchanged.
+- **No live operator verification** of: calendar-upcoming-sensor, window-sensor, propose_goal UI flow, mull→propose routing (those need a real boot + dashboard session per task-957 §26).
+- **The boot + eval baseline fails** remain (boot is the Windows-SIGINT test flake, eval/memory-impact are data-dependent tests that need a populated vault). Unchanged from Phase 3.
+- **The pre-existing flake at `test/engagements/events.test.js:43`** still intermittently fires under suite load (~1/3 runs). Independent of Phase 4. Same `Date.now()` race documented in Phase 2.
+
