@@ -318,9 +318,21 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
           'Consider: loose ends, follow-ups they might forget, observations about their ' +
           'work patterns, things that seem important. If yes, respond with JSON: ' +
           '{"thoughts": "what to mention", "priority": "low|medium|high"}\n' +
-          'If nothing is worth mentioning, respond: {"thoughts": "", "priority": "low"}'
+          'If nothing is worth mentioning, respond: {"thoughts": "", "priority": "low"}\n\n' +
+          // V8 (Phase 4): also surface goal PROPOSALS — things the operator might
+          // want to do that MYTHOS noticed but shouldn't auto-pursue. The cortex
+          // cannot mint active goals (AUTONOMOUS_EXCLUDED), but it CAN propose
+          // them via the propose_goal effector for one-tap operator acceptance.
+          'ALSO consider: are there 0-2 GOALS the operator might want to add? ' +
+          'These should be durable aims you noticed from their work patterns, not ' +
+          'one-off tasks. Each will be proposed (NOT auto-activated) — the operator ' +
+          'sees them in the dashboard and accepts/rejects.\n' +
+          'Respond as: {"thoughts": "...", "priority": "...", ' +
+          '"proposals": [{"text": "goal text", "category": "Work|Personal|Learning|Health|General", ' +
+          '"reason": "why this is worth pursuing"}, ...]}\n' +
+          'Empty proposals array if nothing fits.'
         }],
-        schemaHint: '{ thoughts: string, priority: string }',
+        schemaHint: '{ thoughts: string, priority: string, proposals: Array<{text:string,category:string,reason:string}> }',
         source: 'idle-mull'
       });
 
@@ -343,6 +355,31 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
             channel: 'cognition'
           });
           bus.emit('cortex.thought', { text: thoughtText, priority: result.parsed.priority });
+        }
+      }
+
+      // V8 (Phase 4): route brain-returned proposals through propose_goal.
+      // Each becomes a status:'proposed' goal (inert — arbiter ignores) that
+      // the operator accepts/rejects via the dashboard. Caps at 2 per mull pass
+      // (safety bound — don't spam the proposal queue). T1 leash tier handles
+      // the audit automatically. Effectors are optional in tests; skip silently
+      // when absent.
+      if (result && !result.offline && result.parsed && Array.isArray(result.parsed.proposals)) {
+        var proposals = result.parsed.proposals.slice(0, 2);
+        for (var pi = 0; pi < proposals.length; pi++) {
+          var pr = proposals[pi];
+          if (!pr || !pr.text || !String(pr.text).trim()) continue;
+          try {
+            if (effectors && typeof effectors.invoke === 'function') {
+              await effectors.invoke('propose_goal', {
+                text: String(pr.text).trim().slice(0, 200),
+                category: pr.category || 'General',
+                reason: pr.reason ? String(pr.reason).slice(0, 200) : 'mull-proposed',
+                drive: 'curiosity'
+              }, { bus: bus, goalId: null });
+              bus.emit('cortex.proposed', { text: String(pr.text).slice(0, 80) });
+            }
+          } catch (_) { /* proposal is best-effort — never blocks the tick */ }
         }
       }
       // D2: Reset consecutive failure counter on success.

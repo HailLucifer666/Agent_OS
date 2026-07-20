@@ -79,6 +79,7 @@ const ALLOWED_EVENTS = new Set([
 
   // conversation.* + cortex.thought (conversational brain — proactive speech + idle reasoning)
   'cortex.recall',      // V1 (Phase 4): orient→recallHybrid per-tick cache hydration
+  'cortex.proposed',    // V8 (Phase 4): mull() → propose_goal suggestion surfaced
   'conversation.announced',
   'conversation.intent',   // Phase 5a — conversation-gateway.js's non-engagement route() fallback
   'cortex.thought',
