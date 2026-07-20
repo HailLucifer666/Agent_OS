@@ -41,6 +41,10 @@ async function dispatchAction(decision, ctx) {
         detail: result,
         outcome: result && result.ok ? 'ok' : 'fail',
         tier: tier, tokensSpent: spentTokens,
+        // V2 (Phase 4): carry skillRef so V9 reflection can correlate outcomes
+        // back to the procedural skill that produced them.
+        skillRef: decision.skillRef || null,
+        rationale: decision.rationale || null,
       });
     } catch (_) { /* persistence is best-effort */ }
   }
@@ -50,8 +54,25 @@ async function dispatchAction(decision, ctx) {
     goals.debitBudget(goalId, { tokens: spentTokens, actions: 1 });
   }
 
+  // 4.5 V2 (Phase 4): close the execution→learning loop.
+  //   (a) skills.recordUse — feeds the EMA successRate the planner consults
+  //       in goals.plan() to decide whether to replay this procedure. Only
+  //       fires when the decision came from a procedural skill (skillRef set).
+  //   (b) goals.markPlanStepDone — advances a persisted multi-step plan so
+  //       the next tick dispatches the next step instead of step[0] forever.
+  // Both are best-effort: failures here MUST NOT mask the action's own result.
+  const actionOk = !!(result && result.ok);
+  if (decision.skillRef && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
+    try { memory.skills.recordUse(decision.skillRef, actionOk); }
+    catch (_) { /* skill bookkeeping is best-effort */ }
+  }
+  if (goalId && goals && typeof goals.markPlanStepDone === 'function') {
+    try { goals.markPlanStepDone(goalId, actionOk); }
+    catch (_) { /* plan-queue advance is best-effort */ }
+  }
+
   // 5. Emit completion event
-  bus.emit('action.completed', { tool: decision.tool, ok: result && result.ok, goalId: goalId });
+  bus.emit('action.completed', { tool: decision.tool, ok: actionOk, goalId: goalId });
 
   // B4: Audit-log the action outcome for traceability.
   if (memory && memory.audit && typeof memory.audit.write === 'function') {
