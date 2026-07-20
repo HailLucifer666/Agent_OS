@@ -57,6 +57,27 @@ const SCHEMA = {
   SCREEN_AWARENESS_POLL_MS:  { type: 'number', default: 30000, min: 10000, max: 600000 },
   SCREEN_AWARENESS_SALIENCE: { type: 'number', default: 0.3, min: 0, max: 1 },
 
+  // V8 (Phase 4) — calendar upcoming-event perception sensor
+  // (src/core/sensors/calendar-upcoming-sensor.js). ON by default — no
+  // privacy surface (reads only local reminders.json, no mic/camera/screen).
+  // Distinct from reminder-sensor which emits reminder.due for OVERDUE events
+  // (bypasses OODA, fires straight to proactive speech). This sensor emits
+  // perception.calendar for UPCOMING events (within LEAD_MS) so the cortex
+  // loop can act on them (mull a goal, surface to operator).
+  CALENDAR_UPCOMING_ENABLED:   { type: 'bool',   default: true },
+  CALENDAR_UPCOMING_POLL_MS:   { type: 'number', default: 60000, min: 10000, max: 600000 },
+  CALENDAR_UPCOMING_LEAD_MS:   { type: 'number', default: 900000, min: 60000, max: 86400000 },
+  CALENDAR_UPCOMING_SALIENCE:  { type: 'number', default: 0.6, min: 0, max: 1 },
+
+  // V8 (Phase 4) — opt-in active-window perception sensor
+  // (src/core/sensors/window-sensor.js). OFF by default — same privacy surface
+  // as screen-sensor (reads foreground window title at intervals). Emits
+  // perception.window with structured {app, title} metadata (NOT vision
+  // captions like screen-sensor). Mirrors SCREEN_AWARENESS_* triplet.
+  WINDOW_AWARENESS_ENABLED:  { type: 'bool',   default: false },
+  WINDOW_AWARENESS_POLL_MS:  { type: 'number', default: 30000, min: 5000, max: 600000 },
+  WINDOW_AWARENESS_SALIENCE: { type: 'number', default: 0.3, min: 0, max: 1 },
+
   // Daily planning + accountability (hands-free morning brief / stall
   // check-ins / evening review — src/core/planner/daily.js). On by default
   // (unlike wake-word/screen-awareness, this touches no camera/mic/screen

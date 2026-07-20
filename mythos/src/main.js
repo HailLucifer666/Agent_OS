@@ -21,6 +21,7 @@ const { createEngagementManager } = require('./core/engagements');
 const { createConversationGateway } = require('./core/assistant/gateway');
 const { createTimerSensor } = require('./core/sensors/timer');
 const { createReminderSensor } = require('./core/sensors/reminder-sensor');
+const { createCalendarUpcomingSensor } = require('./core/sensors/calendar-upcoming-sensor');
 const { createGmailSensor } = require('./core/sensors/gmail-sensor');
 const { createScreenSensor } = require('./core/sensors/screen-sensor');
 const { createDailyPlanner } = require('./core/planner/daily');
@@ -600,6 +601,19 @@ async function main() {
         var reminderSensor = createReminderSensor({ calendar: calendarWiring.calendar, bus: bus });
         reminderSensor.start();
         logger.info('sensors.reminder.started', {});
+
+        // V8 (Phase 4): calendar upcoming-event perception sensor — emits
+        // perception.calendar for events coming up within LEAD_MS so the
+        // cortex OODA loop can act on them (distinct from reminder.due above
+        // which fires for OVERDUE events straight to proactive speech).
+        // ON by default (no privacy surface — reads only local reminders.json).
+        if (config.CALENDAR_UPCOMING_ENABLED) {
+          var calendarUpcomingSensor = createCalendarUpcomingSensor({
+            calendar: calendarWiring.calendar, bus: bus, config: config, logger: logger
+          });
+          calendarUpcomingSensor.start();
+          logger.info('sensors.calendar-upcoming.started', { leadMs: config.CALENDAR_UPCOMING_LEAD_MS });
+        }
       }
 
       // Gmail unread triage sensor — polls gmail_unread via the hub every
