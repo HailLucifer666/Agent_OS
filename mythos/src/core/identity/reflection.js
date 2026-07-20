@@ -13,14 +13,20 @@
 // pass; the next one tries again. One LLM call per ~15 turns on the free
 // simple lane keeps this affordable.
 
-function createReflection({ brain, memory, identity, config, logger }) {
+function createReflection({ brain, memory, identity, config, logger, bus }) {
   if (!brain || !memory || !identity) {
     throw new Error('createReflection requires brain, memory, identity');
   }
   var log = logger || { info: function() {}, warn: function() {} };
   var everyTurns = Number((config && config.REFLECTION_EVERY_TURNS) || process.env.REFLECTION_EVERY_TURNS) || 15;
+  // V9 (Phase 4): cadence for the action-outcome reflection pass, separate
+  // from the conversation-preferences pass above. Defaults to 2x the
+  // conversation cadence so the action analysis runs less often (it scans
+  // a larger episodic window and writes to the diagnostician + Skills).
+  var actionEveryTurns = Number((config && config.REFLECTION_ACTION_EVERY_TURNS) || process.env.REFLECTION_ACTION_EVERY_TURNS) || (everyTurns * 2);
   var turns = 0;
   var running = false;
+  var runningActions = false;   // V9: separate reentrancy guard
 
   function existingPrefs() {
     try {
@@ -110,18 +116,131 @@ function createReflection({ brain, memory, identity, config, logger }) {
     }
   }
 
+  // V9 (Phase 4): action-outcome reflection. Reads the last N action episodics,
+  // asks the brain to identify recurring failure patterns + reusable success
+  // patterns. Routes:
+  //   - recurring failures → bus.emit('health.anomaly', {kind:'recurring-failure', ...})
+  //     so the diagnostician can pick them up (it already subscribes to
+  //     health.anomaly events — see immune/diagnostician.js:58)
+  //   - success patterns → memory.skills.write() for future procedural recall
+  //
+  // Mirrors runNow's structure: reentrancy-guarded, one bounded brain call on
+  // the 'simple' lane, best-effort, never blocks the caller. Idle-skip: only
+  // runs when there are >= REFLECTION_ACTION_MIN (default 5) recent actions to
+  // analyze (otherwise there's nothing to learn from).
+  async function reflectOnActions(reason) {
+    if (runningActions) return { skipped: 'already-running' };
+    runningActions = true;
+    try {
+      if (!memory.episodic) return { skipped: 'no-episodic' };
+      var actions = [];
+      try {
+        actions = memory.episodic.recall('', { kind: 'action', limit: 30, windowDays: 2 }) || [];
+      } catch (_) { return { skipped: 'episodic-unavailable' }; }
+
+      var minActions = Number((config && config.REFLECTION_ACTION_MIN) || 5);
+      if (actions.length < minActions) return { skipped: 'too-few-actions', count: actions.length };
+
+      // Compact the action trace. Tag each line with outcome so the brain can
+      // spot patterns. SkillRef presence tells it which procedure produced the
+      // outcome (if any).
+      var lines = actions.map(function (hit) {
+        var r = hit && hit.record ? hit.record : hit;
+        var ok = r.outcome === 'ok' ? 'OK  ' : 'FAIL';
+        var skill = r.skillRef ? (' <' + r.skillRef + '>') : '';
+        return '[' + ok + ']' + skill + ' ' + (r.summary || r.tool || 'unknown');
+      });
+
+      var result = await brain.think({
+        lane: 'simple',
+        messages: [{ role: 'user', content:
+          'You are reviewing a trace of your recent autonomous actions to learn from them.\n' +
+          'Each line shows [OK|FAIL] <optional skillRef> followed by the action summary.\n\n' +
+          lines.join('\n') + '\n\n' +
+          'Identify:\n' +
+          '1. RECURRING FAILURES — patterns where the same kind of action keeps failing. ' +
+          'For each, name the failure mode in one line (e.g. "shell_run with cmd:build keeps timing out").\n' +
+          '2. SUCCESS PATTERNS — sequences of 2-4 actions that consistently succeed together and could ' +
+          'be reused as a procedure. For each, give a name, a when-condition, and the ordered steps.\n\n' +
+          'Respond as JSON: {"failures": ["one-line failure mode 1", ...], ' +
+          '"successes": [{"name":"kebab-name","when":"trigger condition",' +
+          '"steps":[{"tool":"tool-name","args":{<required>}}, ...]}]}\n' +
+          'Empty arrays if nothing fits. Do not invent tools that do not appear in the trace.'
+        }],
+        schemaHint: '{ failures: string[], successes: Array<{name:string,when:string,steps:Array<{tool:string,args:object}>}> }',
+        source: 'reflection:actions:' + (reason || 'cadence')
+      });
+      if (!result || result.offline || result.aborted || !result.parsed) {
+        return { skipped: 'brain-unavailable' };
+      }
+
+      var failuresEmitted = 0;
+      var failures = Array.isArray(result.parsed.failures) ? result.parsed.failures.slice(0, 5) : [];
+      failures.forEach(function (f) {
+        var line = String(f || '').trim();
+        if (line.length < 5 || line.length > 200) return;
+        // Route to the diagnostician via the existing health.anomaly channel.
+        // The diagnostician already subscribes (immune/diagnostician.js:58) and
+        // will treat 'recurring-failure' as a new anomaly kind to investigate.
+        if (bus && typeof bus.emit === 'function') {
+          bus.emit('health.anomaly', { kind: 'recurring-failure', detail: line });
+          failuresEmitted++;
+        }
+      });
+
+      var skillsWritten = 0;
+      var successes = Array.isArray(result.parsed.successes) ? result.parsed.successes.slice(0, 3) : [];
+      if (memory.skills && typeof memory.skills.write === 'function') {
+        for (var i = 0; i < successes.length; i++) {
+          var s = successes[i];
+          if (!s || !s.name || !Array.isArray(s.steps) || s.steps.length === 0) continue;
+          try {
+            var res = memory.skills.write(s.name, {
+              when: [s.when || ''],
+              steps: s.steps,
+              successCriteria: [],
+              uses: 0,
+              successRate: 0
+            });
+            if (res && res.ref) skillsWritten++;
+          } catch (_) { /* skill write is best-effort */ }
+        }
+      }
+
+      if (failuresEmitted || skillsWritten) {
+        log.info('reflection.actions', { failures: failuresEmitted, skills: skillsWritten });
+      }
+      return { failuresEmitted: failuresEmitted, skillsWritten: skillsWritten };
+    } finally {
+      runningActions = false;
+    }
+  }
+
   // Called once per completed conversation turn (server/index.js). Fires a
   // background reflection pass every `everyTurns` turns — never blocks the turn.
   function noteTurn() {
     turns += 1;
-    if (turns < everyTurns) return;
-    turns = 0;
-    runNow('cadence').catch(function(err) {
-      log.warn('reflection.failed', { error: err.message });
-    });
+    if (turns >= everyTurns) {
+      var carry = turns - everyTurns;
+      turns = carry;
+      runNow('cadence').catch(function(err) {
+        log.warn('reflection.failed', { error: err.message });
+      });
+    }
+    // V9 (Phase 4): action-outcome reflection on its own (slower) cadence.
+    // Tracks turns independently so the two passes don't have to co-fire.
+    if (turns > 0 && turns % actionEveryTurns === 0) {
+      reflectOnActions('cadence').catch(function (err) {
+        log.warn('reflection.actions.failed', { error: err && err.message });
+      });
+    }
   }
 
-  return { noteTurn: noteTurn, runNow: runNow };
+  return {
+    noteTurn: noteTurn,
+    runNow: runNow,
+    reflectOnActions: reflectOnActions   // V9: also exposed for direct invocation
+  };
 }
 
 module.exports = { createReflection };

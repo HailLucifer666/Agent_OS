@@ -469,7 +469,7 @@ async function main() {
       // P4 Jarvis upgrade: the learning loop — extracts operator preferences +
       // speaking style from conversation episodics every ~15 turns and at
       // graceful shutdown. Best-effort: constructor deps all exist by now.
-      reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger });
+      reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger, bus: bus });
 
       var serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,

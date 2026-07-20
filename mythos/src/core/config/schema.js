@@ -94,6 +94,12 @@ const SCHEMA = {
   // V10 (Phase 4): consolidate-* merge threshold. The merge pass only fires
   // when this many consolidated-* topics have accumulated. Idle-skip lever.
   CONSOLIDATE_MERGE_MIN:    { type: 'number', default: 3, min: 2, max: 50 },
+  // V9 (Phase 4): action-outcome reflection cadence + minimum sample size.
+  // REFLECTION_ACTION_EVERY_TURNS fires the action analysis pass (separate
+  // from the conversation-preferences pass). REFLECTION_ACTION_MIN is the
+  // floor below which the pass skips (not enough data to learn from).
+  REFLECTION_ACTION_EVERY_TURNS: { type: 'number', default: 30, min: 1, max: 500 },
+  REFLECTION_ACTION_MIN:     { type: 'number', default: 5, min: 1, max: 100 },
 
   // Leash (Phase 5)
   LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },
