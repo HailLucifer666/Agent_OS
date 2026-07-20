@@ -91,6 +91,9 @@ const SCHEMA = {
   // when nothing salient arrives). ORIENT_RECALL_LIMIT caps the cache size.
   ORIENT_RECALL_MIN_SALIENCE: { type: 'number', default: 0.5, min: 0, max: 1 },
   ORIENT_RECALL_LIMIT:      { type: 'number', default: 5, min: 1, max: 20 },
+  // V10 (Phase 4): consolidate-* merge threshold. The merge pass only fires
+  // when this many consolidated-* topics have accumulated. Idle-skip lever.
+  CONSOLIDATE_MERGE_MIN:    { type: 'number', default: 3, min: 2, max: 50 },
 
   // Leash (Phase 5)
   LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },

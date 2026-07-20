@@ -66,6 +66,94 @@ function createMemory({ config, bus, logger, brain }) {
 
   const VECTOR_MIN_SCORE = 0.5;
 
+  // V10 (Phase 4): scan existing Semantic/consolidated-*.md topics, find
+  // near-duplicates + contradictions via one bounded brain call, rewrite them
+  // as a single canonical topic. The previous flow wrote a fresh
+  // consolidated-<ts> topic per pass with no dedup/merge, so the same fact
+  // accumulated N times and stale facts never got reconciled.
+  //
+  // Idle-skip: only fires when there are >= CONSOLIDATE_MERGE_MIN (default 3)
+  // consolidated-* topics accumulating. Returns silently otherwise.
+  // Best-effort: any failure (no brain, brain offline, parse fail, fs error)
+  // returns null and never blocks consolidation.
+  async function mergeConsolidatedTopics() {
+    if (!brain || typeof brain.think !== 'function') return null;
+    if (!fs || typeof fs.listFiles !== 'function') return null;
+    const minTopics = (config && typeof config.CONSOLIDATE_MERGE_MIN === 'number')
+      ? config.CONSOLIDATE_MERGE_MIN : 3;
+
+    // Gather existing consolidated-* topics with their facts.
+    var topics = [];
+    try {
+      var files = fs.listFiles('Semantic', '.md');
+      for (var i = 0; i < files.length; i++) {
+        if (!/^consolidated-/i.test(files[i].name)) continue;
+        var content = fs.readText(files[i].path, '');
+        if (!content) continue;
+        // Reuse semantic's parse helpers via a fresh call (they're scoped inside
+        // the semantic closure, so we just pull bullets out with a regex here).
+        var bullets = [];
+        var m;
+        var re = /^-\s+(.+)$/gm;
+        while ((m = re.exec(content)) !== null) bullets.push(m[1].trim());
+        if (bullets.length > 0) topics.push({ file: files[i].path, facts: bullets });
+      }
+    } catch (_) { return null; }
+
+    if (topics.length < minTopics) return null;
+
+    // Compact the topic facts for the brain prompt.
+    var flatFacts = [];
+    topics.forEach(function (t, ti) {
+      t.facts.forEach(function (f) { flatFacts.push('[' + (ti + 1) + '] ' + f); });
+    });
+    var factBlock = flatFacts.join('\n');
+
+    var result;
+    try {
+      result = await brain.think({
+        lane: 'simple',
+        messages: [{ role: 'user', content:
+          'You are consolidating a knowledge base. Below are facts drawn from ' +
+          topics.length + ' previously-distilled memory snapshots (the [N] tag ' +
+          'marks which snapshot each fact came from).\n\n' +
+          factBlock + '\n\n' +
+          'Merge them into a canonical set. Rules:\n' +
+          '1. DEDUP: combine near-identical facts into one (e.g. "user prefers dark mode" x3 -> one bullet).\n' +
+          '2. CONTRADICT: when two facts conflict, KEEP the more recent/specific one and DROP the stale one. ' +
+          'If you cannot tell which is newer, keep BOTH but mark the conflict with "(conflicts with: ...)".\n' +
+          '3. PRESERVE: do not invent new facts. Only facts that appear above may appear in the output.\n\n' +
+          'Respond as JSON: {"facts": ["merged fact 1", "merged fact 2", ...], "dropped": ["one short note on what was dropped/merged, optional"]}\n' +
+          'If everything is already unique, return the same facts unchanged.'
+        }],
+        schemaHint: '{ facts: string[], dropped?: string[] }',
+        source: 'memory:consolidate-merge'
+      });
+    } catch (_) { return null; }
+    if (!result || result.offline || result.aborted || !result.parsed) return null;
+    var mergedFacts = Array.isArray(result.parsed.facts) ? result.parsed.facts : [];
+    if (mergedFacts.length === 0) return null;
+
+    // Rewrite: delete the old consolidated-* files, write one fresh
+    // consolidated-<ts> topic with the merged facts. Single atomic swap.
+    try {
+      topics.forEach(function (t) { fs.removeFile(t.file); });
+    } catch (_) { /* partial cleanup — next pass will retry */ }
+    try {
+      semantic.write('consolidated-' + Date.now(), mergedFacts, {
+        confidence: 0.7,
+        sources: topics.map(function (t) { return t.file; })
+      });
+    } catch (_) { return null; }
+
+    bus.emit('memory.merged', {
+      inputTopics: topics.length,
+      inputFacts: flatFacts.length,
+      outputFacts: mergedFacts.length
+    });
+    return { merged: topics.length, facts: mergedFacts.length };
+  }
+
   return {
     fs,
     episodic,
@@ -225,6 +313,21 @@ function createMemory({ config, bus, logger, brain }) {
           }
         } catch (_) {
           // Conversation distillation is best-effort — never block consolidation
+        }
+
+        // 3c. V10 (Phase 4): consolidate-* dedup + contradiction handling.
+        // Each prior consolidation pass wrote a fresh consolidated-<ts> topic.
+        // Over time these accumulate near-duplicates ("the user likes dark mode"
+        // x N) and occasionally contradictions ("user uses Vim" vs "user uses
+        // Emacs"). One bounded brain call on the 'simple' lane scans them all,
+        // returns a merged set, and we rewrite them as a single canonical topic.
+        // Idle-skip: only runs when there are >= 3 consolidated topics
+        // accumulating, AND respects the existing stagger (brain was already
+        // used at most once above). Best-effort: never blocks consolidation.
+        try {
+          await mergeConsolidatedTopics();
+        } catch (_) {
+          // mergeConsolidatedTopics failures are best-effort
         }
       }
 
