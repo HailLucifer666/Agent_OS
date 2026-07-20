@@ -54,6 +54,7 @@ const ALLOWED_EVENTS = new Set([
   // memory.*
   'memory.decay',
   'memory.checkpoint.saved',
+  'memory.merged',      // V10 (Phase 4): consolidate-* dedup/contradiction merge pass
 
   // lifecycle.*
   'lifecycle.started',     // D-37 fix: was 'lifecycle.cortex-started'
@@ -71,11 +72,13 @@ const ALLOWED_EVENTS = new Set([
   'goal.updated',
   'goal.removed',
   'goal.budget-debited',
+  'goal.completed',     // V3 (Phase 4): autonomous completion + distillation trigger
 
   // mission.* (P11 — mission orchestrator)
   'mission.update',
 
   // conversation.* + cortex.thought (conversational brain — proactive speech + idle reasoning)
+  'cortex.recall',      // V1 (Phase 4): orient→recallHybrid per-tick cache hydration
   'conversation.announced',
   'conversation.intent',   // Phase 5a — conversation-gateway.js's non-engagement route() fallback
   'cortex.thought',

@@ -322,6 +322,20 @@ function buildTools(ctx) {
     }
   }
 
+  // V5 (Phase 4): propose_goal — the cortex SUGGESTS a goal without activating
+  // it. Creates a status:'proposed' record that the operator accepts/rejects
+  // via the dashboard. NOT in AUTONOMOUS_EXCLUDED (the whole point: the cortex
+  // can propose but not mint active goals). The arbiter ignores proposals.
+  function propose_goal({ text, category, reason, drive, priority }) {
+    try {
+      if (!text || !text.trim()) return fail('Goal text is required.');
+      const proposals = goalsEffector.proposeGoal(text, category, { reason: reason, drive: drive, priority: priority });
+      return ok({ proposals: proposals });
+    } catch (err) {
+      return fail(err.message);
+    }
+  }
+
   function list_goals() {
     try {
       return ok({ goals: goalsEffector.listGoals(), stats: goalsEffector.stats() });
@@ -723,6 +737,7 @@ function buildTools(ctx) {
     { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); } },
     { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
+    { name: 'propose_goal', description: 'Propose a new goal for operator acceptance (does NOT auto-activate — creates a status:proposed goal the operator accepts via the dashboard).', params: { text: 'string', category: 'string (optional)', reason: 'string (optional — why this goal is worth pursuing)', drive: 'string (optional — curiosity or user-service, default curiosity)', priority: 'number (optional 0..1)' }, danger: false, fn: propose_goal },
     { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals },
     { name: 'toggle_goal', description: 'Toggle a goal done/undone by matching its text.', params: { query: 'string' }, danger: false, fn: toggle_goal },
     { name: 'delete_goal', description: 'Permanently delete a goal by matching its text.', params: { query: 'string' }, danger: true, fn: delete_goal },

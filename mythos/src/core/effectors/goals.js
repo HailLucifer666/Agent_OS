@@ -170,9 +170,76 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
     return { total: all.length, done: all.filter(function(g) { return g.done; }).length, active: all.filter(function(g) { return !g.done; }).length };
   }
 
+  // ---- Phase 4 / Area D (V5) — proposed goals ----
+  //
+  // A proposed goal is status:'proposed' (the GoalSystem default), NOT 'active'.
+  // The cortex arbiter only selects from status:'active' (goals/index.js getActive),
+  // so proposals are inert — the cortex can SUGGEST goals without violating the
+  // AUTONOMOUS_EXCLUDED rule that forbids create_goal. The operator accepts a
+  // proposal via the dashboard (acceptProposal flips status proposed → active).
+  //
+  // listGoals() above reads from Goals.md, so proposals don't show up there —
+  // listProposals() reads directly from the GoalSystem's status:'proposed' filter.
+  // writeBack() is NOT called for proposals: they don't belong in Goals.md until
+  // accepted (keeps the human-facing checkbox list clean).
+
+  function proposeGoal(text, category, opts) {
+    opts = opts || {};
+    var goal = goalSystem.create({
+      drive: opts.drive || 'curiosity',
+      title: text,
+      status: 'proposed',
+      priority: typeof opts.priority === 'number' ? opts.priority : 0.5,
+      reason: opts.reason || 'goals-effector:proposeGoal'
+    });
+    // Stash the category on the goal record so the UI can render it. The
+    // GoalSystem doesn't have a category field natively — use reason prefix.
+    if (category) {
+      goalSystem.update(goal.id, { reason: '[' + category + '] ' + (opts.reason || 'proposed') });
+    }
+    return listProposals();
+  }
+
+  function listProposals() {
+    return goalSystem.list({ status: 'proposed' }).map(function (g) {
+      // Strip the optional [category] prefix from reason for the UI.
+      var category = '';
+      var reason = g.reason || '';
+      var m = reason.match(/^\[([^\]]+)\]\s*(.*)$/);
+      if (m) { category = m[1]; reason = m[2]; }
+      return {
+        id: g.id, text: g.title, category: category,
+        reason: reason, priority: g.priority,
+        drive: g.drive, createdAt: g.createdAt
+      };
+    });
+  }
+
+  function acceptProposal(id) {
+    var goal = goalSystem.get(id);
+    if (!goal || goal.status !== 'proposed') return listProposals();
+    // Flip to active AND drive:user-service — the operator sanctioning a
+    // proposal makes it a user goal, which writeBack() then appends to Goals.md.
+    // (writeBack only appends drive:'user-service' goals, so without this flip
+    // an accepted curiosity-driven proposal would never reach the checkbox list.)
+    goalSystem.update(id, { status: 'active', drive: 'user-service', reason: 'operator-accepted' });
+    writeBack();   // NOW it joins Goals.md
+    return listProposals();
+  }
+
+  function rejectProposal(id) {
+    var goal = goalSystem.get(id);
+    if (!goal || goal.status !== 'proposed') return listProposals();
+    goalSystem.remove(id);   // outright delete — proposals are disposable
+    return listProposals();
+  }
+
   return {
     sync: sync, writeBack: writeBack, parseGoalsMd: parseGoalsMd,
-    listGoals: listGoals, addGoal: addGoal, toggleGoal: toggleGoal, deleteGoal: deleteGoal, stats: stats
+    listGoals: listGoals, addGoal: addGoal, toggleGoal: toggleGoal, deleteGoal: deleteGoal, stats: stats,
+    // V5 (Phase 4):
+    proposeGoal: proposeGoal, listProposals: listProposals,
+    acceptProposal: acceptProposal, rejectProposal: rejectProposal
   };
 }
 

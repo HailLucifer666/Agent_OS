@@ -8,7 +8,7 @@
 // panels, and omitted memory/health/audit — which caused 4 of 6 voice-driven
 // dashboard navigations to fail. Now hardcoded to the truth.
 
-const ALL_ROUTES = ['goals', 'kanban', 'pipeline', 'memory', 'health', 'audit', 'backend', 'conversation', 'engagements'];
+const ALL_ROUTES = ['goals', 'proposals', 'kanban', 'pipeline', 'memory', 'health', 'audit', 'backend', 'conversation', 'engagements'];
 
 // Spoken-phrasing synonyms -> canonical route id. Keys must be lowercase.
 // Trimmed to only map to panels that actually exist on the client.
@@ -20,6 +20,12 @@ const SYNONYMS = {
   'the pipeline': 'pipeline',
   'my goals': 'goals',
   'the goals': 'goals',
+  'proposals': 'proposals',
+  'the proposals': 'proposals',
+  'my proposals': 'proposals',
+  'goal proposals': 'proposals',
+  'suggestions': 'proposals',
+  'mythos suggestions': 'proposals',
   'my memory': 'memory',
   'my memories': 'memory',
   'the memory': 'memory',

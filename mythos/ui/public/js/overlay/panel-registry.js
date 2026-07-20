@@ -4,6 +4,7 @@
 
 export const PANELS = {
   goals:    { title: 'GOALS',    loader: () => import('/js/views/goals.js'),    mutating: true },
+  proposals: { title: 'PROPOSALS', loader: () => import('/js/views/proposals.js'), mutating: true },
   kanban:   { title: 'KANBAN',   loader: () => import('/js/views/kanban.js'),   mutating: true },
   pipeline: { title: 'PIPELINE', loader: () => import('/js/views/pipeline.js'), mutating: true },
   memory:   { title: 'MEMORY',   loader: () => import('/js/views/memory.js'),   mutating: false },

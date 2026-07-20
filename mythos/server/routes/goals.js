@@ -47,6 +47,24 @@ function mountGoalsRoutes(app, deps) {
     auditRest('rest.goals.delete', { id: req.params.id }, 'ok');
     res.json({ goals: list, stats: novaGoalsStats(goalsEffector) });
   });
+
+  // ---- V5 (Phase 4) — proposed-goal queue (one-tap accept/reject) ----
+  // The cortex (mull) creates status:'proposed' goals via the propose_goal
+  // effector; these routes let the operator accept (→ active + Goals.md) or
+  // reject (→ deleted) from the dashboard. Mirrors the W4 audit pattern.
+  app.get('/api/goals/proposals', (req, res) => {
+    res.json({ proposals: goalsEffector.listProposals() });
+  });
+  app.post('/api/goals/:id/accept', (req, res) => {
+    const proposals = goalsEffector.acceptProposal(req.params.id);
+    auditRest('rest.goals.accept', { id: req.params.id }, 'ok');
+    res.json({ proposals: proposals, stats: novaGoalsStats(goalsEffector) });
+  });
+  app.post('/api/goals/:id/reject', (req, res) => {
+    const proposals = goalsEffector.rejectProposal(req.params.id);
+    auditRest('rest.goals.reject', { id: req.params.id }, 'ok');
+    res.json({ proposals: proposals });
+  });
 }
 
 module.exports = { mountGoalsRoutes, novaGoalsStats };

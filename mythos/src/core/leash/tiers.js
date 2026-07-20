@@ -37,6 +37,7 @@ const TIER_TABLE = {
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
+  'propose_goal':          1,  // V5 (Phase 4): creates status:'proposed' only — inert until operator accepts
   'toggle_goal':           1,
   'capture_idea':          1,
   'kanban_add_card':       1,
