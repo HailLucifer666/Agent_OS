@@ -199,12 +199,25 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
 
   // --- Planner ---
 
+  // Phase 4 / Area A (B-3): the planner used to be stateless — plan() returned
+  // ONE next action every tick and forgot the rest. With V2/V3 we now persist
+  // multi-step plans into goal.plan so:
+  //   - procedural-skill steps execute in order (not just step[0] forever)
+  //   - brain-returned plans survive across ticks (stateless → stateful)
+  // Each step: { tool, args, status: 'pending'|'done'|'failed', rationale,
+  //              skillRef?, _spentTokens? }
+  // markPlanStepDone() advances the queue and is called from dispatchAction
+  // after each step's outcome is recorded.
+
   async function plan(goal, ctx) {
     // 1. Check current plan for pending step
     if (goal.plan && goal.plan.length > 0) {
       for (var i = 0; i < goal.plan.length; i++) {
         if (goal.plan[i].status === 'pending') {
-          return { tool: goal.plan[i].tool, args: goal.plan[i].args, rationale: 'plan-step' };
+          var step = goal.plan[i];
+          var decision = { tool: step.tool, args: step.args, rationale: step.rationale || 'plan-step' };
+          if (step.skillRef) decision.skillRef = step.skillRef;
+          return decision;
         }
       }
     }
@@ -230,11 +243,25 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           // (uses===0) pass through — they get a chance to prove themselves.
           if (skillRec.uses > 0 && (skillRec.successRate || 0) < minSuccess) continue;
           var sref = skillRec.id || skills[si].ref;
-          var step0 = skillRec.steps[0];
+          // B-3 + V3 fix: persist the WHOLE skill procedure into goal.plan so
+          // subsequent ticks step through it in order, not just step[0] forever.
+          // Each step is marked 'pending' and advanced by markPlanStepDone().
+          goal.plan = skillRec.steps.map(function (s) {
+            return {
+              tool: s.tool, args: s.args,
+              rationale: 'procedural-skill',
+              status: 'pending',
+              skillRef: sref
+            };
+          });
+          saveGoal(goal.id);
+          var firstStep = goal.plan[0];
+          firstStep.status = 'executing';
+          saveGoal(goal.id);
           return {
-            tool: step0.tool, args: step0.args,
+            tool: firstStep.tool, args: firstStep.args,
             rationale: 'procedural-skill', offline: true,
-            skillRef: sref            // V2: carried into dispatchAction for recordUse
+            skillRef: sref
           };
         }
       } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'skills-recall-failed', error: err.message }); }
@@ -287,10 +314,15 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           lane: lane,
           messages: [{ role: 'user', content:
             toolList + skillsHint + '\n\nPlan next action for goal: ' + goal.title +
-            '\n\nGROUNDING: If this goal involves current events, real-time data, news, dates, or anything that could be stale, use web_search or web_fetch FIRST to get real data before planning further actions.' +
-            '\nRespond as JSON: {"tool": "<exact tool name from the list>", "args": {<required params>}}'
+            '\n\nGROUNDING: If this goal involves current events, real-time data, news, dates, or anything that could be stale, use web_search or web_fetch FIRST to get real data before planning actions.' +
+            // V3 (Phase 4): allow the brain to OPTIONALLY return a multi-step
+            // plan. If it returns steps, we persist them to goal.plan and they
+            // execute in order across subsequent ticks (markPlanStepDone). If
+            // it returns tool+args only (the original shape), that still works.
+            '\nRespond as JSON: {"tool": "<exact tool name>", "args": {<required params>}, "plan"?: [{"tool": "...", "args": {...}}, ...]}' +
+            '\nUse "plan" only when you can confidently sequence 2-6 steps now. Otherwise return just tool+args.'
           }],
-          schemaHint: '{ tool: string, args: object }',
+          schemaHint: '{ tool: string, args: object, plan?: Array<{tool:string,args:object}> }',
           source: 'goal:' + goal.id,
           budget: { tokens: goal.budget.tokens - goal.spent.tokens, actions: goal.budget.actions - goal.spent.actions }
         });
@@ -310,12 +342,61 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
               return null;
             }
           }
+          // V3 (Phase 4): if the brain returned a multi-step "plan", validate
+          // each step's tool name and persist to goal.plan. Only the first step
+          // is dispatched this tick; subsequent ticks pick up the rest via the
+          // plan-step branch at the top of plan(). Single-step returns (no
+          // "plan" field) work exactly as before.
+          if (Array.isArray(result.parsed.plan) && result.parsed.plan.length > 1) {
+            var validSteps = [];
+            var brainPlanValid = true;
+            for (var pi = 0; pi < result.parsed.plan.length; pi++) {
+              var ps = result.parsed.plan[pi];
+              if (!ps || !ps.tool || AUTONOMOUS_EXCLUDED.indexOf(ps.tool) !== -1) {
+                brainPlanValid = false; break;
+              }
+              if (regNames && regNames.length > 0 && regNames.indexOf(ps.tool) === -1) {
+                brainPlanValid = false; break;
+              }
+              validSteps.push({
+                tool: ps.tool, args: ps.args || {},
+                rationale: 'brain-planned', status: 'pending'
+              });
+            }
+            if (brainPlanValid && validSteps.length > 1) {
+              goal.plan = validSteps;
+              saveGoal(goal.id);
+            }
+            // Even on plan-validation failure we still dispatch the validated
+            // top-level tool — just don't persist the queue.
+          }
           return { tool: result.parsed.tool, args: result.parsed.args || {}, rationale: 'brain-planned', done: false, _spentTokens: result.spentTokens || 0 };
         }
       } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'planner-brain-failed', error: err.message }); }
     }
 
     return null;
+  }
+
+  // Phase 4 / Area A (B-3): advance the plan queue after a step finishes.
+  // Called by dispatchAction once the action outcome is recorded. Marks the
+  // current 'executing' step done|failed and clears the queue if every step
+  // has resolved (so plan() will re-plan fresh next tick).
+  function markPlanStepDone(goalId, success) {
+    var goal = goals.get(goalId);
+    if (!goal || !goal.plan || goal.plan.length === 0) return;
+    var idx = -1;
+    for (var i = 0; i < goal.plan.length; i++) {
+      if (goal.plan[i].status === 'executing' || goal.plan[i].status === 'pending') {
+        idx = i; break;
+      }
+    }
+    if (idx === -1) return;
+    goal.plan[idx].status = success ? 'done' : 'failed';
+    // Clear the queue when all steps have resolved so plan() re-plans fresh.
+    var allDone = goal.plan.every(function (s) { return s.status === 'done' || s.status === 'failed'; });
+    if (allDone) goal.plan = [];
+    saveGoal(goal.id);
   }
 
   // --- Budget ---
@@ -422,6 +503,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     create, get, update, remove, list,
     getActive, hasActive, getActiveGoals,
     arbitrate, plan, debitBudget, grantTier,
+    markPlanStepDone,
     init, stats,
     _internal: { DRIVE_WEIGHTS, goalRelevance, goals: function() { return goals; } }
   };
