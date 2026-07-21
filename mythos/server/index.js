@@ -102,14 +102,16 @@ function createServer(deps) {
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
 
-  // ALLOWED_ORIGINS mirrors NOVA exactly: comma-sep env passthrough, NOT schema-ized —
-  // matches NOVA's own precedent of leaving this outside the coerced-type config.
-  // A5 FIX: validate env-sourced origins to prevent injection of malicious origins.
+  // Phase 5 (P3): ALLOWED_ORIGINS CORS + WS allowlist. Schema-ized at
+  // config.ALLOWED_ORIGINS (string, default ''). Comma-separated URLs that
+  // pass isValidOrigin. Loopback + same-origin always implicitly allowed.
+  // A5 FIX preserved: validate env-sourced origins to prevent injection of
+  // malicious origins.
   function isValidOrigin(o) { return /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?$/.test(o); }
   const ALLOWED_ORIGINS = new Set([
     `http://localhost:${PORT}`,
     `http://127.0.0.1:${PORT}`,
-    ...(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).filter(isValidOrigin),
+    ...(config.ALLOWED_ORIGINS || process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).filter(isValidOrigin),
   ]);
 
   // A4 FIX: sanitize error messages before sending to WS clients.

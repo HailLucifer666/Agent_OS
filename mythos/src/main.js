@@ -515,16 +515,28 @@ async function main() {
         });
       }
 
-      // Start PC child (PowerShell automation daemon) for desktop control tools.
-      pcChild.startPcChild();
-      logger.info('pc-child.starting', {});
+      // Phase 5 (P6): platform-gate the Windows-only adapters. pc-child spawns
+      // powershell.exe and cua-driver is a Windows binary — on Linux/macOS these
+      // emit noisy ENOENT spawn errors (the adapters catch them internally and
+      // degrade to OFFLINE, but the error-spam is ugly and confusing). Skip
+      // them outright on non-Windows. browser-agent above is cross-platform
+      // (playwright-core) so it stays ungated.
+      var isWindows = process.platform === 'win32';
+      if (isWindows) {
+        // Start PC child (PowerShell automation daemon) for desktop control tools.
+        pcChild.startPcChild();
+        logger.info('pc-child.starting', {});
 
-      // BUG-026 (4th attempt) part B — optional cua-driver adapter for the Spotify click path.
-      // Degraded, not fatal: if the binary isn't installed, spawn ENOENT is caught
-      // inside the adapter itself and getStatus() just stays OFFLINE forever, so
-      // spotify_play() falls back to the existing UIA/keystroke path unchanged.
-      cuaDriver.startCuaDriver();
-      logger.info('cua-driver.starting', {});
+        // BUG-026 (4th attempt) part B — optional cua-driver adapter for the Spotify click path.
+        // Degraded, not fatal: if the binary isn't installed, spawn ENOENT is caught
+        // inside the adapter itself and getStatus() just stays OFFLINE forever, so
+        // spotify_play() falls back to the existing UIA/keystroke path unchanged.
+        cuaDriver.startCuaDriver();
+        logger.info('cua-driver.starting', {});
+      } else {
+        logger.info('pc-child.skipped', { reason: 'non-windows platform', platform: process.platform });
+        logger.info('cua-driver.skipped', { reason: 'non-windows platform', platform: process.platform });
+      }
     }},
 
     { name: 'capabilities-manifest', fail: 'degraded', fn: function() {
