@@ -1170,3 +1170,47 @@ Fix shipped in commit `6505f93` (B-1 + B-2 + skills.recall signature) + `03c4eb7
 - **The boot + eval baseline fails** remain (boot is the Windows-SIGINT test flake, eval/memory-impact are data-dependent tests that need a populated vault). Unchanged from Phase 3.
 - **The pre-existing flake at `test/engagements/events.test.js:43`** still intermittently fires under suite load (~1/3 runs). Independent of Phase 4. Same `Date.now()` race documented in Phase 2.
 
+
+## Phase 5 — Production & Docs (task-957 §26 P1-P6)
+
+**Status:** ✅ CODED (2026-07-21) — 4 commits on `phase5/production-and-docs` (`e4fca4e` → `82ef724`), 1307/1312 tests pass (+17 new). The Start Agent OS.bat crash fix (2 commits, `28bdb1a`→`f402026`) is also on main. Live operator verification still pending per task-957 §26 (deploy to Render, set secrets, smoke-test the auth gate from a foreign origin).
+
+### What landed
+
+| Item | Spec ref | Commit | Status |
+|---|---|---|---|
+| `MYTHOS_AUTH_TOKEN` bearer-token gate on `/api` + WS | P1 | `e4fca4e` | ✅ Empty default = gate disabled (loopback/local-dev unchanged). Set for any cloud-exposed deploy. UI transparently injects the header via fetch override. |
+| `ALLOWED_ORIGINS` via config (D-46) | P3 | `3ce3802` | ✅ Server now reads `config.ALLOWED_ORIGINS` (with `process.env` fallback). CORS allow-headers extended for `Authorization` + `X-Auth-Token`. |
+| Platform-gate pc-child / cua-driver on non-Windows | P6 | `3ce3802` | ✅ Linux/macOS hosts skip the Windows-only adapters entirely with a logged `*.skipped` message. browser-agent stays ungated (playwright-core is cross-platform). |
+| `render.yaml` health path + persistent vault disk | P2, P4 | `82ef724` | ✅ `/health` (was wrong `/api/health`), 1 GB disk at `/data` with `MYTHOS_VAULT_ROOT=/data/vault`, cloud-mode env vars (`BROWSER_AUTOMATION=false`, etc.) |
+| Docs re-sync | P5 | (this commit) | ✅ ROADMAP commit log appended for Phases 2-5, BUGS Phase 5 section added. |
+
+### Honest caveats
+
+- **`Start Agent OS.bat` was the unrelated fire.** During Phase 5 testing the operator reported the launcher opening + closing immediately. Root cause: UTF-8 em dashes in REM lines + Microsoft's removal of `wmic` from Windows 11. Two compounding bugs, both pre-existing (Phase 3 BUG-029 introduced the wmic call). Fixed in `28bdb1a`/`f402026` and merged to main.
+- **Live OAuth / live sensor verification** remains operator-hardware work per task-957 §26. Phase 5 ships the code gates; the operator must deploy to Render (or any Docker host), set `MYTHOS_AUTH_TOKEN`, set `ALLOWED_ORIGINS` to the public URL, set the brain provider keys, and smoke-test from a foreign origin to confirm the 401 path.
+- **NOVA `app/`** stays in place by default — archiving is an explicit operator decision per task-957 §26.
+- **The boot + eval + events.test.js flakes** remain unchanged — boot is the Windows-SIGINT test race, eval/memory-impact needs a populated vault, events.test.js:43 is the `Date.now()` race documented since Phase 2.
+- **`render.yaml` uses `plan: starter`** (not free) — Render's free tier sleeps after 15 min of inactivity, wrong for an always-on entity. Bump to `standard` if brain load is heavy.
+
+### What I did NOT do
+
+- No `git push` (house rule §24.2 — operator reviews and pushes)
+- No live deploy / no live OAuth / no live sensor verification
+- No MYTHOS_AUTH_TOKEN value baked in (operator secret — set via Render dashboard)
+- No removal of the single-pane `.bat` fallback (kept as a safety net)
+- No autonomous goal-completion trigger (Phase 4 left this as a Phase 4.5 design call)
+
+### Verification
+
+```bash
+# Full Phase 5 test suite
+cd mythos
+node --test test/phase5-auth-token.test.js test/phase5-platform-gate.test.js
+
+# Manual auth smoke (token required)
+MYTHOS_AUTH_TOKEN=test-token node src/main.js &
+curl -i http://127.0.0.1:4478/api/status           # → 401 Unauthorized
+curl -i -H 'X-Auth-Token: test-token' http://127.0.0.1:4478/api/status   # → 200 OK
+curl -i http://127.0.0.1:4478/health               # → 200 {ok:true,...}
+```
