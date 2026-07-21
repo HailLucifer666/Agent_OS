@@ -153,6 +153,7 @@ Route text input through the voice loop's `beginTurn()/onExternalChunk()/deliver
 
 ### BUG-006: YouTube embed shows "Video unavailable"
 **Status:** 🔧 CODED — fallback UI enhanced + config escape hatch added
+**Live-verify harness:** `node scripts/verify-youtube.js` (server-side) + manual iframe check — see `docs/live-verification-runbook.md` §A3
 **Severity:** MEDIUM | **Reported:** 2026-07-15
 
 **What happened:**
@@ -336,6 +337,7 @@ Ran `node --test mythos/test/immune.test.js`: 50/50 tests pass (2 new + 48 exist
 
 ### BUG-014: Memory pollution — `remember` auto-saves transcription noise
 **Status:** 🔧 CODED — server-side guard added and tested
+**Live-verify harness:** `node scripts/verify-memory-guard.js` — see `docs/live-verification-runbook.md` §A2
 **Severity:** MEDIUM | **Reported:** 2026-07-15
 
 **Symptom:** User said "that you like." (a fragment, STT noise). MYTHOS ran `remember({text:"The user mentioned they like something, but did not specify what."})` and replied "Noted — I'll remember that." This garbage was persisted to semantic memory.
@@ -464,6 +466,7 @@ Run: `node --test mythos/test/bug-019-audit-history.test.js` — **1/1 pass**
 
 ### BUG-020: Voice pipeline picks up phantom background noise
 **Status:** 🔧 CODED — mic-tuning still needs a live pass by the user
+**Live-verify:** manual session + VAD constant tuning — see `docs/live-verification-runbook.md` §C4
 **Severity:** LOW | **Reported:** 07-12
 
 **Symptom:** User in an AC room (should be quiet) but MYTHOS picks up background noise and transcribes it. User says they'll "have to use third-party STT software from GitHub because this ain't working well."
@@ -650,6 +653,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 
 ### BUG-027: Voice pipeline transcribes MYTHOS's own TTS output as user speech (audio feedback loop)
 **Status:** 🔧 CODED — manual live-conversation check still needed (no automated harness exists for this browser module, see below)
+**Live-verify:** manual voice session with open-air speakers — see `docs/live-verification-runbook.md` §C2
 **Severity:** HIGH (causes hallucinated/unrequested tool calls) | **Reported:** 2026-07-16 (live session)
 
 **Symptom:** MYTHOS executed `web_search({"query":"best pizza recipe"})` and `open_web` when the user never asked for it — user confirmed: "I never said to web search best pizza recipe." Transcript shows the trigger text was MYTHOS's own prior spoken reply ("...including Neapolitan and NYT styles. Shall I show you the search results...") echoed back as if the user had said it. A `remember()` and a `log_incident()` call fired the same way — off MYTHOS's own speech, not the user's.
@@ -666,6 +670,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 
 ### BUG-028: `navigate` has no "news" route — MYTHOS opens the wrong panel or fails while claiming success
 **Status:** 🔧 CODED — prompt clarification added, manual conversation testing needed | **Severity:** MEDIUM | **Reported:** 2026-07-16 (live session)
+**Live-verify:** manual conversation — see `docs/live-verification-runbook.md` §B1
 
 **Symptom:** User: "what's the news for today?" → MYTHOS says "Opening the news feed now, Alex" but the actual call logged is `navigate({"route":"health"})` — wrong panel opens while the reply claims the right one did. User calls it out directly, MYTHOS then tries `navigate({"route":"news"})` and gets a clean rejection: "I attempted to open the news feed, but it is not a valid route."
 
@@ -1039,9 +1044,9 @@ Two separate build passes, both phase-gated (test-suite hold + commit + restart 
 
 **Jarvis-class upgrade** (commits `10ad982`, `72f36f5`, `da25c36`) — clean-room built in MYTHOS's own stack (Node/vanilla ESM), NOT copied from github.com/vierisid/jarvis (incompatible source-available license + unrelated stack). Independently gap-audited against the build spec after landing; all three genuinely implemented, no stubs, no fabricated logic:
 
-36. **BUG-039 — Wake-word ("hey jarvis")** 🔧 CODED, not yet live-verified. Real 3-stage ONNX pipeline (melspectrogram→embedding→classifier) in `wakeword.js`, tensor shapes (1280-sample frames, 32 mel bins, 76-frame/stride-8 embedding window, 96-dim output) byte-verified against openWakeWord's actual `utils.py` source. Models are CC BY-NC-SA — fetched by `scripts/setup-wakeword.js`, never committed (gitignored same-commit as the script); `WAKEWORD_ENABLED=false` by default. Needs a live mic session: say "hey jarvis," confirm activation with no click and no re-trigger during TTS playback.
-37. **BUG-040 — Ambient screen awareness** 🔧 CODED, not yet live-verified. Hash-gated vision sensor (`screen-sensor.js`) — identical screen skips the brain call entirely; privacy-audited paranoid-level, zero raw image/base64 ever touches disk. `ambient_awareness` voice tool (on/off/status) really toggles the running sensor. `SCREEN_AWARENESS_ENABLED=false` by default. Needs live verification: enable, change what's on screen, confirm a description-based answer and confirm the hash-skip holds in logs on an unchanged screen.
-38. **BUG-041 — Daily planning + accountability** 🔧 CODED, not yet live-verified. Morning brief / stalled-goal check-in / evening review (`planner/daily.js`) built entirely on the existing Goals API (`goals.arbitrate`/`goals.list`, no reimplemented ranking); day-file idempotence line-traced and test-verified — a mid-day restart cannot re-fire the morning brief (fired-flags persisted in `vault/Plans/YYYY-MM-DD.json`, read fresh every tick). New 7th persona dial `strictness` (drill-sergeant tone at high values); pre-existing `persona.json` files missing the key are safely defaulted via the existing `loadLevels()` merge. Needs live verification: a real morning-brief firing, a stalled-goal check-in, and a restart mid-day to confirm no double-brief in practice (not just in the test harness).
+36. **BUG-039 — Wake-word ("hey jarvis")** 🔧 CODED, not yet live-verified. Real 3-stage ONNX pipeline (melspectrogram→embedding→classifier) in `wakeword.js`, tensor shapes (1280-sample frames, 32 mel bins, 76-frame/stride-8 embedding window, 96-dim output) byte-verified against openWakeWord's actual `utils.py` source. Models are CC BY-NC-SA — fetched by `scripts/setup-wakeword.js`, never committed (gitignored same-commit as the script); `WAKEWORD_ENABLED=false` by default. Needs a live mic session: say "hey jarvis," confirm activation with no click and no re-trigger during TTS playback. **Live-verify:** manual voice session — see `docs/live-verification-runbook.md` §C1.
+37. **BUG-040 — Ambient screen awareness** 🔧 CODED, not yet live-verified. Hash-gated vision sensor (`screen-sensor.js`) — identical screen skips the brain call entirely; privacy-audited paranoid-level, zero raw image/base64 ever touches disk. `ambient_awareness` voice tool (on/off/status) really toggles the running sensor. `SCREEN_AWARENESS_ENABLED=false` by default. Needs live verification: enable, change what's on screen, confirm a description-based answer and confirm the hash-skip holds in logs on an unchanged screen. **Live-verify harness:** `SCREEN_AWARENESS_ENABLED=true node scripts/verify-screen-sensor.js` — see `docs/live-verification-runbook.md` §A4.
+38. **BUG-041 — Daily planning + accountability** ✅ CODED + LIVE-VERIFIED (2026-07-21 via `scripts/verify-planner.js` — morning brief fires on first 60s tick, day file written with morningFiredAt, restart idempotence holds). Morning brief / stalled-goal check-in / evening review (`planner/daily.js`) built entirely on the existing Goals API (`goals.arbitrate`/`goals.list`, no reimplemented ranking); day-file idempotence line-traced and test-verified — a mid-day restart cannot re-fire the morning brief (fired-flags persisted in `vault/Plans/YYYY-MM-DD.json`, read fresh every tick). New 7th persona dial `strictness` (drill-sergeant tone at high values); pre-existing `persona.json` files missing the key are safely defaulted via the existing `loadLevels()` merge. **Live-verify harness:** `node scripts/verify-planner.js` — see `docs/live-verification-runbook.md` §A1.
 
 | File | Change | Bug |
 |---|---|---|
@@ -1083,7 +1088,9 @@ Landed on `phase2/wiring-integrity`, rebased onto `main` @ `66cb7e8` (Phase 1). 
 
 ### Pre-existing flakes found during Phase 2 (NOT introduced by Phase 2)
 
-- **`test/engagements/events.test.js:43`** — `assert.equal(event.timestamp, Date.now() || event.timestamp > 0)`. The `||` short-circuits on truthy `Date.now()` and compares `event.timestamp` against a fresh `Date.now()` call that's 0–1ms different. Flakes ~1/3 runs. Independent of Phase 2 (passes in isolation). Fix: `assert.ok(event.timestamp > 0)` — separate cleanup.
+- **`test/engagements/events.test.js:43`** — ~~`assert.equal(event.timestamp, Date.now() || event.timestamp > 0)`. The `||` short-circuits on truthy `Date.now()` and compares `event.timestamp` against a fresh `Date.now()` call that's 0–1ms different. Flakes ~1/3 runs. Independent of Phase 2 (passes in isolation). Fix: `assert.ok(event.timestamp > 0)` — separate cleanup.~~ **✅ RESOLVED 2026-07-21** — fixed in commit `23165ad` (verify/live-sensor-and-flakes branch). Replaced with `assert.ok(event.timestamp > 0)`.
+
+- **`test/boot.test.js` Windows SIGINT race + `test/eval/memory-impact.eval.js` date-window rot** — **✅ RESOLVED 2026-07-21** (same commit `23165ad`). The boot test now accepts `exitCode === null` on win32 (Node's signal-emulation failure for detached piped-stdio spawns). The eval was NOT operator-vault-dependent as long believed — it was date-relative rot (records pinned to `2026-07-12` aged past the 7-day window). Re-anchored at `Date.now()` with the same relative offsets. Suite now 1294/1295 (0 fails, 1 skip).
 
 ### W9 acceptance (post-rebase, honest residual)
 
