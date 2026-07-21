@@ -57,21 +57,22 @@ async function main() {
 
   let pass = true;
   try {
-    log('⏳', 'waiting for plan.morning-brief (capture 30s of bus events)...');
-    const events = await captureEvents(DEFAULT_PORT, ['plan.morning-brief', 'plan.checkin', 'plan.evening-review'], 30000);
+    log('⏳', 'waiting for planner first tick (75s — planner ticks every 60s)...');
+    // plan.morning-brief is subscribed in server/index.js:554 ONLY for
+    // proactiveSpeak (audio TTS) — it does NOT broadcast as a typed WS event.
+    // So we capture WS events as a bonus signal but the PRIMARY verification
+    // is the vault/Plans/<date>.json file write with morningFiredAt set.
+    const events = await captureEvents(DEFAULT_PORT, ['plan.morning-brief', 'plan.checkin', 'plan.evening-review'], 75000);
     if (events.length > 0) {
-      log('✅', `planner fired ${events.length} event(s): ${events.map(e => e.type).join(', ')}`);
-    } else {
-      log('❌', 'planner did NOT fire any events within 30s');
-      pass = false;
+      log('ℹ️', `WS captured ${events.length} plan.* event(s) as bonus (not all plan events broadcast to WS — primary signal is the vault file below)`);
     }
 
-    // Check the day file was written
+    // PRIMARY signal: the day file was written
     const plan = readPlanFile();
     if (plan && plan.morningFiredAt) {
       log('✅', `vault/Plans/${todayDateStr()}.json written, morningFiredAt=${plan.morningFiredAt}`);
     } else {
-      log('❌', `vault/Plans/${todayDateStr()}.json missing or morningFiredAt unset`);
+      log('❌', `vault/Plans/${todayDateStr()}.json missing or morningFiredAt unset — planner did NOT fire`);
       pass = false;
     }
   } finally {

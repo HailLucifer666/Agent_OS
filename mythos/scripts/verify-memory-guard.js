@@ -11,6 +11,12 @@
 // confirms the noise is rejected while the signal is persisted. Mirrors
 // the 23 unit tests in test/from-memory.test.js but against a real boot.
 //
+// Requirements:
+//   - At least one brain provider key set (GROQ_API_KEY, MISTRAL_API_KEY, etc.)
+//     — the voice agent needs the brain to decide to call the remember tool.
+//     Without a brain key the utterance returns "all my thinking providers
+//     are offline" and the remember tool is never reached.
+//
 // Usage:
 //   node scripts/verify-memory-guard.js
 //   MYTHOS_AUTH_TOKEN=secret node scripts/verify-memory-guard.js

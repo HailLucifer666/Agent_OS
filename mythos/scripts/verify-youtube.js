@@ -13,6 +13,12 @@
 // This script verifies the SERVER-SIDE contract only. The runbook
 // (docs/live-verification-runbook.md) documents the live-browser check.
 //
+// Requirements:
+//   - At least one brain provider key set (GROQ_API_KEY, MISTRAL_API_KEY, etc.)
+//     — the voice agent needs the brain to interpret the utterance and decide
+//     to call open_web. Without a brain key the utterance returns "all my
+//     thinking providers are offline" and open_web is never called.
+//
 // Usage:
 //   node scripts/verify-youtube.js                 # default YOUTUBE_MODE
 //   YOUTUBE_MODE=newtab node scripts/verify-youtube.js
