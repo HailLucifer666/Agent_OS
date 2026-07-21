@@ -160,11 +160,36 @@ function createServer(deps) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      // Phase 5 (P1): include the auth headers so browser fetches carrying the
+      // token pass CORS preflight. Both Authorization: Bearer and X-Auth-Token
+      // are accepted by the gate below.
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
       res.setHeader('Access-Control-Max-Age', '600');
     }
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
+  });
+
+  // Phase 5 (P1): bearer-token auth gate on /api. Reads the token LIVE at
+  // request time per the D-46 discipline (config.X at call time, never cached
+  // at construction). When MYTHOS_AUTH_TOKEN is empty (the default), the gate
+  // is DISABLED — local dev + loopback keep working without a token. Set it
+  // to a strong random string for any deployment exposed beyond loopback.
+  //
+  // /health stays open regardless — it's mounted at root, not /api, so it
+  // bypasses this middleware entirely. That's deliberate: Render/k8s readiness
+  // probes hit /health without a token.
+  //
+  // Accepted forms: Authorization: Bearer <token>  OR  X-Auth-Token: <token>
+  // (browsers can't set Authorization on WebSocket — for WS the token is
+  // passed as ?token=<token> query string and checked in verifyClient below.)
+  app.use('/api', (req, res, next) => {
+    const expected = config.MYTHOS_AUTH_TOKEN;
+    if (!expected) return next();   // gate disabled
+    const provided = req.headers['x-auth-token'] ||
+                     (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (provided === expected) return next();
+    return res.status(401).json({ error: 'Unauthorized' });
   });
 
   app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), { etag: false, maxAge: 0, lastModified: false }));
@@ -288,13 +313,32 @@ function createServer(deps) {
   function verifyClient(info, callback) {
     const origin = info.origin;
     if (origin) {
-      if (ALLOWED_ORIGINS.has(origin)) return callback(true);
-      logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
+      if (!ALLOWED_ORIGINS.has(origin)) {
+        logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
+        return callback(false, 403, 'Forbidden');
+      }
+    } else if (!isLoopback(info.req)) {
+      logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
       return callback(false, 403, 'Forbidden');
     }
-    if (isLoopback(info.req)) return callback(true);
-    logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
-    return callback(false, 403, 'Forbidden');
+    // Phase 5 (P1): token gate on WS. Same semantics as the /api gate —
+    // disabled when MYTHOS_AUTH_TOKEN is empty (loopback/local dev). For WS
+    // the client passes the token as ?token=<token> in the upgrade URL
+    // (browsers cannot set custom headers on new WebSocket()). Loopback
+    // bypasses the token so local dev keeps working without it.
+    const expected = config.MYTHOS_AUTH_TOKEN;
+    if (expected && !isLoopback(info.req)) {
+      let provided = '';
+      try {
+        const url = new URL(info.req.url, 'http://localhost');
+        provided = (url.searchParams.get('token') || '').trim();
+      } catch (_) { provided = ''; }
+      if (provided !== expected) {
+        logger.warn('ws-upgrade-rejected', { reason: 'missing or wrong auth token' });
+        return callback(false, 401, 'Unauthorized');
+      }
+    }
+    return callback(true);
   }
 
   const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient });

@@ -227,6 +227,11 @@ const SCHEMA = {
   RATE_LIMIT_GLOBAL:           { type: 'number', default: 240, min: 1 },
   RATE_LIMIT_EXPENSIVE:        { type: 'number', default: 8,   min: 1 },
   ALLOWED_ORIGINS:             { type: 'string', default: '' }, // comma-sep WS/CORS allowlist
+  // Phase 5 (P1): optional bearer-token gate on /api + WS. When empty (default),
+  // the gate is DISABLED — local dev + loopback keep working without a token.
+  // Set to a strong random string for production deployments exposed beyond
+  // loopback. /health stays open regardless (Render/k8s readiness probes).
+  MYTHOS_AUTH_TOKEN:           { type: 'string', default: '' },
 
   // Cortex drain cap per tick (the 50-per-tick perception cap, §11.1)
   MAX_DRAIN_PER_TICK:          { type: 'number', default: 50, min: 1, max: 500 },

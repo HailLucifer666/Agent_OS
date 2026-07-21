@@ -17,7 +17,13 @@ function nextReqId() {
 
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/ws`;
+  // Phase 5 (P1): when the operator has configured MYTHOS_AUTH_TOKEN, the UI
+  // passes it as ?token=<token> on the WS upgrade URL. Read from a global the
+  // dashboard can set (window.MYTHOS_AUTH_TOKEN) or localStorage so it survives
+  // reloads. Absent → no token sent, which works for loopback/unset cases.
+  const token = (window.MYTHOS_AUTH_TOKEN || localStorage.getItem('MYTHOS_AUTH_TOKEN') || '').trim();
+  const base = `${proto}//${location.host}/ws`;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 function flushQueue() {

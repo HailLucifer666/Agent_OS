@@ -2,6 +2,27 @@
 // Voice initializes on first pointerdown (Chrome's user-gesture policy for
 // mic/AudioContext); everything else mounts immediately.
 
+// Phase 5 (P1): transparent auth-token injection. When the operator has set
+// MYTHOS_AUTH_TOKEN (production deployments), every /api/* fetch gets the
+// Authorization header; the WS connection passes it via ?token= (handled in
+// ws.js). When unset, this is a no-op — local dev + loopback keep working.
+// The token is read from window.MYTHOS_AUTH_TOKEN (set by the operator via
+// console or a future login form) or localStorage (persists across reloads).
+(function () {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.startsWith('/api/') || url.includes('/api/')) {
+      const token = (window.MYTHOS_AUTH_TOKEN || localStorage.getItem('MYTHOS_AUTH_TOKEN') || '').trim();
+      if (token) {
+        init = init || {};
+        init.headers = Object.assign({}, init.headers || {}, { 'X-Auth-Token': token });
+      }
+    }
+    return origFetch(input, init);
+  };
+})();
+
 import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance } from './ws.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
