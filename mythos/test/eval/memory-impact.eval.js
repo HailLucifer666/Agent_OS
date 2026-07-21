@@ -2,8 +2,9 @@
 
 // memory-impact.eval.js — golden-set regression gate for recall quality.
 // Run after adding new memory sources, skills, or providers to verify
-// recall didn't regress. Uses deterministic fixtures (pinned timestamps)
-// so scores are reproducible.
+// recall didn't regress. Uses deterministic RELATIVE offsets (anchored at
+// runtime via Date.now()) so scores are reproducible AND the records stay
+// inside episodic.recall()'s default 7-day window forever.
 //
 // Run: node --test test/eval/memory-impact.eval.js
 
@@ -29,8 +30,15 @@ describe('eval: memory-impact — episodic recall quality', () => {
 
   before(() => {
     mem = setupMemory();
-    // Seed deterministic records with pinned timestamps
-    var baseTs = Date.parse('2026-07-12T12:00:00Z');
+    // Seed deterministic records with RELATIVE offsets anchored at runtime.
+    // Was: Date.parse('2026-07-12T12:00:00Z') — but episodic.recall()'s
+    // default windowDays=7 filters files older than 7 days before scoring,
+    // so once the calendar advanced past 2026-07-19 every seeded record
+    // got filtered out and all 3 recall assertions failed with length===0.
+    // Anchoring at Date.now() keeps records inside the 7-day window forever;
+    // the lexical scorer (episodic.js recall) doesn't care about absolute
+    // dates, only relative age, so the ranking assertions still hold.
+    var baseTs = Date.now();
     mem.episodic.write({ id: 'ep-1', ts: baseTs, kind: 'build', summary: 'Built AI news landing page with dark theme', detail: 'Used Mistral for generation, Cerebras for review', salience: 0.8, channel: 'pipeline' });
     mem.episodic.write({ id: 'ep-2', ts: baseTs - 86400000, kind: 'build', summary: 'Fixed voice microphone NotReadableError', detail: 'Dual getUserMedia conflict between mic-indicator and voice-loop', salience: 0.9, channel: 'fix' });
     mem.episodic.write({ id: 'ep-3', ts: baseTs - 3600000, kind: 'conversation', summary: 'Discussed agentic OS architecture patterns', detail: 'Risk classification, evidence validators, credential scanning', salience: 0.6, channel: 'voice' });

@@ -40,7 +40,12 @@ describe('engagements/events', () => {
     const event = createEngagementDrafted({ engagementId: 'eng-123', intent: 'build a CLI tool', bus });
     assert.equal(event.engagementId, 'eng-123');
     assert.equal(event.intent, 'build a CLI tool');
-    assert.equal(event.timestamp, Date.now() || event.timestamp > 0);
+    // Was: assert.equal(event.timestamp, Date.now() || event.timestamp > 0)
+    // The `||` short-circuits on the always-truthy Date.now() and compares
+    // event.timestamp against a FRESH Date.now() 0-1ms later — flaky ~50% of
+    // runs. The original intent was "either equal OR > 0"; the right shape is
+    // a positive-epoch sanity check.
+    assert.ok(event.timestamp > 0, 'timestamp should be a positive epoch ms');
     assert.equal(bus._emitted().length, 1);
     assert.equal(bus._emitted()[0].type, 'engagement.draft');
   });
