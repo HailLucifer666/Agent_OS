@@ -1,3 +1,18 @@
+# render.yaml — Render Blueprint for MYTHOS deployment.
+#
+# Phase 5 (P2-P4) hardening: /health readiness probe + persistent vault disk
+# + the production env vars the security/cloud-mode work requires.
+#
+# The MYTHOS_AUTH_TOKEN, GROQ_API_KEY, and other secrets are NOT in this file —
+# set them via Render's dashboard "Environment" panel (sync:false entries below).
+# Render never echoes secret values back, so committing this file is safe.
+#
+# Previous version used /api/health — the actual endpoint is /health (server.js
+# mounts it at root, intentionally outside /api so the MYTHOS_AUTH_TOKEN gate
+# doesn't block readiness probes). Also added the persistent vault disk: without
+# it every deploy wipes Episodic/Semantic/Skills/Identity — MYTHOS forgets
+# everything between deploys.
+
 services:
   - type: web
     name: agent-os
@@ -5,8 +20,25 @@ services:
     repo: https://github.com/HailLucifer666/Agent_OS
     branch: main
     rootDir: mythos
-    plan: free
+    # starter = 512 MB / 0.5 CPU. Free tier sleeps after 15 min inactivity —
+    # wrong for an always-on entity. Bump to standard for heavier brain loads.
+    plan: starter
+    # P2: /health returns {ok:true, uptime:...} — Render hits it every ~30s
+    # and restarts the service if it fails. Mounted at ROOT not /api so the
+    # MYTHOS_AUTH_TOKEN gate (Phase 5 P1) doesn't block it.
+    healthCheckPath: /health
+    autoDeploy: true
+    # P4: persistent disk so the vault survives redeploys. Mounted at /data;
+    # MYTHOS_VAULT_ROOT points the fs-store at it below. Without this, every
+    # deploy wipes Episodic/Semantic/Skills/Identity — the entity forgets all.
+    disk:
+      name: mythos-vault
+      mountPath: /data
+      sizeGB: 1
     envVars:
+      # Render auto-injects PORT; main.js:84 maps it through to MYTHOS_PORT.
+      # MYTHOS_BIND=0.0.0.0 is REQUIRED — the schema default 127.0.0.1 binds
+      # loopback only, unreachable from Render's reverse proxy.
       - key: PORT
         generateValue: true
       - key: MYTHOS_BIND
@@ -15,11 +47,37 @@ services:
         value: "MYTHOS"
       - key: LOG_LEVEL
         value: "info"
-      # --- Brain provider keys (set these in Render dashboard, NOT here) ---
+      # P4: vault root — points at the persistent disk mount.
+      - key: MYTHOS_VAULT_ROOT
+        value: "/data/vault"
+      # P3: CORS + WS origin allowlist. Replace with your Render URL after
+      # first deploy: https://agent-os-<random>.onrender.com
+      # sync:false = don't auto-sync on every commit; set it once in dashboard.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # P1: bearer-token gate on /api + WS. STRONG RANDOM STRING (set in
+      # dashboard). Empty = gate disabled (loopback/local-dev — NOT for cloud).
+      - key: MYTHOS_AUTH_TOKEN
+        sync: false
+      # Cloud-mode tweaks: no operator present to greet, no Chrome/screen/window
+      # to drive. Reduces noisy connection-refused spam in logs.
+      - key: BOOT_GREETING
+        value: "false"
+      - key: BROWSER_AUTOMATION
+        value: "false"
+      - key: SCREEN_AWARENESS_ENABLED
+        value: "false"
+      - key: WINDOW_AWARENESS_ENABLED
+        value: "false"
+      - key: GMAIL_TRIAGE_ENABLED
+        value: "false"
+      # --- Brain provider keys (set in Render dashboard, NOT here) ---
       # NIM_API_KEY=
       # NIM_API_KEY_2=
       # GROQ_API_KEY=
       # MISTRAL_API_KEY=
       # OPENROUTER_API_KEY=
       # CEREBRAS_API_KEY=
-    healthCheckPath: /api/health
+      # GOOGLE_CLIENT_ID=
+      # GOOGLE_CLIENT_SECRET=
+      # GOOGLE_REFRESH_TOKEN=
