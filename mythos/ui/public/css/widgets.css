@@ -2,8 +2,16 @@
 
 .widget-card {
   position: absolute;
+  /* Flex column so an explicit height set by the resize handle actually
+     flows down to the body (which fills the remaining space). Without this
+     the frame grew but content stayed content-sized. */
+  display: flex;
+  flex-direction: column;
   min-width: 170px;
-  max-width: 260px;
+  /* Was max-width:260px, which capped whatever width the resize handle wrote
+     (widget-host.js makeResizable) so the card couldn't grow past 260px.
+     Raised so resize isn't silently clamped; still bounded to the viewport. */
+  max-width: min(90vw, 640px);
   padding: 0 0 12px;
   pointer-events: auto;
   user-select: none;
@@ -78,7 +86,11 @@
 
 .widget-card.dragging .widget-title { cursor: grabbing; }
 
-.widget-body { padding: 0 14px; }
+/* flex:1 + min-height:0 so the body fills a resized (taller) card and
+   scrolls instead of clipping when the card is made shorter than its
+   content. min-height:0 is required for overflow to work inside a flex
+   column. */
+.widget-body { padding: 0 14px; flex: 1 1 auto; min-height: 0; overflow: auto; }
 
 .widget-value {
   font-size: 22px;
@@ -103,7 +115,9 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 160px;
+  /* No fixed max-height: let the list grow with the (resizable) card and
+     rely on .widget-body's own overflow to scroll when the card is small.
+     A hard 160px cap here ignored the card height entirely. */
   overflow-y: auto;
 }
 
@@ -143,7 +157,9 @@
 .widget-chip.chip-closed { color: var(--status-ok); border-color: var(--status-ok); }
 
 /* NEWS widget — headline list from /api/news */
-.news-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
+/* No fixed max-height: grows with the resizable card; .widget-body scrolls
+   when the card is smaller than the list. */
+.news-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
 .news-list::-webkit-scrollbar { width: 4px; }
 .news-list::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 2px; }
 
@@ -173,7 +189,7 @@
 /* MEDIA widget — now playing from Windows SMTC */
 .widget-art {
   width: 100%;
-  max-height: 120px;
+  max-height: 240px;
   object-fit: cover;
   border-radius: var(--radius-sm);
   margin-bottom: 8px;
@@ -183,7 +199,7 @@
    already caps height; the image itself needs the same treatment. */
 .widget-art-img {
   width: 100%;
-  max-height: 120px;
+  max-height: 240px;
   object-fit: cover;
   border-radius: var(--radius-sm);
   display: block;

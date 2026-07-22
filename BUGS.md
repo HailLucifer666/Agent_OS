@@ -9,8 +9,19 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-07-18 (session 4 — core-repair pass, jarvis-class upgrade: wake-word/ambient-awareness/daily-planner shipped, CODED not yet live-verified)
+Last updated: 2026-07-22 (HUD session — media controls, YouTube embeds, weather location, widget resize)
 Maintainer: update this file as issues are resolved. Strike through the status.
+
+---
+
+## Session (2026-07-22) — HUD dashboard fixes
+
+Four live-reported dashboard defects, each root-caused (4 parallel read-only investigations + live probes) then fixed:
+
+- **BUG-042 (media controls dead):** ✅ FIXED + LIVE-VERIFIED. Media widget play/pause/next/prev/volume did nothing. Wiring (frontend `/api/media/control` → `routes/media.js` → `media_key` effector → pc-child) was byte-correct; the break was the execution boundary — `Send-VkKey` in `ps-automation.ps1` injected global media VK codes via `SendInput` and discarded the return count, so `Handle-MediaKey` always reported `sent:$true` even when the OS silently dropped the input (UIPI/foreground/integrity — a fragility this repo already documents). Read path (`media_status`) worked because it never touches `SendInput`. **Fix:** route transport (play/pause/next/prev) through the SAME `GlobalSystemMediaTransportControlsSession` the read path uses — `TryTogglePlayPauseAsync`/`TrySkipNextAsync`/`TrySkipPreviousAsync` via `Await-WinRTOperation` — so control is direct and foreground-independent; keep volume keys on VK injection but capture the `SendInput` count and report an honest failure on 0. Live-verified against running Spotify: `next_track` changed the title (A PERFECT WORLD → PIECES), `play_pause` froze then resumed the position oracle. Note: the widget's ▶/⏸ flag can lag one 5s poll (SMTC PlaybackStatus latency) — cosmetic, not a control bug.
+- **BUG-006 (YouTube "Video unavailable"):** ✅ enhanced (see full entry below). Root cause of "most videos fail": the video was chosen as the first search hit with ZERO embeddability check, and most YouTube videos have embedding disabled by the uploader. **Fix:** `from-dashboard.js` now pulls 6 candidates and pre-checks each via YouTube's keyless oEmbed endpoint, embedding the first that allows it; if none do, it opens the real youtube.com page in a browser tab (always plays). `web-panel.js` also catches the player's `onError` postMessage → auto-opens the real tab. Combined with the earlier `enablejsapi=1` + `listening` handshake fix.
+- **BUG-043 (weather wrong location):** ✅ FIXED (auto-detect). "Brisbane/Australia" was NOT hardcoded (zero repo hits) — `weather.js` used only `navigator.geolocation` (desktop → unreliable network/IP location) and showed no city name. **Fix:** keep geolocation as primary but reverse-geocode the coords to a city name (BigDataCloud, keyless) and always display it; on denial/timeout, fall back to IP geolocation (ipapi.co → ip-api.com, keyless) which returns city directly; Kolkata constant only as last resort. Shows a real city name every launch. Honest caveat: if the machine's public IP itself geolocates wrong (VPN), both sources may agree on the wrong city — but the visible name now makes that obvious.
+- **BUG-044 (widget resize doesn't scale content):** ✅ FIXED. `makeResizable` set width/height on `.widget-card`, but the card was a plain block capped at `max-width:260px` with a non-filling `.widget-body`, so the frame grew while content stayed put. **Fix (`widgets.css`):** `.widget-card` becomes a flex column with a raised max-width; `.widget-body` gets `flex:1; min-height:0; overflow:auto` so content fills/scrolls with the frame; removed fixed `max-height` caps on feed/news lists so they use the resized space.
 
 ---
 
@@ -152,9 +163,29 @@ Route text input through the voice loop's `beginTurn()/onExternalChunk()/deliver
 ---
 
 ### BUG-006: YouTube embed shows "Video unavailable"
-**Status:** 🔧 CODED — fallback UI enhanced + config escape hatch added
+**Status:** ✅ ROOT-CAUSED + FIXED 2026-07-22 (live-verified) — see "Actual root cause" below; prior CODED status attributed this to unfixable YouTube bot/consent blocks, which was not correct
 **Live-verify harness:** `node scripts/verify-youtube.js` (server-side) + manual iframe check — see `docs/live-verification-runbook.md` §A3
 **Severity:** MEDIUM | **Reported:** 2026-07-15
+
+**Actual root cause (found 2026-07-22, after a fresh live report: video plays fine for a few seconds, then goes black while a redundant fallback thumbnail card appears below it, the panel becomes scrollable, and audio keeps playing in the background):**
+
+Two independent, compounding bugs — not YouTube-side blocking at all:
+
+1. **8s failTimer always fires, even on a healthy video.** The embed URL built in `from-dashboard.js`'s `open_web` youtube branch (`https://www.youtube-nocookie.com/embed/<id>?autoplay=1&rel=0&modestbranding=1`) never included `enablejsapi=1`, in any commit. Without it, the YouTube player never activates its postMessage bridge, so `web-panel.js`'s success-detection listener (waiting for `onReady`/`infoDelivery`) never fires, and the 8-second `failTimer` unconditionally assumes failure — every time. On timeout, only the iframe was hidden (not its parent `.web-iframe-wrap` box, not `iframe.src`), so the wrap stayed as an empty black box, the fallback thumbnail rendered below it, the panel overflowed into a scrollbar, and the still-loaded iframe kept playing audio invisibly.
+2. **The video panel's ancestor carried a persistent CSS `transform`.** `.hud-panel`'s base open animation (`fadeInUp`, fill-mode `both`) leaves `transform: translateY(0)` on the panel forever after the ~300ms animation completes. A non-`none` `transform`/`filter`/`backdrop-filter` on an iframe's ancestor breaks Chromium's hardware-accelerated video compositing (video paints black, audio keeps playing) — matches the "plays fine, then blacks out" timing (GPU promotes the video to a hardware overlay a beat after first paint; compositing through the transformed ancestor fails at that point). A same-session `backdrop-filter` fix on the video panel didn't address this since it's a separate CSS property causing the same effect.
+
+**Fix (2026-07-22):**
+- `from-dashboard.js`: added `&enablejsapi=1` to the embed URL.
+- `web-widget.css` (`.hud-panel.web-panel-video`): added `animation: none; transform: none;` alongside the existing `backdrop-filter: none` override.
+- `web-panel.js` failTimer: now hides the whole `.web-iframe-wrap` and blanks `iframe.src` (not just the inner iframe) when a genuine failure does occur, so a real dead/blocked video shows only the fallback card — no leftover black box, no scroll, no lingering audio.
+- `web-panel.js` (follow-up, same day): `enablejsapi=1` alone was NOT enough — the YT widget protocol posts no events until the parent sends a `{"event":"listening","channel":"widget"}` postMessage handshake into the iframe (what YouTube's official IFrame API library does internally). Added the handshake (sent on iframe load + retried every 500ms until an event arrives), which is what finally lets `onReady`/`infoDelivery` reach the detector so healthy videos stop being swapped for the fallback card at the 8s mark.
+
+Live-verified: MYTHOS relaunched with the fix; `/health` 200 on fresh boot. (Visual re-check of an actual video playing past 8s is operator-eyes-only, same as the original BUG-006 verification — see runbook §A3.)
+
+---
+
+### BUG-006 (historical entry, pre-2026-07-22 investigation, kept for context)
+**Status (as of 2026-07-15):** 🔧 CODED — fallback UI enhanced + config escape hatch added
 
 **What happened:**
 1. YouTube was working with `youtube-nocookie.com/embed/...?autoplay=1`

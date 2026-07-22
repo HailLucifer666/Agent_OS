@@ -52,14 +52,29 @@ export async function render(body, payload) {
 
     // Detect embed failure: an XFO-blocked iframe never fires 'load'. A YouTube
     // embed that loads but shows "Video unavailable" never fires onReady via
-    // postMessage. Either case → show the fallback link.
+    // postMessage (and/or fires onError). Either case → show the fallback link.
     let ok = false;
-    const failTimer = setTimeout(() => {
-      if (!ok) {
-        iframe.style.display = 'none';
-        fallback.style.display = 'block';
-      }
-    }, 8000);
+    let handled = false;
+    let listenTimer = null;
+
+    // Shared teardown-to-fallback: hide the whole 16:9 wrap (not just the
+    // iframe) and blank its src — otherwise the empty wrap box lingers above
+    // the fallback card (forcing the panel to scroll) and the iframe keeps
+    // playing audio invisibly, since display:none alone doesn't stop playback.
+    // openTab=true also opens the real YouTube page (guaranteed playback) —
+    // used when we KNOW the embed failed (onError), vs a mere timeout.
+    const showFallback = (openTab) => {
+      if (handled) return;
+      handled = true;
+      if (listenTimer) clearInterval(listenTimer);
+      const wrap = body.querySelector('.web-iframe-wrap');
+      if (wrap) wrap.style.display = 'none';
+      iframe.src = 'about:blank';
+      fallback.style.display = 'block';
+      if (openTab) { try { window.open(fallbackUrl, '_blank', 'noopener'); } catch (_) {} }
+    };
+
+    const failTimer = setTimeout(() => { if (!ok) showFallback(false); }, 8000);
     iframe.addEventListener('load', () => {
       // 'load' fires even for XFO blocks in some browsers, so for web URLs we
       // clear the timer (assume success); for YouTube we keep waiting for the
@@ -67,16 +82,47 @@ export async function render(body, payload) {
       if (payload.widgetType === 'web') { ok = true; clearTimeout(failTimer); }
     });
     if (payload.widgetType === 'youtube') {
+      // YT widget protocol: the player posts NO events (onReady/infoDelivery)
+      // until the parent sends this "listening" handshake into the iframe —
+      // enablejsapi=1 on the embed URL only arms the bridge, this activates
+      // it (it's what YouTube's official IFrame API library does internally).
+      // Sent on iframe load and retried on an interval because the player's
+      // internal message handler attaches asynchronously after load.
+      const YT_ORIGIN = 'https://www.youtube-nocookie.com';
+      const sayListening = () => {
+        try {
+          if (iframe.contentWindow) iframe.contentWindow.postMessage(
+            JSON.stringify({ event: 'listening', id: 'mythos-web-panel', channel: 'widget' }),
+            YT_ORIGIN
+          );
+        } catch (_) {}
+      };
+      iframe.addEventListener('load', sayListening);
+      listenTimer = setInterval(sayListening, 500);
+
       const ytHandler = (e) => {
         if (e.origin !== 'https://www.youtube-nocookie.com' && e.origin !== 'https://www.youtube.com') return;
         try {
           const d = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
-          if (d && (d.event === 'onReady' || d.event === 'infoDelivery')) { ok = true; clearTimeout(failTimer); }
+          if (!d) return;
+          // Explicit playback error (codes 2/5/100/101/150 — embed-disabled,
+          // private, removed, region-locked). oEmbed pre-check catches most of
+          // these server-side, but this is the safety net: auto-open the real
+          // YouTube page, which always plays.
+          const errored = d.event === 'onError' ||
+            (d.info && d.info.errorCode !== undefined && d.info.errorCode !== null);
+          if (errored) { showFallback(true); return; }
+          if (d.event === 'onReady' || d.event === 'infoDelivery') {
+            ok = true;
+            clearTimeout(failTimer);
+            clearInterval(listenTimer);
+          }
         } catch (_) {}
       };
       window.addEventListener('message', ytHandler);
       return () => {
         clearTimeout(failTimer);
+        clearInterval(listenTimer);
         window.removeEventListener('message', ytHandler);
         iframe.src = 'about:blank';
         if (panel) panel.classList.remove('web-panel-video');

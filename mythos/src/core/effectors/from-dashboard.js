@@ -107,25 +107,57 @@ function buildTools(ctx) {
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
       if (t === 'youtube') {
         if (!q) return fail('A search query is required for YouTube.');
-        var ytRes = await web_search({ query: q + ' site:youtube.com', maxResults: 3, bus: ctx.bus });
+        // maxResults 6 (was 3): most YouTube videos have embedding DISABLED by
+        // the uploader, so we need several candidates to find one that will
+        // actually play in the iframe.
+        var ytRes = await web_search({ query: q + ' site:youtube.com', maxResults: 6, bus: ctx.bus });
         if (!ytRes.ok || !ytRes.result || !ytRes.result.results || !ytRes.result.results.length) {
           return fail('No YouTube videos found for "' + q + '".');
         }
-        // Extract video ID from the first youtube.com/watch?v= URL
-        var videoId = null;
-        var videoTitle = title || q;
+        // Collect ALL candidate video IDs (in result order), not just the first.
+        var candidates = [];
         for (var i = 0; i < ytRes.result.results.length; i++) {
           var r = ytRes.result.results[i];
           var idM = String(r.url).match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
-          if (idM) { videoId = idM[1]; if (r.title) videoTitle = r.title; break; }
+          if (idM) candidates.push({ id: idM[1], title: r.title || (title || q) });
         }
-        if (!videoId) return fail('Found results but could not extract a YouTube video ID. Try rephrasing.');
+        if (!candidates.length) return fail('Found results but could not extract a YouTube video ID. Try rephrasing.');
+
         // Check YOUTUBE_MODE config: if 'newtab', skip embed and open in new tab instead
         var youtubeMode = (config && config.YOUTUBE_MODE) || 'embed';
         if (youtubeMode === 'newtab') {
-          return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + videoId, title: videoTitle });
+          return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
         }
-        return ok({ widgetType: 'youtube', embedUrl: 'https://www.youtube-nocookie.com/embed/' + videoId + '?autoplay=1&rel=0&modestbranding=1', title: videoTitle, videoId: videoId });
+
+        // Embeddability pre-check via YouTube's public oEmbed endpoint (no API
+        // key): a 200 means the video allows embedding; 401/403/404 means it's
+        // embed-disabled/private/removed and would show "Video unavailable" in
+        // the iframe. Pick the FIRST embeddable candidate. This is the "smart
+        // pick" that makes far more videos actually play in-dashboard.
+        var chosen = null;
+        for (var c = 0; c < candidates.length; c++) {
+          try {
+            var oembedUrl = 'https://www.youtube.com/oembed?url=' +
+              encodeURIComponent('https://www.youtube.com/watch?v=' + candidates[c].id) + '&format=json';
+            var oeRes = await fetch(oembedUrl, { signal: AbortSignal.timeout(4000) });
+            if (oeRes.ok) {
+              chosen = candidates[c];
+              try { var oeData = await oeRes.json(); if (oeData && oeData.title) chosen.title = oeData.title; } catch (_) {}
+              break;
+            }
+          } catch (_) { /* network/timeout — try next candidate */ }
+        }
+        // If none of the candidates are embeddable, fall back to opening the
+        // real YouTube page in a browser tab — it always plays there (no embed
+        // restriction applies outside an iframe). This is the guaranteed
+        // "alternate way".
+        if (!chosen) {
+          return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
+        }
+        // enablejsapi=1 is required for the player to postMessage onReady/
+        // infoDelivery — without it, web-panel.js's success detection never
+        // fires and its failTimer wrongly assumes every embed has failed.
+        return ok({ widgetType: 'youtube', embedUrl: 'https://www.youtube-nocookie.com/embed/' + chosen.id + '?autoplay=1&rel=0&modestbranding=1&enablejsapi=1', title: chosen.title, videoId: chosen.id });
       }
 
       // WEATHER — geocode location, return the Open-Meteo URL for client-side fetch

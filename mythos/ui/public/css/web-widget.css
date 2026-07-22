@@ -3,10 +3,27 @@
 
 /* ---- Overlay panel: video sizing ---- */
 /* When the web panel shows video, cap its width so it doesn't fill the screen.
-   The base .hud-panel is min(860px, 92vw); this overrides to a smaller max. */
+   The base .hud-panel is min(860px, 92vw); this overrides to a smaller max.
+   Also drops backdrop-filter: an ancestor with backdrop-filter/filter/transform
+   breaks a nested iframe's hardware-accelerated video compositing in Chromium —
+   the video paints solid black while audio keeps playing. Falls back to a near-
+   opaque flat version of --panel since blur is no longer available to fake the
+   translucent look. */
 
 .hud-panel.web-panel-video {
   width: min(720px, 88vw);
+  backdrop-filter: none;
+  background: rgba(14, 22, 38, 0.97);
+  /* The base .hud-panel plays a fadeInUp open animation with fill-mode
+     "both" (overlay.css), whose keyframe ends on transform: translateY(0).
+     "both" means that transform never clears once the animation finishes —
+     it's a non-none transform sitting on this iframe's ancestor forever,
+     which is the same compositing-breaking condition as backdrop-filter
+     above. animation:none stops fadeInUp from ever running here (so it
+     never leaves a transform behind); transform:none is belt-and-suspenders
+     in case this class gets applied mid-animation. */
+  animation: none;
+  transform: none;
 }
 
 .hud-panel.web-panel-video .hud-panel-body {

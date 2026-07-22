@@ -278,7 +278,11 @@ function Send-VkKey($vk) {
     $inputs[1].type = [NativeInput]::INPUT_KEYBOARD
     $inputs[1].u.ki.wVk = $vk
     $inputs[1].u.ki.dwFlags = [NativeInput]::KEYEVENTF_KEYUP
-    [void][NativeInput]::SendInput(2, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+    # Capture SendInput's return (count of events actually injected) into a
+    # script-scope var instead of [void]-discarding it, so callers can tell a
+    # silent no-op (0 = blocked by UIPI/higher-integrity foreground) from a
+    # real keypress. Assigned (not emitted) so void callers stay unaffected.
+    $script:LastVkSent = [NativeInput]::SendInput(2, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
 }
 
 # Media key VK codes
@@ -298,6 +302,37 @@ function Send-MediaKey($keyName) {
     }
     Send-VkKey $vk
     return $null
+}
+
+# Drive transport (play/pause, next, previous) via the SAME SMTC session the
+# media_status read path uses. This controls the active media app directly and
+# does NOT depend on SendInput / foreground focus / integrity level — the
+# fragile path the global media keys were silently failing on. Returns $true on
+# success or an error string on failure (caller can then fall back to VK keys).
+function Send-SmtcControl($action) {
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction SilentlyContinue
+        $type = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        if (-not $type) { return 'SMTC API not available' }
+        $mgrOp = $type::RequestAsync()
+        $mgr = Await-WinRTOperation $mgrOp $type
+        if (-not $mgr) { return 'Failed to get SMTC session manager' }
+        $session = $mgr.GetCurrentSession()
+        if (-not $session) { return 'No active media session' }
+        $op = $null
+        switch ($action) {
+            'toggle' { $op = $session.TryTogglePlayPauseAsync() }
+            'next'   { $op = $session.TrySkipNextAsync() }
+            'prev'   { $op = $session.TrySkipPreviousAsync() }
+            default  { return "Unknown SMTC action: $action" }
+        }
+        # Try*Async() return IAsyncOperation<bool>; await the boolean result.
+        $result = Await-WinRTOperation $op ([bool])
+        if ($result) { return $true }
+        return 'SMTC control returned false (session rejected the command)'
+    } catch {
+        return ('SMTC control failed: ' + $_.Exception.Message)
+    }
 }
 
 function Send-UnicodeText($text) {
@@ -631,9 +666,32 @@ function Handle-Drag($x1, $y1, $x2, $y2) {
 
 function Handle-MediaKey($key) {
     if (-not $key) { return 'Key name is required.' }
+
+    # Transport controls → SMTC session (robust). Fall back to VK media-key
+    # injection if SMTC is unavailable or rejects the command.
+    $transport = @{ play_pause = 'toggle'; next_track = 'next'; prev_track = 'prev' }
+    if ($transport.ContainsKey($key)) {
+        $smtc = Send-SmtcControl $transport[$key]
+        if ($smtc -eq $true) { return @{ key = $key; sent = $true; via = 'smtc' } }
+        # Fallback: global media-key injection.
+        $script:LastVkSent = $null
+        $err = Send-MediaKey $key
+        if ($err) { return "media '$key' failed (smtc: $smtc; vkey: $err)" }
+        if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
+            return "media '$key' failed (smtc: $smtc; SendInput injected 0 events - input blocked)"
+        }
+        return @{ key = $key; sent = $true; via = 'vkey-fallback'; smtc = "$smtc" }
+    }
+
+    # Volume keys have no SMTC equivalent → VK injection, but report honestly
+    # whether SendInput actually delivered anything.
+    $script:LastVkSent = $null
     $err = Send-MediaKey $key
     if ($err) { return $err }
-    return @{ key = $key; sent = $true }
+    if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
+        return "volume key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)"
+    }
+    return @{ key = $key; sent = $true; via = 'vkey' }
 }
 
 function Handle-ScreenLook($query) {
