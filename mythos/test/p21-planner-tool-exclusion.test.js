@@ -101,4 +101,45 @@ describe('P21: planner tool exclusion (AUTONOMOUS_EXCLUDED)', () => {
 
     cleanupVaultDir(dir);
   });
+
+  // REMEDIATION P2-10: an effectors implementation without catalog() (only
+  // count()/effectors, the pre-FIX-A shape) previously left toolList as an
+  // empty string — the brain got NO tool guidance at all, worse than the
+  // original bare name-only list FIX A replaced. Must fall back to that list.
+  it('falls back to a bare name-only tool list when ctx.effectors.catalog is not a function', async () => {
+    var brainContent = '';
+    var brain = {
+      think: async function(opts) {
+        brainContent = opts.messages[0].content;
+        return { content: '{"tool":"read_status","args":{}}', offline: false, parsed: { tool: 'read_status', args: {} } };
+      }
+    };
+
+    var dir = tempVaultDir();
+    var fs = createFsStore(function() { return dir; });
+    var bus = fakeBus();
+
+    // Deliberately no catalog() — mirrors an effectors implementation that
+    // predates FIX A (or any partial one that never grew it).
+    var registry = new Map();
+    ['capture_idea', 'read_status', 'get_time'].forEach(function(t) { registry.set(t, { name: t }); });
+    var effectorsNoCatalog = {
+      count: function() { return registry.size; },
+      effectors: registry,
+      invoke: async function() { return { ok: true }; }
+    };
+
+    var goals = createGoalSystem({ fs: fs, config: { GOAL_TOKEN_BUDGET: 50000 }, bus: bus, memory: null, brain: brain });
+    var goal = goals.create({ title: 'no-catalog goal', drive: 'user-service' });
+    goal.status = 'active';
+
+    var result = await goals.plan(goal, { effectors: effectorsNoCatalog, brain: brain });
+
+    assert.ok(brainContent.trim().length > 0, 'the brain must receive a non-empty tool list even without catalog()');
+    assert.ok(brainContent.indexOf('read_status') !== -1, 'a legitimate tool must still appear in the fallback list');
+    assert.ok(brainContent.indexOf('capture_idea') === -1, 'AUTONOMOUS_EXCLUDED must still be honored in the fallback list');
+    assert.ok(result !== null, 'plan() should still work end-to-end with the fallback list');
+
+    cleanupVaultDir(dir);
+  });
 });

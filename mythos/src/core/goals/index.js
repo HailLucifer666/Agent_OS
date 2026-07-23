@@ -408,6 +408,21 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
             return '  - ' + e.name + '(' + paramsText + ')' + (e.description ? ' — ' + e.description : '');
           }).join('\n') +
           '\nDo NOT invent tool names or args. If none of these tools fit, return {"tool":"", "args":{}}.';
+      } else if (ctx.effectors && typeof ctx.effectors.count === 'function') {
+        // REMEDIATION P2-10: without a real catalog(), fall back to the
+        // original bare name-only list rather than silently leaving toolList
+        // empty — an empty list gave the brain NO guidance at all, worse than
+        // the pre-FIX-A behavior this was meant to improve on.
+        var healerFallback = require('../immune/healer');
+        var iter = ctx.effectors.effectors;
+        var names = iter && typeof iter.keys === 'function'
+          ? Array.from(iter.keys()).filter(function(n) {
+              return AUTONOMOUS_EXCLUDED.indexOf(n) === -1 && !healerFallback.isToolSuppressed(n);
+            })
+          : [];
+        toolList = 'You may ONLY choose a tool from this list (use the exact name):\n' +
+          names.map(function(n) { return '  - ' + n; }).join('\n') +
+          '\nDo NOT invent tool names. If none of these tools fit, return {"tool":"", "args":{}}.';
       }
       try {
         // Skills hint: surface the curated skill catalog so the autonomous
