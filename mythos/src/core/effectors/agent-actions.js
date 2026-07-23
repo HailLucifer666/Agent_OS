@@ -535,6 +535,11 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         return { artifact: artifact, review: review, researchStatus: researchStatus };
       }
     });
+    // REMEDIATION P2-8: same fix as buildKanbanCard's job.spec below — the
+    // clean topic, not basePrompt (DELIVERABLE_PREAMBLE + skill-pack/design-
+    // system boilerplate prefixed onto it). Pipeline cards only carry
+    // {id, text} (no title/detail), so the clean spec is simply card.text.
+    job.spec = card.text;
     pipeline.moveCard(card.id, 'execute', { jobId: job.id, progress: 25 });
     return { job: job, board: pipeline.listAll() };
   }
