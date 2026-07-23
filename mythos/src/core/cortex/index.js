@@ -39,6 +39,16 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     if (tickOnce._inFlight) return;
     tickOnce._inFlight = true;
 
+    // REMEDIATION P1-5: capture the generation this specific invocation
+    // belongs to. stop()+start() (a healer 'restart-cortex' heal) bumps
+    // `generation` and force-resets _inFlight above so the NEW generation's
+    // ticks are never blocked — but if THIS tick is still awaiting something
+    // slow (a brain call, an effector dispatch) when that happens, it must
+    // not go on to mutate shared memory.working once it resumes: see the
+    // `generation !== myGen` bail-out below, after the two real await points
+    // (DECIDE's brain call, ACT's dispatch) where a restart could interleave.
+    var myGen = generation;
+
     try {
       var working = memory.working;
       working.tick++;
@@ -147,6 +157,11 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // 'unknown-effector'. This is why Phase 7 effectors would never actually have
       // fired even though the hub itself was wired correctly.
       var decision = await decide(ranked, goals, working, brain, memory, config);
+      // REMEDIATION P1-5: decide() awaits goals.plan() (a real brain call) —
+      // exactly where a restart-cortex heal race can interleave. A stale tick
+      // resuming here must not commit further mutations (spend, action
+      // dispatch) on behalf of a generation that's already been superseded.
+      if (generation !== myGen) return;
       if (!decision) return;
 
       // RC#3: feed the planner's brain-call spend into the working-memory ledger
@@ -158,6 +173,10 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
 
       // -- ACT --
       await act(decision, { bus, memory, goals, brain, leash, effectors, config, working, ACTION_TIMEOUT_MS });
+      // REMEDIATION P1-5: act() awaits the effector dispatch (up to
+      // ACTION_TIMEOUT_MS) — another real restart-race window. A stale tick
+      // must not proceed to REFLECT/CONSOLIDATE on a superseded generation.
+      if (generation !== myGen) return;
 
       // -- REFLECT --
       if (ooda.shouldReflect(working.tick, config)) {
@@ -177,7 +196,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         bus.emit('health.diagnosed', { kind: 'cortex-stall', target: 'tick-loop', consecutive: tickOnce._consecutiveErrors });
       }
     } finally {
-      tickOnce._inFlight = false;
+      // REMEDIATION P1-5: only the tick that's STILL the current generation
+      // gets to clear the reentrancy flag. Without this, a stale tick's
+      // finally (running long after a restart already reset _inFlight and
+      // let the new generation's ticks proceed) could reset _inFlight back to
+      // false WHILE a new-generation tick is genuinely still in flight,
+      // letting a third, overlapping tick start.
+      if (generation === myGen) tickOnce._inFlight = false;
     }
   }
 
