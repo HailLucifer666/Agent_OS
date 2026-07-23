@@ -131,7 +131,11 @@ const SCHEMA = {
   ACTION_TIMEOUT_MS:        { type: 'number', default: 30000, min: 1000 },
 
   // Immune
-  STALL_MS:                 { type: 'number', default: 5000, min: 1000 },
+  // FIX C: was 5000 — lastTickAt is set once at tick start and not refreshed
+  // mid-tick, so any legitimately slow (but progressing) 'build'-lane brain call
+  // past 5s tripped the stall watchdog. Raised to match ACTION_TIMEOUT_MS so only
+  // a truly hung loop fires it.
+  STALL_MS:                 { type: 'number', default: 30000, min: 1000 },
   WATCHDOG_MS:              { type: 'number', default: 2000, min: 500 },
   BREAKER_FAIL_THRESHOLD:   { type: 'number', default: 3, min: 1 },
   BREAKER_WINDOW_MS:        { type: 'number', default: 30000, min: 1000 },
@@ -164,6 +168,19 @@ const SCHEMA = {
   // Browser automation (Phase 9 — playwright-core, drives installed Chrome/Edge)
   BROWSER_CDP_URL:            { type: 'string',  default: 'http://127.0.0.1:9222' },
   BROWSER_AUTOMATION:         { type: 'bool', default: true },
+  // Auto-connect poller: while OFFLINE, retry the CDP connect on this interval so
+  // MYTHOS attaches the moment a debug Chrome appears (and re-attaches after a
+  // drop) with no manual "Connect". CDP-connect only — never launches a browser,
+  // so zero mic risk. 0 = disabled.
+  BROWSER_RECONNECT_MS:       { type: 'number', default: 15000, min: 0 },
+  // Opt-in fully hands-off launch. Boot never launches a browser (it steals the
+  // mic/audio device on Windows during voice init); when this is true, MYTHOS
+  // launches a debug Chrome AFTER boot — once the audio device is already
+  // claimed — so the constraint is respected by timing, not by skipping launch.
+  BROWSER_AUTO_LAUNCH:        { type: 'bool', default: false },
+  // Delay (ms) after the browser-automation boot step before the deferred
+  // auto-launch fires. Long enough for voice/mic init to grab the device first.
+  BROWSER_AUTO_LAUNCH_DELAY_MS: { type: 'number', default: 20000, min: 0 },
 
   // Google OAuth (Phase 13 — Gmail adapter)
   GOOGLE_CLIENT_ID:            { type: 'string', default: '' },

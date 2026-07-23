@@ -383,20 +383,28 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       // names like 'clarify', 'ask_user', 'reason', 'search_files' that don't
       // exist — every one returned 'unknown-effector' and stalled the cortex.
       // BUG-013: also filter out suppressed tools (circuit breaker opened).
+      // FIX A: render params alongside each tool name via ctx.effectors.catalog()
+      // (hub.js's real {name, description, params} source, already consumed by
+      // voice's buildCatalogFromHub) instead of a bare name list. A name-only list
+      // gave the brain no way to know a tool's real arg shape, so it hallucinated
+      // args by pattern-matching other tools (e.g. propose_goal({goal,steps}) —
+      // copied from run_mission({goal}) — when the handler actually reads {text}),
+      // which always failed and stalled the goal on an endless re-plan loop.
       var toolList = '';
-      if (ctx.effectors && typeof ctx.effectors.count === 'function') {
-        var names = [];
-        var iter = ctx.effectors.effectors;
-        if (iter && typeof iter.keys === 'function') {
-          names = Array.from(iter.keys()).filter(function(n) {
-            // BUG-013: check if tool is suppressed via immune system
-            var healer = require('../immune/healer');
-            return AUTONOMOUS_EXCLUDED.indexOf(n) === -1 && !healer.isToolSuppressed(n);
-          });
-        }
-        toolList = 'You may ONLY choose a tool from this list (use the exact name):\n' +
-          names.map(function(n) { return '  - ' + n; }).join('\n') +
-          '\nDo NOT invent tool names. If none of these tools fit, return {"tool":"", "args":{}}.';
+      if (ctx.effectors && typeof ctx.effectors.catalog === 'function') {
+        var healer = require('../immune/healer');
+        var entries = ctx.effectors.catalog().filter(function(e) {
+          // BUG-013: also filter out suppressed tools (circuit breaker opened).
+          return AUTONOMOUS_EXCLUDED.indexOf(e.name) === -1 && !healer.isToolSuppressed(e.name);
+        });
+        toolList = 'You may ONLY choose a tool from this list (use the exact name and args):\n' +
+          entries.map(function(e) {
+            var paramsText = e.params && Object.keys(e.params).length
+              ? Object.keys(e.params).map(function(p) { return p + ': ' + e.params[p]; }).join(', ')
+              : '';
+            return '  - ' + e.name + '(' + paramsText + ')' + (e.description ? ' — ' + e.description : '');
+          }).join('\n') +
+          '\nDo NOT invent tool names or args. If none of these tools fit, return {"tool":"", "args":{}}.';
       }
       try {
         // Skills hint: surface the curated skill catalog so the autonomous

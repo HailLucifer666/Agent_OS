@@ -410,6 +410,11 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     running = false;
     generation++;
     if (timer) { clearInterval(timer); timer = null; }
+    // FIX C: a restart during a slow-but-live tick (tickOnce._inFlight still true,
+    // its finally() hasn't run yet) previously left the reentrancy guard stuck —
+    // every tick on the freshly-started cortex would see _inFlight===true and
+    // silently no-op forever, even though healer already announced "Self-healed".
+    tickOnce._inFlight = false;
     if (bus) bus.emit('lifecycle.stopped', { component: 'cortex' });
   }
 

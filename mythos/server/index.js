@@ -1108,6 +1108,11 @@ function createServer(deps) {
   let entityStatus = 'booting';
   bus.subscribe('lifecycle.*', (e) => {
     if (e.type === 'lifecycle.alive') entityStatus = 'alive';
+    // FIX B: a self-heal restart (healer's 'restart-cortex') calls cortex.stop()
+    // then start() — start() emits 'lifecycle.started', not 'lifecycle.alive'
+    // (that fires once at boot only), so without this the bridge never left
+    // 'stopped' and the orb stuck on "ENTITY OFFLINE" for the rest of the process.
+    if (e.type === 'lifecycle.started' && e.payload && e.payload.component === 'cortex') entityStatus = 'alive';
     if (e.type === 'lifecycle.stopped') entityStatus = 'stopped';
     broadcastAll({ type: 'entity-state', payload: { name: config.MYTHOS_NAME, status: entityStatus, tick: memory.working.tick } });
   });

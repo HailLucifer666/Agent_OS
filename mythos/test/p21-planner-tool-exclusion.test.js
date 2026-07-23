@@ -17,7 +17,15 @@ function fakeEffectors(tools) {
   return {
     count: function() { return registry.size; },
     effectors: registry,
-    invoke: async function() { return { ok: true }; }
+    invoke: async function() { return { ok: true }; },
+    // FIX A: goals/index.js's plan() now sources the brain-facing tool list from
+    // catalog() (hub.js's real {name, description, params} shape, via describeMeta())
+    // instead of a bare name list — mirror that shape here.
+    catalog: function() {
+      return Array.from(registry.values()).map(function(t) {
+        return { name: t.name, description: t.description || '', params: t.params || {} };
+      });
+    }
   };
 }
 

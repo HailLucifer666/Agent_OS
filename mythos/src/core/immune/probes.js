@@ -26,6 +26,12 @@ function isProviderDown(id, registryStatus) {
 function createProbes({ bus, config }) {
   if (!bus) throw new Error('createProbes requires bus');
 
+  // FIX C: getStatus() is polled every 4s (sensors/metric.js) while registry's
+  // own probe result is cached for a 5-min TTL — without this, one real outage
+  // re-fired 'provider-down' on every poll (~150 duplicate events per outage).
+  // Track last-known down/up state per provider and emit only on the transition.
+  const downState = {};
+
   async function getStatus() {
     const registryStatus = await registry.getStatus();
     const stats = spend.getStats();
@@ -33,10 +39,15 @@ function createProbes({ bus, config }) {
 
     for (let i = 0; i < DOWN_CAPABLE.length; i++) {
       const id = DOWN_CAPABLE[i];
-      if (isProviderDown(id, registryStatus)) {
+      const down = isProviderDown(id, registryStatus);
+      const wasDown = !!downState[id];
+      if (down && !wasDown) {
         // 'health.anomaly' — exact string, do not paraphrase.
         bus.emit('health.anomaly', { kind: 'provider-down', target: id, evidence: registryStatus[id] });
+      } else if (!down && wasDown) {
+        bus.emit('health.healed', { kind: 'provider-recovered', target: id, evidence: registryStatus[id] });
       }
+      downState[id] = down;
     }
 
     for (let i = 0; i < quotas.length; i++) {
