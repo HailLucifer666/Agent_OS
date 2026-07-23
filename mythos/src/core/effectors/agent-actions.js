@@ -669,6 +669,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         return { artifact: artifact, review: review, researchStatus: researchStatus };
       }
     });
+    // FIX H (bug 2): the clean topic, not basePrompt (design-system boilerplate +
+    // preamble prefixed onto it) — build-runner's verifier.verify() uses this
+    // instead of basePrompt so its LLM self-check and required-element scan see
+    // the real spec, not injected boilerplate (which was producing false
+    // "topic mismatch" / "missing cta" rejections on correct builds).
+    job.spec = card.title + ' ' + (card.detail || '');
     kanban.patchCard(card.id, { lane: 'building', jobId: job.id });
     return { job: job, board: kanban.listBoard() };
   }

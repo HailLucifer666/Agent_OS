@@ -9,6 +9,11 @@ const sendQueue = [];
 const handlers = new Map();
 const broadcastHandlers = new Map();
 let reqCounter = 0;
+// FIX I: every subscribe({types, replay}) call made so far, re-sent on each
+// reconnect's 'open' event — without this, a dropped/reconnected socket
+// silently stopped receiving 'tick'/'health'/'entity-state' etc. until a full
+// page reload, since the original {type:'subscribe'} message was never resent.
+const activeSubscriptions = [];
 
 function nextReqId() {
   reqCounter += 1;
@@ -41,6 +46,11 @@ function connect() {
     connecting = false;
     backoffMs = 500;
     flushQueue();
+    // FIX I: resubscribe every live subscription so a reconnect doesn't leave
+    // the client deaf to 'tick'/'health'/'entity-state'/etc. broadcasts.
+    activeSubscriptions.forEach((sub) => {
+      sendMessage({ type: 'subscribe', types: sub.types, replay: sub.replay });
+    });
   });
 
   socket.addEventListener('message', (event) => {
@@ -96,7 +106,9 @@ export function offBroadcast(type, fn) {
 // (backend-terminal only — replaying 'action' everywhere would re-fire HUD FX).
 export function subscribe(types, onEvent, opts) {
   connect();
-  sendMessage({ type: 'subscribe', types, replay: Boolean(opts && opts.replay) });
+  const replay = Boolean(opts && opts.replay);
+  sendMessage({ type: 'subscribe', types, replay });
+  activeSubscriptions.push({ types, replay });
   types.forEach((t) => onBroadcast(t, onEvent));
   return () => types.forEach((t) => offBroadcast(t, onEvent));
 }

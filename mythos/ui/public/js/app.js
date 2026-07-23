@@ -26,7 +26,10 @@ mountInitScreen({ subscribe });
 // When entity reports offline/degraded, voice loop skips transcription to save API calls.
 let _brainOnline = true;
 subscribe(['entity-state'], (msg) => {
-  const state = msg.state || msg.status || '';
+  // FIX I: the server sends the status nested at msg.payload.status (see
+  // server/index.js's 'entity-state' broadcast) — msg.state/msg.status were
+  // always undefined, so _brainOnline was always true (failed open).
+  const state = (msg.payload && msg.payload.status) || '';
   _brainOnline = state !== 'offline' && state !== 'error';
 });
 

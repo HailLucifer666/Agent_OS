@@ -100,6 +100,8 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
    * @param {number} [opts.limit=20]       Max results.
    * @param {number} [opts.windowDays=7]   How far back to scan (days).
    * @param {string} [opts.kind]           Filter by record kind (e.g. 'conversation', 'thought'). Omit for all.
+   * @param {string[]} [opts.excludeKinds]  Kinds to exclude (e.g. ['proactive-speech'] — FIX G,
+   *                                        keeps a re-recalled boot greeting from being re-spoken).
    * @returns {Array<{ref:string, score:number, record:object, snippet:string, store:string}>}
    */
   function recall(query, opts) {
@@ -107,6 +109,7 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
     const maxResults = opts.limit || 20;
     const windowDays = opts.windowDays || 7;
     const kindFilter = opts.kind || null;
+    const excludeKinds = opts.excludeKinds || null;
 
     // Date range boundaries
     const until = fs.todayKey();
@@ -124,6 +127,7 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
       const entry = entries[i];
       if (!entry) continue; // corrupt / unparseable
       if (kindFilter && entry.kind !== kindFilter) continue;
+      if (excludeKinds && excludeKinds.indexOf(entry.kind) !== -1) continue;
       // When filtering by kind with no text query, score by recency only
       // (lexicalScore returns 0 for empty query, which would hide all results).
       const score = (kindFilter && !query.trim())

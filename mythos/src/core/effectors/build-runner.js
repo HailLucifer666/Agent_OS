@@ -159,7 +159,11 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
       if (verifier && typeof verifier.verify === 'function') {
         job.stage = 'verifying';
         notify(job);
-        var verification = await verifier.verify(raw, prompt);
+        // FIX H: prefer job.spec (the clean topic, set by buildKanbanCard) over
+        // prompt — prompt is the full builder prompt (design-system boilerplate
+        // first), which made the verifier's spec.slice(0,300) see only
+        // boilerplate. Jobs that don't set spec keep the old prompt fallback.
+        var verification = await verifier.verify(raw, job.spec || prompt);
         if (!verification.pass && !job._retried) {
           job._retried = true;
           var retryResult = await brain.think({
@@ -173,7 +177,7 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
           if (retryResult && !retryResult.offline) {
             raw = retryResult.content;
             // Re-verify the retry — if it still fails, block shipment
-            var reverify = await verifier.verify(raw, prompt);
+            var reverify = await verifier.verify(raw, job.spec || prompt);
             if (!reverify.pass) {
               throw new Error('build failed verification after retry: ' + reverify.issues.join('; '));
             }

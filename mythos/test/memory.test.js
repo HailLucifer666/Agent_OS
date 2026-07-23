@@ -684,6 +684,24 @@ describe('memory-facade', () => {
     assert.ok(Array.isArray(emptyHits));
   });
 
+  // FIX G (bug 1): the boot greeting is persisted as episodic kind:'proactive-speech'
+  // and was being recalled back into conversation context on a fresh session (empty
+  // history) and re-spoken. excludeKinds keeps it out of the recall set.
+  it('recallHybrid excludes matching proactive-speech records when excludeKinds is set', async () => {
+    memory.episodic.write({ tick: 1, kind: 'proactive-speech', summary: 'good morning greeting text', salience: 0.5 });
+    memory.episodic.write({ tick: 1, kind: 'conversation', summary: 'good morning greeting reply', salience: 0.5 });
+
+    const hits = await memory.recallHybrid('good morning greeting', { limit: 10 });
+    assert.ok(hits.some((h) => h.record && h.record.kind === 'proactive-speech'),
+      'sanity: without excludeKinds the proactive-speech record is recallable');
+
+    const filtered = await memory.recallHybrid('good morning greeting', { limit: 10, excludeKinds: ['proactive-speech'] });
+    assert.ok(!filtered.some((h) => h.record && h.record.kind === 'proactive-speech'),
+      'proactive-speech must be excluded once excludeKinds is set');
+    assert.ok(filtered.some((h) => h.record && h.record.kind === 'conversation'),
+      'non-excluded kinds must still come through');
+  });
+
   it('skills write/recall works through facade', () => {
     memory.skills.write('facade-skill', { when: ['facade skill test'], steps: [{ tool: 'echo', args: {} }], successCriteria: [] });
     const hits = memory.skills.recall('facade skill test');

@@ -762,7 +762,10 @@ function createServer(deps) {
         // Best-effort: failures degrade to no memory context (amnesia), never crash.
         var memoryContext = null;
         try {
-          var recalled = await recallWithTimeout(memory.recallHybrid(text, { limit: 8 }), RECALL_TIMEOUT_MS);
+          // FIX G: exclude the boot greeting's own episodic record from being
+          // recalled back into context and re-spoken on a fresh conversation
+          // (empty history / idle-TTL wipe).
+          var recalled = await recallWithTimeout(memory.recallHybrid(text, { limit: 8, excludeKinds: ['proactive-speech'] }), RECALL_TIMEOUT_MS);
           if (recalled === RECALL_TIMED_OUT) {
             logger.warn('memory-recall-timeout', { store: 'hybrid', timeoutMs: RECALL_TIMEOUT_MS });
             recalled = [];

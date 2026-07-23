@@ -203,6 +203,10 @@ function createMemory({ config, bus, logger, brain }) {
             try { rec = store.get(h.ref); } catch { /* pruned/archived ref */ }
             if (!rec) continue;
             const record = rec.record || rec;
+            // FIX G: keyword-path exclusion happens inside episodic.recall() —
+            // the vector path bypasses that (fetches straight from the store),
+            // so apply the same excludeKinds filter here.
+            if (opts.excludeKinds && opts.excludeKinds.indexOf(record.kind) !== -1) continue;
             vector.push({
               ref: h.ref,
               score: h.score,

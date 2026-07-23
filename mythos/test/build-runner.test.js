@@ -83,4 +83,47 @@ describe('effectors/build-runner: createBuildRunner', () => {
 
     cleanupVaultDir(dir);
   });
+
+  // FIX H (bug 2): verifier.verify() must receive the clean topic (job.spec, set
+  // by buildKanbanCard) instead of the full builder prompt (design-system
+  // boilerplate first) — otherwise verify.js's spec.slice(0,300) saw only
+  // boilerplate and rejected correct builds as a false "topic mismatch".
+  it('verify() receives job.spec (clean topic) instead of the full builder prompt when set', async () => {
+    const dir = tempVaultDir();
+    const fs = createFsStore(() => dir, null);
+    const bus = fakeBus();
+    const brain = { think: async () => ({ content: 'ok', offline: false }) };
+    let receivedSpec = null;
+    const verifier = { verify: async (raw, spec) => { receivedSpec = spec; return { pass: true, issues: [] }; } };
+    const buildRunner = createBuildRunner({ config: {}, brain, bus, vault: fs, verifier });
+
+    const job = buildRunner.enqueue({
+      kind: 'kanban-build',
+      prompt: '[DESIGN SYSTEM boilerplate...]\n\nBuild a landing page',
+      run: async () => ({ artifact: { path: '/x' } })
+    });
+    job.spec = 'Build a landing page'; // mirrors buildKanbanCard setting job.spec right after enqueue
+
+    await waitForStatus(buildRunner, job.id, ['done', 'failed']);
+    assert.equal(receivedSpec, 'Build a landing page', 'verifier.verify must receive job.spec, not the full prompt');
+
+    cleanupVaultDir(dir);
+  });
+
+  it('verify() falls back to prompt when job.spec is not set', async () => {
+    const dir = tempVaultDir();
+    const fs = createFsStore(() => dir, null);
+    const bus = fakeBus();
+    const brain = { think: async () => ({ content: 'ok', offline: false }) };
+    let receivedSpec = null;
+    const verifier = { verify: async (raw, spec) => { receivedSpec = spec; return { pass: true, issues: [] }; } };
+    const buildRunner = createBuildRunner({ config: {}, brain, bus, vault: fs, verifier });
+
+    const job = buildRunner.enqueue({ kind: 'test', prompt: 'plain prompt, no spec set', run: async () => ({ artifact: { path: '/x' } }) });
+
+    await waitForStatus(buildRunner, job.id, ['done', 'failed']);
+    assert.equal(receivedSpec, 'plain prompt, no spec set');
+
+    cleanupVaultDir(dir);
+  });
 });
