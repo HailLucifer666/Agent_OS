@@ -405,11 +405,24 @@ function Handle-ListWindows {
     $condition = [System.Windows.Automation.Condition]::TrueCondition
     $all = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
     $windows = @()
+    $skipped = 0
     foreach ($child in $all) {
-        $procId = $child.Current.ProcessId
-        $name = $child.Current.Name
-        $cls = $child.Current.ClassName
-        $rect = Get-RectBounds $child.Current.BoundingRectangle
+        # A window can close between FindAll() enumerating it and this loop
+        # reading its .Current properties — the AutomationElement COM handle
+        # then throws ElementNotAvailableException on ANY property access.
+        # Previously only the Get-Process lookup below was guarded; a throw
+        # from ProcessId/Name/ClassName/BoundingRectangle itself aborted the
+        # whole foreach, failing list_windows entirely for one stale handle
+        # among possibly dozens. Skip just that window and keep going.
+        try {
+            $procId = $child.Current.ProcessId
+            $name = $child.Current.Name
+            $cls = $child.Current.ClassName
+            $rect = Get-RectBounds $child.Current.BoundingRectangle
+        } catch {
+            $skipped++
+            continue
+        }
         try {
             $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
             $procName = if ($proc) { $proc.ProcessName } else { 'unknown' }
@@ -423,7 +436,7 @@ function Handle-ListWindows {
             visible = ($rect.width -gt 0 -and $rect.height -gt 0)
         }
     }
-    return @{ windows = $windows; total = $all.Count }
+    return @{ windows = $windows; total = $windows.Count; skipped = $skipped }
 }
 
 # V8 (Phase 4): active-window sensor handler. Returns the foreground window's
@@ -1112,6 +1125,14 @@ while ($true) {
         }
         'media_key' {
             $result = Handle-MediaKey $cmd.key
+            # REMEDIATION P0-2: the dispatch loop's final gate below only sets
+            # ok:false from $err (unknown-command) or a null $result — every
+            # Handle-* function's own bare-string failure (this file's
+            # established convention: string = failure, hashtable = success)
+            # otherwise fell through as {ok:true, result:"<failure text>"}.
+            # This silently defeated Handle-MediaKey's own honest zero-
+            # SendInput failure (BUG-042). Route a string result to $err.
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'screen_look' {
             $result = Handle-ScreenLook $cmd.query
@@ -1124,9 +1145,16 @@ while ($true) {
         }
         'ui_type' {
             $result = Handle-UiType $cmd.text $cmd.pid $cmd.elementPath
+            # REMEDIATION P0-2: same dispatcher defect as media_key above —
+            # without this, Handle-UiType's zero-SendInput honest failure (and
+            # its plain arg-validation failures) always shipped as ok:true,
+            # and from-pc.js's foregroundThenRetry (which only retries on
+            # !ok) never actually engaged.
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'send_key' {
             $result = Handle-SendKey $cmd.key
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'click_at' {
             $result = Handle-ClickAt $cmd.x $cmd.y

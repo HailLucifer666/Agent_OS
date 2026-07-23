@@ -31,7 +31,36 @@ const NAVIGATE_TIMEOUT_MS = 30000;
 // cleanup step) can kill any orphan before booting.
 const BROWSER_PID_FILE = path.join(__dirname, '..', '..', '.browser-agent.pid');
 
-function writeBrowserPidFile(ctx) {
+// Found live-verifying BUG-029 (2026-07-24, playwright-core 1.61.1): neither
+// accessor below actually yields a process on this version — ctx.browser()
+// returns null for a persistent context, and ctx._browser._process is
+// undefined too — so writeBrowserPidFile silently returned null every time
+// ("browserPid":null in the launch log) and .browser-agent.pid was never
+// written, leaving Start Agent OS.bat's orphan-cleanup step with no PID to
+// check. Fall back to identifying the process by its unique --user-data-dir,
+// the same distinguishing signal the .bat's own provenance check already
+// uses, instead of depending on Playwright-internal accessors.
+function findChromePidByUserDataDir(userDataDir) {
+  try {
+    const { execFileSync } = require('child_process');
+    const escaped = userDataDir.replace(/'/g, "''");
+    // Top-level browser process carries --user-data-dir but not --type= (every
+    // renderer/gpu-process/utility child process does carry --type=). Single
+    // quotes only (no -Filter WQL string) — execSync's shell-string form with
+    // nested double quotes silently returned empty output on Windows (cmd.exe
+    // mangles the escaping); execFileSync with an args array bypasses the
+    // shell entirely, same pattern pc-child/index.js already uses to spawn
+    // powershell.exe.
+    const psCmd = `(Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -like '*${escaped}*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1 -ExpandProperty ProcessId)`;
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], { timeout: 5000, windowsHide: true }).toString().trim();
+    const pid = parseInt(out, 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeBrowserPidFile(ctx, userDataDir) {
   try {
     // launchPersistentContext exposes the browser process via the context's
     // browser() (null for persistent contexts on some versions) — fall back to
@@ -41,6 +70,13 @@ function writeBrowserPidFile(ctx) {
     if (proc && proc.pid) {
       fs.writeFileSync(BROWSER_PID_FILE, String(proc.pid), 'utf8');
       return proc.pid;
+    }
+    if (userDataDir && process.platform === 'win32') {
+      const pid = findChromePidByUserDataDir(userDataDir);
+      if (pid) {
+        fs.writeFileSync(BROWSER_PID_FILE, String(pid), 'utf8');
+        return pid;
+      }
     }
   } catch (_) { /* best-effort */ }
   return null;
@@ -184,7 +220,7 @@ async function launchLocal(userDataDir) {
     launched = true;
     mode = 'launched';
     state = 'ONLINE';
-    const browserPid = writeBrowserPidFile(context); // BUG-029
+    const browserPid = writeBrowserPidFile(context, userDataDir); // BUG-029
     log.info('browser-agent launched local browser', { userDataDir, pages: context.pages().length, browserPid });
 
     context.on('close', function() {

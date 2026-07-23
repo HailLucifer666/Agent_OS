@@ -19,24 +19,19 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 
 ---
 
-## ⚠️ MANDATORY SYNC FILES — UPDATE ON EVERY PUSH
+## Keeping this file current
 
-The following files **MUST** be updated and committed alongside every phase gate push.
-No phase is considered complete until both files reflect the current state.
+Update `ROADMAP.md` (phase status, test count, commit log) as phases land —
+it's the single source of truth; `mythos/ROADMAP.md` is a stale pointer here,
+not a second copy to maintain.
 
-| File | Action | Location |
-|---|---|---|
-| `ROADMAP.md` | Mark phase ✅ Done, update test count, append commit SHA to log | `ROADMAP.md` |
-| `graphify-out/graph.html` | Regenerate with new MYTHOS nodes/edges for completed phase | `graphify-out/graphify-out/graph.html` |
-
-**Procedure for every phase completion:**
-1. Run `npm test` — must be green
-2. Update `ROADMAP.md`: flip phase status to ✅ Done, update test count in Progress table, add commit to Commit Log
-3. Regenerate `graphify-out/graph.html`: add new module nodes + dependency edges for the phase (use `mythos/.graph-data.json` as source, merge into existing NOVA data with community ID offset +50)
-4. `git add -f graphify-out/graph.html ROADMAP.md`
-5. Commit and push together
-
-**Skipping this step blocks the phase gate.**
+**Dropped 2026-07-24:** the previous policy mandating `graphify-out/graph.html`
+regeneration on every push. It was demonstrably not being followed in practice
+(the file's last edit predates dozens of intervening phase-equivalent commits,
+discovered live during the 2026-07-24 wiring audit) and blocked nothing real.
+`graphify-out/` still exists as a manually-regenerated visualization aid —
+regenerate it on demand (`/graphify .`) when a diagram is actually wanted, not
+as a merge gate.
 
 ---
 
