@@ -127,6 +127,17 @@ const TIER_TABLE = {
   'delete_artifact':       3,  // permanently deletes an artifact file + card (danger:true) — same
                                // unmapped-fail-safe bug class as open_artifact/BUG-008, mapped explicitly
                                // here so it resolves to T3 from the table, not tierOf()'s fail-safe
+  // Folder read-write feature: write_file/create_folder/delete_file are the
+  // write side of the sandboxed folder tools (list_folder/read_file are T0).
+  // T3 (not T4) matches delete_artifact/delete_goal above — leash.check()'s
+  // dangerWhen override caps at Math.max(tier,3) regardless, so there is no
+  // clean per-call T4 escalation path today (e.g. "T4 only when overwriting an
+  // existing file") without touching that shared gating logic; T3 confirm-
+  // once-per-goal is the same policy already applied to every other
+  // irreversible-but-sandboxed destructive tool.
+  'write_file':            3,
+  'create_folder':         3,
+  'delete_file':           3,
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,

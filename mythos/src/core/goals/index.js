@@ -26,6 +26,9 @@ var AUTONOMOUS_EXCLUDED = [
   'pipeline_advance',  // the human gate itself — cortex approving its own cards defeats it
   'kill_session',      // irreversible process kill — human only
   'gmail_send',        // sends email to real people — operator-gated
+  'write_file',        // writes/overwrites user files — operator-gated (voice/dashboard only)
+  'create_folder',     // creates user folders — operator-gated
+  'delete_file',       // permanently deletes a user file — operator-gated
 ];
 
 function createGoalSystem({ fs, config, bus, memory, brain }) {

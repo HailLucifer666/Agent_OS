@@ -158,6 +158,91 @@ function read_file({ path: rawPath }) {
   }
 }
 
+// FEATURE (folder read-write): resolveSandboxed() only resolves a path
+// lexically. A directory INSIDE an allowed root that is itself a symlink to
+// somewhere outside would otherwise let a write/delete escape the sandbox even
+// though the raw path looked contained. realpathSync the parent (skipped, not
+// blocked, if it doesn't exist yet — nothing to hijack there) and re-check it
+// still lands inside an allowed root. Hardening beyond the read-only tools
+// above, which have nothing to mutate.
+function parentIsInsideAllowedRoots(dir) {
+  let real;
+  try {
+    real = fs.realpathSync(dir);
+  } catch {
+    return true; // parent doesn't exist yet (will be created) — nothing to check
+  }
+  const roots = allowedRoots();
+  const realForCompare = process.platform === 'win32' ? real.toLowerCase() : real;
+  return roots.some((root) => {
+    const rootForCompare = process.platform === 'win32' ? root.toLowerCase() : root;
+    return realForCompare === rootForCompare || realForCompare.startsWith(rootForCompare + path.sep);
+  });
+}
+
+// ---- write_file ----
+
+function write_file({ path: rawPath, content }) {
+  const sandboxed = resolveSandboxed(rawPath);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (content === undefined || content === null) return fail('Content is required.');
+  try {
+    const dir = path.dirname(sandboxed.resolved);
+    fs.mkdirSync(dir, { recursive: true });
+    if (!parentIsInsideAllowedRoots(dir)) return fail(`"${rawPath}" resolves outside the allowed folders.`);
+    const overwritten = fs.existsSync(sandboxed.resolved);
+    // Atomic write: temp file + renameSync (mirrors memory/fs-store.js's writeText).
+    const tmp = `${sandboxed.resolved}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, String(content), 'utf8');
+    try {
+      fs.renameSync(tmp, sandboxed.resolved);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup */ }
+      throw err;
+    }
+    return ok({ path: sandboxed.resolved, bytesWritten: Buffer.byteLength(String(content), 'utf8'), overwritten });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
+// ---- create_folder ----
+
+function create_folder({ path: rawPath }) {
+  const sandboxed = resolveSandboxed(rawPath);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  try {
+    if (!parentIsInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
+      return fail(`"${rawPath}" resolves outside the allowed folders.`);
+    }
+    fs.mkdirSync(sandboxed.resolved, { recursive: true });
+    return ok({ created: sandboxed.resolved });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
+// ---- delete_file ----
+// Files only — no recursive directory delete in v1 (matches the plan's
+// explicitly scoped-down first cut of the write side).
+
+function delete_file({ path: rawPath }) {
+  const sandboxed = resolveSandboxed(rawPath);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  try {
+    if (!fs.existsSync(sandboxed.resolved)) return fail(`File not found: ${sandboxed.resolved}`);
+    const stat = fs.statSync(sandboxed.resolved);
+    if (!stat.isFile()) return fail('Not a file — delete_file only removes files, not directories.');
+    if (!parentIsInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
+      return fail(`"${rawPath}" resolves outside the allowed folders.`);
+    }
+    fs.unlinkSync(sandboxed.resolved);
+    return ok({ deleted: sandboxed.resolved });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
 // ---- compose_email ----
 
 // Truncates BEFORE encoding, not after — encoding a truncated string never risks cutting
@@ -206,6 +291,9 @@ const TOOLS = [
   { name: 'open_folder', description: 'Open a folder in Windows Explorer.', params: { path: 'string' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
+  { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists).', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },
+  { name: 'create_folder', description: 'Create a folder (and any missing parent folders) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: create_folder },
+  { name: 'delete_file', description: 'Permanently delete a file (not a folder) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: delete_file },
   { name: 'compose_email', description: "Draft an email and open it in a browser Gmail compose tab (or the OS mail app if VOICE_EMAIL_MODE=mailto). Does NOT send it — human must click Send.", params: { to: 'string (optional)', subject: 'string', body: 'string' }, danger: false, fn: compose_email },
 ];
 
@@ -222,6 +310,9 @@ module.exports = {
   open_folder,
   list_folder,
   read_file,
+  write_file,
+  create_folder,
+  delete_file,
   compose_email,
   resolveSandboxed,
   buildMailtoUrl,
