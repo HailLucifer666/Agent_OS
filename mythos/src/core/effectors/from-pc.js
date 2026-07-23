@@ -177,6 +177,12 @@ async function ui_type({ text, pid, elementPath }) {
   const cmdObj = { cmd: 'ui_type', text };
   if (pid) cmdObj.pid = pid;
   if (elementPath) cmdObj.elementPath = elementPath;
+  // FIX E: foreground the target window first, same as ui_click — the confirm-
+  // approval round trip (human clicks Approve in the dashboard) drifts OS
+  // keyboard focus off the target window, so SendInput keystrokes landed
+  // nowhere while still reporting typed:true. No pid means "type into whatever
+  // is focused right now" — nothing to foreground, so keep the plain delegate.
+  if (pid) return foregroundThenRetry(pid, cmdObj, { attempts: 3 });
   return delegate(cmdObj);
 }
 

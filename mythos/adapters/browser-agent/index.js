@@ -72,6 +72,16 @@ let state = 'OFFLINE';   // OFFLINE | CONNECTING | ONLINE
 let hint = null;
 let intentionalDisconnect = false;
 let cdpUrl = null;
+// FIX-1: the in-flight connect() promise, if any. requireOnline() only guards
+// state === 'ONLINE' (not CONNECTING), so a browser_* call that lands while
+// the poller's connect() is still awaiting chromium.connectOverCDP (~10s, with
+// `browser` still null) previously triggered a SECOND concurrent
+// connectOverCDP — leaking one Browser handle (never .close()d) whose live
+// 'disconnected' listener later clobbers the active connection's state to
+// OFFLINE. connect() now returns this promise instead of dialing again
+// whenever one is already in flight, so the poller, ensureOnline(), and
+// browser_launch_debug() can never open two sessions.
+let connectingPromise = null;
 
 function getStatus() {
   let pageCount = 0;
@@ -89,6 +99,10 @@ function getStatus() {
 }
 
 async function connect(url) {
+  // FIX-1: join an in-flight connect instead of racing chromium.connectOverCDP
+  // a second time.
+  if (connectingPromise) return connectingPromise;
+
   if (browser || context) {
     log.info('browser-agent already connected, disconnecting first');
     await disconnect();
@@ -99,31 +113,49 @@ async function connect(url) {
   hint = null;
   intentionalDisconnect = false;
 
-  try {
-    browser = await chromium.connectOverCDP(url, { timeout: CONNECT_TIMEOUT_MS });
-    launched = false;
-    mode = 'cdp';
-    state = 'ONLINE';
-    log.info('browser-agent connected via CDP', { url, contexts: browser.contexts().length });
+  connectingPromise = (async function attemptConnect() {
+    try {
+      const newBrowser = await chromium.connectOverCDP(url, { timeout: CONNECT_TIMEOUT_MS });
 
-    // Handle disconnection events
-    browser.on('disconnected', function() {
-      if (!intentionalDisconnect) {
-        state = 'OFFLINE';
-        hint = 'Chrome disconnected unexpectedly.';
-        log.warn('browser-agent disconnected unexpectedly');
+      // FIX-4: shutdown's disconnect() may have run while this connectOverCDP
+      // was in flight (it sets intentionalDisconnect + forces state OFFLINE
+      // synchronously, since `browser`/`context` are still null mid-connect).
+      // Don't resurrect a connection shutdown already tore down — close the
+      // handle we just opened and bail without touching state/mode.
+      if (intentionalDisconnect) {
+        try { newBrowser.close(); } catch (_) { /* best-effort */ }
+        return false;
       }
-      browser = null;
-    });
 
-    return true;
-  } catch (err) {
-    state = 'OFFLINE';
-    hint = 'CDP connect failed: ' + err.message;
-    browser = null;
-    log.warn('browser-agent connect failed', { error: err.message });
-    return false;
-  }
+      browser = newBrowser;
+      launched = false;
+      mode = 'cdp';
+      state = 'ONLINE';
+      log.info('browser-agent connected via CDP', { url, contexts: browser.contexts().length });
+
+      // Handle disconnection events
+      browser.on('disconnected', function() {
+        if (!intentionalDisconnect) {
+          state = 'OFFLINE';
+          hint = 'Chrome disconnected unexpectedly.';
+          log.warn('browser-agent disconnected unexpectedly');
+        }
+        browser = null;
+      });
+
+      return true;
+    } catch (err) {
+      state = 'OFFLINE';
+      hint = 'CDP connect failed: ' + err.message;
+      browser = null;
+      log.warn('browser-agent connect failed', { error: err.message });
+      return false;
+    } finally {
+      connectingPromise = null;
+    }
+  })();
+
+  return connectingPromise;
 }
 
 async function launchLocal(userDataDir) {
@@ -197,6 +229,43 @@ async function ensureOnline(opts) {
   return false;
 }
 
+// Background auto-connect poller. While OFFLINE (and not an intentional
+// disconnect), retry connect(url) on an interval so MYTHOS attaches the moment a
+// debug Chrome appears, and re-attaches after an unexpected drop — no manual
+// "Connect" needed. CDP-connect only: never launches a browser, so there is no
+// mic/audio-device risk (that is why this is safe to run from boot, unlike a
+// launch). onOnline is invoked once per OFFLINE->ONLINE transition the poller
+// causes, so callers can refresh downstream state (e.g. capabilities.md). The
+// timer is unref'd so it never keeps the process alive on its own.
+let autoConnectTimer = null;
+
+function startAutoConnect(url, intervalMs, onOnline) {
+  stopAutoConnect();
+  if (!url || !intervalMs || intervalMs <= 0) return;
+  autoConnectTimer = setInterval(function () {
+    if (intentionalDisconnect) return;
+    if (state === 'ONLINE' || state === 'CONNECTING') return;
+    connect(url).then(function (ok) {
+      if (ok && typeof onOnline === 'function') {
+        try { onOnline(); } catch (_) { /* best-effort */ }
+      }
+    }).catch(function () {
+      // FIX-5: defensive only — connect() always resolves (true/false), never
+      // rejects (every internal failure path is caught and turned into a
+      // `return false`), so this branch is currently unreachable. Left in
+      // place as a safety net in case that invariant ever changes.
+    });
+  }, intervalMs);
+  if (autoConnectTimer.unref) autoConnectTimer.unref();
+}
+
+function stopAutoConnect() {
+  if (autoConnectTimer) {
+    clearInterval(autoConnectTimer);
+    autoConnectTimer = null;
+  }
+}
+
 async function disconnect() {
   intentionalDisconnect = true;
 
@@ -226,6 +295,57 @@ async function withPage(callback) {
   }
 
   try {
+    var ctx, page;
+
+    if (launched && context) {
+      // Launched (playwright-managed) mode: one persistent context, whose
+      // initial about:blank page we reuse.
+      ctx = context;
+      page = context.pages()[0] || await context.newPage();
+    } else {
+      // CDP-attached mode. Reuse an already-open tab instead of opening a second
+      // one: a freshly launched Chrome opens a blank new-tab, and its CDP target
+      // can lag a moment behind connectOverCDP. Creating a page before that blank
+      // tab is enumerated is what left a stray blank tab beside the navigated one
+      // ("open youtube" -> tab 1 blank + tab 2 youtube). So look across all
+      // contexts for an existing page, briefly waiting for the launch tab to
+      // appear, and only open a new tab (in the existing default context, never a
+      // fresh window) as a last resort.
+      var contexts = browser.contexts();
+      if (!contexts.length) contexts = [await browser.newContext()];
+
+      for (var attempt = 0; attempt < 5 && !page; attempt++) {
+        for (var i = 0; i < contexts.length; i++) {
+          var ps = contexts[i].pages();
+          if (ps.length) { ctx = contexts[i]; page = ps[0]; break; }
+        }
+        if (!page) await new Promise(function (r) { setTimeout(r, 150); });
+      }
+      if (!page) { ctx = contexts[0]; page = await ctx.newPage(); }
+    }
+
+    page.setDefaultTimeout(PAGE_TIMEOUT_MS);
+    page.setDefaultNavigationTimeout(NAVIGATE_TIMEOUT_MS);
+
+    return await callback(page, ctx);
+  } catch (err) {
+    throw new Error('Browser command failed: ' + err.message);
+  }
+}
+
+// Execute a callback on a genuinely NEW tab (never the reused current tab).
+// Used when the caller explicitly asked to open something in a new tab — a
+// single atomic call (create tab + run callback) so the tab can never be left
+// blank because a follow-up navigate call was dropped (the bug this fixes: two
+// separate browser_tabs(new) + browser_navigate calls let a turn create the
+// blank tab and then skip navigating it). Always opens in the existing
+// context/window — never a new browser window.
+async function withNewPage(callback) {
+  if (state !== 'ONLINE' || (!browser && !context)) {
+    throw new Error('Browser automation is OFFLINE.');
+  }
+
+  try {
     var ctx;
     if (launched && context) {
       ctx = context;
@@ -233,8 +353,26 @@ async function withPage(callback) {
       var contexts = browser.contexts();
       ctx = contexts[0] || await browser.newContext();
     }
-    var pages = ctx.pages();
-    var page = pages[0] || await ctx.newPage();
+    // FIX D: a cold-start Chrome/Playwright context opens a default about:blank
+    // tab; unconditionally creating a genuinely new page here leaves that
+    // pre-existing blank tab stranded beside the real one (bug 4/5 — "open
+    // youtube in a new tab" -> blank tab + youtube tab). Briefly poll for it —
+    // mirrors withPage()'s own blank-tab-reuse guard — and navigate the blank
+    // tab instead of opening a second one. If a real page already exists (not
+    // blank), preserve the genuine "open in new tab" intent and create new.
+    var page = null;
+    var existing = ctx.pages();
+    for (var attempt = 0; attempt < 5 && !existing.length; attempt++) {
+      await new Promise(function (r) { setTimeout(r, 150); });
+      existing = ctx.pages();
+    }
+    if (existing.length === 1) {
+      var url0 = (function () { try { return existing[0].url(); } catch (_) { return ''; } })();
+      if (url0 === 'about:blank' || url0 === 'chrome://new-tab-page/' || url0 === '') {
+        page = existing[0];
+      }
+    }
+    if (!page) page = await ctx.newPage();
     page.setDefaultTimeout(PAGE_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATE_TIMEOUT_MS);
 
@@ -249,7 +387,10 @@ module.exports = {
   disconnect,
   getStatus,
   withPage,
+  withNewPage,
   launchLocal,
   ensureOnline,
+  startAutoConnect,    // background CDP auto-connect poller (safe, never launches)
+  stopAutoConnect,
   recordLaunchedPid,   // BUG-029 Phase 3 — for from-browser.js browser_launch_debug
 };

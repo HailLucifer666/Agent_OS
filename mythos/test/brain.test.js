@@ -506,6 +506,19 @@ describe('tryParseWithRepair', function() {
     assert.equal(tryParseWithRepair(''), null);
     assert.equal(tryParseWithRepair(null), null);
   });
+
+  // FIX F (bug 12): a raw Windows path like "D:\Agent OS" contains an illegal
+  // \A JSON escape — plain JSON.parse fails on it. The sanitizer doubles lone
+  // backslashes (not already a valid \" \\ \/ \b \f \n \r \t \u escape) and
+  // retries, recovering the path deterministically without a repair-reprompt.
+  it('recovers a JSON string containing an unescaped Windows path backslash', function() {
+    const raw = '{"path":"D:\\Agent OS"}';
+    assert.deepEqual(tryParseWithRepair(raw), { path: 'D:\\Agent OS' });
+  });
+
+  it('does not double an already-valid escape (e.g. "C:\\\\")', function() {
+    assert.deepEqual(tryParseWithRepair('{"path":"C:\\\\"}'), { path: 'C:\\' });
+  });
 });
 
 // ---------------------------------------------------------------------------

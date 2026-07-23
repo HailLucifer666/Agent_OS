@@ -3,10 +3,23 @@
 // Uses chain.complete for cooldown/failover/key-rotation.
 // Records spend via brain/spend.js (CA from activity-log.js).
 
+// FIX F: doubles a lone backslash (one not already starting a valid JSON escape
+// \" \\ \/ \b \f \n \r \t \u) so a raw Windows path like "D:\Agent OS" (illegal
+// \A escape) becomes valid JSON ("D:\\Agent OS") instead of failing every parse
+// strategy below and forcing a repair-reprompt that lets the model re-garble its
+// own already-broken text (bug 12 — "D:\Agent OS" -> "D:\\\\\\\\OS").
+function sanitizeLoneBackslashes(content) {
+  return String(content).replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+}
+
 function tryParseWithRepair(content) {
   if (!content) return null;
   // Try direct parse first
   try { return JSON.parse(content); } catch {}
+  // Sanitize invalid backslash escapes (common in Windows paths) and retry —
+  // deterministic, no second LLM round trip. Kept ahead of the fence/brace
+  // strategies below so the plain-text (no fence) case is recovered directly.
+  try { return JSON.parse(sanitizeLoneBackslashes(content)); } catch {}
   // Fence-strip: extract JSON from markdown code fences
   const fenceRe = /```(?:json)?\s*\n?([\s\S]*?)\n?```/g;
   let match;

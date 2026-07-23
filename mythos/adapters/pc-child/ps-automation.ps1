@@ -336,6 +336,10 @@ function Send-SmtcControl($action) {
 }
 
 function Send-UnicodeText($text) {
+    # Accumulates SendInput's actual injected-event count into $script:LastVkSent
+    # (same honest-failure pattern as Send-VkKey/BUG-042) so callers can tell a
+    # silently-blocked type (UIPI/higher-integrity foreground) from a real one.
+    $script:LastVkSent = 0
     # Send each character as a Unicode key event pair (down + up)
     foreach ($ch in $text.ToCharArray()) {
         $inputs = @(
@@ -348,7 +352,7 @@ function Send-UnicodeText($text) {
         $inputs[1].type = [NativeInput]::INPUT_KEYBOARD
         $inputs[1].u.ki.wScan = [int]$ch
         $inputs[1].u.ki.dwFlags = [NativeInput]::KEYEVENTF_UNICODE -bor [NativeInput]::KEYEVENTF_KEYUP
-        [void][NativeInput]::SendInput(2, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+        $script:LastVkSent += [NativeInput]::SendInput(2, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
         # Small delay between characters to avoid overwhelming the target
         Start-Sleep -Milliseconds 5
     }
@@ -814,7 +818,14 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
                 Start-Sleep -Milliseconds 50
             }
         }
+        $script:LastVkSent = $null
         Send-UnicodeText $text
+        # BUG-042-class honest failure: SendInput injected zero events (UIPI /
+        # a higher-integrity foreground app blocked it) — report failure instead
+        # of the silent typed:$true that shipped before this fix.
+        if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
+            return "Type failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
+        }
         return @{ typed = $true; length = $text.Length }
     } catch {
         return ('Type failed: ' + $_.Exception.Message)
@@ -840,7 +851,12 @@ function Handle-SendKey($key) {
     if (-not $vk) {
         return @("Unknown key: $key. Valid: $($VK_CODES.Keys -join ', ')")
     }
+    $script:LastVkSent = $null
     Send-VkKey $vk
+    # Same BUG-042-class honest failure as Handle-MediaKey/Handle-UiType.
+    if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
+        return "Send key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
+    }
     return @{ key = $key; sent = $true }
 }
 
