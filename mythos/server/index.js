@@ -1109,13 +1109,22 @@ function createServer(deps) {
 
   // 'lifecycle.started' / 'lifecycle.stopped' / 'lifecycle.alive' feed entity-state.
   let entityStatus = 'booting';
+  // REMEDIATION P1-4: cortex.start() (which emits 'lifecycle.started') also
+  // runs as part of ORDINARY boot sequencing, before later boot steps — if
+  // one of those later steps then fails fast, the process exits without
+  // 'lifecycle.alive' ever firing (src/core/lifecycle/index.js emits it
+  // exactly once, only at the very end of a fully successful boot). Gate
+  // honoring a cortex 'lifecycle.started' as "alive" on having already seen
+  // a genuine 'lifecycle.alive' at least once — otherwise a mid-boot cortex
+  // start could paint the HUD falsely alive moments before boot aborts.
+  let bootComplete = false;
   bus.subscribe('lifecycle.*', (e) => {
-    if (e.type === 'lifecycle.alive') entityStatus = 'alive';
+    if (e.type === 'lifecycle.alive') { entityStatus = 'alive'; bootComplete = true; }
     // FIX B: a self-heal restart (healer's 'restart-cortex') calls cortex.stop()
     // then start() — start() emits 'lifecycle.started', not 'lifecycle.alive'
     // (that fires once at boot only), so without this the bridge never left
     // 'stopped' and the orb stuck on "ENTITY OFFLINE" for the rest of the process.
-    if (e.type === 'lifecycle.started' && e.payload && e.payload.component === 'cortex') entityStatus = 'alive';
+    if (bootComplete && e.type === 'lifecycle.started' && e.payload && e.payload.component === 'cortex') entityStatus = 'alive';
     if (e.type === 'lifecycle.stopped') entityStatus = 'stopped';
     broadcastAll({ type: 'entity-state', payload: { name: config.MYTHOS_NAME, status: entityStatus, tick: memory.working.tick } });
   });

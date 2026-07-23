@@ -267,6 +267,70 @@ test('perception relay is salience-gated: below-threshold non-ws perceptions are
   await server.stop();
 });
 
+// REMEDIATION P1-4: FIX B's lifecycle bridge flipped entityStatus='alive' on
+// ANY 'lifecycle.started'{component:'cortex'} — but cortex.start() ALSO fires
+// during ordinary boot sequencing, before later fail-fast boot steps run. If
+// a later step then throws, the process exits without ever emitting
+// 'lifecycle.alive' — but the HUD had already been told 'alive' by the
+// cortex step alone. A genuine 'lifecycle.alive' (fired exactly once, at the
+// very end of a successful boot — src/core/lifecycle/index.js) must gate
+// whether a later 'lifecycle.started'{cortex} (a genuine restart-cortex heal)
+// is honored as "alive again".
+test('entity-state: a cortex lifecycle.started BEFORE boot ever reaches alive is not painted alive (boot-race guard)', async () => {
+  const bus = createBus({ historySize: 50 });
+  const server = createServer(baseDeps(bus));
+  let ws;
+
+  try {
+    await server.ready;
+    const addr = server.httpServer.address();
+    ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+    await new Promise((resolve) => ws.on('open', resolve));
+
+    const states = [];
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'entity-state') states.push(msg.payload.status);
+    });
+
+    function waitForState(count, timeoutMs) {
+      return new Promise((resolve, reject) => {
+        const start = Date.now();
+        const poll = setInterval(() => {
+          if (states.length >= count) { clearInterval(poll); resolve(); }
+          else if (Date.now() - start > (timeoutMs || 2000)) { clearInterval(poll); reject(new Error('timed out waiting for entity-state broadcasts')); }
+        }, 5);
+      });
+    }
+
+    // Cortex starting as part of ORDINARY boot sequencing — 'lifecycle.alive'
+    // has not fired yet (boot isn't done; a later fail-fast step could still
+    // abort it). Must NOT be painted alive.
+    bus.emit('lifecycle.started', { component: 'cortex', generation: 1 });
+    await waitForState(1);
+    assert.notEqual(states[0], 'alive', 'a cortex start before the FIRST lifecycle.alive must not be painted alive (boot-race)');
+
+    // Boot genuinely completes.
+    bus.emit('lifecycle.alive', {});
+    await waitForState(2);
+    assert.equal(states[1], 'alive');
+
+    // NOW a real restart-cortex heal (stop -> start) after boot has genuinely
+    // completed once — this IS the case FIX B exists to handle.
+    bus.emit('lifecycle.stopped', { component: 'cortex' });
+    bus.emit('lifecycle.started', { component: 'cortex', generation: 2 });
+    await waitForState(4);
+    assert.equal(states[2], 'stopped');
+    assert.equal(states[3], 'alive', 'a cortex restart AFTER boot has completed must restore alive');
+  } finally {
+    // Always tear down, even on assertion failure — an uncleaned real
+    // HTTP/WS server otherwise keeps the process alive and hangs the whole
+    // `node --test` run instead of failing this one test.
+    if (ws) { try { ws.close(); } catch { /* best-effort */ } }
+    await server.stop();
+  }
+});
+
 test('verifyClient rejects a foreign Origin on WS upgrade (CSWSH guard)', async () => {
   const bus = createBus({ historySize: 50 });
   const server = createServer(baseDeps(bus));
