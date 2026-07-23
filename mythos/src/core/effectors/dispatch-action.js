@@ -63,8 +63,21 @@ async function dispatchAction(decision, ctx) {
   // Both are best-effort: failures here MUST NOT mask the action's own result.
   const actionOk = !!(result && result.ok);
   if (decision.skillRef && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
-    try { memory.skills.recordUse(decision.skillRef, actionOk); }
-    catch (_) { /* skill bookkeeping is best-effort */ }
+    try {
+      // FIX-2: recordUse is async and was previously fire-and-forget with no
+      // .catch — a rejection (e.g. a transient Windows EBUSY/EPERM reading a
+      // locked Skills/*.md) escaped as an unhandled rejection and could crash
+      // the whole process. Attach .catch so it can never escape; best-effort
+      // telemetry only, must not mask the action's own result.
+      const recordUseResult = memory.skills.recordUse(decision.skillRef, actionOk);
+      if (recordUseResult && typeof recordUseResult.catch === 'function') {
+        recordUseResult.catch((err) => {
+          if (bus && typeof bus.emit === 'function') {
+            try { bus.emit('health.anomaly', { source: 'skills.recordUse', error: err && err.message }); } catch (_) { /* best-effort */ }
+          }
+        });
+      }
+    } catch (_) { /* skill bookkeeping is best-effort */ }
   }
   if (goalId && goals && typeof goals.markPlanStepDone === 'function') {
     try { goals.markPlanStepDone(goalId, actionOk); }

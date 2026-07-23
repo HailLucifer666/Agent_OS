@@ -46,7 +46,7 @@ const { createVoiceEffector } = require('./core/effectors/voice');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { registerFromComputer } = require('./core/effectors/from-computer');
 const { registerFromPc } = require('./core/effectors/from-pc');
-const { registerFromBrowser } = require('./core/effectors/from-browser');
+const { registerFromBrowser, browser_launch_debug } = require('./core/effectors/from-browser');
 const skillsLoader = require('./core/skills/loader');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
 const { registerFromPersona } = require('./core/effectors/from-persona');
@@ -152,6 +152,13 @@ async function main() {
   let engagementStore = null;
   let engagementManager = null;
   let conversationGateway = null;
+
+  // Re-write vault/Identity/capabilities.md on demand. Assigned by the
+  // 'capabilities-manifest' boot step once effectors/memory are wired; the
+  // browser auto-connect/auto-launch callbacks (which settle async, after that
+  // step) call it so the manifest reflects ONLINE the moment it happens instead
+  // of the stale OFFLINE written at boot. No-op until assigned.
+  let refreshCapabilities = function () {};
 
   // Real boot sequence — wires memory/brain/cortex/goals/sensors (already built)
   // so the entity actually runs its OODA loop end-to-end, not just in unit tests.
@@ -500,19 +507,54 @@ async function main() {
       // already-running Chrome first, then launches Chrome/Edge locally as fallback.
       // Also starts the PC child (PowerShell automation daemon).
       if (config.BROWSER_AUTOMATION !== false) {
-        // CDP connect only — no auto-launch. Launching a real browser on boot
-        // steals the mic/audio device on Windows, breaking voice input. Browser
-        // launches on-demand when tools actually need it.
+        // CDP connect only — no auto-launch here. Launching a real browser on
+        // boot steals the mic/audio device on Windows, breaking voice input.
         browserAgent.connect(config.BROWSER_CDP_URL).then(function(ok) {
           var status = browserAgent.getStatus();
           if (ok) {
             logger.info('browser-automation.online', { mode: status.mode, pages: status.pageCount });
+            refreshCapabilities();
           } else {
-            logger.info('browser-automation.standby', { hint: 'CDP not connected — browser will launch on demand' });
+            logger.info('browser-automation.standby', { hint: 'CDP not connected — auto-connect poller + on-demand launch will bring it online' });
           }
         }).catch(function(err) {
           logger.warn('browser-automation.connect-failed', { error: err.message });
         });
+
+        // Auto-connect poller: attach the moment a debug Chrome appears (operator
+        // ran setup-chrome-debug.ps1, started Chrome with --remote-debugging-port,
+        // or the deferred launch below fired) and re-attach after an unexpected
+        // drop — no manual "Connect". Connect-only, so no mic risk. Refreshes
+        // capabilities.md on the OFFLINE->ONLINE transition. 0 disables it.
+        browserAgent.startAutoConnect(config.BROWSER_CDP_URL, config.BROWSER_RECONNECT_MS, function() {
+          var s = browserAgent.getStatus();
+          logger.info('browser-automation.auto-connected', { mode: s.mode, pages: s.pageCount });
+          refreshCapabilities();
+        });
+
+        // Opt-in fully hands-off launch: boot stays launch-free, but once voice/
+        // mic init has claimed the audio device (delay below), launch a debug
+        // Chrome so the adapter reaches ONLINE with zero manual steps. The
+        // auto-connect poller keeps it attached afterwards; this timer only
+        // bootstraps the first launch. Unref'd so it never holds the process up.
+        if (config.BROWSER_AUTO_LAUNCH === true) {
+          var launchTimer = setTimeout(function() {
+            if (browserAgent.getStatus().state === 'ONLINE') return;
+            logger.info('browser-automation.auto-launch', { delayMs: config.BROWSER_AUTO_LAUNCH_DELAY_MS });
+            Promise.resolve(browser_launch_debug()).then(function(res) {
+              if (res && res.ok) {
+                var s = browserAgent.getStatus();
+                logger.info('browser-automation.auto-launched', { mode: s.mode, pages: s.pageCount });
+                refreshCapabilities();
+              } else {
+                logger.warn('browser-automation.auto-launch-failed', { reason: res && res.result });
+              }
+            }).catch(function(err) {
+              logger.warn('browser-automation.auto-launch-failed', { error: err.message });
+            });
+          }, config.BROWSER_AUTO_LAUNCH_DELAY_MS);
+          if (launchTimer.unref) launchTimer.unref();
+        }
       }
 
       // Start PC child (PowerShell automation daemon) for desktop control tools.
@@ -548,6 +590,10 @@ async function main() {
         }
       }
       writeIt();
+      // Expose the writer so the browser auto-connect/auto-launch callbacks (which
+      // settle async, after this step) can re-write the manifest when the adapter
+      // flips ONLINE — otherwise it keeps the stale OFFLINE line written here.
+      refreshCapabilities = writeIt;
       var settleTimer = setTimeout(writeIt, 10000);
       if (settleTimer.unref) settleTimer.unref();
       logger.info('capabilities-manifest.written', { tools: effectors.count() });
@@ -722,6 +768,7 @@ async function main() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     pcChild.shutdownPcChild();
     cuaDriver.shutdownCuaDriver();
+    browserAgent.stopAutoConnect();  // stop the poller before disconnect so it can't re-attach mid-shutdown
     browserAgent.disconnect();
     if (edgeTtsChild) edgeTtsChild.stop();
     if (timerSensor) timerSensor.stop();

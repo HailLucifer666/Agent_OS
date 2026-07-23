@@ -9,6 +9,7 @@ const { effectorFromTool } = require('./adapter');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 function ok(result) { return { ok: true, result }; }
 function fail(reason) { return { ok: false, result: reason }; }
@@ -25,7 +26,20 @@ let config = null;
 async function requireOnline() {
   let status = browserAgent.getStatus();
   if (status.state !== 'ONLINE') {
-    try { await browserAgent.ensureOnline({ cdpUrl: process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) }); } catch { /* fall through to OFFLINE report below */ }
+    // Lazy bring-up: try a CDP connect to an already-running debug Chrome, then
+    // fall back to launching one. Passing userDataDir is what actually arms
+    // ensureOnline's launch fallback (adapter's launchLocal) — previously only
+    // cdpUrl was passed, so ensureOnline could only connect and browser tools
+    // stayed OFFLINE whenever no debug Chrome was already running. Safe here:
+    // this runs mid-session when a browser tool is actually invoked, so voice/
+    // mic init already holds the audio device (that is why boot stays
+    // connect-only). launchLocal records the PID for BUG-029 orphan cleanup.
+    try {
+      await browserAgent.ensureOnline({
+        cdpUrl: process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL),
+        userDataDir: path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'MYTHOS', 'chrome-debug-profile'),
+      });
+    } catch { /* fall through to OFFLINE report below */ }
     status = browserAgent.getStatus();
   }
   if (status.state !== 'ONLINE') {
@@ -36,16 +50,22 @@ async function requireOnline() {
 
 // ---- Tool implementations ----
 
-async function browser_navigate({ url }) {
+async function browser_navigate({ url, newTab }) {
   if (!url) return fail('URL is required.');
   try { new URL(url); } catch { return fail(`Invalid URL: "${url}"`); }
   const guard = await requireOnline();
   if (guard) return guard;
 
-  return browserAgent.withPage(async (page) => {
+  // newTab:true opens a genuinely new tab and loads url into it in one atomic
+  // call. This exists so "open X in a new tab" can never be satisfied by
+  // creating a blank tab without navigating it (the bug: browser_tabs(new) and
+  // browser_navigate were two separate, droppable calls) — one tool call now
+  // does both, so a stray blank tab can't be left behind.
+  const runner = newTab ? browserAgent.withNewPage : browserAgent.withPage;
+  return runner(async (page) => {
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     const title = await page.title();
-    return ok({ url: page.url(), title });
+    return ok({ url: page.url(), title, newTab: !!newTab });
   }).catch(err => fail(err.message));
 }
 
@@ -288,7 +308,20 @@ function findBrowserExecutable() {
 // that turns that CDP-connect-only standby into an actually-online browser
 // when the user asks for one, without touching the boot-time prohibition.
 async function browser_launch_debug() {
-  if (browserAgent.getStatus().state === 'ONLINE') return ok({ alreadyOnline: true });
+  const status0 = browserAgent.getStatus();
+  if (status0.state === 'ONLINE') return ok({ alreadyOnline: true });
+  if (status0.state === 'CONNECTING') {
+    // FIX-1: a connect is already in flight (poller tick or a concurrent
+    // caller) — join it via ensureOnline()/connect()'s connectingPromise guard
+    // instead of spawning a second Chrome process on top of it.
+    const cdpUrl0 = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
+    const joined = await browserAgent.ensureOnline({ cdpUrl: cdpUrl0 }).catch(() => false);
+    if (joined) {
+      const s = browserAgent.getStatus();
+      return ok({ launched: false, mode: s.mode, pageCount: s.pageCount });
+    }
+    return fail('A browser connection attempt is already in progress and did not complete — try again in a moment.');
+  }
 
   const exe = findBrowserExecutable();
   if (!exe) return fail('No Chrome or Edge installation found. Install Google Chrome or Microsoft Edge.');
@@ -328,7 +361,7 @@ async function browser_launch_debug() {
 // ---- Tool catalog ----
 
 const TOOLS = [
-  { name: 'browser_navigate', description: 'Navigate the browser to a URL.', params: { url: 'string - the URL to navigate to' }, danger: false, fn: browser_navigate, needs_result: true },
+  { name: 'browser_navigate', description: 'Navigate the browser to a URL. Set newTab:true to open it in a new tab instead of reusing the current one.', params: { url: 'string - the URL to navigate to', newTab: 'boolean (optional) - open in a new tab instead of the current one' }, danger: false, fn: browser_navigate, needs_result: true },
   { name: 'browser_click', description: 'Click an element on the page using a CSS selector.', params: { selector: 'string - CSS selector of the element to click' }, danger: false, fn: browser_click },
   { name: 'browser_type', description: 'Type text into an input field. Set clearFirst to true to clear the field first.', params: { selector: 'string - CSS selector of the input field', text: 'string - text to type', clearFirst: 'boolean (optional) - clear field before typing' }, danger: false, fn: browser_type },
   { name: 'browser_screenshot', description: 'Take a screenshot of the current page. Returns base64 PNG.', params: {}, danger: false, fn: browser_screenshot, needs_result: true },

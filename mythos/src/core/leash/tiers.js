@@ -124,6 +124,9 @@ const TIER_TABLE = {
   'browser_fill_form':     3,  // Phase 4 — autonomous multi-field typing
   'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
   'run_command':           3,  // Phase 3 (V7) — allow-listed shell command; confirm-once-per-goal. v1 is allowlist+timeout, NOT a full sandbox
+  'delete_artifact':       3,  // permanently deletes an artifact file + card (danger:true) — same
+                               // unmapped-fail-safe bug class as open_artifact/BUG-008, mapped explicitly
+                               // here so it resolves to T3 from the table, not tierOf()'s fail-safe
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,

@@ -80,6 +80,31 @@ describe('BUG-008 — open_artifact tiering', function() {
   });
 });
 
+describe('FIX-3 — delete_artifact tiering (same unmapped-fail-safe bug class as BUG-008)', function() {
+  it('tierOf("delete_artifact") resolves to the explicit T3 entry, not the T3 unmapped fail-safe', function() {
+    var { tierOf, TIER_TABLE } = require('../src/core/leash/tiers');
+    // Both resolve to 3, but only the first proves it came FROM THE TABLE — an
+    // unmapped tool would also land on 3 via tierOf()'s fail-safe, silently
+    // masking a missing entry. This is the exact bug open_artifact/BUG-008 hit.
+    assert.equal(TIER_TABLE.delete_artifact, 3, 'delete_artifact must have an explicit TIER_TABLE entry');
+    assert.equal(tierOf('delete_artifact'), 3);
+  });
+
+  it('leash.check() requires confirm for delete_artifact (destructive, T3)', function() {
+    var { createLeash } = require('../src/core/leash');
+    var leash = createLeash({
+      bus: fakeBus(), config: fakeConfig(), identity: noopIdentity(),
+      auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
+      effectors: noopEffectors()
+    });
+    var result = leash.check({ tool: 'delete_artifact', args: { query: 'old-build' } }, {});
+    assert.equal(result.allow, false);
+    assert.equal(result.requireConfirm, true);
+    assert.equal(result.tier, 3);
+    assert.equal(result.reason, 'tier-3-requires-confirm');
+  });
+});
+
 describe('BUG-012 — session-scoped T3 grants for goal-less (voice) actions', function() {
   function makeLeash() {
     var { createLeash } = require('../src/core/leash');

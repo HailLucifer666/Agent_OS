@@ -145,4 +145,39 @@ describe('Phase 4 / Area A — V2 execution→learning loop in dispatchAction', 
     assert.equal(completed.payload.ok, true);
   });
 
+  // FIX-2: recordUse() is async and was previously fire-and-forget with no
+  // .catch attached to its returned promise. The try/catch above only guards
+  // call-INITIATION (a synchronous throw) — a promise that resolves and later
+  // REJECTS (e.g. a transient Windows EBUSY/EPERM reading a locked
+  // Skills/*.md file) escaped as an unhandled rejection with no
+  // unhandledRejection handler anywhere in the app, crashing the process.
+  it('a REJECTING (async) recordUse promise does not escape as an unhandled rejection', async function () {
+    var mem = fakeMemory();
+    mem.skills.recordUse = function () { return Promise.reject(new Error('EBUSY: locked Skills/x.md')); };
+    var bus = fakeBus();
+    var unhandled = [];
+    function onUnhandled(err) { unhandled.push(err); }
+    process.on('unhandledRejection', onUnhandled);
+    var result;
+    try {
+      var decision = { tool: 'shell_run', args: {}, skillRef: 'sk', rationale: 'procedural-skill' };
+      result = await dispatchAction(decision, {
+        effectors: fakeEffectors({ ok: true, result: 'deployed' }),
+        bus: bus, goals: fakeGoals(), memory: mem, config: { ACTION_TIMEOUT_MS: 5000 },
+        goalId: 'g-1', tier: 2
+      });
+      // Give the rejected recordUse promise's microtasks a couple of ticks to
+      // surface as an unhandledRejection if it were going to.
+      await new Promise(function (r) { setImmediate(r); });
+      await new Promise(function (r) { setImmediate(r); });
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+    assert.equal(result.ok, true, 'the action result must still be returned even though recordUse rejected');
+    assert.equal(unhandled.length, 0, 'a rejecting recordUse() must not escape as an unhandled rejection');
+    var anomaly = bus._emitted().find(function (e) { return e.name === 'health.anomaly'; });
+    assert.ok(anomaly, 'the rejection should be reported as a health.anomaly event');
+    assert.equal(anomaly.payload.source, 'skills.recordUse');
+  });
+
 });
