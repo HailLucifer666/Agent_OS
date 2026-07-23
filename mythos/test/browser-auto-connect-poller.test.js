@@ -310,6 +310,59 @@ test('withNewPage: a context with a real (non-blank) page still opens a genuinel
   });
 });
 
+// REMEDIATION P2-7: the FIX D above only checked a SINGLE context (contexts[0]
+// in CDP mode) and only reused a blank tab when it was the context's ONLY
+// page (existing.length === 1) — missing a blank tab sitting in a
+// non-first context, or a blank tab coexisting alongside an already-real one
+// in the same context. withNewPage() must mirror withPage()'s own
+// multi-context poll and find a blank page ANYWHERE, however many other
+// pages exist alongside it.
+test('withNewPage: a blank tab in a NON-FIRST context is found and reused (multi-context)', async () => {
+  const realPage = { url: () => 'https://example.com/', setDefaultTimeout: () => {}, setDefaultNavigationTimeout: () => {} };
+  const blankPage = { url: () => 'about:blank', setDefaultTimeout: () => {}, setDefaultNavigationTimeout: () => {} };
+  let newPageCalls = 0;
+  const contextA = { pages: () => [realPage], newPage: async () => { newPageCalls++; throw new Error('must not create a new page — a blank tab exists in another context'); } };
+  const contextB = { pages: () => [blankPage], newPage: async () => { newPageCalls++; throw new Error('must not create a new page — this context already has the blank tab'); } };
+  const mockChromium = {
+    connectOverCDP: async () => ({ contexts: () => [contextA, contextB], on: () => {} }),
+    launchPersistentContext: async () => { throw new Error('unused'); },
+  };
+
+  await withMockedPlaywright(mockChromium, async (agent) => {
+    await agent.connect('http://127.0.0.1:9222');
+
+    let receivedPage = null;
+    await agent.withNewPage(async (page) => { receivedPage = page; });
+
+    assert.equal(receivedPage, blankPage, 'the blank tab in the second context must be found and reused');
+    assert.equal(newPageCalls, 0, 'ctx.newPage() must not be called when a blank tab exists anywhere');
+  });
+});
+
+test('withNewPage: a blank tab coexisting alongside a real tab in the SAME context is reused, not the real one', async () => {
+  const realPage = { url: () => 'https://example.com/', setDefaultTimeout: () => {}, setDefaultNavigationTimeout: () => {} };
+  const blankPage = { url: () => 'about:blank', setDefaultTimeout: () => {}, setDefaultNavigationTimeout: () => {} };
+  let newPageCalls = 0;
+  const fakeContext = {
+    pages: () => [realPage, blankPage],
+    newPage: async () => { newPageCalls++; throw new Error('must not create a new page — a blank tab already coexists here'); },
+  };
+  const mockChromium = {
+    connectOverCDP: async () => ({ contexts: () => [fakeContext], on: () => {} }),
+    launchPersistentContext: async () => { throw new Error('unused'); },
+  };
+
+  await withMockedPlaywright(mockChromium, async (agent) => {
+    await agent.connect('http://127.0.0.1:9222');
+
+    let receivedPage = null;
+    await agent.withNewPage(async (page) => { receivedPage = page; });
+
+    assert.equal(receivedPage, blankPage, 'the blank tab must be reused even though a real tab coexists in the same context');
+    assert.equal(newPageCalls, 0);
+  });
+});
+
 test('browser_navigate: without newTab reuses the current tab via withPage', async () => {
   let withPageCalled = false;
   let withNewPageCalled = false;

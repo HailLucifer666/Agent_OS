@@ -369,6 +369,22 @@ async function withPage(callback) {
   }
 }
 
+// A page is Chrome's/Playwright's default cold-start new-tab page — never a
+// real navigated page — regardless of which context or how many other pages
+// sit alongside it.
+function isBlankPageUrl(url) {
+  return url === 'about:blank' || url === 'chrome://new-tab-page/' || url === '';
+}
+
+function findBlankPage(pages) {
+  for (var i = 0; i < pages.length; i++) {
+    var url;
+    try { url = pages[i].url(); } catch (_) { url = ''; }
+    if (isBlankPageUrl(url)) return pages[i];
+  }
+  return null;
+}
+
 // Execute a callback on a genuinely NEW tab (never the reused current tab).
 // Used when the caller explicitly asked to open something in a new tab — a
 // single atomic call (create tab + run callback) so the tab can never be left
@@ -382,32 +398,39 @@ async function withNewPage(callback) {
   }
 
   try {
-    var ctx;
+    var ctx, page = null;
+
     if (launched && context) {
       ctx = context;
+      page = findBlankPage(context.pages());
     } else {
+      // REMEDIATION P2-7: a cold-start Chrome/Playwright context opens a
+      // default about:blank tab; unconditionally creating a genuinely new
+      // page leaves that pre-existing blank tab stranded beside the real one
+      // (bug 4/5 — "open youtube in a new tab" -> blank tab + youtube tab).
+      // Mirror withPage()'s own multi-context poll — search ALL contexts,
+      // not just the first — and reuse a blank page found ANYWHERE, however
+      // many other (real) pages coexist alongside it in the same context.
       var contexts = browser.contexts();
-      ctx = contexts[0] || await browser.newContext();
-    }
-    // FIX D: a cold-start Chrome/Playwright context opens a default about:blank
-    // tab; unconditionally creating a genuinely new page here leaves that
-    // pre-existing blank tab stranded beside the real one (bug 4/5 — "open
-    // youtube in a new tab" -> blank tab + youtube tab). Briefly poll for it —
-    // mirrors withPage()'s own blank-tab-reuse guard — and navigate the blank
-    // tab instead of opening a second one. If a real page already exists (not
-    // blank), preserve the genuine "open in new tab" intent and create new.
-    var page = null;
-    var existing = ctx.pages();
-    for (var attempt = 0; attempt < 5 && !existing.length; attempt++) {
-      await new Promise(function (r) { setTimeout(r, 150); });
-      existing = ctx.pages();
-    }
-    if (existing.length === 1) {
-      var url0 = (function () { try { return existing[0].url(); } catch (_) { return ''; } })();
-      if (url0 === 'about:blank' || url0 === 'chrome://new-tab-page/' || url0 === '') {
-        page = existing[0];
+      if (!contexts.length) contexts = [await browser.newContext()];
+
+      for (var attempt = 0; attempt < 5 && !page; attempt++) {
+        for (var i = 0; i < contexts.length; i++) {
+          var found = findBlankPage(contexts[i].pages());
+          if (found) { ctx = contexts[i]; page = found; break; }
+        }
+        if (!page) {
+          // No blank page anywhere yet — but if some context already has a
+          // real (non-blank) page, a blank one isn't going to appear later;
+          // stop waiting and fall through to creating a genuinely new tab.
+          var anyPages = contexts.some(function (c) { return c.pages().length > 0; });
+          if (anyPages) break;
+          await new Promise(function (r) { setTimeout(r, 150); });
+        }
       }
+      if (!ctx) ctx = contexts[0];
     }
+
     if (!page) page = await ctx.newPage();
     page.setDefaultTimeout(PAGE_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATE_TIMEOUT_MS);
