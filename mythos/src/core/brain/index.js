@@ -32,20 +32,25 @@ function sanitizeLoneBackslashes(content) {
 
 function tryParseWithRepair(content) {
   if (!content) return null;
-  // REMEDIATION P1-3: prefer the sanitized parse over a naive direct parse of
-  // the ORIGINAL text whenever sanitizing actually changed something (i.e.
-  // the raw text contained at least one lone/unescaped backslash). A naive
-  // direct parse can silently SUCCEED with a corrupted value for exactly the
-  // inputs this sanitizer exists to fix (see comment above) — it does not
-  // reliably throw, so gating the sanitize-and-retry behind a caught
-  // exception missed those cases entirely. When sanitizing is a no-op
-  // (content has no lone backslashes, or none at all), this changes nothing.
+  // REMEDIATION P1-3b: direct parse FIRST. Valid JSON — including string values
+  // that legitimately contain \n \t \" etc. (e.g. a write_file `content` arg
+  // with real line breaks) — must round-trip untouched. A repair pass must
+  // never corrupt VALID input; an earlier revision ran the backslash-doubling
+  // sanitizer first and turned every "line1\nline2" into a literal backslash-n.
+  try { return JSON.parse(content); } catch {}
+  // Direct parse threw: the model likely emitted a raw Windows path with an
+  // ILLEGAL escape such as "D:\Agent OS" (\A is not a JSON escape). Double every
+  // lone backslash and retry — recovers bug 12's reported case with no reprompt.
+  // Known residual: a raw path whose segment begins with t/n/r/b/f/u after a
+  // lone backslash (e.g. "D:\temp") is itself VALID JSON (\t == a tab), so the
+  // direct parse above already consumed it — to a corrupted value. That
+  // ambiguity is unfixable by a purely syntactic pass without breaking
+  // legitimate escapes, so we favour not corrupting valid JSON; a well-behaved
+  // model escapes its paths ("D:\\temp").
   const sanitized = sanitizeLoneBackslashes(content);
   if (sanitized !== content) {
     try { return JSON.parse(sanitized); } catch {}
   }
-  // Try direct parse
-  try { return JSON.parse(content); } catch {}
   // Fence-strip: extract JSON from markdown code fences
   const fenceRe = /```(?:json)?\s*\n?([\s\S]*?)\n?```/g;
   let match;

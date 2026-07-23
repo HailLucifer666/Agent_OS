@@ -515,21 +515,28 @@ describe('tryParseWithRepair', function() {
     assert.deepEqual(tryParseWithRepair(raw), { path: 'D:\\Agent OS' });
   });
 
-  // REMEDIATION P1-3: the previous sanitizer's negative-lookahead excluded
-  // \t \n \b \f \r \u from doubling on the theory they were "already a valid
-  // JSON escape" — but for a RAW unescaped Windows path those are exactly the
-  // common first letters of real folder names (temp, node_modules, backup,
-  // foo, run, uploads...), and \t/\n/\b/\f/\r/\u4dig ARE syntactically valid
-  // JSON escapes, so a naive JSON.parse doesn't even throw — it silently
-  // SUCCEEDS with a corrupted value (a real tab/newline/etc. character
-  // swallowing the following letter), which the old throws-only sanitizer
-  // path never got a chance to catch at all. These must round-trip exactly.
-  it('round-trips "D:\\temp" without corrupting it into a literal tab', function() {
-    assert.deepEqual(tryParseWithRepair('{"path":"D:\\temp"}'), { path: 'D:\\temp' });
+  // REMEDIATION P1-3b: a repair pass must never corrupt VALID JSON. The prior
+  // revision doubled every lone backslash BEFORE a direct parse, turning a
+  // legitimately-escaped value like "line1\nline2" into a literal backslash-n.
+  // Direct parse now runs first (brain/index.js), so valid escapes round-trip
+  // untouched. These two FAIL on that prior revision — regression guards, and
+  // the write_file `content`-with-newlines case that motivated the fix.
+  it('preserves a real \\n newline escape in valid JSON (not literal backslash-n)', function() {
+    assert.deepEqual(tryParseWithRepair('{"content":"line1\\nline2"}'), { content: 'line1\nline2' });
   });
 
-  it('round-trips "D:\\node_modules" without corrupting it into a literal newline', function() {
-    assert.deepEqual(tryParseWithRepair('{"path":"D:\\node_modules"}'), { path: 'D:\\node_modules' });
+  it('preserves a real \\t tab escape in valid JSON (not literal backslash-t)', function() {
+    assert.deepEqual(tryParseWithRepair('{"content":"a\\tb"}'), { content: 'a\tb' });
+  });
+
+  // Known residual: a raw UNESCAPED path whose first segment begins with a
+  // JSON-escape letter (t/n/r/b/f/u) — e.g. "D:\temp" — is itself valid JSON
+  // (\t == a tab), so the direct parse consumes it (to a corrupted value)
+  // before the sanitizer can see it. Unfixable syntactically without breaking
+  // the legitimate escapes above. A well-behaved model escapes its paths, which
+  // round-trips correctly:
+  it('round-trips a properly-escaped Windows path', function() {
+    assert.deepEqual(tryParseWithRepair('{"path":"D:\\\\temp"}'), { path: 'D:\\temp' });
   });
 
   it('round-trips "D:\\Users\\foo" (two lone backslashes) correctly', function() {
