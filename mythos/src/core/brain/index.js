@@ -3,23 +3,49 @@
 // Uses chain.complete for cooldown/failover/key-rotation.
 // Records spend via brain/spend.js (CA from activity-log.js).
 
-// FIX F: doubles a lone backslash (one not already starting a valid JSON escape
-// \" \\ \/ \b \f \n \r \t \u) so a raw Windows path like "D:\Agent OS" (illegal
-// \A escape) becomes valid JSON ("D:\\Agent OS") instead of failing every parse
-// strategy below and forcing a repair-reprompt that lets the model re-garble its
-// own already-broken text (bug 12 — "D:\Agent OS" -> "D:\\\\\\\\OS").
+// REMEDIATION P1-3: doubles every LONE backslash — one that is not already
+// the second half of a pre-existing "\\" pair — so a raw Windows path like
+// "D:\Agent OS" (illegal \A escape) or "D:\temp"/"D:\node_modules" becomes
+// valid JSON instead of failing every parse strategy below (bug 12). The
+// previous version used a negative lookahead that skipped doubling whenever
+// the backslash was followed by "\"\\/bfnrtu" on the theory those were
+// "already a valid JSON escape" — but for a RAW unescaped path those are
+// exactly the common first letters of real folder names (temp, node_modules,
+// backup, foo, run...), and \t \n \b \f \r \u ARE syntactically valid JSON
+// escapes, so plain JSON.parse doesn't even throw on them — it SILENTLY
+// SUCCEEDS with a corrupted value (a real tab/newline/etc. swallowing the
+// following letter). A pre-existing genuine "\\" pair is left untouched (both
+// characters consumed together) so already-correctly-escaped input is a no-op.
 function sanitizeLoneBackslashes(content) {
-  return String(content).replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+  const str = String(content);
+  let out = '';
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === '\\') {
+      out += '\\\\';
+      if (str[i + 1] === '\\') i++; // consume the pair together, don't re-double it
+    } else {
+      out += str[i];
+    }
+  }
+  return out;
 }
 
 function tryParseWithRepair(content) {
   if (!content) return null;
-  // Try direct parse first
+  // REMEDIATION P1-3: prefer the sanitized parse over a naive direct parse of
+  // the ORIGINAL text whenever sanitizing actually changed something (i.e.
+  // the raw text contained at least one lone/unescaped backslash). A naive
+  // direct parse can silently SUCCEED with a corrupted value for exactly the
+  // inputs this sanitizer exists to fix (see comment above) — it does not
+  // reliably throw, so gating the sanitize-and-retry behind a caught
+  // exception missed those cases entirely. When sanitizing is a no-op
+  // (content has no lone backslashes, or none at all), this changes nothing.
+  const sanitized = sanitizeLoneBackslashes(content);
+  if (sanitized !== content) {
+    try { return JSON.parse(sanitized); } catch {}
+  }
+  // Try direct parse
   try { return JSON.parse(content); } catch {}
-  // Sanitize invalid backslash escapes (common in Windows paths) and retry —
-  // deterministic, no second LLM round trip. Kept ahead of the fence/brace
-  // strategies below so the plain-text (no fence) case is recovered directly.
-  try { return JSON.parse(sanitizeLoneBackslashes(content)); } catch {}
   // Fence-strip: extract JSON from markdown code fences
   const fenceRe = /```(?:json)?\s*\n?([\s\S]*?)\n?```/g;
   let match;

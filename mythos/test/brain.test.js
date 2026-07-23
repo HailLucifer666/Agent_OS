@@ -508,15 +508,35 @@ describe('tryParseWithRepair', function() {
   });
 
   // FIX F (bug 12): a raw Windows path like "D:\Agent OS" contains an illegal
-  // \A JSON escape — plain JSON.parse fails on it. The sanitizer doubles lone
-  // backslashes (not already a valid \" \\ \/ \b \f \n \r \t \u escape) and
-  // retries, recovering the path deterministically without a repair-reprompt.
-  it('recovers a JSON string containing an unescaped Windows path backslash', function() {
+  // \A JSON escape — plain JSON.parse fails (throws) on it. Recovered
+  // deterministically without a repair-reprompt.
+  it('recovers a JSON string containing an unescaped Windows path backslash (throwing case)', function() {
     const raw = '{"path":"D:\\Agent OS"}';
     assert.deepEqual(tryParseWithRepair(raw), { path: 'D:\\Agent OS' });
   });
 
-  it('does not double an already-valid escape (e.g. "C:\\\\")', function() {
+  // REMEDIATION P1-3: the previous sanitizer's negative-lookahead excluded
+  // \t \n \b \f \r \u from doubling on the theory they were "already a valid
+  // JSON escape" — but for a RAW unescaped Windows path those are exactly the
+  // common first letters of real folder names (temp, node_modules, backup,
+  // foo, run, uploads...), and \t/\n/\b/\f/\r/\u4dig ARE syntactically valid
+  // JSON escapes, so a naive JSON.parse doesn't even throw — it silently
+  // SUCCEEDS with a corrupted value (a real tab/newline/etc. character
+  // swallowing the following letter), which the old throws-only sanitizer
+  // path never got a chance to catch at all. These must round-trip exactly.
+  it('round-trips "D:\\temp" without corrupting it into a literal tab', function() {
+    assert.deepEqual(tryParseWithRepair('{"path":"D:\\temp"}'), { path: 'D:\\temp' });
+  });
+
+  it('round-trips "D:\\node_modules" without corrupting it into a literal newline', function() {
+    assert.deepEqual(tryParseWithRepair('{"path":"D:\\node_modules"}'), { path: 'D:\\node_modules' });
+  });
+
+  it('round-trips "D:\\Users\\foo" (two lone backslashes) correctly', function() {
+    assert.deepEqual(tryParseWithRepair('{"path":"D:\\Users\\foo"}'), { path: 'D:\\Users\\foo' });
+  });
+
+  it('leaves an already-properly-escaped backslash pair untouched (no double-doubling)', function() {
     assert.deepEqual(tryParseWithRepair('{"path":"C:\\\\"}'), { path: 'C:\\' });
   });
 });
