@@ -23,7 +23,7 @@
 //   node scripts/verify-youtube.js                 # default YOUTUBE_MODE
 //   YOUTUBE_MODE=newtab node scripts/verify-youtube.js
 
-const { log, bootMythos, killTree, sendUtterance, DEFAULT_PORT } = require('./verify-lib');
+const { log, bootMythos, killTree, sendUtterance, captureEvents, DEFAULT_PORT } = require('./verify-lib');
 
 async function main() {
   const token = process.env.MYTHOS_AUTH_TOKEN || '';
@@ -42,13 +42,22 @@ async function main() {
   try {
     const utterance = 'play guitar tutorial on YouTube';
     log('▶️', `sending utterance: "${utterance}"`);
-    const { events, timedOut } = await sendUtterance(DEFAULT_PORT, utterance, { token, timeoutMs: 20000 });
+
+    // server/index.js subscribes 'ui.open-web' and re-broadcasts it as
+    // {type:'open-web'} via broadcastAll() — a GLOBAL send to every connected
+    // WS client, with NO reqId attached. sendUtterance()'s collector only
+    // keeps messages whose reqId matches its own request, so it can never see
+    // this event on its own connection. Capture it on a second, type-subscribed
+    // connection running concurrently (same pattern verify-screen-sensor.js
+    // uses for perception.* — also a reqId-less bus broadcast).
+    const capturePromise = captureEvents(DEFAULT_PORT, ['open-web'], 20000, { token });
+    await new Promise(r => setTimeout(r, 300));   // let the subscribe land first
+    const { timedOut } = await sendUtterance(DEFAULT_PORT, utterance, { token, timeoutMs: 20000 });
     if (timedOut) {
       log('⚠️', 'utterance timed out — the brain provider may be unavailable. Falling back to static-event check.');
     }
+    const events = await capturePromise;
 
-    // Look through events for an open-web action or ui.open-web broadcast
-    // (server emits ui.open-web on the bus → broadcastAll sends type:'open-web')
     const flat = JSON.stringify(events);
     const hasYoutube = flat.toLowerCase().includes('youtube') || flat.includes('videoId');
     const hasUrl = flat.includes('watch?v=') || flat.includes('youtube-nocookie.com/embed/') || flat.includes('youtube.com/watch');

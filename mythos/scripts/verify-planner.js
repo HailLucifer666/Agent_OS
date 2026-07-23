@@ -23,8 +23,16 @@ const fs = require('fs');
 const path = require('path');
 const { log, bootMythos, killTree, captureEvents, vaultPath, DEFAULT_PORT } = require('./verify-lib');
 
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// Local date, matching src/core/planner/daily.js's dateKeyFor() exactly — the
+// day file is named by LOCAL date. Using toISOString() (UTC) here caused a
+// false FAIL for anyone west of UTC around midnight local time (verify script
+// looked for yesterday's UTC-dated file while the planner had already written
+// today's local-dated one).
 function todayDateStr() {
-  return new Date().toISOString().slice(0, 10);   // YYYY-MM-DD
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 function readPlanFile() {

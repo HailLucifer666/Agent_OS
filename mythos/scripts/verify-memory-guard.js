@@ -25,16 +25,21 @@ const fs = require('fs');
 const path = require('path');
 const { log, bootMythos, killTree, sendUtterance, vaultPath, DEFAULT_PORT } = require('./verify-lib');
 
+// remember() appends to the PERSISTENT vault/Semantic/user-facts.md (never a
+// per-session new file), and the WS 'done' message only carries {say, speak,
+// chunked} — never the raw tool-dispatch {ok, result} — so neither
+// "look for a new file" nor "grep the WS event JSON for ok\":false" can ever
+// observe a rejection. The only real oracle is the file's own content,
+// snapshotted immediately around each utterance.
+function readFacts(semDir) {
+  try { return fs.readFileSync(path.join(semDir, 'user-facts.md'), 'utf8'); } catch (_) { return ''; }
+}
+
 async function main() {
   const token = process.env.MYTHOS_AUTH_TOKEN || '';
   log('🧪', 'BUG-014 memory-guard verification starting');
 
-  // Snapshot vault/Semantic BEFORE so we can detect NEW writes only.
   const semDir = path.join(vaultPath(), 'Semantic');
-  const before = new Set();
-  try {
-    fs.readdirSync(semDir).filter(f => f.endsWith('.md')).forEach(f => before.add(f));
-  } catch (_) { /* dir may not exist yet */ }
 
   let boot;
   try {
@@ -46,52 +51,43 @@ async function main() {
 
   let allPassed = true;
   try {
-    // --- Noise samples — should ALL be rejected ---
+    // --- Noise samples — should ALL be rejected (user-facts.md unchanged) ---
     const noiseSamples = ['uh', 'the', 'that you like', 'hmm'];
     for (const text of noiseSamples) {
-      const { events } = await sendUtterance(DEFAULT_PORT, `remember: ${text}`, { token });
-      // Look for any action with tool:'remember' + ok:false OR a reply mentioning rejection
-      const flat = JSON.stringify(events).toLowerCase();
-      const rejected = flat.includes('ok":false') || flat.includes('reject') || flat.includes('too short') || flat.includes('noise');
-      if (rejected) {
-        log('✅', `noise "${text}" rejected as expected`);
+      const before = readFacts(semDir);
+      await sendUtterance(DEFAULT_PORT, `remember: ${text}`, { token });
+      await new Promise(r => setTimeout(r, 1500));   // let a write (if any) flush to disk
+      const after = readFacts(semDir);
+      if (after === before) {
+        log('✅', `noise "${text}" rejected as expected (user-facts.md unchanged)`);
       } else {
-        log('❌', `noise "${text}" NOT rejected — events: ${flat.slice(0, 200)}`);
+        log('❌', `noise "${text}" NOT rejected — user-facts.md gained: ${after.slice(before.length).trim().slice(0, 200)}`);
         allPassed = false;
       }
     }
 
-    // --- Signal sample — should be accepted + persisted ---
+    // --- Signal sample — should be accepted + persisted (user-facts.md grows) ---
     const signal = 'i really enjoy playing jazz piano';
-    const { events: signalEvents } = await sendUtterance(DEFAULT_PORT, `remember: ${signal}`, { token });
-    const flatSig = JSON.stringify(signalEvents).toLowerCase();
-    const accepted = flatSig.includes('ok":true') || flatSig.includes('noted') || flatSig.includes('saved');
-    if (accepted) {
-      log('✅', `signal "${signal}" accepted as expected`);
-    } else {
-      log('❌', `signal "${signal}" NOT accepted — events: ${flatSig.slice(0, 200)}`);
-      allPassed = false;
-    }
-
-    // Give the vault a moment to flush, then check Semantic for NEW files
+    const beforeSignal = readFacts(semDir);
+    await sendUtterance(DEFAULT_PORT, `remember: ${signal}`, { token });
     await new Promise(r => setTimeout(r, 1500));
-    let newFiles = [];
-    try {
-      newFiles = fs.readdirSync(semDir).filter(f => f.endsWith('.md') && !before.has(f));
-    } catch (_) {}
-
-    if (newFiles.length > 0) {
-      log('✅', `${newFiles.length} new Semantic file(s) written: ${newFiles.join(', ')}`);
-      // Read the new file and confirm the signal text appears
-      const content = fs.readFileSync(path.join(semDir, newFiles[0]), 'utf8').toLowerCase();
-      if (content.includes('jazz') || content.includes('piano')) {
-        log('✅', 'signal text appears in the new Semantic file');
-      } else {
-        log('⚠️', `new Semantic file doesn't mention the signal text. content: ${content.slice(0, 200)}`);
+    const afterSignal = readFacts(semDir);
+    // NOTE: semantic.js write() ALWAYS regenerates the {id, ts} sidecar comment
+    // and rewrites the file on every accepted call — even when append-mode dedup
+    // recognizes the fact as already present (same final bullet lines, new
+    // sidecar). So "unchanged length" does NOT mean "rejected" the way it does
+    // for the noise samples above (which never reach semantic.write() at all).
+    // Any byte difference here means the write happened; the content check
+    // below confirms it's actually this fact, not a coincidental unrelated write.
+    if (afterSignal !== beforeSignal) {
+      const grew = afterSignal.length > beforeSignal.length;
+      log('✅', `signal "${signal}" accepted — user-facts.md ${grew ? 'gained: ' + afterSignal.slice(beforeSignal.length).trim().slice(0, 200) : 're-written (deduped: fact already present, sidecar id/ts refreshed)'}`);
+      if (!/jazz|piano/i.test(afterSignal)) {
+        log('⚠️', 'user-facts.md does not mention jazz/piano anywhere — check this write is actually the signal fact');
       }
     } else {
-      // The signal may have been appended to user-facts.md rather than a new file
-      log('⚠️', 'no NEW Semantic file — signal may have been appended to user-facts.md or rejected by the brain\'s judgement. Check the dashboard.');
+      log('❌', `signal "${signal}" NOT accepted — user-facts.md byte-identical (no write occurred)`);
+      allPassed = false;
     }
   } finally {
     await killTree(boot.child);
