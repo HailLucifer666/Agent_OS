@@ -240,12 +240,23 @@ test('perception relay is salience-gated: below-threshold non-ws perceptions are
     if (msg.type === 'perception') perceptions.push(msg.payload);
   });
 
+  // Shapes below match how real sensors actually call bus.emit(type, payload)
+  // — the payload IS `summary` (every sensor) with an optional untruncated
+  // `text` (perception.voice only). A prior version of this test used a
+  // synthetic double-nested `{payload:{text:...}}` shape that matched a bug
+  // in the server's relay (it read `p.payload.text`, but `p` is already the
+  // emitted payload — real sensors never nest a second `.payload` inside it),
+  // masking that every non-voice sensor's description was silently dropped
+  // on the wire. Fixed in server/index.js's perception.* relay; this test now
+  // exercises the real shape.
+
   // Below MYTHOS_IDLE_SALIENCE (0.3), channel 'file' — must be filtered.
-  bus.emit('perception.file', { channel: 'file', kind: 'file-change', salience: 0.1, payload: { text: 'noise' } });
+  bus.emit('perception.file', { channel: 'file', kind: 'file-change', salience: 0.1, summary: 'noise' });
   // Above threshold — must relay.
-  bus.emit('perception.file', { channel: 'file', kind: 'file-change', salience: 0.9, payload: { text: 'signal' } });
-  // 'ws' channel — always relays regardless of salience.
-  bus.emit('perception.ws', { channel: 'ws', kind: 'utterance', salience: 0, payload: { text: 'human' } });
+  bus.emit('perception.file', { channel: 'file', kind: 'file-change', salience: 0.9, summary: 'signal' });
+  // 'ws' channel — always relays regardless of salience. text (untruncated),
+  // when present, must win over summary.
+  bus.emit('perception.ws', { channel: 'ws', kind: 'utterance', salience: 0, summary: 'human (clipped)', text: 'human' });
 
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(perceptions.length, 2, 'exactly the high-salience and ws perceptions relay');

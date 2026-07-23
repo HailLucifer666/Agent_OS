@@ -1132,7 +1132,13 @@ function createServer(deps) {
   bus.subscribe('perception.*', (e) => {
     const p = e.payload;
     if (p.channel !== 'ws' && (p.salience || 0) < config.MYTHOS_IDLE_SALIENCE) return;
-    broadcastAll({ type: 'perception', payload: { channel: p.channel, kind: p.kind, salience: p.salience, text: p.payload && p.payload.text } });
+    // Bug found live-verifying BUG-040: this read `p.payload.text` — but `p`
+    // IS the emitted payload already (bus.emit(type, payload) -> e.payload),
+    // there is no nested `.payload` on it, so that was always undefined for
+    // every sensor, not just screen-sensor. Every sensor sets `summary`;
+    // perception.voice additionally sets `text` (the untruncated original,
+    // vs. summary's 200-char clip) — prefer it when present, else summary.
+    broadcastAll({ type: 'perception', payload: { channel: p.channel, kind: p.kind, salience: p.salience, text: p.text || p.summary } });
   });
 
   // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
