@@ -232,7 +232,7 @@ const SCHEMA = {
   VOICE_INTAKE_IDLE_MS:        { type: 'number', default: 600000, min: 10000 }, // idle history retention
   VOICE_MAX_TOOL_ITERATIONS:   { type: 'number', default: 4, min: 1, max: 20 },
   VOICE_EMAIL_MODE:            { type: 'string', default: 'gmail', enum: ['gmail', 'mailto'] },
-  VOICE_ALLOWED_DIRS:          { type: 'string', default: '%USERPROFILE%' },    // comma-sep list_folder whitelist
+  VOICE_ALLOWED_DIRS:          { type: 'string', default: '%USERPROFILE%' },    // semicolon-separated list_folder whitelist
 
   // Identity / reflection / immune speech
   BOOT_GREETING:               { type: 'string', default: '' },    // '' = on; 'false' = off
