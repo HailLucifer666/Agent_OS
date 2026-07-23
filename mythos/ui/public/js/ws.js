@@ -108,9 +108,19 @@ export function subscribe(types, onEvent, opts) {
   connect();
   const replay = Boolean(opts && opts.replay);
   sendMessage({ type: 'subscribe', types, replay });
-  activeSubscriptions.push({ types, replay });
+  // REMEDIATION P1-6: keep a reference to THIS call's own entry so the
+  // returned unsubscribe can prune exactly it — without this, every
+  // subscribe()/unsubscribe() pair (a panel or widget opening then closing)
+  // left a permanent stale entry, growing activeSubscriptions unboundedly and
+  // making a reconnect resend subscriptions for views that no longer exist.
+  const entry = { types, replay };
+  activeSubscriptions.push(entry);
   types.forEach((t) => onBroadcast(t, onEvent));
-  return () => types.forEach((t) => offBroadcast(t, onEvent));
+  return () => {
+    types.forEach((t) => offBroadcast(t, onEvent));
+    const idx = activeSubscriptions.indexOf(entry);
+    if (idx !== -1) activeSubscriptions.splice(idx, 1);
+  };
 }
 
 // Shared reply handler for utterance() and visionQuery(): 'speech-chunk'

@@ -13,6 +13,7 @@ import { createVoiceLoop } from './voice/voice-loop.js';
 import { createCameraLoop } from './vision/camera.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
+import { isEntityAlive } from './entity-status.js';
 
 const ctx = { subscribe, onRefresh };
 
@@ -29,8 +30,12 @@ subscribe(['entity-state'], (msg) => {
   // FIX I: the server sends the status nested at msg.payload.status (see
   // server/index.js's 'entity-state' broadcast) — msg.state/msg.status were
   // always undefined, so _brainOnline was always true (failed open).
+  // REMEDIATION P1-6: isEntityAlive() (entity-status.js) classifies the
+  // server's real booting/alive/stopped vocabulary — the previous inline
+  // comparison here checked for 'offline'/'error', values the server never
+  // actually sends, so this still always evaluated true.
   const state = (msg.payload && msg.payload.status) || '';
-  _brainOnline = state !== 'offline' && state !== 'error';
+  _brainOnline = isEntityAlive(state);
 });
 
 // BUG-020: VAD tuning fetched once at boot. Voice initializes lazily (first
