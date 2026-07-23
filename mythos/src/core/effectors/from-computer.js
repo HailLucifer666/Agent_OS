@@ -158,19 +158,32 @@ function read_file({ path: rawPath }) {
   }
 }
 
-// FEATURE (folder read-write): resolveSandboxed() only resolves a path
-// lexically. A directory INSIDE an allowed root that is itself a symlink to
-// somewhere outside would otherwise let a write/delete escape the sandbox even
-// though the raw path looked contained. realpathSync the parent (skipped, not
-// blocked, if it doesn't exist yet — nothing to hijack there) and re-check it
-// still lands inside an allowed root. Hardening beyond the read-only tools
-// above, which have nothing to mutate.
-function parentIsInsideAllowedRoots(dir) {
+// REMEDIATION P0-1: resolveSandboxed() only resolves a path lexically. A
+// directory INSIDE an allowed root that is itself a symlink/junction to
+// somewhere outside would otherwise let a write/delete escape the sandbox
+// even though the raw path looked contained. The check MUST run before any
+// fs mutation (a prior version ran mkdirSync first and checked after — by
+// then the mutation had already landed outside the sandbox) and must walk up
+// to the NEAREST EXISTING ancestor of the target, not just the immediate
+// parent — a not-yet-created leaf segment can't itself be a symlink, but the
+// immediate parent is often exactly the segment that doesn't exist yet while
+// a symlink sits a few levels further up the chain.
+function nearestExistingAncestor(dir) {
+  let probe = path.resolve(dir);
+  while (!fs.existsSync(probe)) {
+    const parent = path.dirname(probe);
+    if (parent === probe) break; // reached a filesystem root; stop
+    probe = parent;
+  }
+  return probe;
+}
+
+function isInsideAllowedRoots(dir) {
   let real;
   try {
-    real = fs.realpathSync(dir);
+    real = fs.realpathSync(nearestExistingAncestor(dir));
   } catch {
-    return true; // parent doesn't exist yet (will be created) — nothing to check
+    return false; // couldn't resolve at all — fail CLOSED, not open
   }
   const roots = allowedRoots();
   const realForCompare = process.platform === 'win32' ? real.toLowerCase() : real;
@@ -186,10 +199,11 @@ function write_file({ path: rawPath, content }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
   if (content === undefined || content === null) return fail('Content is required.');
+  const dir = path.dirname(sandboxed.resolved);
+  // Sandbox check BEFORE any mutation — see isInsideAllowedRoots() above.
+  if (!isInsideAllowedRoots(dir)) return fail(`"${rawPath}" resolves outside the allowed folders.`);
   try {
-    const dir = path.dirname(sandboxed.resolved);
     fs.mkdirSync(dir, { recursive: true });
-    if (!parentIsInsideAllowedRoots(dir)) return fail(`"${rawPath}" resolves outside the allowed folders.`);
     const overwritten = fs.existsSync(sandboxed.resolved);
     // Atomic write: temp file + renameSync (mirrors memory/fs-store.js's writeText).
     const tmp = `${sandboxed.resolved}.tmp-${process.pid}-${Date.now()}`;
@@ -211,10 +225,10 @@ function write_file({ path: rawPath, content }) {
 function create_folder({ path: rawPath }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
+    return fail(`"${rawPath}" resolves outside the allowed folders.`);
+  }
   try {
-    if (!parentIsInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
-      return fail(`"${rawPath}" resolves outside the allowed folders.`);
-    }
     fs.mkdirSync(sandboxed.resolved, { recursive: true });
     return ok({ created: sandboxed.resolved });
   } catch (err) {
@@ -233,7 +247,7 @@ function delete_file({ path: rawPath }) {
     if (!fs.existsSync(sandboxed.resolved)) return fail(`File not found: ${sandboxed.resolved}`);
     const stat = fs.statSync(sandboxed.resolved);
     if (!stat.isFile()) return fail('Not a file — delete_file only removes files, not directories.');
-    if (!parentIsInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
+    if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
       return fail(`"${rawPath}" resolves outside the allowed folders.`);
     }
     fs.unlinkSync(sandboxed.resolved);
