@@ -207,7 +207,32 @@ async function browser_scroll({ direction }) {
   }).catch(err => fail(err.message));
 }
 
-async function browser_tabs({ action, index }) {
+async function listTabs(pages) {
+  return Promise.all(pages.map(async (p, i) => ({
+    index: i,
+    title: await p.title().catch(() => '(error)'),
+    url: p.url(),
+  })));
+}
+
+// Indexes are recomputed fresh every call and shift the instant any tab
+// closes. `match` targets a tab by identity (title/url substring) instead of
+// a position that may already be stale; every switch/close response also
+// returns a fresh tabs list.
+async function resolveTabIndex(pages, index, match) {
+  if (typeof index === 'number') return { idx: index };
+  if (match) {
+    const needle = String(match).toLowerCase();
+    for (let i = 0; i < pages.length; i++) {
+      const title = await pages[i].title().catch(() => '');
+      if (title.toLowerCase().includes(needle) || pages[i].url().toLowerCase().includes(needle)) return { idx: i };
+    }
+    return { idx: -1, error: `No open tab matches "${match}".` };
+  }
+  return { idx: null };
+}
+
+async function browser_tabs({ action, index, match }) {
   const act = action || 'list';
   const validActions = ['list', 'new', 'switch', 'close'];
   if (!validActions.includes(act)) return fail(`Invalid tab action: "${act}". Valid: ${validActions.join(', ')}`);
@@ -220,11 +245,7 @@ async function browser_tabs({ action, index }) {
     switch (act) {
       case 'list':
         return ok({
-          tabs: await Promise.all(pages.map(async (p, i) => ({
-            index: i,
-            title: await p.title().catch(() => '(error)'),
-            url: p.url(),
-          }))),
+          tabs: await listTabs(pages),
           total: pages.length,
         });
       case 'new': {
@@ -232,18 +253,22 @@ async function browser_tabs({ action, index }) {
         return ok({ index: pages.length, title: await newPage.title(), url: newPage.url() });
       }
       case 'switch': {
-        const idx = typeof index === 'number' ? index : 0;
+        const resolved = await resolveTabIndex(pages, index, match);
+        if (resolved.error) return fail(resolved.error);
+        const idx = resolved.idx != null ? resolved.idx : 0;
         if (idx < 0 || idx >= pages.length) return fail(`Tab index ${idx} out of range (0-${pages.length - 1})`);
         await pages[idx].bringToFront();
-        return ok({ switched: idx, title: await pages[idx].title(), url: pages[idx].url() });
+        return ok({ switched: idx, title: await pages[idx].title(), url: pages[idx].url(), tabs: await listTabs(ctx.pages()) });
       }
       case 'close': {
-        const idx = typeof index === 'number' ? index : (pages.length - 1);
+        const resolved = await resolveTabIndex(pages, index, match);
+        if (resolved.error) return fail(resolved.error);
+        const idx = resolved.idx != null ? resolved.idx : (pages.length - 1);
         if (idx < 0 || idx >= pages.length) return fail(`Tab index ${idx} out of range (0-${pages.length - 1})`);
         if (pages.length <= 1) return fail('Cannot close the last tab.');
         await pages[idx].close();
         const remaining = ctx.pages();
-        return ok({ closed: idx, remaining: remaining.length, title: await remaining[0].title(), url: remaining[0].url() });
+        return ok({ closed: idx, remaining: remaining.length, title: await remaining[0].title(), url: remaining[0].url(), tabs: await listTabs(remaining) });
       }
       default:
         return fail(`Unknown tab action: ${act}`);
@@ -368,7 +393,7 @@ const TOOLS = [
   { name: 'browser_get_title', description: 'Get the title and URL of the current page.', params: {}, danger: false, fn: browser_get_title, needs_result: true },
   { name: 'browser_get_text', description: 'Get the text content of the page or a specific element (CSS selector). Truncated at 4000 chars.', params: { selector: 'string (optional) - CSS selector, defaults to body' }, danger: false, fn: browser_get_text, needs_result: true },
   { name: 'browser_scroll', description: 'Scroll the page up or down by 600 pixels.', params: { direction: 'string - "up" or "down" (default: down)' }, danger: false, fn: browser_scroll },
-  { name: 'browser_tabs', description: 'Manage browser tabs. Actions: list (default), new, switch (needs index), close (needs index).', params: { action: 'string (optional) - list, new, switch, close', index: 'number (optional) - tab index for switch/close' }, danger: false, fn: browser_tabs, needs_result: true },
+  { name: 'browser_tabs', description: 'Manage browser tabs. Actions: list (default), new, switch (needs index), close (needs index). switch/close accept either index (indexes shift after any tab closes — re-list first if unsure) or match (substring of the target tab\'s title or URL; safer than a cached index). Every switch/close response includes a fresh tabs list.', params: { action: 'string (optional) - list, new, switch, close', index: 'number (optional) - tab index for switch/close', match: 'string (optional) - substring of the target tab\'s title or URL, an alternative to index for switch/close' }, danger: false, fn: browser_tabs, needs_result: true },
   { name: 'browser_go_back', description: 'Navigate back to the previous page in history.', params: {}, danger: false, fn: browser_go_back },
   { name: 'browser_wait_for', description: 'Wait for an element matching a CSS selector to appear on the page. Fails honestly if it does not appear within the timeout. Use before reading or interacting with a dynamically-loaded element.', params: { selector: 'string - CSS selector to wait for', timeoutMs: 'number (optional) - max wait in ms, default 10000, capped at 30000' }, danger: false, fn: browser_wait_for, needs_result: true },
   { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{selector, value}]. Each field is filled (replacing existing content); a bad selector reports that field failure without aborting the rest.', params: { fields: 'array - [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
