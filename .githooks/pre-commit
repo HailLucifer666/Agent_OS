@@ -1,0 +1,13 @@
+#!/bin/sh
+# Blocks commits that raise the mythos test-failure count above the known baseline (2).
+cd "$(git rev-parse --show-toplevel)/mythos" || exit 1
+out=$(node --test test/*.test.js 2>&1)
+fails=$(printf '%s' "$out" | grep -Eo '^# fail [0-9]+' | tail -1 | grep -Eo '[0-9]+')
+[ -z "$fails" ] && fails=999
+echo "pre-commit: mythos test failures = $fails (baseline 2)"
+if [ "$fails" -gt 2 ]; then
+  printf '%s\n' "$out" | tail -40
+  echo "pre-commit: BLOCKED — failure count above baseline. Fix or revert."
+  exit 1
+fi
+exit 0

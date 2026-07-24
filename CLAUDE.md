@@ -68,3 +68,4 @@ Rules to prevent a repeat:
 - Baseline: `node --test test/*.test.js` from `mythos/` — 2 known pre-existing
   failures (boot SIGINT-on-Windows, event-name allowlist). Anything else
   failing is a regression.
+- CI workflow (`.github/workflows/ci.yml`) runs on push/PR to main. Pre-commit hook (`.githooks/pre-commit`) blocks commits that raise test failures above baseline — activate once per clone with `git config core.hooksPath .githooks`.
