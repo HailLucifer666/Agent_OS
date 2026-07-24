@@ -170,9 +170,27 @@ function writeManifest(fs, hub, adapterStatuses) {
   return text;
 }
 
+// Compact live-truth digest injected into every voice prompt (pre-context).
+// Hard budget: <= 5 lines, ~80 tokens — this rides on EVERY turn.
+function summaryDigest(opts) {
+  opts = opts || {};
+  var apps = opts.apps;
+  var roots = opts.roots;
+  var adapters = opts.adapters;
+  var providerCount = opts.providerCount;
+
+  var lines = ['CAPABILITY SNAPSHOT (live — trust this over any assumption):'];
+  if (apps && apps.length) lines.push('- Desktop apps launchable by name: ' + apps.join(', ') + ' (plus anything on the system PATH).');
+  if (roots && roots.length) lines.push('- Files/folders reachable ONLY inside: ' + roots.join('; ') + '. Other drives and folders are NOT accessible.');
+  if (adapters) lines.push('- Adapters: ' + Object.entries(adapters).map(function(entry) { return entry[0] + ' ' + (entry[1] ? 'ONLINE' : 'OFFLINE'); }).join(', ') + '.');
+  if (typeof providerCount === 'number') lines.push('- LLM providers reachable: ' + providerCount + '.');
+  return lines.join('\n');
+}
+
 module.exports = {
   buildCapabilities: buildCapabilities,
   summaryLine: summaryLine,
   generateMarkdown: generateMarkdown,
   writeManifest: writeManifest,
+  summaryDigest: summaryDigest,
 };

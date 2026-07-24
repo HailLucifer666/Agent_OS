@@ -87,7 +87,7 @@ function resolveSandboxed(raw) {
       return resolvedForCompare === rootForCompare || resolvedForCompare.startsWith(rootForCompare + path.sep);
     });
     if (!inside) {
-      return { ok: false, reason: `"${raw}" is outside the allowed folders.` };
+      return { ok: false, reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.` };
     }
     return { ok: true, resolved };
   } catch (err) {
@@ -201,7 +201,7 @@ function write_file({ path: rawPath, content }) {
   if (content === undefined || content === null) return fail('Content is required.');
   const dir = path.dirname(sandboxed.resolved);
   // Sandbox check BEFORE any mutation — see isInsideAllowedRoots() above.
-  if (!isInsideAllowedRoots(dir)) return fail(`"${rawPath}" resolves outside the allowed folders.`);
+  if (!isInsideAllowedRoots(dir)) return fail(`"${rawPath}" is outside the folders I can access. I'm limited to: ${allowedRoots().join('; ')}.`);
   try {
     fs.mkdirSync(dir, { recursive: true });
     const overwritten = fs.existsSync(sandboxed.resolved);
@@ -226,7 +226,7 @@ function create_folder({ path: rawPath }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
   if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
-    return fail(`"${rawPath}" resolves outside the allowed folders.`);
+    return fail(`"${rawPath}" is outside the folders I can access. I'm limited to: ${allowedRoots().join('; ')}.`);
   }
   try {
     fs.mkdirSync(sandboxed.resolved, { recursive: true });
@@ -248,7 +248,7 @@ function delete_file({ path: rawPath }) {
     const stat = fs.statSync(sandboxed.resolved);
     if (!stat.isFile()) return fail('Not a file — delete_file only removes files, not directories.');
     if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
-      return fail(`"${rawPath}" resolves outside the allowed folders.`);
+      return fail(`"${rawPath}" is outside the folders I can access. I'm limited to: ${allowedRoots().join('; ')}.`);
     }
     fs.unlinkSync(sandboxed.resolved);
     return ok({ deleted: sandboxed.resolved });
@@ -329,6 +329,7 @@ module.exports = {
   delete_file,
   compose_email,
   resolveSandboxed,
+  allowedRoots,
   buildMailtoUrl,
   buildGmailUrl,
   truncateBody,
