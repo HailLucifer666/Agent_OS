@@ -44,8 +44,8 @@ const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createVoiceEffector } = require('./core/effectors/voice');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
-const { registerFromComputer } = require('./core/effectors/from-computer');
-const { registerFromPc } = require('./core/effectors/from-pc');
+const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
+const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
 const { registerFromBrowser, browser_launch_debug } = require('./core/effectors/from-browser');
 const skillsLoader = require('./core/skills/loader');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
@@ -481,6 +481,26 @@ async function main() {
       // graceful shutdown. Best-effort: constructor deps all exist by now.
       reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger, bus: bus });
 
+      // B2 (pre-context brain upgrade): live capability digest, read fresh on
+      // every voice turn. Synchronous, in-memory reads only — no new awaits,
+      // no new probes, same getStatus() calls the capabilities-manifest step
+      // below already uses. providerCount is deliberately omitted: no
+      // synchronous provider-registry count exists anywhere in this file
+      // (brain/registry.js's getStatus() is async, and probing it here would
+      // be exactly the new-async-call this digest must not introduce) —
+      // capabilities.summaryDigest() already treats providerCount as optional.
+      function getCapabilityDigest() {
+        var adapterOnline = {};
+        try { adapterOnline['pc-child'] = pcChild.getStatus().state === 'ONLINE'; } catch (_) {}
+        try { adapterOnline['cua-driver'] = cuaDriver.getStatus().state === 'ONLINE'; } catch (_) {}
+        try { adapterOnline['browser-agent'] = browserAgent.getStatus().state === 'ONLINE'; } catch (_) {}
+        return capabilities.summaryDigest({
+          apps: KNOWN_DESKTOP_APPS,
+          roots: allowedRoots(),
+          adapters: adapterOnline,
+        });
+      }
+
       var serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
         goalsEffector: goalsEffector,
@@ -493,6 +513,7 @@ async function main() {
         reflection: reflection,
         engagementStore: engagementStore, engagementManager: engagementManager,
         conversationGateway: conversationGateway,
+        getCapabilityDigest: getCapabilityDigest,
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.

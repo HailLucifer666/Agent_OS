@@ -79,6 +79,7 @@ function createServer(deps) {
   const engagementStore = deps.engagementStore;         // Engagement layer — persistent record store (may be undefined in tests)
   const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction; Phase 1 executor lives on it (may be undefined in tests)
   const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
+  const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
   // with the camera actively watching answers with one JPEG frame. 8s timeout.
@@ -419,7 +420,7 @@ function createServer(deps) {
     // of the hand-maintained CATALOG_RAW list alone — this is what makes a
     // newly-registered effector (e.g. capture_screenshot) show up on the voice
     // channel automatically.
-    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus, config: config, hub: effectors });
+    voiceAgent = createVoiceAgent({ brain, leash, dispatch: dispatchAction, bus, config: config, hub: effectors, getCapabilityDigest: getCapabilityDigest });
   } catch (err) {
     logger.warn('voice-agent.unavailable', { error: err.message });
   }

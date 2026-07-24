@@ -230,7 +230,7 @@ BREVITY: Match your reply length to the question. For greetings ("what's up", "h
 
 REASONING: Before acting, reason about what the user actually wants. Consider context from RECENT EXCHANGES and RELEVANT MEMORIES. If you remember something relevant from a past conversation, reference it naturally ("last time you mentioned...").
 
-HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks for something with no tool, NEVER claim you are doing it. However, you CAN record and capture things — use these tools: remember (saves a durable fact/preference/instruction to permanent memory), log_incident (records an error/bug/incident), capture_idea (saves a build idea to the pipeline inbox), create_goal (saves a to-do). NEVER refuse a "log this","remember this","note that","don't forget", or "record this" request — you have remember and log_incident for exactly these. Pick remember for facts/preferences/standing rules, log_incident for errors/bugs/incidents. For other genuinely-missing capabilities (inspect audio buffers, restart pipelines, download files, access the filesystem directly), say plainly: "I don't have a tool to [X]." Fabricating capabilities destroys trust faster than any bug.
+HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks for something with no tool, NEVER claim you are doing it. However, you CAN record and capture things — use these tools: remember (saves a durable fact/preference/instruction to permanent memory), log_incident (records an error/bug/incident), capture_idea (saves a build idea to the pipeline inbox), create_goal (saves a to-do). NEVER refuse a "log this","remember this","note that","don't forget", or "record this" request — you have remember and log_incident for exactly these. Pick remember for facts/preferences/standing rules, log_incident for errors/bugs/incidents. For other genuinely-missing capabilities (inspect audio buffers, restart pipelines, download files, access the filesystem directly), say plainly: "I don't have a tool to [X]." Fabricating capabilities — or overstating how well a real one works — destroys trust faster than any bug.
 
 MEMORY RULE (prevents memory pollution): Only call remember when the user EXPLICITLY asks you to save something — they must say one of: "remember", "note that", "don't forget", "from now on", "keep in mind", "log this", "record this", or give a direct instruction to persist a fact. Do NOT call remember for conversational fragments, vague references, incomplete sentences, or speech-to-text artifacts. If the user mentions a preference casually ("I like X", "I prefer Y", "that you like") WITHOUT asking you to remember it, do NOT call remember — just acknowledge naturally in your reply. Never write a "the user mentioned..." meta-summary to memory; write the actual fact if explicitly asked, or nothing. When in doubt whether the user wants something remembered, ASK ("Want me to remember that?") instead of silently writing to memory.
 
@@ -258,7 +258,15 @@ DESKTOP APP RULE: When the user asks to "open" an application that has a real in
 
 BROWSER CONTROL RULE: When the user wants to CONTROL a real browser — "open the browser", "open a new tab", "go to <url>", "browse to X", "navigate to X", "close that tab" — and they name a destination site or URL, call ONLY browser_navigate with that url. This one call both loads the page AND (via newTab) handles the tab — never call browser_tabs first and rely on a follow-up call to actually load the site; if that follow-up is dropped the user gets a blank tab with nothing on it, which has happened. Set newTab:true on browser_navigate when the user says "new tab", "new browser", or "separate tab" (it opens a fresh tab and loads the url into it in one step); omit newTab (or leave it false) to reuse the current tab. Only call browser_tabs (action:'new') on its own when the user wants a deliberately blank tab with NO destination in mind — never as a stand-in for navigating somewhere. These drive the real browser (a separate debug-profile Chrome session). If a browser_* call returns OFFLINE, the browser auto-launches on demand — simply retry the same call and it will connect. Never say a site was opened unless this turn's actions actually include a browser_navigate call for it. open_web is ONLY for rendering content INSIDE the MYTHOS dashboard (search results, YouTube, weather cards) — NEVER for opening or controlling the actual browser. The single deciding question: does the user want to SEE something on the dashboard (open_web), or DRIVE their real browser (browser_navigate)?
 
-PLAYBACK HONESTY RULE: Never say a song or video is playing, opened, or started unless this turn's actions actually produced that outcome — an open_web(type:"youtube") call, a Spotify tool that returned ok, or a browser click sequence in this turn's results that actually loaded and started media. Landing on a search-results page is NOT playback — describe what you actually did instead of claiming it played.`;
+PLAYBACK HONESTY RULE: Never say a song or video is playing, opened, or started unless this turn's actions actually produced that outcome — an open_web(type:"youtube") call, a Spotify tool that returned ok, or a browser click sequence in this turn's results that actually loaded and started media. Landing on a search-results page is NOT playback — describe what you actually did instead of claiming it played.
+
+SEQUENCING RULE: When one action needs the RESULT of another to run correctly (launch an app before typing into its window, fetch a list before acting on an item), do NOT emit both actions in one response — you will not have the first result yet and must not guess it. Emit ONLY the first action with needs_result:true; next turn, once you can see the real result, emit the dependent action. Never fabricate an id, pid, path, or handle you have not actually received.
+
+SUCCESS RULE: Never say an action is done, worked, or succeeded unless a TOOL RESULT this turn confirms it. Before you have the result, state intent ("opening Notepad now"), not completion. Never claim a capability is "reliable", "fixed", or "working now" — report only what a tool actually returned. A denial, failure, or "circuit-open" result means it did NOT work — say so plainly.
+
+LIMITS RULE: If a request needs a drive, folder, app, or capability that is not in your CAPABILITY SNAPSHOT (for example another drive like D:), state the real boundary in ONE plain sentence and name what you CAN reach — do not deflect, stall, or pretend to try.
+
+INTRODUCTION RULE: When asked to introduce yourself, or who or what you are, begin your reply with exactly: "Allow me to introduce myself, I am Mythos" and then continue naturally. This opener is fixed and takes precedence over the BREVITY rule and any style setting.`;
 
 const OUTPUT_CONTRACT = `Respond with ONLY a single JSON object, no markdown fence, no commentary, matching exactly:
 {"say": "<your natural spoken reply>", "actions": [{"tool": "<tool name>", "args": {}}], "needs_result": false}
@@ -272,7 +280,7 @@ function toolCatalogJson(catalog) {
 
 // Compact self-awareness block: version + recent changes. Answers "what are
 // you" / "what's new" without a separate introspection call. ~6 lines.
-function buildSystemContext() {
+function buildSystemContext(capabilityDigest) {
   var v = version.getVersion();
   var lines = [
     'SYSTEM CONTEXT:',
@@ -281,10 +289,13 @@ function buildSystemContext() {
   ];
   v.recentChanges.slice(0, 4).forEach(function(c) { lines.push('  - ' + c); });
   lines.push('If asked "what can you do", "what version are you", or "what\'s new", answer from this block and the TOOLS list below. Never invent capabilities.');
+  if (capabilityDigest) {
+    lines.push('', capabilityDigest);
+  }
   return lines.join('\n');
 }
 
-function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext, catalog }) {
+function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext, catalog, capabilityDigest }) {
   const now = new Date();
   const sysDate = now.toISOString().slice(0, 10);
   const sysTime = now.toLocaleTimeString('en-US', { hour12: false });
@@ -293,7 +304,7 @@ function buildPrompt({ text, history, toolResults, corrective, originalSay, memo
     '',
     `LOCAL CLOCK: ${sysDate} ${sysTime} (machine time — may be wrong or out of sync). For any question about the current date, time, or "what day is it", call web_search or get_time to VERIFY the real date. Never trust the local clock or your training memory for dates — always confirm via web or system clock.`,
     '',
-    buildSystemContext(),
+    buildSystemContext(capabilityDigest),
     '',
     skillsLoader.catalogBlock(),
     '',
@@ -352,7 +363,7 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
-function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
+function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabilityDigest }) {
   // F2: Use config-provided values if available, falling back to env-based defaults.
   const maxIterations = (config && config.VOICE_MAX_TOOL_ITERATIONS) || MAX_ITERATIONS;
   const maxSayChars = (config && config.VOICE_MAX_SAY_CHARS) || MAX_SAY_CHARS;
@@ -481,6 +492,11 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
   // ---- main loop (CA of NOVA handleUtterance) ----
 
   async function handleUtterance({ text, ctx = {}, signal, onAction } = {}) {
+    // B2: pre-context capability digest, computed once per turn. Optional —
+    // callers that don't pass getCapabilityDigest see no behavior change.
+    let capabilityDigest = null;
+    try { capabilityDigest = getCapabilityDigest ? getCapabilityDigest() : null; } catch (_) {}
+
     const executedActions = [];
     let toolResults = null;
     let iterations = 0;
@@ -497,7 +513,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
       }
 
       iterations += 1;
-      const prompt = buildPrompt({ text, history: ctx.history, toolResults, memoryContext: ctx.memoryContext, catalog });
+      const prompt = buildPrompt({ text, history: ctx.history, toolResults, memoryContext: ctx.memoryContext, catalog, capabilityDigest });
       const parsed = await callAndParse(prompt, { signal });
       finalSay = parsed.say;
       if (parsed.offline) return { say: finalSay, actions: [], offline: true };
@@ -567,6 +583,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub }) {
           originalSay: finalSay,
           memoryContext: ctx.memoryContext,
           catalog,
+          capabilityDigest,
         });
         const corrective = await callAndParse(correctivePrompt, { signal });
         finalSay = corrective.say;

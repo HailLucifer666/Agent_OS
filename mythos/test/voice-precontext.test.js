@@ -14,6 +14,7 @@ const path = require('path');
 const fromPc = require('../src/core/effectors/from-pc');
 const fromComputer = require('../src/core/effectors/from-computer');
 const capabilities = require('../src/core/identity/capabilities');
+const { createVoiceAgent, _internal } = require('../src/core/voice/voice-agent');
 
 describe('B1: honest tool descriptions (no pid fabrication)', () => {
   const uiType = fromPc.TOOLS.find((t) => t.name === 'ui_type');
@@ -88,5 +89,115 @@ describe('B1: KNOWN_DESKTOP_APPS drift guard', () => {
     fromPc.KNOWN_DESKTOP_APPS.forEach((name) => {
       assert.ok(block.toLowerCase().includes(`'${name}'`), `${name} present in $script:KnownApps block`);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2: RULES additions (source scans) + capability-digest wiring through
+// buildPrompt/buildSystemContext/createVoiceAgent.
+// ---------------------------------------------------------------------------
+
+describe('B2: RULES source-scans for the new paragraphs', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'core', 'voice', 'voice-agent.js'),
+    'utf8'
+  );
+
+  it('SEQUENCING RULE paragraph exists', () => {
+    assert.match(src, /SEQUENCING RULE/);
+  });
+
+  it('SUCCESS RULE paragraph exists', () => {
+    assert.match(src, /SUCCESS RULE/);
+  });
+
+  it('LIMITS RULE paragraph exists', () => {
+    assert.match(src, /LIMITS RULE/);
+  });
+
+  it('INTRODUCTION RULE opener text is exact', () => {
+    assert.match(src, /Allow me to introduce myself, I am Mythos/);
+  });
+});
+
+describe('B2: capability digest wiring through buildPrompt/buildSystemContext', () => {
+  it('buildPrompt includes the digest text when capabilityDigest is supplied', () => {
+    const digest = 'CAPABILITY SNAPSHOT (live — trust this over any assumption):\n- test line';
+    const prompt = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null, capabilityDigest: digest });
+    assert.ok(prompt.includes(digest), 'prompt should include the supplied capability digest');
+  });
+
+  it('buildPrompt produces identical output to before when capabilityDigest is not supplied (no behavior change)', () => {
+    const withoutDigestArg = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null });
+    const withExplicitUndefined = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null, capabilityDigest: undefined });
+    assert.equal(withoutDigestArg, withExplicitUndefined);
+    // '- test line' is unique to the digest content used in the previous test —
+    // its absence (not the bare phrase "CAPABILITY SNAPSHOT", which the LIMITS
+    // RULE paragraph also mentions independent of any injected digest) proves
+    // no digest block was appended when the param is omitted.
+    assert.ok(!withoutDigestArg.includes('- test line'), 'no digest supplied means no digest block injected');
+  });
+});
+
+describe('B2: sequencing behavior — launch_app result feeds ui_type without a fabricated pid', () => {
+  // Mirrors the makeBrain pattern in test/voice-agent-tools.test.js's BUG-007
+  // suite: detect which pass a brain.think() call belongs to by inspecting
+  // the prompt for the marker the corresponding buildPrompt branch injects.
+  // Here that marker is "TOOL RESULTS:", which only appears once the first
+  // action's real result has come back.
+  function makeSequencingBrain(launchReply, typeReply) {
+    const calls = [];
+    return {
+      calls,
+      think: async ({ messages }) => {
+        const prompt = messages[0].content;
+        const hasToolResults = prompt.includes('TOOL RESULTS:');
+        calls.push(hasToolResults ? 'second' : 'first');
+        const reply = hasToolResults ? typeReply : launchReply;
+        return { content: JSON.stringify(reply), parsed: reply, offline: false };
+      },
+    };
+  }
+
+  it('emits launch_app alone with needs_result:true, then ui_type with pid omitted once the real pid is known', async () => {
+    const launchReply = {
+      say: 'Opening Notepad now.',
+      actions: [{ tool: 'launch_app', args: { name: 'notepad' } }],
+      needs_result: true,
+    };
+    const typeReply = {
+      say: 'Typing now.',
+      actions: [{ tool: 'ui_type', args: { text: 'hello' } }],
+      needs_result: false,
+    };
+    const brain = makeSequencingBrain(launchReply, typeReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const bus = { emit: () => {} };
+    // A fake hub so launch_app/ui_type are KNOWN tools (the legacy CATALOG
+    // fallback used when no hub is passed does not include PC tools).
+    const hub = {
+      catalog: () => [
+        { name: 'launch_app', description: 'Launch an application by name.', params: { name: 'string' } },
+        { name: 'ui_type', description: 'Type text into the focused element.', params: { text: 'string', pid: 'number (optional)' } },
+      ],
+    };
+    const dispatchCalls = [];
+    const dispatch = async (decision) => {
+      dispatchCalls.push(decision);
+      if (decision.tool === 'launch_app') return { ok: true, result: { pid: 4242, name: 'notepad', launched: true } };
+      if (decision.tool === 'ui_type') return { ok: true, result: { typed: true } };
+      return { ok: true, result: {} };
+    };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {}, hub });
+    const result = await agent.handleUtterance({ text: 'open notepad and type hello', ctx: {} });
+
+    assert.deepEqual(brain.calls, ['first', 'second'], 'brain must be consulted once per pass, launch_app then ui_type');
+    assert.equal(dispatchCalls.length, 2, 'exactly two tool dispatches — launch_app then ui_type');
+    assert.equal(dispatchCalls[0].tool, 'launch_app');
+    assert.equal(dispatchCalls[1].tool, 'ui_type');
+    assert.equal(dispatchCalls[0].args.pid, undefined, 'launch_app call carries no pid');
+    assert.equal(dispatchCalls[1].args.pid, undefined, 'ui_type call must not carry a fabricated pid');
+    assert.equal(result.say, typeReply.say);
   });
 });
