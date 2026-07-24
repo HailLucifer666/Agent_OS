@@ -28,6 +28,19 @@ var vaultFs = null;
 // revisit if concurrent desktop actions become a real use case.
 var lastLaunchedPid = null;
 
+// The planning LLM sometimes emits a non-numeric placeholder ("Notepad PID")
+// instead of a real pid. That string is truthy, so `pid || lastLaunchedPid`
+// picked it over the real fallback — sent straight to focus_window, whose PS
+// Get-Process -Id (Int32) rejects it, and foregroundThenRetry aborts before
+// ui_type/ui_click ever run. Coerce: a real number or numeric string passes
+// through as a number; anything else counts as "no pid supplied" so
+// lastLaunchedPid actually engages.
+function coercePid(pid) {
+  if (typeof pid === 'number' && Number.isFinite(pid) && pid > 0) return pid;
+  if (typeof pid === 'string' && /^\d+$/.test(pid.trim())) return Number(pid.trim());
+  return null;
+}
+
 // Guard: pc-child must be ONLINE to send commands
 function requireOnline() {
   const status = pcChild.getStatus();
@@ -111,8 +124,14 @@ async function list_windows() {
 }
 
 async function focus_window({ pid }) {
-  if (!pid) return fail('PID is required.');
-  return delegate({ cmd: 'focus_window', pid });
+  // A non-numeric placeholder pid (e.g. "Notepad PID") must not be forwarded
+  // toward PS's Get-Process -Id (Int32) — coerce it away so it degrades to the
+  // existing "PID is required" validation failure instead of a type-conversion
+  // crash. focus_window has no lastLaunchedPid fallback (unlike ui_click/ui_type):
+  // it requires an explicit real pid.
+  var targetPid = coercePid(pid);
+  if (!targetPid) return fail('PID is required.');
+  return delegate({ cmd: 'focus_window', pid: targetPid });
 }
 
 async function close_window({ pid }) {
@@ -189,7 +208,7 @@ async function ui_elements({ pid, depth }) {
 async function ui_click({ pid, elementPath }) {
   // FIX 1: default the omitted pid to the last app launch_app opened, so the
   // planner doesn't have to remember to thread it through itself.
-  var targetPid = pid || lastLaunchedPid;
+  var targetPid = coercePid(pid) || lastLaunchedPid;
   if (!targetPid) return fail('PID is required.');
   if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
   // Phase 3 hardening: focus the target window first, then retry on failure —
@@ -202,7 +221,7 @@ async function ui_type({ text, pid, elementPath }) {
   // FIX 1: default the omitted pid to the last app launch_app opened — the
   // real root cause of the "typed nothing" bug was ui_type carrying no pid at
   // all, which made the foregroundThenRetry branch below dead code.
-  var targetPid = pid || lastLaunchedPid;
+  var targetPid = coercePid(pid) || lastLaunchedPid;
   const cmdObj = { cmd: 'ui_type', text };
   if (targetPid) cmdObj.pid = targetPid;
   if (elementPath) cmdObj.elementPath = elementPath;

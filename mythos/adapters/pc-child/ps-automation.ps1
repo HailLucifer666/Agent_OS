@@ -946,6 +946,21 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             }
         }
 
+        # Audit honesty: capture what is ACTUALLY foreground at injection time,
+        # TargetPid or not — when the caller omits pid (the "type into whatever
+        # has focus" contract), typed:true previously gave zero visibility into
+        # where the keystrokes landed. Best-effort: a lookup failure must never
+        # block typing.
+        $typedIntoPid = 0
+        $typedIntoTitle = $null
+        try {
+            $curFgHwnd = [NativeInput]::GetForegroundWindow()
+            [void][NativeInput]::GetWindowThreadProcessId($curFgHwnd, [ref]$typedIntoPid)
+            $sb = New-Object System.Text.StringBuilder 512
+            [void][NativeInput]::GetWindowText($curFgHwnd, $sb, 512)
+            $typedIntoTitle = $sb.ToString()
+        } catch { }
+
         $script:LastVkSent = $null
         Send-UnicodeText $text
         # BUG-042-class honest failure: SendInput injected zero events (UIPI /
@@ -954,7 +969,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
             return "Type failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
         }
-        return @{ typed = $true; length = $text.Length }
+        return @{ typed = $true; length = $text.Length; typedIntoPid = [int]$typedIntoPid; typedIntoTitle = $typedIntoTitle }
     } catch {
         return ('Type failed: ' + $_.Exception.Message)
     }
