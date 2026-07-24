@@ -92,7 +92,12 @@ async function dispatchAction(decision, ctx) {
     try {
       memory.audit.write({
         tool: decision.tool, tier: tier, decision: 'completed',
-        outcome: result && result.ok ? 'ok' : 'fail',
+        outcome: actionOk ? 'ok' : 'fail',
+        // The failure reason was sitting in result.result (effectors' fail()
+        // shape) and was never carried over — outcome:'fail' alone is
+        // useless for diagnosing WHY. Truncated: audit lines persist
+        // forever in JSONL.
+        reason: actionOk ? undefined : String((result && result.result) || '').slice(0, 300),
         goalId: goalId,
       });
     } catch (_) {}

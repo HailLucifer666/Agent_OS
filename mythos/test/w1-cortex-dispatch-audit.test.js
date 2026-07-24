@@ -29,7 +29,12 @@ function buildHarness({ tool, invokeResult }) {
       pushPerception() {}, addSpend() {}
     },
     episodic: { write: async () => ({ ref: 'ep-1' }) },
-    audit: { write: (entry) => { auditCalls.push(entry); } },
+    // Round-trip through JSON like the real audit-writer's fs.appendLine
+    // (JSON.stringify(obj) to a .jsonl line) — a key set to `undefined` is
+    // an own property on the raw object but is dropped by serialization,
+    // and audit lines are read back from disk by other consumers, so this
+    // mock must reflect the persisted shape, not the in-memory one.
+    audit: { write: (entry) => { auditCalls.push(JSON.parse(JSON.stringify(entry))); } },
     consolidate: async () => {}
   };
   const goals = {
@@ -64,6 +69,11 @@ describe('W1: cortex act() routes through dispatchAction (audit + ui.navigate re
     assert.ok(completed, 'expected an audit entry with decision:"completed"');
     assert.equal(completed.tool, 'test_tool');
     assert.equal(completed.outcome, 'ok');
+    // A8: a successful action must carry NO reason key at all (not just a
+    // falsy one) — JSON.stringify drops an `undefined` value, so the
+    // success-case audit line stays byte-identical to before A8.
+    assert.equal(Object.prototype.hasOwnProperty.call(completed, 'reason'), false,
+      'a successful audit entry must not have a reason key at all');
   });
 
   it('a navigate action emits ui.navigate so the dashboard follows the route', async () => {
@@ -93,5 +103,25 @@ describe('W1: cortex act() routes through dispatchAction (audit + ui.navigate re
     const completed = auditCalls.find((e) => e.decision === 'completed');
     assert.ok(completed, 'expected an audit entry even on failure');
     assert.equal(completed.outcome, 'fail');
+    // A8: the failure reason (effectors' fail() shape lands in result.result)
+    // must be carried into the audit entry — outcome:'fail' alone gives no
+    // way to diagnose why.
+    assert.equal(completed.reason, 'boom');
+  });
+
+  it('a failing action with a long error message truncates reason to exactly 300 chars', async () => {
+    const longError = 'x'.repeat(400);
+    const { cortex, auditCalls } = buildHarness({
+      tool: 'test_tool',
+      invokeResult: { ok: false, result: longError }
+    });
+    cortex.start();
+    await cortex.tickOnce();
+    cortex.stop();
+
+    const completed = auditCalls.find((e) => e.decision === 'completed');
+    assert.ok(completed, 'expected an audit entry even on failure');
+    assert.equal(completed.reason.length, 300, 'reason must be truncated to exactly 300 chars');
+    assert.equal(completed.reason, 'x'.repeat(300));
   });
 });
