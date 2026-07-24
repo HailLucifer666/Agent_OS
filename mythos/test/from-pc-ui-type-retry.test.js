@@ -63,3 +63,26 @@ test('ui_type surfaces a final ok:false when every attempt keeps failing', async
     assert.equal(result.ok, false, 'a persistently blocked type must surface as ok:false, never a silent success');
   });
 });
+
+// AUDIT FIX: focus_window is honest now (FIX 2), so foregroundThenRetry must
+// ABORT on a denied focus instead of proceeding blind — ui_click's coordinate
+// fallback would otherwise click whatever window is topmost and report
+// clicked:true (the exact silent wrong-window class this fix-set kills).
+test('a failed focus_window aborts the action with the focus error — no blind ui_type is sent', async () => {
+  const calls = [];
+  await withMockedPcChild({
+    getStatus: () => ({ state: 'ONLINE' }),
+    sendCommand: async (cmdObj) => {
+      calls.push(cmdObj.cmd);
+      if (cmdObj.cmd === 'focus_window') {
+        return { ok: false, error: 'Failed to bring PID 4242 to the foreground (blocked by the OS foreground-lock).' };
+      }
+      return { ok: true, result: { typed: true, length: 5 } };
+    },
+  }, async (fromPc) => {
+    const result = await fromPc.ui_type({ text: 'hello', pid: 4242 });
+    assert.equal(result.ok, false, 'a denied focus must surface as ok:false, not proceed to a blind type');
+    assert.match(String(result.result || ''), /foreground/i);
+    assert.ok(calls.indexOf('ui_type') === -1, 'the ui_type command must NOT be sent after a failed focus');
+  });
+});

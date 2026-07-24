@@ -80,15 +80,17 @@ async function delegateWithRetry(cmdObj, opts) {
   return lastResult;
 }
 
-// Phase 3 hardening: foreground escalation. For ui_click/click_at on an element
-// whose window may not be foreground, focus the window first, then retry. The
-// focus is best-effort (a focus failure does NOT abort the click — the original
-// window may still be clickable). Reused by both desktop and browser click paths
-// (browser applies it via its own focus step).
+// Phase 3 hardening: foreground escalation. For ui_click/ui_type on an element
+// whose window may not be foreground, focus the window first, then retry.
+// AUDIT FIX: focus_window is now honest (FIX 2 verifies GetForegroundWindow),
+// so a focus failure ABORTS the action instead of proceeding blind — ui_type
+// has a PS-side pre-type pid check (FIX 3) as backstop, but ui_click has none:
+// its coordinate fallback would click whatever window is topmost and still
+// report clicked:true. Honest abort beats a silent wrong-window action.
 async function foregroundThenRetry(pid, cmdObj, opts) {
   if (pid) {
-    try { await delegate({ cmd: 'focus_window', pid: pid }); }
-    catch (_) { /* best-effort focus — proceed to the action regardless */ }
+    const focus = await delegate({ cmd: 'focus_window', pid: pid });
+    if (!focus.ok) return focus;
   }
   return delegateWithRetry(cmdObj, opts);
 }
@@ -115,7 +117,11 @@ async function focus_window({ pid }) {
 
 async function close_window({ pid }) {
   if (!pid) return fail('PID is required.');
-  return delegate({ cmd: 'close_window', pid });
+  var res = await delegate({ cmd: 'close_window', pid });
+  // AUDIT FIX: a closed pid must not linger as the ui_type/ui_click default —
+  // Windows recycles PIDs, so a stale value could target an unrelated process.
+  if (res.ok && Number(pid) === lastLaunchedPid) lastLaunchedPid = null;
+  return res;
 }
 
 async function media_key({ key }) {
@@ -318,7 +324,7 @@ const TOOLS = [
   { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
-  { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center.', params: { pid: 'number - window process ID', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
+  { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center.', params: { pid: 'number (optional) - window process ID, normally the pid launch_app just returned; defaults to the last launched app', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. Pass the pid returned by the preceding launch_app call so the target window is reliably foregrounded before typing — omitting it risks typing into whatever window happens to have focus.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID, normally the pid launch_app just returned', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },

@@ -164,17 +164,22 @@ describe('Phase 3 — bounded-retry helper retries then resolves / fails clean',
     assert.deepEqual(clickCmd.elementPath, ['0', '1']);
   });
 
-  it('foreground-escalation does NOT abort the click when focus itself fails', async () => {
+  it('foreground-escalation ABORTS the click when focus itself fails (honest focus, no blind click)', async () => {
+    // Semantics inverted by the reliability audit: focus_window used to lie
+    // (always focused:true), so proceeding "best-effort" was harmless. Now that
+    // FIX 2 makes focus honest, a denied focus means the target window is NOT
+    // foreground — proceeding would let ui_click's coordinate fallback click
+    // whatever window is topmost and still report clicked:true.
     const sentCommands = [];
     realPcChild.sendCommand = (cmdObj) => {
       sentCommands.push(cmdObj);
-      // focus_window fails, but the ui_click still proceeds and succeeds.
       if (cmdObj.cmd === 'focus_window') return Promise.resolve({ ok: false, error: 'focus denied' });
       return Promise.resolve({ ok: true, result: { clicked: true } });
     };
     const { ui_click } = require('../src/core/effectors/from-pc');
     const r = await ui_click({ pid: 777, elementPath: ['0'] });
-    assert.equal(r.ok, true, 'click must still proceed after a best-effort focus failure');
+    assert.equal(r.ok, false, 'a denied focus must abort the click with an honest failure');
+    assert.ok(!sentCommands.some((c) => c.cmd === 'ui_click'), 'no blind ui_click may be sent after a failed focus');
   });
 });
 

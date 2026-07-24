@@ -89,3 +89,25 @@ test('a genuinely successful command still returns ok:true (classification fix m
   assert.equal(resp.ok, true, `expected ok:true, got: ${JSON.stringify(resp)}`);
   assert.equal(resp.result.pong, true);
 });
+
+// FIX 4 + audit sweep: the launch_app/focus_window/ui_click dispatcher cases
+// gained the same string=failure guard. Each test below uses a deterministic
+// failure path that needs no real window and has no desktop side effect.
+
+test('launch_app with an unresolvable name returns ok:false (no explorer fallback, no false success)', async () => {
+  const resp = await sendOneCommand({ cmd: 'launch_app', name: 'definitely-not-an-installed-app-xyz', id: 5 });
+  assert.equal(resp.ok, false, `expected ok:false, got: ${JSON.stringify(resp)}`);
+  assert.match(String(resp.error || ''), /failed to launch/i);
+});
+
+test('focus_window on a nonexistent pid returns ok:false (honest focus failure must not ship as ok:true)', async () => {
+  // Windows PIDs are always multiples of 4 — an odd pid can never exist.
+  const resp = await sendOneCommand({ cmd: 'focus_window', pid: 999999, id: 6 });
+  assert.equal(resp.ok, false, `expected ok:false, got: ${JSON.stringify(resp)}`);
+  assert.match(String(resp.error || ''), /cannot focus/i);
+});
+
+test('ui_click with missing args returns ok:false (danger:true click failures must engage the retry loop)', async () => {
+  const resp = await sendOneCommand({ cmd: 'ui_click', id: 7 });
+  assert.equal(resp.ok, false, `expected ok:false, got: ${JSON.stringify(resp)}`);
+});

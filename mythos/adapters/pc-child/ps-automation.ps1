@@ -382,7 +382,7 @@ function Send-UnicodeText($text) {
 # Keep this list short; easy to extend.
 $script:KnownApps = @{
     'slack'   = @{ path = (Join-Path $env:LOCALAPPDATA 'slack\slack.exe') }
-    'discord' = @{ path = (Join-Path $env:LOCALAPPDATA 'Discord\Update.exe'); args = @('--processStart', 'Discord.exe') }
+    'discord' = @{ path = (Join-Path $env:LOCALAPPDATA 'Discord\Update.exe'); args = @('--processStart', 'Discord.exe'); procName = 'Discord' }
     'teams'   = @{ path = (Join-Path $env:LOCALAPPDATA 'Microsoft\Teams\current\Teams.exe') }
 }
 
@@ -422,6 +422,16 @@ function Handle-LaunchApp($name) {
             if ($known.args) { $procArgs.ArgumentList = $known.args }
             $proc = Start-Process @procArgs
             Start-Sleep -Milliseconds 500
+            # AUDIT FIX: launcher-style entries (Discord's Squirrel Update.exe)
+            # spawn the real app and exit — $proc.Id would be the bootstrapper's
+            # transient PID, poisoning lastLaunchedPid upstream. Resolve the
+            # real process by name, same pattern as the Spotify branch above.
+            if ($known.procName) {
+                Start-Sleep -Milliseconds 1000
+                $real = Get-Process -Name $known.procName -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($real) { return @{ pid = $real.Id; name = $name; launched = $true } }
+                return @{ name = $name; launched = $true; note = 'launched via bootstrapper; app process not yet visible' }
+            }
             return @{ pid = $proc.Id; name = $name; launched = $true }
         } catch {
             return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
@@ -446,8 +456,12 @@ function Handle-LaunchApp($name) {
 
 # FIX 5: "show desktop" previously had no dedicated tool, so the planner fell
 # back to launch_app("explorer") — opening a File Explorer window instead of
-# minimizing everything. Shell.Application's MinimizeAll is the same action
-# the taskbar's "Show desktop" corner button performs; no P/Invoke needed.
+# minimizing everything. Shell.Application's MinimizeAll performs the same
+# minimize-all action as the taskbar's "Show desktop" corner button, but is
+# one-directional (always minimizes; the real corner button toggles back to
+# restore all on a second press) — arguably the better semantic for a voice
+# command anyway, since "show desktop" said twice should not un-minimize
+# everything. No P/Invoke needed.
 function Handle-ShowDesktop {
     try {
         $shell = New-Object -ComObject Shell.Application
@@ -1256,6 +1270,11 @@ while ($true) {
         }
         'ui_click' {
             $result = Handle-UiClick $cmd.pid $cmd.elementPath
+            # Reliability audit: Handle-UiClick returns a bare 'Click failed: ...'
+            # string on arg-validation/resolution failure. Without this guard it
+            # shipped as ok:true (danger:true, physically acts on the desktop)
+            # AND silently defeated delegateWithRetry's retry-on-failure loop.
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'ui_type' {
             $result = Handle-UiType $cmd.text $cmd.pid $cmd.elementPath
@@ -1272,6 +1291,9 @@ while ($true) {
         }
         'click_at' {
             $result = Handle-ClickAt $cmd.x $cmd.y
+            # Same guard as ui_click above — Handle-ClickAt's own 'Click failed: ...'
+            # string must reach the caller as ok:false, not a false success.
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'media_status' {
             $result = Handle-MediaStatus
