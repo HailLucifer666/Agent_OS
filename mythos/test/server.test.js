@@ -407,3 +407,35 @@ test('POST /api/voice/transcribe surfaces a Groq failure as a real HTTP 503, nev
     await server.stop();
   }
 });
+
+// A7: 'health.anomaly' was subscribed and fed anomalyLog/broadcastHealth, but
+// 'health.healed' (probes.js down->up transition, healer.js recovery) had no
+// subscriber at all — the health card only ever accumulated "down" entries,
+// never recoveries. Exercises the real bus + real server + real ws client,
+// same shape as the 'tick' relay test above.
+test('real bus health.healed event relays to a real WS client health broadcast, marked healed:true', async () => {
+  const bus = createBus({ historySize: 50 });
+  const server = createServer(baseDeps(bus));
+
+  await server.ready; // address() is null until the listening event (async bind on Windows)
+  const addr = server.httpServer.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await new Promise((resolve) => ws.on('open', resolve));
+
+  const received = new Promise((resolve) => {
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'health') resolve(msg);
+    });
+  });
+
+  bus.emit('health.healed', { kind: 'provider-recovered', target: 'mistral' });
+  const msg = await received;
+  const entry = msg.payload.anomalies[msg.payload.anomalies.length - 1];
+  assert.equal(entry.healed, true);
+  assert.equal(entry.kind, 'provider-recovered');
+  assert.equal(entry.target, 'mistral');
+
+  ws.close();
+  await server.stop();
+});

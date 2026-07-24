@@ -1209,6 +1209,24 @@ function createServer(deps) {
       });
     } catch (_) {}
   });
+  // Recoveries — the other half of BUG-030: 'health.anomaly' feeds
+  // anomalyLog/broadcast above, but 'health.healed' (probes.js down->up
+  // transition, healer.js recovery emits) was never subscribed, so the health
+  // card only ever accumulated "down" entries. Mirrors the anomaly
+  // subscription exactly.
+  bus.subscribe('health.healed', (e) => {
+    anomalyLog.push(Object.assign({ healed: true }, e.payload));
+    if (anomalyLog.length > 200) anomalyLog.shift();
+    broadcastHealth(lastStatus);
+    try {
+      memory.episodic.write({
+        kind: 'anomaly', channel: 'immune',
+        summary: 'healed: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.target || ''),
+        detail: { kind: e.payload.kind, target: e.payload.target, playbookId: e.payload.playbookId, outcome: e.payload.outcome },
+        outcome: 'healed', salience: 0.6,
+      });
+    } catch (_) {}
+  });
   bus.subscribe('perception.metric', () => {
     probes.getStatus().then((status) => {
       lastStatus = status;
