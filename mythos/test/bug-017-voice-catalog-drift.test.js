@@ -100,7 +100,7 @@ describe('BUG-017: voice catalog derived from real hub registrations', () => {
     let checked = 0;
     for (const entry of catalog) {
       const effector = hub.get(entry.name);
-      if (!effector || typeof effector.describeMeta !== 'function') continue; // not a hub-registered tool effector (e.g. media_status)
+      if (!effector || typeof effector.describeMeta !== 'function') continue; // not a hub-registered tool effector (e.g. a voice-only pseudo-tool)
       const real = effector.describeMeta();
       assert.deepEqual(entry.params, real.params, `${entry.name}: voice catalog params drifted from the real hub registration`);
       checked += 1;

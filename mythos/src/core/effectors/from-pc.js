@@ -238,6 +238,10 @@ async function show_desktop() {
   return delegate({ cmd: 'show_desktop' });
 }
 
+async function media_status() {
+  return delegate({ cmd: 'media_status' });
+}
+
 async function send_key({ key }) {
   if (!key) return fail('Key name is required (enter, tab, escape, space, up, down, left, right).');
   const validKeys = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right'];
@@ -355,6 +359,7 @@ const TOOLS = [
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
   { name: 'ambient_awareness', description: "Turn ambient screen awareness on or off, or report its status. Use for 'watch my screen', 'stop watching my screen', 'are you watching?'.", params: { action: 'string - on|off|status' }, danger: false, fn: ambient_awareness, needs_result: true },
   { name: 'show_desktop', description: "Minimize all windows and show the desktop. Use for 'show desktop', 'minimize everything', 'go to desktop'.", params: {}, danger: false, fn: show_desktop },
+  { name: 'media_status', description: 'Get currently playing media info (title, artist, album, position/duration, art) from Windows SMTC.', params: {}, danger: false, fn: media_status, needs_result: true },
 ];
 
 function registerFromPc(hub, opts) {
@@ -377,4 +382,5 @@ module.exports = {
   screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
   ambient_awareness, setScreenSensorHandle, show_desktop,
   move_window, snap_window, scroll_at, right_click_at, drag,
+  media_status,
 };

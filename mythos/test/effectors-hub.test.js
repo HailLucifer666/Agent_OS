@@ -1,6 +1,6 @@
 'use strict';
 
-const { describe, it, before, after } = require('node:test');
+const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { tempVaultDir, cleanupVaultDir, fakeBus } = require('./helpers');
@@ -115,7 +115,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 77 registered count', () => {
+describe('gate: 78 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -144,12 +144,50 @@ describe('gate: 77 registered count', () => {
     // + 1 propose_goal (from-dashboard, Phase 4 V5 — 2026-07-20) = 73,
     // + 3 write_file/create_folder/delete_file (from-computer, folder read-write
     // feature — 2026-07-23 bug sweep) = 76, + show_desktop (from-pc, 2026-07-24
-    // typing/wrong-app fix sweep — FIX 5) = 77.
+    // typing/wrong-app fix sweep — FIX 5) = 77, + media_status (from-pc —
+    // registers the previously hub-less pseudo-tool so invoke() no longer
+    // returns unknown-effector) = 78.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 77);
+    assert.equal(hub.count(), 78);
+  });
+});
+
+describe('media_status: registered on the hub, invoke() no longer returns unknown-effector', () => {
+  const pcChildPath = require.resolve('../adapters/pc-child');
+  const realPcChild = require(pcChildPath);
+  let originalSend, originalGetStatus;
+
+  beforeEach(() => {
+    originalSend = realPcChild.sendCommand;
+    originalGetStatus = realPcChild.getStatus;
+    realPcChild.getStatus = () => ({ state: 'ONLINE', hint: null });
+    delete require.cache[require.resolve('../src/core/effectors/from-pc')];
+  });
+
+  afterEach(() => {
+    realPcChild.sendCommand = originalSend;
+    realPcChild.getStatus = originalGetStatus;
+    delete require.cache[require.resolve('../src/core/effectors/from-pc')];
+  });
+
+  it('hub.invoke("media_status", {}, {}) delegates to pc-child and passes SMTC fields through unchanged', async () => {
+    const smtcPayload = { title: 'Track Name', artist: 'Some Artist', album: 'Some Album', position: 42, duration: 210 };
+    realPcChild.sendCommand = (cmdObj) => {
+      assert.deepEqual(cmdObj, { cmd: 'media_status' });
+      return Promise.resolve({ ok: true, result: smtcPayload });
+    };
+
+    const { registerFromPc: registerFromPcFresh } = require('../src/core/effectors/from-pc');
+    const bus = fakeBus();
+    const hub = createEffectorHub({ bus, config: {} });
+    registerFromPcFresh(hub);
+
+    const result = await hub.invoke('media_status', {}, {});
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.result, smtcPayload);
   });
 });
 

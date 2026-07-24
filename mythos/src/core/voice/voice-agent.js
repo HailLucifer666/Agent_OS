@@ -112,9 +112,8 @@ const CATALOG = buildCatalog();
 // the odd deliberate voice-facing description override, e.g. navigate's route
 // enum/"no news route" warning). Any hub-registered effector with no CATALOG_RAW
 // entry at all (a brand new tool) is added automatically. Any CATALOG_RAW entry
-// with no hub match (e.g. media_status, which is served via the PC-child/REST
-// path rather than the effector hub) passes through unchanged — it's a genuine
-// voice-only pseudo-tool, not drift.
+// with no hub match at all passes through unchanged — a genuine voice-only
+// pseudo-tool, not drift.
 //
 // Deliberately additive: CATALOG_RAW itself is untouched (existing hub-less
 // tests and call sites that construct createVoiceAgent without a hub keep
