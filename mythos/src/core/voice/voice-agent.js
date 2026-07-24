@@ -87,7 +87,7 @@ const CATALOG_RAW = [
   { name: 'spotify_next', description: 'Skip to next track on Spotify.', params: {}, danger: false },
   { name: 'spotify_previous', description: 'Go to previous track on Spotify.', params: {}, danger: false },
   { name: 'spotify_volume', description: 'Adjust Spotify volume.', params: { direction: 'string - up, down, or mute' }, danger: false },
-  { name: 'spotify_status', description: 'Check if Spotify is running and get window info.', params: {}, danger: false },
+  { name: 'spotify_status', description: 'Check whether Spotify is running AND whether something is actually playing right now (playing:true/false, derived from the window title). Use this before ever claiming a song "is playing."', params: {}, danger: false },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Use for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false },
   { name: 'media_status', description: 'Get currently playing media info (title, artist, album, art) from Windows SMTC.', params: {}, danger: false },
 ];

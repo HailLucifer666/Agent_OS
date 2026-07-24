@@ -526,15 +526,27 @@ async function spotify_search({ query }) {
   return ok({ query, tracks, count: tracks.length });
 }
 
+// Spotify's window title is "Spotify"/"Spotify Free"/"Spotify Premium" while
+// idle and becomes "Artist - Track" (literal " - " separator) the instant
+// something plays — the same title oracle cuaPlayViaDriver's click-verify
+// loop already relies on (cuaSpotifyWindowTitle above). running !== playing:
+// Spotify can sit open and paused for hours.
+function looksLikePlayingTitle(title) {
+  const t = String(title || '').trim();
+  if (!t || /^spotify(\s+(free|premium))?$/i.test(t)) return false;
+  return t.indexOf(' - ') !== -1;
+}
+
 async function spotify_status() {
   const windowResult = await getSpotifyWindow();
-  if (!windowResult.ok) return ok({ running: false, reason: windowResult.result });
+  if (!windowResult.ok) return ok({ running: false, playing: false, reason: windowResult.result });
 
-  // Could add screen_look to see what's playing
+  const title = windowResult.result.title;
   return ok({
     running: true,
+    playing: looksLikePlayingTitle(title),
     pid: windowResult.result.pid,
-    title: windowResult.result.title,
+    title: title,
     processName: windowResult.result.processName
   });
 }
@@ -589,7 +601,7 @@ const TOOLS = [
   },
   {
     name: 'spotify_status',
-    description: 'Check if Spotify is running and get window info.',
+    description: 'Check whether Spotify is running AND whether something is actually playing right now (playing:true/false, derived from the window title). Use this before ever claiming a song "is playing."',
     params: {},
     danger: false,
     fn: spotify_status

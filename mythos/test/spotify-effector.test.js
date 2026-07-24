@@ -177,6 +177,73 @@ describe('Spotify tool parameter validation', () => {
   });
 });
 
+describe('spotify_status: playing derived from window-title oracle', () => {
+  function makeStatusHub(title) {
+    const dir = tempVaultDir();
+    const bus = fakeBus();
+    const hub = createEffectorHub({ bus, config: {} });
+    const mockPcEffectors = {
+      invoke: async (tool) => {
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title }] } };
+        }
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+    return { hub, dir };
+  }
+
+  it('title "Artist - Track" reports playing:true', async () => {
+    const { hub, dir } = makeStatusHub('Radiohead - Karma Police');
+    const result = await hub.invoke('spotify_status', {}, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.running, true);
+    assert.equal(result.result.playing, true);
+    cleanupVaultDir(dir);
+  });
+
+  it('title "Spotify" (idle) reports playing:false', async () => {
+    const { hub, dir } = makeStatusHub('Spotify');
+    const result = await hub.invoke('spotify_status', {}, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.running, true);
+    assert.equal(result.result.playing, false);
+    cleanupVaultDir(dir);
+  });
+
+  it('title "Spotify Premium" (idle) reports playing:false', async () => {
+    const { hub, dir } = makeStatusHub('Spotify Premium');
+    const result = await hub.invoke('spotify_status', {}, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.running, true);
+    assert.equal(result.result.playing, false);
+    cleanupVaultDir(dir);
+  });
+
+  // Empty windows:[] triggers getSpotifyWindow's real 4x cold-launch retry
+  // with backoff (see the comment on the param-validation suite above) — this
+  // one case is unavoidably ~5s slower than the others to exercise the actual
+  // not-running path honestly.
+  it('Spotify not running reports running:false, playing:false', async () => {
+    const dir = tempVaultDir();
+    const bus = fakeBus();
+    const hub = createEffectorHub({ bus, config: {} });
+    const mockPcEffectors = {
+      invoke: async (tool) => {
+        if (tool === 'list_windows') return { ok: true, result: { windows: [] } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      }
+    };
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+    const result = await hub.invoke('spotify_status', {}, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.running, false);
+    assert.equal(result.result.playing, false);
+    cleanupVaultDir(dir);
+  });
+});
+
 describe('Spotify effector integration with tier table', () => {
   it('all Spotify tool names exist in TIER_TABLE', () => {
     const spotifyToolNames = [
