@@ -373,6 +373,35 @@ function Send-UnicodeText($text) {
 
 # ---- Command Handlers ----
 
+# FIX 7: env-derived, portable app-path resolution chain. KnownApps' per-user
+# paths go stale the moment an app is reinstalled via a different channel —
+# e.g. Slack installed as a Microsoft Store package is registered under
+# HKCU:\...\App Paths\slack.exe, not %LOCALAPPDATA%. No machine-specific path
+# is ever hardcoded here (portability rule).
+function Resolve-AppPathFromRegistry($name) {
+    $exeName = if ($name -match '\.exe$') { $name } else { $name + '.exe' }
+    $roots = @(
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths'
+    )
+    foreach ($root in $roots) {
+        try {
+            $key = Get-Item -Path (Join-Path $root $exeName) -ErrorAction Stop
+            $resolved = $key.GetValue('')
+            if ($resolved -and (Test-Path -LiteralPath $resolved)) { return $resolved }
+        } catch { }
+    }
+    return $null
+}
+
+function Resolve-AppViaStartApps($name) {
+    try {
+        $match = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
+        if ($match) { return $match.AppID }
+    } catch { }
+    return $null
+}
+
 # FIX 6: known desktop-app resolver. Several common apps install to per-user
 # AppData paths with no PATH entry and no registered "App Path" — Start-Process
 # -FilePath "<name>" can't resolve them, so they fell through to the generic
@@ -415,6 +444,7 @@ function Handle-LaunchApp($name) {
 
     # FIX 6: known installed desktop app — resolve before the generic
     # Start-Process attempt below, which can't find apps with no PATH entry.
+    $attempted = @()
     $known = $script:KnownApps[$name.ToLowerInvariant()]
     if ($known -and (Test-Path $known.path)) {
         try {
@@ -436,6 +466,33 @@ function Handle-LaunchApp($name) {
         } catch {
             return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
         }
+    } else {
+        # FIX 7: KnownApps only knows a literal per-user Win32 exe path. Apps
+        # reinstalled via a different channel — e.g. Slack as a Microsoft Store
+        # package — register under HKCU App Paths instead, or need the
+        # shell:AppsFolder\<AppID> launch form entirely. Both steps are
+        # best-effort and additive: any failure just falls through to the
+        # generic Start-Process attempt below, preserving the honest-failure
+        # contract.
+        if ($known) { $attempted += ('KnownApps path missing on disk: ' + $known.path) }
+
+        $regPath = Resolve-AppPathFromRegistry $name
+        if ($regPath) {
+            try {
+                $proc = Start-Process -FilePath $regPath -PassThru -ErrorAction Stop
+                Start-Sleep -Milliseconds 500
+                return @{ pid = $proc.Id; name = $name; launched = $true; resolvedVia = 'registry-app-paths' }
+            } catch { $attempted += ('registry path ' + $regPath + ': ' + $_.Exception.Message) }
+        } else { $attempted += 'registry App Paths: no match' }
+
+        $appId = Resolve-AppViaStartApps $name
+        if ($appId) {
+            try {
+                Start-Process "shell:AppsFolder\$appId" -ErrorAction Stop
+                Start-Sleep -Milliseconds 800
+                return @{ launched = $true; name = $name; resolvedVia = 'start-apps'; note = 'Store/UWP app; no per-process pid resolvable for this app model.' }
+            } catch { $attempted += ('shell:AppsFolder ' + $appId + ': ' + $_.Exception.Message) }
+        } else { $attempted += 'Get-StartApps: no match' }
     }
 
     # Try Start-Process with the name
@@ -450,7 +507,8 @@ function Handle-LaunchApp($name) {
         # silently fall back to opening File Explorer / triggering a browser
         # web-search while still claiming success — a mistyped or unknown app
         # name previously opened the wrong thing and reported launched:true.
-        return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+        $attempted += ('Start-Process "' + $name + '": ' + $_.Exception.Message)
+        return ('Failed to launch "' + $name + '". Tried: ' + ($attempted -join '; '))
     }
 }
 
