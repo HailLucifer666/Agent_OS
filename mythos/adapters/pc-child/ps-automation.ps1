@@ -17,6 +17,7 @@
 #   { "cmd": "ping" }
 #   { "cmd": "send_key", "key": "enter" }
 #   { "cmd": "click_at", "x": 500, "y": 300 }
+#   { "cmd": "show_desktop" }
 #
 # Response shape:
 #   { "ok": true, "result": <any> }
@@ -224,6 +225,18 @@ public static class NativeInput {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+    // FIX 2: Windows' foreground-lock silently denies SetForegroundWindow from
+    // a process that isn't attached to the current foreground thread's input
+    // queue. AttachThreadInput bridges that gap for the duration of the call;
+    // GetCurrentThreadId identifies this (the pc-child) thread as the attach
+    // target.
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
+
     public const int SW_RESTORE = 9;
     public const int SW_MINIMIZE = 6;
     public const int SW_MAXIMIZE = 3;
@@ -360,8 +373,27 @@ function Send-UnicodeText($text) {
 
 # ---- Command Handlers ----
 
+# FIX 6: known desktop-app resolver. Several common apps install to per-user
+# AppData paths with no PATH entry and no registered "App Path" — Start-Process
+# -FilePath "<name>" can't resolve them, so they fell through to the generic
+# attempt below and failed (or, before FIX 4, silently opened File Explorer /
+# a browser search instead). Env-derived only (portability rule — no hardcoded
+# user paths), so this resolves correctly for any installed user's account.
+# Keep this list short; easy to extend.
+$script:KnownApps = @{
+    'slack'   = @{ path = (Join-Path $env:LOCALAPPDATA 'slack\slack.exe') }
+    'discord' = @{ path = (Join-Path $env:LOCALAPPDATA 'Discord\Update.exe'); args = @('--processStart', 'Discord.exe') }
+    'teams'   = @{ path = (Join-Path $env:LOCALAPPDATA 'Microsoft\Teams\current\Teams.exe') }
+}
+
 function Handle-LaunchApp($name) {
     if (-not $name) { return 'App name is required.' }
+    # A bare non-string JSON value (e.g. a number) reaches here as-is; coerce
+    # before .ToLowerInvariant() below, which only exists on [string] and would
+    # otherwise throw a MethodInvocationException that crashes this dispatch
+    # loop (transient DoS — pc-child auto-restarts, but every in-flight command
+    # is lost until it does).
+    $name = [string]$name
 
     # Special handling for Spotify - use URI scheme (works for both desktop and Windows Store/UWP apps)
     if ($name -eq 'spotify' -or $name -like 'spotify:*') {
@@ -381,6 +413,21 @@ function Handle-LaunchApp($name) {
         }
     }
 
+    # FIX 6: known installed desktop app — resolve before the generic
+    # Start-Process attempt below, which can't find apps with no PATH entry.
+    $known = $script:KnownApps[$name.ToLowerInvariant()]
+    if ($known -and (Test-Path $known.path)) {
+        try {
+            $procArgs = @{ FilePath = $known.path; PassThru = $true; ErrorAction = 'Stop' }
+            if ($known.args) { $procArgs.ArgumentList = $known.args }
+            $proc = Start-Process @procArgs
+            Start-Sleep -Milliseconds 500
+            return @{ pid = $proc.Id; name = $name; launched = $true }
+        } catch {
+            return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+        }
+    }
+
     # Try Start-Process with the name
     try {
         $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
@@ -389,14 +436,25 @@ function Handle-LaunchApp($name) {
         $info = @{ pid = $proc.Id; name = $name }
         return $info
     } catch {
-        # If direct launch fails, try explorer/Open-With
-        try {
-            Start-Process -FilePath "explorer.exe" -ArgumentList $name -ErrorAction Stop
-            Start-Sleep -Milliseconds 500
-            return @{ name = $name; launched = $true; note = 'opened via explorer' }
-        } catch {
-            return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
-        }
+        # FIX 4: an unresolvable name must report an honest failure, not
+        # silently fall back to opening File Explorer / triggering a browser
+        # web-search while still claiming success — a mistyped or unknown app
+        # name previously opened the wrong thing and reported launched:true.
+        return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+    }
+}
+
+# FIX 5: "show desktop" previously had no dedicated tool, so the planner fell
+# back to launch_app("explorer") — opening a File Explorer window instead of
+# minimizing everything. Shell.Application's MinimizeAll is the same action
+# the taskbar's "Show desktop" corner button performs; no P/Invoke needed.
+function Handle-ShowDesktop {
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $shell.MinimizeAll()
+        return @{ shown = $true }
+    } catch {
+        return ('Show desktop failed: ' + $_.Exception.Message)
     }
 }
 
@@ -481,7 +539,33 @@ function Handle-FocusWindow($TargetPid) {
         # Restore if minimized, then bring to foreground
         [NativeInput]::ShowWindow($hwnd, [NativeInput]::SW_RESTORE) | Out-Null
         Start-Sleep -Milliseconds 100
-        [NativeInput]::SetForegroundWindow($hwnd) | Out-Null
+
+        # FIX 2: SetForegroundWindow's return was previously discarded, so this
+        # handler always reported focused:true even when Windows' foreground-lock
+        # silently denied the request (a background process may only steal
+        # foreground if it's attached to the current foreground thread's input
+        # queue). AttachThreadInput bridges that gap for the duration of the
+        # call; detach again in finally regardless of outcome.
+        $fgHwndBefore = [NativeInput]::GetForegroundWindow()
+        $fgThreadId = 0
+        [void][NativeInput]::GetWindowThreadProcessId($fgHwndBefore, [ref]$fgThreadId)
+        $ourThreadId = [NativeInput]::GetCurrentThreadId()
+        $attached = $false
+        if ($fgThreadId -ne 0 -and $fgThreadId -ne $ourThreadId) {
+            $attached = [NativeInput]::AttachThreadInput($ourThreadId, $fgThreadId, $true)
+        }
+        try {
+            [NativeInput]::SetForegroundWindow($hwnd) | Out-Null
+        } finally {
+            if ($attached) { [void][NativeInput]::AttachThreadInput($ourThreadId, $fgThreadId, $false) }
+        }
+        Start-Sleep -Milliseconds 50
+
+        # Verify it actually took instead of trusting the return value blind —
+        # SetForegroundWindow can return true yet still be denied in edge cases.
+        if ([NativeInput]::GetForegroundWindow() -ne $hwnd) {
+            return ('Failed to bring PID ' + $TargetPid + ' to the foreground (blocked by the OS foreground-lock).')
+        }
         return @{ pid = $TargetPid; focused = $true }
     } catch {
         return ('Cannot focus PID ' + $TargetPid + ': ' + $_.Exception.Message)
@@ -831,6 +915,23 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
                 Start-Sleep -Milliseconds 50
             }
         }
+
+        # FIX 3 (belt-and-suspenders on top of FIX 2's honest focus_window):
+        # SendInput types into whatever window the OS currently has foreground,
+        # not whatever the caller intended. When a target pid is known, confirm
+        # the foreground window is actually owned by that pid before injecting
+        # a single keystroke — a stale/drifted foreground (e.g. a confirm-dialog
+        # round trip that moved focus away) must surface as an honest failure
+        # so the retry loop re-attempts instead of typing into the wrong window.
+        if ($TargetPid) {
+            $fgHwnd = [NativeInput]::GetForegroundWindow()
+            $fgPid = 0
+            [void][NativeInput]::GetWindowThreadProcessId($fgHwnd, [ref]$fgPid)
+            if ($fgPid -ne [uint32]$TargetPid) {
+                return ('Type aborted: foreground window belongs to PID ' + $fgPid + ', not target PID ' + $TargetPid + '.')
+            }
+        }
+
         $script:LastVkSent = $null
         Send-UnicodeText $text
         # BUG-042-class honest failure: SendInput injected zero events (UIPI /
@@ -1095,6 +1196,15 @@ while ($true) {
         }
         'launch_app' {
             $result = Handle-LaunchApp $cmd.name
+            # FIX 4: this case was missing the string-result-is-failure guard
+            # every other handler below already has — a genuine "Failed to
+            # launch..." string (including FIX 4's new honest failure) shipped
+            # as {ok:true, result:"<failure text>"} instead of ok:false.
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'show_desktop' {
+            $result = Handle-ShowDesktop
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'list_windows' {
             $result = Handle-ListWindows
@@ -1104,6 +1214,10 @@ while ($true) {
         }
         'focus_window' {
             $result = Handle-FocusWindow $cmd.pid
+            # Same P0-2-class dispatcher guard: Handle-FocusWindow now (FIX 2)
+            # returns an honest failure string when the foreground-lock blocks
+            # it, which must reach the caller as ok:false, not silently succeed.
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'close_window' {
             $result = Handle-CloseWindow $cmd.pid

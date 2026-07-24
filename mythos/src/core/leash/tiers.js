@@ -107,6 +107,10 @@ const TIER_TABLE = {
   'move_window':           2,  // non-destructive window move/resize
   'snap_window':           2,  // non-destructive window snap/min/max/restore
   'scroll_at':             2,  // non-destructive wheel scroll at a point
+  'show_desktop':          2,  // 2026-07-24 fix sweep (FIX 5) — bulk-minimizes every window,
+                               // same non-destructive/reversible risk class as snap_window's
+                               // own 'minimize' position; unmapped names fail-safe to T3 via
+                               // tierOf(), which would wrongly confirm-gate a danger:false tool.
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,

@@ -16,6 +16,18 @@ function fail(reason) {
 var brain = null;
 var vaultFs = null;
 
+// FIX 1: last pid returned by a successful launch_app. ui_type/ui_click use
+// this as their default target when the caller (the planning LLM) omits pid,
+// so foregroundThenRetry engages deterministically instead of depending on
+// the model remembering to thread pid through itself.
+// Known scope limit: this is process-wide shared state, not per-conversation
+// or per-goal — a concurrent internal launch_app (e.g. from-spotify.js's own
+// auto-launch path, if it ever routes through this same function) could
+// overwrite it between a user's launch_app and a pid-omitted ui_type/ui_click.
+// Acceptable for a single-PC assistant handling one voice command at a time;
+// revisit if concurrent desktop actions become a real use case.
+var lastLaunchedPid = null;
+
 // Guard: pc-child must be ONLINE to send commands
 function requireOnline() {
   const status = pcChild.getStatus();
@@ -85,7 +97,11 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
 
 async function launch_app({ name }) {
   if (!name) return fail('App name is required.');
-  return delegate({ cmd: 'launch_app', name });
+  var res = await delegate({ cmd: 'launch_app', name });
+  if (res.ok && res.result && typeof res.result.pid === 'number') {
+    lastLaunchedPid = res.result.pid;
+  }
+  return res;
 }
 
 async function list_windows() {
@@ -165,25 +181,36 @@ async function ui_elements({ pid, depth }) {
 }
 
 async function ui_click({ pid, elementPath }) {
-  if (!pid) return fail('PID is required.');
+  // FIX 1: default the omitted pid to the last app launch_app opened, so the
+  // planner doesn't have to remember to thread it through itself.
+  var targetPid = pid || lastLaunchedPid;
+  if (!targetPid) return fail('PID is required.');
   if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
   // Phase 3 hardening: focus the target window first, then retry on failure —
   // a flaky ui_click often lands once the window is foregrounded.
-  return foregroundThenRetry(pid, { cmd: 'ui_click', pid, elementPath }, { attempts: 3 });
+  return foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
 }
 
 async function ui_type({ text, pid, elementPath }) {
   if (!text) return fail('Text is required.');
+  // FIX 1: default the omitted pid to the last app launch_app opened — the
+  // real root cause of the "typed nothing" bug was ui_type carrying no pid at
+  // all, which made the foregroundThenRetry branch below dead code.
+  var targetPid = pid || lastLaunchedPid;
   const cmdObj = { cmd: 'ui_type', text };
-  if (pid) cmdObj.pid = pid;
+  if (targetPid) cmdObj.pid = targetPid;
   if (elementPath) cmdObj.elementPath = elementPath;
   // FIX E: foreground the target window first, same as ui_click — the confirm-
   // approval round trip (human clicks Approve in the dashboard) drifts OS
   // keyboard focus off the target window, so SendInput keystrokes landed
   // nowhere while still reporting typed:true. No pid means "type into whatever
   // is focused right now" — nothing to foreground, so keep the plain delegate.
-  if (pid) return foregroundThenRetry(pid, cmdObj, { attempts: 3 });
+  if (targetPid) return foregroundThenRetry(targetPid, cmdObj, { attempts: 3 });
   return delegate(cmdObj);
+}
+
+async function show_desktop() {
+  return delegate({ cmd: 'show_desktop' });
 }
 
 async function send_key({ key }) {
@@ -292,7 +319,7 @@ const TOOLS = [
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center.', params: { pid: 'number - window process ID', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
-  { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
+  { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. Pass the pid returned by the preceding launch_app call so the target window is reliably foregrounded before typing — omitting it risks typing into whatever window happens to have focus.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID, normally the pid launch_app just returned', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
@@ -302,6 +329,7 @@ const TOOLS = [
   { name: 'drag', description: 'Drag the mouse from (x1,y1) to (x2,y2) — left button down, stepped move, up. Used for drag-and-drop and slider adjustment.', params: { x1: 'number - start x', y1: 'number - start y', x2: 'number - end x', y2: 'number - end y' }, danger: true, fn: drag },
   { name: 'write_note', description: 'Save a text note to the NOVA-Notes folder in the user profile.', params: { text: 'string - note content', title: 'string (optional) - note title' }, danger: false, fn: write_note },
   { name: 'ambient_awareness', description: "Turn ambient screen awareness on or off, or report its status. Use for 'watch my screen', 'stop watching my screen', 'are you watching?'.", params: { action: 'string - on|off|status' }, danger: false, fn: ambient_awareness, needs_result: true },
+  { name: 'show_desktop', description: "Minimize all windows and show the desktop. Use for 'show desktop', 'minimize everything', 'go to desktop'.", params: {}, danger: false, fn: show_desktop },
 ];
 
 function registerFromPc(hub, opts) {
@@ -322,6 +350,6 @@ module.exports = {
   TOOLS,
   launch_app, list_windows, focus_window, close_window, media_key,
   screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
-  ambient_awareness, setScreenSensorHandle,
+  ambient_awareness, setScreenSensorHandle, show_desktop,
   move_window, snap_window, scroll_at, right_click_at, drag,
 };
