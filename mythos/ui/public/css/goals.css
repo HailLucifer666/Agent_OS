@@ -16,7 +16,7 @@
   transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .goals-tile:hover {
-  border-color: var(--gold-soft);
+  border-color: var(--accent-dim);
   transform: translateY(-1px);
 }
 .goals-tile-label {
@@ -31,7 +31,7 @@
 }
 .goals-tile:nth-child(2) .goals-tile-value { color: var(--module-goals); }
 .goals-tile:nth-child(3) .goals-tile-value { color: var(--module-kanban); }
-.goals-tile:nth-child(4) .goals-tile-value { color: var(--gold); }
+.goals-tile:nth-child(4) .goals-tile-value { color: var(--accent); }
 
 .goals-progress-track {
   margin-top: 10px;
@@ -42,7 +42,7 @@
 }
 .goals-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--gold), #e8c98a);
+  background: linear-gradient(90deg, var(--accent), #e8c98a);
   transition: width var(--dur-slow) var(--ease);
 }
 
@@ -100,7 +100,7 @@
 }
 .goals-text-input:focus {
   outline: none;
-  border-color: var(--gold-soft);
+  border-color: var(--accent-dim);
 }
 
 .goals-category-select {
@@ -187,7 +187,7 @@
   transition: border-color var(--dur-fast) var(--ease);
 }
 .goals-row:hover {
-  border-color: var(--gold-soft);
+  border-color: var(--accent-dim);
 }
 
 .goals-check {

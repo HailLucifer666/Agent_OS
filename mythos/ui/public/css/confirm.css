@@ -60,8 +60,8 @@
 }
 
 .confirm-accept {
-  background: var(--gold-soft);
-  color: var(--gold);
+  background: var(--accent-dim);
+  color: var(--accent);
   border-color: var(--accent-dim);
 }
 .confirm-accept:hover { background: var(--accent-dim); color: var(--text); }

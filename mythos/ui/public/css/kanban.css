@@ -127,7 +127,7 @@
 }
 .kanban-goal-input:focus {
   outline: none;
-  border-color: var(--gold-soft);
+  border-color: var(--accent-dim);
 }
 .kanban-assemble-btn {
   height: 42px;
@@ -168,7 +168,7 @@
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 .kanban-lane.drag-over {
-  border-color: var(--gold);
+  border-color: var(--accent);
   background: var(--bg-raised-2);
 }
 
@@ -227,7 +227,7 @@
   transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .kanban-card:hover {
-  border-color: var(--gold-soft);
+  border-color: var(--accent-dim);
 }
 .kanban-card:active {
   cursor: grabbing;
@@ -316,7 +316,7 @@
 }
 .kanban-add-input:focus {
   outline: none;
-  border-color: var(--gold-soft);
+  border-color: var(--accent-dim);
   border-style: solid;
 }
 

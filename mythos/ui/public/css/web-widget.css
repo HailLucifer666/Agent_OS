@@ -170,7 +170,7 @@
   font-size: 11px;
   letter-spacing: 0.1em;
   text-decoration: none;
-  color: var(--gold);
+  color: var(--accent);
   background: var(--bg-raised);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);

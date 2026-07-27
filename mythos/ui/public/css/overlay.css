@@ -35,7 +35,7 @@
 }
 
 .hud-panel-title {
-  color: var(--gold);
+  color: var(--accent);
   font-size: 13px;
   letter-spacing: 0.2em;
 }
@@ -131,4 +131,4 @@
   font-size: 13px;
   color: var(--text-dim);
 }
-.audit-row .mono:first-child { color: var(--gold); min-width: 28px; }
+.audit-row .mono:first-child { color: var(--accent); min-width: 28px; }
