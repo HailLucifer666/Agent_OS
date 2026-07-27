@@ -6,7 +6,8 @@
 // no server TTS when anything is missing (the voice UI falls back to browser
 // speechSynthesis). Set EDGE_TTS_AUTOSTART=false to disable. Never started
 // under the test runner: the long-lived child interferes with Windows console
-// signal delivery (same class of issue as the abtop note in main.js).
+// signal delivery (a shell-wrapped child process changes how Windows delivers
+// console signals to the whole process group, breaking graceful SIGINT shutdown).
 
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');

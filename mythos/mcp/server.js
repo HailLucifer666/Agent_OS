@@ -233,7 +233,7 @@ module.exports = {
 // ---------------------------------------------------------------------------
 if (require.main === module) {
   (async function bootStandalone() {
-    require('dotenv').config();
+    try { process.loadEnvFile(); } catch (_) {}
 
     const { loadConfig } = require('../src/core/config');
     const configResult = loadConfig();

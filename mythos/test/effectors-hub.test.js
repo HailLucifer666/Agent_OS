@@ -146,12 +146,14 @@ describe('gate: 78 registered count', () => {
     // feature — 2026-07-23 bug sweep) = 76, + show_desktop (from-pc, 2026-07-24
     // typing/wrong-app fix sweep — FIX 5) = 77, + media_status (from-pc —
     // registers the previously hub-less pseudo-tool so invoke() no longer
-    // returns unknown-effector) = 78.
+    // returns unknown-effector) = 78, - 2 monitor_snapshot/kill_session
+    // (dead abtop-backed tools removed — Wave 1 mechanical dead-code pass,
+    // abtop.start() had zero callers) = 76.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 78);
+    assert.equal(hub.count(), 76);
   });
 });
 

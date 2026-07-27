@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 // Skills store — procedural memory
 // vault/Skills/<skill>.md
 // Format:
@@ -16,7 +18,7 @@ function createSkillsStore({ fs, config, bus, logger }) {
   const STEP_RE = /^-\s+tool:\s*(\w+),\s*args:\s*(\{[^}]+\})$/gm;
 
   function generateId() {
-    return 'sk-' + Math.random().toString(36).slice(2, 10);
+    return 'sk-' + crypto.randomUUID();
   }
 
   function sanitizeFilename(name) {

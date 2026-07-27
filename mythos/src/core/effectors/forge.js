@@ -11,6 +11,7 @@
 //   awaiting-final-review →(approve) done. Failures → awaiting-mid-build-decision;
 //   final-review reject → applyRevision(feedback). Crash mid-flight → interrupted.
 
+const crypto = require('crypto');
 const prompts = require('./forge-prompts');
 const buildPack = require('../skills/build-pack');
 const validate = require('./forge-validate');
@@ -346,7 +347,7 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
   function createProject(spec, kind, opts) {
     opts = opts || {};
     const p = {
-      id: 'forge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      id: 'forge-' + crypto.randomUUID(),
       spec: String(spec || ''), kind: kind === 'website' ? 'website' : 'app',
       name: 'project', slug: null, previewUrl: null, status: 'planning',
       files: [], manifest: null, error: null,

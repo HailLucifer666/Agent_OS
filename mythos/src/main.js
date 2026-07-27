@@ -66,7 +66,6 @@ const { registerFromSpotify } = require('./core/effectors/from-spotify');
 const { registerFromWidgets } = require('./core/effectors/from-widgets');
 const { registerFromDocs } = require('./core/effectors/from-docs');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
-const abtop = require('./core/effectors/collectors/abtop');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
 const { createJobSensor } = require('./core/sensors/job');
@@ -78,7 +77,7 @@ const cuaDriver = require('../adapters/cua-driver');
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
-  require('dotenv').config();
+  try { process.loadEnvFile(); } catch (_) {}
 
   // Render / cloud injects PORT; promote it to MYTHOS_PORT if not explicitly set.
   if (!process.env.MYTHOS_PORT && process.env.PORT) process.env.MYTHOS_PORT = process.env.PORT;
@@ -297,16 +296,6 @@ async function main() {
       hub.registerNamed('kanban-effector', kanbanEffector);
       hub.registerNamed('pipeline-effector', pipelineEffector);
 
-      // NOTE: abtop.start() (the optional NOVA agent-CLI-session poller behind
-      // monitor_snapshot/kill_session) is deliberately NOT started here. In NOVA it was
-      // started by server.js, i.e. whatever owns the dashboard surface — a role Phase 9
-      // takes on in MYTHOS, not main.js's headless boot sequence. Starting it here was
-      // tried and reverted: it spawns a shell-wrapped child process (`spawn(..., {shell:
-      // true})`) that changes how Windows delivers console signals to the whole process
-      // group, breaking graceful SIGINT shutdown (verified via test/boot.test.js — see
-      // git history). Until Phase 9 calls abtop.start() itself, the two tools stay
-      // honest-inert (abtop.getState() reports enabled:false), which is correct: there
-      // is no dashboard process to monitor CLI sessions for yet.
       registerFromComputer(hub);
       pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
       registerFromSpotify(hub, { effectors: hub, bus: bus, memory: memory, goals: goals, config: config });
@@ -314,7 +303,7 @@ async function main() {
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
-        probes: immune.probes, abtop: abtop, config: config, fs: memory.fs, bus: bus
+        probes: immune.probes, config: config, fs: memory.fs, bus: bus
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.

@@ -1,5 +1,7 @@
 'use strict';
 
+var crypto = require('crypto');
+
 // Identity memory store — human-readable markdown with parseable sidecar
 // vault/Identity/self.md — ENTITY-WRITABLE. This store owns self.md and its
 // archive only; it never reads or writes any other file under Identity/ —
@@ -41,7 +43,7 @@ function createIdentityStore({ fs, config, bus, logger }) {
   ].join('\n');
 
   function generateId() {
-    return 'idn-' + Math.random().toString(36).slice(2, 10);
+    return 'idn-' + crypto.randomUUID();
   }
 
   function readRaw() {

@@ -14,9 +14,6 @@
 // style): read_status's provider-status half re-points to mythos's own immune/probes.js
 // (ctx.probes.getStatus()) instead of NOVA's app/lib/probes.js (a different, NOVA-only
 // module) since immune/probes.js is MYTHOS's real equivalent status aggregator.
-// monitor_snapshot/kill_session re-point to effectors/collectors/abtop.js (ctx.abtop),
-// copied verbatim from NOVA — see that file's header comment for why no MYTHOS-specific
-// rewrite was invented for this NOVA-dashboard-only multi-agent-CLI-session concept.
 //
 // DEVIATION (same convention as from-project.js): this file receives its collaborators
 // via `ctx` (constructed once in main.js's 'effectors' boot step) rather than bare NOVA
@@ -51,7 +48,6 @@ function buildTools(ctx) {
   const agentActions = ctx.agentActions;
   const buildRunner = ctx.buildRunner;
   const probes = ctx.probes;
-  const abtop = ctx.abtop;
   const config = ctx.config;
   const fs = ctx.fs;
 
@@ -707,26 +703,6 @@ function buildTools(ctx) {
     }
   }
 
-  // ---- monitor ----
-
-  function monitor_snapshot() {
-    try {
-      return ok(abtop.getState());
-    } catch (err) {
-      return fail(err.message);
-    }
-  }
-
-  async function kill_session({ pid, agentCli }) {
-    try {
-      if (!pid || !agentCli) return fail('pid and agentCli are required.');
-      await abtop.killSession({ pid: Number(pid), agentCli });
-      return ok({ killed: true, pid });
-    } catch (err) {
-      return fail(err.message);
-    }
-  }
-
   // ---- daily_plan (Phase 3 Jarvis upgrade — daily planning + accountability) ----
   // Injected after construction, same setter-injection pattern as
   // setAskAgentDispatch/setCameraFrameProvider above (and setScreenSensorHandle
@@ -786,8 +762,6 @@ function buildTools(ctx) {
     { name: 'kanban_assemble', description: 'Run the planner agent to break a goal into several kanban cards.', params: { goal: 'string' }, danger: false, fn: kanban_assemble },
     { name: 'kanban_build_card', description: 'Run the builder agent on a kanban card, producing a deliverable.', params: { query: 'string' }, danger: false, fn: kanban_build_card },
     { name: 'ask_agent', description: 'Ask a specific agent seat a question and get a short reply.', params: { seat: 'string', prompt: 'string' }, danger: false, fn: ask_agent },
-    { name: 'monitor_snapshot', description: 'Read the live agent monitor snapshot (running CLI sessions).', params: {}, danger: false, fn: monitor_snapshot },
-    { name: 'kill_session', description: 'Kill a running agent CLI session by PID. Irreversible.', params: { pid: 'number', agentCli: 'string' }, danger: true, fn: kill_session },
     { name: 'camera_look', description: 'Capture a frame from the dashboard camera and describe what is visible. Use when you need to see the user, their environment, or objects they are showing.', params: { query: 'string (optional) — what specifically to look for' }, danger: false, fn: camera_look },
     { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];

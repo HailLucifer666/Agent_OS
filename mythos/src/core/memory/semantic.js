@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 // Semantic memory — human-readable markdown with parseable sidecar
 // vault/Semantic/<topic>.md
 // Format:
@@ -36,7 +38,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
   }
 
   function generateId() {
-    return 'sem-' + Math.random().toString(36).slice(2, 10);
+    return 'sem-' + crypto.randomUUID();
   }
 
   function write(topic, facts, opts) {

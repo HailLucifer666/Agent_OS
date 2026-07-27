@@ -1,10 +1,12 @@
 'use strict';
 
+const crypto = require('crypto');
+
 function createEvent(type, payload, opts) {
   opts = opts || {};
   const cause = opts.cause || null;
   const source = opts.source || 'unknown';
-  const id = 'evt-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+  const id = 'evt-' + crypto.randomUUID();
 
   return {
     id: id,

@@ -6,7 +6,7 @@
 const registry = require('./registry');
 const zcode = require('../../../providers/zcode');
 const nim = require('../../../providers/nim');
-const nim2 = require('../../../providers/nim2');
+const nim2 = nim.createNimProvider('nim2', 'NIM_API_KEY_2');
 const groq = require('../../../providers/groq');
 const mistral = require('../../../providers/mistral');
 const cerebras = require('../../../providers/cerebras');

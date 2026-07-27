@@ -29,8 +29,6 @@ const W8_KEYS = [
   'EDGE_TTS_URL',
   'EDGE_TTS_PORT',
   'EDGE_TTS_AUTOSTART',
-  'HERMES_ENABLED',
-  'HERMES_URL',
   'OLLAMA_EMBED_MODEL',
   'MISTRAL_EMBED_MODEL',
   'GROQ_STT_MODEL',
@@ -38,8 +36,6 @@ const W8_KEYS = [
   'GROQ_API_URL',
   'MISTRAL_API_URL',
   'CEREBRAS_API_URL',
-  'AGENT_MONITOR_ENABLED',
-  'AGENT_MONITOR_POLL_MS',
 ];
 
 describe('W8: previously-bypassed env keys are schema-defined', () => {
@@ -63,7 +59,7 @@ describe('W8: previously-bypassed env keys are schema-defined', () => {
       'CHAIN_ATTEMPT_TIMEOUT_MS', 'VOICE_RECALL_TIMEOUT_MS', 'VOICE_INTAKE_IDLE_MS',
       'VOICE_MAX_TOOL_ITERATIONS', 'REFLECTION_EVERY_TURNS', 'ANNOUNCER_REANNOUNCE_MS',
       'RATE_LIMIT_GLOBAL', 'RATE_LIMIT_EXPENSIVE', 'MAX_DRAIN_PER_TICK',
-      'EDGE_TTS_PORT', 'AGENT_MONITOR_POLL_MS'
+      'EDGE_TTS_PORT'
     ];
     for (const k of numericW8) {
       assert.equal(SCHEMA[k].type, 'number', k + ' should be type:number');

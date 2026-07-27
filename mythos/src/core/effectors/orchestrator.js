@@ -1,5 +1,7 @@
 'use strict';
 
+var crypto = require('crypto');
+
 // orchestrator.js — mission orchestrator: the brain delegates a multi-part
 // goal to a background agent team. Fixed 3-stage pipeline over existing
 // primitives (deliberately NOT a graph framework — see plan/ROADMAP):
@@ -156,7 +158,7 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
   function runMission(goal, goalId) {
     if (!goal || !String(goal).trim()) throw new Error('goal required');
     var m = {
-      id: 'mission-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      id: 'mission-' + crypto.randomUUID(),
       goal: String(goal).trim(),
       goalId: goalId != null ? goalId : null,
       status: 'planning',

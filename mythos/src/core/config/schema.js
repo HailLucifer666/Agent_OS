@@ -103,7 +103,6 @@ const SCHEMA = {
   GOAL_TOKEN_BUDGET:        { type: 'number', default: 20000, min: 0 },
   GOAL_ACTION_BUDGET:       { type: 'number', default: 25, min: 0 },
   MAX_ACTIVE_GOALS:         { type: 'number', default: 5, min: 1, max: 20 },
-  CURIOSITY_MIN_INTERVAL_MS: { type: 'number', default: 600000, min: 0 },
   // V3 (Phase 4): procedural-skill gate. Skills with uses>0 below this
   // successRate are not replayed by plan() — they keep failing.
   SKILL_MIN_SUCCESS_RATE:   { type: 'number', default: 0.5, min: 0, max: 1 },
@@ -256,10 +255,6 @@ const SCHEMA = {
   EDGE_TTS_PORT:               { type: 'number', default: 5050, min: 1024, max: 65535 },
   EDGE_TTS_AUTOSTART:          { type: 'string', default: '' },  // 'false' = don't spawn at boot
 
-  // Hermes sidecar (T3 task delegation)
-  HERMES_ENABLED:              { type: 'bool', default: false },
-  HERMES_URL:                  { type: 'string', default: 'http://127.0.0.1:8082' },
-
   // Embeddings / STT model overrides (free-tier default models)
   OLLAMA_EMBED_MODEL:          { type: 'string', default: 'nomic-embed-text' },
   MISTRAL_EMBED_MODEL:         { type: 'string', default: 'mistral-embed' },
@@ -270,10 +265,6 @@ const SCHEMA = {
   GROQ_API_URL:                { type: 'string', default: 'https://api.groq.com/openai/v1' },
   MISTRAL_API_URL:             { type: 'string', default: 'https://api.mistral.ai/v1' },
   CEREBRAS_API_URL:            { type: 'string', default: 'https://api.cerebras.ai/v1' },
-
-  // Agent monitor (abtop — deliberately honest-inert until a dashboard owns it)
-  AGENT_MONITOR_ENABLED:       { type: 'string', default: '' },   // 'false' = force-off
-  AGENT_MONITOR_POLL_MS:       { type: 'number', default: 5000, min: 1000 },
 
   // Phase 3 (V7) — run_command effector (allow-listed shell commands for build
   // verification). v1 is allowlist + timeout, NOT a full sandbox. Empty
