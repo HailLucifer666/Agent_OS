@@ -29,8 +29,8 @@
   font-size: 22px;
   color: var(--text);
 }
-.goals-tile:nth-child(2) .goals-tile-value { color: var(--accent-goals-purple); }
-.goals-tile:nth-child(3) .goals-tile-value { color: var(--accent-kanban); }
+.goals-tile:nth-child(2) .goals-tile-value { color: var(--module-goals); }
+.goals-tile:nth-child(3) .goals-tile-value { color: var(--module-kanban); }
 .goals-tile:nth-child(4) .goals-tile-value { color: var(--gold); }
 
 .goals-progress-track {
@@ -62,7 +62,7 @@
   margin-bottom: 12px;
 }
 .goals-add-icon {
-  color: var(--accent-kanban);
+  color: var(--module-kanban);
 }
 
 .goals-add-row {
@@ -117,7 +117,7 @@
 .goals-add-btn {
   height: 40px;
   padding: 0 18px;
-  background: var(--accent-hermes);
+  background: var(--module-hermes);
   color: #fff;
   border-radius: var(--radius-sm);
   font-size: 14px;
@@ -152,9 +152,9 @@
   transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .goals-chip.active {
-  border-color: var(--accent-goals-purple);
+  border-color: var(--module-goals);
   color: var(--text);
-  box-shadow: 0 0 0 1px var(--accent-goals-purple) inset;
+  box-shadow: 0 0 0 1px var(--module-goals) inset;
 }
 
 .goals-saved-label {

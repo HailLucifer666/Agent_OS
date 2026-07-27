@@ -83,11 +83,11 @@
 #mic-indicator.mic-listening .mic-status { color: var(--accent); }
 
 #mic-indicator.mic-processing .mic-ring {
-  border-color: var(--accent-goals-purple, #a78bfa);
-  color: var(--accent-goals-purple, #a78bfa);
+  border-color: var(--module-goals, #a78bfa);
+  color: var(--module-goals, #a78bfa);
 }
 #mic-indicator.mic-processing .mic-status {
-  color: var(--accent-goals-purple, #a78bfa);
+  color: var(--module-goals, #a78bfa);
   animation: mic-pulse 0.9s var(--ease) infinite;
 }
 
@@ -102,11 +102,11 @@
 }
 
 #mic-indicator.mic-downloading .mic-ring {
-  border-color: var(--accent-goals-purple, #a78bfa);
-  color: var(--accent-goals-purple, #a78bfa);
+  border-color: var(--module-goals, #a78bfa);
+  color: var(--module-goals, #a78bfa);
 }
 #mic-indicator.mic-downloading .mic-status {
-  color: var(--accent-goals-purple, #a78bfa);
+  color: var(--module-goals, #a78bfa);
   animation: mic-pulse 0.9s var(--ease) infinite;
 }
 
@@ -148,7 +148,7 @@
   height: 150px;
   border-radius: 10px;
   overflow: hidden;
-  border: 1.5px solid var(--accent-memory);
+  border: 1.5px solid var(--module-memory);
   box-shadow: 0 0 16px rgba(96, 165, 250, 0.35);
   z-index: 60;
   background: #000;

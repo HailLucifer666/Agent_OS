@@ -52,7 +52,7 @@ export function mountCoreOrb(canvas, ctx) {
   const DIM = cssVar('--text-dim', '#8ba3c4');
   const DANGER = cssVar('--danger', '#ff5f66');
   const WARN = cssVar('--status-degraded', '#eab308');
-  const THINKING = cssVar('--accent-goals-purple', '#a78bfa'); // matches mic-processing (voice.css)
+  const THINKING = cssVar('--module-goals', '#a78bfa'); // matches mic-processing (voice.css)
   // Orb glow colors per user spec:
   //   idle = cyan, listening = green, speaking = yellow, error = red
   const LISTENING = '#43e5a0';   // green
@@ -60,9 +60,9 @@ export function mountCoreOrb(canvas, ctx) {
 
   const ACTION_COLORS = {
     goals: THINKING,
-    kanban: cssVar('--accent-kanban', '#2dd4bf'),
-    pipeline: cssVar('--accent-pipeline', '#34d399'),
-    memory: cssVar('--accent-memory', '#60a5fa'),
+    kanban: cssVar('--module-kanban', '#2dd4bf'),
+    pipeline: cssVar('--module-pipeline', '#34d399'),
+    memory: cssVar('--module-memory', '#60a5fa'),
     health: WARN,
     audit: DIM,
     core: ACCENT,

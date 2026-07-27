@@ -22,7 +22,7 @@
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  background: var(--accent-kanban);
+  background: var(--module-kanban);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -76,7 +76,7 @@
   color: var(--text-dim);
 }
 .kanban-toggle.active {
-  background: var(--accent-hermes);
+  background: var(--module-hermes);
   color: #fff;
 }
 .kanban-toggle:disabled {
@@ -132,7 +132,7 @@
 .kanban-assemble-btn {
   height: 42px;
   padding: 0 18px;
-  background: var(--accent-hermes);
+  background: var(--module-hermes);
   color: #fff;
   border-radius: var(--radius-sm);
   font-size: 14px;
@@ -185,7 +185,7 @@
   flex-shrink: 0;
 }
 .kanban-lane-dot.amber { background: var(--status-degraded); box-shadow: 0 0 6px var(--status-degraded); }
-.kanban-lane-dot.blue { background: var(--accent-hermes); box-shadow: 0 0 6px var(--accent-hermes); }
+.kanban-lane-dot.blue { background: var(--module-hermes); box-shadow: 0 0 6px var(--module-hermes); }
 .kanban-lane-dot.green { background: var(--status-ok); box-shadow: 0 0 6px var(--status-ok); }
 
 .kanban-lane-label {
@@ -263,7 +263,7 @@
 }
 .kanban-card-artifact {
   font-size: 12px;
-  color: var(--accent-kanban);
+  color: var(--module-kanban);
   text-decoration: none;
 }
 .kanban-card-artifact:hover {
@@ -294,7 +294,7 @@
   transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .kanban-card-action:hover {
-  border-color: var(--accent-kanban);
+  border-color: var(--module-kanban);
   color: var(--text);
 }
 

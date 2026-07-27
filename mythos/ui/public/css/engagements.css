@@ -5,7 +5,7 @@
 
 :root {
   /* Engagement-specific accent tokens */
-  --engag-accent: var(--accent-hermes, #4fd8ff);
+  --engag-accent: var(--module-hermes, #4fd8ff);
   --engag-accent-soft: rgba(79, 216, 255, 0.12);
   --engag-accent-glow: 0 0 12px rgba(79, 216, 255, 0.25);
 
@@ -687,7 +687,7 @@
   background: var(--bg-raised-2);
 }
 .engag-stage-type-badge.build { color: var(--accent); border-color: var(--accent-dim); }
-.engag-stage-type-badge.research { color: var(--accent-goals-purple); border-color: rgba(139, 92, 246, 0.3); }
+.engag-stage-type-badge.research { color: var(--module-goals); border-color: rgba(139, 92, 246, 0.3); }
 .engag-stage-prompt {
   font-size: var(--engag-font-body);
   color: var(--text-dim);

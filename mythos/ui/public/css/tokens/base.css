@@ -1,0 +1,158 @@
+/* base.css — Layer: resets, utilities, global element defaults. Not a token
+   layer itself — this is the CA of tokens.css's non-`:root` rules, split out
+   so tokens.css's :root block (semantic.css) isn't sharing a file with
+   unrelated global styling.
+
+   --gold/--gold-soft were deleted in Wave 2 / Phase 1 (2026-07): they were a
+   literal duplicate of --accent/--accent-dim (same hex, same rgba), a
+   leftover from a pre-Jarvis multi-provider skin. Every consumer below
+   (.text-gold, .gold-divider, ::selection) now reads --accent/--accent-dim
+   directly. The CSS *class* names (.text-gold, .gold-divider) are
+   deliberately unchanged — 3 JS files build "text-gold" as a string
+   (js/widgets/kinds/actions.js, dynamic.js, web-result.js); the bug was only
+   ever the variable being mis-named as gold when it's cyan, not the class. */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  background-image:
+    radial-gradient(circle at 15% -10%, rgba(79, 216, 255, 0.04), transparent 40%),
+    radial-gradient(circle at 85% 0%, rgba(79, 216, 255, 0.02), transparent 35%);
+  background-attachment: fixed;
+}
+
+/* page vignette — pure CSS, zero canvas cost. z-index 4: above widgets'
+   z3, below overlays' z50. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(2, 4, 8, 0.55) 100%);
+}
+
+h1, h2, h3 {
+  margin: 0;
+  font-weight: 300;
+  font-family: var(--font-serif);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+/* scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.script {
+  font-family: var(--font-script);
+}
+
+.text-dim { color: var(--text-dim); }
+.text-faint { color: var(--text-faint); }
+.text-gold { color: var(--accent); }
+.text-warn { color: var(--status-warn); }
+
+/* gold divider with sparkle, used across headers/sections */
+.gold-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--accent);
+}
+.gold-divider .line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+  opacity: 0.5;
+}
+.gold-divider .spark {
+  font-size: 14px;
+}
+
+/* fade-in utility for panels */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeInUp var(--dur-slow) var(--ease) both;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* glass panel utility — Jarvis frosted panels */
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  backdrop-filter: blur(14px);
+  border-radius: var(--radius-md);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -117,7 +117,7 @@
 }
 .compose-voice-btn.processing,
 .compose-voice-btn.downloading {
-  color: var(--accent-goals-purple, #a78bfa);
+  color: var(--module-goals, #a78bfa);
 }
 .compose-voice-btn.speaking {
   color: var(--accent);

@@ -1,0 +1,95 @@
+/* semantic.css — Layer 2: named by role, referenced everywhere else in the
+   codebase. This is the only layer view/component CSS should touch for
+   anything that isn't feature-specific.
+
+   3-layer token contract (Wave 2 / Phase 1 of the UI overhaul):
+     1. Primitive (tokens/primitives.css) — raw values, no meaning attached.
+     2. Semantic (this file) — named by role (--bg, --danger, --module-kanban).
+     3. Component (top of each feature CSS file, e.g. engagements.css's
+        --engag-* block) — named by feature, always `var(--semantic-token,
+        hard-fallback)` so the file still degrades sanely opened standalone.
+        engagements.css already does this correctly; that's the pattern,
+        promoted here as house style rather than replaced.
+
+   Breakpoint convention (documented here per plan, not usable as var()
+   inside @media — CSS spec limitation, every feature file should still use
+   exactly these 3 pixel values):
+     1200px "wide"    : full HUD layout, all floating widgets at default corners
+     900px  "compact" : panels go near-fullscreen, widget corners tighten
+     600px  "narrow"  : panels fullscreen, non-essential widgets auto-hide */
+
+:root {
+  /* base palette — Jarvis: near-black navy, single cyan accent */
+  --bg: #05080f;
+  --bg-raised: #0a101c;
+  --bg-raised-2: #101828;
+  --bg-hover: #162034;
+  --border: #1a2540;
+  --border-soft: rgba(120, 200, 255, 0.1);
+
+  --text: #d7e3f4;
+  --text-dim: #8ba3c4;
+  --text-faint: #6b82a3;
+  --text-mono: #a0b8d4;
+
+  --accent: #4fd8ff;
+  --accent-dim: rgba(79, 216, 255, 0.3);
+  --accent-glow: 0 0 12px rgba(79, 216, 255, 0.3);
+  --glow-accent: 0 0 18px rgba(79, 216, 255, 0.22);
+  --glow-soft: 0 0 32px rgba(79, 216, 255, 0.10);
+  --danger: #ff5f66;
+  --ok: #43e5a0;
+  --hairline: rgba(120, 200, 255, 0.14);
+  --panel: rgba(14, 22, 38, 0.55);
+  --font-ui: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+
+  /* status colors */
+  --status-ok: #43e5a0;
+  --status-degraded: #eab308;
+  --status-offline: #5f7391;
+  --status-warn: #ff5f66;
+
+  /* per-HUD-module accents — read by hud-canvas.js/core-orb.js's node/state
+     color maps and by each module's own view CSS (goals.css, kanban.css,
+     pipeline.css, voice.css, compose-bar.css, engagements.css). Renamed out
+     of "--accent-*" (2026-07 Wave-2 Phase 1): "--accent-kanban" read like an
+     accent-color override per brand-surface, the exact confusion that
+     produced the old --gold/--accent duplicate. "--module-*" names them for
+     what they actually are: a fixed color-key per HUD module. */
+  --module-hermes: #4fd8ff;
+  --module-goals: #a78bfa;
+  --module-kanban: #2dd4bf;
+  --module-pipeline: #34d399;
+  --module-memory: #60a5fa;
+
+  /* provider-brand accents — live: read by the token-usage widget
+     (js/widgets/kinds/tokens.js's PROVIDER_ACCENTS map, one color dot per
+     LLM provider) and by memory.css (mastermind). Kept under "--accent-*"
+     deliberately — these really are per-brand accent overrides, unlike the
+     module tokens above. (Phase-0 inventory gate found 5 more of these
+     15 originally-lumped-together "--accent-*" entries were confirmed dead
+     with zero references anywhere in mythos/ui/public — those are deleted,
+     not listed here: --accent-claude, --accent-cloudflare, --accent-tts,
+     --accent-video, --accent-music, --accent-game, --accent-thumbnail,
+     --accent-radar, --accent-monitor, --accent-goals-yellow.) */
+  --accent-zcode: #4fd8ff;
+  --accent-nim: #76b900;
+  --accent-groq: #f55036;
+  --accent-openrouter-free: #8b5cf6;
+  --accent-cerebras: #e45550;
+  --accent-mistral: #ff7000;
+  --accent-mastermind: #4fd8ff;
+
+  /* layout */
+  --sidebar-w: 56px;
+  --header-pad-x: 40px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  /* motion */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;
+  --dur-med: 320ms;
+  --dur-slow: 900ms;
+}

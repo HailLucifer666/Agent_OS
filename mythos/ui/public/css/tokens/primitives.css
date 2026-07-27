@@ -1,0 +1,48 @@
+/* primitives.css — Layer 1: raw building blocks, no meaning attached.
+   @font-face declarations and the raw font-stack values. Nothing here is
+   ever referenced outside semantic.css — views/components reach these only
+   through the semantic tokens that name what they're *for*.
+
+   Colors/radii/motion/status values are NOT split into a primitive layer:
+   this codebase has no reused color ramp beneath them (every color is
+   already a single-use role, e.g. --bg is defined once, directly, never
+   derived from a shared "navy-950" primitive) — inventing that indirection
+   now would be speculative abstraction with no real reuse behind it. Those
+   live directly in semantic.css as role tokens. See semantic.css's header
+   comment for the full 3-layer contract. */
+
+@font-face {
+  font-family: 'Outfit';
+  src: url('../../fonts/Outfit-Variable.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Source Serif 4 Light';
+  src: url('../../fonts/SourceSerif4-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('../../fonts/JetBrainsMono-Variable.woff2') format('woff2');
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Caveat';
+  src: url('../../fonts/Caveat-Variable.woff2') format('woff2');
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: 'Outfit', -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Source Serif 4 Light', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+  --font-script: 'Caveat', cursive;
+}
