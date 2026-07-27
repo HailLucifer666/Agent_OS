@@ -66,7 +66,10 @@ function cardNode(card) {
   // attribute (like contenteditable), not a boolean attribute like disabled;
   // h()'s boolean shorthand would emit draggable="" which browsers do not
   // treat the same as draggable="true".
-  return h('div', { class: 'kanban-card fade-in', draggable: 'true', 'data-id': card.id }, ...cardBody(card));
+  // tabindex starts at -1 (not a Tab stop) — applyRovingTabindex() (below)
+  // promotes exactly one card per lane to tabindex=0 every renderBoard()
+  // pass, so a freshly-created node is never stuck non-focusable.
+  return h('div', { class: 'kanban-card fade-in', draggable: 'true', tabindex: '-1', 'data-id': card.id }, ...cardBody(card));
 }
 
 function updateCardNode(node, card) {
@@ -91,6 +94,162 @@ function renderBoard() {
     }
     keyedList(body, items, (c) => c.id, cardNode, updateCardNode);
   });
+  applyRovingTabindex();
+}
+
+// --- Phase 5: keyboard navigation (roving tabindex) -------------------------
+// Drag-and-drop (dragstart/dragover/drop, wired in render() below) stays the
+// primary interaction; everything here is a PARALLEL keyboard path, not a
+// replacement. Pattern: one Tab stop per non-empty lane (roving tabindex),
+// landing on that lane's "active" card; Up/Down move within a lane; Left/Right
+// move across lanes (skipping empty ones); Enter/Space opens a move-to-lane
+// menu that calls the existing moveCard(id, lane) closure from render().
+//
+// laneFocusIndex is keyed by lane id, not by card id, and is intentionally
+// re-derived on every focus event (onBoardFocusIn) and after every board
+// re-render (applyRovingTabindex(), called at the end of renderBoard() above)
+// so it self-heals if cards are added/removed/reordered by something other
+// than this keyboard path (a poll tick, another tab, drag-and-drop).
+let laneFocusIndex = {};
+let moveMenu = null;      // { el } while a move-to-lane menu is open
+let moveCardImpl = null;  // set by render() to its in-scope moveCard(id, lane)
+
+function laneCardNodes(laneId) {
+  return Array.from(document.querySelectorAll(`.kanban-lane-body[data-lane="${laneId}"] .kanban-card`));
+}
+
+function applyRovingTabindex() {
+  LANES.forEach((lane) => {
+    const nodes = laneCardNodes(lane.id);
+    if (!nodes.length) return;
+    let idx = laneFocusIndex[lane.id] || 0;
+    if (idx >= nodes.length) idx = nodes.length - 1;
+    if (idx < 0) idx = 0;
+    laneFocusIndex[lane.id] = idx;
+    nodes.forEach((n, i) => n.setAttribute('tabindex', i === idx ? '0' : '-1'));
+  });
+}
+
+function findCardNode(id) {
+  return Array.from(document.querySelectorAll('.kanban-card')).find((n) => n.dataset.id === String(id));
+}
+
+function closeMoveMenu() {
+  if (!moveMenu) return;
+  moveMenu.el.remove();
+  moveMenu = null;
+}
+
+// Builds the keyboard-driven "move to lane" menu next to `card`'s node.
+// onSelect(targetLaneId) is provided by the caller (render(), where the real
+// moveCard fetch-and-refetch closure lives) — this function only builds and
+// operates the popup, it never talks to the network itself.
+function openMoveMenu(card, onSelect) {
+  closeMoveMenu();
+  const options = LANES.filter((l) => l.id !== card.lane);
+  if (!options.length) return;
+  const cardEl = findCardNode(card.id);
+  if (!cardEl) return;
+
+  const items = options.map((l, i) => h('button', {
+    class: 'kanban-move-menu-item',
+    type: 'button',
+    role: 'menuitem',
+    tabindex: i === 0 ? '0' : '-1',
+    onClick: () => { closeMoveMenu(); onSelect(l.id); },
+  }, `→ ${l.label}`));
+
+  const menu = h('div', { class: 'kanban-move-menu', role: 'menu', 'aria-label': `Move "${card.title}" to lane` }, ...items);
+  menu.addEventListener('keydown', (e) => {
+    const focusItems = Array.from(menu.querySelectorAll('.kanban-move-menu-item'));
+    const i = focusItems.indexOf(document.activeElement);
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeMoveMenu();
+      cardEl.focus();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusItems[(i + 1) % focusItems.length].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusItems[(i - 1 + focusItems.length) % focusItems.length].focus();
+    }
+  });
+
+  cardEl.after(menu);
+  moveMenu = { el: menu };
+  items[0].focus();
+}
+
+// Runs an actual keyboard-triggered move: calls the real moveCard() (fetch +
+// board refresh, unchanged), then re-derives roving-tabindex state for the
+// destination lane and moves real DOM focus onto the card at its new home —
+// verification item 2 (a card actually changes lanes via keyboard alone)
+// depends on this landing on the *post-move* board state, not the pre-move one.
+async function moveCardViaKeyboard(id, targetLane) {
+  if (!moveCardImpl) return;
+  await moveCardImpl(id, targetLane);
+  const nodes = laneCardNodes(targetLane);
+  const idx = nodes.findIndex((n) => n.dataset.id === String(id));
+  const landing = idx >= 0 ? idx : 0;
+  if (!nodes.length) return;
+  laneFocusIndex[targetLane] = landing;
+  applyRovingTabindex();
+  nodes[landing].focus();
+}
+
+function onBoardKeydown(e) {
+  const cardEl = e.target.closest('.kanban-card');
+  if (!cardEl) return;
+  const laneEl = cardEl.closest('.kanban-lane');
+  const laneId = laneEl && laneEl.dataset.lane;
+  if (!laneId) return;
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const nodes = laneCardNodes(laneId);
+    const idx = nodes.indexOf(cardEl);
+    const nextIdx = e.key === 'ArrowDown' ? idx + 1 : idx - 1;
+    if (nextIdx < 0 || nextIdx >= nodes.length) return;
+    laneFocusIndex[laneId] = nextIdx;
+    applyRovingTabindex();
+    nodes[nextIdx].focus();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const laneIdx = LANES.findIndex((l) => l.id === laneId);
+    const dir = e.key === 'ArrowRight' ? 1 : -1;
+    let targetIdx = laneIdx + dir;
+    while (targetIdx >= 0 && targetIdx < LANES.length && laneCardNodes(LANES[targetIdx].id).length === 0) {
+      targetIdx += dir;
+    }
+    if (targetIdx < 0 || targetIdx >= LANES.length) return;
+    const targetLane = LANES[targetIdx].id;
+    const targetNodes = laneCardNodes(targetLane);
+    const targetIdxInLane = Math.min(laneFocusIndex[targetLane] || 0, targetNodes.length - 1);
+    laneFocusIndex[targetLane] = targetIdxInLane;
+    applyRovingTabindex();
+    targetNodes[targetIdxInLane].focus();
+  } else if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    const card = cards.find((c) => String(c.id) === cardEl.dataset.id);
+    if (card) openMoveMenu(card, (targetLane) => moveCardViaKeyboard(card.id, targetLane));
+  }
+}
+
+// Keeps laneFocusIndex honest whenever a card actually receives focus, by
+// whatever means (native Tab, our own .focus() calls above, or a mouse click
+// now that cards carry a real tabindex) — self-healing after any re-render
+// that happened for a reason unrelated to this keyboard path.
+function onBoardFocusIn(e) {
+  const cardEl = e.target.closest('.kanban-card');
+  if (!cardEl) return;
+  const laneEl = cardEl.closest('.kanban-lane');
+  const laneId = laneEl && laneEl.dataset.lane;
+  if (!laneId) return;
+  const idx = laneCardNodes(laneId).indexOf(cardEl);
+  if (idx < 0) return;
+  laneFocusIndex[laneId] = idx;
+  applyRovingTabindex();
 }
 
 async function buildCard(id) {
@@ -267,6 +426,10 @@ export async function render(mount) {
       console.error('move card failed', err);
     }
   }
+  // Phase 5: expose this render()-scoped moveCard to the module-level
+  // keyboard-menu path (moveCardViaKeyboard) — same function, just also
+  // reachable from a non-mouse input path. No new API, no duplicate logic.
+  moveCardImpl = moveCard;
 
   document.getElementById('kanban-assemble-btn').addEventListener('click', async () => {
     const input = document.getElementById('kanban-goal-input');
@@ -337,10 +500,17 @@ export async function render(mount) {
     });
   });
 
+  // Phase 5: keyboard nav, delegated on the same board container as drag-and-
+  // drop above — a parallel input path, not a replacement for it.
+  board.addEventListener('keydown', onBoardKeydown);
+  board.addEventListener('focusin', onBoardFocusIn);
+
   await load();
 
   return () => {
     if (jobTimer) clearInterval(jobTimer);
     jobTimer = null;
+    closeMoveMenu();
+    moveCardImpl = null;
   };
 }
