@@ -158,20 +158,28 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     p.status = 'generating'; notify(p);
     const queue = subset.slice();
     let active = 0;
-    return new Promise(function (resolve) {
-      function pump() {
-        if (!queue.length && active === 0) { finishGenerateStage(p).then(resolve); return; }
-        while (active < CONCURRENCY && queue.length) {
-          const file = queue.shift();
-          active += 1;
-          generateOneFile(p, file).then(function () { active -= 1; pump(); });
+    // Auto-use the real skill tool ONCE per project (not per file): for
+    // website/UI projects, run ui-ux-pro-max's search.py to resolve a genuine
+    // design system, then prepend it to every file prompt so the whole project
+    // is coherent. Falls back to '' (essences only) if the skill is absent.
+    // Resolved before the pump starts so all files share the same system.
+    return buildPack.resolveSkillTool(p.kind === 'website' ? (p.title || p.kind) : '').then(function (dsBlock) {
+      const designSystemBlock = dsBlock || '';
+      return new Promise(function (resolve) {
+        function pump() {
+          if (!queue.length && active === 0) { finishGenerateStage(p).then(resolve); return; }
+          while (active < CONCURRENCY && queue.length) {
+            const file = queue.shift();
+            active += 1;
+            generateOneFile(p, file, designSystemBlock).then(function () { active -= 1; pump(); });
+          }
         }
-      }
-      pump();
+        pump();
+      });
     });
   }
 
-  async function generateOneFile(p, file) {
+  async function generateOneFile(p, file, designSystemBlock) {
     file.status = 'generating'; file.error = null; notify(p, file.path);
     const attemptsAllowed = FILE_RETRY + 1;
     // Skill-pack essences (P3 Jarvis upgrade): anti-slop discipline prepended
@@ -183,11 +191,16 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
       const packKind = (p.kind === 'website' || /\.(html|css)$/i.test(file.path)) ? 'ui' : 'code';
       skillBlock = buildPack.packBlockFor(packKind);
     } catch (_) { /* essence injection is best-effort */ }
+    // designSystemBlock (resolved once per project in runGenerateStage via the
+    // real ui-ux-pro-max skill tool) is prepended alongside the essences so the
+    // build model sees genuine colors/styles/typography for the whole project.
+    const dsBlock = designSystemBlock || '';
     for (let attempt = 1; attempt <= attemptsAllowed; attempt += 1) {
       file.attempts = attempt;
       let prompt = attempt === 1
         ? prompts.buildFilePrompt(p.manifest, file, doneSummaries(p))
         : prompts.buildRetryPrompt(p.manifest, file, doneSummaries(p), file.error);
+      if (dsBlock) prompt = dsBlock + '\n\n' + prompt;
       if (skillBlock) prompt = skillBlock + '\n\n' + prompt;
       const result = await think(prompt, null, 'file:' + file.path, p);
       if (!result || result.offline) { file.error = 'brain offline'; continue; }

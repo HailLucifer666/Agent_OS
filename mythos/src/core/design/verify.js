@@ -1,9 +1,17 @@
 'use strict';
 
 // design/verify.js — P22: post-generation verification for build deliverables.
-// Structural checks (title, viewport, responsive, placeholder detection) +
-// LLM self-check on first 2000 chars (up from 500). Returns {pass, issues}.
-// build-runner.js blocks shipment on failure after retry (P22 change).
+// Two tiers of findings:
+//   - issues   = rule-based, hard-fail (structural HTML, placeholder/generic-
+//                template blocklist, title-spec relevance, required design
+//                elements). These catch genuine garbage; build-runner blocks
+//                shipment when issues is non-empty after retry (P22 guarantee).
+//   - warnings = LLM self-check advisory (subjective stylistic judgements like
+//                "color palette violates minimalism", "title invents a focus").
+//                These do NOT hard-fail — they're surfaced for the review phase
+//                and ship-with-warning. Keeps the LLM-judge from vetoing
+//                legitimate stylistic variation the rule checks would allow.
+// Returns { pass, issues, warnings }. pass reflects ONLY rule-based issues.
 
 // Placeholder/generic-template patterns — if any appear, the deliverable is
 // likely a generic template rather than a spec-matched build.
@@ -60,15 +68,16 @@ var DESIGN_ELEMENT_PATTERNS = {
 
 function createVerifier({ brain }) {
   if (!brain || typeof brain.think !== 'function') {
-    return { verify: function() { return Promise.resolve({ pass: true, issues: [] }); } };
+    return { verify: function() { return Promise.resolve({ pass: true, issues: [], warnings: [] }); } };
   }
 
   async function verify(raw, spec) {
-    var issues = [];
+    var issues = [];     // rule-based, hard-fail
+    var warnings = [];   // LLM-judge advisory, ship-with-warning
     var content = String(raw || '');
 
     if (!content.trim()) {
-      return { pass: false, issues: ['empty output'] };
+      return { pass: false, issues: ['empty output'], warnings: warnings };
     }
 
     // Structural HTML checks
@@ -147,8 +156,12 @@ function createVerifier({ brain }) {
       }
     }
 
-    // LLM self-check on first 2000 chars (up from 500 — checks more meaningful content)
-    // Run this even if other issues exist - catches things regex can't
+    // LLM self-check on first 2000 chars. Its findings are ADVISORY warnings,
+    // not hard-fail issues — the LLM-judge tends to veto legitimate stylistic
+    // variation (e.g. "color palette violates Swiss Style") that the rule-based
+    // checks correctly allow. Genuine garbage (placeholders, off-topic titles,
+    // missing structure) is already caught by the rule checks above and remains
+    // a hard-fail. Warnings surface to the review phase / ship-with-warning.
     try {
       var result = await brain.think({
         lane: 'simple',
@@ -165,12 +178,12 @@ function createVerifier({ brain }) {
       });
       if (result && !result.offline && result.parsed) {
         if (result.parsed.pass === false && Array.isArray(result.parsed.issues)) {
-          issues = issues.concat(result.parsed.issues);
+          warnings = warnings.concat(result.parsed.issues);
         }
       }
     } catch (_) { /* verifier LLM call is best-effort */ }
 
-    return { pass: issues.length === 0, issues: issues };
+    return { pass: issues.length === 0, issues: issues, warnings: warnings };
   }
 
   return { verify: verify };

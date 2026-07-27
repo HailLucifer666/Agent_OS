@@ -1,21 +1,52 @@
 'use strict';
 
-// skills/build-pack.js — per-deliverable skill-essence injection for build
-// lanes. Free/low-context brain models produce slop without guidance and
-// can't afford full skills, so build prompts get the hand-distilled
-// SKILL-CORE.md essences (mythos/skills/<name>/SKILL-CORE.md, ~1-2KB each):
-//   UI/frontend deliverable → taste-frontend + ui-ux-pro-max
-//   everything else (code)  → ponytail + karpathy-guidelines
-// Missing essences are skipped silently — the pack degrades to whatever is
-// vendored, never blocks a build.
+// skills/build-pack.js — intent → skill router for build lanes.
+//
+// Two layers of skill involvement, both automatic (no slash commands):
+//
+//   1. ESSENCE INJECTION (synchronous, always-on). Free/low-context brain
+//      models produce slop without guidance, so every build prompt gets the
+//      hand-distilled SKILL-CORE.md essences for its deliverable kind:
+//        UI/frontend  → taste-frontend + ui-ux-pro-max
+//        code/backend → ponytail + karpathy-guidelines
+//      This is the existing behavior; build-pack.packBlock(text) is unchanged.
+//
+//   2. SKILL-TOOL INVOCATION (async, auto-routed, graceful-degrading). When
+//      the deliverable is UI/frontend AND the ui-ux-pro-max skill is installed
+//      with its real scripts/search.py tool, run it to resolve a genuine
+//      design system from the skill's full CSV database (192 palettes / 84
+//      styles / 74 font pairings) — instead of the weaker home-grown
+//      substitute in design/system.js. Returns null if the skill or Python is
+//      absent; callers fall back to designSystemEngine in that case. Never
+//      blocks a build.
+//
+// The router is data-driven: ROUTES maps a kind to the skill-tool invocation
+// (script + arg-builder). Adding a new route (e.g. app-builds →
+// using-superpowers, research → deep-research) is one entry.
 
 var loader = require('./loader');
+var runSkillTool = require('./run-skill-tool');
 
 var UI_RE = /\b(landing|web ?page|website|web ?app|ui|ux|frontend|front-end|portfolio|dashboard|design|redesign|html|css|storefront|blog|home ?page|interface|screen|mockup)\b/i;
 
 var PACKS = {
   ui: ['taste-frontend', 'ui-ux-pro-max'],
-  code: ['ponytail', 'karpathy-guidelines']
+  code: ['ponytail', 'karpathy-guidelines'],
+};
+
+// Skill-tool routes: kind → { skill, script, buildArgs(brief) }.
+// Only kinds with a runnable skill tool belong here. Others rely on essences.
+var ROUTES = {
+  ui: {
+    skill: 'ui-ux-pro-max',
+    script: 'scripts/search.py',
+    // --design-system resolves a full design system (pattern/style/colors/
+    // typography/effects) from the skill's database; -f markdown keeps it
+    // prompt-friendly; the brief carries the product/industry signal.
+    buildArgs: function(brief) {
+      return [String(brief || 'web landing page'), '--design-system', '-f', 'markdown'];
+    },
+  },
 };
 
 function classifyDeliverable(text) {
@@ -23,7 +54,9 @@ function classifyDeliverable(text) {
 }
 
 // Composed essence block for an explicit pack kind ('ui' | 'code'), or '' if
-// nothing is available. Callers prepend it to the build prompt.
+// nothing is available. Callers prepend it to the build prompt. SYNC only —
+// this is the discipline layer, present on every build regardless of whether
+// the skill's real tool runs.
 function packBlockFor(kind) {
   var names = PACKS[kind] || PACKS.code;
   var parts = [];
@@ -41,9 +74,27 @@ function packBlock(text) {
   return packBlockFor(classifyDeliverable(text));
 }
 
+// Auto-route a brief through its skill's real tool. Returns the tool's output
+// (a design system, research brief, etc.) as a string, or null if:
+//   - the kind has no skill-tool route (e.g. plain code builds), or
+//   - the skill isn't installed / the script is absent / Python is missing, or
+//   - the tool exits non-zero / times out.
+// Callers must handle null by falling back to their existing resolver.
+async function resolveSkillTool(brief) {
+  var kind = classifyDeliverable(brief);
+  var route = ROUTES[kind];
+  if (!route) return null;
+  // Fast no-exec probe: skip the execFile round-trip when obviously absent.
+  if (!runSkillTool.skillToolAvailable(route.skill, route.script)) return null;
+  var args = route.buildArgs(brief);
+  return runSkillTool.runSkillTool(route.skill, route.script, args, { timeoutMs: 30000 });
+}
+
 module.exports = {
   classifyDeliverable: classifyDeliverable,
   packBlock: packBlock,
   packBlockFor: packBlockFor,
-  _PACKS: PACKS
+  resolveSkillTool: resolveSkillTool,
+  _PACKS: PACKS,
+  _ROUTES: ROUTES,
 };

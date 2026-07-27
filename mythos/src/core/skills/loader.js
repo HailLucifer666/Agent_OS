@@ -79,6 +79,42 @@ function skillPath(name) {
   return path.join(skillsDir(), name, 'SKILL.md');
 }
 
+// Resolve a skill's directory. Repo-local (mythos/skills/<name>/) is checked
+// first so a fresh clone works with zero external installs, then ~/.zcode.
+// NOTE: many skills are vendored repo-local as essence-only (SKILL-CORE.md,
+// no scripts/data), while their full install with tooling lives in ~/.zcode.
+// For locating runnable assets prefer resolveSkillFile() below, which checks
+// both locations for the specific file. Returns '' if neither dir exists.
+function skillDir(name) {
+  var local = path.join(REPO_SKILLS_DIR, name);
+  if (fs.existsSync(local)) return local;
+  var external = path.join(skillsDir(), name);
+  return fs.existsSync(external) ? external : '';
+}
+
+// Resolve a specific asset within a skill, checking BOTH locations and
+// returning the SKILL ROOT dir that contains the file. This is the correct
+// resolver for runnable assets (scripts/search.py, data/*.csv): a skill may be
+// vendored repo-local as essence-only while its tooling lives in ~/.zcode.
+// Returns the skill root (e.g. .../ui-ux-pro-max), or '' if neither location
+// has the file. Callers append relPath to the returned dir to get the full
+// script path, and use the returned dir as cwd so the script can reach
+// sibling assets (data/*.csv) via relative paths.
+function resolveSkillFile(name, relPath) {
+  var external = path.join(skillsDir(), name, relPath);
+  try { if (fs.existsSync(external)) return path.join(skillsDir(), name); } catch (_) {}
+  var local = path.join(REPO_SKILLS_DIR, name, relPath);
+  try { if (fs.existsSync(local)) return path.join(REPO_SKILLS_DIR, name); } catch (_) {}
+  return '';
+}
+
+// Does a file exist relative to EITHER skill dir location? Used by
+// run-skill-tool.js to probe whether a skill ships a runnable tool before
+// shelling out. Returns false if the skill or the file is absent in both.
+function skillFileExists(name, relPath) {
+  return resolveSkillFile(name, relPath) !== '';
+}
+
 // Build the catalog: [{ name, description }] for each allowlisted skill that
 // actually exists on disk. Missing skills are silently skipped (the allowlist
 // is advisory, not a hard contract — a skill may be removed upstream).
@@ -172,9 +208,13 @@ module.exports = {
   loadEssence: loadEssence,
   catalogBlock: catalogBlock,
   refresh: refresh,
+  skillDir: skillDir,
+  skillFileExists: skillFileExists,
+  resolveSkillFile: resolveSkillFile,
   // Exports for testing
   _parseFrontmatter: parseFrontmatter,
   _readAllowlist: readAllowlist,
   _skillPath: skillPath,
+  _skillDir: skillDir,
   _ALLOWLIST_PATH: ALLOWLIST_PATH,
 };
