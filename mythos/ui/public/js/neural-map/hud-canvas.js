@@ -128,8 +128,22 @@ export function mountHud(canvas, ctx) {
   const a11yRoot = document.getElementById('hud-a11y-root');
   const a11yLayer = a11yRoot ? mountHudA11yLayer(a11yRoot, { onNodeClick: ctx.onNodeClick }) : { sync() {}, cleanup() {} };
 
+  // Honest sub-480px degradation (Phase 6 responsive, scope call: tablet-down
+  // graceful degradation, not phone support — see semantic.css's breakpoint
+  // convention). Below 480px the canvas is hidden and this message shown
+  // instead of a silently clipped/broken render; resize() toggles both.
+  const narrowMsg = document.createElement('div');
+  narrowMsg.className = 'hud-narrow-message';
+  narrowMsg.textContent = 'MYTHOS HUD is designed for a wider screen — try a tablet or desktop view.';
+  if (canvas.parentNode) canvas.parentNode.insertBefore(narrowMsg, canvas.nextSibling);
+
   let width = 0;
   let height = 0;
+  // Phase 6 responsive tiers (see css/tokens/semantic.css's documented
+  // convention: 1200 wide / 900 compact / 600 narrow). resize() sets both;
+  // narrow simplifies node labels (drawLabelBlock below), tooNarrow swaps
+  // the canvas for an honest degradation message instead of a broken render.
+  let narrow = false;
   let stats = null;
   const live = { goalDelta: 0, kanbanDelta: 0, pipelineDelta: 0, auditDelta: 0, breakers: {}, degraded: false };
   let entityStatus = 'booting';
@@ -286,6 +300,13 @@ export function mountHud(canvas, ctx) {
     height = window.innerHeight;
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
+    // <= not < : matches the CSS convention's `max-width: 600px` (inclusive),
+    // same as widget-host.js's `matchMedia('(max-width: 600px)')` — keeps the
+    // canvas and DOM widgets agreeing on which pixel the tier starts at.
+    narrow = width <= 600;
+    const tooNarrow = width < 480;
+    canvas.style.visibility = tooNarrow ? 'hidden' : '';
+    narrowMsg.classList.toggle('visible', tooNarrow);
     rebuild();
   }
 
@@ -519,21 +540,28 @@ export function mountHud(canvas, ctx) {
     const isHovered = hovered && hovered.id === node.id;
     c2d.textAlign = align;
     c2d.textBaseline = 'alphabetic';
-    c2d.font = '500 10px Outfit, "Segoe UI", sans-serif';
-    c2d.fillStyle = isHovered ? COLORS.dim : COLORS.faint;
-    c2d.fillText(node.label.split('').join(' '), tx, ty - 8);
+    // Narrow tier (<600px): drop the small-caps module-name line and pull the
+    // value line up to where it sat — halves the label's vertical footprint
+    // so satellite labels don't collide once node spacing shrinks.
+    if (!narrow) {
+      c2d.font = '500 10px Outfit, "Segoe UI", sans-serif';
+      c2d.fillStyle = isHovered ? COLORS.dim : COLORS.faint;
+      c2d.fillText(node.label.split('').join(' '), tx, ty - 8);
+    }
+    const valueY = narrow ? ty : ty + 8;
     c2d.font = '13px "JetBrains Mono", monospace';
     c2d.fillStyle = danger ? COLORS.danger : (isHovered ? COLORS.text : COLORS.accent);
-    c2d.fillText(value, tx, ty + 8);
+    c2d.fillText(value, tx, valueY);
     if (ratio !== null && ratio !== undefined) {
-      const barW = 44;
+      const barW = narrow ? 28 : 44;
+      const barY = valueY + 6;
       const bx = align === 'right' ? tx - barW : align === 'center' ? tx - barW / 2 : tx;
       c2d.fillStyle = COLORS.faint;
       c2d.globalAlpha = 0.35;
-      c2d.fillRect(bx, ty + 14, barW, 1.5);
+      c2d.fillRect(bx, barY, barW, 1.5);
       c2d.globalAlpha = 1;
       c2d.fillStyle = COLORS.accent;
-      c2d.fillRect(bx, ty + 14, barW * Math.max(0, Math.min(1, ratio)), 1.5);
+      c2d.fillRect(bx, barY, barW * Math.max(0, Math.min(1, ratio)), 1.5);
     }
   }
 
@@ -785,6 +813,7 @@ export function mountHud(canvas, ctx) {
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointercancel', onPointerUp);
       a11yLayer.cleanup();
+      narrowMsg.remove();
     },
     setVoiceState(s) { voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle'; },
     setActivity(v) { activity = Math.max(0, Math.min(1, Number(v) || 0)); },

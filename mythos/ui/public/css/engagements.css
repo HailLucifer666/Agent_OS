@@ -205,7 +205,9 @@
   background: var(--engag-accent-soft);
   color: var(--engag-accent);
 }
-@media (max-width: 500px) {
+/* Phase 6 responsive: consolidated from an ad hoc 500px to the documented
+   600px "narrow" tier (see css/tokens/semantic.css). */
+@media (max-width: 600px) {
   .engag-choice-group {
     grid-template-columns: 1fr;
   }
@@ -937,8 +939,8 @@
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .engag-modal-btn-approve {
-  background: var(--gold-soft);
-  color: var(--gold);
+  background: var(--accent-dim);
+  color: var(--accent);
   border-color: var(--accent-dim);
 }
 .engag-modal-btn-approve:hover { background: var(--accent-dim); color: var(--text); }
@@ -997,7 +999,7 @@
 }
 .engag-progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--engag-accent), var(--gold));
+  background: linear-gradient(90deg, var(--engag-accent), var(--accent));
   border-radius: 999px;
   transition: width var(--engag-dur-progress) var(--ease);
 }
@@ -1732,7 +1734,9 @@
   display: block;
   animation: fadeInUp var(--dur-med) var(--ease) both;
 }
-@media (max-width: 500px) {
+/* Phase 6 responsive: consolidated from an ad hoc 500px to the documented
+   600px "narrow" tier (see css/tokens/semantic.css). */
+@media (max-width: 600px) {
   .engag-detail-tabs {
     flex-direction: column;
     gap: 0;
@@ -1840,7 +1844,9 @@
   gap: var(--engag-space-4);
   height: 100%;
 }
-@media (max-width: 1100px) {
+/* Phase 6 responsive: consolidated from ad hoc 1100px/768px to the documented
+   900px "compact" / 600px "narrow" tiers (see css/tokens/semantic.css). */
+@media (max-width: 900px) {
   .engag-dashboard {
     grid-template-columns: 240px 1fr;
     grid-template-rows: 1fr auto;
@@ -1850,7 +1856,7 @@
     margin-top: var(--engag-space-3);
   }
 }
-@media (max-width: 768px) {
+@media (max-width: 600px) {
   .engag-dashboard {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr auto;

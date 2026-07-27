@@ -15,6 +15,30 @@ html, body {
   z-index: 1;
 }
 
+/* Sub-480px honest degradation (Phase 6 responsive) — shown by hud-canvas.js's
+   resize() in place of the canvas below the "narrow" tier's floor; the HUD's
+   drag-resize widgets/hover labels/wake-word/gesture control don't survive a
+   phone-portrait viewport, so this replaces a silently broken render with an
+   honest message instead of pretending to support it. */
+.hud-narrow-message {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  align-items: center;
+  justify-content: center;
+  padding: 0 32px;
+  text-align: center;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.hud-narrow-message.visible {
+  display: flex;
+}
+
 #core-orb {
   position: fixed;
   left: 50%;

@@ -154,6 +154,43 @@ export function mountWidgets(root, ctx) {
     patchStored(id, { hidden: !!hidden });
   }
 
+  // Narrow-viewport auto-hide (Phase 6 responsive, see css/tokens/semantic.css
+  // for the 600px "narrow" tier). Hides non-essential widgets so they don't
+  // fight the compose bar/HUD canvas for room below 600px, WITHOUT touching
+  // a user's own explicit hidden choice (hover ✕ or a voice command, both of
+  // which go through setWidgetHidden -> patchStored above). autoHidden tracks
+  // only the ids THIS mechanism hid, so: a widget the user hid stays hidden
+  // through a narrow round-trip (never added to autoHidden, so widening never
+  // touches it), and a widget the user never hid reappears when widened back
+  // out (removed from autoHidden, class cleared).
+  const NARROW_QUERY = '(max-width: 600px)';
+  const AUTO_HIDE_EXEMPT = new Set(['clock']);
+  const autoHidden = new Set();
+
+  function isUserHidden(id) {
+    const stored = loadPositions()[id];
+    return !!(stored && stored.hidden);
+  }
+
+  function applyNarrowAutoHide(isNarrow) {
+    cards.forEach((card, id) => {
+      if (AUTO_HIDE_EXEMPT.has(id)) return;
+      if (isNarrow) {
+        if (isUserHidden(id) || autoHidden.has(id)) return;
+        autoHidden.add(id);
+        card.classList.add('widget-hidden'); // transient — never persisted
+      } else if (autoHidden.has(id)) {
+        autoHidden.delete(id);
+        if (!isUserHidden(id)) card.classList.remove('widget-hidden');
+      }
+    });
+  }
+
+  const narrowQuery = window.matchMedia(NARROW_QUERY);
+  applyNarrowAutoHide(narrowQuery.matches);
+  const onNarrowChange = (e) => applyNarrowAutoHide(e.matches);
+  narrowQuery.addEventListener('change', onNarrowChange);
+
   // Voice-driven widget command (manage_widget effector → 'widget-command'
   // WS broadcast → app.js). Payload is pre-resolved server-side:
   // {mode:'close'|'open', targets:[ids]} or {mode:'solo', targets:[keepId]}.
@@ -222,7 +259,11 @@ export function mountWidgets(root, ctx) {
   }
 
   return {
-    cleanup: () => { cleanups.forEach((fn) => fn()); spawnedCleanups.forEach((fn) => fn()); },
+    cleanup: () => {
+      narrowQuery.removeEventListener('change', onNarrowChange);
+      cleanups.forEach((fn) => fn());
+      spawnedCleanups.forEach((fn) => fn());
+    },
     spawnWebWidget,
     applyWidgetCommand,
   };
