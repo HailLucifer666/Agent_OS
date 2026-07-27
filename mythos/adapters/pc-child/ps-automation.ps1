@@ -415,6 +415,40 @@ $script:KnownApps = @{
     'teams'   = @{ path = (Join-Path $env:LOCALAPPDATA 'Microsoft\Teams\current\Teams.exe') }
 }
 
+# BUG-notepad-typing: MSIX/UWP-packaged apps (confirmed live: Windows 11's
+# Microsoft.WindowsNotepad package) resolve through a thin registry-App-Paths
+# or generic Start-Process launcher that hands activation off via COM and
+# exits within about a second — Start-Process's own -PassThru handle then
+# refers to a pid that is already gone by the time any subsequent
+# focus_window/ui_type call tries to use it, so those calls fail (or worse,
+# silently act on whatever unrelated window happens to have OS focus). This
+# is the same class of bug the AUDIT FIX below already solved for Squirrel-
+# style bootstrappers (Discord/Slack/Teams) by re-resolving the real process
+# by name after launch — generalized here for any launch path that can hit
+# it, not just the KnownApps table.
+function Resolve-RealProcessAfterLaunch($StartedProc, $Name) {
+    # A bare "does the pid still exist" check is not enough: some single-
+    # instance packaged apps (confirmed live: Windows 11's Notepad) spawn a
+    # genuinely new, persistently-running process on a second launch that
+    # NEVER acquires its own top-level window at all -- activation is instead
+    # handed to whichever same-named process already owns a window. Poll
+    # briefly for the started pid to gain a real window (covers the normal
+    # case, including packaged apps that are just slow to create one), then
+    # fall back to any same-named process that already has one.
+    for ($i = 0; $i -lt 6; $i++) {
+        try {
+            $p = Get-Process -Id $StartedProc.Id -ErrorAction Stop
+            if ($p.MainWindowHandle -ne 0) { return $p.Id }
+        } catch {
+            break
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    $named = Get-Process -Name $Name -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($named) { return $named.Id }
+    return $null
+}
+
 function Handle-LaunchApp($name) {
     if (-not $name) { return 'App name is required.' }
     # A bare non-string JSON value (e.g. a number) reaches here as-is; coerce
@@ -481,7 +515,9 @@ function Handle-LaunchApp($name) {
             try {
                 $proc = Start-Process -FilePath $regPath -PassThru -ErrorAction Stop
                 Start-Sleep -Milliseconds 500
-                return @{ pid = $proc.Id; name = $name; launched = $true; resolvedVia = 'registry-app-paths' }
+                $realPid = Resolve-RealProcessAfterLaunch $proc $name
+                if ($realPid) { return @{ pid = $realPid; name = $name; launched = $true; resolvedVia = 'registry-app-paths' } }
+                return @{ launched = $true; name = $name; resolvedVia = 'registry-app-paths'; note = 'launched but process pid could not be confirmed (packaged-app activation likely exited its launcher stub)' }
             } catch { $attempted += ('registry path ' + $regPath + ': ' + $_.Exception.Message) }
         } else { $attempted += 'registry App Paths: no match' }
 
@@ -499,9 +535,9 @@ function Handle-LaunchApp($name) {
     try {
         $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
         Start-Sleep -Milliseconds 500
-        # Return basic info
-        $info = @{ pid = $proc.Id; name = $name }
-        return $info
+        $realPid = Resolve-RealProcessAfterLaunch $proc $name
+        if ($realPid) { return @{ pid = $realPid; name = $name } }
+        return @{ launched = $true; name = $name; note = 'launched but process pid could not be confirmed (packaged-app activation likely exited its launcher stub)' }
     } catch {
         # FIX 4: an unresolvable name must report an honest failure, not
         # silently fall back to opening File Explorer / triggering a browser
