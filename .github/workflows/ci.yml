@@ -11,11 +11,13 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: npm ci
-      - name: Run test suite (tolerates the 2 known pre-existing failures)
+      - name: Run test suite + verify test-count docs are in sync (baseline 0 known failures)
         shell: pwsh
         run: |
-          node --test test/*.test.js 2>&1 | Tee-Object -Variable out
+          node --test --test-reporter=tap test/*.test.js 2>&1 | Tee-Object -Variable out
           $failLine = $out | Select-String -Pattern '^# fail (\d+)' | Select-Object -Last 1
           $fails = if ($failLine) { [int]$failLine.Matches[0].Groups[1].Value } else { 999 }
-          Write-Host "fail count: $fails (baseline allows 2)"
-          if ($fails -gt 2) { exit 1 } else { exit 0 }
+          Write-Host "fail count: $fails (baseline allows 0)"
+          if ($fails -gt 0) { exit 1 }
+          $out | node scripts/sync-test-count.js --check
+          if ($LASTEXITCODE -ne 0) { exit 1 }

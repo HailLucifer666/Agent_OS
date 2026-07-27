@@ -65,7 +65,22 @@ Rules to prevent a repeat:
 - No fix is "done" until live-verified against the running system (or the
   relevant oracle: `media_status` for playback, window title for Spotify).
   Plausible theories have been wrong 3+ times in this repo's history.
-- Baseline: `node --test test/*.test.js` from `mythos/` — 2 known pre-existing
-  failures (boot SIGINT-on-Windows, event-name allowlist). Anything else
-  failing is a regression.
-- CI workflow (`.github/workflows/ci.yml`) runs on push/PR to main. Pre-commit hook (`.githooks/pre-commit`) blocks commits that raise test failures above baseline — activate once per clone with `git config core.hooksPath .githooks`.
+- Baseline (reproduced 2026-07-27, `node scripts/sync-test-count.js --check` /
+  `mythos/scripts/sync-test-count.js`): **1197 tests, 1196 pass, 0 fail, 1
+  skip.** The 1 skip is `test/sensors-file.test.js` honestly skipping via
+  `t.skip()` — an environment-specific `fs.watch` crash on this Node/Windows
+  build, not a real failure. There are currently no known deterministic
+  failures — anything failing is a regression. (`wakeword.test.js` has shown
+  one transient Windows `EPERM` directory-rename race under full-suite load;
+  it self-resolves on rerun and is a test-fixture timing issue, not a code
+  defect — rerun before assuming a regression, don't inflate the baseline to
+  cover it.)
+- README.md/ROADMAP.md test-count mentions are kept in sync with the real
+  suite by `mythos/scripts/sync-test-count.js` (`--check` to verify, `--write`
+  to fix) — run `--write` and commit the result whenever the test count
+  changes, instead of hand-editing numbers in those files.
+- CI workflow (`.github/workflows/ci.yml`) runs on push/PR to main and also
+  gates on `sync-test-count.js --check`. Pre-commit hook
+  (`.githooks/pre-commit`) blocks commits that raise test failures above
+  baseline (0) or leave test-count docs stale — activate once per clone with
+  `git config core.hooksPath .githooks`.
