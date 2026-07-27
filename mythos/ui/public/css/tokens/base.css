@@ -149,6 +149,24 @@ button {
   border-radius: var(--radius-md);
 }
 
+/* visually-hidden utility (standard clip-rect pattern) — for screen-reader-only
+   content. ApprovalGateModal.js's #engag-approval-desc already carries this
+   class; there was no matching rule anywhere in the stylesheet tree before
+   this (Wave 2 / Phase 3), so that description div rendered as a plain
+   visible element. Promoted here as the one shared definition — also the
+   base hud-a11y-layer.js (Phase 4) will use. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

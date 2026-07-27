@@ -1,5 +1,7 @@
 // ApprovalGateModal.js — Extended confirm modal for engagement approval gate
 
+import { trapFocus } from '../../a11y/focus-trap.js';
+
 export function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str ?? '';
@@ -125,82 +127,60 @@ function extractRiskIndicators(plan) {
   return risks;
 }
 
+let releaseTrap = null;
+
+// mountApprovalModal/renderState/wireHandlers — state ('visible' |
+// 'requesting-changes') is now threaded explicitly through every re-render
+// instead of the previous code's attempt to detect it by inspecting a
+// button's text content via `.engag-modal-btn-reject:not([type="button"])`.
+// Every button in the template carries an explicit type="button", so that
+// selector could never match anything — it silently no-op'd both the
+// "Request Changes" button's click handler and the "<- Back" button's
+// return-to-summary branch (this file currently has no live caller anywhere
+// in the codebase, confirmed by grep, so this was latent rather than a live
+// regression). Fixed as part of this rewrite since it's the exact code path
+// the leak fix already has to touch.
+//
+// The leak itself: reattachHandlers() used to add a fresh
+// document.addEventListener('keydown', onKeydown) on every state-transition
+// re-render and never removed the previous one (onClose was defined but
+// never invoked or returned to anything). trapFocus() replaces that
+// entirely — one release() per re-render, called before establishing the
+// next trap, so exactly one keydown listener ever exists at a time.
 export function mountApprovalModal(mount, engagement, onApprove, onReject, onCancel) {
-  mount.innerHTML = renderApprovalModal(engagement);
+  renderState(mount, engagement, 'visible', { onApprove, onReject, onCancel });
 
-  const rejectBtn = mount.querySelector('[type="button"]');
-  const requestChangesBtn = mount.querySelector('.engag-modal-btn-reject:not([type="button"])');
-  const approveBtn = mount.querySelector('.engag-modal-btn-approve');
-  const cancelBtn = mount.querySelector('.engag-modal-btn-cancel');
-  const feedbackInput = mount.querySelector('#engag-feedback-input');
-
-  // Cancel/Back button
-  if (cancelBtn) {
-    cancelBtn.addEventListener('click', () => {
-      if (requestChangesBtn && !requestChangesBtn.disabled && requestChangesBtn.textContent === 'Submit Feedback') {
-        // Already in feedback mode, go back
-        mount.innerHTML = renderApprovalModal(engagement);
-        // Re-attach handlers
-        reattachHandlers();
-      } else {
-        onCancel && onCancel();
-      }
-    });
-  }
-
-  // Request changes button
-  const requestChangesBtnHandler = mount.querySelector('.engag-modal-btn-reject:not([type="button"])');
-  if (requestChangesBtnHandler) {
-    requestChangesBtnHandler.addEventListener('click', () => {
-      if (feedbackInput) {
-        mount.innerHTML = renderApprovalModal(engagement, 'requesting-changes');
-        reattachHandlers();
-
-        const submitBtn = mount.querySelector('.engag-modal-btn-reject');
-        const backBtn = mount.querySelector('.engag-modal-btn-cancel');
-
-        submitBtn?.addEventListener('click', () => {
-          const feedback = mount.querySelector('#engag-feedback-input')?.value || '';
-          onReject && onReject(feedback);
-        });
-
-        backBtn?.addEventListener('click', () => {
-          mount.innerHTML = renderApprovalModal(engagement);
-          reattachHandlers();
-        });
-      }
-    });
-  }
-
-  // Approve button
-  approveBtn?.addEventListener('click', () => onApprove && onApprove());
-
-  // Initial setup
-  if (mount.querySelector('.engag-modal-btn-reject')) {
-    reattachHandlers();
-  }
-
-  // Focus management - focus cancel first (safest default)
-  cancelBtn?.focus();
+  return function cleanup() {
+    if (releaseTrap) { releaseTrap(); releaseTrap = null; }
+  };
 }
 
-function reattachHandlers() {
-  const root = document.querySelector('.engag-modal-overlay');
-  if (!root) return;
+function renderState(mount, engagement, state, callbacks) {
+  if (releaseTrap) { releaseTrap(); releaseTrap = null; }
+  mount.innerHTML = renderApprovalModal(engagement, state);
+  wireHandlers(mount, engagement, state, callbacks);
+  const cancelBtn = mount.querySelector('.engag-modal-btn-cancel');
+  releaseTrap = trapFocus(mount, { onEscape: () => cancelBtn?.click() });
+}
 
-  const cancelBtn = root.querySelector('.engag-modal-btn-cancel');
-  const rejectBtn = root.querySelector('.engag-modal-btn-reject');
-  const approveBtn = root.querySelector('.engag-modal-btn-approve');
+function wireHandlers(mount, engagement, state, callbacks) {
+  const { onApprove, onReject, onCancel } = callbacks;
+  const cancelBtn = mount.querySelector('.engag-modal-btn-cancel');
+  const rejectBtn = mount.querySelector('.engag-modal-btn-reject');
+  const approveBtn = mount.querySelector('.engag-modal-btn-approve');
 
-  // Escape key closes modal
-  const onKeydown = (e) => {
-    if (e.key === 'Escape') {
-      cancelBtn?.click();
-    }
-  };
-  document.addEventListener('keydown', onKeydown);
+  cancelBtn?.addEventListener('click', () => {
+    if (state === 'requesting-changes') renderState(mount, engagement, 'visible', callbacks);
+    else onCancel && onCancel();
+  });
 
-  // Cleanup on modal close
-  const onClose = () => document.removeEventListener('keydown', onKeydown);
-  // Return cleanup via external call
+  if (state === 'requesting-changes') {
+    rejectBtn?.addEventListener('click', () => {
+      const feedback = mount.querySelector('#engag-feedback-input')?.value || '';
+      onReject && onReject(feedback);
+    });
+  } else {
+    rejectBtn?.addEventListener('click', () => renderState(mount, engagement, 'requesting-changes', callbacks));
+    approveBtn?.addEventListener('click', () => onApprove && onApprove());
+  }
 }

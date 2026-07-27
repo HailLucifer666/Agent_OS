@@ -4,18 +4,24 @@
 // ws.confirmReply -> server -> leash.confirm -> dispatchAction.
 
 import { subscribe, confirmReply } from '../ws.js';
+import { trapFocus } from '../a11y/focus-trap.js';
 
 export function mountConfirmModal(root, opts) {
   const onResolved = (opts && opts.onResolved) || (() => {});
   let overlay = null;
+  let releaseTrap = null;
 
   function closeModal() {
+    if (releaseTrap) { releaseTrap(); releaseTrap = null; }
     if (overlay) { overlay.remove(); overlay = null; }
     onResolved();
   }
 
   function showModal(payload) {
-    if (overlay) overlay.remove();
+    if (overlay) {
+      if (releaseTrap) { releaseTrap(); releaseTrap = null; }
+      overlay.remove();
+    }
     overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
     overlay.innerHTML = `
@@ -40,12 +46,18 @@ export function mountConfirmModal(root, opts) {
       closeModal();
     });
     root.appendChild(overlay);
+    // Tab now cycles Approve/Deny inside the modal, Escape closes it, and
+    // focus returns to whatever had focus before this popped up — none of
+    // which existed before (a keyboard user could previously tab straight
+    // out of a live confirm dialog into the HUD canvas behind it).
+    releaseTrap = trapFocus(overlay, { onEscape: closeModal });
   }
 
   const unsub = subscribe(['confirm-request'], (msg) => showModal(msg.payload));
 
   return () => {
     unsub();
+    if (releaseTrap) { releaseTrap(); releaseTrap = null; }
     if (overlay) { overlay.remove(); overlay = null; }
   };
 }

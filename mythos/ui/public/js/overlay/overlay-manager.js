@@ -7,6 +7,24 @@
 import { getPanel } from './panel-registry.js';
 import { emitRefresh } from '../stats-bus.js';
 
+// Elements to shut out of the tab order (and pointer/click) while any panel
+// is open. Panels themselves are NOT modal — the HUD stays interactive
+// underneath by deliberate design — so this is `inert`, not a focus trap:
+// a keyboard user just shouldn't be able to Tab past the panel into the
+// canvas/widgets behind it. Native `inert` handles that with zero JS
+// event-handling of its own. Missing elements (e.g. in a DOM-free test
+// harness) are silently skipped.
+const INERT_WHILE_OPEN_IDS = ['widget-root', 'hud-canvas', 'core-orb'];
+
+function setBackgroundInert(isInert) {
+  for (const id of INERT_WHILE_OPEN_IDS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (isInert) el.setAttribute('inert', '');
+    else el.removeAttribute('inert');
+  }
+}
+
 export function createOverlayManager(root) {
   const open = new Map(); // panelId -> { el, cleanup }
   let zTop = 100;
@@ -20,6 +38,7 @@ export function createOverlayManager(root) {
     }
     entry.el.remove();
     if (entry.mutating) emitRefresh(panelId);
+    if (open.size === 0) setBackgroundInert(false);
   }
 
   function closeTop() {
@@ -65,6 +84,7 @@ export function createOverlayManager(root) {
 
     const entry = { el, cleanup: null, mutating: panel.mutating };
     open.set(panelId, entry);
+    setBackgroundInert(true); // no-op if already set from an earlier open panel
 
     try {
       const mod = await panel.loader();
@@ -78,6 +98,10 @@ export function createOverlayManager(root) {
       const body = el.querySelector('.hud-panel-body');
       body.innerHTML = `<div class="text-faint">Failed to load this surface: ${err.message}</div>`;
     }
+    // Focus-on-open (containment-lite, not a full trap — panels stay
+    // non-modal by design). Only steps in if the rendered body didn't already
+    // claim focus itself (e.g. a panel that autofocuses its own input).
+    if (!el.contains(document.activeElement)) el.querySelector('.hud-panel-close')?.focus();
   }
 
   function onKey(e) {
