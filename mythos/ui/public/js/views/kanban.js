@@ -1,7 +1,9 @@
 // kanban.js — Agent Kanban surface: static Phase-1 chrome + real drag-and-drop CRUD board via /api/kanban.
 
+import { h, keyedList } from '../dom.js';
+
 const LANES = [
-  { id: 'backlog', label: 'BACKLOG', dot: 'amber', empty: 'Give the team a goal above &mdash; the Planner fills this column with cards.' },
+  { id: 'backlog', label: 'BACKLOG', dot: 'amber', empty: 'Give the team a goal above — the Planner fills this column with cards.' },
   { id: 'building', label: 'BUILDING', dot: 'amber', empty: '' },
   { id: 'review', label: 'REVIEW', dot: 'blue', empty: '' },
   { id: 'done', label: 'DONE', dot: 'green', empty: '' },
@@ -9,50 +11,66 @@ const LANES = [
 
 let cards = [];
 let jobs = {}; // cardId -> latest job record
+let jobTimer = null;
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
-}
-
-function cardTemplate(card) {
+// cardBody/cardNode/updateCardNode: built with dom.js's h() instead of an
+// innerHTML template. A card's visible content depends on job status (busy/
+// failed/verdict) as much as on the card record itself, and either can change
+// independently (a poll tick can flip busy->failed with no card-array change
+// at all) — rather than hand-patch which optional blocks are currently present
+// (title/detail/status/artifact/verdict/actions all conditional), updateFn
+// rebuilds this ONE card's children in place via replaceChildren(). The outer
+// <div class="kanban-card"> node itself is never destroyed or recreated, so
+// keyedList still delivers the actual fix: a status change on one card no
+// longer rebuilds every sibling card in the lane (losing scroll/hover/
+// in-flight drag state on cards nothing happened to).
+function cardBody(card) {
   const job = jobs[card.id];
   const busy = job && (job.status === 'running' || job.status === 'queued');
   const failed = job && job.status === 'failed';
+  const children = [h('div', { class: 'kanban-card-title' }, card.title)];
+
+  if (card.detail) children.push(h('div', { class: 'kanban-card-detail' }, card.detail));
+  if (busy) children.push(h('div', { class: 'kanban-card-status mono' }, `agent: ${job.stage}`));
+  if (failed) children.push(h('div', { class: 'kanban-card-status kanban-card-error' }, job.error || 'agent failed'));
+  if (card.artifact && card.artifact.path) {
+    children.push(h('a', { class: 'kanban-card-artifact', href: card.artifact.path, target: '_blank', rel: 'noopener' },
+      `▷ ${card.artifact.title || 'view build'}`));
+  }
+  if (card.reviewVerdict) {
+    children.push(h('div', { class: `kanban-card-verdict ${card.reviewVerdict}` },
+      `${card.reviewVerdict === 'approve' ? '✅' : '❌'} ${card.reviewNotes || ''}`));
+  }
+
   const actions = [];
   if (card.lane === 'backlog' && !busy) {
-    actions.push(`<button class="kanban-card-action" data-action="build" data-id="${card.id}" type="button">&#128736; Build</button>`);
+    actions.push(h('button', { class: 'kanban-card-action', type: 'button', onClick: () => buildCard(card.id) }, '🛠 Build'));
   }
   if (card.lane === 'review' && !card.reviewVerdict && !busy) {
-    actions.push(`<button class="kanban-card-action" data-action="review" data-id="${card.id}" type="button">&#9989; Review</button>`);
+    actions.push(h('button', { class: 'kanban-card-action', type: 'button', onClick: () => reviewCard(card.id) }, '✅ Review'));
   }
   if (card.lane === 'review' && card.reviewVerdict === 'approve') {
-    actions.push(`<button class="kanban-card-action" data-action="accept-done" data-id="${card.id}" type="button">&#10003; Accept &#8594; Done</button>`);
+    actions.push(h('button', { class: 'kanban-card-action', type: 'button', onClick: () => acceptCard(card.id, 'done') }, '✓ Accept → Done'));
   }
   if (card.lane === 'review' && card.reviewVerdict === 'reject') {
-    actions.push(`<button class="kanban-card-action" data-action="accept-backlog" data-id="${card.id}" type="button">&#8617; Send back</button>`);
+    actions.push(h('button', { class: 'kanban-card-action', type: 'button', onClick: () => acceptCard(card.id, 'backlog') }, '↩ Send back'));
   }
-  const artifactLink = card.artifact && card.artifact.path
-    ? `<a class="kanban-card-artifact" href="${escapeHtml(card.artifact.path)}" target="_blank" rel="noopener">&#9655; ${escapeHtml(card.artifact.title || 'view build')}</a>`
-    : '';
-  const verdictNote = card.reviewVerdict
-    ? `<div class="kanban-card-verdict ${card.reviewVerdict}">${card.reviewVerdict === 'approve' ? '&#9989;' : '&#10060;'} ${escapeHtml(card.reviewNotes || '')}</div>`
-    : '';
-  return `
-    <div class="kanban-card fade-in" draggable="true" data-id="${card.id}">
-      <div class="kanban-card-title">${escapeHtml(card.title)}</div>
-      ${card.detail ? `<div class="kanban-card-detail">${escapeHtml(card.detail)}</div>` : ''}
-      ${busy ? `<div class="kanban-card-status mono">agent: ${escapeHtml(job.stage)}</div>` : ''}
-      ${failed ? `<div class="kanban-card-status kanban-card-error">${escapeHtml(job.error || 'agent failed')}</div>` : ''}
-      ${artifactLink}
-      ${verdictNote}
-      <div class="kanban-card-footer">
-        ${actions.join('')}
-        <button class="kanban-card-delete" data-action="delete" data-id="${card.id}" aria-label="Delete card">&times;</button>
-      </div>
-    </div>
-  `;
+  actions.push(h('button', { class: 'kanban-card-delete', type: 'button', 'aria-label': 'Delete card', onClick: () => deleteCard(card.id) }, '×'));
+  children.push(h('div', { class: 'kanban-card-footer' }, ...actions));
+
+  return children;
+}
+
+function cardNode(card) {
+  // draggable must be the literal string 'true' — it's an HTML enumerated
+  // attribute (like contenteditable), not a boolean attribute like disabled;
+  // h()'s boolean shorthand would emit draggable="" which browsers do not
+  // treat the same as draggable="true".
+  return h('div', { class: 'kanban-card fade-in', draggable: 'true', 'data-id': card.id }, ...cardBody(card));
+}
+
+function updateCardNode(node, card) {
+  node.replaceChildren(...cardBody(card));
 }
 
 function laneCards(laneId) {
@@ -68,13 +86,102 @@ function renderBoard() {
     const body = document.querySelector(`.kanban-lane-body[data-lane="${lane.id}"]`);
     if (!body) return;
     if (items.length === 0) {
-      body.innerHTML = lane.empty
-        ? `<div class="kanban-empty">${lane.empty}</div>`
-        : '';
-    } else {
-      body.innerHTML = items.map(cardTemplate).join('');
+      body.replaceChildren(...(lane.empty ? [h('div', { class: 'kanban-empty' }, lane.empty)] : []));
+      return;
     }
+    keyedList(body, items, (c) => c.id, cardNode, updateCardNode);
   });
+}
+
+async function buildCard(id) {
+  try {
+    const res = await fetch(`/api/kanban/cards/${id}/build`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    jobs[id] = data.job;
+    cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
+    renderBoard();
+    watchJobs();
+  } catch (err) {
+    jobs[id] = { status: 'failed', stage: 'failed', error: err.message };
+    renderBoard();
+  }
+}
+
+async function reviewCard(id) {
+  try {
+    const res = await fetch(`/api/kanban/cards/${id}/review`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    jobs[id] = data.job;
+    renderBoard();
+    watchJobs();
+  } catch (err) {
+    jobs[id] = { status: 'failed', stage: 'failed', error: err.message };
+    renderBoard();
+  }
+}
+
+async function acceptCard(id, lane) {
+  try {
+    const res = await fetch(`/api/kanban/cards/${id}/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lane }),
+    });
+    const data = await res.json();
+    cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
+    renderBoard();
+  } catch (err) {
+    console.error('accept failed', err);
+  }
+}
+
+async function deleteCard(id) {
+  try {
+    const res = await fetch(`/api/kanban/cards/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
+    renderBoard();
+  } catch (err) {
+    console.error('delete card failed', err);
+  }
+}
+
+function watchJobs() {
+  if (jobTimer) return;
+  jobTimer = setInterval(async () => {
+    const active = Object.values(jobs).filter((j) => j.status === 'running' || j.status === 'queued');
+    if (!active.length) { clearInterval(jobTimer); jobTimer = null; return; }
+    let stale = false;
+    for (const j of active) {
+      try {
+        const res = await fetch(`/api/jobs/${j.id}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (data.job.cardId) jobs[data.job.cardId] = data.job;
+        else jobs['__plan__'] = data.job;
+        if (data.job.status === 'done' || data.job.status === 'failed') stale = true;
+      } catch { /* transient */ }
+    }
+    if (stale) await load(); else renderBoard();
+  }, 2500);
+}
+
+async function load() {
+  try {
+    const res = await fetch('/api/kanban');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    cards = (data && Array.isArray(data.cards)) ? data.cards : [];
+    renderBoard();
+  } catch (err) {
+    console.error('kanban load failed', err);
+    cards = [];
+    renderBoard();
+    const note = document.getElementById('kanban-note');
+    if (note) note.textContent = `Could not load the board: ${err.message}`;
+  }
 }
 
 function laneColumn(lane) {
@@ -130,22 +237,6 @@ export async function render(mount) {
     </div>
   `;
 
-  async function load() {
-    try {
-      const res = await fetch('/api/kanban');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      cards = (data && Array.isArray(data.cards)) ? data.cards : [];
-      renderBoard();
-    } catch (err) {
-      console.error('kanban load failed', err);
-      cards = [];
-      renderBoard();
-      const note = document.getElementById('kanban-note');
-      if (note) note.textContent = `Could not load the board: ${err.message}`;
-    }
-  }
-
   async function addCard(lane, title) {
     if (!title.trim()) return;
     try {
@@ -177,38 +268,6 @@ export async function render(mount) {
     }
   }
 
-  async function deleteCard(id) {
-    try {
-      const res = await fetch(`/api/kanban/cards/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
-      renderBoard();
-    } catch (err) {
-      console.error('delete card failed', err);
-    }
-  }
-
-  let jobTimer = null;
-  function watchJobs() {
-    if (jobTimer) return;
-    jobTimer = setInterval(async () => {
-      const active = Object.values(jobs).filter((j) => j.status === 'running' || j.status === 'queued');
-      if (!active.length) { clearInterval(jobTimer); jobTimer = null; return; }
-      let stale = false;
-      for (const j of active) {
-        try {
-          const res = await fetch(`/api/jobs/${j.id}`);
-          if (!res.ok) continue;
-          const data = await res.json();
-          if (data.job.cardId) jobs[data.job.cardId] = data.job;
-          else jobs['__plan__'] = data.job;
-          if (data.job.status === 'done' || data.job.status === 'failed') stale = true;
-        } catch { /* transient */ }
-      }
-      if (stale) await load(); else renderBoard();
-    }, 2500);
-  }
-
   document.getElementById('kanban-assemble-btn').addEventListener('click', async () => {
     const input = document.getElementById('kanban-goal-input');
     const goal = input.value.trim();
@@ -238,51 +297,10 @@ export async function render(mount) {
     }
   });
 
-  async function buildCard(id) {
-    try {
-      const res = await fetch(`/api/kanban/cards/${id}/build`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      jobs[id] = data.job;
-      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
-      renderBoard();
-      watchJobs();
-    } catch (err) {
-      jobs[id] = { status: 'failed', stage: 'failed', error: err.message };
-      renderBoard();
-    }
-  }
-
-  async function reviewCard(id) {
-    try {
-      const res = await fetch(`/api/kanban/cards/${id}/review`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      jobs[id] = data.job;
-      renderBoard();
-      watchJobs();
-    } catch (err) {
-      jobs[id] = { status: 'failed', stage: 'failed', error: err.message };
-      renderBoard();
-    }
-  }
-
-  async function acceptCard(id, lane) {
-    try {
-      const res = await fetch(`/api/kanban/cards/${id}/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lane }),
-      });
-      const data = await res.json();
-      cards = (data && data.board && (Array.isArray(data.board) ? data.board : data.board.cards)) || [];
-      renderBoard();
-    } catch (err) {
-      console.error('accept failed', err);
-    }
-  }
-
-  // Drag and drop + per-lane add inputs + delete, delegated on the board container.
+  // Drag and drop + per-lane add inputs, delegated on the board container.
+  // Card action buttons (build/review/accept/delete) bind their own click
+  // handlers directly at creation time now (see cardBody() above) — there is
+  // no longer a delegated board-level click handler for them.
   const board = mount.querySelector('.kanban-board');
 
   board.addEventListener('dragstart', (e) => {
@@ -308,19 +326,6 @@ export async function render(mount) {
       const targetLane = laneEl.dataset.lane;
       if (id) moveCard(id, targetLane);
     });
-  });
-
-  board.addEventListener('click', (e) => {
-    const del = e.target.closest('[data-action="delete"]');
-    if (del) return deleteCard(del.dataset.id);
-    const build = e.target.closest('[data-action="build"]');
-    if (build) return buildCard(build.dataset.id);
-    const review = e.target.closest('[data-action="review"]');
-    if (review) return reviewCard(review.dataset.id);
-    const acceptDone = e.target.closest('[data-action="accept-done"]');
-    if (acceptDone) return acceptCard(acceptDone.dataset.id, 'done');
-    const acceptBacklog = e.target.closest('[data-action="accept-backlog"]');
-    if (acceptBacklog) return acceptCard(acceptBacklog.dataset.id, 'backlog');
   });
 
   board.querySelectorAll('.kanban-add-input').forEach((input) => {

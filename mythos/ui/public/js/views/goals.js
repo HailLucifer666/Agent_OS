@@ -1,6 +1,7 @@
 // goals.js — Goals surface: stat tiles, add-goal row, filter chips, goal list. Full CRUD against /api/goals.
 
 import { attachMic } from './speech-to-text.js';
+import { h, keyedList } from '../dom.js';
 
 const CATEGORIES = ['General', 'Work', 'Personal', 'Learning', 'Health'];
 
@@ -24,23 +25,51 @@ function categoryOptions(selected) {
   return CATEGORIES.map((c) => `<option value="${c}" ${c === selected ? 'selected' : ''}>${c}</option>`).join('');
 }
 
-function goalRow(goal) {
-  return `
-    <div class="goals-row fade-in" data-id="${goal.id}">
-      <button class="goals-check ${goal.done ? 'done' : ''}" data-action="toggle" aria-label="Toggle done">
-        ${goal.done ? '&#10003;' : ''}
-      </button>
-      <div class="goals-row-text ${goal.done ? 'done' : ''}">${escapeHtml(goal.text)}</div>
-      <span class="goals-pill mono">${escapeHtml(goal.category || 'General')}</span>
-      <button class="goals-delete" data-action="delete" aria-label="Delete goal">&times;</button>
-    </div>
-  `;
+// goalRow/updateGoalRow: built with dom.js's h() instead of an innerHTML
+// template — text content (goal.text, goal.category) is always a real text
+// node, so this is the point where the old hand-rolled escapeHtml() stops
+// being needed. onToggle/onDelete are bound once, at row creation, and never
+// rebound — keyedList() reuses this same node (via updateGoalRow) for every
+// subsequent re-render, so toggling one goal no longer destroys and rebuilds
+// every sibling row (losing focus/scroll/hover state on each toggle).
+function goalRow(goal, onToggle, onDelete) {
+  return h('div', { class: 'goals-row fade-in', 'data-id': goal.id },
+    h('button', { class: `goals-check${goal.done ? ' done' : ''}`, 'aria-label': 'Toggle done', onClick: () => onToggle(goal.id) },
+      goal.done ? '✓' : ''),
+    h('div', { class: `goals-row-text${goal.done ? ' done' : ''}` }, goal.text),
+    h('span', { class: 'goals-pill mono' }, goal.category || 'General'),
+    h('button', { class: 'goals-delete', 'aria-label': 'Delete goal', onClick: () => onDelete(goal.id) }, '×'),
+  );
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
+function updateGoalRow(node, goal) {
+  const check = node.querySelector('.goals-check');
+  check.classList.toggle('done', goal.done);
+  check.textContent = goal.done ? '✓' : '';
+  const rowText = node.querySelector('.goals-row-text');
+  rowText.classList.toggle('done', goal.done);
+  rowText.textContent = goal.text;
+  node.querySelector('.goals-pill').textContent = goal.category || 'General';
+}
+
+async function toggleGoal(id) {
+  try {
+    const res = await fetch(`/api/goals/${id}/toggle`, { method: 'POST' });
+    const data = await res.json();
+    applyData(data);
+  } catch (err) {
+    console.error('toggle goal failed', err);
+  }
+}
+
+async function deleteGoal(id) {
+  try {
+    const res = await fetch(`/api/goals/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    applyData(data);
+  } catch (err) {
+    console.error('delete goal failed', err);
+  }
 }
 
 function filteredGoals() {
@@ -70,10 +99,10 @@ function renderGoalsUI() {
   const list = document.getElementById('goals-list');
   const items = filteredGoals();
   if (items.length === 0) {
-    list.innerHTML = `<div class="goals-empty">Nothing to chase right now. Add one above.</div>`;
-  } else {
-    list.innerHTML = items.map(goalRow).join('');
+    list.replaceChildren(h('div', { class: 'goals-empty' }, 'Nothing to chase right now. Add one above.'));
+    return;
   }
+  keyedList(list, items, (g) => g.id, (g) => goalRow(g, toggleGoal, deleteGoal), updateGoalRow);
 }
 
 function applyData(data) {
@@ -144,26 +173,6 @@ export async function render(mount) {
     }
   }
 
-  async function toggleGoal(id) {
-    try {
-      const res = await fetch(`/api/goals/${id}/toggle`, { method: 'POST' });
-      const data = await res.json();
-      applyData(data);
-    } catch (err) {
-      console.error('toggle goal failed', err);
-    }
-  }
-
-  async function deleteGoal(id) {
-    try {
-      const res = await fetch(`/api/goals/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      applyData(data);
-    } catch (err) {
-      console.error('delete goal failed', err);
-    }
-  }
-
   document.getElementById('goals-add-btn').addEventListener('click', addGoal);
   document.getElementById('goals-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addGoal();
@@ -178,14 +187,6 @@ export async function render(mount) {
     if (!chip) return;
     state.filter = chip.dataset.filter;
     renderGoalsUI();
-  });
-
-  document.getElementById('goals-list').addEventListener('click', (e) => {
-    const row = e.target.closest('.goals-row');
-    if (!row) return;
-    const id = row.dataset.id;
-    if (e.target.closest('[data-action="toggle"]')) toggleGoal(id);
-    if (e.target.closest('[data-action="delete"]')) deleteGoal(id);
   });
 
   await load();
