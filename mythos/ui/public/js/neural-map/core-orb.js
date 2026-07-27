@@ -120,6 +120,19 @@ export function mountCoreOrb(canvas, ctx) {
   function statusColor() { return STATE_COLOR[resolveState()]; }
   function statusLine() { return STATE_LINE[resolveState()]; }
 
+  // aria-live announce — #hud-status-live is one of exactly two live regions
+  // in the whole HUD (the other is kanban.js's #kanban-note); this pushes
+  // STATE_LINE[state] only on an actual state TRANSITION, never per frame
+  // (resolveState() is otherwise recomputed every frame for drawing, which
+  // would make a screen reader unusable if echoed at that rate).
+  const statusLiveEl = document.getElementById('hud-status-live');
+  let lastAnnouncedState = null;
+  function announceState(state) {
+    if (state === lastAnnouncedState) return;
+    lastAnnouncedState = state;
+    if (statusLiveEl) statusLiveEl.textContent = STATE_LINE[state];
+  }
+
   // ---- halo particles orbiting just outside the ring (depth-sorted, state-reactive) ----
   const orbRand = mulberry32(0xA11CE0DE);
   const particles = Array.from({ length: 48 }, () => ({
@@ -524,6 +537,7 @@ export function mountCoreOrb(canvas, ctx) {
     ringR = R;
     const state = resolveState();
     const color = STATE_COLOR[state];
+    announceState(state);
     drawPlasmaCore(c, R, color, state);      // behind everything
     drawOrbitals(c, R, color);               // tilted ellipses + comets
     drawHaloParticles(c, R, color, state);

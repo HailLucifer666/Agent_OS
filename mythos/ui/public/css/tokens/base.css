@@ -167,6 +167,41 @@ button {
   border: 0;
 }
 
+/* Same hiding technique as .sr-only, but reveals on :focus-within — some AT
+   and browser-zoom users benefit from seeing what they've focused, unlike
+   .sr-only's permanently-hidden content (e.g. ApprovalGateModal.js's plan
+   summary, which is never meant to become visible). Used by
+   hud-a11y-layer.js's node-button mirror (Phase 4): keyboard-focusing one of
+   the mirrored module buttons reveals the whole group, not just that button,
+   since Tabbing through it is a group-level navigation, not a one-off. */
+.sr-only-until-focus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.sr-only-until-focus:focus-within {
+  position: fixed;
+  z-index: 1000;
+  top: 8px;
+  left: 8px;
+  width: auto;
+  height: auto;
+  padding: 8px;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+  background: var(--bg-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -21,6 +21,7 @@
 
 import { buildGraph } from './graph-model.js';
 import { layoutGraph } from './graph-layout.js';
+import { mountHudA11yLayer } from './hud-a11y-layer.js';
 
 const RESYNC_EVERY_TICKS = 100;
 const BG_DOT_COUNT = 130;          // ambient starfield cap
@@ -120,6 +121,12 @@ export function mountHud(canvas, ctx) {
   const c2d = canvas.getContext('2d');
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Screen-reader mirror of the node graph — see hud-a11y-layer.js. Synced
+  // once per rebuild() (below), never per animation frame; a no-op object if
+  // #hud-a11y-root isn't present (e.g. a DOM-lite test harness).
+  const a11yRoot = document.getElementById('hud-a11y-root');
+  const a11yLayer = a11yRoot ? mountHudA11yLayer(a11yRoot, { onNodeClick: ctx.onNodeClick }) : { sync() {}, cleanup() {} };
 
   let width = 0;
   let height = 0;
@@ -265,6 +272,13 @@ export function mountHud(canvas, ctx) {
       const b = positions.get(edge.to);
       if (a && b) paths.set(`${edge.from}->${edge.to}`, buildPath(edge, a, b));
     });
+    // A11y mirror: nodeReadout() is otherwise only ever called per-node
+    // PER-FRAME inside drawLabelBlock() below (60x/sec) — fine for canvas
+    // drawing, but the mirror only needs a snapshot once per rebuild(), so it
+    // gets its own cache here rather than hooking into the frame loop.
+    const readoutCache = new Map();
+    graph.nodes.forEach((node) => { if (node.type === 'module') readoutCache.set(node.id, nodeReadout(node)); });
+    a11yLayer.sync(graph.nodes, readoutCache);
   }
 
   function resize() {
@@ -770,6 +784,7 @@ export function mountHud(canvas, ctx) {
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointercancel', onPointerUp);
+      a11yLayer.cleanup();
     },
     setVoiceState(s) { voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle'; },
     setActivity(v) { activity = Math.max(0, Math.min(1, Number(v) || 0)); },

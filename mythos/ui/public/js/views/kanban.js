@@ -230,7 +230,7 @@ export async function render(mount) {
       <input type="text" id="kanban-goal-input" class="kanban-goal-input" placeholder="Give the team a goal — e.g. 'a set of fun neon web toys' or 'a tiny finance toolkit'" />
       <button class="kanban-assemble-btn" id="kanban-assemble-btn" type="button">&#10148; Assemble board</button>
     </div>
-    <div class="kanban-note" id="kanban-note"></div>
+    <div class="kanban-note" id="kanban-note" aria-live="polite"></div>
 
     <div class="kanban-board">
       ${LANES.map(laneColumn).join('')}

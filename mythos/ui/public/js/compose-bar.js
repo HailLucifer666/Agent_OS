@@ -129,7 +129,11 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     if (onVoiceState) onVoiceState(s);
   }
 
-  // Caption passthrough (reused by app.js for the old mic.setCaption calls)
+  // Caption passthrough (reused by app.js for the old mic.setCaption calls).
+  // Every voice/build/mission status string already funnels through this one
+  // function, so it's also the one place that needs to feed #hud-status-live
+  // (one of exactly two aria-live regions in the HUD) — no new call sites.
+  const statusLiveEl = document.getElementById('hud-status-live');
   function setCaption(text, kind) {
     if (!text) { captionEl.innerHTML = ''; return; }
     let captionDiv = captionEl.querySelector('.mic-caption');
@@ -140,6 +144,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     }
     captionDiv.textContent = text;
     captionDiv.setAttribute('data-kind', kind || 'info');
+    if (statusLiveEl) statusLiveEl.textContent = text;
   }
 
   // Waveform passthrough
