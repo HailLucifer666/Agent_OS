@@ -43,6 +43,56 @@ Rules to prevent a repeat:
    binding time and the handler returns null), DPI-awareness block, `click_at`
    command, command-id echo in `Write-Response`.
 
+## Latest session update — read after pulling, then replace this section next session
+
+This is a single, overwritten-in-place note (not an accumulating log — see
+Wave 1's deletion of stale point-in-time handoff docs below for why). It
+reflects the state as of commit `30385d7` (2026-07-27). Whoever picks this up
+next should replace this whole section with their own summary rather than
+appending to it.
+
+**What shipped this session (24 commits, `f02a668`..`30385d7`, all on `main`,
+already pushed to `origin/main`):**
+1. **Test-truth fix** (`f02a668`): the pre-commit/CI gate was silently
+   parsing the wrong `node --test` reporter format and would have blocked
+   every commit had it ever been activated. Fixed; real baseline confirmed
+   1197/1196/0/1 (see Testing discipline above). New
+   `mythos/scripts/sync-test-count.js` keeps README/ROADMAP counts honest.
+2. **Dead-code removal** (`91ae8b2`): deleted `app/` (31.6K LOC undeployed
+   dead twin of the live UI), ~290 lines of dead code/config, the `dotenv`
+   dependency (replaced with `process.loadEnvFile()`).
+3. **HUD UI/UX overhaul** (`2eb79e0` .. `338d292`, 8 phases): CSS
+   token-layer restructure, new `mythos/ui/public/js/dom.js` keyed-
+   reconciliation primitive, focus-trap + modal fixes, a canvas
+   text-alternative + 2 new aria-live regions, kanban keyboard navigation,
+   responsive breakpoint consolidation, and a follow-up fix for a focus-drop
+   regression the closing sweep itself found. All client-side — no wiring
+   needed, loads automatically.
+4. **pc-child fix** (`30385d7`): `launch_app` was returning a dead/wrong pid
+   for Windows 11's MSIX-packaged Notepad (and any similarly-packaged app) —
+   the activation stub exits within ~1s, or (single-instance apps) the new
+   process never gets its own window at all. Fixed by resolving the real
+   windowed process after launch instead of trusting `Start-Process`'s raw
+   pid. **Still open, not fixed**: `focus_window` was reproducibly denied by
+   Windows' foreground-lock in headless/no-app-focused test conditions, even
+   with the existing `AttachThreadInput` workaround — unconfirmed whether
+   this reproduces in real voice-driven usage where some app is normally
+   already focused. If typing into a launched app still silently fails,
+   re-test starting from a real app (not the bare desktop) having focus —
+   that's the next thing to chase.
+
+**Wiring needed on a fresh clone/pull:** `git config core.hooksPath
+.githooks` (once per clone) — nothing else; no new deps, no build step.
+
+**In flight, NOT in this push:** a background workflow was mid-run on the
+originating machine live-verifying BUGS.md's ~16 previously-🔧-CODED bugs
+and triaging ROADMAP.md's ~57 drift items. Its output (updated BUGS.md/
+ROADMAP.md status lines, new `scripts/verify-live.js`/`scripts/
+triage-drift.js`) was NOT part of this push and will land in a later commit.
+If you see uncommitted changes to ROADMAP.md or new `verify-*.js` scripts in
+`mythos/scripts/` on the originating machine, that's this in-progress work —
+don't discard it.
+
 ## Hard-won platform gotchas (do not re-learn these)
 
 - **PowerShell 5.1 + pipes**: stdout defaults to the OEM codepage, which

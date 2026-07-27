@@ -313,12 +313,14 @@ Ran `node --test mythos/test/capture-screenshot.test.js` — **3/3 pass**.
 ---
 
 ### BUG-011: Browser automation offline / misconfigured
-**Status:** Fix 2 (param aliasing) ✅ VERIFIED · Fix 1 (lazy auto-connect) 🔧 CODED
+**Status:** Fix 2 (param aliasing) ✅ VERIFIED · Fix 1 (lazy auto-connect) ✅ LIVE-VERIFIED (2026-07-27) · on-demand launch ✅ LIVE-VERIFIED (2026-07-27)
 **Severity:** HIGH | **Reported:** 07-12 (6 failures) | **Fixed:** 2026-07-16
 
 **Symptom:** `browser_navigate` returns "Browser automation is OFFLINE. Run setup-chrome-debug.ps1 first." even after the user grants Chrome access, because nothing ever called the adapter's own auto-connect. Also `browser_evaluate` only read a `script` key, so calls sending `query`/`expression`/`javascript` failed with a missing-argument error even when the browser was online.
 
-**Fix 1 — lazy auto-connect (🔧 CODED, not live-verified):** `mythos/src/core/effectors/from-browser.js` — `requireOnline()` (line 22) is now `async`. When status isn't `ONLINE` it now awaits `browserAgent.ensureOnline({ cdpUrl: process.env.BROWSER_CDP_URL || config?.BROWSER_CDP_URL })` (adapters/browser-agent's existing CDP-connect-then-launchLocal-fallback, previously never called by any effector) before re-checking status and failing. All 10 call sites in the file (`browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_get_title`, `browser_get_text`, `browser_scroll`, `browser_tabs`, `browser_go_back`, `browser_evaluate`) were updated from `const guard = requireOnline();` to `const guard = await requireOnline();`. `registerFromBrowser(hub, ctx)` now accepts a `ctx` and stashes `ctx.config` into a module-level `config` var for the CDP URL lookup; `mythos/src/main.js`'s call site (was `registerFromBrowser(hub);`, no ctx ever passed) is now `registerFromBrowser(hub, { config: config });`. Verified with mocked `browserAgent.ensureOnline()`/`getStatus()` in `mythos/test/bug-011-browser-auto-connect.test.js` (OFFLINE→ensureOnline()→ONLINE path, ensureOnline-fails-cleanly path, and already-ONLINE-skips-ensureOnline path all pass) — but a real Chrome/CDP connection has not been exercised end-to-end, so mark this 🔧 CODED, not ✅ VERIFIED, until confirmed live. **After running `setup-chrome-debug.ps1` once, `browser_navigate` (and every other browser tool) should now self-connect with no further action needed.**
+**Fix 1 — lazy auto-connect (✅ LIVE-VERIFIED 2026-07-27):** `mythos/src/core/effectors/from-browser.js` — `requireOnline()` (line 22) is now `async`. When status isn't `ONLINE` it now awaits `browserAgent.ensureOnline({ cdpUrl: process.env.BROWSER_CDP_URL || config?.BROWSER_CDP_URL })` (adapters/browser-agent's existing CDP-connect-then-launchLocal-fallback, previously never called by any effector) before re-checking status and failing. All 10 call sites in the file (`browser_navigate`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_get_title`, `browser_get_text`, `browser_scroll`, `browser_tabs`, `browser_go_back`, `browser_evaluate`) were updated from `const guard = requireOnline();` to `const guard = await requireOnline();`. `registerFromBrowser(hub, ctx)` now accepts a `ctx` and stashes `ctx.config` into a module-level `config` var for the CDP URL lookup; `mythos/src/main.js`'s call site (was `registerFromBrowser(hub);`, no ctx ever passed) is now `registerFromBrowser(hub, { config: config });`. Verified with mocked `browserAgent.ensureOnline()`/`getStatus()` in `mythos/test/bug-011-browser-auto-connect.test.js` (OFFLINE→ensureOnline()→ONLINE path, ensureOnline-fails-cleanly path, and already-ONLINE-skips-ensureOnline path all pass). **Live-verified 2026-07-27** via `mythos/scripts/verify-browser-autoconnect.js` against real Chrome + real playwright-core (no mocks): with debug Chrome off, calling a browser tool self-connected via CDP-attempt-then-launch-fallback exactly as this fix describes (`browser_get_title()` returned `{ok:true}`, `getStatus()` went OFFLINE→ONLINE) — with **zero manual `setup-chrome-debug.ps1` step**, not even the one-time run this note used to require. Independently re-run and reproduced with a different Chrome PID (rules out a cached/replayed result). **After a fresh boot, `browser_navigate` (and every other browser tool) now self-connects with no setup step needed at all.**
+
+**On-demand launch (✅ LIVE-VERIFIED 2026-07-27):** live-invoked the real `browser_launch_debug` effector (`mythos/scripts/verify-browser-launch.js`) with no debug browser running; it spawned a genuine Chrome process (BUG-029 pidfile written with the real PID), came ONLINE over CDP, and drove a real page (`page.goto` + `page.title()` returned the expected title) — all cleaned up afterward with no orphan left. Independently re-run with a different Chrome PID each time, confirming this isn't replayed output.
 
 **Fix 2 — `browser_evaluate` param aliasing (✅ VERIFIED):** now accepts `{ script, expression, javascript, query }` and uses whichever is present (`const code = script || expression || javascript || query;`), with a clearer error message when none are given. Fully unit-tested (no live Chrome needed): `bug-011-browser-auto-connect.test.js` asserts `browser_evaluate({expression:'1+1'})`, `{query:'1+1'}`, and `{javascript:'1+1'}` all behave identically to `{script:'1+1'}`, plus the no-alias-provided failure message.
 
@@ -715,8 +717,8 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-028: `navigate` has no "news" route — MYTHOS opens the wrong panel or fails while claiming success
-**Status:** 🔧 CODED — prompt clarification added, manual conversation testing needed | **Severity:** MEDIUM | **Reported:** 2026-07-16 (live session)
-**Live-verify:** manual conversation — see `docs/live-verification-runbook.md` §B1
+**Status:** ✅ LIVE-VERIFIED (2026-07-27) | **Severity:** MEDIUM | **Reported:** 2026-07-16 (live session)
+**Live-verify:** `node scripts/verify-news-route.js` (automated WS harness against a real boot, no human needed) — see `docs/live-verification-runbook.md` §B1
 
 **Symptom:** User: "what's the news for today?" → MYTHOS says "Opening the news feed now, Alex" but the actual call logged is `navigate({"route":"health"})` — wrong panel opens while the reply claims the right one did. User calls it out directly, MYTHOS then tries `navigate({"route":"news"})` and gets a clean rejection: "I attempted to open the news feed, but it is not a valid route."
 
@@ -724,7 +726,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 
 **Fix applied:** Updated the `navigate` tool description in the CATALOG_RAW (`mythos/src/core/voice/voice-agent.js` line 43) to add a clarifying note: "Note: there is no "news" route — news is a boot-time floating widget spawned separately, not a navigable dashboard panel. Never call navigate with route:"news"." This keeps the model from guessing or hallucinating a "news" route and instead responds honestly when asked about news.
 
-**Verification note:** This is a prompt-behavior change that cannot be unit-tested (no automated way to verify an LLM's future decision-making from a static prompt string). Manual conversation testing required: ask "what's the news for today" or "can you show me the news" in a live session and confirm that MYTHOS either (a) explains that news is a floating widget already visible on the dashboard and does not attempt `navigate({route:'news'})`, or (b) responds with a search/open_web result instead of a navigate call. The model should NOT call `navigate({route:'news'})` or `navigate({route:'health'})` while claiming it's opening the news.
+**Verification note:** This is a prompt-behavior change that cannot be unit-tested (no automated way to verify an LLM's future decision-making from a static prompt string), but it was live-verified via a scripted WS harness driving a real boot instead of a human: `mythos/scripts/verify-news-route.js` sent the real utterance "what's the news for today?" over the actual compose-bar WS protocol and inspected the server's own `action`/`navigate` broadcast telemetry. Result (run twice, adversarially rechecked): exactly one action fired — `{tool:'open_web', ok:true}` — with real dated search-card content; zero `navigate` calls of any kind (no `route:'news'` attempt, no `route:'health'` hallucination); the spoken reply ("Opening today's AI news on the dashboard now, Alex.") accurately described the real, successful action. The original BUG-028 fabrication pattern (wrong-route navigate + false success claim) did not occur.
 
 **Files:** `mythos/src/core/voice/voice-agent.js` (CATALOG_RAW navigate description updated, line 43) — `mythos/src/core/effectors/routes.js` (reference only, no change needed)
 
@@ -1021,7 +1023,7 @@ Full list in `ROADMAP.md` lines 396-403.
 13. **BUG-007** — Fabrication of success (trust-destroying)
 14. **BUG-016** — Pipeline ships failed-review builds
 15. **BUG-008** — `open_artifact` voice channel broken
-16. **BUG-028** — `navigate` has no "news" route, MYTHOS guesses/fabricates instead
+16. ~~**BUG-028**~~ — `navigate` has no "news" route — ✅ LIVE-VERIFIED 2026-07-27 (see entry above)
 17. **BUG-013** — Cortex flapping/stall loops (healer can't fix)
 18. **BUG-010** — `ask_agent` not wired
 19. **BUG-011** — Browser automation offline
@@ -1045,9 +1047,9 @@ CLOSED this session: ~~BUG-038~~ (OEM-codepage JSON corruption — the real "not
 
 Still open, in priority order:
 31. **BUG-029** — orphaned automation browser: pidfile mitigation shipped (kills orphans on next launch); proper D-07 graceful shutdown + live repro still open.
-32. **BUG-027 / BUG-020 / BUG-021 / BUG-028** — voice-only checks that need the user in a live session (TTS echo, mic noise, conversation tone, "news" ask) — see the guided acceptance list in the session notes.
+32. **BUG-027 / BUG-020 / BUG-021** — voice-only checks that need the user in a live session (TTS echo, mic noise, conversation tone) — see the guided acceptance list in the session notes. (BUG-028's "news" ask is no longer in this list — ✅ LIVE-VERIFIED 2026-07-27 via a scripted WS harness, no human needed.)
 33. **BUG-037** — mitigated via repo CLAUDE.md rules; unenforceable by git, keep the discipline.
-34. **BUG-011** — browser automation lazy auto-connect coded; standby confirmed at boot, on-demand launch not yet live-tested (deliberately — avoids creating a BUG-029 orphan before its mitigation was in).
+34. ~~**BUG-011**~~ — browser automation lazy auto-connect + on-demand launch both ✅ LIVE-VERIFIED 2026-07-27 (see entry above).
 35. **BUG-024** — Gmail/Calendar: needs user's Google OAuth setup (code-level done).
 
 ---
@@ -1196,7 +1198,7 @@ Phase 4 is autonomy advancement (biggest leverage first, all respecting idle-ski
 
 ## Phase 4 — Autonomy Advancement (task-957 §26)
 
-**Status:** ✅ CODED (2026-07-20) — 13 commits on `phase4/autonomy-advancement`, 1290/1295 tests pass (4 baseline fails unchanged). Full vision-gap close-out in `MYTHOS_Phase4-Autonomy_Handoff.md`. Live operator verification still pending per task-957 §26.
+**Status:** ✅ CODED (2026-07-20) — 13 commits on `phase4/autonomy-advancement`, 1290/1295 tests pass (4 baseline fails unchanged). Full vision-gap close-out in `MYTHOS_Phase4-Autonomy_Handoff.md`. Live operator verification: see "Honest caveats" below — a 2026-07-27 pass closed 3 of the 4 named gaps and found the remaining one (mull→propose_goal routing) structurally broken, not merely unverified.
 
 ### Latent bugs surfaced + fixed (Area A foundation)
 
@@ -1225,7 +1227,8 @@ Fix shipped in commit `6505f93` (B-1 + B-2 + skills.recall signature) + `03c4eb7
 
 - **No autonomous goal-completion trigger** — `goals.complete(id)` API exists but no cortex path calls it autonomously yet. Deciding when the cortex is allowed to declare success is a Phase 4.5 design call.
 - **No engagement-transition brain driving** — the transition handler stays synchronous (canned paths). The brain-driven methods are surfaces for cortex/gateway/future orchestrator; this keeps the existing phase1-engagement-executor.test.js harness (which bypasses interview/spec) working unchanged.
-- **No live operator verification** of: calendar-upcoming-sensor, window-sensor, propose_goal UI flow, mull→propose routing (those need a real boot + dashboard session per task-957 §26).
+- **Status:** ✅ LIVE-VERIFIED (2026-07-27) — calendar-upcoming-sensor (V8a): a real seeded reminder was perceived and written to the episodic log end-to-end (`mythos/scripts/verify-calendar-upcoming-sensor.js`). Opt-in window-sensor (V8b): a real OS foreground-window change (driven via pc-child/`ps-automation.ps1`) was relayed over the WS `perception` broadcast with the correct summary (`mythos/scripts/verify-window-sensor.js`). propose_goal dashboard accept/reject click flow (V5, UI half): real Accept/Reject clicks in a real headless Chromium flipped on-disk goal status to `active` and deleted the rejected proposal's JSON file, through the real REST routes (`mythos/scripts/verify-propose-goal-ui-click.js`). All three re-run and adversarially rechecked as genuine (no mocks, no stale/replayed state).
+- **Live-tested 2026-07-27 and found BROKEN, not merely unverified** (`mythos/scripts/verify-propose-goal.js`, `mythos/scripts/verify-mull-propose-goal.js`): both the `mull()`→`propose_goal` idle-branch routing (V8c) and the backend suggestion-generation half of V5 are structurally unreachable. `cortex/index.js`'s `if (perceptions.length === 0 && !hasActive)` gate — the only call site for `mull()` — never opens in real operation, because `sensors/timer.js` unconditionally emits a `perception.tick` heartbeat every tick that main.js's unfiltered `bus.subscribe('perception.*', ...)` queues into the same perception buffer the gate inspects, so `perceptions.length` never reaches 0 in steady state. Confirmed on live boots (45/45 and 65/65 real ticks observed, never 0 perceptions) and corroborated by a separate check showing the configured brain model DOES return real proposals when `mull()`'s exact prompt is called directly — the gap is that `mull()` is never invoked, not that the model declines. This needs a real fix (e.g. excluding the timer's own heartbeat from the idle-perception count), not another verification pass.
 - **The boot + eval baseline fails** remain (boot is the Windows-SIGINT test flake, eval/memory-impact are data-dependent tests that need a populated vault). Unchanged from Phase 3.
 - **The pre-existing flake at `test/engagements/events.test.js:43`** still intermittently fires under suite load (~1/3 runs). Independent of Phase 4. Same `Date.now()` race documented in Phase 2.
 

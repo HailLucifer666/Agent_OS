@@ -162,6 +162,8 @@ SCREEN_AWARENESS_ENABLED=true SCREEN_AWARENESS_POLL_MS=10000 node scripts/verify
 
 ## Group B — Live dashboard session (no script)
 
+> **Update 2026-07-27:** BUG-028 has since been fully automated — `node scripts/verify-news-route.js` drives the same utterance over the real compose-bar WS protocol and inspects the server's own action/navigate broadcast telemetry instead of a human watching the screen. It PASSED (twice, adversarially rechecked). The manual procedure below is kept for anyone who wants to eyeball it directly, but is no longer required to close this bug.
+
 ### B1. BUG-028 navigate "news" route fabrication
 
 **What:** asking about news should NOT trigger a fabricated `navigate({route:'news'})` call — news is a dashboard widget, not a route.
