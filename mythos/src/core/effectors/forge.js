@@ -1,41 +1,32 @@
 'use strict';
 
-// effectors/forge.js — multi-file agentic build pipeline (P22). Does NOT route
-// through build-runner (its job shape is one-prompt→one-artifact): Forge calls
-// brain.think({lane:'build'}) directly with its own FORGE_CONCURRENCY pump.
+// effectors/forge.js — multi-file agentic build pipeline (P22). Phase 3 of the
+// Hermes orchestration change: Forge now drives the Hermes-Agent CLI (via
+// hermes-runner.js) instead of calling brain.think({lane:'build'}) per file.
 // Checkpoints (P21 sibling module, connectionId:'system' so a voice-started
 // build stays HUD-approvable) gate the plan and the final review. Pending
 // checkpoints hold live closures and cannot survive a restart — init() re-arms
 // them from persisted state (honest-inert). State machine:
 //   planning → awaiting-plan-approval →(approve) generating →(all done)
-//   awaiting-final-review →(approve) done. Failures → awaiting-mid-build-decision;
-//   final-review reject → applyRevision(feedback). Crash mid-flight → interrupted.
+//   awaiting-final-review →(approve) done. Partial build → awaiting-mid-
+//   build-decision; final-review reject → applyRevision(feedback). Crash
+//   mid-flight → interrupted.
 
 const crypto = require('crypto');
-const prompts = require('./forge-prompts');
-const buildPack = require('../skills/build-pack');
 const validate = require('./forge-validate');
-const { dispatchAction } = require('./dispatch-action');   // Phase 3 (V7) — Forge verify-stage runs commands via run_command
 
 const FILE = 'Checkpoints/forge-projects.json';
 const MAX_PERSISTED = 100;
 
-function createForge({ config, brain, bus, vault, checkpoints, effectors, leash }) {
-  if (!brain || typeof brain.think !== 'function') throw new Error('createForge requires brain.think');
+function createForge({ config, runner, bus, vault, checkpoints }) {
+  if (!runner || typeof runner.runPlan !== 'function' || typeof runner.runBuild !== 'function') {
+    throw new Error('createForge requires a hermes runner');
+  }
   if (!vault || typeof vault.writeText !== 'function' || typeof vault.readJSON !== 'function') {
     throw new Error('createForge requires a vault fs-store');
   }
   if (!bus) throw new Error('createForge requires bus');
   if (!checkpoints || typeof checkpoints.create !== 'function') throw new Error('createForge requires checkpoints');
-  // Phase 3 (V7): effectors + leash are OPTIONAL — Forge degrades to the
-  // pre-Phase-3 'no command verification' path when either is missing
-  // (unit tests, partial boot). When both are present AND the operator has
-  // set RUN_COMMAND_ALLOWLIST, the verify stage runs build commands (e.g.
-  // 'npm test') before arming the final-review checkpoint.
-
-  const MAX_FILES = (config && config.FORGE_MAX_FILES) || 12;
-  const FILE_RETRY = (config && config.FORGE_FILE_RETRY != null) ? config.FORGE_FILE_RETRY : 2;
-  const CONCURRENCY = (config && config.FORGE_CONCURRENCY) || 2;
 
   const projects = new Map();
 
@@ -70,11 +61,6 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     persist();
   }
 
-  function doneSummaries(p) {
-    return p.files.filter(function (f) { return f.status === 'done' && f.summary; })
-      .map(function (f) { return { path: f.path, summary: f.summary }; });
-  }
-
   function slugTaken(slug) {
     for (const other of projects.values()) { if (other.slug === slug) return true; }
     return vault.exists(validate.PROJECTS_REL + '/' + slug);
@@ -89,6 +75,8 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     p.previewUrl = validate.computePreviewUrl(p.slug, p.files);
   }
 
+  function projectDirRel(p) { return validate.PROJECTS_REL + '/' + p.slug; }
+
   function planBody(p) {
     const lines = p.files.map(function (f) { return '- ' + f.path + (f.purpose ? ': ' + f.purpose : ''); });
     return 'Plan for ' + p.name + ' (' + p.kind + '), ' + p.files.length + ' files:\n' + lines.join('\n');
@@ -99,7 +87,7 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     const view = checkpoints.create({
       kind: 'plan-approval', title: 'Build plan for "' + p.name + '"', body: planBody(p),
       goalId: p.goalId, projectId: p.id, connectionId: 'system',
-      onApprove: function () { return runGenerateStage(p, pendingFiles(p)); },
+      onApprove: function () { return runBuildStage(p); },
       onReject: function () { p.status = 'plan-rejected'; p.finishedAt = Date.now(); notify(p); },
     });
     p.checkpointId = view.id;
@@ -115,11 +103,15 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     p.checkpointId = view.id;
   }
 
+  // A 'partial' build (some but not all planned files produced) still left
+  // something reviewable — let the operator decide whether to keep it
+  // (final-review, same as a clean build) or abandon it, rather than
+  // silently discarding partial work.
   function armMidBuildCheckpoint(p) {
-    const failed = p.files.filter(function (f) { return f.status === 'failed'; }).map(function (f) { return f.path; });
+    const missing = p.files.filter(function (f) { return f.status !== 'done'; }).map(function (f) { return f.path; });
     const view = checkpoints.create({
-      kind: 'mid-build', title: 'Some files failed for "' + p.name + '"',
-      body: 'Failed: ' + failed.join(', ') + '. Approve to keep what built, or reject to abandon.',
+      kind: 'mid-build', title: 'Build incomplete for "' + p.name + '"',
+      body: (p.error || 'Some planned files were not produced') + (missing.length ? ('. Missing: ' + missing.join(', ')) : '') + '. Approve to keep what built, or reject to abandon.',
       goalId: p.goalId, projectId: p.id, connectionId: 'system',
       onApprove: function () { p.status = 'awaiting-final-review'; notify(p); armFinalCheckpoint(p); },
       onReject: function () { p.status = 'failed'; p.error = 'abandoned after partial build'; p.finishedAt = Date.now(); notify(p); },
@@ -127,184 +119,66 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     p.checkpointId = view.id;
   }
 
-  function pendingFiles(p) { return p.files.filter(function (f) { return f.status === 'pending'; }); }
-
   // ---- plan stage ----
   async function runPlanStage(p) {
     p.status = 'planning'; notify(p);
-    let result = await think(prompts.buildManifestPrompt(p.spec, p.kind), prompts.MANIFEST_SCHEMA_HINT, 'manifest', p);
-    let manifest = prompts.tryExtractManifest(result, { kind: p.kind, name: p.name }, MAX_FILES);
-    if (!manifest) {
-      const repair = await think(prompts.buildRepairPrompt(p.spec, p.kind, result && result.content), prompts.MANIFEST_SCHEMA_HINT, 'manifest-repair', p);
-      manifest = prompts.tryExtractManifest(repair, { kind: p.kind, name: p.name }, MAX_FILES);
-    }
-    if (!manifest) {
-      p.status = 'failed'; p.error = 'could not produce a valid file plan'; p.finishedAt = Date.now();
+    const res = await runner.runPlan(p.spec, p.kind);
+    if (!res.ok) {
+      p.status = 'failed'; p.error = res.error || res.reason; p.finishedAt = Date.now();
       notify(p); return;
     }
-    applyManifest(p, manifest);
+    applyManifest(p, res.manifest);
     p.status = 'awaiting-plan-approval'; notify(p);
     armPlanCheckpoint(p);
   }
 
-  async function think(prompt, schemaHint, tag, p) {
-    try {
-      return await brain.think({ lane: 'build', schemaHint: schemaHint, messages: [{ role: 'user', content: prompt }], source: 'forge:' + p.id + ':' + tag });
-    } catch (_) { return null; }
-  }
+  // ---- build stage ----
+  // Replaces the old per-file generate pump: ONE Hermes run does the whole
+  // build (or revision); progress comes from directory polling inside
+  // hermes-runner.js, not from per-file LLM calls.
+  async function runBuildStage(p, feedback) {
+    p.status = feedback ? 'revising' : 'generating'; notify(p);
+    const dirRel = projectDirRel(p);
 
-  // ---- generate stage (own bounded concurrency pump) ----
-  function runGenerateStage(p, subset) {
-    p.status = 'generating'; notify(p);
-    const queue = subset.slice();
-    let active = 0;
-    return new Promise(function (resolve) {
-      function pump() {
-        if (!queue.length && active === 0) { finishGenerateStage(p).then(resolve); return; }
-        while (active < CONCURRENCY && queue.length) {
-          const file = queue.shift();
-          active += 1;
-          generateOneFile(p, file).then(function () { active -= 1; pump(); });
-        }
-      }
-      pump();
+    const res = await runner.runBuild({
+      dirRel: dirRel,
+      manifest: p.manifest,
+      spec: p.spec,
+      feedback: feedback || null,
+      onProgress: function (paths) {
+        markFilesFromDisk(p, paths);
+        notify(p, paths.length ? paths[paths.length - 1] : null);
+      },
     });
-  }
 
-  async function generateOneFile(p, file) {
-    file.status = 'generating'; file.error = null; notify(p, file.path);
-    const attemptsAllowed = FILE_RETRY + 1;
-    // Skill-pack essences (P3 Jarvis upgrade): anti-slop discipline prepended
-    // to every file-generation prompt. Pack chosen from the file's own path +
-    // the project kind (websites and .html/.css files get the UI pack; the
-    // rest get the code pack). Best-effort — a missing essence injects nothing.
-    let skillBlock = '';
-    try {
-      const packKind = (p.kind === 'website' || /\.(html|css)$/i.test(file.path)) ? 'ui' : 'code';
-      skillBlock = buildPack.packBlockFor(packKind);
-    } catch (_) { /* essence injection is best-effort */ }
-    for (let attempt = 1; attempt <= attemptsAllowed; attempt += 1) {
-      file.attempts = attempt;
-      let prompt = attempt === 1
-        ? prompts.buildFilePrompt(p.manifest, file, doneSummaries(p))
-        : prompts.buildRetryPrompt(p.manifest, file, doneSummaries(p), file.error);
-      if (skillBlock) prompt = skillBlock + '\n\n' + prompt;
-      const result = await think(prompt, null, 'file:' + file.path, p);
-      if (!result || result.offline) { file.error = 'brain offline'; continue; }
-      if (result.aborted) { file.error = 'aborted'; continue; }
-      const content = prompts.cleanRawOutput(result.content);
-      const v = validate.validateFileContent(file.path, content);
-      if (!v.ok) { file.error = v.error; continue; }
-      try { validate.writeProjectFile(vault, p.slug, file.path, content); }
-      catch (err) { file.error = (err && err.message) || 'write failed'; continue; }
-      file.summary = validate.summarizeGeneratedFile(file.path, content);
-      file.status = 'done'; file.error = null; notify(p, file.path);
+    markFilesFromDisk(p, res.files || []);
+    p.previewUrl = validate.computePreviewUrl(p.slug, p.files) || p.previewUrl;
+
+    if (res.ok) {
+      p.status = 'awaiting-final-review'; p.error = null; notify(p); armFinalCheckpoint(p);
       return;
     }
-    file.status = 'failed'; notify(p, file.path);
+    // 'partial' still produced something reviewable → let the operator decide.
+    // Everything else (timeout, hermes-error, no-output) is a hard failure —
+    // Invariant 9: fail honestly, never fabricate success.
+    if (res.reason === 'partial') {
+      p.status = 'awaiting-mid-build-decision'; p.error = res.error; notify(p); armMidBuildCheckpoint(p);
+      return;
+    }
+    p.status = 'failed'; p.error = res.error || res.reason; p.finishedAt = Date.now(); notify(p);
   }
 
-  async function finishGenerateStage(p) {
-    const done = countDone(p);
-    const failed = p.files.filter(function (f) { return f.status === 'failed'; }).length;
-    if (done === 0) {
-      p.status = 'failed'; p.error = 'all files failed to generate'; p.finishedAt = Date.now(); notify(p); return;
-    }
-    if (failed > 0) { p.status = 'awaiting-mid-build-decision'; notify(p); armMidBuildCheckpoint(p); return; }
-    // Phase 3 (V7): run a command-verify stage before the final-review
-    // checkpoint IF the project plan has a verify command AND the operator
-    // has enabled RUN_COMMAND_ALLOWLIST. Failure routes into the same
-    // mid-build-decision state as a failed file (revision feedback path).
-    // No verify command OR allowlist unset → straight to final-review
-    // (pre-Phase-3 behavior preserved).
-    var verifyCmd = p.manifest && p.manifest.verify && p.manifest.verify.command;
-    var allowlist = (config && config.RUN_COMMAND_ALLOWLIST) || process.env.RUN_COMMAND_ALLOWLIST || '';
-    if (verifyCmd && allowlist && effectors && leash) {
-      var v = await runVerifyStage(p, verifyCmd);
-      if (!v.ok) {
-        // Verification failed (allowlist-deny, nonzero exit, timeout). Route
-        // into mid-build-decision with the verify error as feedback — same
-        // shape as a failed file, the operator can revise or abandon.
-        p.status = 'awaiting-mid-build-decision';
-        p.error = 'verify failed: ' + (v.error || 'unknown');
-        notify(p);
-        armMidBuildCheckpoint(p);
-        return;
-      }
-      // Verify ok — fall through to final-review with the verify stdout
-      // attached (informative for the operator at review time).
-      p.verifyResult = { stdout: v.stdout, exitCode: v.exitCode };
-    }
-    p.status = 'awaiting-final-review'; p.error = null; notify(p); armFinalCheckpoint(p);
-  }
-
-  // Phase 3 (V7): run a build-verification command (e.g. 'npm test') via the
-  // run_command effector, gated by the leash (T3 + credential scan). cwd is
-  // pinned to the project's vault/builds/projects/<slug> by the effector
-  // itself (caller passes projectSlug). Returns {ok, stdout?, exitCode?,
-  // error?}. Never throws — every failure path returns {ok:false,...}.
-  async function runVerifyStage(p, verifyCmd) {
-    // Parse verifyCmd the same way the engagement executor does: split into
-    // command + args via a minimal shell-like parse (the run_command effector
-    // re-validates each arg for shell metachars + allowlist compliance).
-    var parsed = parseVerifyCmd(verifyCmd);
-    if (!parsed) return { ok: false, error: 'unparseable verify command' };
-    var decision = {
-      tool: 'run_command',
-      args: {
-        command: parsed.command,
-        args: parsed.args,
-        projectSlug: p.slug            // pins cwd to vault/builds/projects/<slug>
-      }
-    };
-    try {
-      // Leash check (mandatory). T3 confirm-once-per-goal + credential scan
-      // run on the run_command args. We do NOT auto-approve — the operator
-      // sees the confirm popup just like any T3 autonomous action.
-      var lr = leash.check(decision, { goalId: p.goalId });
-      if (!lr.allow) {
-        return { ok: false, error: 'leash-denied: ' + (lr.reason || 'requires-confirm') };
-      }
-      var result = await dispatchAction(decision, {
-        effectors: effectors, bus: bus, goals: null, memory: null,
-        config: config, goalId: p.goalId, tier: lr.tier || 3, channel: 'forge-verify'
-      });
-      if (result && result.ok) {
-        return { ok: true, stdout: result.result && result.result.stdout, exitCode: result.result && result.result.exitCode };
-      }
-      return { ok: false, error: (result && result.result && result.result.error) || 'verify command failed' };
-    } catch (err) {
-      return { ok: false, error: 'verify-threw: ' + ((err && err.message) || String(err)) };
-    }
-  }
-
-  // Minimal shell-like split for verify commands — mirrors the engagement
-  // executor's parseVerifyCmd. Respects single/double quotes + backslash
-  // escapes. Returns null if the command parses to nothing or has an
-  // unterminated quote.
-  function parseVerifyCmd(cmd) {
-    if (!cmd || typeof cmd !== 'string') return null;
-    var tokens = [];
-    var cur = '';
-    var quote = null;
-    for (var i = 0; i < cmd.length; i++) {
-      var c = cmd[i];
-      if (quote) {
-        if (c === '\\' && i + 1 < cmd.length) { cur += cmd[++i]; continue; }
-        if (c === quote) { quote = null; continue; }
-        cur += c;
-      } else if (c === '"' || c === "'") {
-        quote = c;
-      } else if (/\s/.test(c)) {
-        if (cur) { tokens.push(cur); cur = ''; }
-      } else {
-        cur += c;
-      }
-    }
-    if (cur) tokens.push(cur);
-    if (quote) return null;
-    if (!tokens.length) return null;
-    return { command: tokens[0], args: tokens.slice(1) };
+  // p.files is now derived from disk rather than driven by a generator.
+  // Planned-but-absent files stay 'pending' (an honest "not produced yet/at
+  // all" signal); unplanned files Hermes chose to add are appended as 'done'
+  // so the HUD reflects the real contents.
+  function markFilesFromDisk(p, paths) {
+    const seen = new Set(paths);
+    p.files.forEach(function (f) { if (seen.has(f.path)) { f.status = 'done'; f.error = null; } });
+    const known = new Set(p.files.map(function (f) { return f.path; }));
+    paths.forEach(function (rel) {
+      if (!known.has(rel)) p.files.push({ path: rel, purpose: '', status: 'done', attempts: 1, error: null, summary: null });
+    });
   }
 
   // ---- revision ----
@@ -313,34 +187,8 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     if (!p) return { ok: false, error: 'project not found' };
     if (!p.manifest) return { ok: false, error: 'nothing to revise yet' };
     p.feedback = String(feedback || '').slice(0, 2000);
-    p.status = 'revising'; notify(p);
-    const result = await think(prompts.buildRevisionPrompt(p.manifest, p.feedback), prompts.REVISION_SCHEMA_HINT, 'revision', p);
-    const targets = prompts.tryExtractRevisionTargets(result);
-    if (!targets) {
-      p.status = 'awaiting-final-review'; p.error = 'could not determine which files to revise'; notify(p);
-      armFinalCheckpoint(p);
-      return { ok: false, error: 'revision targets unparseable' };
-    }
-    const subset = markRevisionTargets(p, targets);
-    await runGenerateStage(p, subset);
+    await runBuildStage(p, p.feedback);
     return { ok: true, status: p.status };
-  }
-
-  function markRevisionTargets(p, targets) {
-    const subset = [];
-    for (let i = 0; i < targets.files.length; i += 1) {
-      const tp = targets.files[i];
-      let file = p.files.find(function (f) { return f.path === tp; });
-      if (!file) {
-        file = { path: tp, purpose: '', status: 'pending', attempts: 0, error: null, summary: null };
-        p.files.push(file);
-      }
-      file.status = 'pending'; file.attempts = 0; file.error = null; file.summary = null;
-      file.purpose = (file.purpose || '') + ' [REVISION: ' + p.feedback + (targets.notes ? ' — ' + targets.notes : '') + ']';
-      subset.push(file);
-    }
-    p.previewUrl = validate.computePreviewUrl(p.slug, p.files) || p.previewUrl;
-    return subset;
   }
 
   // ---- public API ----
@@ -364,6 +212,10 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     return { id: p.id, status: p.status };
   }
 
+  // Resuming a crashed build re-runs the SAME stage: with no manifest, that
+  // means replanning; with a manifest, runBuildStage re-runs against the
+  // same project dir — Hermes reads back whatever partial output it left
+  // behind rather than starting cold.
   function resumeProject(id) {
     const p = projects.get(id);
     if (!p) return { ok: false, error: 'project not found' };
@@ -373,9 +225,9 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
       queueMicrotask(function () { runPlanStage(p).catch(function () {}); });
       return { ok: true, status: 'planning' };
     }
-    const subset = p.files.filter(function (f) { return f.status !== 'done'; });
-    for (let i = 0; i < subset.length; i += 1) { subset[i].status = 'pending'; subset[i].attempts = 0; subset[i].error = null; }
-    runGenerateStage(p, subset).catch(function () {});
+    runBuildStage(p).catch(function (err) {
+      p.status = 'failed'; p.error = (err && err.message) || 'resume error'; p.finishedAt = Date.now(); notify(p);
+    });
     return { ok: true, status: 'generating' };
   }
 
@@ -408,14 +260,7 @@ function createForge({ config, brain, bus, vault, checkpoints, effectors, leash 
     return { loaded: projects.size };
   }
 
-  // Phase 3 (V7): the leash isn't available at Forge construction time
-  // (main.js builds Forge inside the 'leash' boot step but creates the
-  // leash AFTER createForge). Set it once the boot step finishes so
-  // runVerifyStage can gate run_command dispatches.
-  function setLeash(_leash) { leash = _leash; }
-  function setEffectors(_effectors) { effectors = _effectors; }
-
-  return { init, createProject, getProject, listProjects, resumeProject, applyRevision, setLeash, setEffectors };
+  return { init, createProject, getProject, listProjects, resumeProject, applyRevision };
 }
 
 module.exports = { createForge };

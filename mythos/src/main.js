@@ -15,6 +15,7 @@ const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
 const { createCheckpointRegistry } = require('./core/leash/checkpoints');
 const { createForge } = require('./core/effectors/forge');
+const { createHermesRunner } = require('./core/effectors/hermes-runner');
 const { registerFromForge } = require('./core/effectors/from-forge');
 const { createEngagementStore } = require('./core/engagements/store');
 const { createEngagementManager } = require('./core/engagements');
@@ -361,13 +362,16 @@ async function main() {
       registerFromDocs(hub, { vault: memory.fs });
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
-      // registry. checkpoints needs memory.audit + goals (both exist by now); forge
-      // drives brain.think({lane:'build'}) and writes files under vault/builds/projects.
+      // registry. checkpoints needs memory.audit + goals (both exist by now).
+      // Phase 3 of the Hermes orchestration change: Forge now drives the
+      // hermes-agent CLI (via hermes-runner.js) instead of brain.think —
+      // hermesRunner is the only thing forge.js knows how to call to build.
       checkpoints = createCheckpointRegistry({ config: config, bus: bus, auditWriter: memory.audit, goals: goals, fs: memory.fs });
       checkpoints.init();
       checkpointSweepTimer = setInterval(function() { checkpoints.sweep(); }, config.CHECKPOINT_SWEEP_MS);
       if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
-      forge = createForge({ config: config, brain: brain, bus: bus, vault: memory.fs, checkpoints: checkpoints, effectors: hub, leash: leash });
+      const hermesRunner = createHermesRunner({ config: config, vault: memory.fs });
+      forge = createForge({ config: config, runner: hermesRunner, bus: bus, vault: memory.fs, checkpoints: checkpoints });
       forge.init();
       registerFromForge(hub, { forge: forge });
 
@@ -377,10 +381,6 @@ async function main() {
       logger.info('effectors.ready', { count: effectors.count() });
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors, scanner: require('./core/effectors/credential-scanner').createCredentialScanner() });
-      // Phase 3 (V7): Forge's runVerifyStage needs the leash to gate run_command
-      // dispatches. The leash wasn't available at createForge time (above), so
-      // hand it over now via the setter.
-      if (forge && typeof forge.setLeash === 'function') forge.setLeash(leash);
       logger.info('leash.ready', {});
     }},
 

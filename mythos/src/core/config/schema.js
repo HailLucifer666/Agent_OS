@@ -196,10 +196,12 @@ const SCHEMA = {
   ENGAGEMENT_INTERVIEW_MAX_Q:  { type: 'number', default: 5, min: 1, max: 20 },
   ENGAGEMENT_MAX_STAGES:       { type: 'number', default: 10, min: 1, max: 50 },
 
-  // Forge (P22 — multi-file agentic build pipeline)
+  // Forge (P22 — multi-file agentic build pipeline). FORGE_FILE_RETRY and
+  // FORGE_CONCURRENCY (a per-file retry count + concurrency pump) were
+  // removed by the Phase 3 Hermes orchestration change: Hermes does one
+  // build run for the whole project rather than per-file brain.think calls,
+  // so neither knob has anything left to read it.
   FORGE_MAX_FILES:             { type: 'number', default: 12,      min: 1,     max: 40 },
-  FORGE_FILE_RETRY:            { type: 'number', default: 2,       min: 0,     max: 5 },
-  FORGE_CONCURRENCY:           { type: 'number', default: 2,       min: 1,     max: 6 },
   // Hermes build driver (hermes-runner.js) — Forge now drives the hermes-agent
   // CLI instead of brain.think(). Plan runs are sandboxed/short; builds run a
   // real agent loop and need real headroom (30 min default, per THE DECISION's
