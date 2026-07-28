@@ -200,6 +200,14 @@ const SCHEMA = {
   FORGE_MAX_FILES:             { type: 'number', default: 12,      min: 1,     max: 40 },
   FORGE_FILE_RETRY:            { type: 'number', default: 2,       min: 0,     max: 5 },
   FORGE_CONCURRENCY:           { type: 'number', default: 2,       min: 1,     max: 6 },
+  // Hermes build driver (hermes-runner.js) — Forge now drives the hermes-agent
+  // CLI instead of brain.think(). Plan runs are sandboxed/short; builds run a
+  // real agent loop and need real headroom (30 min default, per THE DECISION's
+  // Mistral-primary arithmetic — see the Hermes orchestration handoff).
+  HERMES_PLAN_TIMEOUT_MS:      { type: 'number', default: 300000,   min: 10000,  max: 900000 },
+  HERMES_BUILD_TIMEOUT_MS:     { type: 'number', default: 1800000,  min: 60000,  max: 3600000 },
+  HERMES_POLL_MS:              { type: 'number', default: 2000,     min: 500,    max: 30000 },
+  HERMES_BUILD_TERMINAL_ENV:   { type: 'string', default: 'local' },
   // Checkpoints (P22 — workflow approval gates, distinct from LEASH_CONFIRM_TTL_MS)
   CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
   CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },

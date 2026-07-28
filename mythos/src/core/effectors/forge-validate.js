@@ -5,11 +5,17 @@
 // validateFileContent is a cheap parse-only gate; writeProjectFile enforces a
 // hard path-traversal guard before any fs write.
 
+const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { isUnsafePath } = require('./forge-prompts');
 
 const PROJECTS_REL = 'builds/projects';
+
+// Directory names that are build noise, not build output — skipped so a
+// Hermes run that does `npm install` doesn't report thousands of
+// node_modules files as "progress" (see walkProjectFiles below).
+const WALK_SKIP = new Set(['node_modules', '.git', '.venv', '__pycache__', 'dist', 'build', '.next']);
 
 // Cheap, deterministic sanity gate — never executes the file.
 function validateFileContent(relPath, content) {
@@ -94,6 +100,28 @@ function summarizeGeneratedFile(relPath, content) {
   return surfaceStr + 'Head:\n' + c.slice(0, 400);
 }
 
+// Recursive walk returning dirAbs-relative, forward-slash, sorted paths.
+// Used by hermes-runner.js to poll a Hermes build's output directory
+// (Invariant 5 — readdir polling, never fs.watch, which has a documented
+// crash on this Node/Windows build; see test/sensors-file.test.js). Skips
+// WALK_SKIP noise dirs. Never throws — a missing/unreadable directory is
+// honestly an empty list, since a build that hasn't written anything yet
+// (or a race against directory creation) is not an error condition here.
+function walkProjectFiles(dirAbs, _rel, _out) {
+  const rel = _rel || '';
+  const out = _out || [];
+  let entries;
+  try { entries = fs.readdirSync(path.join(dirAbs, rel), { withFileTypes: true }); }
+  catch (_) { return out; }
+  for (const e of entries) {
+    if (WALK_SKIP.has(e.name)) continue;
+    const childRel = rel ? rel + '/' + e.name : e.name;
+    if (e.isDirectory()) walkProjectFiles(dirAbs, childRel, out);
+    else out.push(childRel);
+  }
+  return out.sort();
+}
+
 module.exports = {
   validateFileContent,
   writeProjectFile,
@@ -101,5 +129,6 @@ module.exports = {
   uniqueSlug,
   computePreviewUrl,
   summarizeGeneratedFile,
+  walkProjectFiles,
   PROJECTS_REL,
 };

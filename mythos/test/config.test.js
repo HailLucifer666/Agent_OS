@@ -20,6 +20,19 @@ describe('config', () => {
     assert.equal(result.config.SHUTDOWN_MS, 10000);
   });
 
+  it('Hermes build-driver knobs (hermes-runner.js) default sensibly and accept overrides', () => {
+    const defaults = validate({}, SCHEMA);
+    assert.equal(defaults.config.HERMES_PLAN_TIMEOUT_MS, 300000);
+    assert.equal(defaults.config.HERMES_BUILD_TIMEOUT_MS, 1800000);
+    assert.equal(defaults.config.HERMES_POLL_MS, 2000);
+    assert.equal(defaults.config.HERMES_BUILD_TERMINAL_ENV, 'local');
+
+    const overridden = validate({ HERMES_BUILD_TIMEOUT_MS: '600000', HERMES_POLL_MS: '500' }, SCHEMA);
+    assert.equal(overridden.ok, true);
+    assert.equal(overridden.config.HERMES_BUILD_TIMEOUT_MS, 600000);
+    assert.equal(overridden.config.HERMES_POLL_MS, 500);
+  });
+
   it('overrides defaults with env values', () => {
     const result = validate({ MYTHOS_PORT: '3000', MYTHOS_NAME: 'GALACTUS', LOG_LEVEL: 'debug' }, SCHEMA);
     assert.equal(result.ok, true);
