@@ -30,6 +30,16 @@ graphify-out/
 # editor/planner scratch
 .kilo/
 
+# dashboard design mockups — local-only exploration, deliberately not shipped.
+# Leading slash matters: a bare "design/" would also ignore the TRACKED
+# mythos/src/core/design/ source dir and silently swallow new files added there.
+/design/
+
+# wakeword model backup left behind when test/wakeword.test.js loses the EPERM
+# directory-rename race. Must never be committed: it holds the same CC BY-NC-SA
+# openWakeWord weights that mythos/ui/public/models/wakeword/ is ignored for.
+mythos/ui/public/models/wakeword.test-backup/
+
 # scratch test/debug scripts (root-level ps1 probing scripts)
 /check_*.ps1
 /test_*.ps1
