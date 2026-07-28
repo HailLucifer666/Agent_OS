@@ -417,13 +417,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var skillBlock = buildPack.packBlock(card.text);
         if (skillBlock) base = skillBlock + '\n\n' + base;
       } catch (_) { /* essence injection is best-effort */ }
-      if (designSystem) {
-        try {
-          var ds = designSystemEngine.generateDesignSystem(card.text);
-          var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-          if (dsBlock) return dsBlock + '\n\n' + base;
-        } catch (_) { /* design system lookup is best-effort */ }
-      }
+      // NOTE: the design-system block is resolved INSIDE run() below, not here.
+      // It requires an async skill-tool call (ui-ux-pro-max's search.py) which
+      // can't run in this sync IIFE — executePipelineCard must stay sync for
+      // its callers (from-project/from-dashboard read job.job.id synchronously).
+      // The pump's first generation runs essence-only; the grounded rebuild in
+      // run() prepends the real design system before the model sees the prompt.
       return base;
     })();
 
@@ -437,6 +436,25 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
         var needsVisual = riskClassifierLib.requiresVisual(risk);
+
+        // Auto-use the real skill tool: for UI/frontend builds, run
+        // ui-ux-pro-max's search.py to resolve a genuine design system from
+        // its CSV database, and prepend it to the prompt so the build model
+        // works from real colors/styles/typography instead of improvising.
+        // Falls back to the home-grown designSystemEngine substitute only if
+        // the skill or Python is absent. Best-effort: never blocks a build.
+        // (Resolved here in run() because the skill-tool call is async and
+        // executePipelineCard must stay sync for its callers.)
+        if (designSystem) {
+          try {
+            var dsBlock = await buildPack.resolveSkillTool(card.text);
+            if (!dsBlock) {
+              var ds = designSystemEngine.generateDesignSystem(card.text);
+              dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
+            }
+            if (dsBlock) basePrompt = dsBlock + '\n\n' + basePrompt;
+          } catch (_) { /* design system lookup is best-effort */ }
+        }
 
         // P22: Research gate — gather real web data before committing to the build.
         // The initial `raw` was generated without grounding; if research returns
@@ -583,13 +601,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var skillBlock = buildPack.packBlock(card.title + ' ' + (card.detail || ''));
         if (skillBlock) base = skillBlock + '\n\n' + base;
       } catch (_) { /* essence injection is best-effort */ }
-      if (designSystem) {
-        try {
-          var ds = designSystemEngine.generateDesignSystem(card.title + ' ' + (card.detail || ''));
-          var dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-          if (dsBlock) return dsBlock + '\n\n' + base;
-        } catch (_) { /* best-effort */ }
-      }
+      // NOTE: design-system block resolved inside run() (async skill-tool call).
       return base;
     })();
 
@@ -605,6 +617,21 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var risk = riskClassifierLib.classify((card.title || '') + ' ' + (card.detail || ''));
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
+
+        // Auto-use the real skill tool: for UI/frontend cards, run
+        // ui-ux-pro-max's search.py for a genuine design system. Mirrors
+        // executePipelineCard's resolution. Falls back to designSystemEngine.
+        if (designSystem) {
+          try {
+            var dsTopic = card.title + ' ' + (card.detail || '');
+            var dsBlock = await buildPack.resolveSkillTool(dsTopic);
+            if (!dsBlock) {
+              var ds = designSystemEngine.generateDesignSystem(dsTopic);
+              dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
+            }
+            if (dsBlock) basePrompt = dsBlock + '\n\n' + basePrompt;
+          } catch (_) { /* design system lookup is best-effort */ }
+        }
 
         // P22: Research gate — gather real web data before committing to the build.
         // A4: track researchStatus for observability (never fail silently).

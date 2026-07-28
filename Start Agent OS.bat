@@ -85,15 +85,68 @@ if not exist ".env" (
     )
 )
 
-if not exist "node_modules" (
-    echo Installing dependencies...
-    call npm install
+REM --- Dependency sync ---------------------------------------------------------
+REM Two triggers, same install:
+REM   (a) fresh install: no node_modules (or no inner lockfile marker) at all
+REM   (b) drift after a pull: package-lock.json was updated upstream but
+REM       node_modules was never reinstalled against it. npm's own marker for
+REM       "node_modules matches this exact lockfile" is the copy it writes at
+REM       node_modules/.package-lock.json — when that marker's LastWriteTime is
+REM       OLDER than the root lockfile's, the tree is stale (this is exactly
+REM       how the pulled deps — e.g. the dropped `dotenv` — would otherwise
+REM       stay installed silently).
+REM
+REM NOTE on the signal: `dir /od` and byte-compares both fail here. `dir /od`
+REM sorts unreliably across directories (it listed the newer root lockfile
+REM first, contradicting its own timestamp column), and `fc` reports identity
+REM even when stale because npm adds a node_modules map section to the inner
+REM copy. LastWriteTime via PowerShell is the reliable, dependency-free signal
+REM — and matches the PS idiom already used for the port/pid provenance checks
+REM below.
+set "NEEDS_INSTALL=0"
+set "LOCK_DRIFT="
+if not exist "node_modules" set "NEEDS_INSTALL=1"
+if not exist "node_modules\.package-lock.json" set "NEEDS_INSTALL=1"
+if exist "package-lock.json" if exist "node_modules\.package-lock.json" (
+    for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "if((Get-Item 'package-lock.json').LastWriteTime -gt (Get-Item 'node_modules\.package-lock.json').LastWriteTime){'drift'}" 2^>nul`) do set "LOCK_DRIFT=%%D"
+    if /i "!LOCK_DRIFT!"=="drift" set "NEEDS_INSTALL=1"
+)
+if "!NEEDS_INSTALL!"=="1" (
+    echo Syncing dependencies against package-lock.json...
+    call npm ci
     if errorlevel 1 (
-        echo npm install failed.
+        echo npm ci failed - retrying with npm install...
+        call npm install
+    )
+    if errorlevel 1 (
+        echo Dependency install failed. See messages above.
         pause
         exit /b 1
     )
 )
+
+REM --- Git pre-commit hook wiring ----------------------------------------------
+REM .githooks/pre-commit is the local gate that blocks commits raising the
+REM mythos test-failure count above baseline and keeps README/ROADMAP test-count
+REM mentions honest. It is tracked in-repo but git does NOT activate it
+REM automatically — each clone needs `core.hooksPath .githooks` set once.
+REM The launcher is run after every pull, so this is the natural place to
+REM guarantee it is wired. We are in mythos/; git root is one level up.
+cd /d "%~dp0"
+if exist ".githooks\pre-commit" (
+    set "CUR_HOOKS="
+    for /f "delims=" %%H in ('git config core.hooksPath 2^>nul') do set "CUR_HOOKS=%%H"
+    REM Positive comparison + else: cmd's block parser mishandles
+    REM `if /i not "!X!"=="Y" (` (the `not` keyword + `==` + opening paren
+    REM breaks block nesting). The inverted positive form parses cleanly.
+    if /i "!CUR_HOOKS!"==".githooks" (
+        echo Git pre-commit hook already wired.
+    ) else (
+        git config core.hooksPath .githooks
+        echo Git pre-commit hook wired ^(core.hooksPath = .githooks^).
+    )
+)
+cd /d "%~dp0mythos"
 
 REM Launch split-view via Windows Terminal: left = MYTHOS server, right = live
 REM backend logs. Falls back to single-pane mode if wt.exe is unavailable.

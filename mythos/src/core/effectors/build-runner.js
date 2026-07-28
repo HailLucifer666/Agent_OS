@@ -155,6 +155,12 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
       // P22: if verification fails AFTER retry, mark the job failed — do NOT
       // save a known-defective artifact. Previously this saved anyway, shipping
       // garbage to the user silently.
+      // Softening: the verifier splits findings into issues (rule-based, hard-
+      // fail — genuine garbage) and warnings (LLM-judge advisory — stylistic
+      // opinions like "violates Swiss Style"). Only issues block shipment;
+      // warnings are recorded on the job for the review phase (ship-with-
+      // warning), mirroring fullReview's existing behavior. This stops the
+      // LLM-judge from vetoing legitimate stylistic variation the rules allow.
       var raw = result.content;
       if (verifier && typeof verifier.verify === 'function') {
         job.stage = 'verifying';
@@ -164,6 +170,9 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
         // first), which made the verifier's spec.slice(0,300) see only
         // boilerplate. Jobs that don't set spec keep the old prompt fallback.
         var verification = await verifier.verify(raw, job.spec || prompt);
+        if (verification.warnings && verification.warnings.length) {
+          job._verifyWarnings = verification.warnings;
+        }
         if (!verification.pass && !job._retried) {
           job._retried = true;
           var retryResult = await brain.think({
@@ -176,14 +185,17 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
           });
           if (retryResult && !retryResult.offline) {
             raw = retryResult.content;
-            // Re-verify the retry — if it still fails, block shipment
+            // Re-verify the retry — only rule-based issues block shipment.
             var reverify = await verifier.verify(raw, job.spec || prompt);
+            if (reverify.warnings && reverify.warnings.length) {
+              job._verifyWarnings = reverify.warnings;
+            }
             if (!reverify.pass) {
               throw new Error('build failed verification after retry: ' + reverify.issues.join('; '));
             }
           }
         } else if (!verification.pass) {
-          // Already retried or retry didn't help — block shipment
+          // Already retried or retry didn't help — block shipment (rule-based issues only)
           throw new Error('build failed verification: ' + verification.issues.join('; '));
         }
       }
@@ -195,6 +207,13 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
       job.status = 'done';
       job.stage = 'done';
       if (runResult && runResult.artifact) job.artifact = runResult.artifact;
+      // Surface verifier warnings (LLM-judge advisory — stylistic opinions that
+      // didn't block shipment) on the job record so job_status/announcer can
+      // flag them, mirroring how review issues are surfaced below.
+      if (job._verifyWarnings && job._verifyWarnings.length) {
+        job.verifyStatus = 'warn';
+        job.verifyWarnings = job._verifyWarnings;
+      }
       // A4: surface research provenance on the job record so job_status can
       // report whether the build was grounded in real web data or built blind.
       if (runResult && runResult.researchStatus) job.researchStatus = runResult.researchStatus;

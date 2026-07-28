@@ -107,8 +107,24 @@ function createHermesRunner({ config, vault }) {
     let skillBlock = '';
     try { skillBlock = buildPack.packBlockFor(packKind); } catch (_) { /* best-effort */ }
 
+    // Real design system, merged forward from 9352a85. That commit wired
+    // ui-ux-pro-max's search.py into the old per-file generate pump, which this
+    // module replaced — so the feature is ported here rather than lost. One
+    // resolve per BUILD (not per file, as the pump did) is strictly better:
+    // Hermes writes the whole project in a single run, so one system keeps it
+    // coherent by construction. resolveSkillTool returns null whenever the
+    // skill, its script, or Python is absent, so this can never block a build.
+    let designSystemBlock = '';
+    if (packKind === 'ui') {
+      try {
+        const brief = spec || (manifest && manifest.name) || '';
+        designSystemBlock = (await buildPack.resolveSkillTool(brief)) || '';
+      } catch (_) { /* best-effort, same contract as packBlockFor above */ }
+    }
+
     const prompt = [
       skillBlock,
+      designSystemBlock,
       feedback
         ? 'You previously built this project in the current directory. Apply this change: ' + feedback
         : 'Build the project described below in the CURRENT DIRECTORY.',

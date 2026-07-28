@@ -21,13 +21,22 @@ const PREF_VOICE = [
 ];
 
 const PREF_BUILD = [
-  { provider: 'ollama',     model: 'hermes3:8b' },                                // P22: local, free, unlimited (ollama pull hermes3:8b to activate)
+  // Build lane leads with reachable cloud models. Previously this lane uniquely
+  // led with ollama/hermes3:8b — a model that was never `ollama pull`ed on the
+  // dev machine, so it was silently filtered out and every build fell through
+  // to mistral anyway. That violated this file's own invariant ("each lane ends
+  // in an optional ollama entry that's simply filtered out if absent"). Fixed:
+  // cloud models first (mistral-large + groq's fast 70B, both reachable with
+  // the keys set in .env), then the existing coder/generalist chain, with the
+  // optional local models LAST so their absence never costs a build attempt.
   { provider: 'mistral',    model: 'mistral-large-2512' },
+  { provider: 'groq',       model: 'llama-3.3-70b-versatile' },                    // fastest reachable (Groq LPU); already leads PREF_VOICE
   { provider: 'cerebras',   model: 'zai-glm-4.7' },
   { provider: 'cerebras',   model: 'gpt-oss-120b' },
   { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
   { provider: 'openrouter', model: 'nousresearch/hermes-3-llama-3.1-405b:free' }, // P22: Hermes fallback
   { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },
+  { provider: 'ollama',     model: 'hermes3:8b' },                                 // P22: local, free, unlimited (ollama pull hermes3:8b to activate; filtered out if absent)
   { provider: 'ollama',     model: 'ornith:9b' },
 ];
 

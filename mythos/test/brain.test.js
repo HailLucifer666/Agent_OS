@@ -34,10 +34,19 @@ describe('brain/lanes.default', function() {
     assert.equal(lanes.PREF_VOICE[0].model, 'llama-3.3-70b-versatile');
   });
 
-  it('build lane has local Hermes (ollama) first, Mistral as first hosted fallback (P22 re-rank)', function() {
-    assert.equal(lanes.PREF_BUILD[0].provider, 'ollama');
-    assert.equal(lanes.PREF_BUILD[0].model, 'hermes3:8b');
-    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'mistral' && p.model === 'mistral-large-2512'; }), 'Mistral fallback preserved');
+  it('build lane leads with a reachable cloud model (Mistral), ollama entries last (filtered if absent)', function() {
+    // P22 re-rank fix: the build lane previously led with ollama/hermes3:8b,
+    // which was never `ollama pull`ed on the dev machine — silently filtered
+    // out, so every build fell through to mistral anyway. Cloud-first now;
+    // optional local models sit last so their absence never costs a build.
+    assert.equal(lanes.PREF_BUILD[0].provider, 'mistral');
+    assert.equal(lanes.PREF_BUILD[0].model, 'mistral-large-2512');
+    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'groq' && p.model === 'llama-3.3-70b-versatile'; }), 'Groq 70B present (fastest reachable)');
+    // ollama entries (if any) must be at the tail, not leading
+    const firstOllama = lanes.PREF_BUILD.findIndex(function(p) { return p.provider === 'ollama'; });
+    if (firstOllama !== -1) {
+      assert.ok(firstOllama > 0, 'ollama entry not leading the build lane');
+    }
   });
 
   it('each table has env override key', function() {
