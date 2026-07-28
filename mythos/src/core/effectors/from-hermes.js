@@ -9,6 +9,8 @@
 var effectorFromTool = require('./adapter').effectorFromTool;
 var hermes = require('../../../adapters/hermes-agent');
 
+var MAX_REPLY_CHARS = 20000; // build reports run long — 4000 truncated real output
+
 function ok(r) { return { ok: true, result: r }; }
 function fail(m) { return { ok: false, result: { error: m } }; }
 
@@ -19,7 +21,7 @@ function buildTools() {
     try {
       var reply = await hermes.runTask(task);
       if (!reply) return fail('hermes returned an empty response');
-      return ok({ reply: reply.slice(0, 4000), status: hermes.getStatus() });
+      return ok({ reply: reply.slice(0, MAX_REPLY_CHARS), status: hermes.getStatus() });
     } catch (err) {
       return fail(String(err.message || err));
     }

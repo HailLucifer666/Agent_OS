@@ -569,11 +569,39 @@ describe('core/quota', function() {
   });
 
   it('groq has request cap', function() {
-    const status = quota.getQuotaStatus('groq', { byProvider: {}, today: { calls: 100 } });
+    const status = quota.getQuotaStatus('groq', { byProvider: { groq: { calls: 100, tokens: 0 } }, today: { calls: 100 } });
     assert.equal(status.unlimited, false);
-    assert.equal(status.cap, 14400);
+    assert.equal(status.cap, 1000);
     assert.equal(status.used, 100);
-    assert.equal(status.remaining, 14300);
+    assert.equal(status.remaining, 900);
+  });
+
+  it('groq quota reflects only its own usage, not the cross-provider today aggregate (regression)', function() {
+    // Reproduces the leak: another provider's calls must never inflate groq's gauge.
+    const stats = {
+      byProvider: { groq: { calls: 5, tokens: 500 }, mistral: { calls: 50, tokens: 5000 } },
+      today: { calls: 55, tokensIn: 5500, tokensOut: 0 }, // all-provider total
+    };
+    const status = quota.getQuotaStatus('groq', stats);
+    assert.equal(status.used, 5, 'groq usage must come from byProvider.groq, not the 55-call cross-provider total');
+  });
+
+  it('groq surfaces the token cap once it is tighter than the request cap', function() {
+    // 37 calls at ~2,700 tokens/call blows the 100,000 TPD cap long before
+    // the 1,000 RPD request cap would ever bind — the gauge must track
+    // whichever cap actually 429s first, not always 'requests'.
+    const stats = { byProvider: { groq: { calls: 37, tokens: 99900 } } };
+    const status = quota.getQuotaStatus('groq', stats);
+    assert.equal(status.unit, 'tokens');
+    assert.equal(status.used, 99900);
+    assert.ok(status.remainingPercent < 1);
+  });
+
+  it('groq keeps the request cap when it is tighter (low call count, no token pressure)', function() {
+    const stats = { byProvider: { groq: { calls: 900, tokens: 1000 } } };
+    const status = quota.getQuotaStatus('groq', stats);
+    assert.equal(status.unit, 'requests');
+    assert.equal(status.used, 900);
   });
 
   it('nim is trial', function() {

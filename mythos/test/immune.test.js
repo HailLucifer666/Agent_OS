@@ -556,7 +556,7 @@ describe('immune/probes — (regression) null-guard on remainingPercent', functi
     assert.equal(isQuotaLow(zcode), false, 'null remainingPercent must never coerce to a false low-quota positive');
 
     var groq = quotas.find(function(q) { return q.provider === 'groq'; });
-    var lowStats = { byProvider: {}, today: { calls: 14000, tokensIn: 0, tokensOut: 0 } }; // ~97% of 14400 used
+    var lowStats = { byProvider: { groq: { calls: 970, tokens: 0 } }, today: { calls: 970, tokensIn: 0, tokensOut: 0 } }; // ~97% of 1000 req/day used
     var groqLow = quota.getQuotaStatus('groq', lowStats);
     assert.ok(groqLow.remainingPercent < 10, 'sanity: contrived stats should genuinely be low, got ' + groqLow.remainingPercent);
     assert.equal(isQuotaLow(groqLow), true, 'a real low-quota provider must still trigger the guard');
