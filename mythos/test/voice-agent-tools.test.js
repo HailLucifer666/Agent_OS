@@ -160,16 +160,21 @@ describe('voice-agent CATALOG (runtime)', () => {
     assert.equal(tool.danger, false);
   });
 
-  it('start_project is danger:false (tier 2 — re-tiered from T3)', () => {
+  // Re-tiered T2 -> T3 on 2026-07-29. The build tools now drive the Hermes CLI
+  // (an external coding agent that runs real commands; Forge sets
+  // HERMES_YOLO_MODE=1), so "sandboxed to vault/builds/" stopped being a true
+  // description of the blast radius — and T2 meant auto-allow under
+  // AUTONOMOUS_MAX_TIER, which is how a build launched itself unasked.
+  it('start_project is danger:true (tier 3 — drives the Hermes CLI)', () => {
     const tool = CATALOG.find(t => t.name === 'start_project');
     assert.ok(tool, 'start_project not in CATALOG');
-    assert.equal(tool.danger, false);
+    assert.equal(tool.danger, true);
   });
 
-  it('run_mission is danger:false (tier 2 — re-tiered from T3)', () => {
+  it('run_mission is danger:true (tier 3 — drives the Hermes CLI)', () => {
     const tool = CATALOG.find(t => t.name === 'run_mission');
     assert.ok(tool, 'run_mission not in CATALOG');
-    assert.equal(tool.danger, false);
+    assert.equal(tool.danger, true);
   });
 
   it('delete_goal is danger:true (tier 3)', () => {
@@ -369,12 +374,16 @@ describe('tiers.js consistency', () => {
     assert.equal(tierOf('reminder_list'), 0);
   });
 
-  it('start_project is tier 2 (re-tiered from T3 — confirmation-policy pass)', () => {
-    assert.equal(tierOf('start_project'), 2);
+  // T2 -> T3 (2026-07-29): see the danger:true cases above. Every build-
+  // dispatch tool now requires a real confirm turn; the voice-agent
+  // self-confirm shortcut that used to accept its own request was removed
+  // in the same change.
+  it('start_project is tier 3 (drives the Hermes CLI — no auto-allow)', () => {
+    assert.equal(tierOf('start_project'), 3);
   });
 
-  it('run_mission is tier 2 (re-tiered from T3 — confirmation-policy pass)', () => {
-    assert.equal(tierOf('run_mission'), 2);
+  it('run_mission is tier 3 (drives the Hermes CLI — no auto-allow)', () => {
+    assert.equal(tierOf('run_mission'), 3);
   });
 
   it('delete_goal is tier 3', () => {

@@ -11,10 +11,18 @@ it on their machine. Therefore:
   `%LOCALAPPDATA%`/`%USERPROFILE%`/`$env:TEMP` (PowerShell/batch),
   `os.homedir()`/`os.tmpdir()`/`process.env.*` (Node), `%~dp0`-relative
   paths (batch).
-- **External binaries are optional**: cua-driver (and anything similar) must
-  degrade gracefully when absent — spawn ENOENT → adapter stays OFFLINE →
-  fallback paths take over. Never make boot or a core feature depend on an
-  uninstalled binary.
+- **External binaries are optional** — with one deliberate exception. cua-driver
+  (and anything similar) must degrade gracefully when absent: spawn ENOENT →
+  adapter stays OFFLINE → fallback paths take over.
+  **Hermes-Agent is the exception**: since 2026-07-29 it is the only
+  build-content engine (build-runner, the engagement build stage, and Forge all
+  route through `src/core/effectors/build-engine.js`), and there is no
+  brain.think fallback by design — a build with no engine FAILS with an install
+  hint instead of shipping a plausible-but-wrong artifact. Boot still succeeds
+  without it; only builds stop. It installs project-local into
+  `<repo>/Hermes Agent/` (gitignored) via
+  `node mythos/scripts/setup-hermes.js --install`, which clones from git and
+  runs that clone's own installer — never `curl | bash` / `iex (irm …)`.
 - **All secrets and provider keys live in `mythos/.env`** (gitignored), with
   every supported key documented in `mythos/.env.example`. No key, no
   hardcoded default — features degrade honestly instead.

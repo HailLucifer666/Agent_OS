@@ -339,7 +339,7 @@ function createEngagement({ bus, config, store, stateMachine, interview, specBui
   };
 }
 
-function createEngagementManager({ bus, config, memory, goals, leash, effectors, engagementStore, brain, checkpoints }) {
+function createEngagementManager({ bus, config, memory, goals, leash, effectors, engagementStore, brain, checkpoints, buildEngine }) {
   // Create sub-components. V6 (Phase 4): thread `brain` into interview +
   // specBuilder + planBuilder so they can use brain-driven methods with
   // template fallback when the brain is offline. The transition handler
@@ -377,6 +377,7 @@ function createEngagementManager({ bus, config, memory, goals, leash, effectors,
     leash: leash,
     effectors: effectors,         // Phase 3: thread the hub so action-stage dispatch works (was missing → NPE)
     brain: brain,
+    buildEngine: buildEngine,     // Hermes — the single build-content generator
     checkpoints: checkpoints,
     store: engagement,
     engagementStore: engagementStore,

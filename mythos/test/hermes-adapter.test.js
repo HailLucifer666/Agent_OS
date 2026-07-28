@@ -130,6 +130,52 @@ describe('hermes-agent adapter — env scrub + requireCli', () => {
 // Uses a fake `hermes` binary (test/fixtures/fake-hermes-cli.bat) so the
 // test doesn't depend on a real install: --version replies instantly (probe
 // finds CLI reachable), -z hangs so the timeout is guaranteed to fire.
+// Transport shape. Before 2026-07-29 the adapter passed shell:true on win32
+// unconditionally, and Node concatenates args UNQUOTED when shell is set — so
+// hermes-runner's 24000-char build prompt was re-split on spaces, stripped of
+// its quotes, and pushed through cmd.exe's 8191-char command-line ceiling.
+// A build prompt literally could not reach Hermes intact on Windows.
+describe('hermes-agent adapter — spawn shape (prompt integrity)', () => {
+  const hermes = require('../adapters/hermes-agent');
+  const savedCli = process.env.HERMES_CLI;
+  const restore = () => { if (savedCli === undefined) delete process.env.HERMES_CLI; else process.env.HERMES_CLI = savedCli; };
+
+  it('a real executable spawns with shell:false and a verbatim argv array', () => {
+    process.env.HERMES_CLI = 'C:\\Program Files\\hermes\\hermes.exe';
+    try {
+      const shape = hermes.spawnShape(['-z', 'a prompt with spaces and "quotes"']);
+      assert.equal(shape.shell, false, 'shell:true would re-split the prompt on spaces');
+      assert.equal(shape.bin, 'C:\\Program Files\\hermes\\hermes.exe', 'no manual quoting — argv carries the space');
+      assert.deepEqual(shape.args, ['-z', 'a prompt with spaces and "quotes"']);
+    } finally { restore(); }
+  });
+
+  it('a 24000-char prompt stays ONE argv entry (hermes-runner maxPromptChars)', () => {
+    process.env.HERMES_CLI = '/usr/local/bin/hermes';
+    try {
+      const big = 'x'.repeat(24000);
+      const shape = hermes.spawnShape(['-z', big]);
+      assert.equal(shape.shell, false);
+      assert.equal(shape.args.length, 2);
+      assert.equal(shape.args[1].length, 24000);
+    } finally { restore(); }
+  });
+
+  it('a .bat/.cmd shim still gets shell:true — Node refuses to spawn those otherwise', () => {
+    process.env.HERMES_CLI = 'D:\\somewhere\\hermes.bat';
+    try {
+      const shape = hermes.spawnShape(['--version']);
+      assert.equal(shape.shell, true);
+      assert.equal(shape.bin, '"D:\\somewhere\\hermes.bat"');
+      assert.ok(hermes.needsShell('x.bat'));
+      assert.ok(hermes.needsShell('x.CMD'));
+      assert.ok(!hermes.needsShell('hermes'));
+      assert.ok(!hermes.needsShell('/usr/bin/hermes'));
+      assert.ok(!hermes.needsShell('hermes.exe'));
+    } finally { restore(); }
+  });
+});
+
 describe('hermes-agent adapter — CLI timeout tree-kills (not bare child.kill)', () => {
   const path = require('node:path');
   const HERMES_PATH = require.resolve('../adapters/hermes-agent');

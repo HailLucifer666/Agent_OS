@@ -32,7 +32,8 @@ function createEngagementExecutor(deps) {
   const dispatchAction = deps.dispatchAction;
   const leash = deps.leash;
   const effectors = deps.effectors;                 // hub — required for dispatchAction (Phase 3 fix; was missing → NPE on action-stage dispatch)
-  const brain = deps.brain;                       // optional — build/research stages degrade gracefully
+  const brain = deps.brain;                       // optional — research stages degrade gracefully
+  const buildEngine = deps.buildEngine;           // optional in tests; production wires it — the ONLY build-content generator (Hermes)
   const checkpoints = deps.checkpoints;           // optional — stage-approval gates
   const store = deps.store;                       // engagement module: { transition(id,event,payload), findById(id) }
   const engagementStore = deps.engagementStore;   // persistence: sync read/write/list
@@ -289,16 +290,25 @@ function createEngagementExecutor(deps) {
     return { ok: true, verified: v.ok, skipped: v.skipped, artifacts: [] };
   }
 
-  // Build stage: brain.think generates file content, written under the vault.
-  // Offline brain → fall back to a no-op "produced nothing" success (honest:
-  // we don't fake a file; verification will then fail naturally if a file was
-  // required). Keep this deliberately simple for v1 (no forge coupling).
+  // Build stage: generates file content, written under the vault. Content now
+  // comes from buildEngine (Hermes-Agent) — the same single engine build-runner
+  // uses — instead of this module's own brain.think call, which was a third,
+  // independent generator with no queue, verifier or review gate behind it.
+  // No fallback: an unavailable engine produces nothing and raises an anomaly
+  // carrying the real reason, rather than silently substituting brain output.
+  // Verification then fails naturally if the stage required a file.
   async function runBuildStage(record, stage) {
     var artifacts = [];
-    if (brain && vault && typeof vault.writeText === 'function') {
+    var generator = buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null;
+    if ((generator || brain) && vault && typeof vault.writeText === 'function') {
       var prompt = (stage.prompt || stage.name || 'build') +
         '\n\nProduce the file content for this build stage. Respond with the file content as plain text.';
-      var result = await think(prompt, null, 'build:' + stage.id, record.id);
+      var result = generator
+        ? await generator.generate({ prompt: prompt, source: 'engagement:' + record.id + ':build:' + stage.id })
+        : await think(prompt, null, 'build:' + stage.id, record.id);
+      if (result && result.offline && result.error) {
+        anomaly('engagement-build-engine-offline', { engagementId: record.id, stageId: stage.id, error: result.error });
+      }
       if (result && !result.offline && result.content) {
         var relPath = 'builds/engagements/' + record.id + '/' + (stage.id || 'stage') + '.txt';
         try {

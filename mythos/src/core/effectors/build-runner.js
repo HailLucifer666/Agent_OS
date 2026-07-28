@@ -21,9 +21,21 @@
 // empty-prompt refusal below; the success path still returns the raw job record.
 function fail(reason) { return { ok: false, result: { error: reason } }; }
 
-function createBuildRunner({ config, brain, bus, vault, verifier }) {
-  if (!brain || typeof brain.think !== 'function') {
-    throw new Error('createBuildRunner requires a brain with think()');
+// Content generation moved to build-engine.js (Hermes-Agent). `buildEngine` is
+// what production wires; when it is present brain.think is NEVER consulted for
+// build content — there is deliberately no fallback, because a plausible-but-
+// wrong artifact is worse than a failed job (see build-engine.js's header).
+//
+// `brain` remains accepted so the existing suite, which constructs this runner
+// with a fake brain to exercise the queue/verify/retry/review machinery, keeps
+// working without 11 test files being rewritten around an engine they aren't
+// testing. Production never takes that path: main.js always passes buildEngine,
+// and every job record is stamped with `engine` so a brain-generated artifact
+// is visible rather than silent.
+function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine }) {
+  var hasEngine = Boolean(buildEngine && typeof buildEngine.generate === 'function');
+  if (!hasEngine && (!brain || typeof brain.think !== 'function')) {
+    throw new Error('createBuildRunner requires a buildEngine with generate() (or a brain with think())');
   }
   if (!vault || typeof vault.writeJSON !== 'function' || typeof vault.readJSON !== 'function') {
     throw new Error('createBuildRunner requires a vault fs-store with readJSON/writeJSON');
@@ -135,16 +147,27 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
     job.stage = 'generating';
     notify(job);
 
-    try {
-      var result = await brain.think({
+    // One generator, resolved once. hasEngine → Hermes, exclusively.
+    function generate(text, sourceTag) {
+      if (hasEngine) {
+        return buildEngine.generate({ prompt: text, source: sourceTag, spec: job.spec });
+      }
+      return brain.think({
         lane: 'build',
-        messages: [{ role: 'user', content: prompt }],
-        source: 'build-runner:' + job.id,
+        messages: [{ role: 'user', content: text }],
+        source: sourceTag,
         persona: persona || undefined
       });
+    }
+
+    try {
+      var result = await generate(prompt, 'build-runner:' + job.id);
+      job.engine = (result && result.engine) || (hasEngine ? 'hermes' : 'brain');
 
       if (!result || result.offline) {
-        throw new Error('brain offline — chain exhausted for lane "build"');
+        // Carry the engine's real reason (usually the Hermes install hint) —
+        // "brain offline" would be a lie once the engine is Hermes.
+        throw new Error((result && result.error) || 'brain offline — chain exhausted for lane "build"');
       }
       if (result.aborted) {
         throw new Error('build aborted');
@@ -175,14 +198,11 @@ function createBuildRunner({ config, brain, bus, vault, verifier }) {
         }
         if (!verification.pass && !job._retried) {
           job._retried = true;
-          var retryResult = await brain.think({
-            lane: 'build',
-            messages: [{ role: 'user', content:
-              prompt + '\n\nYour previous output had these problems: ' +
-              verification.issues.join('; ') + '. Fix them and regenerate.'
-            }],
-            source: 'build-runner-retry:' + job.id
-          });
+          var retryResult = await generate(
+            prompt + '\n\nYour previous output had these problems: ' +
+            verification.issues.join('; ') + '. Fix them and regenerate.',
+            'build-runner-retry:' + job.id
+          );
           if (retryResult && !retryResult.offline) {
             raw = retryResult.content;
             // Re-verify the retry — only rule-based issues block shipment.

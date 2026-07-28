@@ -996,7 +996,13 @@ function Handle-UiClick($TargetPid, $elementPath) {
                 $invokePattern.Invoke()
                 $invoked = $true
             }
-        } catch { /* no invoke pattern */ }
+        } catch {
+            # No invoke pattern on this element — fall through to the coordinate
+            # click below. PowerShell has NO C-style comments: a `/* ... */` here
+            # parses as a command named '/*', so the catch itself threw
+            # "The term '/*' is not recognized..." and killed every ui_click on
+            # a non-invokable element (text fields included). Use '#' only.
+        }
 
         if (-not $invoked) {
             # Fall back to clicking the center of the element's bounding rect

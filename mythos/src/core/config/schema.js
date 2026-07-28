@@ -284,6 +284,14 @@ const SCHEMA = {
   // never allow sh/bash/cmd/powershell.
   RUN_COMMAND_ALLOWLIST:       { type: 'string', default: '' },
   RUN_COMMAND_TIMEOUT_MS:      { type: 'number', default: 60000, min: 1000 },
+
+  // install_from_github effector (src/core/effectors/from-installer.js). Reuses
+  // RUN_COMMAND_ALLOWLIST above as its gate (needs 'git' plus the target repo's
+  // package manager), so it is fail-closed by the same switch. Only the timeout
+  // is separate: a real `npm install`/`pip install .` routinely exceeds
+  // RUN_COMMAND_TIMEOUT_MS's 60s default, and raising that default would loosen
+  // every run_command call too.
+  INSTALL_TIMEOUT_MS:          { type: 'number', default: 600000, min: 1000 },
 };
 
 module.exports = { SCHEMA };

@@ -2,6 +2,18 @@
 mythos/node_modules/
 _devtools/
 
+# python virtualenv (project-local Python tooling, e.g. the agent-reach CLI).
+# Never committed — contributors create their own with `python -m venv .venv`.
+.venv/
+
+# Hermes-Agent (NousResearch, MIT) — the build engine, installed project-local
+# via mythos/scripts/setup-hermes.js. This is HERMES_HOME: it holds a full
+# third-party git checkout, its own CPython + uv + PortableGit, AND Hermes's own
+# config.yaml/auth.json with provider credentials. Never commit it — contributors
+# run the setup script to pull their own copy from git.
+# Leading slash pins this to the repo root (see the /design/ note above for why).
+/Hermes Agent/
+
 # local data — real user vault content, never publish
 mythos/vault/
 

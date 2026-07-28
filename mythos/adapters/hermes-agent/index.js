@@ -37,13 +37,36 @@ function apiKey() { return process.env.HERMES_API_KEY || ''; }
 function cliBin() { return process.env.HERMES_CLI || 'hermes'; }
 function taskTimeoutMs() { return Number(process.env.HERMES_TASK_TIMEOUT_MS) || 180000; }
 
-// With shell:true on win32, spawn() concatenates command+args into a single
-// cmd.exe command line and does NOT quote them — an unquoted path containing
-// a space (a HERMES_CLI pointing into "Program Files", a per-user profile
-// with a space, or a venv install path) silently splits into two tokens and
-// cmd.exe reports "not recognized". Only the command itself needs quoting
-// here (args stay a normal array — node keeps those as real argv entries).
+// Transport selection. shell:true was previously used unconditionally on win32
+// to survive a HERMES_CLI path containing a space — but that cure was worse
+// than the disease: with shell enabled, spawn() concatenates command AND args
+// into one cmd.exe command line WITHOUT quoting them, so
+//   1. a 24000-char build prompt (hermes-runner.js maxPromptChars) blows past
+//      cmd.exe's 8191-char command-line limit, and
+//   2. the prompt re-splits on spaces into dozens of argv entries, with its
+//      quotes stripped — Hermes receives a shredded fragment, not the prompt.
+// shell:false passes argv through verbatim and handles spaces in the command
+// path correctly on its own, so it is now the default everywhere.
+//
+// The one case that still needs a shell is a .bat/.cmd target: Node refuses to
+// spawn those without shell:true (CVE-2024-27980). That path is kept working
+// but warned about loudly, because it reintroduces both problems above — a
+// .bat shim (e.g. one forwarding into WSL) cannot carry a real build prompt.
+function needsShell(bin) { return /\.(bat|cmd)$/i.test(String(bin || '').trim()); }
 function quoteForWindowsShell(s) { return '"' + String(s).replace(/"/g, '""') + '"'; }
+
+// Resolve {bin, args, shell} for a spawn. Callers never build these by hand.
+function spawnShape(args) {
+  var bin = cliBin();
+  if (needsShell(bin)) {
+    logger.warn('hermes-agent.bat-shim', {
+      bin: bin,
+      hint: 'HERMES_CLI points at a .bat/.cmd, which must run through cmd.exe — arguments are concatenated unquoted and truncated at 8191 chars, so long build prompts WILL be corrupted. Point HERMES_CLI at the real hermes executable instead.',
+    });
+    return { bin: quoteForWindowsShell(bin), args: args, shell: true };
+  }
+  return { bin: bin, args: args, shell: false };
+}
 
 // System env vars a Hermes child needs just to run (PATH resolution, temp
 // dirs, shell). Deliberately NOT process.env wholesale — a Hermes child must
@@ -121,8 +144,8 @@ async function probe(force) {
   var cliOk = await new Promise(function(resolve) {
     var child;
     try {
-      var bin = process.platform === 'win32' ? quoteForWindowsShell(cliBin()) : cliBin();
-      child = spawn(bin, ['--version'], { windowsHide: true, shell: process.platform === 'win32', env: scrubbedEnv() });
+      var shape = spawnShape(['--version']);
+      child = spawn(shape.bin, shape.args, { windowsHide: true, shell: shape.shell, env: scrubbedEnv() });
     } catch (_) { return resolve(false); }
     var timer = setTimeout(function() { treeKill(child, child.pid); resolve(false); }, 8000);
     child.on('error', function() { clearTimeout(timer); resolve(false); });
@@ -166,10 +189,10 @@ function runViaCli(prompt, opts) {
   return new Promise(function(resolve, reject) {
     var child;
     try {
-      var bin = process.platform === 'win32' ? quoteForWindowsShell(cliBin()) : cliBin();
-      child = spawn(bin, ['-z', prompt], {
+      var shape = spawnShape(['-z', prompt]);
+      child = spawn(shape.bin, shape.args, {
         windowsHide: true,
-        shell: process.platform === 'win32',
+        shell: shape.shell,
         cwd: opts.cwd,
         env: env,
       });
@@ -231,4 +254,8 @@ function getStatus() {
   return { state: state, mode: mode, hint: hint };
 }
 
-module.exports = { probe: probe, runTask: runTask, getStatus: getStatus, scrubbedEnv: scrubbedEnv };
+module.exports = {
+  probe: probe, runTask: runTask, getStatus: getStatus, scrubbedEnv: scrubbedEnv,
+  // Exported for unit tests:
+  needsShell: needsShell, spawnShape: spawnShape,
+};

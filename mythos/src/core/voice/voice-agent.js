@@ -409,14 +409,22 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
 
   const KNOWN = new Set(catalog.map((t) => t.name));
 
-  // Tools whose human gate is the PROJECT INTAKE RULE conversation itself
-  // (clarify -> restate -> explicit go-ahead in a later turn). NOVA's
-  // tools-project.js documents the rationale: the conversational go-ahead IS
-  // the human-gate approval, so a confirm modal here would be a redundant
-  // second confirmation. The confirm is still created AND accepted through
-  // the leash registry so the audit trail records a proper two-step, scoped
-  // to this connection — never a silent bypass.
-  const INTAKE_GATED = new Set(['start_project', 'run_mission', 'build_project']);
+  // REMOVED 2026-07-29 — the intake-gated self-confirm.
+  //
+  // start_project/run_mission/build_project used to skip the confirm modal on
+  // the theory that "the conversational go-ahead IS the human-gate approval",
+  // and the code expressed that by calling leash.confirm.create() and then
+  // leash.confirm.accept() on the very next line. That produced a tidy
+  // two-step audit trail of an approval nobody gave: nothing checked that the
+  // PROJECT INTAKE RULE had actually been followed, or that a go-ahead existed
+  // in any earlier turn — it trusted the model's own tool call to prove the
+  // user had consented to it. On 2026-07-29 a build launched itself
+  // mid-conversation while the user was reporting an unrelated bug.
+  //
+  // Every requireConfirm tool now takes the same path: emit confirm-request,
+  // return confirmPending, and wait for a real approval turn. The audit trail
+  // is unchanged in shape; the difference is that the accept now comes from a
+  // human.
 
   async function executeAction(action, { connectionId } = {}) {
     // H4: Guard against empty/invalid args before dispatch.
@@ -461,19 +469,13 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     // so leash could never tell which connection was asking.
     const verdict = leash.check(decision, { connectionId });
 
-    if (verdict.requireConfirm && !INTAKE_GATED.has(decision.tool)) {
+    if (verdict.requireConfirm) {
       const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${humanizeArgs(decision.args)})` : ''}`;
       const confirmId = leash.confirm.create(summary, { decision, goalId: null, tier: verdict.tier }, connectionId || 'system');
       bus.emit('confirm-request', { ...decision, confirmId, summary, tier: verdict.tier });
       return { tool: decision.tool, args: decision.args, ok: false, confirmPending: true, confirmId, summary };
     }
-    if (verdict.requireConfirm) {
-      // Intake-gated: consume a real confirm cycle on the spot (audited),
-      // attributed to the voice go-ahead, then fall through to dispatch.
-      const summary = `Voice intake go-ahead: ${decision.tool}`;
-      const confirmId = leash.confirm.create(summary, { decision, goalId: null, tier: verdict.tier }, connectionId || 'system');
-      leash.confirm.accept(confirmId, connectionId || 'system');
-    } else if (!verdict.allow) {
+    if (!verdict.allow) {
       return { tool: decision.tool, args: decision.args, ok: false, summary: `Denied: ${verdict.reason}.` };
     }
 

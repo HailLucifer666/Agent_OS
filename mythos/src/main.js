@@ -37,6 +37,7 @@ const { createMetricSensor } = require('./core/sensors/metric');
 const { createEffectorHub } = require('./core/effectors/hub');
 const { dispatchAction } = require('./core/effectors/dispatch-action');
 const { createBuildRunner } = require('./core/effectors/build-runner');
+const { createBuildEngine } = require('./core/effectors/build-engine');
 const { createPipelineEffector } = require('./core/effectors/pipeline');
 const { createRiskClassifier } = require('./core/effectors/risk-classifier');
 const { createEvidenceValidator } = require('./core/effectors/evidence-validator');
@@ -56,6 +57,7 @@ const capabilities = require('./core/identity/capabilities');
 const { createExplainer } = require('./core/immune/explainer');
 const { registerFromHermes } = require('./core/effectors/from-hermes');
 const { registerFromRunner } = require('./core/effectors/from-runner');
+const { registerFromInstaller } = require('./core/effectors/from-installer');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
@@ -132,6 +134,7 @@ async function main() {
   let immune = null; // { probes, diagnostician, healer, watchdog, announcer, monitor }
   let metricSensor = null;
   let buildRunner = null;
+  let buildEngine = null;
   let agentActionsEffector = null;
   let dashboardWiring = null;
   let fileSensor = null;
@@ -269,7 +272,14 @@ async function main() {
       var kanbanEffector = createKanbanEffector({ fs: memory.fs });
       // Integration 3: build verifier (needs brain)
       var verifier = require('./core/design/verify').createVerifier({ brain: brain });
-      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier });
+      // Single build-content engine (Hermes-Agent). Passed to BOTH the build
+      // runner and the engagement executor so the three formerly-independent
+      // generators collapse to one. With buildEngine present, build-runner
+      // never calls brain.think for content — there is no fallback by design
+      // (see build-engine.js). brain is still passed for the verifier/review
+      // machinery that legitimately uses it.
+      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus });
+      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine });
 
       // Integration 2 + 4: agent actions with design system + persona dispatch
       agentActionsEffector = createAgentActions({
@@ -356,6 +366,10 @@ async function main() {
       // Phase 3 (V7): allow-listed shell runner for engagement/Forge verify-stages.
       // Fail-closed when RUN_COMMAND_ALLOWLIST is empty — honest-inert.
       registerFromRunner(hub, { vault: memory.fs, config: config });
+      // install_from_github — clones a GitHub repo into vault/builds/installs and
+      // runs its package manager, reporting every stage's real subprocess output.
+      // Shares run_command's RUN_COMMAND_ALLOWLIST gate, so it is fail-closed too.
+      registerFromInstaller(hub, { vault: memory.fs, config: config });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
       // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.
@@ -399,7 +413,7 @@ async function main() {
       // interrupted/AWAITING_STAGE_APPROVAL engagements from persisted state.
       engagementManager = createEngagementManager({
         bus, config, memory, goals, leash, effectors, engagementStore,
-        brain: brain, checkpoints: checkpoints
+        brain: brain, checkpoints: checkpoints, buildEngine: buildEngine
       });
       try {
         var execInit = engagementManager && engagementManager.executor && engagementManager.executor.init();

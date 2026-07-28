@@ -111,3 +111,26 @@ test('ui_click with missing args returns ok:false (danger:true click failures mu
   const resp = await sendOneCommand({ cmd: 'ui_click', id: 7 });
   assert.equal(resp.ok, false, `expected ok:false, got: ${JSON.stringify(resp)}`);
 });
+
+// Regression guard: Handle-UiClick's inner catch was written `catch { /* no
+// invoke pattern */ }`. PowerShell has no C-style comments, so `/*` parses as a
+// COMMAND NAME and the catch itself threw
+//   "The term '/*' is not recognized as the name of a cmdlet, ..."
+// which the outer catch re-shipped as "Click failed: ...". It fired on every
+// element without a UIA InvokePattern (text fields included) and destroyed the
+// bounding-rect coordinate fallback that block exists to reach. The script still
+// PARSES cleanly with the defect present, so a parser check cannot catch this —
+// only a source assertion can. `#`-comment text is exempt so the defect can be
+// described in comments (as it is at the fix site).
+test('ps-automation.ps1 contains no C-style comment tokens outside # comments', () => {
+  const src = require('fs').readFileSync(SCRIPT_PATH, 'utf8');
+  const offenders = [];
+  src.split(/\r?\n/).forEach((line, i) => {
+    const code = line.split('#')[0];
+    if (code.includes('/*') || code.includes('*/')) {
+      offenders.push(`${i + 1}: ${line.trim()}`);
+    }
+  });
+  assert.deepEqual(offenders, [],
+    'C-style comment token in PowerShell source — `/*` parses as a command name and throws at runtime:\n' + offenders.join('\n'));
+});

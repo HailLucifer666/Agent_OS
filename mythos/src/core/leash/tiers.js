@@ -92,13 +92,22 @@ const TIER_TABLE = {
   // deliberately untouched.
   'spotify_play':          2,
   'spotify_search':        2,
-  'build_project':         2,  // P22 Forge — multi-file build, sandboxed to vault/builds/
-  'revise_project':        2,  // P22 Forge — targeted regen, sandboxed to vault/builds/
-  'pipeline_execute':      2,
-  'kanban_assemble':       2,
-  'kanban_build_card':     2,
-  'start_project':         2,
-  'run_mission':           2,
+  // RE-TIERED BACK TO T3 (2026-07-29). The T3->T2 reasoning above no longer
+  // holds for the build tools: as of the Hermes engine change every one of
+  // these drives an external coding agent that runs real commands (Forge sets
+  // HERMES_YOLO_MODE=1, which bypasses Hermes's own dangerous-command
+  // approval), so "sandboxed to vault/builds/" is no longer a true description
+  // of the blast radius. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
+  // which is how a build launched itself unasked mid-conversation on
+  // 2026-07-29 while the user was reporting an unrelated bug. Spotify and the
+  // docs-gen tools keep T2; they genuinely are local and bounded.
+  'build_project':         3,  // P22 Forge — multi-file build; drives the Hermes CLI
+  'revise_project':        3,  // P22 Forge — targeted regen; drives the Hermes CLI
+  'pipeline_execute':      3,
+  'kanban_assemble':       3,
+  'kanban_build_card':     3,
+  'start_project':         3,
+  'run_mission':           3,
   // Phase 2 docs-gen — sandboxed vault writes under builds/docs/, no destructive risk.
   'generate_spreadsheet':  2,  // .xlsx via exceljs
   'generate_deck':         2,  // .pptx via pptxgenjs
@@ -128,6 +137,9 @@ const TIER_TABLE = {
   'browser_fill_form':     3,  // Phase 4 — autonomous multi-field typing
   'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
   'run_command':           3,  // Phase 3 (V7) — allow-listed shell command; confirm-once-per-goal. v1 is allowlist+timeout, NOT a full sandbox
+  'install_from_github':   3,  // clones + installs a GitHub repo; shares run_command's allowlist gate. Runs the
+                               // repo's own build hooks (npm postinstall, setup.py), so it is at least as
+                               // dangerous as run_command — never map it below T3
   'delete_artifact':       3,  // permanently deletes an artifact file + card (danger:true) — same
                                // unmapped-fail-safe bug class as open_artifact/BUG-008, mapped explicitly
                                // here so it resolves to T3 from the table, not tierOf()'s fail-safe
