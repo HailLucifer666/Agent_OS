@@ -103,13 +103,18 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
   }
 
   function notify(job) {
+    // REMEDIATION P2-12: build-jobs.json had no updatedAt at all — only
+    // createdAt/finishedAt (finishedAt stays null for the entire in-progress
+    // lifetime), so there was no way to tell a job that's genuinely still
+    // running from one that silently stopped updating.
+    job.updatedAt = Date.now();
     persist();
     listeners.forEach(function(fn) {
       try { fn(job); } catch (_) { /* a broken listener must never kill the pump */ }
     });
   }
 
-  function enqueue({ kind, prompt, run, goalId, persona }) {
+  function enqueue({ kind, prompt, run, goalId, persona, onFailed }) {
     // BUG-025 defensive fallback: a build-kind job with no real prompt means the
     // upstream card lost its spec (field-name mismatch, capture bug, etc.) — refuse
     // to enqueue rather than silently sending "undefined" into brain.think().
@@ -128,7 +133,14 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
       finishedAt: null
     };
     jobs.set(job.id, job);
-    queue.push({ job: job, prompt: prompt, run: run, persona: persona });
+    // REMEDIATION P0-2: onFailed is an optional caller hook (agent-actions.js
+    // passes one for pipeline/kanban cards) invoked from pump()'s catch block
+    // below when the job dies WITHOUT ever reaching `run()` — e.g. the build
+    // engine itself is offline. Without it, run()'s own card bookkeeping
+    // (BUG-016's reviewed/not-reviewed branches) never fires, and the card is
+    // left at execute/progress:25 with no trace of failure — indistinguishable
+    // from "still building" to pipeline_status forever.
+    queue.push({ job: job, prompt: prompt, run: run, persona: persona, onFailed: onFailed });
     notify(job);
     // Defer pump() so enqueue() always returns a job in 'queued' state — see NOVA
     // orchestrator.js's identical queueMicrotask comment; same race exists here.
@@ -142,7 +154,7 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
     if (!next) return;
     runningCount += 1;
 
-    var job = next.job, prompt = next.prompt, run = next.run, persona = next.persona;
+    var job = next.job, prompt = next.prompt, run = next.run, persona = next.persona, onFailed = next.onFailed;
     job.status = 'running';
     job.stage = 'generating';
     notify(job);
@@ -249,6 +261,12 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
       job.status = 'failed';
       job.stage = 'failed';
       job.error = err && err.message ? err.message : String(err);
+      // REMEDIATION P0-2: give the caller (agent-actions.js) a chance to mark
+      // its card as failed. Best-effort — a broken hook must never mask the
+      // real job failure being recorded above.
+      if (typeof onFailed === 'function') {
+        try { onFailed(err, job); } catch (_) { /* best-effort */ }
+      }
     }
     job.finishedAt = Date.now();
     notify(job);

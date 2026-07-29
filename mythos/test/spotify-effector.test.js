@@ -129,6 +129,7 @@ describe('Spotify tool parameter validation', () => {
         // not-found/retry path at all.
         if (tool === 'list_windows') return { ok: true, result: { windows: [{ pid: 1, processName: 'Spotify.exe', title: 'Spotify' }] } };
         if (tool === 'media_key') return { ok: true, result: { sent: true } };
+        if (tool === 'set_volume') return { ok: true, result: { level: args && args.level } };
         if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
         if (tool === 'ui_click') return { ok: true, result: { clicked: true } };
         if (tool === 'ui_type') return { ok: true, result: { typed: true } };
@@ -157,6 +158,29 @@ describe('Spotify tool parameter validation', () => {
   it('spotify_volume rejects invalid direction', async () => {
     const result = await hub.invoke('spotify_volume', { direction: 'sideways' }, {});
     assert.equal(result.ok, false);
+  });
+
+  // REMEDIATION P1-8: "reduce the volume to 20%" is now expressible via level.
+  // Ordered before the out-of-range test below: 3 consecutive failures on the
+  // same tool trips the effector hub's circuit breaker, which would otherwise
+  // short-circuit ("circuit-open") these still-valid calls.
+  it('spotify_volume with level routes to set_volume with an exact target', async () => {
+    const result = await hub.invoke('spotify_volume', { level: 20 }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.level, 20);
+  });
+
+  it('spotify_volume prefers level over direction when both are given', async () => {
+    const result = await hub.invoke('spotify_volume', { level: 35, direction: 'up' }, {});
+    assert.equal(result.ok, true);
+    assert.equal(result.result.level, 35);
+  });
+
+  it('spotify_volume rejects an out-of-range level', async () => {
+    for (const bad of [-1, 101, 150]) {
+      const result = await hub.invoke('spotify_volume', { level: bad }, {});
+      assert.equal(result.ok, false);
+    }
   });
 
   it('spotify_play requires query or trackId', async () => {

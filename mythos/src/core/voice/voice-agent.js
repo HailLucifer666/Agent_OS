@@ -86,7 +86,7 @@ const CATALOG_RAW = [
   { name: 'spotify_play_pause', description: 'Toggle play/pause on Spotify.', params: {}, danger: false },
   { name: 'spotify_next', description: 'Skip to next track on Spotify.', params: {}, danger: false },
   { name: 'spotify_previous', description: 'Go to previous track on Spotify.', params: {}, danger: false },
-  { name: 'spotify_volume', description: 'Adjust Spotify volume.', params: { direction: 'string - up, down, or mute' }, danger: false },
+  { name: 'spotify_volume', description: 'Adjust or set system volume. Prefer level for an exact target ("set volume to 20%"); direction for relative nudges (up/down/mute).', params: { level: 'number (optional) - exact target 0-100', direction: 'string (optional) - up, down, or mute' }, danger: false },
   { name: 'spotify_status', description: 'Check whether Spotify is running AND whether something is actually playing right now (playing:true/false, derived from the window title). Use this before ever claiming a song "is playing."', params: {}, danger: false },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Use for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false },
   { name: 'media_status', description: 'Get currently playing media info (title, artist, album, art) from Windows SMTC.', params: {}, danger: false },
@@ -131,6 +131,9 @@ function buildCatalogFromHub(hub) {
       description: (override && override.description) || meta.description,
       params: meta.params || {},
       danger: tierOf(meta.name) >= 3,
+      // REMEDIATION P3-8: carry needs_result through so the loop below can
+      // enforce it for ANY tool that declares it, not just a hardcoded pair.
+      needs_result: !!((override && override.needs_result) || meta.needs_result),
     });
     seen.add(meta.name);
   });
@@ -377,6 +380,10 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // shows up with its real params, with zero manual duplication. Without a hub
   // (existing hub-less callers/tests), fall back to the legacy module-level CATALOG.
   const catalog = hub ? buildCatalogFromHub(hub) : CATALOG;
+  // REMEDIATION P3-8: precomputed once per agent instance (catalog is static
+  // for the lifetime of createVoiceAgent) — the set of tool names whose
+  // catalog entry declares needs_result:true.
+  const needsResultToolNames = new Set(catalog.filter(function(t) { return t.needs_result; }).map(function(t) { return t.name; }));
 
   async function callModel(prompt, { signal } = {}) {
     const result = await brain.think({
@@ -426,7 +433,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // is unchanged in shape; the difference is that the accept now comes from a
   // human.
 
-  async function executeAction(action, { connectionId } = {}) {
+  async function executeAction(action, { connectionId, traceId } = {}) {
     // H4: Guard against empty/invalid args before dispatch.
     if (!action || !action.tool) return { tool: '?', args: {}, ok: false, summary: 'no tool specified' };
     if (action.args && typeof action.args === 'object') {
@@ -479,7 +486,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       return { tool: decision.tool, args: decision.args, ok: false, summary: `Denied: ${verdict.reason}.` };
     }
 
-    const outcome = await dispatch(decision, { tier: verdict.tier });
+    const outcome = await dispatch(decision, { tier: verdict.tier, traceId: traceId });
     const ok = Boolean(outcome && outcome.ok);
     const raw = outcome && outcome.result;
     return {
@@ -525,7 +532,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         if (signal && signal.aborted) {
           return { say: finalSay, actions: executedActions, aborted: true };
         }
-        const result = await executeAction(action, { connectionId: ctx.connectionId });
+        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId });
         executedActions.push(result);
         // B2: Track failures across all iterations.
         if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);
@@ -538,12 +545,21 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
 
       if (confirmPending) break;
 
-      // Force needs_result for web tools: if the model called web_search or
-      // web_fetch but set needs_result:false, force it to true so the search
-      // results are fed back into the model. Without this, the model searches,
-      // gets results, never reads them, and hallucinates from training data.
-      var webActionsCalled = parsed.actions.some(function(a) { return a.tool === 'web_search' || a.tool === 'web_fetch'; });
-      if (webActionsCalled && !parsed.needs_result) {
+      // REMEDIATION P3-8: force needs_result for ANY tool whose catalog entry
+      // declares needs_result:true (status/check/list/read-class tools —
+      // web_search/web_fetch, read_status, job_status, pipeline_status,
+      // list_goals, spotify_status, media_status, screen_look, gmail_unread,
+      // etc.) if the model called one but set needs_result:false. Previously
+      // this was hardcoded to web_search/web_fetch only — every other
+      // read-class tool's own needs_result:true declaration was dead
+      // metadata (adapter.js/buildCatalogFromHub dropped the field before it
+      // ever reached here). Without this, the model calls a status tool, gets
+      // the result, never reads it, and answers from training data / a
+      // pre-tool-call guess instead — exactly the operator's first and
+      // most-repeated complaint ("you said checking now... but you don't
+      // actually report back").
+      var forceNeedsResult = parsed.actions.some(function(a) { return needsResultToolNames.has(a.tool); });
+      if (forceNeedsResult && !parsed.needs_result) {
         parsed.needs_result = true;
       }
 

@@ -6,6 +6,7 @@
 
 const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
+const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +18,10 @@ function fail(reason) { return { ok: false, result: reason }; }
 // Set by registerFromBrowser() from ctx.config — used by requireOnline()'s lazy
 // auto-connect fallback to find BROWSER_CDP_URL when the env var isn't set.
 let config = null;
+// REMEDIATION P1-7: set by registerFromBrowser() from ctx.fs — the vault
+// fs-store, used to existence-check a /vault/... path before browser_navigate
+// forwards it anywhere (same fs.exists() abstraction open_artifact uses).
+let vaultFs = null;
 
 // BUG-011 fix 1: lazy auto-connect. Previously this was synchronous and only ever
 // reported OFFLINE — nothing ever called browserAgent.ensureOnline(), so browser
@@ -52,7 +57,19 @@ async function requireOnline() {
 
 async function browser_navigate({ url, newTab }) {
   if (!url) return fail('URL is required.');
-  try { new URL(url); } catch { return fail(`Invalid URL: "${url}"`); }
+  // REMEDIATION P1-7: a /vault/... path (or a mistaken file:///vault/... URL)
+  // is not a real filesystem path on any machine — resolve it through the
+  // same vault-url.js mapping open_artifact uses instead of forwarding it
+  // verbatim into a file:// URL that page.goto then fails to load.
+  let target = url;
+  const relPath = vaultRelativePath(url);
+  if (relPath !== null) {
+    if (!vaultFs || typeof vaultFs.exists !== 'function' || !vaultFs.exists(relPath)) {
+      return fail(`Artifact does not exist: ${url}. Call pipeline_status or job_status to get a real artifact path before navigating to one.`);
+    }
+    target = vaultUrl(relPath, config);
+  }
+  try { new URL(target); } catch { return fail(`Invalid URL: "${target}"`); }
   const guard = await requireOnline();
   if (guard) return guard;
 
@@ -63,7 +80,7 @@ async function browser_navigate({ url, newTab }) {
   // does both, so a stray blank tab can't be left behind.
   const runner = newTab ? browserAgent.withNewPage : browserAgent.withPage;
   return runner(async (page) => {
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.goto(target, { waitUntil: 'domcontentloaded' });
     const title = await page.title();
     return ok({ url: page.url(), title, newTab: !!newTab });
   }).catch(err => fail(err.message));
@@ -403,6 +420,7 @@ const TOOLS = [
 
 function registerFromBrowser(hub, ctx) {
   config = (ctx && ctx.config) || null;
+  vaultFs = (ctx && ctx.fs) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }

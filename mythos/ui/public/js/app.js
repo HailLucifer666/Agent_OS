@@ -354,10 +354,19 @@ subscribe(['navigate'], (msg) => {
   if (msg.route) overlays.openPanel(msg.route);
 });
 
-// Close-panel — emitted by dispatchAction when a close_panel effector call succeeds.
+// Close-panel — server-initiated request from the close_panel effector
+// (REMEDIATION P1-5: requestClosePanel() in server/index.js, mirroring
+// camera_look's cameraFrameProvider round-trip). Closes BOTH overlay panels
+// AND floating widgets (previously only overlays — close_panel was
+// structurally unable to reach a widget open_web spawned) and acks back the
+// real counts so close_panel's return value is honest instead of a
+// hardcoded closed:true.
 subscribe(['close-panel'], (msg) => {
-  if (msg.all) overlays.closeAll();
-  else overlays.closeTop();
+  const overlaysClosed = msg.all ? overlays.closeAll() : overlays.closeTop();
+  const widgetsClosed = widgetApi.closeSpawnedWidgets(Boolean(msg.all));
+  if (msg.reqId) {
+    sendMessage({ type: 'close-panel-ack', reqId: msg.reqId, overlaysClosed, widgetsClosed });
+  }
 });
 
 // Widget-command — voice-driven HUD widget hide/show (manage_widget effector).

@@ -150,6 +150,22 @@ async function media_key({ key }) {
   return delegate({ cmd: 'media_key', key });
 }
 
+// REMEDIATION P1-8: "set the volume to 20%" was not expressible — media_key's
+// volume_up/down/mute are single fixed steps with no target level and no
+// read-back. get_volume/set_volume drive Windows' actual master-volume COM
+// API (IAudioEndpointVolume, see ps-automation.ps1's Get-AudioEndpointVolumeType)
+// so a level request converges exactly instead of spamming direction keys.
+async function get_volume() {
+  return delegate({ cmd: 'get_volume' });
+}
+
+async function set_volume({ level }) {
+  if (level === undefined || level === null || level === '') return fail('level (0-100) is required.');
+  const lvl = Number(level);
+  if (!Number.isFinite(lvl) || lvl < 0 || lvl > 100) return fail(`level must be a number between 0 and 100 (got ${level}).`);
+  return delegate({ cmd: 'set_volume', level: Math.round(lvl) });
+}
+
 async function screen_look({ query }) {
   var shot = await delegate({ cmd: 'screen_look' });
   if (!shot.ok) return shot;
@@ -348,7 +364,9 @@ const TOOLS = [
   { name: 'list_windows', description: 'List all open windows with their PIDs, titles, process names, and visibility status.', params: {}, danger: false, fn: list_windows, needs_result: true },
   { name: 'focus_window', description: 'Bring a window to the foreground and restore it if minimized.', params: { pid: 'number - process ID of the window' }, danger: false, fn: focus_window },
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },
-  { name: 'media_key', description: 'Send a media key press (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute).', params: { key: 'string - media key name' }, danger: false, fn: media_key },
+  { name: 'media_key', description: 'Send a media key press (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute). For an exact target level ("set volume to 20%"), use set_volume instead — this only steps once per call.', params: { key: 'string - media key name' }, danger: false, fn: media_key },
+  { name: 'get_volume', description: 'Read the current system master volume (0-100) and mute state. Use before claiming a volume change worked.', params: {}, danger: false, fn: get_volume, needs_result: true },
+  { name: 'set_volume', description: 'Set the system master volume to an exact level. Use for "set/reduce/turn the volume to N%" — converges exactly instead of media_key\'s fixed up/down steps.', params: { level: 'number - target volume 0-100' }, danger: false, fn: set_volume },
   { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
@@ -384,7 +402,7 @@ module.exports = {
   registerFromPc,
   TOOLS,
   KNOWN_DESKTOP_APPS,
-  launch_app, list_windows, focus_window, close_window, media_key,
+  launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
   screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
   ambient_awareness, setScreenSensorHandle, show_desktop,
   move_window, snap_window, scroll_at, right_click_at, drag,

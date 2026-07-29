@@ -258,6 +258,23 @@ export function mountWidgets(root, ctx) {
     spawnedCleanups.push(teardown);
   }
 
+  // REMEDIATION P1-5: close_panel was structurally unable to reach floating
+  // widgets (search/weather/flights/image cards spawned by open_web) — it
+  // only ever touched overlay panels. all:true tears down every spawned
+  // widget; all:false (the default "close the top one") closes the
+  // most-recently-spawned card, mirroring overlay-manager's closeTop().
+  // Returns the real count closed so close_panel can report it honestly.
+  function closeSpawnedWidgets(all) {
+    if (!spawnedCleanups.length) return 0;
+    if (all) {
+      const count = spawnedCleanups.length;
+      spawnedCleanups.slice().forEach((fn) => fn());
+      return count;
+    }
+    spawnedCleanups[spawnedCleanups.length - 1]();
+    return 1;
+  }
+
   return {
     cleanup: () => {
       narrowQuery.removeEventListener('change', onNarrowChange);
@@ -266,5 +283,6 @@ export function mountWidgets(root, ctx) {
     },
     spawnWebWidget,
     applyWidgetCommand,
+    closeSpawnedWidgets,
   };
 }

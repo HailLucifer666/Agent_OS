@@ -299,6 +299,10 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       goalId: working.activeGoalId,
       tier: leashResult.tier || 0,
       channel: 'cortex',
+      // REMEDIATION P2-12: correlates this dispatch back to the tick that
+      // produced it — the cortex-side equivalent of voice's WS reqId / a
+      // confirm's confirmId.
+      traceId: 'tick-' + working.tick,
       spentTokens: working.spendThisTick,
       signal: AbortSignal.timeout(ACTION_TIMEOUT_MS),
     });

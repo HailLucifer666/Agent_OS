@@ -100,6 +100,67 @@ function createServer(deps) {
     });
   }
 
+  // REMEDIATION P1-5: server-initiated close_panel ack, mirroring
+  // requestCameraFrame's request/response shape exactly. close_panel used to
+  // broadcast 'close-panel' fire-and-forget and immediately report
+  // {closed:true} regardless of what (if anything) actually closed. Now the
+  // connected dashboard(s) close what they can (overlay panels AND floating
+  // widgets) and report real counts back; a client with nothing connected
+  // (or that never answers within the timeout) resolves null, and close_panel
+  // surfaces that honestly instead of fabricating success.
+  const pendingClosePanel = new Map(); // reqId -> { resolve, timer }
+  function requestClosePanel(all) {
+    return new Promise(function(resolve) {
+      const id = 'closepanel-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      const timer = setTimeout(function() { pendingClosePanel.delete(id); resolve(null); }, 3000);
+      pendingClosePanel.set(id, { resolve: resolve, timer: timer });
+      broadcastAll({ type: 'close-panel', all: !!all, reqId: id });
+    });
+  }
+
+  // REMEDIATION P0-3 (2026-07-29 audit, item 10): audio ducking. Council
+  // verdict (Torvalds/Feynman/Musashi, unanimous): STT transcribing Spotify
+  // lyrics as commands is a state-coordination bug, not a signal-processing
+  // one — duck (lower) system volume for exactly the VAD-confirmed recording
+  // window (voice-loop.js's startRecording()/stopRecording(), the mic-hot
+  // boundary) via the REAL Windows master-volume API (get_volume/set_volume,
+  // added for item 4) instead of AEC or speaker verification, both of which
+  // solve problems this single-user desktop assistant doesn't have.
+  // preDuckVolume is process-global (single desktop, single mic) — guarded
+  // so a second duck (e.g. barge-in re-arming mid-utterance) never overwrites
+  // the real original level with an already-ducked one.
+  const DUCK_VOLUME_LEVEL = 15;
+  const UNDUCK_SAFETY_MS = 15000; // restore even if the client never sends unduck (dropped connection, crash)
+  let preDuckVolume = null;
+  let unduckSafetyTimer = null;
+  async function duckAudio() {
+    if (preDuckVolume !== null) return; // already ducked
+    if (!effectors || typeof effectors.invoke !== 'function') return;
+    try {
+      const current = await effectors.invoke('get_volume', {}, {});
+      if (!current.ok || !current.result || typeof current.result.level !== 'number') return;
+      preDuckVolume = current.result.level;
+      await effectors.invoke('set_volume', { level: DUCK_VOLUME_LEVEL }, {});
+      clearTimeout(unduckSafetyTimer);
+      unduckSafetyTimer = setTimeout(function() { unduckAudio(); }, UNDUCK_SAFETY_MS);
+    } catch (err) {
+      preDuckVolume = null;
+      logger.warn('audio-duck-failed', { error: err.message });
+    }
+  }
+  async function unduckAudio() {
+    if (preDuckVolume === null) return;
+    const restoreLevel = preDuckVolume;
+    preDuckVolume = null;
+    clearTimeout(unduckSafetyTimer);
+    if (!effectors || typeof effectors.invoke !== 'function') return;
+    try {
+      await effectors.invoke('set_volume', { level: restoreLevel }, {});
+    } catch (err) {
+      logger.warn('audio-unduck-failed', { error: err.message });
+    }
+  }
+
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
 
@@ -203,7 +264,14 @@ function createServer(deps) {
   });
 
   // ---- /api/media — Windows SMTC now-playing (W9: extracted to routes/media.js) ----
-  require('./routes/media').mountMediaRoutes(app, { pcChild, leash, effectors });
+  // REMEDIATION P2-12: dispatchAction (this file's shared wrapper, defined
+  // below — hoisted, safe to reference here) replaces a raw effectors.invoke
+  // so /api/media/control's dispatches (the HUD media widget's play/pause/
+  // volume buttons) get an audit line + episodic record like every other
+  // dispatch surface. Previously this route bypassed dispatchAction entirely:
+  // 42 of 43 media_key audit records from the 2026-07-29 incident had no
+  // outcome at all — this route is why.
+  require('./routes/media').mountMediaRoutes(app, { pcChild, leash, effectors, dispatchAction });
 
   // CONSISTENCY FIX (P7 vs NOVA UI, documented in ROADMAP.md P9): the byte-identical
   // ---- W9 (Phase 2 — Wiring Integrity): REST families extracted to
@@ -402,7 +470,13 @@ function createServer(deps) {
       config: config,
       goalId: ctx.goalId || null,
       tier: ctx.tier || 0,
-      channel: 'voice',
+      // REMEDIATION P2-12: this hardcoded 'voice' unconditionally, even for
+      // handleConfirmReply's confirm-accept path below (a T3+ action a human
+      // approved via a HUD click, not something voice itself decided) —
+      // callers now pass the real channel; 'voice' stays the default so the
+      // primary (and originally only) caller is unaffected.
+      channel: ctx.channel || 'voice',
+      traceId: ctx.traceId || null,
     });
   }
 
@@ -807,7 +881,10 @@ function createServer(deps) {
           ? await startEngagementInterview(text)
           : await voiceAgent.handleUtterance({
               text,
-              ctx: { history: historyGet(), connectionId, memoryContext: memoryContext },
+              // REMEDIATION P2-12: thread the WS message's own reqId through
+              // as traceId so every action this turn dispatches can be
+              // correlated back to it in the audit trail.
+              ctx: { history: historyGet(), connectionId, memoryContext: memoryContext, traceId: msg.reqId },
               signal: ctrl.signal,
             });
         clearTimeout(timer);
@@ -1021,7 +1098,11 @@ function createServer(deps) {
       // unchanged — one normalization, no shadow dispatch paths.
       const decision = action.decision || { tool: action.tool, args: action.args };
       try {
-        await dispatchAction(decision, { goalId: action.goalId, tier: action.tier });
+        // REMEDIATION P2-12: this is a confirm-accept (a human clicked "yes"
+        // on a T3+ popup), not the voice agent deciding on its own — label it
+        // as such instead of the wrapper's default, and correlate it back to
+        // the specific confirm popup that was approved.
+        await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId });
       } catch (err) {
         // dispatchAction awaits effectors.invoke + memory.episodic.write +
         // goals.debitBudget — any of these can throw (disk full, EPERM, vault
@@ -1078,6 +1159,20 @@ function createServer(deps) {
       else if (msg.type === 'camera-frame') {
         const p = pendingFrames.get(msg.frameReqId);
         if (p) { clearTimeout(p.timer); pendingFrames.delete(msg.frameReqId); p.resolve(String(msg.image || '') || null); }
+      }
+      else if (msg.type === 'duck-audio') {
+        duckAudio().catch(function() {}); // best-effort — never let a duck failure break voice
+      }
+      else if (msg.type === 'unduck-audio') {
+        unduckAudio().catch(function() {});
+      }
+      else if (msg.type === 'close-panel-ack') {
+        const p = pendingClosePanel.get(msg.reqId);
+        if (p) {
+          clearTimeout(p.timer);
+          pendingClosePanel.delete(msg.reqId);
+          p.resolve({ overlaysClosed: Number(msg.overlaysClosed) || 0, widgetsClosed: Number(msg.widgetsClosed) || 0 });
+        }
       }
       // Item B: barge-in cancel — abort not-yet-sent TTS synthesis for this
       // reqId (sendSpokenReply's or proactiveSpeak's chunk loop). A stop for
@@ -1164,10 +1259,9 @@ function createServer(deps) {
     broadcastAll({ type: 'navigate', route: e.payload.route });
   });
 
-  // Close-panel events — relay to all clients to close panels.
-  bus.subscribe('ui.close-panel', (e) => {
-    broadcastAll({ type: 'close-panel', all: e.payload.all });
-  });
+  // REMEDIATION P1-5: close_panel no longer relays through the bus — it calls
+  // requestClosePanel() directly (below) and awaits the client's ack, so the
+  // effector's return value can be honest about what actually closed.
 
   // Open-web events — relay web content payload (YouTube embed, weather, search
   // cards, etc.) so the dashboard opens a panel or floating widget.
@@ -1331,7 +1425,7 @@ function createServer(deps) {
 
   // `ready` resolves once the ephemeral port is bound — httpServer.address() is
   // null until the 'listening' event fires (async on Windows), so tests await it.
-  return { app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame };
+  return { app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel };
 }
 
 module.exports = { createServer };

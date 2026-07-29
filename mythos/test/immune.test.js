@@ -313,9 +313,11 @@ describe('immune/healer — matchClause/matches DSL', function() {
     assert.deepEqual(resolved, { literal: 'x', dynamic: 12345 });
   });
 
-  it('all six SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
+  it('all eight SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
+    // REMEDIATION P2-10: 6 -> 8 — search-provider-degrade and
+    // build-engine-reprobe added (2026-07-29 audit item 11).
     var { SEED_PLAYBOOKS } = require('../src/core/immune/healer');
-    assert.equal(SEED_PLAYBOOKS.length, 6);
+    assert.equal(SEED_PLAYBOOKS.length, 8);
     SEED_PLAYBOOKS.forEach(function(p) {
       assert.ok(p.id, 'playbook missing id');
       assert.ok(p.when && p.when.kind, 'playbook ' + p.id + ' missing when.kind');
@@ -474,6 +476,64 @@ describe('immune/healer — cooldown + actions', function() {
     // For the test, we manually verify the field is set by checking healed events.
     var healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
     assert.ok(healed.length > 0, 'at least one healed event should be emitted');
+
+    healer.stop();
+  });
+
+  // REMEDIATION P2-10 (2026-07-29 audit, item 11): search-provider-failed and
+  // build-engine-failed previously matched NO playbook at all ('no-match') —
+  // the immune system detected the two failures that actually mattered in the
+  // audited session and had nothing to do about either.
+  it('search-provider-degrade suppresses the failing provider so the next web_search call skips it', async function() {
+    var bus = fakeBus();
+    var memory = fakeMemory();
+    var { createHealer, isSearchProviderSuppressed } = require('../src/core/immune/healer');
+    var healer = createHealer({ bus: bus, config: fakeConfig(), memory: memory, getCortex: function() { return null; }, getGoals: function() { return null; } });
+    healer.start();
+
+    // diagnostician.js's real diagnose() carries the full anomaly under
+    // `evidence` — reproduced here rather than mocked, since that's the exact
+    // shape the healer receives in production.
+    bus.emit('health.diagnosed', {
+      kind: 'search-provider-failed', target: undefined,
+      evidence: { kind: 'search-provider-failed', provider: 'ddg-html', error: 'timeout' }
+    });
+    await sleep(10);
+
+    var healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
+    assert.equal(healed.length, 1);
+    assert.equal(healed[0].payload.playbookId, 'search-provider-degrade');
+    assert.equal(healed[0].payload.outcome, 'applied');
+    assert.ok(isSearchProviderSuppressed('ddg-html'), 'the specific failing provider must be suppressed');
+    assert.ok(!isSearchProviderSuppressed('wikipedia'), 'unrelated providers must be unaffected');
+
+    healer.stop();
+  });
+
+  it('build-engine-reprobe forces a fresh Hermes probe and surfaces the item-6 CLI diagnostic', async function() {
+    var bus = fakeBus();
+    var memory = fakeMemory();
+    var { createHealer } = require('../src/core/immune/healer');
+    var healer = createHealer({ bus: bus, config: fakeConfig(), memory: memory, getCortex: function() { return null; }, getGoals: function() { return null; } });
+    healer.start();
+
+    bus.emit('health.diagnosed', {
+      kind: 'build-engine-failed', target: undefined,
+      evidence: { kind: 'build-engine-failed', engine: 'hermes', error: 'hermes-agent OFFLINE: ...' }
+    });
+    // Real probe() against the real hermes-agent adapter — a genuine live
+    // re-probe, not a mock. Poll instead of a fixed sleep: the CLI spawn this
+    // triggers is a real child process (~1s typical, more under load).
+    var healed = [];
+    for (var attempt = 0; attempt < 50 && healed.length === 0; attempt++) {
+      await sleep(200);
+      healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
+    }
+    assert.equal(healed.length, 1);
+    assert.equal(healed[0].payload.playbookId, 'build-engine-reprobe');
+    assert.equal(healed[0].payload.outcome, 'applied');
+    assert.ok(healed[0].payload.detail && (healed[0].payload.detail.state === 'ONLINE' || healed[0].payload.detail.state === 'OFFLINE'),
+      'must report a definite re-probed state, not silence');
 
     healer.stop();
   });

@@ -430,6 +430,23 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       kind: 'pipeline-execute',
       goalId: goalId,
       prompt: basePrompt,
+      // REMEDIATION P0-2: a job that fails before run() ever executes (e.g.
+      // the build engine itself is offline) previously left the card at
+      // execute/progress:25 forever with no trace of failure —
+      // indistinguishable from "still building" (the 2026-07-29 audit's
+      // headline defect). Mirrors BUG-016's review-failed branch: the card
+      // stays in 'execute' (the existing dashboard retry-build UI already
+      // renders a "Build failed" / retry state off job.status, unchanged)
+      // but now carries real failure metadata instead of none at all.
+      onFailed: function(err, j) {
+        try {
+          if (!pipeline.findCard(card.id)) return; // card deleted/moved meanwhile
+          pipeline.moveCard(card.id, 'execute', {
+            jobId: j.id, progress: 25, buildFailed: true,
+            buildError: (err && err.message) || String(err)
+          });
+        } catch (_) { /* best-effort */ }
+      },
       run: async function(raw, j) {
         // P23: Risk-classified gate path — scale rigor to the change type
         var risk = card.risk || 'feature';
@@ -518,9 +535,11 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           } catch (_) { /* retry failed — ship original with issues flagged */ }
         }
 
-        // Ship — with honest status flag
+        // Ship — with honest status flag. buildFailed:false clears any stale
+        // failure flag a PRIOR job attempt left on this same card (onFailed
+        // above) — otherwise a successful retry would still read as failed.
         var reviewed = review.verdict === 'approve';
-        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk, researchStatus: researchStatus };
+        var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk, researchStatus: researchStatus, buildFailed: false };
         if (!reviewed) {
           shipMeta.reviewIssues = review.issues;
           shipMeta.reviewStatus = 'failed';
@@ -610,6 +629,18 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       goalId: goalId,
       prompt: basePrompt,
       persona: builderPersona,
+      // REMEDIATION P0-2: same fix as executePipelineCard's onFailed above —
+      // a job that fails before run() ever executes otherwise leaves the
+      // card with no trace of failure at all.
+      onFailed: function(err, j) {
+        try {
+          if (!kanban.findCard(card.id)) return;
+          kanban.patchCard(card.id, {
+            jobId: j.id, buildFailed: true,
+            buildError: (err && err.message) || String(err)
+          });
+        } catch (_) { /* best-effort */ }
+      },
       run: async function(raw, j) {
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
 
@@ -689,7 +720,10 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         }
 
         var reviewed = review.verdict === 'approve';
-        var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact, researchStatus: researchStatus };
+        // buildFailed:false clears any stale failure flag a prior job attempt
+        // left on this card (onFailed above) — a successful retry must not
+        // still read as failed.
+        var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact, researchStatus: researchStatus, buildFailed: false };
         if (!reviewed) {
           patchMeta.reviewIssues = review.issues;
           patchMeta.reviewStatus = 'failed';

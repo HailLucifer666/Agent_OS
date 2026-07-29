@@ -148,12 +148,14 @@ describe('gate: 78 registered count', () => {
     // registers the previously hub-less pseudo-tool so invoke() no longer
     // returns unknown-effector) = 78, - 2 monitor_snapshot/kill_session
     // (dead abtop-backed tools removed — Wave 1 mechanical dead-code pass,
-    // abtop.start() had zero callers) = 76.
+    // abtop.start() had zero callers) = 76, + get_volume/set_volume (from-pc,
+    // REMEDIATION P1-8 2026-07-29 — spotify_volume's level:0-100 param routes
+    // through these two new real-master-volume tools) = 78.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 76);
+    assert.equal(hub.count(), 78);
   });
 });
 

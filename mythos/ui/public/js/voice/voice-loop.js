@@ -14,7 +14,7 @@
 //
 // States: idle -> listening -> processing -> speaking -> listening.
 
-import { utterance, stopRequest } from '../ws.js';
+import { utterance, stopRequest, sendMessage } from '../ws.js';
 
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
@@ -532,6 +532,14 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   function startRecording() {
     if (recorder) return;
+    // REMEDIATION P0-3 (2026-07-29 audit, item 10 — council verdict): duck
+    // system/media playback volume for exactly the VAD-confirmed recording
+    // window, so Spotify lyrics can't be transcribed as commands. This is
+    // the mic-hot boundary — the earliest point real speech is confirmed,
+    // not merely "listening" (which is open the whole session). Server
+    // restores the pre-duck volume in stopRecording() below, or after a
+    // bounded timeout if this connection drops mid-utterance.
+    sendMessage({ type: 'duck-audio' });
     chunks = [];
     recordingSince = Date.now();
     peakRms = 0;
@@ -651,6 +659,10 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* ok */ } }
     silenceSince = null;
     aboveCount = 0;
+    // REMEDIATION P0-3: restore playback volume — the mic-hot window closed.
+    // Transcription/dispatch happens async after this; playback doesn't need
+    // to stay ducked for that (network-bound, not acoustic).
+    sendMessage({ type: 'unduck-audio' });
   }
 
   async function transcribeAndDispatch(blob) {

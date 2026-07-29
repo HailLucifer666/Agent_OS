@@ -41,16 +41,21 @@ export function createOverlayManager(root) {
     if (open.size === 0) setBackgroundInert(false);
   }
 
+  // REMEDIATION P1-5: return how many panels were actually closed — close_panel
+  // used to report closed:true unconditionally with no way to verify it.
   function closeTop() {
     let top = null;
     open.forEach((entry, id) => {
       if (!top || Number(entry.el.style.zIndex) > Number(top.entry.el.style.zIndex)) top = { id, entry };
     });
-    if (top) close(top.id);
+    if (top) { close(top.id); return 1; }
+    return 0;
   }
 
   function closeAll() {
-    [...open.keys()].forEach((id) => close(id));
+    const ids = [...open.keys()];
+    ids.forEach((id) => close(id));
+    return ids.length;
   }
 
   function focus(panelId) {

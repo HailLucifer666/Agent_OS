@@ -11,6 +11,23 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
+// REMEDIATION P2-12: some effectors' fail() shape is an object, not a string
+// (e.g. from-runner.js's run_command: fail(m, extra) -> {error: m, ...extra}),
+// so a plain String(result.result) produced the useless literal
+// "[object Object]" in the audit trail — confirmed in the 2026-07-29 audit's
+// own Audit/2026-07-29.jsonl. Extract a real message when there is one,
+// falling back to a truncated JSON dump instead of toString's default.
+function reasonText(raw) {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'object') {
+    if (typeof raw.error === 'string') return raw.error;
+    if (typeof raw.message === 'string') return raw.message;
+    try { return JSON.stringify(raw); } catch (_) { /* fall through */ }
+  }
+  return String(raw);
+}
+
 async function dispatchAction(decision, ctx) {
   const { effectors, bus, goals, memory, config } = ctx;
   const goalId = ctx.goalId || null;
@@ -32,6 +49,12 @@ async function dispatchAction(decision, ctx) {
   // 2. Dispatch
   const result = await effectors.invoke(decision.tool, decision.args, { signal: signal, bus: bus, goalId: goalId });
 
+  // REMEDIATION P2-12: the one per-turn correlation id already threaded
+  // through by callers (the voice WS message's reqId, a confirm's confirmId,
+  // cortex's tick counter) so origin AND turn can both be reconstructed later
+  // — audit/episodic previously recorded neither, only ever the tool+outcome.
+  const traceId = ctx.traceId || null;
+
   // 3. Record outcome in episodic memory
   if (memory && memory.episodic && typeof memory.episodic.write === 'function') {
     try {
@@ -45,6 +68,7 @@ async function dispatchAction(decision, ctx) {
         // back to the procedural skill that produced them.
         skillRef: decision.skillRef || null,
         rationale: decision.rationale || null,
+        traceId: traceId,
       });
     } catch (_) { /* persistence is best-effort */ }
   }
@@ -97,18 +121,29 @@ async function dispatchAction(decision, ctx) {
         // shape) and was never carried over — outcome:'fail' alone is
         // useless for diagnosing WHY. Truncated: audit lines persist
         // forever in JSONL.
-        reason: actionOk ? undefined : String((result && result.result) || '').slice(0, 300),
+        reason: actionOk ? undefined : reasonText(result && result.result).slice(0, 300),
         goalId: goalId,
+        // REMEDIATION P2-12: this call never passed `actor`, so audit-writer's
+        // own default (`entry.actor = 'cortex'`) silently applied to EVERY
+        // record regardless of true origin — voice, confirm-accept, and
+        // autonomous actions were indistinguishable in the audit trail even
+        // though ctx.channel (used above for episodic) already carried the
+        // real answer. traceId is new: correlates this line back to the
+        // specific turn (voice reqId / confirmId / cortex tick) that caused it.
+        actor: ctx.channel || 'cortex',
+        traceId: traceId,
       });
     } catch (_) {}
   }
 
-  // 6. UI-specific events (navigate, close_panel, open_web)
+  // 6. UI-specific events (navigate, open_web). close_panel is deliberately
+  // NOT relayed here (REMEDIATION P1-5): it now broadcasts + awaits a client
+  // ack directly (ctx.closePanelProvider, mirroring camera_look's
+  // self-contained cameraFrameProvider round-trip) so its return value can be
+  // honest about what actually closed, instead of a post-hoc fire-and-forget
+  // that always looked like success regardless of outcome.
   if (decision.tool === 'navigate' && result && result.ok && result.result && result.result.route) {
     bus.emit('ui.navigate', { route: result.result.route });
-  }
-  if (decision.tool === 'close_panel' && result && result.ok) {
-    bus.emit('ui.close-panel', { all: result.result.all });
   }
   if (decision.tool === 'open_web' && result && result.ok && result.result) {
     bus.emit('ui.open-web', result.result);

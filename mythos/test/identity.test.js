@@ -116,6 +116,39 @@ describe('identity module', () => {
     assert.equal(hits[0].record.sidecar.source, 'ep-42');
   });
 
+  // REMEDIATION P3-9 (2026-07-29 audit): identity-class claims (name /
+  // preferred-address changes) reach identity.learn() from TWO paths —
+  // remember()'s preference detector and the autonomous reflection pass
+  // (identity/reflection.js) — and this is the choke point both funnel
+  // through. A single mention must never reach the normal 0.6 confidence;
+  // it needs a second, independent mention to be trusted.
+  describe('P3-9: identity-class claims require corroboration', () => {
+    it('a first-seen identity claim is quarantined below the normal 0.6 confidence', async () => {
+      const result = await identity.learn({ signal: null, text: "Prefers to be called 'Alex' over other names", sourceEpId: 'reflection' });
+      assert.ok(result.ref);
+      const hits = store.recall('Alex');
+      assert.ok(hits[0].record.sidecar.confidence < 0.6, 'an unconfirmed identity claim must not reach the normal confidence');
+    });
+
+    it('a second, independently repeated identity claim IS trusted at full confidence', async () => {
+      await identity.learn({ signal: null, text: 'Call the operator Alex instead of Sir', sourceEpId: 'reflection' });
+      const second = await identity.learn({ signal: null, text: 'Call the operator Alex instead of Sir', sourceEpId: 'reflection' });
+      assert.ok(second.ref);
+      const hits = store.recall('Alex');
+      // Two bullets now exist (write() doesn't dedupe identical text — this
+      // guard is about confidence, not text-dedupe) — the SECOND one, most
+      // recently written, must be at full confidence.
+      const confidences = hits.map((h) => h.record.sidecar.confidence);
+      assert.ok(confidences.some((c) => c === 0.6), 'the corroborated (second) mention must reach full confidence');
+    });
+
+    it('a non-identity preference is unaffected — still written at 0.6', async () => {
+      const result = await identity.learn({ signal: null, text: 'Prefers dark themes for all builds', sourceEpId: 'reflection' });
+      const hits = store.recall('dark themes');
+      assert.equal(hits[0].record.sidecar.confidence, 0.6);
+    });
+  });
+
   it('constructor throws if a mandatory dependency is missing', () => {
     assert.throws(() => createIdentity({ config, fs: fsStore, identityStore: store }), /bus/);
     assert.throws(() => createIdentity({ bus, fs: fsStore, identityStore: store }), /config/);

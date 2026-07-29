@@ -377,8 +377,20 @@ async function spotify_previous() {
   return sendMediaKey('prev_track');
 }
 
-async function spotify_volume({ direction }) {
-  if (!direction) return fail('Direction required: up, down, or mute');
+// REMEDIATION P1-8: "reduce the volume to 20%" was not expressible — this
+// only ever took a fixed up/down/mute step, so the voice agent compensated
+// by spamming direction:'down' repeatedly and never actually converged on a
+// target (see the 2026-07-29 audit). `level` (0-100) sets the exact system
+// master volume via set_volume (real Core Audio API, see ps-automation.ps1's
+// Get-AudioEndpointVolumeType) instead of guessing a step count.
+async function spotify_volume({ direction, level }) {
+  if (!pcEffectors) return fail('PC effectors not initialized');
+  if (level !== undefined && level !== null && level !== '') {
+    const lvl = Number(level);
+    if (!Number.isFinite(lvl) || lvl < 0 || lvl > 100) return fail(`level must be a number between 0 and 100 (got ${level})`);
+    return pcEffectors.invoke('set_volume', { level: Math.round(lvl) }, {});
+  }
+  if (!direction) return fail('Either level (0-100) or direction (up, down, or mute) is required');
   const keyMap = { up: 'volume_up', down: 'volume_down', mute: 'volume_mute' };
   const key = keyMap[direction.toLowerCase()];
   if (!key) return fail(`Invalid direction: ${direction}. Use up, down, or mute`);
@@ -577,8 +589,11 @@ const TOOLS = [
   },
   {
     name: 'spotify_volume',
-    description: 'Adjust Spotify volume. Use for "volume up", "volume down", "louder", "quieter", "turn it up", "turn it down", "mute".',
-    params: { direction: 'string - up, down, or mute' },
+    description: 'Adjust or set system volume (Spotify plays through the system output, same volume control). Prefer level for an exact target ("set volume to 20%", "reduce to 20"); use direction for relative nudges ("volume up", "louder", "mute").',
+    params: {
+      level: 'number (optional) - exact target volume 0-100, preferred when the user gives a percentage',
+      direction: 'string (optional) - up, down, or mute; required only if level is omitted'
+    },
     danger: false,
     fn: spotify_volume
   },
@@ -604,7 +619,8 @@ const TOOLS = [
     description: 'Check whether Spotify is running AND whether something is actually playing right now (playing:true/false, derived from the window title). Use this before ever claiming a song "is playing."',
     params: {},
     danger: false,
-    fn: spotify_status
+    fn: spotify_status,
+    needs_result: true
   }
 ];
 

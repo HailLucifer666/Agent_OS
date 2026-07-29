@@ -120,8 +120,11 @@ const ALLOWED_EVENTS = new Set([
   // relayed to clients so the panel actually opens (FIX 2: dashboard wiring).
   'ui.navigate',
 
-  // ui.close-panel — emitted when close_panel effector succeeds, relayed to clients
-  'ui.close-panel',
+  // ui.close-panel removed (REMEDIATION P1-5): close_panel no longer relays
+  // through the bus post-hoc — it awaits a client ack directly via
+  // ctx.closePanelProvider (mirrors camera_look's cameraFrameProvider), so its
+  // return value can be honest about what actually closed. Deliberately not
+  // re-added — see the immune-guard test below for the pattern.
 
   // ui.open-web — emitted when open_web/spawn_widget effectors succeed (dispatch-action.js,
   // from-widgets.js), relayed to clients as the 'open-web' broadcast. Client-side

@@ -35,7 +35,17 @@ function treeKill(child, pid) {
   try {
     if (process.platform === 'win32') {
       // /T = tree, /F = force. Synchronous enough for the timeout path.
-      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], function () { /* best-effort */ });
+      // REMEDIATION (2026-07-29, discovered while verifying items 6/10):
+      // execFile's returned ChildProcess was never unref()'d, so this
+      // best-effort fire-and-forget kill could keep the parent Node process
+      // (and, transitively, a `node --test` run) alive waiting on taskkill's
+      // own exit — observed as an intermittent full-suite hang specifically
+      // around tests that force a real timeout+tree-kill. unref() doesn't
+      // change what gets killed; it just stops this handle from blocking
+      // process exit, matching the "best-effort" contract already documented
+      // above.
+      var killer = execFile('taskkill', ['/PID', String(pid), '/T', '/F'], function () { /* best-effort */ });
+      if (killer && typeof killer.unref === 'function') killer.unref();
     } else {
       try { process.kill(-pid, 'SIGKILL'); }      // process group (if detached)
       catch (_) { try { child.kill('SIGKILL'); } catch (__) { /* best-effort */ } }

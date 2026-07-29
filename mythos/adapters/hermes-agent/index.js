@@ -36,6 +36,21 @@ function apiUrl() { return (process.env.HERMES_API_URL || 'http://127.0.0.1:8642
 function apiKey() { return process.env.HERMES_API_KEY || ''; }
 function cliBin() { return process.env.HERMES_CLI || 'hermes'; }
 function taskTimeoutMs() { return Number(process.env.HERMES_TASK_TIMEOUT_MS) || 180000; }
+// REMEDIATION P0-1 (item 6): raised from a hardcoded 8000ms — live-verified
+// `hermes --version` returns in ~800ms under scrubbedEnv(), so 8s was never
+// actually the bottleneck for the 2026-07-29 incident, but a slow/cold-start
+// machine deserves headroom; still overridable per the same env-driven
+// pattern as taskTimeoutMs() above.
+function cliProbeTimeoutMs() { return Number(process.env.HERMES_CLI_PROBE_TIMEOUT_MS) || 15000; }
+
+// Last CLI probe's failure diagnostic — {kind, code?, signal?, detail?} or
+// null when the last probe succeeded. Surfaced via getStatus() so a P0-1-class
+// failure (build engine OFFLINE) is diagnosable instead of a silent
+// resolve(false): a spawn ENOENT (binary genuinely missing), an EACCES
+// (present but blocked), a timeout (hung child), and a non-zero exit are all
+// distinct root causes that previously collapsed into one indistinguishable
+// "not installed/running" hint.
+var lastCliProbeDiagnostic = null;
 
 // Transport selection. shell:true was previously used unconditionally on win32
 // to survive a HERMES_CLI path containing a space — but that cure was worse
@@ -141,15 +156,51 @@ async function probe(force) {
     }
   } catch (_) { /* gateway not running */ }
 
+  lastCliProbeDiagnostic = null;
   var cliOk = await new Promise(function(resolve) {
     var child;
+    var settled = false;
     try {
       var shape = spawnShape(['--version']);
       child = spawn(shape.bin, shape.args, { windowsHide: true, shell: shape.shell, env: scrubbedEnv() });
-    } catch (_) { return resolve(false); }
-    var timer = setTimeout(function() { treeKill(child, child.pid); resolve(false); }, 8000);
-    child.on('error', function() { clearTimeout(timer); resolve(false); });
-    child.on('exit', function(code) { clearTimeout(timer); resolve(code === 0); });
+    } catch (err) {
+      // Synchronous spawn throw (rare — e.g. an invalid options object).
+      lastCliProbeDiagnostic = { kind: 'spawn-threw', detail: (err && err.message) || String(err) };
+      return resolve(false);
+    }
+    var timer = setTimeout(function() {
+      if (settled) return;
+      settled = true;
+      lastCliProbeDiagnostic = { kind: 'timeout', detail: 'no exit within ' + cliProbeTimeoutMs() + 'ms' };
+      treeKill(child, child.pid);
+      // REMEDIATION (2026-07-29, discovered verifying items 6/10): taskkill
+      // is itself best-effort — if the OS-level kill silently fails or is
+      // slow (system congestion, a stubborn grandchild process), this
+      // child's still-open stdio pipes were keeping the WHOLE Node process
+      // alive (observed as an intermittent full-suite test hang). Once we've
+      // given up waiting on this child and asked to kill it, its continued
+      // existence must never block OUR process from exiting.
+      if (typeof child.unref === 'function') child.unref();
+      resolve(false);
+    }, cliProbeTimeoutMs());
+    child.on('error', function(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Previously this discarded err.code entirely — ENOENT (binary not
+      // found on PATH), EACCES (present but blocked), and everything else
+      // all collapsed into the same generic hint below.
+      lastCliProbeDiagnostic = { kind: 'spawn-error', code: err && err.code, detail: (err && err.message) || String(err) };
+      resolve(false);
+    });
+    child.on('exit', function(code, signal) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) { resolve(true); return; }
+      lastCliProbeDiagnostic = { kind: 'exit-nonzero', code: code, signal: signal || null };
+      resolve(false);
+    });
   });
 
   caps = { http: httpOk, cli: cliOk };
@@ -162,6 +213,12 @@ async function probe(force) {
   }
   state = 'OFFLINE'; mode = null;
   hint = 'hermes-agent not installed/running — install from github.com/NousResearch/Hermes-Agent, or start `hermes gateway` (set HERMES_API_URL/HERMES_API_KEY)';
+  if (lastCliProbeDiagnostic) {
+    logger.warn('hermes-agent.cli-probe-failed', Object.assign({ bin: cliBin() }, lastCliProbeDiagnostic));
+    hint += ' [CLI probe: ' + lastCliProbeDiagnostic.kind +
+      (lastCliProbeDiagnostic.code != null ? ' ' + lastCliProbeDiagnostic.code : '') +
+      (lastCliProbeDiagnostic.detail ? ' — ' + lastCliProbeDiagnostic.detail : '') + ']';
+  }
   return false;
 }
 
@@ -200,6 +257,10 @@ function runViaCli(prompt, opts) {
     var out = '', errOut = '';
     var timer = setTimeout(function() {
       treeKill(child, child.pid);
+      // REMEDIATION (2026-07-29): see the identical comment in probe()'s
+      // timeout handler above — taskkill is best-effort; once we've given up
+      // on this child, its stdio pipes must never keep our own process alive.
+      if (typeof child.unref === 'function') child.unref();
       reject(new Error('hermes CLI timed out after ' + timeoutMs + 'ms'));
     }, timeoutMs);
     child.stdout.on('data', function(d) { out += d; });
@@ -251,7 +312,7 @@ async function runTask(prompt, opts) {
 }
 
 function getStatus() {
-  return { state: state, mode: mode, hint: hint };
+  return { state: state, mode: mode, hint: hint, cliProbeDiagnostic: lastCliProbeDiagnostic };
 }
 
 module.exports = {

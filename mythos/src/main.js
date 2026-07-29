@@ -80,7 +80,13 @@ const cuaDriver = require('../adapters/cua-driver');
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
-  try { process.loadEnvFile(); } catch (_) {}
+  // REMEDIATION P0-1 (item 6): load by absolute path anchored to this file's
+  // own location, not process.cwd() — process.loadEnvFile() with no argument
+  // resolves relative to the CURRENT WORKING DIRECTORY, which silently misses
+  // mythos/.env whenever MYTHOS is launched from anywhere other than the
+  // mythos/ directory itself (a service, a shortcut, `node src/main.js` from
+  // the repo root, etc.), degrading providers/adapters with no error.
+  try { process.loadEnvFile(path.join(__dirname, '..', '.env')); } catch (_) {}
 
   // Render / cloud injects PORT; promote it to MYTHOS_PORT if not explicitly set.
   if (!process.env.MYTHOS_PORT && process.env.PORT) process.env.MYTHOS_PORT = process.env.PORT;
@@ -310,7 +316,10 @@ async function main() {
       registerFromComputer(hub);
       pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
       registerFromSpotify(hub, { effectors: hub, bus: bus, memory: memory, goals: goals, config: config });
-      registerFromBrowser(hub, { config: config });
+      // REMEDIATION P1-7: fs (vault fs-store) added so browser_navigate can
+      // existence-check a /vault/... path via the same resolver open_artifact
+      // uses (vault-url.js), instead of forwarding it into a file:// URL.
+      registerFromBrowser(hub, { config: config, fs: memory.fs });
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
@@ -522,6 +531,12 @@ async function main() {
       // Wire camera_look — server-initiated frame capture from dashboard clients.
       if (dashboardWiring && typeof dashboardWiring.setCameraFrameProvider === 'function' && typeof serverHandle.requestCameraFrame === 'function') {
         dashboardWiring.setCameraFrameProvider(serverHandle.requestCameraFrame);
+      }
+      // REMEDIATION P1-5: wire close_panel — same server-initiated request/ack
+      // round-trip pattern as camera_look above, so close_panel can report
+      // what actually closed instead of a hardcoded closed:true.
+      if (dashboardWiring && typeof dashboardWiring.setClosePanelProvider === 'function' && typeof serverHandle.requestClosePanel === 'function') {
+        dashboardWiring.setClosePanelProvider(serverHandle.requestClosePanel);
       }
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},

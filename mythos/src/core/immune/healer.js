@@ -43,6 +43,28 @@ const SEED_PLAYBOOKS = [
     when: { kind: 'effector-flapping' },
     then: [{ do: 'suppress-tool', args: { tool: '$target' } }],
     cooldownMs: 60000
+  },
+  // REMEDIATION P2-10 (2026-07-29 audit, item 11): search-provider-failed and
+  // build-engine-failed both returned 'no-match' — the immune system detected
+  // the two failures that actually mattered in the audited session and had
+  // nothing to do about either. web_search() already retries across its own
+  // provider chain within one call (exa -> exa-mcp -> ddg-html -> ddg-lite ->
+  // wikipedia), so "retry" is already covered; what the healer adds is
+  // skipping a provider that keeps failing on FUTURE calls instead of paying
+  // its full PROBE_TIMEOUT every time, and reprobe-build-engine surfaces the
+  // item-6 CLI probe diagnostic (ENOENT vs timeout vs exit code) instead of
+  // leaving P0-1-class failures undiagnosable.
+  {
+    id: 'search-provider-degrade',
+    when: { kind: 'search-provider-failed' },
+    then: [{ do: 'suppress-search-provider', args: { provider: '$evidence.provider' } }],
+    cooldownMs: 30000
+  },
+  {
+    id: 'build-engine-reprobe',
+    when: { kind: 'build-engine-failed' },
+    then: [{ do: 'reprobe-build-engine' }],
+    cooldownMs: 60000
   }
 ];
 
@@ -103,6 +125,11 @@ var degradedLanes = {};
 // the healer suppresses it from the planner's available-tool list, forcing the brain to
 // choose a different approach on the next decision cycle.
 var suppressedTools = {};
+
+// REMEDIATION P2-10: same TTL-map pattern as suppressedTools above, scoped to
+// web-search's provider chain instead of the effector-tool catalog. Keyed by
+// provider name (e.g. 'ddg-html', 'exa') → { restoreAt: timestamp }.
+var suppressedSearchProviders = {};
 
 function buildActions({ getCortex, getGoals, memory }) {
   const registry = require('../brain/registry');
@@ -197,6 +224,36 @@ function buildActions({ getCortex, getGoals, memory }) {
       // The tick loop's restoreTimer (RC#4) also restores expired suppressions.
       suppressedTools[toolName] = { restoreAt: Date.now() + 60000 };
       return { ok: true, result: { tool: toolName, suppressedUntil: suppressedTools[toolName].restoreAt } };
+    },
+
+    // REMEDIATION P2-10: web_search() already retries across its full provider
+    // chain within one call — this action's job is to make the NEXT call skip
+    // a provider that just failed (saving a wasted PROVIDER_TIMEOUT) rather
+    // than re-attempting a known-currently-bad endpoint. web-search.js checks
+    // isSearchProviderSuppressed() before trying each provider.
+    'suppress-search-provider': async function(diagnosis, args) {
+      const provider = args.provider;
+      if (!provider) return { ok: false, reason: 'missing-arg:provider' };
+      suppressedSearchProviders[provider] = { restoreAt: Date.now() + 30000 };
+      return { ok: true, result: { provider: provider, suppressedUntil: suppressedSearchProviders[provider].restoreAt } };
+    },
+
+    // REMEDIATION P2-10 / P0-1: force a fresh Hermes probe (bypassing
+    // PROBE_TTL_MS's cache) and surface the item-6 CLI probe diagnostic
+    // (ENOENT vs timeout vs non-zero exit) instead of leaving a build-engine
+    // failure with no path to re-check or diagnose it. Always ok:true — the
+    // action's job is to re-probe and report, not to guarantee Hermes comes
+    // back online (that's the OFFLINE/ONLINE result inside detail).
+    'reprobe-build-engine': async function() {
+      var hermesAgent;
+      try {
+        hermesAgent = require('../../../adapters/hermes-agent');
+      } catch (err) {
+        return { ok: false, reason: 'missing-dependency:hermes-agent', detail: err.message };
+      }
+      const online = await hermesAgent.probe(true);
+      const status = hermesAgent.getStatus();
+      return { ok: true, result: { online: online, state: status.state, hint: status.hint, cliProbeDiagnostic: status.cliProbeDiagnostic } };
     }
   };
 }
@@ -299,6 +356,16 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
           });
         }
       });
+      // REMEDIATION P2-10: restore suppressed search providers after cooldown.
+      Object.keys(suppressedSearchProviders).forEach(function(provider) {
+        if (suppressedSearchProviders[provider].restoreAt <= now) {
+          delete suppressedSearchProviders[provider];
+          bus.emit('health.healed', {
+            playbookId: 'search-provider-restore', kind: 'search-provider-unsuppressed',
+            target: provider, outcome: 'applied', detail: { restored: true }
+          });
+        }
+      });
     }, 60000);
     if (restoreTimer.unref) restoreTimer.unref();
   }
@@ -333,8 +400,29 @@ function suppressTool(toolName, ttlMs) {
   return true;
 }
 
+// REMEDIATION P2-10: same isToolSuppressed()/suppressTool() pattern, scoped to
+// web-search's provider chain — web-search.js calls isSearchProviderSuppressed()
+// before attempting each provider so a provider degraded by the
+// search-provider-degrade playbook is actually skipped, not just logged.
+function isSearchProviderSuppressed(provider) {
+  if (!suppressedSearchProviders[provider]) return false;
+  const now = Date.now();
+  if (suppressedSearchProviders[provider].restoreAt <= now) {
+    delete suppressedSearchProviders[provider];
+    return false;
+  }
+  return true;
+}
+
+function suppressSearchProvider(provider, ttlMs) {
+  if (!provider) return false;
+  suppressedSearchProviders[provider] = { restoreAt: Date.now() + (ttlMs || 30000) };
+  return true;
+}
+
 module.exports = {
   createHealer: createHealer, SEED_PLAYBOOKS: SEED_PLAYBOOKS,
   matchClause: matchClause, matches: matches, resolveArgs: resolveArgs, getPath: getPath,
-  isToolSuppressed: isToolSuppressed, suppressTool: suppressTool
+  isToolSuppressed: isToolSuppressed, suppressTool: suppressTool,
+  isSearchProviderSuppressed: isSearchProviderSuppressed, suppressSearchProvider: suppressSearchProvider
 };

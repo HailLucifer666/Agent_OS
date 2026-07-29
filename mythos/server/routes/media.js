@@ -15,7 +15,7 @@ const path = require('path');
 const express = require('express');
 
 function mountMediaRoutes(app, deps) {
-  const { pcChild, leash, effectors } = deps;
+  const { pcChild, leash, effectors, dispatchAction } = deps;
 
   // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----
   // BUG-004/BUG-038: album art travels as a temp FILE written by the PS child
@@ -59,7 +59,13 @@ function mountMediaRoutes(app, deps) {
   });
 
   // Media transport — buttons on the media widget. media_key is Tier 2
-  // (auto-allowed); the leash check still writes the audit line.
+  // (auto-allowed by leash.check below).
+  // REMEDIATION P2-12: dispatches through the shared dispatchAction (audit +
+  // episodic + breaker + action.completed) instead of a raw effectors.invoke
+  // — previously this route's calls left NO audit/episodic trace at all (the
+  // 2026-07-29 audit found 42 of 43 media_key records with no outcome
+  // recorded; this was the source). channel:'dashboard-media-widget'
+  // distinguishes these from voice- or cortex-originated media_key calls.
   const MEDIA_KEYS = ['play_pause', 'next_track', 'prev_track', 'volume_up', 'volume_down', 'volume_mute'];
   app.post('/api/media/control', express.json(), async (req, res) => {
     try {
@@ -67,7 +73,9 @@ function mountMediaRoutes(app, deps) {
       if (!MEDIA_KEYS.includes(key)) return res.status(400).json({ ok: false, error: 'invalid media key' });
       const decision = leash.check({ tool: 'media_key', args: { key } }, { goalId: null });
       if (!decision.allow) return res.status(403).json({ ok: false, error: decision.reason });
-      const result = await effectors.invoke('media_key', { key }, {});
+      const result = dispatchAction
+        ? await dispatchAction({ tool: 'media_key', args: { key } }, { tier: decision.tier, channel: 'dashboard-media-widget' })
+        : await effectors.invoke('media_key', { key }, {}); // fallback for callers/tests that don't wire dispatchAction
       res.json({ ok: !!result.ok });
     } catch (err) {
       res.status(502).json({ ok: false, error: err.message });

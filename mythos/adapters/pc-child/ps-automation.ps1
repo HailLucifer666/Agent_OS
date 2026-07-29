@@ -903,6 +903,108 @@ function Handle-MediaKey($key) {
     return @{ key = $key; sent = $true; via = 'vkey' }
 }
 
+# ---- Master volume control (REMEDIATION P1-8) ----
+# "Set the volume to 20%" is not expressible with media_key's fixed
+# volume_up/down/mute VK steps (no target level, no read-back). This drives
+# Windows Core Audio's IAudioEndpointVolume COM interface directly for an
+# exact get/set, independent of SendInput/foreground focus. Lazy Add-Type
+# (same pattern as Send-SmtcControl above) so the cost is only paid when a
+# volume level command is actually used.
+$script:AudioVolumeType = $null
+function Get-AudioEndpointVolumeType {
+    if ($script:AudioVolumeType) { return $script:AudioVolumeType }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+[Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IAudioEndpointVolume {
+    int NotImpl1();
+    int NotImpl2();
+    int GetChannelCount(out uint channelCount);
+    int SetMasterVolumeLevel(float level, Guid eventContext);
+    int SetMasterVolumeLevelScalar(float level, Guid eventContext);
+    int GetMasterVolumeLevel(out float level);
+    int GetMasterVolumeLevelScalar(out float level);
+    int SetChannelVolumeLevel(uint channel, float level, Guid eventContext);
+    int SetChannelVolumeLevelScalar(uint channel, float level, Guid eventContext);
+    int GetChannelVolumeLevel(uint channel, out float level);
+    int GetChannelVolumeLevelScalar(uint channel, out float level);
+    int SetMute(bool mute, Guid eventContext);
+    int GetMute(out bool mute);
+}
+
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMMDevice {
+    int Activate(ref Guid id, int clsCtx, IntPtr activationParams, out IAudioEndpointVolume endpointVolume);
+}
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMMDeviceEnumerator {
+    int NotImpl1();
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint);
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+public class MMDeviceEnumeratorComObject { }
+
+public static class MythosAudioVolume {
+    private static IAudioEndpointVolume GetEndpointVolume() {
+        var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+        IMMDevice dev;
+        // eRender = 0 (playback devices), eMultimedia = 1 (default role for music/movies)
+        Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out dev));
+        Guid epvGuid = typeof(IAudioEndpointVolume).GUID;
+        IAudioEndpointVolume epv;
+        // CLSCTX_ALL = 23
+        Marshal.ThrowExceptionForHR(dev.Activate(ref epvGuid, 23, IntPtr.Zero, out epv));
+        return epv;
+    }
+    public static float GetVolumeScalar() {
+        float level;
+        Marshal.ThrowExceptionForHR(GetEndpointVolume().GetMasterVolumeLevelScalar(out level));
+        return level;
+    }
+    public static void SetVolumeScalar(float level) {
+        Marshal.ThrowExceptionForHR(GetEndpointVolume().SetMasterVolumeLevelScalar(level, Guid.Empty));
+    }
+    public static bool GetMuteState() {
+        bool mute;
+        Marshal.ThrowExceptionForHR(GetEndpointVolume().GetMute(out mute));
+        return mute;
+    }
+}
+'@ -ErrorAction Stop
+    $script:AudioVolumeType = [MythosAudioVolume]
+    return $script:AudioVolumeType
+}
+
+function Handle-GetVolume {
+    try {
+        $type = Get-AudioEndpointVolumeType
+        $scalar = $type::GetVolumeScalar()
+        $muted = $type::GetMuteState()
+        return @{ level = [int][Math]::Round($scalar * 100); muted = [bool]$muted }
+    } catch {
+        return ('get_volume failed: ' + $_.Exception.Message)
+    }
+}
+
+function Handle-SetVolume($level) {
+    if ($null -eq $level -or $level -eq '') { return 'level (0-100) is required.' }
+    $lvl = 0
+    if (-not [int]::TryParse("$level", [ref]$lvl)) { return "level must be a number (got '$level')." }
+    if ($lvl -lt 0 -or $lvl -gt 100) { return "level must be 0-100 (got $lvl)." }
+    try {
+        $type = Get-AudioEndpointVolumeType
+        $type::SetVolumeScalar([float]($lvl / 100.0))
+        $actual = $type::GetVolumeScalar()
+        return @{ level = [int][Math]::Round($actual * 100) }
+    } catch {
+        return ('set_volume failed: ' + $_.Exception.Message)
+    }
+}
+
 function Handle-ScreenLook($query) {
     # Capture full screen screenshot as base64
     # The Node.js bridge (pc-child.js) will handle the VLM vision call.
@@ -1375,6 +1477,14 @@ while ($true) {
             # otherwise fell through as {ok:true, result:"<failure text>"}.
             # This silently defeated Handle-MediaKey's own honest zero-
             # SendInput failure (BUG-042). Route a string result to $err.
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'get_volume' {
+            $result = Handle-GetVolume
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'set_volume' {
+            $result = Handle-SetVolume $cmd.level
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'screen_look' {

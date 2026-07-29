@@ -22,6 +22,7 @@
 const { effectorFromTool } = require('./adapter');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
+const { vaultRelativePath, vaultUrl } = require('./vault-url');
 
 function ok(result, uiActions) {
   return uiActions ? { ok: true, result, uiActions } : { ok: true, result };
@@ -67,11 +68,34 @@ function buildTools(ctx) {
   }
 
   // ---- close_panel ----
-  // Broadcasts a close-panel UI action — the dashboard closes the top panel
-  // or all panels depending on the `all` flag.
-  function close_panel({ all }) {
+  // REMEDIATION P1-5: previously returned ok({closed:true}) unconditionally —
+  // it never inspected what was actually open, and could not reach floating
+  // widgets (search/weather/flights/image cards spawned by open_web) at all,
+  // only overlay panels. Now it asks the connected dashboard(s) to close both
+  // surfaces and awaits a real count back (closePanelProvider, injected via
+  // setClosePanelProvider — same server-initiated request/ack shape as
+  // camera_look's cameraFrameProvider), so `closed` reflects what the
+  // dashboard actually reports rather than a guess.
+  let closePanelProvider = null;
+  function setClosePanelProvider(fn) {
+    closePanelProvider = fn;
+  }
+
+  async function close_panel({ all }) {
     try {
-      return ok({ closed: true, all: Boolean(all) }, [{ action: 'close-panel', all: Boolean(all) }]);
+      if (!closePanelProvider) {
+        return fail('No dashboard is connected to close panels on.');
+      }
+      const ack = await closePanelProvider(Boolean(all));
+      if (!ack) {
+        return fail('No dashboard client acknowledged the close request (it may be disconnected).');
+      }
+      const overlaysClosed = ack.overlaysClosed || 0;
+      const widgetsClosed = ack.widgetsClosed || 0;
+      return ok({
+        closed: (overlaysClosed + widgetsClosed) > 0,
+        overlaysClosed, widgetsClosed, all: Boolean(all)
+      });
     } catch (err) {
       return fail(err.message);
     }
@@ -282,10 +306,38 @@ function buildTools(ctx) {
         return fail('Artifact path contains disallowed characters.');
       }
       let targetUrl = rawPath;
-      if (rawPath.startsWith('/vault/') || rawPath.startsWith('vault/')) {
-        const port = process.env.PORT || (config && config.MYTHOS_PORT) || 4478;
-        const normalized = rawPath.startsWith('/') ? rawPath : '/' + rawPath;
-        targetUrl = `http://localhost:${port}${normalized}`;
+      // REMEDIATION P1-6/P1-7: shared resolver (vault-url.js) also used by
+      // browser_navigate — one mapping from a vault-relative path to (a) an
+      // existence-check-able relative path and (b) the URL the dashboard's
+      // HTTP server serves it at, instead of two that could drift apart.
+      const vaultRelPath = vaultRelativePath(rawPath);
+      if (vaultRelPath !== null) {
+        // REMEDIATION P1-6: check the file actually exists on disk BEFORE
+        // reporting opened:true — previously this mapped any /vault/... path
+        // straight to a URL and spawned the OS opener with no existence
+        // check, so a fabricated slug ("opened:true" for a file that was
+        // never built) looked identical to a real success.
+        if (!fs || typeof fs.exists !== 'function' || !fs.exists(vaultRelPath)) {
+          return fail(`Artifact does not exist: ${rawPath}. Call pipeline_status or job_status to get a real artifact path before opening one.`);
+        }
+        targetUrl = vaultUrl(vaultRelPath, config);
+        // REMEDIATION P1-6 (incident 2026-07-29, live smoke-test): the file
+        // existing on disk is not sufficient — this URL is only real if
+        // THIS process's own HTTP server is actually listening and serving
+        // it. The OS opener launching successfully says nothing about
+        // whether the browser tab it opens will actually load — that
+        // failure (ERR_CONNECTION_REFUSED) happens asynchronously in a
+        // separate process this function can't observe. Pre-flight check
+        // before ever spawning anything, so a server that isn't up gets an
+        // honest failure instead of a fabricated opened:true.
+        try {
+          const head = await fetch(targetUrl, { method: 'HEAD', signal: AbortSignal.timeout(2000) });
+          if (!head.ok) {
+            return fail(`Artifact exists but the dashboard server returned ${head.status} for ${targetUrl}.`);
+          }
+        } catch (err) {
+          return fail(`Artifact exists but the dashboard server is not reachable at ${targetUrl} (${err.message}).`);
+        }
       }
       const platform = process.platform;
       let cmd;
@@ -302,10 +354,21 @@ function buildTools(ctx) {
       // so no shell wrapping is needed; this is the injection-safe path.
       const { spawn } = require('child_process');
       const child = spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore', shell: false });
-      child.on('error', function() { /* best-effort open — surface nothing, the file may still be reachable via the returned url */ });
+      // REMEDIATION P1-6: the spawn error was previously swallowed entirely
+      // ("best-effort") — an opener that fails to even launch (missing OS
+      // handler, bad path) still reported opened:true with no trace anywhere.
+      // spawn's 'error' event fires asynchronously (after this function has
+      // already returned its best-effort opened:true), so it can't change
+      // this call's result — but it must not vanish either; log it as a
+      // health anomaly so it is visible in the audit trail instead of silent.
+      child.on('error', function(err) {
+        if (ctx.bus && typeof ctx.bus.emit === 'function') {
+          ctx.bus.emit('health.anomaly', { kind: 'open-artifact-spawn-failed', error: err.message, path: rawPath });
+        }
+      });
       child.unref();
       const display = title || rawPath;
-      return ok({ opened: true, url: targetUrl, display }, [{ action: 'navigate', route: 'pipeline' }]);
+      return ok({ opened: true, url: targetUrl, display });
     } catch (err) {
       return fail(`Could not open artifact: ${err.message}`);
     }
@@ -536,9 +599,37 @@ function buildTools(ctx) {
     }
   }
 
+  // REMEDIATION P0-2: a card only ever gets failure metadata written onto it
+  // when the job's own run()/onFailed callback fires (agent-actions.js) — a
+  // card whose job failed under an OLDER build without that hook (or whose
+  // callback itself threw) is otherwise stuck reading as "still building"
+  // forever, which is exactly how the 2026-07-29 audit's operator was told a
+  // build was in progress 18 minutes after it had died. Cross-check every
+  // execute-stage card's jobId against buildRunner's own job record — the
+  // real source of truth — and self-heal the card if they disagree, instead
+  // of trusting whatever was last written to the card.
+  function reconcileExecuteCards(board) {
+    if (!buildRunner || typeof buildRunner.getJob !== 'function') return board;
+    var cards = board.execute || [];
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      if (!card.jobId || card.buildFailed) continue;
+      var job = buildRunner.getJob(card.jobId);
+      if (job && job.status === 'failed') {
+        try {
+          var updated = pipeline.moveCard(card.id, 'execute', {
+            buildFailed: true, buildError: job.error || 'build failed'
+          });
+          cards[i] = updated;
+        } catch (_) { /* best-effort — card may have been deleted meanwhile */ }
+      }
+    }
+    return board;
+  }
+
   function pipeline_status() {
     try {
-      return ok({ board: pipeline.listAll() });
+      return ok({ board: reconcileExecuteCards(pipeline.listAll()) });
     } catch (err) {
       return fail(err.message);
     }
@@ -736,27 +827,30 @@ function buildTools(ctx) {
 
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
-    { name: 'close_panel', description: 'Close dashboard panel(s). Pass all:true to close all open panels, omit to close just the top one.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
+    { name: 'close_panel', description: 'Close dashboard panel(s) AND floating widgets (search/weather/flights/image cards spawned by open_web). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
     { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Renders content INSIDE the MYTHOS dashboard, NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
-    { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status },
-    { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch },
-    { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); } },
-    { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false, fn: job_status },
+    // REMEDIATION P3-8: needs_result:true added to every status/check/list/
+    // read-class tool below — previously dead metadata (adapter.js dropped
+    // the field before it reached voice-agent.js), now actually enforced.
+    { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status, needs_result: true },
+    { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch, needs_result: true },
+    { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); }, needs_result: true },
+    { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false, fn: job_status, needs_result: true },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
     { name: 'propose_goal', description: 'Propose a new goal for operator acceptance (does NOT auto-activate — creates a status:proposed goal the operator accepts via the dashboard).', params: { text: 'string', category: 'string (optional)', reason: 'string (optional — why this goal is worth pursuing)', drive: 'string (optional — curiosity or user-service, default curiosity)', priority: 'number (optional 0..1)' }, danger: false, fn: propose_goal },
-    { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals },
+    { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals, needs_result: true },
     { name: 'toggle_goal', description: 'Toggle a goal done/undone by matching its text.', params: { query: 'string' }, danger: false, fn: toggle_goal },
     { name: 'delete_goal', description: 'Permanently delete a goal by matching its text.', params: { query: 'string' }, danger: true, fn: delete_goal },
     { name: 'capture_idea', description: 'Capture a new idea into the pipeline inbox.', params: { text: 'string' }, danger: false, fn: capture_idea },
-    { name: 'pipeline_status', description: 'Read the pipeline board (capture/human-gate/execute/shipped).', params: {}, danger: false, fn: pipeline_status },
+    { name: 'pipeline_status', description: 'Read the pipeline board (capture/human-gate/execute/shipped).', params: {}, danger: false, fn: pipeline_status, needs_result: true },
     { name: 'pipeline_advance', description: 'Approve or reject a pipeline card by matching its text.', params: { query: 'string', action: '"approve" | "reject"' }, danger: false, fn: pipeline_advance, dangerWhen: (args) => args && args.action === 'reject' },
     // pipeline_execute/kanban_assemble/kanban_build_card: re-tiered T3 -> T2
     // (confirmation-policy pass, sandboxed to vault/builds/) — danger:false
     // to stay consistent with tierOf(); see leash/tiers.js's T2 block comment.
     { name: 'pipeline_execute', description: 'Run the build agent for a pipeline card in the Execute stage.', params: { query: 'string' }, danger: false, fn: pipeline_execute },
-    { name: 'kanban_status', description: 'Read the kanban board.', params: {}, danger: false, fn: kanban_status },
+    { name: 'kanban_status', description: 'Read the kanban board.', params: {}, danger: false, fn: kanban_status, needs_result: true },
     { name: 'kanban_add_card', description: 'Add a new kanban card to a lane.', params: { title: 'string', lane: 'string (optional)' }, danger: false, fn: kanban_add_card },
     { name: 'kanban_move_card', description: 'Move a kanban card to a different lane by matching its title.', params: { query: 'string', lane: 'string' }, danger: false, fn: kanban_move_card },
     { name: 'kanban_assemble', description: 'Run the planner agent to break a goal into several kanban cards.', params: { goal: 'string' }, danger: false, fn: kanban_assemble },
@@ -766,7 +860,7 @@ function buildTools(ctx) {
     { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];
 
-  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setPlannerHandle };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setPlannerHandle, setClosePanelProvider };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -778,7 +872,8 @@ function registerFromDashboard(hub, ctx) {
   // Previously the injector was discarded here, leaving ask_agent permanently null.
   return {
     count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch,
-    setCameraFrameProvider: built.setCameraFrameProvider, setPlannerHandle: built.setPlannerHandle
+    setCameraFrameProvider: built.setCameraFrameProvider, setPlannerHandle: built.setPlannerHandle,
+    setClosePanelProvider: built.setClosePanelProvider
   };
 }
 

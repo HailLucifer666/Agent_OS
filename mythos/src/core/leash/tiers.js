@@ -71,6 +71,9 @@ const TIER_TABLE = {
                                // launch_app above, not the T3 confirm tier. Was previously unmapped
                                // and fell back to tierOf()'s T3 fail-safe.
   'media_key':             2,
+  'set_volume':            2,  // REMEDIATION P1-8 — exact system volume set (0-100), same
+                               // risk class as media_key's volume_up/down/mute.
+  'get_volume':            0,  // read-only, same class as media_status
   'ask_agent':             2,
   'browser_navigate':      2,
   'browser_tabs':          2,

@@ -12,6 +12,20 @@ function buildTools(ctx){
     return prefPattern.test(text);
   }
 
+  // REMEDIATION P3-9: identity-class claims (the operator's name, or what to
+  // call them) are uniquely dangerous — a single STT mis-transcription
+  // becomes a permanent "fact" fed back into every future prompt, and it is
+  // self-reinforcing (a wrong name gets used, which then looks like more
+  // evidence for the reflection pass — see the 2026-07-29 audit, where the
+  // wake word "MYTHOS" mis-heard as "my thoughts"/"Mytas" produced "the
+  // operator's name is Alex"). remember() can no longer write one of these
+  // straight to confidence:0.9 — it is quarantined at a low confidence
+  // instead, so it surfaces to the operator honestly ("I only think I heard
+  // this once") and the periodic semantic.pruneLowConfidence() sweep
+  // archives it away if it is never repeated.
+  var IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|prefers? to be called\b|address (?:me|the operator) as\b)/i;
+  var IDENTITY_QUARANTINE_CONFIDENCE = 0.3;
+
   async function remember(args){
     var text=(args&&(args.text||args.fact||args.note)||'').trim();
     if(!text) return fail('text required — the fact or instruction to remember');
@@ -21,7 +35,10 @@ function buildTools(ctx){
     }
     if(!semantic||typeof semantic.write!=='function') return fail('memory store unavailable');
     try{
-      var res=semantic.write('user-facts',[text],{confidence:0.9,append:true,sources:['voice-explicit']});
+      var isIdentityClaim = IDENTITY_CLAIM_RE.test(text);
+      var confidence = isIdentityClaim ? IDENTITY_QUARANTINE_CONFIDENCE : 0.9;
+      var sources = isIdentityClaim ? ['voice-explicit','identity-unconfirmed'] : ['voice-explicit'];
+      var res=semantic.write('user-facts',[text],{confidence:confidence,append:true,sources:sources});
       if(res&&res.degraded) return fail('memory write degraded — disk error');
       // If text looks like a stated preference, also populate Learned Preferences
       if (isPreferenceShape(text) && identity && typeof identity.learn === 'function') {

@@ -30,6 +30,26 @@ function createIdentity({ bus, config, fs, identityStore }) {
   var boundaries = null;  // cached boundaries.md content: { deny, max_autonomous_tier, allowed_dirs }
   var levels = null;      // cached persona levels: { humor, warmth, ... }
 
+  // REMEDIATION P3-9 (2026-07-29 audit): identity-class claims (the
+  // operator's name, or what to call them) are uniquely dangerous — this is
+  // the single choke point both remember()'s preference path AND the
+  // autonomous reflection pass (identity/reflection.js) funnel through, and
+  // it is exactly how Identity/self.md picked up "Prefers to be called
+  // 'Alex'" from a mis-transcribed wake word. A first-seen identity claim is
+  // written at a low confidence instead of the normal 0.6 (below
+  // identityStore.consolidate()'s existing archive threshold isn't required —
+  // it stays visible but honestly low-trust); only a SECOND, independently
+  // repeated identity claim reaches full confidence. pendingIdentityClaims is
+  // per-process (resets on restart) — deliberately: a claim never silently
+  // accumulates trust across restarts without being said again.
+  var IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|prefers? to be called\b|address (?:me|the operator) as\b)/i;
+  var IDENTITY_QUARANTINE_CONFIDENCE = 0.3;
+  var pendingIdentityClaims = new Map(); // normalized claim text -> first-seen ts
+
+  function normalizeIdentityClaim(text) {
+    return String(text || '').toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
   function clampLevel(v) {
     var n = Math.round(Number(v));
     if (!isFinite(n)) return null;
@@ -234,7 +254,17 @@ function createIdentity({ bus, config, fs, identityStore }) {
     // exact destructured signature from §11 — do not paraphrase
     async learn({ signal, text, sourceEpId }) {
       if (signal && signal.aborted) return { ref: null, degraded: true };
-      var result = identityStore.write(text, { source: sourceEpId, confidence: 0.6 });
+      var confidence = 0.6;
+      if (IDENTITY_CLAIM_RE.test(text || '')) {
+        var claimKey = normalizeIdentityClaim(text);
+        if (pendingIdentityClaims.has(claimKey)) {
+          pendingIdentityClaims.delete(claimKey); // corroborated by a second mention
+        } else {
+          pendingIdentityClaims.set(claimKey, Date.now());
+          confidence = IDENTITY_QUARANTINE_CONFIDENCE;
+        }
+      }
+      var result = identityStore.write(text, { source: sourceEpId, confidence: confidence });
       if (result.ref) {
         self = await loadSelf(); // refresh cache in case a header field changed
       }

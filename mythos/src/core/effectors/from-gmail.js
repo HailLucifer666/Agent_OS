@@ -87,8 +87,8 @@ function buildTools(ctx) {
   }
 
   var TOOLS = [
-    { name: 'gmail_unread', description: 'List unread emails in the inbox.', params: { max: 'number (optional, default 10)' }, danger: false, fn: gmail_unread },
-    { name: 'gmail_read', description: 'Read a full email by its ID (obtained from gmail_unread).', params: { id: 'string — email message ID' }, danger: false, fn: gmail_read },
+    { name: 'gmail_unread', description: 'List unread emails in the inbox.', params: { max: 'number (optional, default 10)' }, danger: false, fn: gmail_unread, needs_result: true },
+    { name: 'gmail_read', description: 'Read a full email by its ID (obtained from gmail_unread).', params: { id: 'string — email message ID' }, danger: false, fn: gmail_read, needs_result: true },
     { name: 'gmail_send', description: 'Send an email. Use only when the operator explicitly asks.', params: { to: 'string', subject: 'string', body: 'string' }, danger: true, fn: gmail_send },
     { name: 'gmail_draft', description: 'Save an email as a draft without sending.', params: { to: 'string', subject: 'string', body: 'string' }, danger: false, fn: gmail_draft },
   ];

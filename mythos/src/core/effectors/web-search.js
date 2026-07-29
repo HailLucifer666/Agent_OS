@@ -9,6 +9,13 @@
 // Response shape unchanged: { ok, result: { query, results, source } }
 // Each result: { title, url, snippet }
 
+// REMEDIATION P2-10 (2026-07-29 audit, item 11): search-provider-degrade
+// playbook (immune/healer.js) suppresses a provider that just failed for
+// SUPPRESS_TTL_MS so the NEXT call skips straight past it instead of paying
+// its full PROVIDER_TIMEOUT again — this file's own within-call chain below
+// already handles "retry via the next provider" for the CURRENT call.
+var isSearchProviderSuppressed = require('../immune/healer').isSearchProviderSuppressed
+
 var BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 var EXA_SEARCH_URL = 'https://api.exa.ai/search'
 var EXA_MCP_URL = 'https://mcp.exa.ai/mcp'
@@ -363,7 +370,7 @@ async function web_search({ query, maxResults, bus }) {
     var max = Math.min(maxResults || 5, 10)
 
     // 1a. Exa REST API — only if EXA_API_KEY is configured (higher rate limits)
-    if (process.env.EXA_API_KEY) {
+    if (process.env.EXA_API_KEY && !isSearchProviderSuppressed('exa')) {
       try {
         var controller = new AbortController()
         var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
@@ -398,57 +405,69 @@ async function web_search({ query, maxResults, bus }) {
     }
 
     // 1b. Exa MCP free tier — zero-config default (no key needed, 150 calls/day)
-    try {
-      var mcpResults = await exaMcpSearch(q, max, bus)
-      if (mcpResults.length) {
-        return { ok: true, result: { query: q, results: mcpResults.slice(0, max), source: 'exa-mcp' } }
-      }
-    } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
+    if (!isSearchProviderSuppressed('exa-mcp')) {
+      try {
+        var mcpResults = await exaMcpSearch(q, max, bus)
+        if (mcpResults.length) {
+          return { ok: true, result: { query: q, results: mcpResults.slice(0, max), source: 'exa-mcp' } }
+        }
+      } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
+    }
 
-    // 2. DuckDuckGo HTML direct (+ fallback parser if primary returns nothing)
-    try {
-      var ddgResults = await ddgHtml(q, max, bus)
-      if (!ddgResults.length) {
-        // A2: try the fallback parser against the same HTML — DDG rotates
-        // markup variants and the primary class-targeted regex misses sometimes.
-        try {
-          var controller2 = new AbortController()
-          var timer2 = setTimeout(function() { controller2.abort() }, PROVIDER_TIMEOUT)
-          var htmlRes = await fetch(DDG_HTML_URL + encodeURIComponent(q), {
-            signal: controller2.signal, headers: { 'User-Agent': BROWSER_UA }
-          })
-          clearTimeout(timer2)
-          if (htmlRes.ok) ddgResults = ddgHtmlFallback(await htmlRes.text(), max)
-        } catch (_) { /* fallback parse failed — continue to next provider */ }
-      }
-      if (ddgResults.length) {
-        return { ok: true, result: { query: q, results: ddgResults, source: 'duckduckgo-html' } }
-      }
-    } catch (_) { /* DDG HTML unavailable — fall through */ }
+    // 2. DuckDuckGo HTML direct (+ fallback parser if primary returns nothing).
+    // Suppression key matches the anomaly's own `provider` field ('ddg-html'),
+    // not the success-path `source` label ('duckduckgo-html') — they differ.
+    if (!isSearchProviderSuppressed('ddg-html')) {
+      try {
+        var ddgResults = await ddgHtml(q, max, bus)
+        if (!ddgResults.length) {
+          // A2: try the fallback parser against the same HTML — DDG rotates
+          // markup variants and the primary class-targeted regex misses sometimes.
+          try {
+            var controller2 = new AbortController()
+            var timer2 = setTimeout(function() { controller2.abort() }, PROVIDER_TIMEOUT)
+            var htmlRes = await fetch(DDG_HTML_URL + encodeURIComponent(q), {
+              signal: controller2.signal, headers: { 'User-Agent': BROWSER_UA }
+            })
+            clearTimeout(timer2)
+            if (htmlRes.ok) ddgResults = ddgHtmlFallback(await htmlRes.text(), max)
+          } catch (_) { /* fallback parse failed — continue to next provider */ }
+        }
+        if (ddgResults.length) {
+          return { ok: true, result: { query: q, results: ddgResults, source: 'duckduckgo-html' } }
+        }
+      } catch (_) { /* DDG HTML unavailable — fall through */ }
+    }
 
-    // 3. DuckDuckGo Lite
-    try {
-      var liteResults = await ddgLite(q, max, bus)
-      if (liteResults.length) {
-        return { ok: true, result: { query: q, results: liteResults, source: 'duckduckgo-lite' } }
-      }
-    } catch (_) { /* DDG Lite unavailable — fall through */ }
+    // 3. DuckDuckGo Lite (suppression key: 'ddg-lite', matching the anomaly's provider field)
+    if (!isSearchProviderSuppressed('ddg-lite')) {
+      try {
+        var liteResults = await ddgLite(q, max, bus)
+        if (liteResults.length) {
+          return { ok: true, result: { query: q, results: liteResults, source: 'duckduckgo-lite' } }
+        }
+      } catch (_) { /* DDG Lite unavailable — fall through */ }
+    }
 
     // 4. Jina AI search (free, no key)
-    try {
-      var jinaResults = await jinaSearch(q, max, bus)
-      if (jinaResults.length) {
-        return { ok: true, result: { query: q, results: jinaResults, source: 'jina' } }
-      }
-    } catch (_) { /* Jina unavailable — fall through */ }
+    if (!isSearchProviderSuppressed('jina')) {
+      try {
+        var jinaResults = await jinaSearch(q, max, bus)
+        if (jinaResults.length) {
+          return { ok: true, result: { query: q, results: jinaResults, source: 'jina' } }
+        }
+      } catch (_) { /* Jina unavailable — fall through */ }
+    }
 
     // 5. Wikipedia OpenSearch
-    try {
-      var wikiResults = await wikiSearch(q, max, bus)
-      if (wikiResults.length) {
-        return { ok: true, result: { query: q, results: wikiResults, source: 'wikipedia' } }
-      }
-    } catch (_) { /* Wikipedia unavailable */ }
+    if (!isSearchProviderSuppressed('wikipedia')) {
+      try {
+        var wikiResults = await wikiSearch(q, max, bus)
+        if (wikiResults.length) {
+          return { ok: true, result: { query: q, results: wikiResults, source: 'wikipedia' } }
+        }
+      } catch (_) { /* Wikipedia unavailable */ }
+    }
 
     return { ok: false, result: 'All search providers are unavailable.' }
   } catch (err) {

@@ -52,12 +52,18 @@ function createSemanticStore({ fs, config, bus, logger }) {
     // the new ones, and write the merged set. Without this, every distillation
     // call clobbers the previous — user-facts.md would only ever hold the last
     // fact written. Default mode (overwrite) is unchanged for existing callers.
+    // REMEDIATION P3-9: dedupe was exact-match-after-trim/lowercase only, so
+    // "The operator really enjoys playing jazz piano" and the same sentence
+    // with a trailing period were treated as different facts (confirmed
+    // duplicate in the 2026-07-29 audit's user-facts.md). Also strip
+    // trailing punctuation before comparing.
+    function normalizeFact(f) { return String(f).trim().toLowerCase().replace(/[.!?]+$/, ''); }
     let allFacts = facts;
     if (opts.append) {
       const existing = fs.readText(relPath, '');
       const existingFacts = parseFacts(existing).filter(function(f) {
         return !facts.some(function(nf) {
-          return String(nf).trim().toLowerCase() === String(f).trim().toLowerCase();
+          return normalizeFact(nf) === normalizeFact(f);
         });
       });
       allFacts = existingFacts.concat(facts);

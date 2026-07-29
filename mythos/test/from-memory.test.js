@@ -120,6 +120,44 @@ describe('from-memory: remember', () => {
     assert.equal(written[0], 'spaced out');
   });
 
+  // REMEDIATION P3-9 (2026-07-29 audit): identity-class claims (the operator's
+  // name, or what to call them) are quarantined at a low confidence instead of
+  // the normal 0.9 — a single STT mis-transcription must never become a
+  // permanent high-confidence fact fed back into every future prompt (see the
+  // audit's "Call the operator Alex instead of Sir" / "operator's name is Alex"
+  // poisoning of Semantic/user-facts.md).
+  describe('P3-9: identity-class claims are quarantined, not written at confidence:0.9', () => {
+    it('"call the operator X" is quarantined at a low confidence', async () => {
+      let written = null;
+      const mockSemantic = { write: (topic, facts, opts) => { written = { topic, facts, opts }; return { ref: 'ref-id' }; } };
+      const tools = buildTools({ semantic: mockSemantic, fs: {} });
+      const remember = tools.find(t => t.name === 'remember');
+      const result = await remember.fn({ text: 'Call the operator Alex instead of Sir.' });
+      assert.equal(result.ok, true);
+      assert.ok(written.opts.confidence < 0.9, 'an identity-class claim must never reach the normal 0.9 confidence');
+      assert.ok(written.opts.sources.includes('identity-unconfirmed'));
+    });
+
+    it('"the operator\'s name is X" is quarantined at a low confidence', async () => {
+      let written = null;
+      const mockSemantic = { write: (topic, facts, opts) => { written = { topic, facts, opts }; return { ref: 'ref-id2' }; } };
+      const tools = buildTools({ semantic: mockSemantic, fs: {} });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: "The operator's name is Alex and they created the thoughts entity." });
+      assert.ok(written.opts.confidence < 0.9);
+    });
+
+    it('a non-identity fact is unaffected — still written at confidence:0.9', async () => {
+      let written = null;
+      const mockSemantic = { write: (topic, facts, opts) => { written = { topic, facts, opts }; return { ref: 'ref-ok' }; } };
+      const tools = buildTools({ semantic: mockSemantic, fs: {} });
+      const remember = tools.find(t => t.name === 'remember');
+      await remember.fn({ text: 'The operator really enjoys playing jazz piano' });
+      assert.equal(written.opts.confidence, 0.9);
+      assert.deepEqual(written.opts.sources, ['voice-explicit']);
+    });
+  });
+
   // BUG-022: preference detection and identity.learn() calling
   describe('BUG-022: preference shape detection and identity.learn() integration', () => {
     it('calls identity.learn() when text is preference-shaped (I like)', async () => {
