@@ -12,12 +12,15 @@
 
 | | |
 |---|---|
-| **Status** | Wave 0 — not started |
-| **Next action** | Task 2 Step 1: run `cd mythos && node --test` and record the real four-tuple |
-| **Blocked on** | Nothing. Wave 3 and parts of Task 11 need re-planning first (see blocking gap) |
+| **Status** | Merged-order step 0 ✅ done (V2 spine restored + committed). Step 1 not started. |
+| **Next action** | Merged-order step 1 → Task 2 Step 1: run `cd mythos && node --test`, record the real four-tuple |
+| **Blocked on** | Nothing. **Nothing needs re-planning** — V2 is committed at `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` |
+| **Two documents** | This file = delta/roadmap. V2 spine = source-level detail. Precedence rules in the V2-spine section below. |
 | **Last updated** | 2026-07-30 |
 
-**Waves:** Wave 0 ☐ · Wave 1 ☐ · Wave 2 ☐ · Wave 3 ☐ · Wave 4 (planned only, do not build)
+**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ☐ · 2 ☐ · 3 ☐ · 4 ☐ · 5 ☐ · 6 ☐ · 6.5 ☐ · 7 ☐
+
+Ignore the older "Wave 0/1/1.5/2/3/4" numbering where it conflicts — the merged order table is authoritative.
 
 ### How to keep this file honest
 
@@ -33,27 +36,50 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 | Date | Work | Commit | Live-verified |
 |---|---|---|---|
 | 2026-07-30 | Preserved both untracked plan files + Gemini Live probe into git | `ce013a5` | n/a (docs) |
-| 2026-07-30 | Promoted canonical plan to `mythos/Plans/`, added this tracking header | *this commit* | n/a (docs) |
+| 2026-07-30 | Promoted canonical plan to `mythos/Plans/`, added this tracking header | `496e884` | n/a (docs) |
+| 2026-07-30 | **Merged-order step 0:** restored the V2 spine from `~/.claude/plans/` into `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` (md5 verified identical); retracted the false blocking-gap; folded in V2 §18's seven corrections and merged execution order | *this commit* | n/a (docs) |
 
 ---
 
-## ⚠ Blocking gap — the "V2 spine" this plan cites does not exist
+## The V2 spine — found, committed, nothing to re-plan
 
-Verified 2026-07-30, four independent ways: the file this document names as the 723-line V2 spine is in fact a formatting-stripped copy of **this** document (442 lines); `git stash list` is empty and `git log --all -- "*Synthesis*"` returns nothing, so V2 was never committed; `mythos/Plans/` was empty and a repo-wide search for `*synthesis*` / `*iris*` / `*s2s*` outside `node_modules` found nothing else; and grepping V2's own section markers (`§7.4`, `§0.3`, `§6–§10`, `Anti-Drift Contract`, `AD-9`, `AD-10`) matched only this document citing them.
+**An earlier revision of this section declared the V2 spine lost and marked Wave 3 plus Task 11's §7.1/§7.3/§7.5/§7.6/§7.7 as "must be re-planned from primary sources." That was a false alarm. Retracted.** V2 is intact and is now committed beside this file:
 
-The probe artifact `mythos/scripts/verify-gemini-live.js` **does** exist and is now committed, so the Gemini Live access-probe result is real. Only V2's prose is gone.
+> **`mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md`** — 1,570 lines, md5 `6e1547df33ad0b43663604f86b5acd03`
 
-**Do not fabricate V2 content and attribute it to "V2 §X".** That is the same failure this plan is written against (AD-4 / AD-5, the whole IRIS-vs-MYTHOS honesty thesis). Where a section is re-planned from primary sources, label it as re-planned.
+**Why the search missed it.** The verification was rigorous but scoped entirely to the repo — `git log --all`, `git stash list`, `mythos/Plans/`, and a repo-wide `*synthesis*`/`*iris*`/`*s2s*` filename sweep. V2 lives in `~/.claude/plans/` (where Claude Code plan-mode files go) under the auto-generated name `deep-compare-this-floofy-heron.md`, which matches no plan-related filename pattern. This document sits in that same directory as `i-just-installed-the-virtual-sketch.md` — two siblings in one folder; the search found this one and concluded the other never existed. The root `.md.txt` that was analysed was a stripped copy of **this** document, which is why the `§` markers only ever matched themselves. **Lesson for the next session: `~/.claude/plans/` is outside the repo and outside every repo-scoped search. Check it before concluding a plan is gone.**
 
-| Bucket | Items |
-|---|---|
-| **Executable as written** — self-contained here, literal test code included | Task 2, Task 3, Task 4, Task 5, Task 7, Task 8, Task 9, Task 10, Task 12 |
-| **Recoverable from the code seams named here** | Task 6 (bearer auth), Task 11-persona (`brain/index.js:117-134`, `voice/voice-agent.js:232`, `identity/index.js:101` STYLE_GUARDRAIL, `vault/Identity/persona.json`, `vault/Identity/self.md`) |
-| **Must be re-planned from primary sources** (code + current Gemini Live docs, never from memory) | Wave 3 S2S transport (`live-session.js`, `live-tools.js`, tool adapter, browser PCM path, server wiring), and Task 11's §7.1 OCR / §7.3 PIN-Hello / §7.5 Document RAG / §7.6 Calendar / §7.7 Wallpaper |
+Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract with AD-1…AD-10 and each executable check · §3 frozen Gemini Live wire protocol, every envelope and exact field name · §4 frozen MYTHOS seams, 23 seams with line numbers and contracts · §6 `live-session.js` full source · §7 `live-tools.js` full source with the param-prose converter · §8 the leash tool adapter · §9 both browser worklets · §10 server wiring diff · §11 persona table, all six changes · §7.1–§7.7 including the WinRT OCR PowerShell block · §13 Electron shell · §17 Amendment 1.
 
-Wave 3's three hard-won constraints did survive in this document (single `serverContent` frame carries audio **and** both transcripts — no `else if`; `realtimeInput` not `clientContent` mid-conversation; `contextWindowCompression.slidingWindow` + `sessionResumption` mandatory). Treat those as frozen and carry them into the re-plan.
+**Precedence between the two documents.** V2 is the spine and owns anything it specifies in source-level detail (S2S transport, the frozen references, the Anti-Drift Contract, Electron). This document is the delta and wins where it is more concrete or more recent — it carries literal test code, and V2's own §18.2 explicitly adopts six of its decisions. Where they conflict, V2 §18 is the tie-breaker because it was written last and with both documents in hand. Do not build both sides of a supersession: V2 §7.4's `android-adb`/`from-phone.js` with 6 tools is **replaced** by this document's Wave 2 (`android-child`/`from-android.js`, 14 tools, per-device queues).
 
-Two amendments to Task 1, already applied: the plan's instruction to `rm` the root `.md.txt` is superseded — both root files were committed verbatim in `ce013a5` first, then removed, so nothing can be lost the way V2 was. And `/council` cannot convene: `~/.claude/agents/` holds 39 agents and zero `council-*.md`. Use the real installed reviewers (`code-reviewer`, `security-reviewer`, `silent-failure-hunter`, `debugger`) instead of synthesizing a verdict.
+### Corrections this document needs (from V2 §18.3) — apply as you reach them
+
+- [ ] **`phone_whatsapp_send` has no legal tap primitive — internal contradiction.** Task 10 requires "a resolved send tap", but none of the 14 tools taps or types, and `phone_shell` is deliberately refused. As written the flow can only ever report "opened, please tap send." **Fix:** add a tiered `phone_tap` (T3, resource-id targeted only, never raw coordinates), or drop the send step and keep the honest deep-link-open behaviour.
+- [ ] **Do not register `phone_flashlight_toggle`.** Task 10 concedes no reliable stock command exists. A tool that always fails pollutes `capabilities.md` and, worse, the Live `functionDeclarations`, where accuracy degrades with tool count. Omit it, or register only after a runtime capability probe succeeds. AD-4 argues this.
+- [ ] **Licensing is a hard gate before Wave 4, and it is absent from this document.** Verified in code, not just claimed: `mythos/providers/edge-tts.js:8` and `mythos/services/edge-tts-server.py:7` both label edge-tts as a reverse-engineered endpoint, personal/hobby use only, commercial deployment prohibited; `mythos/THIRD_PARTY_NOTICES.md:25` records the openWakeWord **model weights** as CC BY-NC-SA 4.0, non-commercial. Wave 4 ships an installer, and a paid binary must not contain NC-licensed wake-word weights. **Swap edge-TTS → Piper (MIT, local) and train an own-voice `hey_mythos` model using openWakeWord's Apache-2.0 tooling** — the tooling is permissive, only the pretrained weights are NC. This is a licensing problem, not a technical one, and it will never surface in testing.
+- [ ] **Fix cross-reference drift in the parity table.** At least four rows cite the wrong task ID: "Up to 2 Android devices" → Task 6 (that's server auth), "24/7 background" → Task 6 (that's Task 7), "SMS to contacts" and "Phone calls" → Task 8 (that's the adapter; the tools are Task 10). In a document whose thesis is anti-drift, these must be right.
+- [ ] **Split Task 11.** It is nine items behind one checkbox. A checkbox-driven roadmap needs one task each.
+- [ ] **Schedule the §1 anti-drift invariant tests in Wave 0.** All 14 phone tools dispatch, so AD-1 (single dispatch surface) and AD-2 (single audit write) must cover them. No wave currently schedules these test files at all.
+- [ ] **Wave numbering is inconsistent** — "Wave 1.5" is sequenced 3rd in the order table but appears after Wave 2 in the body. Let the order table be the only sequence.
+
+### Merged execution order (V2 §18.4 — supersedes the table in Decision 3)
+
+| # | Work | Source |
+|---|---|---|
+| 0 | ✅ Restore the V2 spine into `mythos/Plans/` — unblocks Wave 3 + Task 11 | §18.1 — **done, this commit** |
+| 1 | Green the baseline + docs (AD-10) + §1 invariant tests | Tasks 1–2 + §18.3.6 |
+| 2 | Server auth + WS `?token=` + `/vault/builds` gate | §7.2 + §18.2 |
+| 3 | Persona unclamp — hours, largest felt win, two-file rollback | §11 |
+| 4 | S2S transport + latency instrumentation | §6–§10 + Task 12 |
+| 5 | Desktop gaps: clipboard, file ops, alarms, autostart, OCR, maps, image gen, code search, PIN, wallpaper, calendar | §7 + §17.2 + §18.2 |
+| 6 | ADB bridge: adapter, setup script, 14 tools, per-device queues, device registry | §17.1 + Tasks 8–10 |
+| **6.5** | **Licensing gate: edge-TTS → Piper, own wake-word model** | §18.3.3 — **blocks 7** |
+| 7 | Electron shell + installer + overlay; Android app planned only | §13 |
+
+Two further notes carried from V2 §18.2. Decision 1 (cancelling the speculative sentence-chunk TTS parser) is correct and **stronger than this document states** — sentence-chunked TTS streaming already exists as `splitSentences` in `server/index.js` and `src/core/effectors/voice.js`, with `test/sentence-streamer.test.js` and `test/split-sentences.test.js`; the cancelled work was redundant twice over. And V2 §7.12 wants **real Windows Scheduled Tasks** for alarms so they survive a MYTHOS restart, which is more than Task 5's in-process timer delivers — reconcile when building Task 5, and note V2 §7.8 tiers `clipboard_write` at T2 against Task 3's T1.
+
+One standing constraint: `/council` cannot convene — `~/.claude/agents/` holds 39 agents and zero `council-*.md`. Report that; never synthesize a verdict. Use the real installed reviewers (`code-reviewer`, `security-reviewer`, `silent-failure-hunter`, `debugger`).
 
 ---
 
@@ -63,7 +89,7 @@ Two amendments to Task 1, already applied: the plan's instruction to `rm` the ro
 
 **Goal:** Reach IRIS "Complete Suite / Desktop + Mobile Pro" feature parity on MYTHOS, reusing the already-built-and-probed Gemini Live speech-to-speech path rather than building a second streaming mechanism.
 
-**Architecture:** ~~The existing V2 plan on disk (`MYTHOS × IRIS — Synthesis Plan.md.txt`, 723 lines, Gemini Live S2S + Electron + Anti-Drift Contract) is the spine and stays as written.~~ **← FALSE, see the blocking-gap section above. That file was a stripped copy of this one; the V2 spine is lost and its S2S / §7.x sections must be re-planned.** This document was written as the **delta**: it adds the IRIS Pro-Plus capabilities V2 under-scoped (phone SMS/calls/contacts/WhatsApp/hardware, clipboard, file ops, alarms, autostart, 2-device registry) and **cancels** one thing I was about to build that would have been redundant.
+**Architecture:** The existing V2 plan (Gemini Live S2S + Electron + Anti-Drift Contract) is the spine and stays as written — **now committed at `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md`, 1,570 lines.** Only its filename here was wrong: it was never the root `.md.txt` (that was a stripped copy of *this* document), it was `~/.claude/plans/deep-compare-this-floofy-heron.md`. This document is the **delta**: it adds the IRIS Pro-Plus capabilities V2 under-scoped (phone SMS/calls/contacts/WhatsApp/hardware, clipboard, file ops, alarms, autostart, 2-device registry) and **cancels** one thing I was about to build that would have been redundant.
 
 **Tech Stack:** Node 22 (no build step), Gemini Live WS (`gemini-3.1-flash-live-preview`, probe passed), PowerShell 5.1 daemon, `adb` platform-tools as optional binary, `node --test`.
 
@@ -75,7 +101,7 @@ Two things prompted this plan, and the second one changed it materially.
 
 You installed IRIS locally, found nothing wired together, and identified it as a marketing build — while its Pro-Plus tier still describes the product surface you actually want: one voice assistant that owns the Windows desktop *and* your Android phone, sub-800ms replies, 24/7 background execution, and a memory vault that follows you across devices. You asked for a rewrite plan aligned to that.
 
-Mid-session I discovered my starting assumption was wrong. I reported the root file `MYTHOS × IRIS — Synthesis Plan.md.txt` as empty (0 bytes) and held. ~~It is now 723 lines of finished V2 planning work~~ — **this claim did not survive verification on 2026-07-30; that file was a 442-line stripped copy of this document, and no 723-line V2 ever existed in git, stash, or on disk.** What is real and confirmed: a **passing** Gemini Live access probe (84,482 bytes of 24kHz audio, clean `turnComplete`), whose script `mythos/scripts/verify-gemini-live.js` is now committed rather than untracked.
+Mid-session I discovered my starting assumption was wrong. I reported the root file `MYTHOS × IRIS — Synthesis Plan.md.txt` as empty (0 bytes) and held. It is 723 lines of finished V2 planning work — **correct as to the content, wrong as to the path.** The V2 spine was `~/.claude/plans/deep-compare-this-floofy-heron.md`, has since grown to 1,570 lines, and is now committed inside the repo; the root `.md.txt` was only ever a formatting-stripped copy of *this* document. Also real and confirmed: a **passing** Gemini Live access probe (84,482 bytes of 24kHz audio, clean `turnComplete`), whose script `mythos/scripts/verify-gemini-live.js` is now committed rather than untracked.
 
 The intended outcome: MYTHOS ends up strictly better than IRIS Pro-Plus on capability, and categorically better on honesty — IRIS's HUD synthesizes `temperature = 40 + cpu*0.4 + Math.random()*2` and pure-random network stats. V2's Anti-Drift invariant AD-5 forbids exactly that, and it stays in force.
 
@@ -201,13 +227,13 @@ Modified: `from-computer.js` (4 tools + clipboard delegates), `from-calendar.js`
 
 **Files:** repo root `MYTHOS × IRIS — Synthesis Plan.md.txt`; create `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`
 
-**DONE 2026-07-30 — outcome differs from the steps as written.** Recorded here rather than deleted, because the difference is the reason the blocking-gap section exists.
+**DONE 2026-07-30.** Both documents are now committed side by side in `mythos/Plans/`. Steps are recorded rather than deleted because the path confusion here is worth not repeating.
 
-- [x] **Step 1 — VOID. There was no 723-line root file to read.** The root `.md.txt` was a 442-line formatting-stripped copy of this very document. V2's §3 and §4 (Gemini Live wire protocol; exact MYTHOS seam line numbers) are **lost** and are the highest-value thing to reconstruct — they are what Wave 3 was going to be built from.
-- [x] **Step 2 — VOID.** No §0.3 or §16 exists to update. The probe result is instead recorded in the blocking-gap section above, and the probe script itself is now committed at `mythos/scripts/verify-gemini-live.js`.
-- [x] **Step 3 — VOID.** Nothing to merge into; this document is the only plan. Its §7.4 supersession note stands on its own (build `android-child` + `from-android.js` with 14 tools, **not** V2's `android-adb` + `from-phone.js` with 6 — do not build both).
+- [x] **Step 1 — DONE, at a corrected path.** The root `.md.txt` was **not** V2; it was a formatting-stripped copy of *this* document. V2 was `~/.claude/plans/deep-compare-this-floofy-heron.md`, now committed as `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` (1,570 lines, md5 verified identical to source). Its §3 and §4 frozen references — the Gemini Live wire protocol and the 23 MYTHOS seams with line numbers — are intact and are what merged-order step 4 builds from. **Read them before touching S2S; do not skim.**
+- [ ] **Step 2 — still open, and now actually possible.** V2 §0.3 already reads `✅ PASSED 2026-07-30`, so that half is done. Remaining: in V2 §16, mark the "Live quota (highest)" risk **Retired** — the probe settled it.
+- [x] **Step 3 — superseded, not merged.** The two documents stay separate with a precedence rule (see the V2-spine section above) rather than being fused; V2 §18 already reconciles them from its side. The one supersession to honour: build `android-child` + `from-android.js` with 14 tools, **not** V2 §7.4's `android-adb` + `from-phone.js` with 6. Do not build both.
 - [x] **Step 4 — DONE.** This file is `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`, moved with `git mv` so history follows it.
-- [x] **Step 5 — DONE, but inverted.** Both root files were committed verbatim in `ce013a5` **before** removal, rather than deleted while untracked. The plan's own warning ("it is untracked, so `git` will not save you") is exactly how V2 died; preserve-then-remove makes a repeat impossible.
+- [x] **Step 5 — DONE, but inverted.** Both root files were committed verbatim in `ce013a5` **before** removal, rather than deleted while untracked. The plan's warning ("it is untracked, so `git` will not save you") was sound advice applied to the wrong file — the genuinely at-risk documents were the two in `~/.claude/plans/`, and both are now in the repo.
 - [x] **Step 6 — DONE.** Committed and pushed to `origin/main`, which is what makes this roadmap resumable from another machine.
 
 ### Task 2: Green the two real test failures

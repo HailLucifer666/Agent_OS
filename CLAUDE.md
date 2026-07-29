@@ -53,25 +53,43 @@ Rules to prevent a repeat:
 
 ## ACTIVE BUILD — start here every session
 
-**The MYTHOS × IRIS Pro-Plus parity build is in progress. Its roadmap is the
-cross-session source of truth and it is tracked in git:**
+**The MYTHOS × IRIS Pro-Plus parity build is in progress. It is tracked in git as
+two documents that must be read together:**
 
-> **`mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`**
+> **`mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`** — the roadmap/delta. Start here.
+> **`mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md`** — the V2 spine (1,570
+> lines): Anti-Drift Contract AD-1…AD-10, the frozen Gemini Live wire protocol
+> (§3), the 23 frozen MYTHOS seams with line numbers (§4), full source for
+> `live-session.js`/`live-tools.js`, the persona table, §7.1–§7.7, Electron.
 
-Read its **RESUME HERE** block first — it names the current wave, the next
-action, and anything blocking. Do the next unchecked `- [ ]` step, tick it only
-when **live-verified**, add a row to its Progress log with the commit SHA,
-rewrite RESUME HERE, then commit and **push**. A tick that isn't pushed does not
-exist as far as the next machine is concerned. Do not start a second plan
-document, and do not leave planning in an untracked file — the plan's own "V2
-spine" was lost exactly that way (the roadmap's blocking-gap section has the
-evidence and says which sections must be re-planned rather than cited).
+Read the roadmap's **RESUME HERE** block first — it names the current position in
+the merged execution order, the next action, and anything blocking. Do the next
+unchecked `- [ ]` step, tick it only when **live-verified**, add a row to its
+Progress log with the commit SHA, rewrite RESUME HERE, then commit and **push**.
+A tick that isn't pushed does not exist as far as the next machine is concerned.
+Do not start a third plan document. Precedence: the spine owns anything it
+specifies at source level; the roadmap wins where it is more concrete or more
+recent; V2 §18 breaks ties.
 
-Two standing corrections that live in that file: `/council` cannot convene on
+**Plans can hide outside the repo.** Claude Code plan-mode files live in
+`~/.claude/plans/` under auto-generated names that match no sensible search
+pattern — the V2 spine sat there as `deep-compare-this-floofy-heron.md` and a
+rigorous repo-scoped search (`git log --all`, `git stash`, filename sweeps)
+concluded it was lost. Check that directory before declaring any plan missing,
+and copy anything load-bearing into the repo.
+
+Two standing corrections that live in the roadmap: `/council` cannot convene on
 this machine (`~/.claude/agents/` has 39 agents, zero `council-*.md`) — report
 that, never synthesize a verdict. And the "two real test failures" the plan
 predicts are **unconfirmed** — the pre-commit hook reports 0 failures over its
 ~140-file subset, so reproduce with a full `node --test` before fixing anything.
+
+**Licensing gate before any paid/installer build (merged-order step 6.5):**
+`providers/edge-tts.js:8` and `services/edge-tts-server.py:7` label edge-tts
+personal/hobby only, commercial deployment prohibited; `THIRD_PARTY_NOTICES.md:25`
+records the openWakeWord **weights** as CC BY-NC-SA 4.0 non-commercial. Swap to
+Piper (MIT) and train an own `hey_mythos` model with openWakeWord's Apache-2.0
+tooling. This never surfaces in testing.
 
 ## Previous session update (2026-07-27, commit `30385d7`)
 
