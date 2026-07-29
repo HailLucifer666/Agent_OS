@@ -34,19 +34,83 @@ describe('brain/lanes.default', function() {
     assert.equal(lanes.PREF_VOICE[0].model, 'llama-3.3-70b-versatile');
   });
 
-  it('build lane leads with a reachable cloud model (Mistral), ollama entries last (filtered if absent)', function() {
+  it('build lane leads with the code-specialist model, ollama entries last (filtered if absent)', function() {
     // P22 re-rank fix: the build lane previously led with ollama/hermes3:8b,
     // which was never `ollama pull`ed on the dev machine — silently filtered
     // out, so every build fell through to mistral anyway. Cloud-first now;
     // optional local models sit last so their absence never costs a build.
+    //
+    // 2026-07-29 re-rank: the lead moved from mistral-large-2512 to
+    // codestral-latest. Both were re-verified with real completion calls;
+    // codestral is Mistral's code-specialist model AND measured faster
+    // (344ms vs 771ms), so it strictly dominates for this lane's purpose.
+    // mistral-large-2512 stays as the immediate generalist fallback.
     assert.equal(lanes.PREF_BUILD[0].provider, 'mistral');
-    assert.equal(lanes.PREF_BUILD[0].model, 'mistral-large-2512');
+    assert.equal(lanes.PREF_BUILD[0].model, 'codestral-latest');
+    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'mistral' && p.model === 'mistral-large-2512'; }), 'mistral-large-2512 retained as generalist fallback');
     assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'groq' && p.model === 'llama-3.3-70b-versatile'; }), 'Groq 70B present (fastest reachable)');
     // ollama entries (if any) must be at the tail, not leading
     const firstOllama = lanes.PREF_BUILD.findIndex(function(p) { return p.provider === 'ollama'; });
     if (firstOllama !== -1) {
       assert.ok(firstOllama > 0, 'ollama entry not leading the build lane');
     }
+  });
+
+  it('references no retired OpenRouter :free slug', function() {
+    // Regression guard. Every OpenRouter entry this file used to carry
+    // (qwen/qwen3-coder:free, nousresearch/hermes-3-llama-3.1-405b:free,
+    // meta-llama/llama-3.3-70b-instruct:free) was retired upstream and 404s
+    // with "unavailable for free — use this slug instead", yet registry.js
+    // still counted them alive, so each one burned a real chain attempt.
+    // Only slugs re-verified with a live completion call belong here.
+    const ALLOWED_OPENROUTER = ['inclusionai/ling-3.0-flash:free'];
+    for (const [lane, table] of Object.entries(lanes.BRAIN_TABLES)) {
+      for (const pref of table.prefs) {
+        if (pref.provider !== 'openrouter') continue;
+        assert.ok(
+          ALLOWED_OPENROUTER.includes(pref.model),
+          `${lane} lane carries unverified OpenRouter slug "${pref.model}"`
+        );
+      }
+    }
+  });
+
+  it('excludes models that exceed the chain attempt timeout', function() {
+    // These answer correctly but far too slowly to ever win an attempt:
+    // z-ai/glm-5.2 measured 177-185s (and timed out twice),
+    // minimaxai/minimax-m3 68-93s, mistralai/mistral-nemotron 95s,
+    // devstral-medium-latest 41s — all past CHAIN_ATTEMPT_TIMEOUT_MS (30s).
+    const TOO_SLOW = [
+      'z-ai/glm-5.2',
+      'minimaxai/minimax-m3',
+      'mistralai/mistral-nemotron',
+      'devstral-medium-latest',
+      'meta/llama-3.3-70b-instruct',
+    ];
+    for (const [lane, table] of Object.entries(lanes.BRAIN_TABLES)) {
+      for (const pref of table.prefs) {
+        assert.ok(!TOO_SLOW.includes(pref.model), `${lane} lane carries over-timeout model "${pref.model}"`);
+      }
+    }
+  });
+
+  it('keeps reasoning-leaking models out of the voice lane', function() {
+    // gemma-4-*-it and qwen/qwen3.6-27b emit raw chain-of-thought into
+    // `content` rather than a separate field — in the voice lane MYTHOS would
+    // speak its own reasoning aloud. Verified 2026-07-29.
+    const LEAKY = ['gemma-4-31b-it', 'gemma-4-26b-a4b-it', 'qwen/qwen3.6-27b'];
+    for (const pref of lanes.PREF_VOICE) {
+      assert.ok(!LEAKY.includes(pref.model), `voice lane carries reasoning-leaking model "${pref.model}"`);
+    }
+  });
+
+  it('vision lane has real fallback depth', function() {
+    // Was 1 entry deep in practice: the two nim: entries were filtered out
+    // because NIM_API_KEY was unset, leaving mistral-large-2512 alone with no
+    // fallback at all. Every model below answered a live image probe correctly.
+    assert.ok(lanes.PREF_VISION.length >= 5, 'vision lane needs >=5 ranked entries');
+    const cloud = lanes.PREF_VISION.filter(function(p) { return p.provider !== 'ollama'; });
+    assert.ok(cloud.length >= 4, 'vision lane needs >=4 non-ollama entries (ollama may be absent)');
   });
 
   it('each table has env override key', function() {
@@ -757,6 +821,122 @@ describe('brain/chain — LANES exposure', function() {
     assert.ok(chain._internal.LANES.mistral);
     assert.ok(chain._internal.LANES.cerebras);
     assert.ok(chain._internal.LANES.openrouter);
+    assert.ok(chain._internal.LANES.google);
     assert.ok(chain._internal.LANES.ollama);
+  });
+
+  it('every lane provider named in BRAIN_TABLES has a LANES entry', function() {
+    // Guards the failure mode where a lanes.default.js entry names a provider
+    // chain.js cannot dispatch to: registry.chainFor() would return it as alive
+    // and expand() would map it to a lane that resolves to undefined.
+    const { BRAIN_TABLES } = require('../src/core/brain/lanes.default');
+    for (const [lane, table] of Object.entries(BRAIN_TABLES)) {
+      for (const pref of table.prefs) {
+        assert.ok(
+          chain._internal.LANES[pref.provider],
+          `${lane} lane names provider "${pref.provider}" with no chain.js LANES entry`
+        );
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Google provider structure
+// ---------------------------------------------------------------------------
+describe('providers/google', function() {
+  const google = require('../providers/google');
+
+  it('exports canonical interface', function() {
+    assert.equal(google.name, 'google');
+    assert.equal(typeof google.chat, 'function');
+    assert.equal(typeof google.isAvailable, 'function');
+    assert.equal(typeof google.getModel, 'function');
+    assert.equal(typeof google.getStatus, 'function');
+  });
+
+  it('defaults to a Flash-tier model (Pro tier is quota-locked on free keys)', function() {
+    assert.equal(google.getModel(), 'gemini-flash-lite-latest');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registry liveness — real probes, not key-presence guesses
+// ---------------------------------------------------------------------------
+describe('brain/registry — isProviderAlive', function() {
+  const registry = require('../src/core/brain/registry');
+  const { isProviderAlive } = registry._internal;
+
+  // A fully-populated fake probe cache; each test narrows one field.
+  function cacheWith(over) {
+    return Object.assign({
+      nimModels: [], ollamaModels: [], groqAlive: false, mistralAlive: false,
+      cerebrasModels: [], googleModels: [], openrouterAlive: false,
+    }, over);
+  }
+
+  it('gates cerebras on the probed model list, not just the key', function() {
+    const prev = process.env.CEREBRAS_API_KEY;
+    process.env.CEREBRAS_API_KEY = 'test-key';
+    try {
+      // This is the real 2026-07-29 case: the key works, but llama-3.3-70b is
+      // not on the account and 404s. Key-presence-only said "alive".
+      const c = cacheWith({ cerebrasModels: ['gemma-4-31b', 'gpt-oss-120b', 'zai-glm-4.7'] });
+      assert.equal(isProviderAlive('cerebras', 'gemma-4-31b', c), true);
+      assert.equal(isProviderAlive('cerebras', 'llama-3.3-70b', c), false);
+    } finally {
+      if (prev === undefined) delete process.env.CEREBRAS_API_KEY;
+      else process.env.CEREBRAS_API_KEY = prev;
+    }
+  });
+
+  it('gates google on the probed model list', function() {
+    const prev = process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_API_KEY = 'test-key';
+    try {
+      const c = cacheWith({ googleModels: ['gemini-flash-lite-latest', 'gemini-3.6-flash'] });
+      assert.equal(isProviderAlive('google', 'gemini-3.6-flash', c), true);
+      assert.equal(isProviderAlive('google', 'gemini-2.5-pro', c), false);
+    } finally {
+      if (prev === undefined) delete process.env.GOOGLE_API_KEY;
+      else process.env.GOOGLE_API_KEY = prev;
+    }
+  });
+
+  it('gates openrouter on a real probe result', function() {
+    const prev = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    try {
+      const model = 'inclusionai/ling-3.0-flash:free';
+      assert.equal(isProviderAlive('openrouter', model, cacheWith({ openrouterAlive: true })), true);
+      // Key present but probe failed — must NOT report alive. This is the
+      // defect that let four retired :free slugs keep burning chain attempts.
+      assert.equal(isProviderAlive('openrouter', model, cacheWith({ openrouterAlive: false })), false);
+    } finally {
+      if (prev === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prev;
+    }
+  });
+
+  it('reports every provider dead when no key is configured', function() {
+    const saved = {};
+    for (const k of ['CEREBRAS_API_KEY', 'GOOGLE_API_KEY', 'OPENROUTER_API_KEY']) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+    try {
+      // Honest-inert: a probe cache can never resurrect an unconfigured provider.
+      const c = cacheWith({
+        cerebrasModels: ['gemma-4-31b'], googleModels: ['gemini-3.6-flash'], openrouterAlive: true,
+      });
+      assert.equal(isProviderAlive('cerebras', 'gemma-4-31b', c), false);
+      assert.equal(isProviderAlive('google', 'gemini-3.6-flash', c), false);
+      assert.equal(isProviderAlive('openrouter', 'inclusionai/ling-3.0-flash:free', c), false);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 });

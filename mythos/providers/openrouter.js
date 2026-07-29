@@ -9,13 +9,33 @@ async function chat(messages, opts = {}) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY missing — add it to app/.env');
 
+  const body = { model, messages, stream: true };
+
+  // Reasoning models on OpenRouter return their chain-of-thought in a separate
+  // `reasoning` field. This provider only ever accumulates delta.content, so
+  // those tokens are generated, billed against the account's quota, and then
+  // discarded unread. Excluding them stops paying for output nobody reads —
+  // which matters here because the free tier exposes no rate-limit headers, so
+  // remaining daily quota is unmeasurable and worth conserving.
+  //
+  // NOT a latency optimization: measured 2026-07-29 over 5 paired calls against
+  // inclusionai/ling-3.0-flash, median 950ms excluded vs 975ms kept — identical
+  // within noise. (An earlier single-sample reading suggested a 3x speedup; it
+  // did not survive repetition. Don't re-justify this flag on speed.)
+  //
+  // Set OPENROUTER_KEEP_REASONING=1 to keep it (e.g. when debugging a model's
+  // logic, or if a future model routes its actual answer through that field).
+  if (!process.env.OPENROUTER_KEEP_REASONING) {
+    body.reasoning = { exclude: true };
+  }
+
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model, messages, stream: true }),
+    body: JSON.stringify(body),
     signal,
   });
 

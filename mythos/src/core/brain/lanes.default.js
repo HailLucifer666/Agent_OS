@@ -1,66 +1,105 @@
 // lanes.default.js — brain lane preference tables, ranked best-first.
-// Re-verified 2026-07-10 with a real completion call per entry (not catalog
-// listing alone — several BRAIN-MAP.md 2026-07-08 entries had already gone
-// stale: nim:z-ai/glm-5.2 now hangs indefinitely, nim:deepseek-ai/deepseek-r1
-// is gone from NIM's catalog, and two Nemotron variants list but 404 on this
-// account). Every provider:model pair below answered a real "OK" within
-// ~100ms-ish at verification time. No local model is required in any lane —
-// each ends in an optional ollama entry that's simply filtered out of the
-// alive-ranked list if Ollama isn't running (registry.js's probeOllama()
-// already degrades to [] on connection failure).
-// Each entry: { provider, model }. Provider 'nim' entries expanded by chain.js
-// into one attempt per configured NIM key (key rotation).
+// Re-verified 2026-07-29 with a real completion call per entry (never catalog
+// listing alone — listings lie: several models list fine and then 404, 429 or
+// hang). Latencies in the comments below are measured, not estimated.
+//
+// Three things the previous revision got wrong, all fixed here:
+//   1. Every lane ended in an OpenRouter `:free` slug that no longer exists
+//      (`qwen/qwen3-coder:free`, `nousresearch/hermes-3-llama-3.1-405b:free`,
+//      `meta-llama/llama-3.3-70b-instruct:free` all 404 with "unavailable for
+//      free — use this slug instead"). registry.js counted them alive on key
+//      presence alone, so each one burned a real chain attempt. The account's
+//      guardrail allowlist now permits exactly one model, and it earns its place:
+//      inclusionai/ling-3.0-flash:free has a 262K context (217,840 prompt tokens
+//      verified with correct needle recall) — the largest of any wired provider.
+//   2. `nim:` entries were silently vanishing because NIM_API_KEY was unset,
+//      which left the vision lane one model deep with NO fallback at all.
+//   3. The old header claimed nim:z-ai/glm-5.2 "hangs indefinitely". It does not
+//      hang — it completes, at 177-185s. That distinction matters: it is
+//      queue-starvation on NVIDIA's free tier, not a broken endpoint.
+//
+// DELIBERATELY EXCLUDED (all verified working — excluded for a reason):
+//   - Over CHAIN_ATTEMPT_TIMEOUT_MS (30s default), so they would abort on every
+//     attempt: nim:z-ai/glm-5.2 (177-185s, timed out twice),
+//     nim:minimaxai/minimax-m3 (68-93s), nim:mistralai/mistral-nemotron (95s),
+//     mistral:devstral-medium-latest (41s), nim:meta/llama-3.3-70b-instruct
+//     (timed out at 120s). Batch/offline use only.
+//   - Leak raw chain-of-thought into `content` instead of a separate field, so
+//     the voice lane would speak its own reasoning aloud: google:gemma-4-31b-it,
+//     google:gemma-4-26b-a4b-it, groq:qwen/qwen3.6-27b.
+//   - Return array-shaped `content` (renders as "[object Object]" through string
+//     extraction): mistral:magistral-medium-latest, mistral:magistral-small-latest.
+//   - No quota on a free Google key (429 every call): every Pro-tier Gemini
+//     (gemini-2.5-pro, gemini-pro-latest, gemini-3.1-pro-preview). Flash only.
+//   - Absent from this account (404/503): cerebras:llama-3.3-70b,
+//     nim:deepseek-ai/deepseek-v4-flash, mistral:pixtral-large-latest.
+//
+// No local model is required in any lane — each ends in optional ollama entries
+// that are simply filtered out of the alive-ranked list if Ollama isn't running
+// (registry.js's probeOllama() already degrades to [] on connection failure).
+// Each entry: { provider, model }. Provider 'nim' entries are expanded by
+// chain.js into one attempt per configured NIM key (key rotation).
 
 const PREF_VOICE = [
-  { provider: 'groq',       model: 'llama-3.3-70b-versatile' },
-  { provider: 'mistral',    model: 'mistral-large-2512' },
-  { provider: 'cerebras',   model: 'gemma-4-31b' },
-  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },
-  { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free' },
-  { provider: 'ollama',     model: 'qwen3:8b' },
+  { provider: 'groq',     model: 'llama-3.3-70b-versatile' },     // 656ms — fastest good 70B (Groq LPU)
+  { provider: 'mistral',  model: 'mistral-medium-latest' },       // 414ms — 2x faster than -large for the same job
+  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms
+  { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms
+  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 643ms
+  { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
 const PREF_BUILD = [
-  // Build lane leads with reachable cloud models. Previously this lane uniquely
-  // led with ollama/hermes3:8b — a model that was never `ollama pull`ed on the
-  // dev machine, so it was silently filtered out and every build fell through
-  // to mistral anyway. That violated this file's own invariant ("each lane ends
-  // in an optional ollama entry that's simply filtered out if absent"). Fixed:
-  // cloud models first (mistral-large + groq's fast 70B, both reachable with
-  // the keys set in .env), then the existing coder/generalist chain, with the
-  // optional local models LAST so their absence never costs a build attempt.
-  { provider: 'mistral',    model: 'mistral-large-2512' },
-  { provider: 'groq',       model: 'llama-3.3-70b-versatile' },                    // fastest reachable (Groq LPU); already leads PREF_VOICE
-  { provider: 'cerebras',   model: 'zai-glm-4.7' },
-  { provider: 'cerebras',   model: 'gpt-oss-120b' },
-  { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
-  { provider: 'openrouter', model: 'nousresearch/hermes-3-llama-3.1-405b:free' }, // P22: Hermes fallback
-  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },
-  { provider: 'ollama',     model: 'hermes3:8b' },                                 // P22: local, free, unlimited (ollama pull hermes3:8b to activate; filtered out if absent)
+  // Cloud-first (P22): this lane once led with ollama/hermes3:8b, which was never
+  // `ollama pull`ed — silently filtered out, so every build fell through anyway.
+  // Optional local models sit last so their absence never costs a build attempt.
+  //
+  // NOTE: since 2026-07-29 Hermes-Agent is the only build-CONTENT engine (see
+  // CLAUDE.md / build-engine.js), so this lane no longer carries real build
+  // traffic — it serves whatever still requests brain lane 'build'.
+  { provider: 'mistral',    model: 'codestral-latest' },                     // 344ms — code-specialist AND faster than -large
+  { provider: 'mistral',    model: 'mistral-large-2512' },                   // 771ms — generalist fallback
+  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 371ms
+  { provider: 'groq',       model: 'llama-3.3-70b-versatile' },              // 656ms
+  { provider: 'cerebras',   model: 'zai-glm-4.7' },                          // 1267ms
+  { provider: 'openrouter', model: 'inclusionai/ling-3.0-flash:free' },      // 853ms, 262K ctx — for builds with large context
+  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },           // 271ms
+  { provider: 'ollama',     model: 'hermes3:8b' },                           // local, free, unlimited (ollama pull to activate; filtered if absent)
   { provider: 'ollama',     model: 'ornith:9b' },
 ];
 
 const PREF_SIMPLE = [
-  { provider: 'mistral',    model: 'mistral-large-2512' },
-  { provider: 'cerebras',   model: 'gemma-4-31b' },
-  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },
-  { provider: 'openrouter', model: 'nousresearch/hermes-3-llama-3.1-405b:free' },
-  { provider: 'ollama',     model: 'qwen3:8b' },
+  // Cheapest/fastest lane. Previously led with mistral-large-2512 — the most
+  // expensive model available, in the lane that least needs it.
+  { provider: 'groq',     model: 'llama-3.1-8b-instant' },        // 224ms — fastest measured anywhere
+  { provider: 'mistral',  model: 'ministral-3b-latest' },         // 315ms
+  { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms
+  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms
+  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 643ms
+  { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
 const PREF_TEXT = [
-  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },
-  { provider: 'cerebras',   model: 'gpt-oss-120b' },
-  { provider: 'cerebras',   model: 'zai-glm-4.7' },
-  { provider: 'openrouter', model: 'nousresearch/hermes-3-llama-3.1-405b:free' },
+  { provider: 'cerebras',   model: 'zai-glm-4.7' },                          // 1267ms — best Cerebras quality
+  { provider: 'openrouter', model: 'inclusionai/ling-3.0-flash:free' },      // 853ms, 262K ctx — long-document workhorse
+  { provider: 'nim',        model: 'nvidia/nemotron-3-super-120b-a12b' },    // 1225ms — large model that is genuinely fast
+  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 371ms
+  { provider: 'google',     model: 'gemini-3.6-flash' },                     // 1382ms — newest Flash available on a free key
+  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },           // 271ms
   { provider: 'ollama',     model: 'kimi-k2.5:cloud' },
   { provider: 'ollama',     model: 'qwen3:14b' },
   { provider: 'ollama',     model: 'qwen3:8b' },
 ];
 
 const PREF_VISION = [
-  { provider: 'mistral', model: 'mistral-large-2512' }, // natively multimodal — same model/key as text, no separate Pixtral needed
-  { provider: 'nim',     model: 'meta/llama-3.2-11b-vision-instruct' },
+  // Was ONE entry deep in practice (mistral-large-2512 alone, no fallback),
+  // because both nim: entries were filtered out by the missing NIM_API_KEY.
+  // Every model below correctly identified a generated test image.
+  { provider: 'nim',     model: 'nvidia/nemotron-nano-12b-v2-vl' },      // 386ms — fastest vision measured
+  { provider: 'mistral', model: 'mistral-small-latest' },                // 433ms — cheap and correct
+  { provider: 'mistral', model: 'mistral-large-2512' },                  // 771ms — natively multimodal, same key as text
+  { provider: 'nim',     model: 'meta/llama-3.2-11b-vision-instruct' },  // 1599ms
+  { provider: 'google',  model: 'gemini-flash-latest' },                 // 1715ms
   { provider: 'ollama',  model: 'qwen3.5:latest' },
   { provider: 'ollama',  model: 'qwen2.5vl:7b' },
 ];
@@ -68,6 +107,10 @@ const PREF_VISION = [
 // embed lane — semantic-memory embeddings. NOTE: served by providers/
 // embeddings.js (a different API shape than chat), not chain.js; these
 // entries document the real chain order used there.
+// Google's gemini-embedding-001 also works (verified 2026-07-29) but is
+// 3072-dim against mistral-embed's 1024 — swapping it in would invalidate
+// every stored vector in semantic memory. That is a migration, not a re-rank,
+// so this table is deliberately unchanged.
 const PREF_EMBED = [
   { provider: 'ollama',  model: 'nomic-embed-text' },
   { provider: 'mistral', model: 'mistral-embed' },

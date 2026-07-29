@@ -11,9 +11,10 @@ const groq = require('../../../providers/groq');
 const mistral = require('../../../providers/mistral');
 const cerebras = require('../../../providers/cerebras');
 const openrouter = require('../../../providers/openrouter');
+const google = require('../../../providers/google');
 const ollama = require('../../../providers/ollama');
 
-const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, ollama };
+const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, google, ollama };
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
 const ATTEMPT_TIMEOUT_MS = Number(process.env.CHAIN_ATTEMPT_TIMEOUT_MS) || 30000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
