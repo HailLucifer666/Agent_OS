@@ -51,13 +51,35 @@ Rules to prevent a repeat:
    binding time and the handler returns null), DPI-awareness block, `click_at`
    command, command-id echo in `Write-Response`.
 
-## Latest session update — read after pulling, then replace this section next session
+## ACTIVE BUILD — start here every session
+
+**The MYTHOS × IRIS Pro-Plus parity build is in progress. Its roadmap is the
+cross-session source of truth and it is tracked in git:**
+
+> **`mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`**
+
+Read its **RESUME HERE** block first — it names the current wave, the next
+action, and anything blocking. Do the next unchecked `- [ ]` step, tick it only
+when **live-verified**, add a row to its Progress log with the commit SHA,
+rewrite RESUME HERE, then commit and **push**. A tick that isn't pushed does not
+exist as far as the next machine is concerned. Do not start a second plan
+document, and do not leave planning in an untracked file — the plan's own "V2
+spine" was lost exactly that way (the roadmap's blocking-gap section has the
+evidence and says which sections must be re-planned rather than cited).
+
+Two standing corrections that live in that file: `/council` cannot convene on
+this machine (`~/.claude/agents/` has 39 agents, zero `council-*.md`) — report
+that, never synthesize a verdict. And the "two real test failures" the plan
+predicts are **unconfirmed** — the pre-commit hook reports 0 failures over its
+~140-file subset, so reproduce with a full `node --test` before fixing anything.
+
+## Previous session update (2026-07-27, commit `30385d7`)
 
 This is a single, overwritten-in-place note (not an accumulating log — see
 Wave 1's deletion of stale point-in-time handoff docs below for why). It
-reflects the state as of commit `30385d7` (2026-07-27). Whoever picks this up
-next should replace this whole section with their own summary rather than
-appending to it.
+reflects the state as of commit `30385d7` (2026-07-27). Superseded as the
+starting point by the ACTIVE BUILD section above, but the gotchas and the open
+`focus_window` bug it records are still live.
 
 **What shipped this session (24 commits, `f02a668`..`30385d7`, all on `main`,
 already pushed to `origin/main`):**

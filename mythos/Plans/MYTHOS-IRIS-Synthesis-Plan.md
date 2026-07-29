@@ -1,10 +1,69 @@
-# MYTHOS × IRIS Pro-Plus Parity — Reconciled Implementation Plan
+# MYTHOS × IRIS Pro-Plus Parity — Living Roadmap
+
+> **This file is the cross-session source of truth, and it is tracked in git so any
+> machine can pick the build up mid-flight.** The loop is: read **RESUME HERE**, do the
+> next unchecked step, tick it, update the block, commit, push. Do not start a second
+> plan document — the V2 spine was lost precisely because planning lived in untracked
+> files (see the blocking-gap section below).
+
+## RESUME HERE
+
+*Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
+
+| | |
+|---|---|
+| **Status** | Wave 0 — not started |
+| **Next action** | Task 2 Step 1: run `cd mythos && node --test` and record the real four-tuple |
+| **Blocked on** | Nothing. Wave 3 and parts of Task 11 need re-planning first (see blocking gap) |
+| **Last updated** | 2026-07-30 |
+
+**Waves:** Wave 0 ☐ · Wave 1 ☐ · Wave 2 ☐ · Wave 3 ☐ · Wave 4 (planned only, do not build)
+
+### How to keep this file honest
+
+1. Tick `- [x]` on a step only when it is **live-verified**, not merely unit-green. This repo has shipped 6-of-11 broken behind vacuous tests; a green suite is not evidence.
+2. Add a row to **Progress log** with the commit SHA that carried the work.
+3. Rewrite the **RESUME HERE** table — Status, Next action, Blocked on.
+4. Commit the tick together with the code change, then `git push`. **A tick that isn't pushed does not exist** as far as the next machine is concerned.
+
+Steps get ticked and logged rather than deleted: a task that turns out to need revisiting has to still be readable, and the Progress log is what gives latest-progress at a glance without destroying the spec.
+
+### Progress log
+
+| Date | Work | Commit | Live-verified |
+|---|---|---|---|
+| 2026-07-30 | Preserved both untracked plan files + Gemini Live probe into git | `ce013a5` | n/a (docs) |
+| 2026-07-30 | Promoted canonical plan to `mythos/Plans/`, added this tracking header | *this commit* | n/a (docs) |
+
+---
+
+## ⚠ Blocking gap — the "V2 spine" this plan cites does not exist
+
+Verified 2026-07-30, four independent ways: the file this document names as the 723-line V2 spine is in fact a formatting-stripped copy of **this** document (442 lines); `git stash list` is empty and `git log --all -- "*Synthesis*"` returns nothing, so V2 was never committed; `mythos/Plans/` was empty and a repo-wide search for `*synthesis*` / `*iris*` / `*s2s*` outside `node_modules` found nothing else; and grepping V2's own section markers (`§7.4`, `§0.3`, `§6–§10`, `Anti-Drift Contract`, `AD-9`, `AD-10`) matched only this document citing them.
+
+The probe artifact `mythos/scripts/verify-gemini-live.js` **does** exist and is now committed, so the Gemini Live access-probe result is real. Only V2's prose is gone.
+
+**Do not fabricate V2 content and attribute it to "V2 §X".** That is the same failure this plan is written against (AD-4 / AD-5, the whole IRIS-vs-MYTHOS honesty thesis). Where a section is re-planned from primary sources, label it as re-planned.
+
+| Bucket | Items |
+|---|---|
+| **Executable as written** — self-contained here, literal test code included | Task 2, Task 3, Task 4, Task 5, Task 7, Task 8, Task 9, Task 10, Task 12 |
+| **Recoverable from the code seams named here** | Task 6 (bearer auth), Task 11-persona (`brain/index.js:117-134`, `voice/voice-agent.js:232`, `identity/index.js:101` STYLE_GUARDRAIL, `vault/Identity/persona.json`, `vault/Identity/self.md`) |
+| **Must be re-planned from primary sources** (code + current Gemini Live docs, never from memory) | Wave 3 S2S transport (`live-session.js`, `live-tools.js`, tool adapter, browser PCM path, server wiring), and Task 11's §7.1 OCR / §7.3 PIN-Hello / §7.5 Document RAG / §7.6 Calendar / §7.7 Wallpaper |
+
+Wave 3's three hard-won constraints did survive in this document (single `serverContent` frame carries audio **and** both transcripts — no `else if`; `realtimeInput` not `clientContent` mid-conversation; `contextWindowCompression.slidingWindow` + `sessionResumption` mandatory). Treat those as frozen and carry them into the re-plan.
+
+Two amendments to Task 1, already applied: the plan's instruction to `rm` the root `.md.txt` is superseded — both root files were committed verbatim in `ce013a5` first, then removed, so nothing can be lost the way V2 was. And `/council` cannot convene: `~/.claude/agents/` holds 39 agents and zero `council-*.md`. Use the real installed reviewers (`code-reviewer`, `security-reviewer`, `silent-failure-hunter`, `debugger`) instead of synthesizing a verdict.
+
+---
+
+## Original plan — Reconciled Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reach IRIS "Complete Suite / Desktop + Mobile Pro" feature parity on MYTHOS, reusing the already-built-and-probed Gemini Live speech-to-speech path rather than building a second streaming mechanism.
 
-**Architecture:** The existing V2 plan on disk (`MYTHOS × IRIS — Synthesis Plan.md.txt`, 723 lines, Gemini Live S2S + Electron + Anti-Drift Contract) is the spine and stays as written. This document is the **delta**: it adds the IRIS Pro-Plus capabilities V2 under-scoped (phone SMS/calls/contacts/WhatsApp/hardware, clipboard, file ops, alarms, autostart, 2-device registry) and **cancels** one thing I was about to build that would have been redundant.
+**Architecture:** ~~The existing V2 plan on disk (`MYTHOS × IRIS — Synthesis Plan.md.txt`, 723 lines, Gemini Live S2S + Electron + Anti-Drift Contract) is the spine and stays as written.~~ **← FALSE, see the blocking-gap section above. That file was a stripped copy of this one; the V2 spine is lost and its S2S / §7.x sections must be re-planned.** This document was written as the **delta**: it adds the IRIS Pro-Plus capabilities V2 under-scoped (phone SMS/calls/contacts/WhatsApp/hardware, clipboard, file ops, alarms, autostart, 2-device registry) and **cancels** one thing I was about to build that would have been redundant.
 
 **Tech Stack:** Node 22 (no build step), Gemini Live WS (`gemini-3.1-flash-live-preview`, probe passed), PowerShell 5.1 daemon, `adb` platform-tools as optional binary, `node --test`.
 
@@ -16,7 +75,7 @@ Two things prompted this plan, and the second one changed it materially.
 
 You installed IRIS locally, found nothing wired together, and identified it as a marketing build — while its Pro-Plus tier still describes the product surface you actually want: one voice assistant that owns the Windows desktop *and* your Android phone, sub-800ms replies, 24/7 background execution, and a memory vault that follows you across devices. You asked for a rewrite plan aligned to that.
 
-Mid-session I discovered my starting assumption was wrong. I reported the root file `MYTHOS × IRIS — Synthesis Plan.md.txt` as empty (0 bytes) and held. It is now 723 lines of finished V2 planning work with a **passing** Gemini Live access probe (84,482 bytes of real 24kHz audio, `mythos/scripts/verify-gemini-live.js`, on disk, untracked). Per the repo's concurrent-session rule I did not touch or delete it. This plan reconciles against it instead of competing with it.
+Mid-session I discovered my starting assumption was wrong. I reported the root file `MYTHOS × IRIS — Synthesis Plan.md.txt` as empty (0 bytes) and held. ~~It is now 723 lines of finished V2 planning work~~ — **this claim did not survive verification on 2026-07-30; that file was a 442-line stripped copy of this document, and no 723-line V2 ever existed in git, stash, or on disk.** What is real and confirmed: a **passing** Gemini Live access probe (84,482 bytes of 24kHz audio, clean `turnComplete`), whose script `mythos/scripts/verify-gemini-live.js` is now committed rather than untracked.
 
 The intended outcome: MYTHOS ends up strictly better than IRIS Pro-Plus on capability, and categorically better on honesty — IRIS's HUD synthesizes `temperature = 40 + cpu*0.4 + Math.random()*2` and pure-random network stats. V2's Anti-Drift invariant AD-5 forbids exactly that, and it stays in force.
 
@@ -142,30 +201,20 @@ Modified: `from-computer.js` (4 tools + clipboard delegates), `from-calendar.js`
 
 **Files:** repo root `MYTHOS × IRIS — Synthesis Plan.md.txt`; create `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`
 
-- [ ] **Step 1: Read the root file end to end.** It is 723 lines. Do not skim; §3 and §4 are frozen references (Gemini Live wire protocol; exact MYTHOS seam line numbers).
+**DONE 2026-07-30 — outcome differs from the steps as written.** Recorded here rather than deleted, because the difference is the reason the blocking-gap section exists.
 
-- [ ] **Step 2: Fold in the two known-stale spots.** The file's own closing lines state §0.3 and §16 still carry pre-probe wording — the probe has since PASSED. Update §0.3 to record: `models/gemini-3.1-flash-live-preview → PASS, 84,482 bytes 24kHz audio, clean turnComplete, 2026-07-30`. In §16 mark the "Live quota (highest)" risk **Retired**.
-
-- [ ] **Step 3: Merge this delta document's Waves 1–3 into it** as new sections, and replace its §7.4 with Wave 2 of this plan.
-
-- [ ] **Step 4: Save as `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`.** ASCII filename, `.md` not `.md.txt` — `mythos/Plans/` is where plan artifacts belong and is already an established (currently empty) directory.
-
-- [ ] **Step 5: Delete the root `.md.txt` only after Step 4's file exists and has been read back.** It is untracked, so `git` will not save you.
-
-- [ ] **Step 6: Commit.**
-
-```bash
-git add "mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md" mythos/scripts/verify-gemini-live.js
-git rm --cached "MYTHOS × IRIS — Synthesis Plan.md.txt" 2>/dev/null || true
-rm "MYTHOS × IRIS — Synthesis Plan.md.txt"
-git commit -m "docs(plan): land reconciled MYTHOS-IRIS synthesis plan in mythos/Plans"
-```
+- [x] **Step 1 — VOID. There was no 723-line root file to read.** The root `.md.txt` was a 442-line formatting-stripped copy of this very document. V2's §3 and §4 (Gemini Live wire protocol; exact MYTHOS seam line numbers) are **lost** and are the highest-value thing to reconstruct — they are what Wave 3 was going to be built from.
+- [x] **Step 2 — VOID.** No §0.3 or §16 exists to update. The probe result is instead recorded in the blocking-gap section above, and the probe script itself is now committed at `mythos/scripts/verify-gemini-live.js`.
+- [x] **Step 3 — VOID.** Nothing to merge into; this document is the only plan. Its §7.4 supersession note stands on its own (build `android-child` + `from-android.js` with 14 tools, **not** V2's `android-adb` + `from-phone.js` with 6 — do not build both).
+- [x] **Step 4 — DONE.** This file is `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`, moved with `git mv` so history follows it.
+- [x] **Step 5 — DONE, but inverted.** Both root files were committed verbatim in `ce013a5` **before** removal, rather than deleted while untracked. The plan's own warning ("it is untracked, so `git` will not save you") is exactly how V2 died; preserve-then-remove makes a repeat impossible.
+- [x] **Step 6 — DONE.** Committed and pushed to `origin/main`, which is what makes this roadmap resumable from another machine.
 
 ### Task 2: Green the two real test failures
 
 **Files:** `test/ps-dispatch-honest-failure.test.js`, `test/spotify-effector.test.js` (both confirmed present)
 
-- [ ] **Step 1: Establish the true baseline.** Run `cd mythos && node --test` and record the real four-tuple. Expect ~1511 tests / 2 fail / 1 skip. Note the counts in `CLAUDE.md` (1197) and README (1329) are both stale — `sync-test-count.js` measures a 140-file subset, the runner sees more.
+- [ ] **Step 1: Establish the true baseline.** Run `cd mythos && node --test` and record the real four-tuple. This plan predicted ~1511 tests / 2 fail / 1 skip, but that prediction is **unconfirmed and may be wrong** — the pre-commit hook run on 2026-07-30 (commit `ce013a5`) reported `tests=1329 pass=1328 fail=0 skipped=1`, `mythos test failures = 0 (baseline 0)`, and `sync-test-count --check` passing. That hook only measures the ~140-file subset, so the two claimed failures could be outside it, or could not exist. **Settle it with a full run before spending any time on Step 3.** Do not "fix" a failure you have not reproduced.
 
 - [ ] **Step 2: If the run exits 127 with no summary, or failures wander between files, stop and count stray `node.exe` first.** That signature is Windows fork/commit-limit exhaustion from orphaned processes, not a regression. `Get-Process node | Measure-Object` before theorizing.
 
