@@ -143,8 +143,12 @@ function buildTools(ctx) {
         }
         if (!candidates.length) return fail('Found results but could not extract a YouTube video ID. Try rephrasing.');
 
-        // Check YOUTUBE_MODE config: if 'newtab', skip embed and open in new tab instead
-        var youtubeMode = (config && config.YOUTUBE_MODE) || 'embed';
+        // Check YOUTUBE_MODE config: 'newtab' opens in the external browser
+        // (operator's own ad blocker); 'electron' (default) and the legacy
+        // 'embed' alias both play inside the HUD's web panel, where the Electron
+        // session blocker (electron/main.js) handles ads. Keep in sync with the
+        // schema default in mythos/src/core/config/schema.js.
+        var youtubeMode = (config && config.YOUTUBE_MODE) || 'electron';
         if (youtubeMode === 'newtab') {
           return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
         }

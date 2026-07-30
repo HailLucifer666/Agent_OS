@@ -27,6 +27,10 @@ function createBreakerRegistry() {
       var b = byName.get(name);
       if (b) b.recordFailure();
     },
+    reset: function(name) {
+      var b = byName.get(name);
+      if (b) b.reset();
+    },
     get size() { return byName.size; },
     // [Phase 9 — NEW, additive] iterable like the raw Map it wraps: P9's
     // server/index.js broadcastHealth() does `for (const [name, breaker] of

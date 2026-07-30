@@ -174,8 +174,13 @@ function createServer(deps) {
   // preDuckVolume is process-global (single desktop, single mic) — guarded
   // so a second duck (e.g. barge-in re-arming mid-utterance) never overwrites
   // the real original level with an already-ducked one.
-  const DUCK_VOLUME_LEVEL = 15;
-  const UNDUCK_SAFETY_MS = 15000; // restore even if the client never sends unduck (dropped connection, crash)
+  // Slice-2 (2026-07-31): env-overridable so the operator can tune the duck
+  // depth and safety window without a code change. The restore path already
+  // captures and restores the real pre-duck level (server/index.js duckAudio/
+  // unduckAudio), so these only control the duck TARGET and the fallback timer.
+  // Defaults unchanged (15 / 15000). Verify live before altering restore logic.
+  const DUCK_VOLUME_LEVEL = Number(process.env.DUCK_VOLUME_LEVEL) || 15;
+  const UNDUCK_SAFETY_MS = Number(process.env.UNDUCK_SAFETY_MS) || 15000; // restore even if the client never sends unduck (dropped connection, crash)
   let preDuckVolume = null;
   let unduckSafetyTimer = null;
   // AD-1: these three calls used to go straight to the effector hub's

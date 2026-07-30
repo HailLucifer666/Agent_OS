@@ -515,6 +515,12 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     // B2: Accumulate failed actions across iterations so corrective pass sees
     // failures from earlier iterations, not just the last one.
     const allFailedActions = [];
+    // Slice-2 (2026-07-31): track whether ANY action across the whole turn
+    // succeeded. The deterministic honesty guard below uses this — when every
+    // action failed, the spoken reply must acknowledge failure regardless of
+    // what the corrective pass produced (the model can still claim success in
+    // its corrective output; this overrides that). Sibling of BUG-007/BUG-046.
+    let anySuccess = false;
 
     for (;;) {
       if (signal && signal.aborted) {
@@ -536,6 +542,8 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         executedActions.push(result);
         // B2: Track failures across all iterations.
         if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);
+        // Slice-2: track any success across the whole turn for the honesty guard.
+        if (result && result.ok === true) anySuccess = true;
         if (onAction) onAction(result);
         if (result.confirmPending) {
           confirmPending = result;
@@ -608,6 +616,24 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       } catch (_) {
         // Corrective failed — keep the original response rather than propagating error.
       }
+    }
+
+    // Slice-2 (2026-07-31): DETERMINISTIC honesty guard. The corrective pass
+    // above still relies on the model choosing to admit failure — and the live
+    // transcripts (07-31) show it sometimes doesn't, asserting "now playing" /
+    // "I minimized Spotify" over actions that returned ok:false. When the
+    // ENTIRE turn failed (every action ok:false, none ok:true), do not trust
+    // the model's text at all: prepend a truthful frame naming what failed, so
+    // the operator hears the truth. Partial-success turns (anySuccess) are left
+    // to the model + corrective pass — only the all-failed case is forced.
+    if (allFailedActions.length > 0 && !anySuccess) {
+      const failedTools = allFailedActions
+        .map((a) => a.tool)
+        .filter((t, i, arr) => arr.indexOf(t) === i); // de-dup
+      const truth = "That didn't work — " + failedTools.join(', ') +
+        (failedTools.length === 1 ? " failed." : " all failed.") +
+        " I won't claim it succeeded.";
+      finalSay = truth + (finalSay ? ' ' + finalSay : '');
     }
 
     return { say: finalSay, actions: executedActions, confirmPending: confirmPending || null };

@@ -262,7 +262,7 @@ function buildActions({ getCortex, getGoals, memory }) {
 // Healer
 // ---------------------------------------------------------------------------
 
-function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
+function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, playbooks }) {
   if (!bus) throw new Error('createHealer requires bus');
 
   const ACTIONS = buildActions({ getCortex: getCortex, getGoals: getGoals, memory: memory });
@@ -350,6 +350,15 @@ function createHealer({ bus, config, memory, getCortex, getGoals, playbooks }) {
       Object.keys(suppressedTools).forEach(function(toolName) {
         if (suppressedTools[toolName].restoreAt <= now) {
           delete suppressedTools[toolName];
+          // Reset the effector's circuit breaker so the FSM matches the tool's
+          // restored state. Without this the breaker stays OPEN/HALF_OPEN
+          // (recordSuccess() is never called because the tool was suppressed
+          // and never dispatched), so broadcastHealth keeps reporting it as
+          // open and the HUD shows "degraded" indefinitely after a heal.
+          // This is the missing state transition reported 2026-07-31.
+          if (getEffectors) {
+            try { getEffectors().breakers.reset(toolName); } catch (_) { /* tool may not have a breaker */ }
+          }
           bus.emit('health.healed', {
             playbookId: 'tool-restore', kind: 'tool-unsuppressed',
             target: toolName, outcome: 'applied', detail: { restored: true }

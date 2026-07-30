@@ -77,18 +77,28 @@ describe('BUG-006: YouTube embed mode configuration', () => {
     global.fetch = realFetch;
   });
 
-  it('with default config (no YOUTUBE_MODE), returns widgetType:"youtube" with embed URL', async () => {
-    ctx.config = {}; // no YOUTUBE_MODE set, should default to 'embed'
+  it('with default config (no YOUTUBE_MODE), returns widgetType:"youtube" — in-HUD by default (Slice-2: electron mode)', async () => {
+    ctx.config = {}; // no YOUTUBE_MODE set — defaults to 'electron' (in-HUD embed)
 
     const tools = buildTools(ctx);
     const open_web = toolFn(tools, 'open_web');
     const result = await open_web({ type: 'youtube', query: 'test video' });
 
     assert.equal(result.ok, true, 'Should succeed');
-    assert.equal(result.result.widgetType, 'youtube', 'Default mode should return youtube widget');
-    assert.ok(result.result.videoId, 'Should extract a video ID');
-    assert.match(result.result.embedUrl, /youtube-nocookie\.com\/embed\//, 'Should build embed URL');
-    assert.ok(result.result.title, 'Should have a title');
+    assert.equal(result.result.widgetType, 'youtube', 'Default (electron) mode opens in the HUD web panel, not an external browser');
+    assert.match(result.result.embedUrl, /youtube-nocookie\.com\/embed\//, 'Should have an embed URL for the in-HUD panel');
+  });
+
+  it('with YOUTUBE_MODE="electron" (explicit), returns widgetType:"youtube" — same in-HUD path as embed', async () => {
+    ctx.config = { YOUTUBE_MODE: 'electron' };
+
+    const tools = buildTools(ctx);
+    const open_web = toolFn(tools, 'open_web');
+    const result = await open_web({ type: 'youtube', query: 'test video' });
+
+    assert.equal(result.ok, true, 'Should succeed');
+    assert.equal(result.result.widgetType, 'youtube', 'electron mode opens in the HUD web panel');
+    assert.match(result.result.embedUrl, /youtube-nocookie\.com\/embed\//, 'Should have an embed URL');
   });
 
   it('with YOUTUBE_MODE="newtab", returns widgetType:"newtab" with YouTube URL', async () => {

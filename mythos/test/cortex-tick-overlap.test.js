@@ -48,8 +48,13 @@ function makeGatedGoals() {
   let arbitrateCalls = 0;
   let resolveStaleGate;
   const staleGate = new Promise((resolve) => { resolveStaleGate = resolve; });
+  // Slice-2: the planner's _spentTokens is now debited directly to the goal via
+  // debitBudget() (actions:0) instead of folded into working.spendThisTick. Track
+  // those debits so the staleness test can still assert which tick committed.
+  const debits = [];
   return {
     _resolveStaleGate: function () { resolveStaleGate(); },
+    _debits: function () { return debits.slice(); },
     hasActive: function () { return true; },
     arbitrate: function () {
       arbitrateCalls++;
@@ -62,6 +67,7 @@ function makeGatedGoals() {
       }
       return { tool: 'fresh_tool', args: {}, rationale: 'fresh', _spentTokens: 7 };
     },
+    debitBudget: function (id, usage) { debits.push({ id: id, tokens: usage.tokens, actions: usage.actions }); },
     markPlanStepDone: function () {},
   };
 }
@@ -97,7 +103,14 @@ describe('REMEDIATION: cortex tick overlap after a restart mid-tick', () => {
     await cortex.tickOnce();
 
     assert.equal(memory.working.activeGoalId, 'fresh-goal', 'the new-generation tick must own activeGoalId');
-    assert.equal(memory.working.spendThisTick, 7, "only the fresh tick's spend must be committed");
+    // Slice-2: the planner's _spentTokens is debited to the goal directly
+    // (actions:0) rather than folded into spendThisTick — so the fresh tick's
+    // commit is now visible in the goal debit ledger, not spendThisTick. The
+    // fresh tick debits: planner (7 tokens, 0 actions) + action (0 tokens, 1 action).
+    assert.deepEqual(goals._debits(), [
+      { id: 'fresh-goal', tokens: 7, actions: 0 },
+      { id: 'fresh-goal', tokens: 0, actions: 1 }
+    ], "only the fresh tick's planner + action spend must be committed");
     assert.deepEqual(effectors.invoked, ['fresh_tool'], 'only the fresh tick may have dispatched an action so far');
 
     // NOW let the stale tick resume. It must bail out WITHOUT overwriting the
@@ -106,7 +119,10 @@ describe('REMEDIATION: cortex tick overlap after a restart mid-tick', () => {
     await stalePromise;
 
     assert.equal(memory.working.activeGoalId, 'fresh-goal', 'a resumed stale tick must not clobber activeGoalId');
-    assert.equal(memory.working.spendThisTick, 7, "a resumed stale tick must not add its stale spend");
+    assert.deepEqual(goals._debits(), [
+      { id: 'fresh-goal', tokens: 7, actions: 0 },
+      { id: 'fresh-goal', tokens: 0, actions: 1 }
+    ], "a resumed stale tick must not add its stale spend (999 tokens for stale-goal)");
     assert.deepEqual(effectors.invoked, ['fresh_tool'], 'a resumed stale tick must never dispatch its stale action');
 
     cortex.stop();

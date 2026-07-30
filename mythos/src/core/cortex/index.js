@@ -168,11 +168,23 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       if (generation !== myGen) return;
       if (!decision) return;
 
-      // RC#3: feed the planner's brain-call spend into the working-memory ledger
-      // so episodic records and goal budgets reflect real token usage. Previously
-      // addSpend() was dead code — every action showed tokensSpent:0.
-      if (decision._spentTokens && typeof working.addSpend === 'function') {
-        working.addSpend(decision._spentTokens);
+      // RC#3: account for the planner's brain-call spend. Previously addSpend()
+      // was dead code — every action showed tokensSpent:0. The fix below debits
+      // the planner cost ONCE, directly to the active goal at plan time.
+      //
+      // Slice-2 (2026-07-31): we NO LONGER fold _spentTokens into
+      // working.spendThisTick. That ledger is what act()->dispatchAction()
+      // passes as the ACTION's spentTokens (cortex/index.js:310), so folding the
+      // planner's ~107-tool catalog-prompt cost in there meant every dispatched
+      // action re-charged the goal for re-planning — a fresh goal blew its 20k
+      // token budget in one or two ticks and died with reason 'budget-exhausted'
+      // before doing any work. The planner cost is now debited once here (fair,
+      // single attribution — still fixes the original under-count); the action
+      // carries only its own dispatch cost (effectors don't call the brain, so ~0).
+      if (decision._spentTokens && decision._spentTokens > 0) {
+        if (working.activeGoalId && goals && typeof goals.debitBudget === 'function') {
+          goals.debitBudget(working.activeGoalId, { tokens: decision._spentTokens, actions: 0 });
+        }
       }
 
       // -- ACT --

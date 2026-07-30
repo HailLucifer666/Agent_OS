@@ -462,8 +462,47 @@ describe('BUG-007: corrective pass overrides a fabricated success claim', () => 
     const result = await agent.handleUtterance({ text: 'play bohemian rhapsody', ctx: {} });
 
     assert.deepEqual(brain.calls, ['first', 'corrective'], 'corrective pass must fire exactly once after a failed action');
-    assert.equal(result.say, correctiveReply.say);
+    // Slice-2 (2026-07-31): the deterministic honesty guard now prepends a
+    // truthful frame when the ENTIRE turn failed (no successes), so the model's
+    // corrective text alone is no longer the final word. The frame names the
+    // failed tool and explicitly disclaims success — then the corrective text
+    // follows. The key assertion (line below) is unchanged: no fabricated claim.
+    assert.equal(result.say, "That didn't work — get_time failed. I won't claim it succeeded. " + correctiveReply.say);
     assert.ok(!/playing|done|finished/i.test(result.say), 'say must not carry the fabricated success claim');
+  });
+
+  it('DETERMINISTIC guard overrides a corrective pass that STILL fabricates success (the 07-31 regression)', async () => {
+    // The live transcript (07-31) showed MYTHOS claim "now playing" / "I
+    // minimized Spotify" over actions that returned ok:false — even after the
+    // corrective pass ran, because the model's corrective output itself still
+    // asserted success. The corrective pass alone is prompt-level and the model
+    // can ignore it; the deterministic guard must force the truth regardless.
+    const firstReply = {
+      say: 'Playing The Weeknd now.',
+      actions: [{ tool: 'spotify_play', args: {} }],
+      needs_result: false,
+    };
+    // The corrective pass STILL claims success — the prompt-level fix is not enough.
+    const correctiveReply = {
+      say: 'Done — The Weeknd is playing now.',
+      actions: [],
+      needs_result: false,
+    };
+    const brain = makeBrain(firstReply, correctiveReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async () => ({ ok: false, result: 'spotify offline' }); // action failed
+    const bus = { emit: () => {} };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
+    const result = await agent.handleUtterance({ text: 'play the weeknd', ctx: {} });
+
+    // The deterministic frame must LEAD — naming the failed tool and disclaiming
+    // success — so the operator hears the truth even though the model kept
+    // claiming "playing" / "Done". The frame prefixes; it does not delete the
+    // model's residual text, but the authoritative first statement is the truth.
+    assert.ok(result.say.startsWith("That didn't work —"), 'deterministic truth frame must lead the reply');
+    assert.ok(/spotify_play failed/.test(result.say), 'frame must name the failed tool');
+    assert.ok(/won't claim it succeeded/.test(result.say), 'frame must disclaim success');
   });
 
   it('does not fire the corrective pass when every action succeeds', async () => {

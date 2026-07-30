@@ -1006,6 +1006,25 @@ Full list in `ROADMAP.md` lines 396-403.
 
 ---
 
+## Session (2026-07-31) — Slice 2 Hardening: click gap + honesty + self-loops + Electron playback
+
+All 8 incidents below were flagged by the operator during live MYTHOS sessions on 2026-07-30/31 (episodic logs `vault/Episodic/2026-07-30.jsonl`, `2026-07-31.jsonl`; incidents `vault/Incidents/2026-07-30.jsonl`). Root-caused and fixed in Slice 2. Test suite 1742 → 1761, 0 fail. Note: "the white leg" in the operator's note was a voice-transcription garble for "the UI click is not **wired for the** electron" — there is no "white leg" anywhere in the codebase.
+
+| Bug | Root cause | Fix | Files |
+|---|---|---|---|
+| **Click-inside-rendered-content gap** (Spotify native search/play, YouTube in-app, Electron HUD — "the wire for the electron") | `cua-driver` (element-addressed click binary) existed on disk but was wired to ONE private caller (Spotify), never exposed to the brain as a general tool | `from-cua.js` exposes `cua_list_windows`/`cua_bring_to_front`/`cua_get_window_state`/`cua_click` with OFFLINE-honesty; `main.js` wires them; binary resolves ONLINE | `mythos/src/core/effectors/from-cua.js` (new), `mythos/src/main.js`, `mythos/test/from-cua.test.js` (new) |
+| **YouTube ad-blocker failing (10-15s pre-rolls)** | `fromPrebuiltAdsAndTracking(...).then(...)` never awaited before `loadURL`; cold-cache 7MB fetch finished after the iframe already fired ad requests | Await blocker init before `loadURL`; surface `.catch` failure honestly | `electron/main.js` |
+| **Electron YouTube severely laggy (audio cuts every 1-2s)** | `backgroundThrottling` defaulted to true → iframe renderer throttled when unfocused | `backgroundThrottling:false` + `disable-background-timer-throttling`/`disable-renderer-backgrounding` switches | `electron/main.js` |
+| **"Opened Chrome despite electron-only"** | `YOUTUBE_MODE` enum was only `embed`/`newtab` (no in-app intent), and Electron had no `setWindowOpenHandler` → default `newtab` fired `window.open(_blank)` → external browser | Add `'electron'` mode (new default) + `setWindowOpenHandler` that traps external opens | `mythos/src/core/config/schema.js`, `mythos/src/core/effectors/from-dashboard.js`, `electron/main.js` |
+| **HUD stuck on "degraded" after self-heal** | Healer suppressed/restored tools but never transitioned the breaker FSM → `broadcastHealth` kept rebuilding it as open | Added `breaker.reset()`; healer calls it on `tool-restore` | `mythos/src/core/immune/breakers.js`, `mythos/src/core/effectors/hub.js`, `mythos/src/core/immune/healer.js`, `mythos/src/main.js` |
+| **Goals die on spawn (`budget-exhausted` at creation)** | Planner's full ~107-tool catalog prompt was debited to the goal via `spentTokens: working.spendThisTick`, so each action re-charged for re-planning | Debit planner cost ONCE to the goal at plan time (`actions:0`); action carries only its own cost | `mythos/src/core/cortex/index.js` |
+| **Fabricated success ("now playing", "I minimized Spotify")** | Corrective pass relied on the model choosing to admit failure; effectors returned unverified `sent:$true` | Deterministic honesty guard: when the entire turn failed, force a truthful frame regardless of model output; `show_desktop` result annotated with `scope:'all-windows'` | `mythos/src/core/voice/voice-agent.js`, `mythos/src/core/effectors/from-pc.js` |
+| **Volume ducking self-sabotage (symptom)** | Current tree already saves/restores real pre-duck level; the "40/50/62" symptom was a stale premise. Made `DUCK_VOLUME_LEVEL`/`UNDUCK_SAFETY_MS` env-overridable for live tuning; restore logic unchanged pending live verification | Env knobs only | `mythos/server/index.js` |
+
+**Not fixed (live-verification needed):** Tier 1a/1b/1c and the mic/YouTube-click fixes can only be fully verified by launching the real Electron app against real Spotify/YouTube — same caveat Slice 1 carried. The deterministic + honesty fixes are unit-tested.
+
+---
+
 ## Priority Queue (what to fix next, in order)
 
 1. **BUG-036** — SMTC `media_status` fails (WinRT COM interop — media widget blank, now-playing broken)

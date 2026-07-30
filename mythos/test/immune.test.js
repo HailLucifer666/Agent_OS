@@ -176,6 +176,23 @@ describe('immune/breakers', function() {
     // billions of ms in the future — the bug this regression test guards against).
     assert.ok(secondDelay > 100 && secondDelay <= 130, 'expected ~120ms doubled backoff, got ' + secondDelay);
   });
+
+  it('reset() forces CLOSED from OPEN without waiting for a probe (the HUD-degraded fix)', function() {
+    // Regression for the 2026-07-31 bug: when the healer restores a suppressed
+    // tool, recordSuccess() can NEVER run (the tool was suppressed, so it was
+    // never dispatched), leaving the breaker stuck OPEN and the HUD showing
+    // "degraded" after a heal. reset() is the missing state transition.
+    var bus = fakeBus();
+    var { createBreaker } = require('../src/core/immune/breakers');
+    var breaker = createBreaker({ name: 'test-reset', bus: bus, config: { BREAKER_FAIL_THRESHOLD: 1, BREAKER_RESET_MS: 60000 } });
+    breaker.recordFailure(); // CLOSED -> OPEN
+    assert.equal(breaker.state, 'open');
+    assert.equal(breaker.allow(), false, 'still open, blocking before reset');
+    breaker.reset(); // healer's tool-restore path calls this
+    assert.equal(breaker.state, 'closed', 'reset() must force CLOSED immediately');
+    assert.equal(breaker.allow(), true, 'must allow again after reset');
+    assert.equal(breaker.stats.failCount, 0, 'failCount cleared');
+  });
 });
 
 // ---------------------------------------------------------------------------

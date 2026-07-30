@@ -715,6 +715,29 @@ describe('goals/index', function() {
     goals.debitBudget('goal-nonexistent', { tokens: 100, actions: 1 });
   });
 
+  // Slice-2 (2026-07-31): regression for "goals die on spawn". The root cause
+  // was that cortex folded the planner's ~107-tool catalog-prompt cost into
+  // working.spendThisTick, which act()->dispatchAction() then passed as the
+  // ACTION's spentTokens — so every dispatched action re-charged the goal for
+  // re-planning. A fresh 20k-budget goal blew its budget in 1-2 ticks. The fix
+  // debits the planner cost ONCE directly to the goal (actions:0) at plan time;
+  // the action carries only its own dispatch cost. This test pins that contract:
+  // one planner debit + one action must leave a 20k goal alive and working.
+  it('a goal survives one planner debit + one action (Slice-2: no re-charge per action)', function() {
+    makeGoals();
+    var goal = goals.create({ title: 'Noise reduction', status: 'active',
+      budget: { tokens: 20000, actions: 25 } });
+    // Planner cost debited once at plan time (cortex RC#3/Slice-2): actions:0.
+    goals.debitBudget(goal.id, { tokens: 12000, actions: 0 });
+    // The action's own dispatch cost — effectors don't call the brain, so small.
+    goals.debitBudget(goal.id, { tokens: 50, actions: 1 });
+    var refreshed = goals.get(goal.id);
+    assert.equal(refreshed.status, 'active', 'goal must still be active after plan + one action');
+    assert.notEqual(refreshed.reason, 'budget-exhausted', 'must not be budget-exhausted');
+    assert.equal(refreshed.spent.tokens, 12050, 'planner cost + action cost, counted once each');
+    assert.equal(refreshed.spent.actions, 1, 'only the action counts as an action');
+  });
+
   // --- Stats ---
 
   it('stats returns counts', function() {

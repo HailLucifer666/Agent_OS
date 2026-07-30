@@ -13,6 +13,7 @@ const { TOOLS: PC_TOOLS } = require('../src/core/effectors/from-pc');
 const { TOOLS: BROWSER_TOOLS } = require('../src/core/effectors/from-browser');
 const { registerFromComputer } = require('../src/core/effectors/from-computer');
 const { registerFromPc } = require('../src/core/effectors/from-pc');
+const { registerFromCua } = require('../src/core/effectors/from-cua');
 const { registerFromBrowser } = require('../src/core/effectors/from-browser');
 const { registerFromDashboard, buildTools: buildDashboardTools } = require('../src/core/effectors/from-dashboard');
 const { registerFromProject, buildTools: buildProjectTools } = require('../src/core/effectors/from-project');
@@ -115,7 +116,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 86 registered count', () => {
+describe('gate: 90 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -123,6 +124,7 @@ describe('gate: 86 registered count', () => {
 
     registerFromComputer(hub);
     registerFromPc(hub);
+    registerFromCua(hub);
     registerFromBrowser(hub);
     registerFromDashboard(hub, ctx);
     registerFromProject(hub, ctx);
@@ -155,16 +157,16 @@ describe('gate: 86 registered count', () => {
     // step 5 desktop gaps) = 82, + clipboard_read/clipboard_write
     // (from-computer, Task 3, step 5 desktop gaps) = 84, + screen_read_text
     // (from-pc, §7.1, step 5 desktop gaps) = 85, + set_wallpaper (from-pc,
-    // §7.7, step 5 desktop gaps) = 86.
+    // §7.7, step 5 desktop gaps) = 86,
+    // + 4 cua_* tools (cua_list_windows/cua_bring_to_front/cua_get_window_state/
+    // cua_click from from-cua — the Chromium-capable click path that complements
+    // pc-child's ui_click, un-breaking Spotify-native search-then-play and general
+    // click-inside-rendered-content — Slice 2, 2026-07-31) = 90.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    // 2026-07-31: the dead 'speak' voice effector was removed from main.js's
-    // and mcp/server.js's boots. This gate never registered it (no
-    // createVoiceEffector call above), so 86 is unchanged — recorded here so
-    // the removal is not mistaken for an un-synced count.
-    assert.equal(hub.count(), 86);
+    assert.equal(hub.count(), 90);
   });
 });
 

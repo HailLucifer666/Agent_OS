@@ -236,8 +236,14 @@ const SCHEMA = {
   CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
   CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },
 
-  // YouTube mode (BUG-006 escape hatch): 'embed' attempts iframe embed, 'newtab' opens in new browser tab
-  YOUTUBE_MODE:                { type: 'string', default: 'embed', enum: ['embed', 'newtab'] },
+  // YouTube mode: 'electron' (default) plays inside the HUD's web panel, where
+  // the Electron session-level blocker (electron/main.js,
+  // @ghostery/adblocker-electron) handles ads and the app stays self-contained —
+  // this is the operator's expressed intent ("electron only, don't open the
+  // browser"). 'embed' is the legacy alias for the same in-HUD behavior.
+  // 'newtab' opens videos in the real external browser (where the operator's
+  // own ad blocker lives) — opt-in only, since it pops a separate Chrome window.
+  YOUTUBE_MODE:                { type: 'string', default: 'electron', enum: ['electron', 'embed', 'newtab'] },
 
   // MCP server (Item 10 — hand-rolled JSON-RPC 2.0 stdio server, mcp/server.js).
   // Opt-in by design: exposing the hub's ~58-tool catalog over a new stdio

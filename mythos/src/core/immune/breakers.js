@@ -62,6 +62,21 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
     failCount = 0;
   }
 
+  // Force CLOSED from any state, regardless of the HALF_OPEN-only gate in
+  // recordSuccess(). Used when the immune healer decides a tool is healthy
+  // (tool-restore after suppression cooldown) — without it the breaker stays
+  // OPEN/HALF_OPEN because the suppressed tool is never dispatched again, so
+  // recordSuccess() is never called and the HUD keeps showing "degraded" even
+  // after the tool is logically restored. This is the missing state transition.
+  function reset() {
+    state = BREAKER_STATES.CLOSED;
+    failCount = 0;
+    lastFailAt = 0;
+    resetAt = 0;
+    currentResetMs = RESET_MS;
+    halfOpenAttempts = 0;
+  }
+
   function recordFailure() {
     const now = Date.now();
     if (now - lastFailAt > WINDOW_MS) failCount = 0;
@@ -91,7 +106,8 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
     get stats() { return { name: name, state: state, failCount: failCount, resetAt: resetAt }; },
     allow: allow,
     recordSuccess: recordSuccess,
-    recordFailure: recordFailure
+    recordFailure: recordFailure,
+    reset: reset
   };
 }
 

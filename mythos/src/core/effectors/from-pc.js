@@ -274,7 +274,20 @@ async function ui_type({ text, pid, elementPath }) {
 }
 
 async function show_desktop() {
-  return delegate({ cmd: 'show_desktop' });
+  // Slice-2 (2026-07-31): show_desktop minimizes ALL windows by design — there
+  // is no per-window variant. The 07-31 transcript showed MYTHOS claim "I
+  // minimized the Spotify window, not the electron app" after calling this,
+  // which is impossible. Annotate the result so the voice loop's honesty guard
+  // and corrective pass see the truthful scope and can't misattribute it to a
+  // single window. This is the show_desktop analogue of focus_window's PS-side
+  // GetForegroundWindow oracle (FIX 2) — a truthful result, not a verify-read.
+  var res = await delegate({ cmd: 'show_desktop' });
+  if (res.ok && res.result && typeof res.result === 'object') {
+    res.result.scope = 'all-windows';
+  } else if (res.ok) {
+    res.result = { ok: true, scope: 'all-windows' };
+  }
+  return res;
 }
 
 async function media_status() {
