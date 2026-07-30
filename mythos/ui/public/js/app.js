@@ -10,9 +10,12 @@ import { createOverlayManager } from './overlay/overlay-manager.js';
 import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
+import { decideVoiceTransport } from './voice/voice-transport.js';
 import { createCameraLoop } from './vision/camera.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
+import { mountPinLockScreen } from './pin/pin-lock-screen.js';
+import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
 
 const ctx = { subscribe, onRefresh };
@@ -22,6 +25,12 @@ const ctx = { subscribe, onRefresh };
 // itself once the entity reports alive (or after a hard timeout if the
 // server never answers) — see init-screen.js for the reveal timing.
 mountInitScreen({ subscribe });
+
+// §7.3 local PIN lock — the enforcement point the backend never had. Mounted
+// here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status
+// and only paints an overlay if a PIN is actually configured. With no PIN
+// configured — the default — nothing changes at all. See pin/pin-lock-screen.js.
+const pinLockScreen = mountPinLockScreen(document.getElementById('pin-root'));
 
 // D5: Track brain availability from entity-state broadcasts.
 // When entity reports offline/degraded, voice loop skips transcription to save API calls.
@@ -54,6 +63,19 @@ let _wakewordCfg = null;
 fetch('/api/config/wakeword')
   .then((r) => (r.ok ? r.json() : null))
   .then((cfg) => { if (cfg) _wakewordCfg = cfg; })
+  .catch(() => {});
+
+// Gemini Live speech-to-speech (VOICE_S2S_ENABLED, server/routes/config.js),
+// fetched once at boot like the two above. Stays FALSE unless the server says
+// otherwise — a fetch that fails, 404s, or never resolves leaves the mature
+// batch-STT path (voice-loop.js) in charge, which is the honest default
+// (schema.js defaults VOICE_S2S_ENABLED to false). Until this fetch existed
+// the client had no way to learn the flag at all, so voice/s2s-bridge.js —
+// complete and protocol-correct — had no consumer.
+let _s2sEnabled = false;
+fetch('/api/config/s2s')
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => { if (cfg && cfg.enabled) _s2sEnabled = true; })
   .catch(() => {});
 
 // overlays
@@ -140,8 +162,70 @@ function ensureVoice() {
   return voice;
 }
 
-function toggleVoice() {
-  ensureVoice().toggle();
+// ---- S2S (Gemini Live duplex) transport, additive and flag-gated ----------
+// voice/s2s-bridge.js self-wires its own live-audio-out/live-interrupted/
+// live-state/live-transcript listeners through ws.js's onBroadcast, so all it
+// needs from here is onState/onCaption and a start/stop call. Lazily imported
+// (same pattern as wakeword.js below) so a HUD with the flag off never fetches
+// the bridge or pcm-player at all.
+let s2s = null;
+let _s2sImport = null;
+
+function ensureS2S() {
+  if (s2s) return Promise.resolve(s2s);
+  if (!_s2sImport) {
+    _s2sImport = import('./voice/s2s-bridge.js')
+      .then(({ createS2SBridge }) => {
+        s2s = createS2SBridge({
+          onState: onVoiceState,
+          onCaption: (text, kind) => compose.setCaption(text, kind),
+        });
+        return s2s;
+      })
+      .catch((err) => {
+        // Honest degradation, and permanent for this page: fall back to the
+        // batch loop rather than pretending S2S is available.
+        _s2sEnabled = false;
+        _s2sImport = null;
+        mic.setCaption('Live voice failed to load — using standard voice: ' + ((err && err.message) || err), 'error');
+        return null;
+      });
+  }
+  return _s2sImport;
+}
+
+// One entry point for every voice affordance (compose-bar button, orb click,
+// wake word). decideVoiceTransport() owns the choice AND the mic-exclusivity
+// invariant — the two transports each open their own getUserMedia stream, so
+// both capturing at once would have the Live model hearing itself and the
+// batch loop transcribing MYTHOS's own replies. See voice/voice-transport.js
+// and test/voice-transport-decision.test.js.
+async function toggleVoice() {
+  // No voice affordance (compose-bar button, orb click, wake word) may open
+  // the mic while the PIN lock screen is locked OR its status check hasn't
+  // answered yet — see isGateClosed()'s doc comment in pin/pin-gate.js.
+  if (isGateClosed(pinLockScreen.lockState())) return;
+  const plan = decideVoiceTransport({
+    s2sEnabled: _s2sEnabled,
+    s2sActive: Boolean(s2s && s2s.isActive()),
+    batchActive: Boolean(voice && voice.isActive()),
+  });
+
+  // Release the transport that must not hold the mic, FIRST and always —
+  // including on a stop, so no stray capture is left running.
+  if (plan.stopOther === 'batch' && voice) voice.stop();
+  if (plan.stopOther === 's2s' && s2s) await s2s.stop();
+
+  if (plan.transport === 'batch') {
+    if (plan.action === 'start') ensureVoice().start();
+    else if (voice) voice.stop();
+    return;
+  }
+
+  const bridge = await ensureS2S();
+  if (!bridge) { ensureVoice().start(); return; } // import failed — batch fallback
+  if (plan.action === 'start') await bridge.start();
+  else await bridge.stop();
 }
 
 // Orb click still toggles voice (legacy affordance)
@@ -159,7 +243,12 @@ let camera = null;
 const GESTURE_ACTIONS = {
   Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
   Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
-  Open_Palm:   () => { if (voice && voice.isActive()) { voice.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); } },
+  Open_Palm:   () => {
+    // Whichever transport currently holds the mic (see toggleVoice) — the
+    // gesture has to be able to mute an S2S session too, not just the batch loop.
+    if (voice && voice.isActive()) { voice.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); }
+    if (s2s && s2s.isActive()) { s2s.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); }
+  },
   Victory:     () => describeScene('Describe what you see, briefly.'),
 };
 
@@ -235,6 +324,17 @@ subscribe(['camera-frame-request'], (msg) => {
 // the loop object is constructed on the FIRST pointerdown (any click) — but
 // listening still starts only when the user explicitly clicks the mic or orb.
 const armOnce = () => {
+  // Clicking into the PIN lock screen is a pointerdown too — do NOT arm the
+  // mic or start always-on wake-word listening behind a locked HUD. Stay
+  // subscribed so the first real click after unlocking arms as usual.
+  //
+  // Uses the tri-state lockState(), not the boolean isLocked(): the PIN
+  // status check (GET /api/pin/status) is non-blocking, so there is a real
+  // window where lockState() is still 'unknown' (isLocked() reads false in
+  // that same window). isGateClosed() treats 'unknown' the same as 'locked'
+  // so a pointerdown landing during that round trip can't permanently arm
+  // the mic behind a HUD that then paints locked a moment later.
+  if (isGateClosed(pinLockScreen.lockState())) return;
   document.removeEventListener('pointerdown', armOnce);
   ensureVoice();
   ensureWakeWord();
@@ -258,7 +358,14 @@ function ensureWakeWord() {
     wakeword = createWakeWord({
       threshold: _wakewordCfg.threshold,
       onWake: () => {
+        // Never react to a spoken wake word at a locked (or not-yet-known)
+        // machine — a bystander who knows the wake phrase must not be able
+        // to open a full voice turn, including server-side tool dispatch,
+        // just by speaking at a locked HUD.
+        if (isGateClosed(pinLockScreen.lockState())) return;
         if (voice && voice.isActive()) return;   // already in a conversation
+        if (s2s && s2s.isActive()) return;        // ...or already in a live S2S session
+        if (s2s && s2s.isSpeaking()) return;      // Live model is talking — no re-trigger
         if (_voiceState === 'speaking') return;   // MYTHOS is talking — no re-trigger
         if (orb.flashAction) orb.flashAction('wake', true);
         toggleVoice();                             // same path as clicking the orb
@@ -330,6 +437,13 @@ subscribe(['job'], (msg) => {
 // chunk-queue/barge-in path as voice replies and vision answers. The orb
 // flashes so the user knows MYTHOS is speaking on its own initiative.
 subscribe(['proactive-speech'], (msg) => {
+  // Cortex keeps ticking while locked — do not read build results, goal
+  // titles, or error text aloud over a locked HUD (pin.css's "nothing may be
+  // ... read over the top of a locked HUD" claim). Dropped here, before a
+  // reply handler is even registered, so the matching speech-chunk/done
+  // broadcasts land with no handler and are silently ignored (see ws.js's
+  // registerReplyHandler comment) rather than played later.
+  if (isGateClosed(pinLockScreen.lockState())) return;
   const v = ensureVoice();
   const session = v.beginTurn(msg.reqId); // reqId known upfront — barge-in can cancel this turn's TTS synthesis too (Item B)
   mic.setCaption(msg.text || msg.speak || '', 'reply');
@@ -351,6 +465,9 @@ subscribe(['proactive-speech'], (msg) => {
 // this relay to actually open the panel. Without it, "open the memory panel"
 // succeeds server-side but the view never changes.
 subscribe(['navigate'], (msg) => {
+  // Same locked-HUD invariant as proactive-speech above: a server-driven
+  // navigate must not change what's rendered behind a locked screen.
+  if (isGateClosed(pinLockScreen.lockState())) return;
   if (msg.route) overlays.openPanel(msg.route);
 });
 

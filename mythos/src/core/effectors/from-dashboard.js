@@ -456,6 +456,11 @@ function buildTools(ctx) {
       const match = findByQuery(current, query, (g) => g.text);
       if (!match) return fail(`No goal matching "${query}" found.`);
       const list = goalsEffector.deleteGoal(match.item.id);
+      // list.degraded means the bridge map was unreadable, so nothing was
+      // removed. Claiming `deleted:` here would be a fabricated success (AD-4).
+      if (list.degraded) {
+        return fail(`Could not delete "${match.item.text}" — the goals bridge map is unreadable right now. Nothing was changed.`);
+      }
       return ok({ goals: list, deleted: match.item.text });
     } catch (err) {
       return fail(err.message);

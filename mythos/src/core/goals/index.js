@@ -545,11 +545,41 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     if (bus) bus.emit('goal.budget-debited', { id: id, spent: goal.spent });
   }
 
-  function grantTier(id, tier) {
+  // grantTier(id, tier, tools) — record that a human approved `tools` at `tier`
+  // for this goal, so those specific actions don't re-prompt for the rest of the
+  // goal's life.
+  //
+  // SECURITY: `tools` is REQUIRED and the grant is scoped to it. This used to
+  // store a bare `true`, which leash.check() honoured for every tool at that
+  // tier — so approving one Forge build plan silently handed the goal a
+  // standing pass for gmail_send, delete_file, run_command, phone_call and
+  // every other T3 tool that later carried the same goalId (reachable via
+  // engagements' LLM-authored action stages and via cortex's autonomous ticks).
+  // A grant now names what was approved, and nothing else matches.
+  //
+  // Stored as an ARRAY, not a Set: the goal record is persisted as JSON and a
+  // Set serialises to {}. Missing/empty/non-array `tools` grants nothing — the
+  // fail-closed direction, since a grant we cannot describe is a grant we
+  // cannot safely honour.
+  function grantTier(id, tier, tools) {
     var goal = goals.get(id);
     if (!goal) return;
-    goal.grants[String(tier)] = true;
+    var list = Array.isArray(tools)
+      ? tools.filter(function(t) { return typeof t === 'string' && t.length > 0; })
+      : [];
+    if (list.length === 0) {
+      if (bus) bus.emit('health.anomaly', { kind: 'goal-grant-empty', target: id, evidence: { tier: tier } });
+      return;
+    }
+    var key = String(tier);
+    var existing = Array.isArray(goal.grants[key]) ? goal.grants[key] : [];
+    var merged = existing.slice();
+    for (var i = 0; i < list.length; i++) {
+      if (merged.indexOf(list[i]) === -1) merged.push(list[i]);
+    }
+    goal.grants[key] = merged;
     saveGoal(id);
+    if (bus) bus.emit('goal.tier-granted', { id: id, tier: tier, tools: merged });
   }
 
   // --- Persistence ---

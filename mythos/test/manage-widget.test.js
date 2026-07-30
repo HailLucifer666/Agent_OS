@@ -47,7 +47,11 @@ describe('manage_widget', () => {
     tool.fn({ action: 'open', name: 'all' });
     const cmd = lastCommand();
     assert.equal(cmd.mode, 'open');
-    assert.equal(cmd.targets.length, 10);
+    // Boot-widget registry count. Changelog: 10 -> 11 when the VOICE LATENCY
+    // tile joined ui/public/js/widgets/widget-registry.js (surfacing
+    // /api/status's previously-unread voiceLatency). Keep in step with
+    // BOOT_WIDGET_IDS in src/core/effectors/from-widgets.js.
+    assert.equal(cmd.targets.length, 11);
   });
 
   it('solo keeps only the named widget', () => {

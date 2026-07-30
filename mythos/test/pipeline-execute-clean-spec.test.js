@@ -14,27 +14,19 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const nodeFs = require('fs');
 
-const { tempVaultDir, cleanupVaultDir, fakeBus } = require('./helpers');
+const { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished } = require('./helpers');
 const { createFsStore } = require('../src/core/memory/fs-store');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
 const { createBuildRunner } = require('../src/core/effectors/build-runner');
 const { createAgentActions } = require('../src/core/effectors/agent-actions');
 
-function waitForJobFinished(buildRunner, jobId, timeoutMs) {
-  timeoutMs = timeoutMs || 4000;
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const unsubscribe = buildRunner.onJobUpdate((job) => {
-      if (job.id === jobId && (job.status === 'done' || job.status === 'failed')) { unsubscribe(); resolve(job); }
-    });
-    const poll = setInterval(() => {
-      const job = buildRunner.getJob(jobId);
-      if (job && (job.status === 'done' || job.status === 'failed')) { clearInterval(poll); unsubscribe(); resolve(job); }
-      else if (Date.now() - start > timeoutMs) { clearInterval(poll); unsubscribe(); reject(new Error('timed out waiting for job ' + jobId)); }
-    }, 10);
-  });
-}
+// The 4000ms hand-rolled wait that used to live here was smaller than the
+// bounded worst case of the path it waits on (see helpers.js's
+// waitForJobFinished) and reported flake as failure with a message that could
+// not be told apart from a real hang. Shared helper now owns both. Its
+// onJobUpdate subscription was redundant with the poll (getJob() reads the same
+// in-memory record synchronously) and leaked a listener on the timeout path.
 
 describe('REMEDIATION: executePipelineCard sets a clean job.spec, not the boilerplate builder prompt', () => {
   it("verifier.verify() receives card.text, not the DELIVERABLE_PREAMBLE-prefixed prompt", async () => {

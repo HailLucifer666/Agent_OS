@@ -10,9 +10,12 @@ function fakeAudit() {
   const writes = [];
   return { write: (e) => { writes.push(e); return { ok: true }; }, _writes: writes };
 }
+// Captures the third argument too: grantTier(id, tier, tools) is tool-scoped as
+// of the 2026-07-31 security fix, and a fake that silently dropped `tools` would
+// hide a regression back to the tier-wide grant.
 function fakeGoals() {
   const grants = [];
-  return { grantTier: (id, tier) => grants.push([id, tier]), _grants: grants };
+  return { grantTier: (id, tier, tools) => grants.push([id, tier, tools]), _grants: grants };
 }
 
 describe('checkpoints — workflow approval gates', () => {
@@ -53,7 +56,9 @@ describe('checkpoints — workflow approval gates', () => {
     assert.equal(res.ok, true);
     assert.equal(res.status, 'approved');
     assert.equal(approved, true);
-    assert.deepEqual(goals._grants, [['g1', 3]]);
+    // Tool-scoped as of the 2026-07-31 security fix: a plan approval grants the
+    // build tools it disclosed, never all of T3.
+    assert.deepEqual(goals._grants, [['g1', 3, ['build_project', 'revise_project']]]);
     assert.equal(audit._writes.length, 1);
     assert.equal(audit._writes[0].decision, 'allow');
     assert.equal(bus._lastEvent('checkpoint.resolved').payload.status, 'approved');

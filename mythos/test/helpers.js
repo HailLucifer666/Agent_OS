@@ -62,4 +62,57 @@ function fakeBus() {
   return bus;
 }
 
-module.exports = { tempVaultDir, cleanupVaultDir, fakeBus };
+/**
+ * Wait until a build-runner job reaches a terminal state ('done' | 'failed').
+ *
+ * Replaces the 4000ms hand-rolled polls that used to live inline in
+ * p0-2-pipeline-failure-state.test.js and pipeline-execute-clean-spec.test.js.
+ * Those bounds were smaller than the bounded worst case of the code under test:
+ * executePipelineCard's research gate runs up to three execFile() probes for the
+ * optional `agent-reach` binary (3000ms + 8000ms + 8000ms of allowance), and a
+ * failed Windows process spawn alone measures ~0.6s unloaded. Under a loaded
+ * full-suite run 4s was exceeded and the suite reported a failure that was not a
+ * regression.
+ *
+ * The bound is therefore generous but still finite (a genuine hang must still
+ * fail, not wedge the runner), and the rejection reports the job's LAST OBSERVED
+ * state so a real hang (stuck stage, stale updatedAt) is distinguishable from a
+ * slow machine (stage advancing, fresh updatedAt).
+ */
+function waitForJobFinished(buildRunner, jobId, timeoutMs) {
+  const limit = timeoutMs || 30000;
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const poll = setInterval(() => {
+      const job = buildRunner.getJob(jobId);
+      if (job && (job.status === 'done' || job.status === 'failed')) {
+        clearInterval(poll);
+        resolve(job);
+        return;
+      }
+      const elapsed = Date.now() - start;
+      if (elapsed > limit) {
+        clearInterval(poll);
+        reject(new Error(
+          'timed out after ' + elapsed + 'ms waiting for job ' + jobId +
+          ' to finish — ' + describeJob(job)
+        ));
+      }
+    }, 10);
+  });
+}
+
+/**
+ * One-line diagnosis of a job record for waitForJobFinished's timeout message.
+ * Never invents a value: an absent field is reported as absent.
+ */
+function describeJob(job) {
+  if (!job) return 'no such job record (bad job id, or enqueue() refused the job)';
+  const age = job.updatedAt ? (Date.now() - job.updatedAt) + 'ms ago' : 'never (no updatedAt)';
+  return 'last observed status=' + job.status + ' stage=' + job.stage +
+    ' error=' + (job.error === null || job.error === undefined ? 'none' : JSON.stringify(job.error)) +
+    ', last update ' + age +
+    ' (a stale update + stuck stage means a real hang; a fresh update means the machine is just slow)';
+}
+
+module.exports = { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished };

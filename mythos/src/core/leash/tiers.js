@@ -13,7 +13,11 @@ const TIER_TABLE = {
   'list_goals':            0,
   'pipeline_status':       0,
   'kanban_status':         0,
-  'monitor_snapshot':      0,
+  // 'monitor_snapshot' was removed 2026-07-31 (spec §9 snippet updated to
+  // match): Wave 1's dead-code pass deleted the abtop-backed tool it named,
+  // so the entry was dead policy that read as a shipped capability. The
+  // T4 'kill_session' entry deleted in the same Wave 1 pass deliberately
+  // STAYS — see test/tier-table-conformance.test.js's exemption comment.
   'mission_status':        0,
   'get_time':              0,
   'get_weather':           0,

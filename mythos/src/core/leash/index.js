@@ -166,9 +166,35 @@ function createLeash(deps) {
 
     // 4. T3 -> check per-goal grant (goal.grants['3'], set by goals.grantTier()).
     // Grant dies with the goal record itself — no separate expiry bookkeeping.
+    //
+    // SECURITY (2026-07-31): the grant is a LIST OF TOOL NAMES and only matches
+    // the tool actually named in it. It used to be a bare boolean honoured for
+    // the whole tier, which meant approving a single Forge build plan gave the
+    // goal a standing pass for every T3 tool that later carried the same
+    // goalId — gmail_send, delete_file, run_command, phone_call, phone_sms_send,
+    // browser_click, install_from_github, hermes_task. Two live consumers made
+    // that reachable with no external attacker: engagements/executor.js checks
+    // LLM-authored {tool,args} stages against this gate with goalId set (so any
+    // untrusted text reaching the spec could steer it), and cortex/index.js
+    // passes its own activeGoalId on every autonomous tick. See
+    // test/leash-grant-scope.test.js.
     if (tier === 3) {
       var goal = (goalCtx && goalCtx.goalId) ? goals.get(goalCtx.goalId) : null;
-      if (goal && goal.grants && goal.grants['3']) {
+      var goalGrant = (goal && goal.grants) ? goal.grants['3'] : undefined;
+      // A legacy pre-scoping grant (bare `true` persisted by an older build) is
+      // deliberately NOT honoured: there is no way to recover which tools the
+      // human originally saw, so it fails closed to a fresh confirm. Reported
+      // rather than ignored silently — an operator seeing one re-prompt after
+      // an upgrade should be able to find out why.
+      if (goalGrant === true) {
+        bus.emit('health.anomaly', {
+          kind: 'goal-grant-legacy-unscoped',
+          target: goalCtx.goalId,
+          evidence: { tool: toolName, reason: 'tier-wide grant ignored; re-confirm required' }
+        });
+        goalGrant = undefined;
+      }
+      if (Array.isArray(goalGrant) && goalGrant.indexOf(toolName) !== -1) {
         var grantedWrite = writeAudit(action, goalCtx.goalId, tier, 'allow', { granted: true, reason: 'goal-granted' });
         return failClosedIfUnwritable(tier, grantedWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'goal-granted' });
       }

@@ -67,9 +67,25 @@ the merged execution order, the next action, and anything blocking. Do the next
 unchecked `- [ ]` step, tick it only when **live-verified**, add a row to its
 Progress log with the commit SHA, rewrite RESUME HERE, then commit and **push**.
 A tick that isn't pushed does not exist as far as the next machine is concerned.
-Do not start a third plan document. Precedence: the spine owns anything it
-specifies at source level; the roadmap wins where it is more concrete or more
-recent; V2 §18 breaks ties.
+Do not start a **fourth** plan document. There are now three, deliberately, and
+that is the ceiling:
+
+> **`MYTHOS-IRIS-Synthesis-Plan.md`** — the roadmap/delta for the active build.
+> **`MYTHOS-IRIS-Synthesis-Plan-V2-spine.md`** — source-level detail for it.
+> **`MYTHOS-Post-Parity-Plan.md`** — added 2026-07-31: everything that starts
+> only *after* merged-order step 7 (social platforms, the multi-agent business
+> layer, phone/multi-device control surfaces, multi-device wake-word
+> arbitration). Downstream by construction; the roadmap wins on any overlap.
+
+The original "no third document" rule existed to stop planning from living in
+**untracked** files — that is how the V2 spine was nearly lost. All three are
+tracked, cross-linked from each other, and none of them is a point-in-time
+handoff note. Adding scope to an existing one is still preferred over creating a
+new file.
+
+Precedence: the spine owns anything it specifies at source level; the roadmap
+wins where it is more concrete or more recent; V2 §18 breaks ties; the
+post-parity plan never overrides either.
 
 **Plans can hide outside the repo.** Claude Code plan-mode files live in
 `~/.claude/plans/` under auto-generated names that match no sensible search

@@ -31,8 +31,27 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
     throw new Error('createGoalsMdBridge requires a GoalSystem instance');
   }
 
+  // loadBridgeMap() returns the map array, or NULL meaning "could not read" —
+  // which is NOT the same as [] meaning "no mappings yet".
+  //
+  // SILENT DATA LOSS FIX: this used to be `catch (_) { return []; }`. fs-store's
+  // readJSON already absorbs both legitimate empty cases itself (missing file →
+  // fallback; unparseable JSON → 'json-corrupt' anomaly + fallback), so anything
+  // that throws out of it is a real read failure — typically a transient Windows
+  // EBUSY/EPERM lock. Fabricating [] made findGoalIdFor() miss every tracked row,
+  // so sync() re-created a duplicate goal per row and saveBridgeMap() then wrote
+  // the rebuilt map over the real one, orphaning every existing goal id (and
+  // writeBack() re-appended every user-service goal to Goals.md). Callers must
+  // now check for null and refuse to write over what they could not read.
   function loadBridgeMap() {
-    try { return fs.readJSON(BRIDGE_REL_PATH, []); } catch (_) { return []; }
+    try {
+      // Strict: a corrupt bridge map must reach the catch below, not arrive as
+      // an empty map that re-creates every goal and orphans the real ids.
+      return fs.readJSONStrict(BRIDGE_REL_PATH, []);
+    } catch (err) {
+      if (bus) bus.emit('health.anomaly', { kind: 'goals-bridge-read-failed', path: BRIDGE_REL_PATH, error: err.message });
+      return null;
+    }
   }
   function saveBridgeMap(map) {
     try { fs.writeJSON(BRIDGE_REL_PATH, map); }
@@ -48,9 +67,12 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
   // sync() — call once at boot (and after any external Goals.md edit) to reconcile
   // Goals.md rows into GoalSystem, creating a user-service goal for any unmapped row.
   function sync() {
+    var map = loadBridgeMap();
+    // Unreadable map: reconcile nothing. Proceeding would create a duplicate
+    // goal for every Goals.md row and then overwrite the real map with it.
+    if (map === null) return { rows: 0, mapped: 0, degraded: true };
     var text = fs.readText('Goals.md', '');
     var rows = parseGoalsMd(text);
-    var map = loadBridgeMap();
     var changed = false;
 
     for (var i = 0; i < rows.length; i++) {
@@ -81,9 +103,13 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
   // marks a goal done) so Goals.md reflects it. Only rewrites rows whose mapped goal's
   // status actually disagrees with the checkbox state; never reorders existing rows.
   function writeBack() {
+    var map = loadBridgeMap();
+    // Unreadable map: rewrite nothing. Without it every row looks unmapped and
+    // every user-service goal looks un-appended, so Goals.md would be rebuilt
+    // with duplicated rows and the real map replaced by that rebuild.
+    if (map === null) return { rows: 0, degraded: true };
     var text = fs.readText('Goals.md', '');
     var rows = parseGoalsMd(text);
-    var map = loadBridgeMap();
 
     var out = rows.map(function(row) {
       var goalId = findGoalIdFor(map, row);
@@ -123,10 +149,27 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
   function listGoals() {
     var text = fs.readText('Goals.md', '');
     var rows = parseGoalsMd(text);
-    var map = loadBridgeMap();
+    // Read-only surface: an unreadable map (already reported as an anomaly by
+    // loadBridgeMap) degrades to null ids rather than hiding the rows, and
+    // writes nothing. toggleGoal/deleteGoal on a null id are inert no-ops.
+    var map = loadBridgeMap() || [];
     return rows.map(function(row) {
       return { id: findGoalIdFor(map, row), text: row.text, category: row.category, done: row.done };
     });
+  }
+
+  // These three mutators return the goal LIST (an array) and several callers
+  // consume it as one, so a degraded run cannot change the return type. It marks
+  // the returned array instead: `list.degraded === true` means "the bridge map
+  // could not be read, so Goals.md was NOT updated — do not report success".
+  // Callers that claim an outcome to a human (from-dashboard's delete_goal says
+  // `deleted: <title>`, server/routes/goals.js audits 'ok') must check it; a
+  // caller that only renders the list is unaffected. Added because a transient
+  // EBUSY lock on the bridge map made every delete_goal a silent no-op that was
+  // still audited as a completed tier-1 deletion (AD-4).
+  function markDegraded(list) {
+    list.degraded = true;
+    return list;
   }
 
   function addGoal(text, category) {
@@ -145,20 +188,27 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
       status: 'active',
       reason: 'goals-effector:addGoal'
     });
-    writeBack();
-    return listGoals();
+    var added = writeBack();
+    var list = listGoals();
+    return (added && added.degraded) ? markDegraded(list) : list;
   }
 
   function toggleGoal(id) {
     var goal = goalSystem.get(id);
     if (!goal) return listGoals();
     goalSystem.update(id, { status: goal.status === 'done' ? 'active' : 'done' });
-    writeBack();
-    return listGoals();
+    var toggled = writeBack();
+    var list = listGoals();
+    return (toggled && toggled.degraded) ? markDegraded(list) : list;
   }
 
   function deleteGoal(id) {
-    var map = loadBridgeMap().filter(function(m) { return m.goalId !== id; });
+    var loaded = loadBridgeMap();
+    // Unreadable map: don't remove anything. Writing a filtered version of a map
+    // we never read would drop every OTHER mapping, not just this goal's. Flagged
+    // so the caller reports a refusal instead of a deletion that never happened.
+    if (loaded === null) return markDegraded(listGoals());
+    var map = loaded.filter(function(m) { return m.goalId !== id; });
     saveBridgeMap(map);
     goalSystem.remove(id);
     writeBack();

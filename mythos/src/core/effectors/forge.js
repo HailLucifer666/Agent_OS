@@ -29,9 +29,17 @@ function createForge({ config, runner, bus, vault, checkpoints }) {
   if (!checkpoints || typeof checkpoints.create !== 'function') throw new Error('createForge requires checkpoints');
 
   const projects = new Map();
+  // Latched by init() when the persisted state could not be READ. See init().
+  let persistSuspended = false;
 
   // ---- persistence + views ----
   function persist() {
+    // Refuse to write over state we failed to read: persist() serializes only
+    // the projects held in memory, so a single write after a failed load would
+    // replace the whole file with just the projects created since — destroying
+    // all build history. Stays latched for the process lifetime; a restart
+    // retries the read.
+    if (persistSuspended) return;
     try { vault.writeJSON(FILE, Array.from(projects.values()).slice(-MAX_PERSISTED)); }
     catch (err) { bus.emit('health.anomaly', { kind: 'forge-persist-failed', error: err.message }); }
   }
@@ -241,7 +249,23 @@ function createForge({ config, runner, bus, vault, checkpoints }) {
 
   function init() {
     let saved;
-    try { saved = vault.readJSON(FILE, []); } catch (_) { saved = []; }
+    // SILENT DATA LOSS FIX: this used to be `catch (_) { saved = []; }`. fs-store's
+    // readJSON already absorbs both legitimate empty cases itself (missing file →
+    // fallback; unparseable JSON → 'json-corrupt' anomaly + fallback), so anything
+    // that throws out of it is a real read failure — typically a transient Windows
+    // EBUSY/EPERM lock. Treating that as "no projects yet" meant the next
+    // persist() (the first createProject, or any notify()) rewrote the file with
+    // only the new project and every past build vanished, unreported. Now: report
+    // it, load nothing, and suspend persistence so nothing can truncate the file.
+    try {
+      // Strict: a corrupt projects file must reach the catch below and suspend
+      // persistence, not load as zero projects that the next persist() commits.
+      saved = vault.readJSONStrict(FILE, []);
+    } catch (err) {
+      bus.emit('health.anomaly', { kind: 'forge-state-read-failed', path: FILE, error: err.message });
+      persistSuspended = true;
+      return { loaded: 0, degraded: true };
+    }
     if (!Array.isArray(saved)) saved = [];
     for (let i = 0; i < saved.length; i += 1) { const p = normalizeLoaded(saved[i]); projects.set(p.id, p); }
     let changed = false;

@@ -42,6 +42,23 @@ function mountConfigRoutes(app, deps) {
     res.json({ enabled: config.WAKEWORD_ENABLED, threshold: config.WAKEWORD_THRESHOLD, modelsPresent });
   });
 
+  // ---- /api/config/s2s — Gemini Live speech-to-speech availability, read once
+  // at HUD boot alongside vad/wakeword above. NEW: until this existed, the
+  // client had NO way to learn VOICE_S2S_ENABLED, so ui/public/js/voice/
+  // s2s-bridge.js — a complete, protocol-correct implementation — had no
+  // consumer and the whole S2S feature was unreachable from the UI. app.js
+  // routes a voice toggle to the bridge only when this reports enabled:true;
+  // otherwise voice-loop.js's batch-STT path runs exactly as before.
+  //
+  // Only the boolean is exposed, never GEMINI_API_KEY or the model id: the
+  // client needs to know WHETHER to open a live session, not how the server
+  // talks to Google. A false here is the honest default (schema.js defaults
+  // VOICE_S2S_ENABLED to false), and matches what liveOpen() in
+  // server/index.js would answer anyway ({state:'closed', reason:'disabled'}).
+  app.get('/api/config/s2s', (req, res) => {
+    res.json({ enabled: Boolean(config.VOICE_S2S_ENABLED) });
+  });
+
   // ---- /api/stats — NEW (P9 HUD density source): one snapshot of how much the
   // entity has lived. Drives the neural map's data-grown node weights. ----
   app.get('/api/stats', (req, res) => {

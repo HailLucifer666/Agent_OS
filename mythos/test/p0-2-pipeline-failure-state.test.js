@@ -18,7 +18,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const nodeFs = require('fs');
 
-const { tempVaultDir, cleanupVaultDir, fakeBus } = require('./helpers');
+const { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished } = require('./helpers');
 const { createFsStore } = require('../src/core/memory/fs-store');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
@@ -44,22 +44,10 @@ function setup(brainThinkImpl) {
   return { dir, vaultFs, pipeline, kanban, buildRunner, agentActions };
 }
 
-function waitForJobFinished(buildRunner, jobId, timeoutMs) {
-  timeoutMs = timeoutMs || 4000;
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const poll = setInterval(() => {
-      const job = buildRunner.getJob(jobId);
-      if (job && (job.status === 'done' || job.status === 'failed')) {
-        clearInterval(poll);
-        resolve(job);
-      } else if (Date.now() - start > timeoutMs) {
-        clearInterval(poll);
-        reject(new Error('timed out waiting for job ' + jobId + ' to finish'));
-      }
-    }, 10);
-  });
-}
+// The 4000ms hand-rolled wait that used to live here was smaller than the
+// bounded worst case of the path it waits on (see helpers.js's
+// waitForJobFinished) and reported flake as failure with a message that could
+// not be told apart from a real hang. Shared helper now owns both.
 
 describe('P0-2: a job that fails before run() ever executes still marks the card failed', () => {
   it('onFailed writes buildFailed + buildError onto the pipeline card (Hermes-offline shape)', async () => {
@@ -125,12 +113,9 @@ describe('P0-2: pipeline_status self-heals a stale card pipeline_status was neve
 
       const tools = buildTools({ fs: vaultFs, bus: fakeBus(), config: {}, pipeline, buildRunner });
       // Wait for the enqueued job to actually fail so getJob() reflects it.
-      await new Promise((resolve) => {
-        const poll = setInterval(() => {
-          const j = buildRunner.getJob(realJob.id);
-          if (j && (j.status === 'failed' || j.status === 'done')) { clearInterval(poll); resolve(); }
-        }, 10);
-      });
+      // (Was an UNBOUNDED poll — a hang here wedged the runner with no message
+      // at all; the shared helper bounds it and reports the job's last state.)
+      await waitForJobFinished(buildRunner, realJob.id);
 
       const statusResult = await tools.TOOLS.find((t) => t.name === 'pipeline_status').fn({});
       assert.equal(statusResult.ok, true);

@@ -20,6 +20,14 @@ const crypto = require('crypto');
 const HISTORY_FILE = 'Checkpoints/checkpoint-history.json';
 const MAX_HISTORY = 200;
 
+// The exact T3 tools a 'plan-approval' checkpoint pre-authorises for its goal.
+// Deliberately minimal: the human approved a BUILD PLAN, so they authorised
+// building and revising that project — nothing else. Adding to this list widens
+// what one build approval silently permits for the whole life of the goal, so it
+// needs a safety review, and test/leash-grant-scope.test.js asserts that the
+// outward-facing/destructive T3 tools stay out of it.
+const PLAN_APPROVAL_GRANT_TOOLS = ['build_project', 'revise_project'];
+
 function createCheckpointRegistry({ config, bus, auditWriter, goals, fs }) {
   if (!config) throw new Error('createCheckpointRegistry requires config');
   if (!bus) throw new Error('createCheckpointRegistry requires bus');
@@ -107,10 +115,18 @@ function createCheckpointRegistry({ config, bus, auditWriter, goals, fs }) {
     rec.status = decision; rec.resolvedAt = Date.now();
     rec.feedback = feedback ? String(feedback).slice(0, 2000) : null;
 
-    // Wire the dormant grant mechanism: approving a plan grants the goal a
-    // standing T3 pass so the build's subsequent actions don't re-prompt.
+    // Approving a build plan grants the goal a standing T3 pass for the BUILD
+    // TOOLS ONLY (PLAN_APPROVAL_GRANT_TOOLS), so a revision on the same goal
+    // doesn't re-prompt — and nothing else does.
+    //
+    // SECURITY (2026-07-31): this used to call grantTier(goalId, 3) with no tool
+    // list, which leash.check() honoured tier-wide. Approving one landing-page
+    // build therefore also pre-authorised gmail_send, delete_file, run_command,
+    // phone_call and every other T3 tool for that goal — silently, for the life
+    // of the goal record. The grant now names exactly what the plan-approval
+    // modal actually disclosed to the human.
     if (decision === 'approved' && rec.kind === 'plan-approval' && rec.goalId && goals && typeof goals.grantTier === 'function') {
-      try { goals.grantTier(rec.goalId, 3); }
+      try { goals.grantTier(rec.goalId, 3, PLAN_APPROVAL_GRANT_TOOLS); }
       catch (err) { bus.emit('health.anomaly', { kind: 'checkpoint-grant-failed', id: rec.id, error: err.message }); }
     }
 

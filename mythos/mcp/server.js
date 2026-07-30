@@ -222,8 +222,10 @@ module.exports = {
 // Scope note: this bootstrap builds the real config/bus/memory/identity/
 // goals/leash pair and registers the same read/local-write/local-action
 // effector families main.js does (system, computer, pc, browser, skills,
-// memory, calendar, widgets, spotify, gmail, voice) so tools/list reflects
-// real tools and a T0 tool (get_time) can actually dispatch end-to-end.
+// memory, calendar, widgets, spotify, gmail) so tools/list reflects real tools
+// and a T0 tool (get_time) can actually dispatch end-to-end. (It used to also
+// register the 'speak' voice effector; that never reached tools/list because it
+// had no describeMeta(), and it was removed as dead code 2026-07-31.)
 // It deliberately does NOT wire Forge/mission/project/dashboard (those need
 // buildRunner+checkpoints+orchestrator+probes+abtop — a large, separate
 // dependency chain) — those tools are T3+ anyway and are structurally
@@ -272,7 +274,6 @@ if (require.main === module) {
     const { registerFromWidgets } = require('../src/core/effectors/from-widgets');
     const { registerFromSpotify } = require('../src/core/effectors/from-spotify');
     const { registerFromGmail } = require('../src/core/effectors/from-gmail');
-    const { createVoiceEffector } = require('../src/core/effectors/voice');
 
     const logger = createLogger(config.LOG_LEVEL);
     const bus = createBus({
@@ -309,7 +310,6 @@ if (require.main === module) {
     registerFromWidgets(hub, { bus: bus });
     registerFromSpotify(hub, { effectors: hub });
     registerFromGmail(hub, { logger: logger });
-    hub.register(createVoiceEffector({ config: config }));
 
     const scanner = createCredentialScanner();
     const leash = createLeash({

@@ -4,10 +4,10 @@
 
 **An always-on cognitive entity that perceives, reasons, acts, and self-heals.**
 
-Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1735 tests.
+Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1847 tests.
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-1734%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
+[![Tests](https://img.shields.io/badge/tests-1846%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9)](ROADMAP.md)
 [![Render](https://img.shields.io/badge/deploy-render-4fc08d?logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey)](#license)
@@ -37,7 +37,7 @@ Not a chatbot. Not an agent framework. A living system with an OODA loop, layere
 - [Immune System](#immune-system)
 - [Tiered Autonomy & Safety](#tiered-autonomy--safety)
 - [Voice System](#voice-system)
-- [107-Tool Effectors](#107-tool-effectors)
+- [138-Tool Effectors](#138-tool-effectors)
 - [Deploy](#deploy)
 - [Quickstart](#quickstart)
 - [Screenshots](#screenshots)
@@ -78,7 +78,7 @@ flowchart TB
         end
         subgraph IOLayer["I/O"]
             SENS["10 Sensors"]
-            EFF["107 Effectors"]
+            EFF["138 Effectors"]
         end
         CORT --> BRN --> Cloud
         SENS --> BUS --> EFF
@@ -161,7 +161,7 @@ flowchart LR
 │              IDENTITY                                │  self.md · boundaries.md
 │         Human-editable persona                       │  Entity has no write path
 ├─────────────────────────────────────────────────────┤
-│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  10 sensors · 139 effectors
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  10 sensors · 138 effectors
 │  timer·file·ws·job·metric·gmail·screen·window·       │  Publish/subscribe, never direct
 │  reminder·calendar                                   │
 ├─────────────────────────────────────────────────────┤
@@ -385,11 +385,11 @@ flowchart TB
 
 ---
 
-## 107-Tool Effectors
+## 138-Tool Effectors
 
-Every action MYTHOS can take goes through one of these 139 registered effectors. Counts are
-generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays
-plus the one directly-registered `speak` effector — not hand-typed:
+Every action MYTHOS can take goes through one of these 138 registered effectors. Counts are
+generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays —
+not hand-typed:
 
 ```mermaid
 pie title Tool Distribution
@@ -431,7 +431,6 @@ pie title Tool Distribution
 | **Project** | 1 | start_project (auto-pipeline) |
 | **Command Runner** | 1 | run_command (allowlist-gated) |
 | **Skills** | 1 | use_skill |
-| **Voice** | 1 | speak (edge-tts, registered directly — not from a `from-*.js` file) |
 
 All dangerous tools (delete, execute, kill) require confirmation via the Leash system.
 
@@ -597,7 +596,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## Build History
 
-20 phases shipped. Linear history on `main`. 1735 tests green.
+20 phases shipped. Linear history on `main`. 1847 tests green.
 
 ```mermaid
 gantt
@@ -656,7 +655,7 @@ Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-AR
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 4 gestures: confirm, deny, mute, vision |
-| **Tests** | Built-in `node:test` | 1735 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 1847 tests, zero test framework deps |
 | **Deps** | 7 total | `@mediapipe/tasks-vision` · `exceljs` · `express` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -667,7 +666,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 7 deps, 1735 tests
+│   ├── package.json             # 7 deps, 1847 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -675,7 +674,7 @@ Agent_OS/
 │   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
 │   │       ├── config/          # Schema validation + env loading
 │   │       ├── cortex/          # OODA loop + orient/decide
-│   │       ├── effectors/       # 139 tools, build-runner, orchestrator
+│   │       ├── effectors/       # 138 tools, build-runner, orchestrator
 │   │       ├── goals/           # Arbitrage + budget system
 │   │       ├── identity/        # self.md + boundaries.md
 │   │       ├── immune/          # watchdog, healer, breakers, announcer
@@ -697,7 +696,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 1735 tests (node --test)
+│   ├── test/                    # 1847 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat            # Windows launcher

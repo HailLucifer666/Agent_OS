@@ -1,10 +1,21 @@
 'use strict';
 
-// effectors/voice.js — TTS as an Effector (CA from app/lib/voice/tts.js). Registered in
-// the hub as id 'speak', tier 0 (read-only side effect on the human's speakers, not on
-// entity state — no different in kind from a log line). Truncation logic is verbatim.
-
-var edgeTts = require('../../../providers/edge-tts');
+// effectors/voice.js — TTS text-shaping helpers (CA from app/lib/voice/tts.js).
+//
+// This file used to also export createVoiceEffector(), a hub effector with id
+// 'speak'. It was removed 2026-07-31 as unreachable dead code:
+//   * it declared `tier: 0` on the effector object, but leash/index.js's
+//     check() reads TIER_TABLE[toolName] and ignores an effector's own .tier,
+//     and there was no 'speak' table key — so it resolved to the T3
+//     unknown-tool fail-safe (a confirm popup on speech),
+//   * it had no describeMeta(), so it never appeared in hub.catalog() — the
+//     single source for the autonomous planner's tool list (goals/index.js),
+//     voice-agent's buildCatalogFromHub, live-tools' declarations, MCP
+//     tools/list and the boot capabilities manifest. No planner could name it,
+//   * and nothing invoked 'speak' by name anywhere.
+// Real speech goes bus.emit('action.speak-requested') -> server/index.js's
+// subscriber -> proactiveSpeak() -> providers/edge-tts.synthesize().
+// The truncation/splitting helpers below are live (server/index.js, tests).
 
 var MAX_CHARS = 350;
 
@@ -21,33 +32,6 @@ function truncateAtSentenceBoundary(text, maxChars) {
   var spaceIdx = window.lastIndexOf(' ');
   if (spaceIdx > 0) return window.slice(0, spaceIdx).trim();
   return window.trim();
-}
-
-function createVoiceEffector({ config }) {
-  var defaultVoice = (config && config.VOICE_TTS_VOICE) || 'en-US-AriaNeural';
-
-  return {
-    id: 'speak',
-    tier: 0,
-    describe: function() { return 'Synthesize text to speech via the local edge-tts service.'; },
-    validate: function(params) {
-      if (!params || !params.text || !String(params.text).trim()) {
-        return { ok: false, reason: 'text is required' };
-      }
-      return { ok: true };
-    },
-    async invoke(params) {
-      try {
-        var available = await edgeTts.isAvailable();
-        if (!available) return { ok: false, result: 'tts-unavailable' };
-        var truncated = truncateAtSentenceBoundary(params.text);
-        var buf = await edgeTts.synthesize({ text: truncated, voice: params.voice || defaultVoice });
-        return { ok: true, result: { audioBase64: buf.toString('base64'), truncated: truncated !== params.text } };
-      } catch (err) {
-        return { ok: false, result: err.message };
-      }
-    }
-  };
 }
 
 // Split text into speakable sentences for chunked TTS. Groups very short
@@ -114,4 +98,4 @@ function createSentenceStreamer() {
   return { push, flush };
 }
 
-module.exports = { createVoiceEffector, truncateAtSentenceBoundary, splitSentences, createSentenceStreamer };
+module.exports = { truncateAtSentenceBoundary, splitSentences, createSentenceStreamer };

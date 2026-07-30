@@ -75,6 +75,7 @@ const ALLOWED_EVENTS = new Set([
   'goal.removed',
   'goal.budget-debited',
   'goal.completed',     // V3 (Phase 4): autonomous completion + distillation trigger
+  'goal.tier-granted',  // 2026-07-31 security fix: records WHICH tools a T3 grant covers
 
   // mission.* (P11 — mission orchestrator)
   'mission.update',

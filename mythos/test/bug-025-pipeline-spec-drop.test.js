@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const nodeFs = require('fs');
 
-const { tempVaultDir, cleanupVaultDir, fakeBus } = require('./helpers');
+const { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished } = require('./helpers');
 const { createFsStore } = require('../src/core/memory/fs-store');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
@@ -58,30 +58,11 @@ function setup(brainThinkImpl) {
 
 function cleanup(env) { cleanupVaultDir(env.dir); }
 
-function waitForJobFinished(buildRunner, jobId, timeoutMs) {
-  timeoutMs = timeoutMs || 4000;
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const unsubscribe = buildRunner.onJobUpdate((job) => {
-      if (job.id === jobId && (job.status === 'done' || job.status === 'failed')) {
-        unsubscribe();
-        resolve(job);
-      }
-    });
-    const poll = setInterval(() => {
-      const job = buildRunner.getJob(jobId);
-      if (job && (job.status === 'done' || job.status === 'failed')) {
-        clearInterval(poll);
-        unsubscribe();
-        resolve(job);
-      } else if (Date.now() - start > timeoutMs) {
-        clearInterval(poll);
-        unsubscribe();
-        reject(new Error('timed out waiting for job ' + jobId + ' to finish'));
-      }
-    }, 10);
-  });
-}
+// waitForJobFinished comes from ./helpers — this was the fourth copy of the same
+// 4000ms-bounded waiter. Three of the four flaked under full-suite load on a
+// busy Windows box (this one had not been observed failing yet, but is the same
+// latent bug). The shared version allows 30s and reports the job's last observed
+// status/stage/error so a genuine hang is still distinguishable from slowness.
 
 describe('BUG-025: captured spec survives capture_idea -> pipeline_execute -> brain.think()', () => {
   it('the exact idea text set at capture_idea time reaches the reviewer prompt sent to brain.think', async () => {

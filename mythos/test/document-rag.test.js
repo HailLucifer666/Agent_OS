@@ -15,7 +15,7 @@
 // so these tests can prove real ranking/fusion behavior with a deterministic
 // fake embedder, not just the "embeddings are down" branch.
 
-const { describe, it } = require('node:test');
+const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 const path = require('node:path');
@@ -65,6 +65,15 @@ function freshScratchDir(name) {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+// Each test removed its OWN subdirectory but nothing ever removed the parent,
+// so every suite run left an empty .tmp-doc-rag-test/ in the repo root — git
+// doesn't track empty directories, so it never showed up in `git status` and
+// never got cleaned. Best-effort by design: a cleanup that throws (Windows
+// EPERM/EBUSY under full-suite load) must never turn a green run red.
+after(() => {
+  try { fs.rmSync(SCRATCH_ROOT, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+});
 
 describe('chunkProse', () => {
   it('chunks with ~15% overlap and covers every word', () => {

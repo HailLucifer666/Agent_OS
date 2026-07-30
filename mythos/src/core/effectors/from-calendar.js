@@ -15,14 +15,33 @@
 // — calendar_upcoming only reads.
 
 var FILE = 'Calendar/reminders.json';
+var READ_FAILED = 'Could not read the reminder store (it may be locked by another process) — refusing to overwrite it. Try again in a moment.';
 
 function createCalendarEffector({ fs, bus }) {
   if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function') {
     throw new Error('createCalendarEffector requires a vault fs-store with readJSON/writeJSON');
   }
 
+  // load() returns the reminder array, or NULL meaning "could not read" —
+  // which is NOT the same as [] meaning "confirmed empty".
+  //
+  // SILENT DATA LOSS FIX: this used to be `catch (_) { return []; }`. fs-store's
+  // readJSON already absorbs both legitimate empty cases itself (missing file →
+  // fallback; unparseable JSON → 'json-corrupt' anomaly + fallback), so anything
+  // that throws out of it is a real read failure — typically a transient Windows
+  // EBUSY/EPERM lock from antivirus or the search indexer. Fabricating [] there
+  // made the very next save() write that empty array back over reminders.json,
+  // permanently deleting every other pending reminder and timer while still
+  // returning ok:true. Callers must now check for null and refuse to write.
   function load() {
-    try { return fs.readJSON(FILE, []); } catch (_) { return []; }
+    try {
+      // Strict: a corrupt reminders.json must reach the catch below, not arrive
+      // as an empty list that the next save() then writes over the top of.
+      return fs.readJSONStrict(FILE, []);
+    } catch (err) {
+      if (bus) bus.emit('health.anomaly', { kind: 'reminders-read-failed', path: FILE, error: err.message });
+      return null;
+    }
   }
 
   function save(reminders) {
@@ -44,6 +63,7 @@ function createCalendarEffector({ fs, bus }) {
     if (!when) return { ok: false, error: 'Could not parse that time. Try ISO date, "in 20 minutes", "tomorrow 9am", or "HH:MM".' };
 
     var reminders = load();
+    if (reminders === null) return { ok: false, error: READ_FAILED };
     var record = {
       id: nextId(),
       text: text.trim(),
@@ -62,7 +82,9 @@ function createCalendarEffector({ fs, bus }) {
   }
 
   function listReminders() {
-    return { ok: true, result: { reminders: load() } };
+    var reminders = load();
+    if (reminders === null) return { ok: false, error: READ_FAILED };
+    return { ok: true, result: { reminders: reminders } };
   }
 
   function cancelReminder(opts) {
@@ -70,6 +92,7 @@ function createCalendarEffector({ fs, bus }) {
     if (!query.trim()) return { ok: false, error: 'query required to cancel' };
 
     var reminders = load();
+    if (reminders === null) return { ok: false, error: READ_FAILED };
     var ql = query.toLowerCase();
     var matched = -1;
     for (var i = reminders.length - 1; i >= 0; i--) {
@@ -85,6 +108,10 @@ function createCalendarEffector({ fs, bus }) {
   function fireDueReminders() {
     var now = Date.now();
     var reminders = load();
+    // Read failed: fire nothing this tick rather than marking an empty list
+    // fired and saving it back. load() already emitted the anomaly; the sensor
+    // polls again in 30s, by which time a transient lock will have cleared.
+    if (reminders === null) return [];
     var fired = [];
     for (var i = 0; i < reminders.length; i++) {
       if (reminders[i].fired || reminders[i].dueAt > now) continue;

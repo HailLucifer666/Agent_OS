@@ -58,6 +58,36 @@ function createFsStore(vaultRootFn, bus) {
     }
   }
 
+  // Strict variant of readJSON: returns `fallback` ONLY when the file genuinely
+  // does not exist. Unreadable (EBUSY/EPERM from an AV or indexer lock) and
+  // unparseable both THROW, so a caller cannot mistake either for "empty".
+  //
+  // Why this exists (2026-07-31): readJSON() returns `fallback` for a corrupt
+  // file as well as a missing one. Any caller that loads a collection, mutates
+  // it, and writes it back therefore truncates the whole store on a single
+  // corrupt read — and reports success, because from its point of view the
+  // store was simply empty. Confirmed by seeding a reminders.json with two real
+  // reminders and a truncated closing brace: reminder_add returned ok:true and
+  // both existing reminders were permanently gone.
+  //
+  // readJSON keeps its lenient behaviour — 18 of its 21 callers legitimately
+  // want "no usable file -> default" (persona levels, last-boot marker, caches)
+  // and turning a corrupt cache into a boot failure would be worse. Only the
+  // read-mutate-write callers need the strict version. Use this one whenever a
+  // write can follow the read.
+  function readJSONStrict(relPath, fallback) {
+    const raw = readText(relPath, null);
+    if (raw === null) return fallback;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      if (bus) bus.emit('health.anomaly', { kind: 'json-corrupt', path: relPath, error: e.message });
+      const err = new Error('unparseable JSON at ' + relPath + ': ' + e.message);
+      err.code = 'EJSONCORRUPT';
+      throw err;
+    }
+  }
+
   function writeJSON(relPath, data) {
     writeText(relPath, JSON.stringify(data, null, 2));
   }
@@ -236,7 +266,7 @@ function createFsStore(vaultRootFn, bus) {
   }
 
   return {
-    vaultPath, ensureDir, readText, writeText, readJSON, writeJSON,
+    vaultPath, ensureDir, readText, writeText, readJSON, readJSONStrict, writeJSON,
     listFiles, appendLine, readLines, readDirLines, readDirLinesReverse, pruneOldFiles,
     exists, removeFile, todayKey, withLock, root
   };

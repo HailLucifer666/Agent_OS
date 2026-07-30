@@ -303,7 +303,20 @@ describe('leash <-> goals — real-instance integration (Gate: tier3 once)', fun
     };
   }
 
-  it('T3 tool requires confirm once, then auto-allows after grantTier persists it on the real goal', function() {
+  // REWRITTEN 2026-07-31 (security). This test used to call
+  // `goals.grantTier(goal.id, 3)` with no tool list and then assert that
+  // `delete_goal` auto-allowed — i.e. it asserted the tier-wide grant that a
+  // security review identified as a real vulnerability: one approved Forge build
+  // plan pre-authorised every T3 tool carrying that goalId (gmail_send,
+  // run_command, phone_call, ...), reachable from LLM-authored engagement stages
+  // and from cortex's autonomous ticks. The assertion encoded a wrong
+  // expectation, so it is corrected here rather than preserved. The handoff it
+  // was written to cover — real GoalSystem mutation -> real leash.check() reading
+  // it off a real goal record — is still exactly what it covers, now with the
+  // grant scoped to the tool that was actually granted. The negative case (a
+  // grant for one tool must not allow another) lives in
+  // test/leash-grant-scope.test.js.
+  it('T3 tool requires confirm once, then auto-allows after grantTier persists that tool on the real goal', function() {
     var { createGoalSystem } = require('../src/core/goals');
     var { createLeash } = require('../src/core/leash');
 
@@ -320,10 +333,11 @@ describe('leash <-> goals — real-instance integration (Gate: tier3 once)', fun
     assert.equal(first.allow, false);
     assert.equal(first.requireConfirm, true, 'first T3 attempt must require confirm');
 
-    goals.grantTier(goal.id, 3);   // real GoalSystem mutation — persists goal.grants['3']
+    // Real GoalSystem mutation — persists goal.grants['3'] as ['delete_goal'].
+    goals.grantTier(goal.id, 3, ['delete_goal']);
 
     var second = leash.check({ tool: 'delete_goal', args: { id: goal.id } }, { goalId: goal.id });
-    assert.equal(second.allow, true, 'second attempt after grantTier must auto-allow');
+    assert.equal(second.allow, true, 'second attempt after grantTier must auto-allow the granted tool');
     assert.equal(second.reason, 'goal-granted');
   });
 });

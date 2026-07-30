@@ -27,6 +27,9 @@ function fakeVaultFs() {
   const store = {};
   return {
     readJSON: (p, fb) => (store[p] !== undefined ? JSON.parse(JSON.stringify(store[p])) : fb),
+    // Aliased: this fake holds parsed objects, so there is no corrupt-JSON case
+    // for the strict reader to differ on (see test/silent-data-loss.test.js).
+    readJSONStrict: (p, fb) => (store[p] !== undefined ? JSON.parse(JSON.stringify(store[p])) : fb),
     writeJSON: (p, d) => { store[p] = JSON.parse(JSON.stringify(d)); },
     ensureDir: () => {},
   };

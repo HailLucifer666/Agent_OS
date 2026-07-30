@@ -966,7 +966,6 @@ const TIER_TABLE = {
   'list_goals':            0,
   'pipeline_status':       0,
   'kanban_status':         0,
-  'monitor_snapshot':      0,
   'mission_status':        0,
   'get_time':              0,
   'get_weather':           0,

@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const nodeFs = require('fs');
 
-const { tempVaultDir, cleanupVaultDir, fakeBus } = require('./helpers');
+const { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished } = require('./helpers');
 const { createFsStore } = require('../src/core/memory/fs-store');
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
 const { createKanbanEffector } = require('../src/core/effectors/kanban');
@@ -47,30 +47,14 @@ function setup(brainThinkImpl) {
 
 function cleanup(env) { cleanupVaultDir(env.dir); }
 
-function waitForJobFinished(buildRunner, jobId, timeoutMs) {
-  timeoutMs = timeoutMs || 4000;
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const unsubscribe = buildRunner.onJobUpdate((job) => {
-      if (job.id === jobId && (job.status === 'done' || job.status === 'failed')) {
-        unsubscribe();
-        resolve(job);
-      }
-    });
-    const poll = setInterval(() => {
-      const job = buildRunner.getJob(jobId);
-      if (job && (job.status === 'done' || job.status === 'failed')) {
-        clearInterval(poll);
-        unsubscribe();
-        resolve(job);
-      } else if (Date.now() - start > timeoutMs) {
-        clearInterval(poll);
-        unsubscribe();
-        reject(new Error('timed out waiting for job ' + jobId + ' to finish'));
-      }
-    }, 10);
-  });
-}
+// waitForJobFinished now comes from ./helpers. This file used to carry its own
+// copy with a 4000ms ceiling, which failed under full-suite load on a busy
+// Windows box — the job simply had not reached a terminal state yet, and the
+// message ("timed out waiting for job <id> to finish") could not distinguish
+// that from a real hang. Two sibling files hit the same flake and were switched
+// to the shared helper in the same session; this was the third instance of the
+// duplicated pattern. The shared version allows 30s and reports the job's last
+// observed status/stage/error, so a genuine hang still reads as one.
 
 describe('BUG-016: Pipeline card with failed review should stay in execute, not move to shipped', () => {
   it('when review.verdict is reject, card moves back to execute with reviewStatus failed', async () => {

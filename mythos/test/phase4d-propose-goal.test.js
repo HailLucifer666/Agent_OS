@@ -37,6 +37,19 @@ function fakeFs() {
       if (store[p] == null) return fallback;
       try { return JSON.parse(store[p]); } catch (_) { return fallback; }
     },
+    // This fake stores raw strings, so unlike the object-backed fakes elsewhere
+    // it CAN hold a corrupt value — mirror fs-store's real strict contract:
+    // missing -> fallback, unparseable -> throw (see test/silent-data-loss.test.js).
+    readJSONStrict: function (p, fallback) {
+      if (store[p] == null) return fallback;
+      try {
+        return JSON.parse(store[p]);
+      } catch (e) {
+        var err = new Error('unparseable JSON at ' + p + ': ' + e.message);
+        err.code = 'EJSONCORRUPT';
+        throw err;
+      }
+    },
     writeJSON: function (p, v) { store[p] = JSON.stringify(v); },
     writeText: function (p, v) { store[p] = v; },
     removeFile: function (p) { delete store[p]; },

@@ -98,6 +98,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A .widget-value slot holding words rather than a number (e.g. the VOICE
+   LATENCY tile's honest "no samples yet" state — AD-5 forbids substituting a
+   0 or a placeholder figure). 22px prose wraps out of the card, so the text
+   variant drops to the sub-line scale while keeping the value colour. */
+.widget-value-text {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 .widget-sub {
   font-size: 11px;
   color: var(--text-dim);

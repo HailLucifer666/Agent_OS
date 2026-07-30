@@ -44,7 +44,6 @@ const { createEvidenceValidator } = require('./core/effectors/evidence-validator
 const { createKanbanEffector } = require('./core/effectors/kanban');
 const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
-const { createVoiceEffector } = require('./core/effectors/voice');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
@@ -208,9 +207,11 @@ async function main() {
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
       const announcer = createAnnouncer({
         bus: bus, config: config,
-        // The 'speak' voice effector (Phase 7) is dispatched through Cortex's normal
-        // effectors.invoke() path, not called directly from here — never a silent
-        // no-op. Re-emits onto the 'action' channel for any future direct listener.
+        // Speech is NOT a hub effector — the old 'speak' effector was dead code and
+        // was removed 2026-07-31 (see effectors/voice.js's header). This re-emits onto
+        // 'action.speak-requested', which server/index.js subscribes to and feeds to
+        // proactiveSpeak() -> providers/edge-tts.synthesize(). Never a silent no-op:
+        // announcer.js requires a real speak() at construction.
         speak: function(text) { bus.emit('action.speak-requested', { text: text }); return Promise.resolve(); }
       });
       const monitor = createMonitor({ bus: bus, config: config, memory: memory });
@@ -310,7 +311,15 @@ async function main() {
       // under a named (non-tool, non-breaker-gated) service id — see hub.js's
       // registerNamed CROSS-PHASE FIX comment.
       var goalsBridge = createGoalsMdBridge({ fs: memory.fs, goalSystem: goals, bus: bus });
-      goalsBridge.sync();  // reconcile Goals.md -> GoalSystem once at boot
+      // Reconcile Goals.md -> GoalSystem once at boot. A degraded result means
+      // the bridge map was unreadable, so GoalSystem is NOT reconciled with
+      // Goals.md for this process. Surfaced rather than dropped: the operator
+      // watches the boot log, and a silent skip here looks identical to a
+      // healthy boot while every goal mutation is a no-op.
+      var goalsSync = goalsBridge.sync();
+      if (goalsSync && goalsSync.degraded) {
+        logger.warn('goals.bridge.degraded', { reason: 'bridge map unreadable — Goals.md not reconciled; goal mutations will not persist' });
+      }
       hub.registerNamed('goals-effector', goalsBridge);
       // [Phase 9 — NEW] kanban/pipeline join goals-effector in the hub's
       // namedServices map (hub.js's own comment names all three as its purpose)
@@ -409,10 +418,15 @@ async function main() {
       if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
       const hermesRunner = createHermesRunner({ config: config, vault: memory.fs });
       forge = createForge({ config: config, runner: hermesRunner, bus: bus, vault: memory.fs, checkpoints: checkpoints });
-      forge.init();
+      // A degraded init means the project-state file was unreadable, so Forge
+      // loaded no history AND latched persistence off for this whole process —
+      // builds still run but nothing is written to disk. That must be visible in
+      // the boot log, not inferable only from a health.anomaly.
+      var forgeInit = forge.init();
+      if (forgeInit && forgeInit.degraded) {
+        logger.warn('forge.state.degraded', { reason: 'project state unreadable — history not loaded and persistence suspended until restart' });
+      }
       registerFromForge(hub, { forge: forge });
-
-      hub.register(createVoiceEffector({ config: config }));
 
       effectors = hub;
       logger.info('effectors.ready', { count: effectors.count() });

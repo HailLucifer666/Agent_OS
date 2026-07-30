@@ -1,0 +1,99 @@
+/* pin.css — §7.3 local PIN lock screen. Token vars only, structure mirrors
+   confirm.css (the repo's other full-screen modal). z-index sits ABOVE the
+   confirm modal (210) and the init screen: nothing may be interacted with,
+   or read over the top of, a locked HUD. */
+
+.pin-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.88);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  z-index: 400;
+}
+
+.pin-modal {
+  width: min(360px, 90vw);
+  padding: 34px 28px 22px;
+  text-align: center;
+  border-color: var(--accent-dim);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.pin-orb {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: radial-gradient(circle at 35% 30%, rgba(79, 216, 255, 0.45), rgba(79, 216, 255, 0.06) 70%);
+}
+
+.pin-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0 0 6px;
+}
+
+.pin-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 14px;
+}
+
+.pin-input {
+  width: 100%;
+  padding: 10px 12px;
+  text-align: center;
+  font-size: 20px;
+  letter-spacing: 0.4em;
+  color: var(--text);
+  background: var(--bg-hover);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.pin-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pin-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.pin-submit {
+  padding: 9px 32px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.pin-submit:hover:not(:disabled) { color: var(--text); }
+.pin-submit:disabled { opacity: 0.55; cursor: default; }
+
+/* Reserves its own line so an error/lockout message appearing does not shift
+   the modal. Empty until the server actually says something. */
+.pin-message {
+  min-height: 16px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--status-warn);
+  word-break: break-word;
+}
+
+/* Real server-reported 429 lockout (never a client-side countdown — the
+   backend sends no expiry, so nothing here ticks). */
+.pin-overlay.pin-locked-out .pin-modal { border-color: var(--status-warn); }
+.pin-overlay.pin-locked-out .pin-orb { border-color: var(--status-warn); }

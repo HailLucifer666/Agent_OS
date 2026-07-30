@@ -62,6 +62,14 @@ mythos/ui/public/models/wakeword.test-backup/
 /check_*.ps1
 /test_*.ps1
 
+# Scratch roots created under mythos/ by code-search.test.js and
+# document-rag.test.js. Both now delete these in an after() hook, so a clean
+# run leaves nothing; these entries exist so a run that DIES mid-test can't
+# leave committable garbage behind (an empty dir was already invisible to
+# `git status`, which is exactly why two of them sat here unnoticed).
+mythos/.tmp-code-search-test/
+mythos/.tmp-doc-rag-test/
+
 # zcode session plans
 .zcode/plans/
 # zcode session logs/scratch (never publish)

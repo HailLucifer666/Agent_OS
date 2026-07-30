@@ -34,7 +34,11 @@ const VALID_TONES = ['gold', 'dim', 'warn'];
 // widget there). The server resolves spoken names/synonyms to explicit id
 // lists so the client-side handler stays dumb: {mode:'close'|'open',
 // targets:[ids]} applied verbatim by widget-host.js.
-const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media'];
+// Changelog: 'voice-latency' added when the VOICE LATENCY tile shipped (it
+// surfaces /api/status's voiceLatency, which had no UI consumer at all) —
+// registry count 10 -> 11. test/manage-widget.test.js's "open all" asserts
+// this exact length.
+const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency'];
 const WIDGET_SYNONYMS = {
   'clock': 'clock', 'time': 'clock', 'local time': 'clock',
   'weather': 'weather',
@@ -46,6 +50,7 @@ const WIDGET_SYNONYMS = {
   'breakers': 'breakers', 'circuit breakers': 'breakers',
   'news': 'news', 'headlines': 'news',
   'media': 'media', 'now playing': 'media', 'music': 'media', 'player': 'media', 'spotify': 'media', 'music player': 'media',
+  'voice-latency': 'voice-latency', 'voice latency': 'voice-latency', 'latency': 'voice-latency', 'voice lag': 'voice-latency',
   'all': 'all', 'everything': 'all', 'all widgets': 'all',
   'telemetry': 'telemetry', 'stats': 'telemetry', 'system stats': 'telemetry', 'metrics': 'telemetry'
 };
@@ -170,7 +175,7 @@ function buildTools(ctx) {
   const TOOLS = [
     {
       name: 'manage_widget',
-      description: 'Hide or show dashboard HUD widgets by voice. action: close (hide a widget), open (bring it back), solo (hide everything except the named widget), declutter (hide all telemetry widgets — tokens, spend, tick rate, breakers, WIP, agent actions — in one go). name: clock|weather|agents|spend|tokens|wip|tick-rate|breakers|news|media, or "telemetry"/"all" (not needed for declutter). Hidden widgets are always recoverable with open.',
+      description: 'Hide or show dashboard HUD widgets by voice. action: close (hide a widget), open (bring it back), solo (hide everything except the named widget), declutter (hide all telemetry widgets — tokens, spend, tick rate, breakers, WIP, agent actions — in one go). name: clock|weather|agents|spend|tokens|wip|tick-rate|breakers|news|media|voice-latency, or "telemetry"/"all" (not needed for declutter). Hidden widgets are always recoverable with open.',
       params: {
         action: 'string - close|open|solo|declutter',
         name: 'string (optional for declutter) - which widget',

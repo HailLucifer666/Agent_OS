@@ -128,9 +128,11 @@ function createInertCtx() {
 // order: (1) a static TOOLS array export, (2) a build*Tools(ctx) factory whose
 // return value (or return value's .TOOLS) is an array, (3) a create*(ctx)
 // factory whose result matches hub.register()'s own shape check exactly
-// ({id: string, invoke: function}) — this is how the one non-from-*.js
-// registration (voice.js's `speak` effector) gets counted, on the same
-// contract hub.js enforces, not a special case hand-added for it.
+// ({id: string, invoke: function}) — kept so a future directly-registered
+// effector is counted on the same contract hub.js enforces rather than needing
+// a special case. Nothing uses shape (3) today: voice.js's `speak` effector was
+// its only user and was removed 2026-07-31 as unreachable dead code (it had no
+// describeMeta(), so it never appeared in any catalog the model sees).
 function computeEffectorCount() {
   const dir = path.join(MYTHOS_ROOT, 'src/core/effectors');
   const ctx = createInertCtx();
@@ -188,6 +190,18 @@ function readmeSlots(counts) {
     // AD-10: tool/provider/sensor counts, generated from hub.catalog()-equivalent
     // introspection (computeEffectorCount) and directory reads, not hand-typed.
     { file, pattern: /(Every action MYTHOS can take goes through one of these )(\d+)( registered effectors\.)/, value: counts.effectors },
+    // The effector count also appears in the section HEADING, in the TOC entry
+    // that links to it (link text AND the generated #anchor — both must move
+    // together or the TOC link 404s), and in the architecture mermaid's I/O
+    // node. Those four were NOT slots, so they sat at 107 while the body text
+    // this script does own had already moved to 139 — README disagreeing with
+    // itself by 32 tools. AD-10 says a tool count is generated, never
+    // hand-typed; these are now generated too instead of being re-drifted by
+    // hand every time the effector surface changes.
+    { file, pattern: /(- \[)(\d+)(-Tool Effectors\]\(#\d+-tool-effectors\))/, value: counts.effectors },
+    { file, pattern: /(- \[\d+-Tool Effectors\]\(#)(\d+)(-tool-effectors\))/, value: counts.effectors },
+    { file, pattern: /(## )(\d+)(-Tool Effectors)/, value: counts.effectors },
+    { file, pattern: /(EFF\[")(\d+)( Effectors"\])/, value: counts.effectors },
     { file, pattern: /(SENSORS   ←→   BUS   ←→   EFFECTORS             │  )(\d+)( sensors · \d+ effectors)/, value: counts.sensors },
     { file, pattern: /(sensors · )(\d+)( effectors)/, value: counts.effectors },
     { file, pattern: /(effectors\/       # )(\d+)( tools, build-runner, orchestrator)/, value: counts.effectors },

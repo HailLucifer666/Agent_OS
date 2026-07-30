@@ -160,6 +160,10 @@ describe('gate: 86 registered count', () => {
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
+    // 2026-07-31: the dead 'speak' voice effector was removed from main.js's
+    // and mcp/server.js's boots. This gate never registered it (no
+    // createVoiceEffector call above), so 86 is unchanged — recorded here so
+    // the removal is not mistaken for an un-synced count.
     assert.equal(hub.count(), 86);
   });
 });

@@ -25,7 +25,14 @@
 // Plan.md's "Corrections this document needs" for the recorded resolution.
 //
 // HONEST FAILURE IS THE HARD REQUIREMENT (AD-4). phone_sms_send opens
-// Messages pre-filled; it does not send. Report exactly that.
+// Messages pre-filled; it does not send. Report exactly that. Same rule for
+// state changes: phone_wifi_toggle, phone_bluetooth_toggle, phone_app_launch
+// and phone_app_close used to report success straight from adb's exit code,
+// which on a real device is 0 whether or not anything changed — they now read
+// the resulting state back and report what was observed. See the "read-back
+// verification (AD-4)" block below. Those read-back paths are covered by
+// mocked-adapter tests only; no physical Android device was available, so
+// they are UNVERIFIED against real hardware.
 //
 // SECURITY NOTE ON ARGV vs REMOTE SHELL: every adb invocation here goes
 // through android-child's sendCommand(), which spawns adb with an argv
@@ -212,14 +219,129 @@ function validateToggleState(state) {
   return s;
 }
 
+// ---- read-back verification (AD-4) ----
+//
+// `svc wifi enable|disable`, `svc bluetooth enable|disable`, `am force-stop`
+// and `monkey -p <pkg> -c LAUNCHER 1` all commonly exit 0 on a real device
+// WITHOUT the requested change happening: an OEM build that ignores the
+// state, a permission-restricted package, an already-in-that-state no-op, or
+// monkey finding no launchable activity at all. Reporting that bare exit code
+// as success is exactly the fabrication AD-4 forbids — the same reason
+// phone_hotspot_toggle is labelled best-effort and phone_sms_send reports
+// "opened, needs a tap" rather than "sent". So each of those four tools now
+// reads the resulting state back and reports what was ACTUALLY observed.
+//
+// Three outcomes, and the third is the one that is easy to get wrong:
+//   observed == requested  -> ok, with verified:true and the observed state
+//   observed != requested  -> fail; the device itself contradicts the claim
+//   nothing observable     -> ok with verified:false, dispatched:true and the
+//                             unobserved field null (AD-5: unmeasured means
+//                             absent, never estimated). A broken read-back is
+//                             NOT evidence of failure any more than it is
+//                             evidence of success, so it must not be reported
+//                             as either.
+
+// State changes land asynchronously — the framework flips the setting or
+// forks the process shortly AFTER the dispatch command has already exited 0.
+// A single immediate read-back would therefore fabricate FAILURES about as
+// often as the bare exit code fabricated successes, so the read-back is
+// retried a bounded number of times and stops at the first observation that
+// matches what was asked for.
+const READBACK_ATTEMPTS = 3;
+const READBACK_DELAY_MS = 250;
+
+// Fixed marker used to carry a remote command's exit code back in stdout —
+// see readAppRunning() for why. Never operator-supplied; exported only so the
+// tests can build read-back fixtures without duplicating the literal.
+const READBACK_MARKER = '__mythos_rc';
+
+function delay(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+// readFn() -> Promise<{ verified: boolean, on?: boolean, reason?: string }>
+//
+// A verified observation must win over a later unreadable one: if an earlier
+// attempt verifies a MISMATCH (the phone actively contradicts the request)
+// and a later attempt then can't read the state at all (device drops,
+// permission error), the caller must still see that mismatch — not the
+// unreadable attempt's `verified:false`, which would smuggle a contradicted
+// request through as "dispatched-but-unverified" instead of a real failure.
+async function observeState(readFn, want) {
+  let observed = { verified: false, reason: 'read-back never ran.' };
+  for (let attempt = 0; attempt < READBACK_ATTEMPTS; attempt++) {
+    if (attempt > 0) await delay(READBACK_DELAY_MS);
+    const result = await readFn();
+    if (result.verified && result.on === want) return result;
+    if (result.verified || !observed.verified) observed = result;
+  }
+  return observed;
+}
+
+// 1/0 integer flags in Android's global settings namespace. `settings get`
+// prints "null" (exit 0) for an absent key — that is unreadable, NOT off.
+async function readGlobalFlag(serial, key) {
+  const res = await shellDelegate(serial, 'settings get global ' + shQuote(key));
+  if (!res.ok) return { verified: false, reason: 'read-back command failed: ' + String(res.result) };
+  const raw = String(res.result.output || '').trim();
+  if (raw === '1') return { verified: true, on: true };
+  if (raw === '0') return { verified: true, on: false };
+  return { verified: false, reason: 'settings global ' + key + ' returned ' + (raw ? JSON.stringify(raw) : 'nothing') };
+}
+
+// pidof answers in its EXIT CODE (0 = running, 1 = no such process), and
+// `adb shell` propagates the remote exit code, which android-child turns into
+// ok:false. A bare `pidof` would therefore make "the app is not running"
+// indistinguishable from "the oracle broke" — and reporting the latter as the
+// former is a fabricated failure. Appending a fixed `; echo <marker>=$?`
+// (our own literal, no operator input, so nothing new reaches the remote
+// shell unquoted) keeps the invocation exit-0 and moves the real status into
+// stdout, where 127 (no pidof on this device) can be told apart from 1.
+async function readAppRunning(serial, packageName) {
+  const res = await shellDelegate(serial, 'pidof ' + shQuote(packageName) + '; echo ' + READBACK_MARKER + '=$?');
+  if (!res.ok) return { verified: false, reason: 'read-back command failed: ' + String(res.result) };
+  const output = String(res.result.output || '');
+  const marker = new RegExp(READBACK_MARKER + '=(\\d+)').exec(output);
+  if (!marker) return { verified: false, reason: 'read-back returned no status marker.' };
+  const rc = Number(marker[1]);
+  if (rc === 1) return { verified: true, on: false };
+  if (rc === 0) {
+    if (/\d/.test(output.slice(0, marker.index))) return { verified: true, on: true };
+    return { verified: false, reason: 'pidof exited 0 but printed no pid.' };
+  }
+  return { verified: false, reason: 'pidof is unavailable or errored on this device (exit ' + rc + ').' };
+}
+
+function unverified(field, reason) {
+  const result = { verified: false, dispatched: true };
+  result[field] = null;
+  result.note = 'Dispatched and adb reported no error, but the resulting state could not be read back (' +
+    reason + ') — UNVERIFIED. Do not treat this as either success or failure.';
+  return result;
+}
+
+async function toggleWithReadBack(deviceId, field, settingKey, svcName, s) {
+  const res = await shellDelegate(deviceId, 'svc ' + svcName + ' ' + shQuote(s));
+  if (!res.ok) return res;
+  const want = s === 'enable';
+  const observed = await observeState(function() { return readGlobalFlag(deviceId, settingKey); }, want);
+  if (!observed.verified) return ok(unverified(field, observed.reason));
+  if (observed.on !== want) {
+    return fail('Asked to ' + s + ' ' + field + ', but the phone still reports it ' +
+      (observed.on ? 'on' : 'off') + ' (' + settingKey + '=' + (observed.on ? 1 : 0) +
+      ') — the change did not take effect. `svc ' + svcName + '` exits 0 even on builds that ignore it.');
+  }
+  const result = { verified: true, observed: settingKey + '=' + (observed.on ? 1 : 0) };
+  result[field] = s;
+  return ok(result);
+}
+
 async function phone_wifi_toggle({ deviceId, state }) {
   const devErr = checkDevice(deviceId);
   if (devErr) return devErr;
   const s = validateToggleState(state);
   if (!s) return fail('state must be "enable" or "disable".');
-  const res = await shellDelegate(deviceId, 'svc wifi ' + shQuote(s));
-  if (!res.ok) return res;
-  return ok({ wifi: s });
+  return toggleWithReadBack(deviceId, 'wifi', 'wifi_on', 'wifi', s);
 }
 
 async function phone_bluetooth_toggle({ deviceId, state }) {
@@ -227,9 +349,7 @@ async function phone_bluetooth_toggle({ deviceId, state }) {
   if (devErr) return devErr;
   const s = validateToggleState(state);
   if (!s) return fail('state must be "enable" or "disable".');
-  const res = await shellDelegate(deviceId, 'svc bluetooth ' + shQuote(s));
-  if (!res.ok) return res;
-  return ok({ bluetooth: s });
+  return toggleWithReadBack(deviceId, 'bluetooth', 'bluetooth_on', 'bluetooth', s);
 }
 
 // Best-effort: no single stock command works across all OEMs/versions —
@@ -254,7 +374,18 @@ async function phone_app_launch({ deviceId, packageName }) {
   const cmd = 'monkey -p ' + shQuote(packageName) + ' -c android.intent.category.LAUNCHER 1';
   const res = await shellDelegate(deviceId, cmd);
   if (!res.ok) return res;
-  return ok({ launched: packageName });
+  const observed = await observeState(function() { return readAppRunning(deviceId, packageName); }, true);
+  if (!observed.verified) {
+    const result = unverified('launched', observed.reason);
+    result.running = null;
+    result.packageName = packageName;
+    return ok(result);
+  }
+  if (observed.on !== true) {
+    return fail('Dispatched a LAUNCHER intent for ' + packageName + ', but no process for it is running afterwards — ' +
+      'monkey exits 0 even when the package has no launchable activity or the launch was blocked.');
+  }
+  return ok({ launched: packageName, running: true, verified: true });
 }
 
 async function phone_app_close({ deviceId, packageName }) {
@@ -263,7 +394,18 @@ async function phone_app_close({ deviceId, packageName }) {
   if (!isValidPackageName(packageName)) return fail('A valid Android package name is required (e.g. com.whatsapp).');
   const res = await shellDelegate(deviceId, 'am force-stop ' + shQuote(packageName));
   if (!res.ok) return res;
-  return ok({ closed: packageName });
+  const observed = await observeState(function() { return readAppRunning(deviceId, packageName); }, false);
+  if (!observed.verified) {
+    const result = unverified('closed', observed.reason);
+    result.running = null;
+    result.packageName = packageName;
+    return ok(result);
+  }
+  if (observed.on !== false) {
+    return fail('Ran force-stop on ' + packageName + ', but a process for it is still running afterwards — ' +
+      'am force-stop exits 0 even when the package is protected or immediately restarted.');
+  }
+  return ok({ closed: packageName, running: false, verified: true });
 }
 
 // Device-side path — not sandboxed to the PC's roots (it is the phone's own
@@ -308,11 +450,11 @@ const TOOLS = [
   { name: 'phone_sms_send', description: 'Open the Messages app pre-filled with a number and text. Does NOT send — a human tap on Send is still required.', params: { deviceId: 'string - device serial from phone_list_devices', number: 'string - recipient phone number', text: 'string - message body' }, danger: true, fn: phone_sms_send },
   { name: 'phone_call', description: 'Start a phone call to a number.', params: { deviceId: 'string - device serial from phone_list_devices', number: 'string - phone number to call' }, danger: true, fn: phone_call },
   { name: 'phone_whatsapp_send', description: 'Open WhatsApp to a chat with a number, pre-filled with text via a wa.me deep link. Does NOT send — a human tap on Send is still required.', params: { deviceId: 'string - device serial from phone_list_devices', number: 'string - recipient phone number, E.164 format preferred', text: 'string (optional) - message text to pre-fill' }, danger: true, fn: phone_whatsapp_send },
-  { name: 'phone_wifi_toggle', description: 'Enable or disable WiFi on the phone.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_wifi_toggle },
-  { name: 'phone_bluetooth_toggle', description: 'Enable or disable Bluetooth on the phone.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_bluetooth_toggle },
+  { name: 'phone_wifi_toggle', description: 'Enable or disable WiFi on the phone, then read the state back and report what was actually observed. If the state cannot be read back, reports the command as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_wifi_toggle, needs_result: true },
+  { name: 'phone_bluetooth_toggle', description: 'Enable or disable Bluetooth on the phone, then read the state back and report what was actually observed. If the state cannot be read back, reports the command as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_bluetooth_toggle, needs_result: true },
   { name: 'phone_hotspot_toggle', description: 'Best-effort enable or disable the phone\'s WiFi hotspot. Not guaranteed to work on every device — no single stock command covers all OEMs.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_hotspot_toggle },
-  { name: 'phone_app_launch', description: 'Launch an app on the phone by its Android package name.', params: { deviceId: 'string - device serial from phone_list_devices', packageName: 'string - Android package name, e.g. com.whatsapp' }, danger: false, fn: phone_app_launch },
-  { name: 'phone_app_close', description: 'Force-stop an app on the phone by its Android package name.', params: { deviceId: 'string - device serial from phone_list_devices', packageName: 'string - Android package name' }, danger: false, fn: phone_app_close },
+  { name: 'phone_app_launch', description: 'Launch an app on the phone by its Android package name, then confirm a process for it is actually running. If that cannot be checked, reports the launch as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', packageName: 'string - Android package name, e.g. com.whatsapp' }, danger: false, fn: phone_app_launch, needs_result: true },
+  { name: 'phone_app_close', description: 'Force-stop an app on the phone by its Android package name, then confirm no process for it is left running. If that cannot be checked, reports the close as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', packageName: 'string - Android package name' }, danger: false, fn: phone_app_close, needs_result: true },
   { name: 'phone_file_pull', description: 'Copy a file from the phone to this PC. Creates or OVERWRITES the destination file with phone-side content — same risk class as write_file.', params: { deviceId: 'string - device serial from phone_list_devices', remotePath: 'string - source path on the phone', localPath: 'string - destination path on this PC' }, danger: true, fn: phone_file_pull, needs_result: true },
   { name: 'phone_file_push', description: 'Copy a file from this PC to the phone.', params: { deviceId: 'string - device serial from phone_list_devices', localPath: 'string - source path on this PC', remotePath: 'string - destination path on the phone' }, danger: true, fn: phone_file_push },
 ];
@@ -327,6 +469,7 @@ function registerFromAndroid(hub) {
 module.exports = {
   registerFromAndroid: registerFromAndroid,
   TOOLS: TOOLS,
+  READBACK_MARKER: READBACK_MARKER, // exported for read-back unit tests only
   phone_list_devices: phone_list_devices,
   phone_screenshot: phone_screenshot,
   phone_notifications: phone_notifications,

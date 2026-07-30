@@ -12,6 +12,7 @@ import { mountBreakers } from './kinds/breakers.js';
 import { mountTokens } from './kinds/tokens.js';
 import { mountNews } from './kinds/news.js';
 import { mountMedia } from './kinds/media.js';
+import { mountVoiceLatency } from './kinds/voice-latency.js';
 
 // defaultPos: {left|right, top|bottom} offsets in px — corners stay clear of the
 // central orb and the radial module ring.
@@ -26,6 +27,10 @@ export const WIDGETS = [
   { id: 'breakers',  title: 'BREAKERS',    defaultPos: { right: 24, bottom: 168 }, mount: mountBreakers },
   { id: 'news',      title: 'NEWS',        defaultPos: { right: 24, top: 232 },    mount: mountNews },
   { id: 'media',     title: 'NOW PLAYING', defaultPos: { right: 24, bottom: 200 }, mount: mountMedia },
+  // /api/status's voiceLatency had no consumer anywhere in ui/ before this —
+  // real measured p50/p95 the operator could never see. Bottom-left above
+  // BRAIN SPEND, out of the orb's radial ring.
+  { id: 'voice-latency', title: 'VOICE LATENCY', defaultPos: { left: 24, bottom: 128 }, mount: mountVoiceLatency },
 ];
 
 export function widgetIds() {
