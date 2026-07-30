@@ -9,6 +9,7 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const zlib = require('zlib');           // static-asset gzip (no `compression` dep)
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
@@ -349,23 +350,162 @@ function createServer(deps) {
   app.use('/api', requireToken);
   app.use('/vault/builds', requireToken);
 
-  app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), { etag: false, maxAge: 0, lastModified: false }));
+  // ---- static asset delivery: compression + caching -----------------------
+  //
+  // MEASURED 2026-07-31, and the reason the HUD felt slow to load. Every static
+  // mount below used to be { etag: false, maxAge: 0, lastModified: false } with
+  // no compression anywhere, so a browser re-downloaded EVERY byte, uncompressed,
+  // on every single load:
+  //   node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm   13.5 MB
+  //     (the .jsep variant is 26.8 MB, ort.all.mjs another 5.9 MB)
+  //   ui/public/models/wakeword/*.onnx                                 3.6 MB
+  //   ui/public/js + css                                             489 KB -> 129 KB gzipped (73% off)
+  // Two fixes, both standard and neither touching app logic:
+  //
+  // 1. CACHING. Version-pinned immutable assets (vendored node_modules runtimes,
+  //    the wake-word ONNX models) get a long immutable max-age, so the multi-MB
+  //    WASM is fetched once instead of every load. App JS/CSS keeps max-age 0 —
+  //    the operator must never see a stale HUD after an edit — but now sends an
+  //    ETag, so a reload revalidates and gets a 304 instead of re-sending the
+  //    whole file. Fresh-content guarantee unchanged; bytes on the wire collapse.
+  //
+  // 2. COMPRESSION, for the TEXT assets only (js/mjs/css/html/svg — 489 KB raw,
+  //    129 KB gzipped, a 73% cut on first load). Done by gzipping each file ONCE
+  //    on first request and caching the buffer, then serving it with an explicit
+  //    Content-Length. That shape is deliberate: the first attempt wrapped
+  //    res.write/res.end around a zlib stream ahead of express.static, and it
+  //    HUNG every request — static had already set Content-Length to the RAW
+  //    size, so the browser sat waiting for bytes that the shorter gzipped body
+  //    never delivered. Precompressing sidesteps stream interception entirely.
+  //    No `compression` dep: this repo gates its dependency count (7, and
+  //    ROADMAP tracks growth as a regression).
+  //    WASM/ONNX are deliberately NOT compressed here — they are 13.5 MB and
+  //    3.6 MB, so holding gzipped copies in memory is a poor trade when the
+  //    immutable caching above already removes them from every load after the
+  //    first.
+  const IMMUTABLE_MAX_AGE = '365d';
+  const TEXT_ASSET_RE = /\.(js|mjs|css|html|svg)$/i;
+  const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
+  const NODE_MODULES_DIR = path.join(__dirname, '..', 'node_modules');
+  // URL prefix -> directory, longest prefix first. The vendor roots are included
+  // because onnxruntime's ort.all.mjs alone is 5.8 MB of plain JavaScript, and
+  // first-load time is the actual complaint; .wasm stays out of TEXT_ASSET_RE, so
+  // the 13.5 MB binaries are handled by immutable caching rather than by holding
+  // compressed copies in memory.
+  const GZIP_ROOTS = [
+    { prefix: '/vendor/onnxruntime', dir: path.join(NODE_MODULES_DIR, 'onnxruntime-web', 'dist'), immutable: true },
+    { prefix: '/vendor/mediapipe', dir: path.join(NODE_MODULES_DIR, '@mediapipe', 'tasks-vision'), immutable: true },
+    { prefix: '', dir: UI_PUBLIC_DIR, immutable: false },
+  ];
+  const gzipCache = new Map(); // absolute path -> { buf, mtimeMs }
+
+  function immutableHeaders(res) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+
+  // Revalidate-always for app assets: max-age 0 + ETag => 304 on an unchanged
+  // file. `models/` is exempt because those ONNX blobs are version-pinned
+  // binaries, not editable source.
+  function appAssetHeaders(res, filePath) {
+    if (filePath && /[\\/]models[\\/]/.test(filePath)) return immutableHeaders(res);
+    res.setHeader('Cache-Control', 'no-cache');
+  }
+
+  // Serve a gzipped UI text asset with an explicit Content-Length, or fall
+  // through to express.static untouched. Never throws: any miss, unreadable
+  // file, or path escape hands off to the normal static handler.
+  function gzipTextAssets(req, res, next) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (!TEXT_ASSET_RE.test(req.path)) return next();
+    if (!/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) return next();
+
+    let decoded;
+    try {
+      decoded = decodeURIComponent(req.path);
+    } catch (_) {
+      return next();                       // malformed percent-encoding
+    }
+
+    const root = GZIP_ROOTS.find((r) => r.prefix === '' || decoded.startsWith(r.prefix + '/'));
+    if (!root) return next();
+    const sub = root.prefix ? decoded.slice(root.prefix.length) : decoded;
+    const abs = path.resolve(root.dir, '.' + sub);
+
+    // Path-escape guard: never serve outside the matched root, even though
+    // express.static would also refuse — this handler reads the file itself.
+    const rel = path.relative(root.dir, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return next();
+
+    let stat;
+    try {
+      stat = fs.statSync(abs);
+      if (!stat.isFile()) return next();
+    } catch (_) {
+      return next();                       // not found -> let static 404 it
+    }
+
+    let entry = gzipCache.get(abs);
+    if (!entry || entry.mtimeMs !== stat.mtimeMs) {
+      // mtime keyed, so editing a file invalidates its cached copy — the
+      // no-cache/ETag policy above is worthless if the server itself serves a
+      // stale compressed body.
+      try {
+        entry = { buf: zlib.gzipSync(fs.readFileSync(abs)), mtimeMs: stat.mtimeMs };
+      } catch (_) {
+        return next();
+      }
+      gzipCache.set(abs, entry);
+    }
+
+    const etag = 'W/"' + stat.size.toString(16) + '-' + stat.mtimeMs.toString(16) + '-gzip"';
+    res.setHeader('Vary', 'Accept-Encoding');
+    // Same caching policy the matching express.static mount would have applied:
+    // version-pinned vendor bytes are immutable, editable app source revalidates.
+    res.setHeader('Cache-Control', root.immutable ? 'public, max-age=31536000, immutable' : 'no-cache');
+    res.setHeader('ETag', etag);
+    res.setHeader('Content-Type', express.static.mime.lookup(abs) || 'application/octet-stream');
+    res.setHeader('Content-Encoding', 'gzip');
+
+    if (req.headers['if-none-match'] === etag) {
+      res.removeHeader('Content-Encoding');
+      return res.status(304).end();
+    }
+    res.setHeader('Content-Length', entry.buf.length);
+    if (req.method === 'HEAD') return res.end();
+    return res.end(entry.buf);
+  }
+
+  app.use(gzipTextAssets);
+
+  app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), {
+    etag: true, lastModified: true, maxAge: 0, setHeaders: appAssetHeaders,
+  }));
 
   // Build artifacts (open_artifact spawns the OS browser pointed at these
   // URLs) — scoped to exactly vault/builds, not the whole vault root, which
   // also holds Episodic/Semantic/Identity/Audit/Checkpoints that should never
-  // be served as plain static files.
-  app.use('/vault/builds', express.static(memory.fs.vaultPath('builds'), { etag: false, maxAge: 0, lastModified: false }));
+  // be served as plain static files. Generated content the operator iterates on,
+  // so it must never be cached beyond revalidation.
+  app.use('/vault/builds', express.static(memory.fs.vaultPath('builds'), {
+    etag: true, lastModified: true, maxAge: 0,
+    setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+  }));
 
   // MediaPipe tasks-vision runtime assets (gesture recognition runs fully
   // client-side; these are the WASM runtime + ESM bundle served from
-  // node_modules so the app never loads from a CDN).
-  app.use('/vendor/mediapipe', express.static(path.join(__dirname, '..', 'node_modules', '@mediapipe', 'tasks-vision'), { etag: false, maxAge: 0, lastModified: false }));
+  // node_modules so the app never loads from a CDN). Immutable: the version is
+  // pinned in package.json, so the only way these bytes change is a dep bump.
+  app.use('/vendor/mediapipe', express.static(path.join(__dirname, '..', 'node_modules', '@mediapipe', 'tasks-vision'), {
+    etag: true, lastModified: true, maxAge: IMMUTABLE_MAX_AGE, immutable: true, setHeaders: immutableHeaders,
+  }));
 
   // onnxruntime-web WASM runtime + ESM bundle (wake-word detection runs fully
   // client-side; served from node_modules so the app never loads from a CDN —
-  // same convention as the mediapipe mount above).
-  app.use('/vendor/onnxruntime', express.static(path.join(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist'), { etag: false, maxAge: 0, lastModified: false }));
+  // same convention as the mediapipe mount above). This is the single heaviest
+  // thing the HUD loads; caching it is the largest load-time win available.
+  app.use('/vendor/onnxruntime', express.static(path.join(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist'), {
+    etag: true, lastModified: true, maxAge: IMMUTABLE_MAX_AGE, immutable: true, setHeaders: immutableHeaders,
+  }));
 
   app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
 
