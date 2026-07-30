@@ -17,6 +17,7 @@ const TIER_TABLE = {
   'mission_status':        0,
   'get_time':              0,
   'get_weather':           0,
+  'get_directions':        0,  // §7.9 maps/routing — keyless OSRM+geocode, read-only
   'list_folder':           0,
   'read_file':             0,
   'list_windows':          0,
@@ -28,12 +29,17 @@ const TIER_TABLE = {
   'remember':              0,
   'log_incident':          0,
   'reminder_add':          0,  // read-only — creates a local reminder record
+  'timer_add':             0,  // Task 5 (step 5) — same class as reminder_add above; a
+                               // relative-time reminder additionally flagged to ring alertSound
   'reminder_list':         0,  // read-only — lists pending reminders
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
   'persona_status':        0,  // read-only — reports current personality dial settings
   'self_capabilities':     0,  // read-only — reports the boot-generated capabilities manifest
+  'document_list':         0,  // read-only — lists ingested documents (doc-level metadata), §7.5
+  'document_search':       0,  // read-only — semantic search over ingested document chunks, §7.5, writes nothing
+  'search_code':           0,  // read-only — semantic search over indexed code chunks, §7.11, writes nothing
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
@@ -55,13 +61,21 @@ const TIER_TABLE = {
   'gmail_unread':          1,
   'gmail_read':            1,
   'gmail_draft':           1,
+  'calendar_upcoming':     1,  // §7.6 — reads private calendar data (Google Calendar,
+                               // calendar.readonly scope); same privacy-audit class as
+                               // gmail_unread/gmail_read above, not T0 like get_weather
   'reminder_cancel':       1,  // local write — cancels a pending reminder
+  'timer_cancel':          1,  // Task 5 (step 5) — same as reminder_cancel above
   'spawn_widget':          1,  // local write — spawns a floating dashboard widget from a
                                // validated data-only spec (Item 11 generative UI)
   'set_persona_level':     1,  // local write — adjusts a personality dial in Identity/persona.json
   'manage_widget':         1,  // local write — hides/shows dashboard widgets (state in browser localStorage)
   'ambient_awareness':     1,  // local toggle — turns the ambient screen-awareness sensor on/off/status
   'daily_plan':            1,  // local write — reads/re-fires/quiets the daily planner's day file
+  'document_ingest':       1,  // local write — chunks+embeds an uploaded doc into the vault-backed
+                               // Documents store, §7.5; no destructive risk to the source file
+  'index_project':         1,  // local write — chunks+embeds source files into the same Documents
+                               // store, §7.11; reuses §7.5's index, not a second one
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
@@ -115,6 +129,7 @@ const TIER_TABLE = {
   'generate_spreadsheet':  2,  // .xlsx via exceljs
   'generate_deck':         2,  // .pptx via pptxgenjs
   'generate_pdf':          2,  // .pdf via headless Chrome print-to-pdf; honest HTML fallback when absent
+  'generate_image':        2,  // §7.10 — .png via Gemini native image-gen; honest failure when no image data/quota
   // Phase 3 desktop control — non-destructive window ops; right_click/drag are T3 below.
   'move_window':           2,  // non-destructive window move/resize
   'snap_window':           2,  // non-destructive window snap/min/max/restore
@@ -157,6 +172,14 @@ const TIER_TABLE = {
   'write_file':            3,
   'create_folder':         3,
   'delete_file':           3,
+  // Task 4 (step 5, desktop gaps) — move/copy/rename same class as
+  // write_file/create_folder/delete_file above (irreversible-in-place inside
+  // the sandbox, T3 confirm-once-per-goal); search_files is read-only, T0
+  // matching list_folder/read_file.
+  'move_file':             3,
+  'copy_file':             3,
+  'rename_file':           3,
+  'search_files':          0,
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,
