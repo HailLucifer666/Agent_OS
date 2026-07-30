@@ -358,7 +358,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       playNextChunk(session);
     };
     if (chunk.audioB64) {
-      const audio = new Audio('data:audio/mpeg;base64,' + chunk.audioB64);
+      // Task 5 (step 5, alarms/timers): the bundled alert tone is a real WAV,
+      // not edge-tts's MP3 — chunk.mime lets a sender declare that explicitly.
+      // Every existing sender omits it, so this defaults to the prior
+      // hardcoded behavior unchanged.
+      const audio = new Audio('data:' + (chunk.mime || 'audio/mpeg') + ';base64,' + chunk.audioB64);
       currentAudio = audio;
       audio.onended = onOneDone;
       audio.onerror = () => speakChunkFallback(chunk.text, session, onOneDone);

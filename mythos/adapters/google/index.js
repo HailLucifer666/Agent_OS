@@ -8,6 +8,12 @@ var https = require('https');
 
 var TOKEN_URL = 'https://oauth2.googleapis.com/token';
 var GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
+// §7.6 — Calendar read layer. scripts/google-auth.js has requested
+// 'calendar.readonly' alongside the Gmail scopes since BUG-024 (see that
+// script's SCOPES comment), so any refresh token minted after that fix
+// already carries it — this is genuinely "scope, not new auth" against the
+// existing adapter, not a new OAuth consent flow.
+var CALENDAR_BASE = 'https://www.googleapis.com/calendar/v3';
 
 var _tokenCache = null;
 var _refreshTimer = null;
@@ -66,10 +72,12 @@ function createGoogleAdapter(opts) {
     return refreshAccessToken();
   }
 
-  function gmailRequest(path, method, body) {
+  // Shared request helper, parameterized on base URL — gmailRequest() below is
+  // now a thin wrapper so every existing Gmail call site is untouched.
+  function apiRequest(base, path, method, body) {
     return getToken().then(function(token) {
       return new Promise(function(resolve, reject) {
-        var url = GMAIL_BASE + path;
+        var url = base + path;
         var opts2 = { method: method || 'GET', headers: { 'Authorization': 'Bearer ' + token } };
         if (body) {
           opts2.headers['Content-Type'] = 'application/json';
@@ -81,7 +89,7 @@ function createGoogleAdapter(opts) {
           res.on('data', function(c) { chunks.push(c); });
           res.on('end', function() {
             var json;
-            try { json = JSON.parse(Buffer.concat(chunks).toString()); } catch (e) { return reject(new Error('Invalid Gmail response')); }
+            try { json = JSON.parse(Buffer.concat(chunks).toString()); } catch (e) { return reject(new Error('Invalid response from ' + base)); }
             if (json.error) return reject(new Error(json.error.message || JSON.stringify(json.error)));
             resolve(json);
           });
@@ -91,6 +99,14 @@ function createGoogleAdapter(opts) {
         req.end();
       });
     });
+  }
+
+  function gmailRequest(path, method, body) {
+    return apiRequest(GMAIL_BASE, path, method, body);
+  }
+
+  function calendarRequest(path, method, body) {
+    return apiRequest(CALENDAR_BASE, path, method, body);
   }
 
   // Public API
@@ -146,6 +162,29 @@ function createGoogleAdapter(opts) {
     draft: function(msg) {
       var raw = 'To: ' + (msg.to || '') + '\r\nSubject: ' + (msg.subject || '') + '\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n' + (msg.body || '');
       return gmailRequest('/drafts', 'POST', { message: { raw: Buffer.from(raw).toString('base64') } });
+    },
+    /**
+     * §7.6 — List upcoming events on the primary calendar, soonest first.
+     * Returns array of { id, title, start, end, location }. Read-only
+     * (calendar.readonly scope) — never creates/modifies events.
+     */
+    listUpcomingEvents: function(maxResults) {
+      var timeMin = encodeURIComponent(new Date().toISOString());
+      var qs = '/calendars/primary/events?timeMin=' + timeMin +
+        '&maxResults=' + (maxResults || 10) +
+        '&singleEvents=true&orderBy=startTime';
+      return calendarRequest(qs, 'GET').then(function(data) {
+        var items = data.items || [];
+        return items.map(function(ev) {
+          return {
+            id: ev.id,
+            title: ev.summary || '(no title)',
+            start: (ev.start && (ev.start.dateTime || ev.start.date)) || null,
+            end: (ev.end && (ev.end.dateTime || ev.end.date)) || null,
+            location: ev.location || null,
+          };
+        });
+      });
     },
   };
 }

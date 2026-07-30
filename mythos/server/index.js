@@ -7,6 +7,7 @@
 // is intentionally NOT ported — those stay in archive/nova/ per §16 "LEAVE in NOVA".
 
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -522,6 +523,23 @@ function createServer(deps) {
   // (client uses speechSynthesis). Never throws — proactive speech is
   // best-effort.
   let proactiveSeq = 0;
+  // Task 5 (step 5, alarms/timers) — the bundled audible-alert tone. Loaded
+  // once and cached as base64 (a small static asset, never re-read per call).
+  // REMINDER_ALERT_SOUND overrides the path; default is the bundled WAV.
+  // Missing/unreadable file degrades honestly: no alert chunk gets sent, the
+  // reminder still speaks normally — never throws.
+  let _alertToneB64;
+  function alertToneBase64() {
+    if (_alertToneB64 !== undefined) return _alertToneB64;
+    try {
+      const p = process.env.REMINDER_ALERT_SOUND || path.join(__dirname, '..', 'ui', 'public', 'audio', 'alert.wav');
+      _alertToneB64 = fs.readFileSync(p).toString('base64');
+    } catch (err) {
+      logger.warn('reminder.alert-sound-unavailable', { error: err.message });
+      _alertToneB64 = null;
+    }
+    return _alertToneB64;
+  }
   // Targeted delivery (same bug class as 27b2115/0af423f's boot-greeting
   // fix, generalized): tracks the most-recently-active WS connection (last
   // inbound message, set in ws.on('message') below) so reminders/nudges/
@@ -529,8 +547,9 @@ function createServer(deps) {
   // every open tab at once. Explicit targetWs callers (the boot greeting)
   // are unaffected.
   let lastActiveWs = null;
-  async function proactiveSpeak(text, targetWs) {
+  async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
+    const alertB64 = (opts && opts.alertSound) ? alertToneBase64() : null;
     targetWs = targetWs || lastActiveWs;
     // Optional single-client delivery: the boot greeting passes the connection
     // that triggered it, and every other caller now defaults to the last
@@ -560,26 +579,36 @@ function createServer(deps) {
     const ctrl = new AbortController();
     inflightSpeech.set(reqId, ctrl);
     try {
-      if (ttsUp) {
-        const chunks = splitSentences(speak);
-        for (let i = 0; i < chunks.length; i++) {
-          if (ctrl.signal.aborted) break;
-          let audioB64 = null;
-          try {
-            const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
-            audioB64 = buf.toString('base64');
-          } catch (err) {
-            logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
-          }
-          if (ctrl.signal.aborted) break;
-          sendOut({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
-        }
+      const textChunks = ttsUp ? splitSentences(speak) : [];
+      // Alert tone counts as chunk 0 of the SAME reqId's sequence (not a
+      // separate turn) so it plays through the existing chunk-queue ordering
+      // instead of racing a second, unregistered reqId on the client.
+      const totalChunks = (alertB64 ? 1 : 0) + textChunks.length;
+      let idx = 0;
+      if (alertB64 && !ctrl.signal.aborted) {
+        sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' });
+        idx++;
       }
-      // chunked forced true on abort (even with zero chunks sent): routes the
-      // client's 'done' handling through the session-checked chunk-queue path,
-      // never the non-chunked speechSynthesis fallback (which would otherwise
-      // speak the just-barged-in-on reply after the fact).
-      sendOut({ type: 'done', reqId, say: text, speak, chunked: ctrl.signal.aborted ? true : ttsUp, proactive: true });
+      for (let i = 0; i < textChunks.length; i++) {
+        if (ctrl.signal.aborted) break;
+        let audioB64 = null;
+        try {
+          const buf = await edgeTts.synthesize({ text: textChunks[i], voice: config.VOICE_TTS_VOICE });
+          audioB64 = buf.toString('base64');
+        } catch (err) {
+          logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+        }
+        if (ctrl.signal.aborted) break;
+        sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, text: textChunks[i] });
+        idx++;
+      }
+      // chunked forced true on abort, or when the alert tone alone was sent
+      // (even with edge-tts down): routes the client's 'done' handling through
+      // the session-checked chunk-queue path, never the non-chunked
+      // speechSynthesis fallback (which would otherwise speak the just-
+      // barged-in-on reply after the fact, or skip the alert chunk's queue).
+      const chunked = ctrl.signal.aborted ? true : (ttsUp || Boolean(alertB64));
+      sendOut({ type: 'done', reqId, say: text, speak, chunked, proactive: true });
     } finally {
       inflightSpeech.delete(reqId);
     }
@@ -759,7 +788,9 @@ function createServer(deps) {
 
   // Calendar reminders — proactive speech when a reminder fires due.
   bus.subscribe('reminder.due', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak('Reminder: ' + e.payload.text);
+    if (e && e.payload && e.payload.text) {
+      proactiveSpeak('Reminder: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) });
+    }
   });
 
   // Daily planner (Phase 3 Jarvis upgrade) — proactive speech for the morning

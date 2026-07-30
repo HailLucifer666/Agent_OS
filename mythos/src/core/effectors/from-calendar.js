@@ -1,8 +1,18 @@
 'use strict';
 
 // from-calendar.js — Calendar + reminders effector.
-// Vault-backed local reminder store (zero external deps).
-// Optional Google Calendar layer rides on top when env keys are present.
+// Vault-backed local reminder store (zero external deps) plus a real,
+// read-only Google Calendar "upcoming events" tool (§7.6). This file used to
+// claim an "optional Google Calendar layer... when env keys are present"
+// while no such layer existed anywhere in the codebase — exactly the
+// undocumented-gap-vs-marketing-claim pattern this whole plan exists to
+// avoid. Fixed by actually building the read side rather than deleting the
+// claim: scripts/google-auth.js has requested the 'calendar.readonly' scope
+// alongside Gmail's since BUG-024, so any refresh token minted after that
+// fix already covers it — genuinely "scope, not new auth" reuse of the
+// existing adapters/google adapter, same lazy-construct/clean-error pattern
+// as from-gmail.js. Write-side (creating/editing events) is still not built
+// — calendar_upcoming only reads.
 
 var FILE = 'Calendar/reminders.json';
 
@@ -39,7 +49,12 @@ function createCalendarEffector({ fs, bus }) {
       text: text.trim(),
       dueAt: when,
       createdAt: Date.now(),
-      fired: false
+      fired: false,
+      // Task 5 (step 5, alarms/timers) — a timer is a reminder with this flag
+      // set; server/index.js's reminder.due handler plays a bundled alert
+      // tone before speaking when it's true. Plain reminder_add calls never
+      // set it (defaults false), so existing reminder behavior is unchanged.
+      alertSound: Boolean(opts.alertSound)
     };
     reminders.push(record);
     save(reminders);
@@ -79,7 +94,7 @@ function createCalendarEffector({ fs, bus }) {
     if (fired.length > 0) {
       save(reminders);
       for (var j = 0; j < fired.length; j++) {
-        if (bus) bus.emit('reminder.due', { id: fired[j].id, text: fired[j].text });
+        if (bus) bus.emit('reminder.due', { id: fired[j].id, text: fired[j].text, alertSound: Boolean(fired[j].alertSound) });
       }
     }
     return fired;
@@ -157,12 +172,43 @@ function createCalendarEffector({ fs, bus }) {
   };
 }
 
+// §7.6 — lazy Google adapter for the read-only Calendar tool. Same shape as
+// from-gmail.js's ensureAdapter: construct on first use (never block boot on
+// DNS/OAuth), and only cache a *ready* adapter — caching the not-ready
+// sentinel would make every later call bypass the `if (!a)` guard below.
+var _googleAdapter = null;
+function ensureGoogleAdapter(logger) {
+  if (_googleAdapter && _googleAdapter.ready) return _googleAdapter;
+  var { createGoogleAdapter } = require('../../../adapters/google');
+  _googleAdapter = createGoogleAdapter({ logger: logger || { warn: function() {} } });
+  if (!_googleAdapter.ready) return null;
+  return _googleAdapter;
+}
+
+async function calendarUpcoming(args, ctx) {
+  var logger = (ctx && ctx.logger) || { warn: function() {} };
+  var a = ensureGoogleAdapter(logger);
+  if (!a) {
+    return { ok: false, result: { error: 'Google Calendar is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.' } };
+  }
+  var max = (args && args.max) || 10;
+  try {
+    var events = await a.listUpcomingEvents(max);
+    return { ok: true, result: { events: events } };
+  } catch (err) {
+    return { ok: false, result: { error: 'Calendar fetch failed: ' + err.message } };
+  }
+}
+
 function buildCalendarTools(ctx) {
   var cal = createCalendarEffector(ctx);
   return [
     { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Returns the reminder ID.', params: { text: 'string', when: 'string' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
     { name: 'reminder_list', description: 'List upcoming reminders. Shows all pending reminders with their scheduled times and text.', params: {}, danger: false, fn: async function(args) { return cal.listReminders(args); }, needs_result: true },
     { name: 'reminder_cancel', description: 'Cancel a pending reminder by its ID or text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
+    { name: 'timer_add', description: 'Set a timer that rings an audible alert when it goes off (in addition to speaking). Use for "set a timer for N minutes" style requests, not date-based reminders.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) { return cal.addReminder({ text: (args && args.label) || 'Timer', when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true }); } },
+    { name: 'timer_cancel', description: 'Cancel a pending timer by its label/text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
+    { name: 'calendar_upcoming', description: 'List upcoming events from the connected Google Calendar (read-only). Requires GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN to be configured — degrades honestly with a clear setup message otherwise.', params: { max: 'number (optional) - max events to return, default 10' }, danger: false, fn: async function(args) { return calendarUpcoming(args, ctx); }, needs_result: true },
   ];
 }
 
