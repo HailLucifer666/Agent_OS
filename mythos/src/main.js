@@ -68,6 +68,9 @@ const { registerFromSkills } = require('./core/effectors/from-skills');
 const { registerFromSpotify } = require('./core/effectors/from-spotify');
 const { registerFromWidgets } = require('./core/effectors/from-widgets');
 const { registerFromDocs } = require('./core/effectors/from-docs');
+const { registerFromImageGen } = require('./core/effectors/from-image-gen');
+const { registerFromDocuments } = require('./core/effectors/from-documents');
+const { registerFromCodeSearch } = require('./core/effectors/from-code-search');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
@@ -383,6 +386,13 @@ async function main() {
       registerFromWidgets(hub, { bus: bus });
       // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.
       registerFromDocs(hub, { vault: memory.fs });
+      // §7.10 image generation — separate file from from-docs.js on purpose: that
+      // file documents "no new network at runtime" and image-gen needs a real call.
+      registerFromImageGen(hub, { vault: memory.fs });
+      // §7.5 doc RAG + §7.11 code search — both read/write the SAME
+      // memory.documents store + memory.documentsIndex vector partition.
+      registerFromDocuments(hub, { documents: memory.documents, documentsIndex: memory.documentsIndex });
+      registerFromCodeSearch(hub, { documents: memory.documents, documentsIndex: memory.documentsIndex });
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
       // registry. checkpoints needs memory.audit + goals (both exist by now).

@@ -56,7 +56,7 @@ test('buildSchtasksArgs never produces hardcoded absolute paths', () => {
 test('buildSchtasksArgs works with different repo locations', () => {
   const paths = [
     'E:\\code\\mythos\\Start Agent OS.bat',
-    '/home/user/mythos/Start Agent OS.bat',
+    '/opt/mythos-app/Start Agent OS.bat',
     'C:\\Program Files (x86)\\MyApp\\Start Agent OS.bat',
   ];
 
