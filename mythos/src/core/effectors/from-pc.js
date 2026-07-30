@@ -190,6 +190,16 @@ async function screen_look({ query }) {
   return ok({ description: String(result.content).trim().slice(0, 600) });
 }
 
+// §7.1 (step 5, desktop gaps) — real screen OCR via Windows.Media.Ocr
+// (ps-automation.ps1's Handle-ScreenReadText, through the existing
+// Await-WinRTOperation helper). No caption/vision-model round trip like
+// screen_look — this returns literal recognized text. Honest degrade: no
+// OCR language pack installed -> ok:false with the real reason, never an
+// empty string presented as "no text on screen".
+async function screen_read_text() {
+  return delegate({ cmd: 'screen_read_text' });
+}
+
 // ---- ambient_awareness (screen-sensor toggle) ----
 // Handle injected by main.js after the sensor is constructed in the 'sensors'
 // boot step — mirrors from-dashboard.js's setAskAgentDispatch/
@@ -383,6 +393,7 @@ const TOOLS = [
   { name: 'ambient_awareness', description: "Turn ambient screen awareness on or off, or report its status. Use for 'watch my screen', 'stop watching my screen', 'are you watching?'.", params: { action: 'string - on|off|status' }, danger: false, fn: ambient_awareness, needs_result: true },
   { name: 'show_desktop', description: "Minimize all windows and show the desktop. Use for 'show desktop', 'minimize everything', 'go to desktop'.", params: {}, danger: false, fn: show_desktop },
   { name: 'media_status', description: 'Get currently playing media info (title, artist, album, position/duration, art) from Windows SMTC.', params: {}, danger: false, fn: media_status, needs_result: true },
+  { name: 'screen_read_text', description: 'Read the literal text visible on the primary screen via real OCR (Windows.Media.Ocr) — use this to lift an error message, code snippet, or any on-screen text verbatim, not to describe an image (use screen_look for that).', params: {}, danger: false, fn: screen_read_text, needs_result: true },
 ];
 
 function registerFromPc(hub, opts) {
@@ -403,7 +414,7 @@ module.exports = {
   TOOLS,
   KNOWN_DESKTOP_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
-  screen_look, capture_screenshot, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
+  screen_look, capture_screenshot, screen_read_text, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
   ambient_awareness, setScreenSensorHandle, show_desktop,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,

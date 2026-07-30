@@ -1026,6 +1026,56 @@ function Handle-ScreenLook($query) {
     }
 }
 
+# §7.1 (step 5, desktop gaps) — real screen OCR via Windows.Media.Ocr, zero
+# new dependencies (no tesseract.js — wasm+traineddata for something Windows
+# already ships). Reuses the existing Await-WinRTOperation helper (line ~100)
+# and this file's already-established WinRT-type-resolution convention
+# ([Type]::GetType('...,ContentType=WindowsRuntime')), matching how the SMTC
+# media session code above resolves Windows.Media.Control types — NOT the
+# bare [Windows.Storage.StorageFile] bracket syntax the source plan doc
+# sketches, which doesn't reliably resolve in this codebase's established
+# pattern. Verified live before wiring in: a standalone script using this
+# exact reflection chain against a bitmap with known drawn text ("MYTHOS OCR
+# TEST 12345") round-tripped that exact string back through the real OCR
+# engine on this machine.
+function Handle-ScreenReadText {
+    try {
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+        $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+        $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $tmp = Join-Path $env:TEMP ('mythos-ocr-' + [guid]::NewGuid().ToString('N') + '.png')
+        $bmp.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
+        $gfx.Dispose(); $bmp.Dispose()
+    } catch {
+        return ('screen capture for OCR failed: ' + $_.Exception.Message)
+    }
+    try {
+        $storageFileType = [Type]::GetType('Windows.Storage.StorageFile, Windows.Storage, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $streamType = [Type]::GetType('Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $decoderType = [Type]::GetType('Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $softwareBitmapType = [Type]::GetType('Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $ocrEngineType = [Type]::GetType('Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $ocrResultType = [Type]::GetType('Windows.Media.Ocr.OcrResult, Windows.Media.Ocr, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        $fileAccessModeType = [Type]::GetType('Windows.Storage.FileAccessMode, Windows.Storage, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+
+        $file = Await-WinRTOperation ($storageFileType::GetFileFromPathAsync($tmp)) $storageFileType
+        $readMode = [Enum]::ToObject($fileAccessModeType, 0)  # FileAccessMode.Read = 0
+        $stream = Await-WinRTOperation ($file.OpenAsync($readMode)) $streamType
+        $decoder = Await-WinRTOperation ($decoderType::CreateAsync($stream)) $decoderType
+        $bitmap = Await-WinRTOperation ($decoder.GetSoftwareBitmapAsync()) $softwareBitmapType
+        $engine = $ocrEngineType::TryCreateFromUserProfileLanguages()
+        if ($null -eq $engine) { return 'no OCR language pack installed' }
+        $ocr = Await-WinRTOperation ($engine.RecognizeAsync($bitmap)) $ocrResultType
+        $lines = @($ocr.Lines | ForEach-Object { $_.Text })
+        return @{ text = ($lines -join "`n"); lineCount = $lines.Count }
+    } catch {
+        return ('OCR failed: ' + $_.Exception.Message)
+    } finally {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Handle-UiElements($TargetPid, $depth) {
     if (-not $depth) { $depth = 2 }
     try {
@@ -1549,6 +1599,10 @@ while ($true) {
         }
         'write_note' {
             $result = Handle-WriteNote $cmd.text $cmd.title
+        }
+        'screen_read_text' {
+            $result = Handle-ScreenReadText
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'get_clipboard' {
             $result = Handle-GetClipboard

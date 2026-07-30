@@ -23,6 +23,7 @@ const TIER_TABLE = {
   'clipboard_read':        0,  // Task 3 (step 5) — read-only
   'list_windows':          0,
   'ui_elements':           0,
+  'screen_read_text':      0,  // §7.1 (step 5) — real OCR via Windows.Media.Ocr, read-only
   'browser_get_title':     0,
   'web_search':            0,  // read-only research — fetches public search results
   'web_fetch':             0,  // read-only fetch — retrieves public web page content
