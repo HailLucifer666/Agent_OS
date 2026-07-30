@@ -102,9 +102,20 @@ function check() {
     console.log('  provider     : ' + (provider ? provider[1] : '(unset)') +
                 '  model: ' + (model ? model[1] : '(unset)') +
                 '  base_url: ' + (base ? base[1] : '(unset)'));
-    console.log('  NOTE: config.yaml base_url/provider OVERRIDE the OPENAI_BASE_URL/');
-    console.log('        OPENAI_API_KEY the adapter forwards. If builds come back with');
-    console.log('        "HTTP 401" run `hermes model` to pick a provider interactively.');
+    // config.yaml overrides the OPENAI_* pair the adapter forwards, and only the
+    // `openai-api` registry id actually consumes that pair (its ProviderConfig
+    // declares api_key_env_vars=("OPENAI_API_KEY",) / base_url_env_var=
+    // "OPENAI_BASE_URL"). `openai` is not a registry id at all and `custom` is a
+    // plugin, so either one authenticates as nobody: every call comes back
+    // "HTTP 401: Missing Authentication header". Root-caused live 2026-07-29.
+    if (!provider || provider[1] !== 'openai-api') {
+      console.log('  WARNING: model.provider should be "openai-api" for MYTHOS.');
+      console.log('    That is the only registry id that reads the OPENAI_API_KEY/');
+      console.log('    OPENAI_BASE_URL pair the adapter forwards. With anything else');
+      console.log('    (including "openai" or "custom") every build fails with');
+      console.log('    "HTTP 401: Missing Authentication header".');
+      console.log('    Fix in ' + cfg + ':  provider: openai-api');
+    }
   }
   return (hasOneshot && hasYolo) ? 0 : 1;
 }
