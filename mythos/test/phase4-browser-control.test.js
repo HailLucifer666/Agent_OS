@@ -229,3 +229,121 @@ describe('Phase 4 — tiers parity', () => {
     assert.equal(TIER_TABLE.browser_fill_form, 3);
   });
 });
+
+// ---- SPA / lazy-hydration fix (2026-07-30) ----------------------------------
+// The operator's YouTube session showed browser_get_text timing out at 15s on
+// ytd-rich-item-renderer (a custom element that hydrates AFTER domcontentloaded)
+// while browser_click silently swallowed its 5s pre-wait then rode the 15s page
+// default. The fix: one waitReady() helper (bounded pre-wait, returns true/
+// false, no swallow) reused by click/type/get_text/fill_form, plus a navigate
+// SPA-settle. These tests prove the logic; live SPA verification needs the
+// operator's debug Chrome (flagged in BUGS.md, same as every browser test here).
+describe('Browser SPA fix — waitReady pre-wait + no-swallow', () => {
+  let originalWithPage, originalGetStatus, originalEnsureOnline, originalWithNewPage;
+
+  beforeEach(() => {
+    originalWithPage = realBrowserAgent.withPage;
+    originalWithNewPage = realBrowserAgent.withNewPage;
+    originalGetStatus = realBrowserAgent.getStatus;
+    originalEnsureOnline = realBrowserAgent.ensureOnline;
+    realBrowserAgent.getStatus = () => ({ state: 'ONLINE', hint: null });
+    realBrowserAgent.ensureOnline = async () => {};
+    delete require.cache[require.resolve('../src/core/effectors/from-browser')];
+  });
+
+  afterEach(() => {
+    realBrowserAgent.withPage = originalWithPage;
+    realBrowserAgent.withNewPage = originalWithNewPage;
+    realBrowserAgent.getStatus = originalGetStatus;
+    realBrowserAgent.ensureOnline = originalEnsureOnline;
+    delete require.cache[require.resolve('../src/core/effectors/from-browser')];
+  });
+
+  it('browser_click fails CLEANLY (naming the selector) when waitReady returns false — no swallow, no 15s ride', async () => {
+    let clicked = false;
+    realBrowserAgent.withPage = async (fn) => {
+      const page = {
+        // waitReady's waitForSelector resolves → false (element never visible).
+        waitForSelector: async () => { throw new Error('Timeout 8000ms exceeded'); },
+        click: async () => { clicked = true; },
+        url: () => 'https://example.test',
+      };
+      return fn(page);
+    };
+    const { browser_click } = require('../src/core/effectors/from-browser');
+    const r = await browser_click({ selector: 'ytd-rich-item-renderer #video-title' });
+    assert.equal(r.ok, false, 'must fail when the element never becomes visible');
+    assert.ok(r.result.includes('not ready'), 'failure should name the not-ready reason, got: ' + r.result);
+    assert.ok(r.result.includes('ytd-rich-item-renderer'), 'failure should name the selector, got: ' + r.result);
+    assert.equal(clicked, false, 'must NOT call page.click after a failed pre-wait (old code did, rode the 15s default)');
+  });
+
+  it('browser_click proceeds to click when waitReady resolves true', async () => {
+    const calls = [];
+    realBrowserAgent.withPage = async (fn) => {
+      const page = {
+        waitForSelector: async () => { calls.push('wait'); },
+        click: async () => { calls.push('click'); },
+        url: () => 'https://example.test',
+      };
+      return fn(page);
+    };
+    const { browser_click } = require('../src/core/effectors/from-browser');
+    const r = await browser_click({ selector: '#go' });
+    assert.equal(r.ok, true);
+    assert.deepEqual(calls, ['wait', 'click'], 'wait must precede click');
+  });
+
+  it('browser_get_text now PRE-WAITS (waitForSelector) before textContent — it never used to, which was the YouTube 15s timeout', async () => {
+    const calls = [];
+    realBrowserAgent.withPage = async (fn) => {
+      const page = {
+        waitForSelector: async () => { calls.push('wait'); },
+        textContent: async () => { calls.push('text'); return 'Blinding Lights'; },
+        url: () => 'https://youtube.test',
+      };
+      return fn(page);
+    };
+    const { browser_get_text } = require('../src/core/effectors/from-browser');
+    const r = await browser_get_text({ selector: 'ytd-rich-item-renderer #video-title' });
+    assert.equal(r.ok, true);
+    assert.deepEqual(calls, ['wait', 'text'], 'get_text must waitReady before textContent (the fix)');
+    assert.equal(r.result.text, 'Blinding Lights');
+  });
+
+  it('browser_get_text fails CLEANLY when the selector never becomes visible (not the raw Playwright 15s error)', async () => {
+    realBrowserAgent.withPage = async (fn) => {
+      const page = {
+        waitForSelector: async () => { throw new Error('Timeout 8000ms exceeded'); },
+        textContent: async () => 'should-not-reach',
+        url: () => 'https://youtube.test',
+      };
+      return fn(page);
+    };
+    const { browser_get_text } = require('../src/core/effectors/from-browser');
+    const r = await browser_get_text({ selector: 'ytd-rich-item-renderer #video-title' });
+    assert.equal(r.ok, false);
+    assert.ok(r.result.includes('not ready'), 'should fail cleanly at the pre-wait, got: ' + r.result);
+  });
+
+  it('browser_navigate does a best-effort networkidle settle (SPA hydration) — swallow, never block a fast page', async () => {
+    const calls = [];
+    realBrowserAgent.withPage = async (fn) => {
+      const page = {
+        goto: async (url, opts) => { calls.push({ m: 'goto', waitUntil: opts && opts.waitUntil }); },
+        waitForLoadState: async (state) => { calls.push({ m: 'waitForLoadState', state }); },
+        title: async () => 'Example',
+        url: () => 'https://example.test',
+      };
+      return fn(page);
+    };
+    const { browser_navigate } = require('../src/core/effectors/from-browser');
+    const r = await browser_navigate({ url: 'https://example.test' });
+    assert.equal(r.ok, true);
+    const gotoCall = calls.find((c) => c.m === 'goto');
+    assert.equal(gotoCall.waitUntil, 'commit', 'navigate should use commit, not the old domcontentloaded');
+    const settleCall = calls.find((c) => c.m === 'waitForLoadState');
+    assert.ok(settleCall, 'navigate must attempt a networkidle settle');
+    assert.equal(settleCall.state, 'networkidle');
+  });
+});

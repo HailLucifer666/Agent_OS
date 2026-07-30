@@ -172,6 +172,16 @@ const SCHEMA = {
   // Browser automation (Phase 9 — playwright-core, drives installed Chrome/Edge)
   BROWSER_CDP_URL:            { type: 'string',  default: 'http://127.0.0.1:9222' },
   BROWSER_AUTOMATION:         { type: 'bool', default: true },
+  // Per-page default action timeout (click/type/textContent). Higher lets a
+  // lazy-hydrating SPA (YouTube's ytd-* custom elements) come up before the
+  // click; lower fails faster on a genuinely-absent element. Read by the
+  // browser-agent adapter (setDefaultTimeout) and from-browser's waitReady().
+  BROWSER_PAGE_TIMEOUT_MS:    { type: 'number', default: 15000, min: 1000, max: 60000 },
+  // How long waitReady() (the pre-wait before click/type/get_text) waits for a
+  // selector to become visible. Less than BROWSER_PAGE_TIMEOUT_MS so a missing
+  // element fails at the pre-wait with a clean message, not the raw Playwright
+  // 15s timeout. 8000 covers most SPA hydration without unbounded waiting.
+  BROWSER_PAGE_WAIT_MS:       { type: 'number', default: 8000, min: 500, max: 30000 },
   // Auto-connect poller: while OFFLINE, retry the CDP connect on this interval so
   // MYTHOS attaches the moment a debug Chrome appears (and re-attaches after a
   // drop) with no manual "Connect". CDP-connect only — never launches a browser,

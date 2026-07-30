@@ -100,28 +100,36 @@ that, never synthesize a verdict. And the "two real test failures" the plan
 predicts are **unconfirmed** — the pre-commit hook reports 0 failures over its
 ~140-file subset, so reproduce with a full `node --test` before fixing anything.
 
-**Licensing gate before any release, paid or free (merged-order step 6.5):**
+**Licensing gate before any release, paid or free (merged-order step 6.5 + 6.6):**
 The operator confirmed on **2026-07-30 that MYTHOS will be sold later**, possibly
-alongside a free basic demo tier — so this gate is live, not hypothetical, and a
+alongside a free basic demo tier — so the gate is live, not hypothetical, and a
 free demo does not rescue it if it shares a codebase with the paid product.
 `providers/edge-tts.js` and `services/edge-tts-server.py` label edge-tts
 personal/hobby only; `THIRD_PARTY_NOTICES.md` records the openWakeWord **weights**
-as CC BY-NC-SA 4.0 non-commercial. Planned fix: swap to Piper (MIT, local) and
-train an own `hey_mythos` model with openWakeWord's Apache-2.0 tooling.
+as CC BY-NC-SA 4.0 non-commercial. **Both labels are self-authored in this repo**
+(`git blame` → `532106d8`/`29e9891`), NOT licence text from upstream.
 
-**Two corrections a fresh session must not re-derive wrongly.** First, those
-edge-tts warnings are **self-authored in this repo** (`git blame` → `532106d8`),
-not licence text from Microsoft or upstream — there is no Microsoft licence for
-that endpoint at all, so the real exposure is Terms-of-Use and business risk,
-plus the upstream Python package's own (still **unverified**) code licence.
-openWakeWord's NC weights, by contrast, are a genuine upstream licence. Second,
-this gate blocks **shipping, not building**: step 7's Electron work distributes
-nothing until a release is published, so it may proceed in parallel. Full
-analysis, the wider audit surface (Hermes-Agent, cua-driver, MediaPipe model
-assets, provider ToS for resale) and the three decisions still needed from the
-operator live in the roadmap's "Step 6.5" section. This never surfaces in
-testing. Do not write a confident legal conclusion into any tracked file — that
-is a lawyer's call, not a session's.
+**Licences VERIFIED 2026-07-30 against real upstream sources** (not this repo's
+comments): the upstream `edge-tts` Python package (`github.com/rany2/edge-tts`,
+PyPI `edge-tts` 7.2.8) is **LGPLv3** (LICENSE file + PyPI classifier); it is NOT
+vendored anywhere tracked (`services/edge-tts-server.py` does `import edge_tts`
+with no requirements.txt), so the repo ships a Combined Work expecting the user to
+supply the library. openWakeWord's pretrained `.onnx` weights are **CC BY-NC-SA
+4.0** (GitHub README + HuggingFace `davidscripka/openwakeword`, verbatim) while
+the code/tooling is Apache-2.0 — the weights are a separate artefact under
+separate terms, so reading only the code LICENSE and concluding "Apache for
+everything" is a known trap.
+
+**Three operator decisions answered 2026-07-30** (see the roadmap's 6.5 section):
+(1) TTS stays **BYO** like the API keys — removes the LGPL exposure *without* a
+Piper swap, so the planned swap is no longer required for TTS; the constraint
+becomes "step-7 installer never bundles the LGPL package" + BYO docs, not a 6.5
+code task; (2) free demo deferred; (3) the wider licence audit (Hermes-Agent,
+cua-driver, MediaPipe assets, provider ToS for resale) split into its own tracked
+**step 6.6**. One decision still deferred: how the paid product handles the NC
+wake-word weights. This gate blocks **shipping, not building** — step 7 is
+buildable in parallel. This never surfaces in testing. Do not write a confident
+legal conclusion into any tracked file — that is a lawyer's call, not a session's.
 
 ## Previous session update (2026-07-27, commit `30385d7`)
 

@@ -55,6 +55,36 @@ async function requireOnline() {
 
 // ---- Tool implementations ----
 
+// BROWSER_PAGE_WAIT_MS (schema.js, default 8000): how long waitReady() waits
+// for a selector to become visible before click/type/get_text. Read from config
+// (set in registerFromBrowser) or env. Less than the adapter's page default so
+// a missing element fails here with a clean message, not the raw 15s Playwright
+// timeout. See waitReady() for why this replaced the scattered swallowed-catch
+// waitForSelector(5000/4000) calls.
+function pageWaitMs() {
+  const fromConfig = config && config.BROWSER_PAGE_WAIT_MS;
+  const n = Number(fromConfig || process.env.BROWSER_PAGE_WAIT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 8000;
+}
+
+// waitReady(page, selector) — single bounded pre-wait, returns true/false.
+// Replaces the THREE swallowed-catch waitForSelector({timeout:5000/4000}) sites
+// (click/type/fill_form) AND adds the pre-wait get_text never had. Why it
+// exists: a lazy-hydrating SPA (YouTube's ytd-* custom elements upgrade async
+// AFTER domcontentloaded) means a click right after navigate hits a not-yet-
+// existing node. The old code's empty catch(_) silently swallowed that, then
+// page.click rode the full 15s page default → 20s before an honest fail. One
+// helper, one behaviour, no retry storm (the comment at the old :96 explicitly
+// warned against silent retries; this preserves that — a single bounded wait).
+async function waitReady(page, selector) {
+  try {
+    await page.waitForSelector(selector, { timeout: pageWaitMs(), state: 'visible' });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function browser_navigate({ url, newTab }) {
   if (!url) return fail('URL is required.');
   // REMEDIATION P1-7: a /vault/... path (or a mistaken file:///vault/... URL)
@@ -80,7 +110,14 @@ async function browser_navigate({ url, newTab }) {
   // does both, so a stray blank tab can't be left behind.
   const runner = newTab ? browserAgent.withNewPage : browserAgent.withPage;
   return runner(async (page) => {
-    await page.goto(target, { waitUntil: 'domcontentloaded' });
+    // 'commit' resolves as soon as the network response is received and reading
+    // starts — strictly less strict than the old 'domcontentloaded', so a slow
+    // initial HTML no longer blocks. Then a BOUNDED best-effort networkidle
+    // settle (3s, swallow) gives a lazy SPA (YouTube) a chance to hydrate its
+    // custom elements before the brain's next click lands on a not-yet-existing
+    // node. Fast/static pages ignore it (networkidle already true → instant).
+    await page.goto(target, { waitUntil: 'commit' });
+    try { await page.waitForLoadState('networkidle', { timeout: 3000 }); } catch (_) {}
     const title = await page.title();
     return ok({ url: page.url(), title, newTab: !!newTab });
   }).catch(err => fail(err.message));
@@ -91,11 +128,14 @@ async function browser_click({ selector }) {
   const guard = await requireOnline();
   if (guard) return guard;
 
-  // Phase 4 hardening: implicit waitForSelector before click so a not-yet-rendered
-  // element doesn't fail the whole click. waitForSelector rejects on timeout, which
-  // the .catch turns into a clean fail — no silent retry storm.
   return browserAgent.withPage(async (page) => {
-    try { await page.waitForSelector(selector, { timeout: 5000 }); } catch (_) { /* fall through to click, which will fail honestly */ }
+    // waitReady replaces the old swallowed-catch waitForSelector(5000): if the
+    // element never becomes visible within BROWSER_PAGE_WAIT_MS, fail CLEANLY
+    // here (with the selector named) instead of silently falling through to
+    // page.click which then rode the 15s page-default timeout. No retry storm.
+    if (!(await waitReady(page, selector))) {
+      return fail(`Element not ready (not visible within ${pageWaitMs()}ms): ${selector}`);
+    }
     await page.click(selector);
     return ok({ clicked: selector, url: page.url() });
   }).catch(err => fail(err.message));
@@ -108,8 +148,10 @@ async function browser_type({ selector, text, clearFirst }) {
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
-    // Phase 4 hardening: implicit waitForSelector before typing.
-    try { await page.waitForSelector(selector, { timeout: 5000 }); } catch (_) {}
+    // Same waitReady pre-wait as browser_click — fail cleanly if absent.
+    if (!(await waitReady(page, selector))) {
+      return fail(`Element not ready (not visible within ${pageWaitMs()}ms): ${selector}`);
+    }
     if (clearFirst) await page.fill(selector, text);
     else await page.type(selector, text);
     return ok({ typed: text.length, into: selector, url: page.url() });
@@ -156,8 +198,13 @@ async function browser_fill_form({ fields }) {
         continue;
       }
       try {
-        // Wait briefly for the field, then fill (replace existing content).
-        try { await page.waitForSelector(f.selector, { timeout: 4000 }); } catch (_) {}
+        // waitReady pre-wait per field (replaces the swallowed 4000ms catch).
+        // A field that never appears reports its own failure WITHOUT aborting
+        // the rest of the form (the per-field contract documented above).
+        if (!(await waitReady(page, f.selector))) {
+          results.push({ index: i, selector: f.selector, ok: false, error: 'field not visible within ' + pageWaitMs() + 'ms' });
+          continue;
+        }
         await page.fill(f.selector, String(f.value));
         results.push({ index: i, selector: f.selector, ok: true });
       } catch (err) {
@@ -198,6 +245,13 @@ async function browser_get_text({ selector } = {}) {
   return browserAgent.withPage(async (page) => {
     let text;
     if (selector) {
+      // waitReady pre-wait: previously get_text had NONE, so page.textContent
+      // immediately rode the 15s page-default timeout on any not-yet-hydrated
+      // SPA element (the operator's exact YouTube ytd-rich-item-renderer error).
+      // Fail cleanly here with the selector named, not the raw Playwright timeout.
+      if (!(await waitReady(page, selector))) {
+        return fail('Element not ready (not visible within ' + pageWaitMs() + 'ms): ' + selector);
+      }
       text = await page.textContent(selector);
       if (!text && selector) return fail('Element not found or empty for selector: ' + selector);
     } else {

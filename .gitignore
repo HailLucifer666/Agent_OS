@@ -1,5 +1,9 @@
 # dependencies / build artifacts
 mythos/node_modules/
+# Electron desktop shell lives at the repo root (electron/main.js + root
+# package.json), so its ~180MB of devDeps installs to /node_modules/ —
+# separate from mythos/'s runtime deps. Never commit either.
+/node_modules/
 _devtools/
 
 # python virtualenv (project-local Python tooling, e.g. the agent-reach CLI).
@@ -22,6 +26,11 @@ _devtools/
 
 # local data — real user vault content, never publish
 mythos/vault/
+# A vault rooted at the REPO level (not mythos/vault) can appear if MYTHOS is
+# ever launched with the wrong CWD (e.g. a transient Electron-shell mispath).
+# It's boot artifacts, never publish it. Leading slash pins it to repo root so
+# it does NOT also match a future tracked mythos/vault-equivalent elsewhere.
+/vault/
 
 # test-fixture vaults left behind by test/bug-019-audit-history.test.js (real
 # fs-store-backed temp vaults under a Date.now()-suffixed dir, never cleaned up)
@@ -75,3 +84,6 @@ mythos/.tmp-doc-rag-test/
 # zcode session logs/scratch (never publish)
 .zcode/tmp/
 .gstack/
+
+# secrets scratch file — never commit (live API keys)
+/env.download
