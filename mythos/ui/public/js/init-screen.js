@@ -2,6 +2,24 @@
 // WS connect / entity-state / first tick advance the status lines; canned
 // fillers pace the gaps. Fast-path when the entity is already alive
 // (refresh). Click/Esc skips. Reduced-motion: plain fade, no scan sweep.
+//
+// TIMING, MEASURED 2026-07-31. This overlay was the whole "the HUD feels slow"
+// complaint. The real critical path is 17ms over loopback (1 html + 15 css + 38
+// modules, gzipped, warm cache), and server/index.js:1119 sends an entity-state
+// snapshot the instant the WS connects — so on a refresh the overlay had nothing
+// left to cover and still held the screen for ~1.25s: 1.1s of wordmark intro,
+// then a 500ms hold, then a 700ms fade. Every duration below and its CSS twin in
+// init.css is now halved, which keeps the cinematic but stops charging the
+// operator for it. The numbers are paired: the hold must outlast the wordmark
+// intro or the intro visibly cuts, and the removal timeout must match the
+// #init-screen opacity/transform transition or the overlay pops instead of fades.
+const REVEAL_FAST_MS = 240;   // entity already alive on connect (refresh)
+const REVEAL_SLOW_MS = 520;   // cold boot — let the last status line be read
+const FADE_MS = 380;          // pairs with init.css #init-screen transition (0.35s)
+const FADE_REDUCED_MS = 200;
+const FILLER_FIRST_MS = 120;
+const FILLER_GAP_MS = 220;
+const LINK_TIMEOUT_MS = 3000; // hard ceiling: server down / WS blocked
 export function mountInitScreen({ subscribe }) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const el = document.createElement('div');
@@ -37,7 +55,7 @@ export function mountInitScreen({ subscribe }) {
     unsub();
     document.removeEventListener('keydown', onKey);
     el.classList.add('init-out');
-    setTimeout(() => el.remove(), reduced ? 300 : 750);
+    setTimeout(() => el.remove(), reduced ? FADE_REDUCED_MS : FADE_MS);
   }
 
   const onKey = (e) => { if (e.key === 'Escape') dismiss(); };
@@ -46,7 +64,7 @@ export function mountInitScreen({ subscribe }) {
 
   // canned pacing lines (honest filler — no fake metrics)
   const fillers = ['ESTABLISHING NEURAL LINK', 'MOUNTING MEMORY VAULT', 'CALIBRATING SENSOR ARRAY', 'PRIMING EFFECTOR GRID'];
-  fillers.forEach((f, i) => setTimeout(() => { if (!sawAlive || i < 2) addLine(f); }, 250 + i * 420));
+  fillers.forEach((f, i) => setTimeout(() => { if (!sawAlive || i < 2) addLine(f); }, FILLER_FIRST_MS + i * FILLER_GAP_MS));
 
   const unsub = subscribe(['entity-state', 'tick'], (msg) => {
     if (msg.type === 'entity-state') {
@@ -56,7 +74,7 @@ export function mountInitScreen({ subscribe }) {
         addLine('ENTITY ONLINE', 'ok');
         // fast-path: alive within 700ms of load (refresh/reconnect) → short reveal
         const elapsed = performance.now() - t0;
-        setTimeout(dismiss, elapsed < 700 ? 500 : 1100);
+        setTimeout(dismiss, elapsed < 700 ? REVEAL_FAST_MS : REVEAL_SLOW_MS);
       } else if (status && status !== 'alive' && !sawAlive) {
         addLine('COGNITIVE CORE SPINNING UP');
       }
@@ -66,6 +84,6 @@ export function mountInitScreen({ subscribe }) {
   });
 
   // hard ceiling — never trap the user on the overlay (server down, WS blocked)
-  setTimeout(() => { if (!dismissed) { addLine('LINK TIMEOUT — ENTERING DASHBOARD', 'warn'); setTimeout(dismiss, 600); } }, 6000);
+  setTimeout(() => { if (!dismissed) { addLine('LINK TIMEOUT — ENTERING DASHBOARD', 'warn'); setTimeout(dismiss, 400); } }, LINK_TIMEOUT_MS);
   return { dismiss };
 }

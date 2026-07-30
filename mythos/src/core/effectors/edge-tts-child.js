@@ -9,10 +9,30 @@
 // signal delivery (a shell-wrapped child process changes how Windows delivers
 // console signals to the whole process group, breaking graceful SIGINT shutdown).
 
+const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const TTS_SCRIPT = path.join(__dirname, '..', '..', '..', 'services', 'edge-tts-server.py');
+const MYTHOS_DIR = path.join(__dirname, '..', '..', '..');
+const REPO_ROOT = path.join(MYTHOS_DIR, '..');
+
+// Project-local virtualenvs, checked BEFORE PATH. edge-tts is a BYO dependency
+// (see CLAUDE.md — it is never bundled), and the documented way to supply a
+// Python dependency here is a venv inside the project, not a global pip install.
+// Until this existed the detector only ever looked at PATH, so a correct
+// project-local install left server TTS silently off with a hint that told the
+// operator to install globally. Relative to __dirname, so no absolute path is
+// baked into a tracked file (AD-7).
+function venvPythons() {
+  const leaf = process.platform === 'win32'
+    ? path.join('Scripts', 'python.exe')
+    : path.join('bin', 'python');
+  return [
+    path.join(MYTHOS_DIR, '.venv', leaf),
+    path.join(REPO_ROOT, '.venv', leaf),
+  ];
+}
 
 function createEdgeTtsChild({ logger }) {
   var MAX_RESTART = 3;
@@ -30,7 +50,9 @@ function createEdgeTtsChild({ logger }) {
     // resolves via PATH directly, and shell:true with an args array trips
     // Node's DEP0190 deprecation warning.
     let pyBin = null;
-    for (const bin of ['python', 'python3']) {
+    const candidates = venvPythons().filter((p) => { try { return fs.existsSync(p); } catch { return false; } });
+    candidates.push('python', 'python3');
+    for (const bin of candidates) {
       try {
         const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 3000 });
         if (r.status === 0) { pyBin = bin; break; }
@@ -46,7 +68,12 @@ function createEdgeTtsChild({ logger }) {
     try {
       const r = spawnSync(pyBin, ['-c', 'import edge_tts'], { encoding: 'utf8', timeout: 5000 });
       if (r.status !== 0) {
-        logger.warn('edge-tts.module-missing', { hint: `${pyBin} -m pip install edge-tts` });
+        // Project-local install, per CLAUDE.md's isolation rule — a bare global
+        // `pip install` is what the old hint told the operator to do.
+        logger.warn('edge-tts.module-missing', {
+          hint: 'python -m venv .venv && .venv/Scripts/python -m pip install edge-tts  (bin/python on macOS/Linux)',
+          detected: pyBin,
+        });
         return false;
       }
     } catch {

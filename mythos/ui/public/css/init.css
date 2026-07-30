@@ -1,9 +1,13 @@
+/* Durations halved 2026-07-31 — this overlay WAS the "HUD feels slow" report.
+   Real load is 17ms; the overlay was holding the screen ~1.25s on a refresh.
+   Each duration here is paired with a constant in js/init-screen.js (see the
+   TIMING note there); change them together or the fade pops / intro cuts. */
 #init-screen {
   position: fixed; inset: 0; z-index: 300;
   background: #030509;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
-  transition: opacity 0.7s var(--ease), transform 0.7s var(--ease);
+  transition: opacity 0.35s var(--ease), transform 0.35s var(--ease); /* pairs with FADE_MS */
 }
 #init-screen.init-out { opacity: 0; transform: scale(1.06); pointer-events: none; }
 
@@ -12,7 +16,7 @@
   font-family: var(--font-sans); font-weight: 300; font-size: clamp(28px, 5vw, 46px);
   letter-spacing: 0.35em; color: var(--text);
   text-shadow: 0 0 24px rgba(79, 216, 255, 0.45);
-  animation: init-wordmark-in 1.1s var(--ease) both;
+  animation: init-wordmark-in 0.5s var(--ease) both; /* must finish inside REVEAL_FAST_MS + FADE_MS */
 }
 @keyframes init-wordmark-in { from { opacity: 0; letter-spacing: 0.6em; } to { opacity: 1; letter-spacing: 0.35em; } }
 
@@ -27,7 +31,7 @@
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: conic-gradient(from 0deg, transparent 0deg, rgba(79, 216, 255, 0.10) 24deg, transparent 60deg);
-  animation: init-sweep-rot 2.6s linear infinite;
+  animation: init-sweep-rot 1.3s linear infinite;
   pointer-events: none;
 }
 @keyframes init-sweep-rot { to { transform: translate(-50%, -50%) rotate(360deg); } }
@@ -35,7 +39,7 @@
 .init-scanline {
   position: absolute; left: 0; right: 0; top: -4px; height: 2px;
   background: linear-gradient(90deg, transparent, rgba(79, 216, 255, 0.5), transparent);
-  animation: init-scan 2.2s var(--ease) 0.3s 1 both;
+  animation: init-scan 1.1s var(--ease) 0.15s 1 both;
   pointer-events: none;
 }
 @keyframes init-scan { from { top: -4px; } to { top: 100%; opacity: 0; } }

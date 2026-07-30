@@ -12,7 +12,15 @@
 // If the Python service isn't running, isAvailable() returns false honestly.
 
 const BASE = process.env.EDGE_TTS_URL || 'http://127.0.0.1:5050';
-const HEALTH_CACHE_MS = 10000; // cache health check for 10s to avoid per-poll latency
+const HEALTH_CACHE_MS = 10000; // cache a HEALTHY result for 10s to avoid a fetch storm
+// A FAILED health check is cached far more briefly. The sidecar is autostarted at
+// boot (src/core/effectors/edge-tts-child.js) and needs ~2s to import edge_tts and
+// bind, so the first check after boot always fails. Caching that for the full 10s
+// made the entity answer its own boot greeting in the browser's voice instead of
+// its own, and — because server/index.js gates onToken on isAvailable() — disabled
+// sentence streaming for that window too. Observed 2026-07-31: synthesize() worked
+// while isAvailable() still reported false from the poisoned cache.
+const HEALTH_FAIL_CACHE_MS = 1500;
 const VOICE_CACHE_MS = 5 * 60 * 1000; // cache voice list for 5 min
 
 let _healthCache = { at: 0, ok: false, voices: 0 };
@@ -22,7 +30,8 @@ let _voiceCache = { at: 0, voices: [] };
 // a fetch storm. Never throws — returns {ok:false} on any error.
 async function checkHealth() {
   const now = Date.now();
-  if (now - _healthCache.at < HEALTH_CACHE_MS) return _healthCache;
+  const ttl = _healthCache.ok ? HEALTH_CACHE_MS : HEALTH_FAIL_CACHE_MS;
+  if (_healthCache.at && now - _healthCache.at < ttl) return _healthCache;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1500);
