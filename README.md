@@ -59,6 +59,7 @@ flowchart TB
         MI["Mistral<br/>Large · ∞ free"]
         CE["Cerebras<br/>Sub-100ms"]
         OR["OpenRouter<br/>Free models"]
+        GOOG["Google<br/>Gemini Flash"]
         ZC["ZCode<br/>GLM-5.2"]
     end
 
@@ -195,11 +196,13 @@ flowchart LR
         A2 -->|fail| A3["Cerebras Gemma"]
         A3 -->|fail| A4["NIM Key 1"]
         A4 -->|fail| A5["NIM Key 2"]
-        A5 -->|fail| A6["OpenRouter"]
-        A6 -->|fail| A7["Ollama ∞"]
+        A5 -->|fail| A6["Google<br/>Gemini Flash"]
+        A6 -->|fail| A7["OpenRouter"]
+        A7 -->|fail| A8["ZCode GLM<br/>lane-config gated"]
+        A8 -->|fail| A9["Ollama ∞"]
     end
 
-    A7 -->|fail| DEAD["chainExhausted<br/>offline: true"]
+    A9 -->|fail| DEAD["chainExhausted<br/>offline: true"]
     A1 -->|success| RESP["Response"]
 
     style A1 fill:#0e4429,stroke:#43e5a0

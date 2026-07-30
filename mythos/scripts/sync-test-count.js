@@ -225,23 +225,29 @@ function applySlots(counts, mode, report) {
 }
 
 const ROADMAP_ANCHOR = '## Keeping this file current';
-const ROADMAP_BLOCK_RE = /<!-- SYNC:TEST-COUNT:START -->\n\*\*Current test-suite state\*\* \(auto-synced by `mythos\/scripts\/sync-test-count\.js`, last run \d{4}-\d{2}-\d{2}\): \*\*(\d+) tests, (\d+) passing, (\d+) failing, (\d+) skipped\.\*\*\n<!-- SYNC:TEST-COUNT:END -->/;
+// BUG (found 2026-07-30): the newlines here were hardcoded `\n`, so on any clone
+// with core.autocrlf=true (the Windows default) the CRLF working copy never
+// matched — --check always reported "sync block missing", and --write would then
+// INSERT A SECOND block above the anchor instead of updating the existing one.
+// Match either ending, and emit whichever the file already uses.
+const ROADMAP_BLOCK_RE = /<!-- SYNC:TEST-COUNT:START -->\r?\n\*\*Current test-suite state\*\* \(auto-synced by `mythos\/scripts\/sync-test-count\.js`, last run \d{4}-\d{2}-\d{2}\): \*\*(\d+) tests, (\d+) passing, (\d+) failing, (\d+) skipped\.\*\*\r?\n<!-- SYNC:TEST-COUNT:END -->/;
 
-function roadmapBlock(counts, date) {
-  return `<!-- SYNC:TEST-COUNT:START -->\n**Current test-suite state** (auto-synced by \`mythos/scripts/sync-test-count.js\`, last run ${date}): **${counts.tests} tests, ${counts.pass} passing, ${counts.fail} failing, ${counts.skipped} skipped.**\n<!-- SYNC:TEST-COUNT:END -->`;
+function roadmapBlock(counts, date, eol) {
+  return `<!-- SYNC:TEST-COUNT:START -->${eol}**Current test-suite state** (auto-synced by \`mythos/scripts/sync-test-count.js\`, last run ${date}): **${counts.tests} tests, ${counts.pass} passing, ${counts.fail} failing, ${counts.skipped} skipped.**${eol}<!-- SYNC:TEST-COUNT:END -->`;
 }
 
 function syncRoadmap(counts, mode, report) {
   const content = fs.readFileSync(ROADMAP_FILE, 'utf8');
   const m = content.match(ROADMAP_BLOCK_RE);
   const today = new Date().toISOString().slice(0, 10);
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
 
   if (!m) {
     report.push('ROADMAP.md: sync block missing');
     if (mode === 'write') {
       const idx = content.indexOf(ROADMAP_ANCHOR);
       if (idx === -1) throw new Error(`sync-test-count: ROADMAP.md anchor "${ROADMAP_ANCHOR}" not found, refusing to guess where to insert`);
-      const block = `${roadmapBlock(counts, today)}\n\n---\n\n`;
+      const block = `${roadmapBlock(counts, today, eol)}${eol}${eol}---${eol}${eol}`;
       fs.writeFileSync(ROADMAP_FILE, content.slice(0, idx) + block + content.slice(idx), 'utf8');
       report.push('  -> inserted');
     }
@@ -254,7 +260,7 @@ function syncRoadmap(counts, mode, report) {
 
   report.push(`ROADMAP.md: sync block stale (found ${tests}/${pass}/${fail}/${skipped}, expected ${counts.tests}/${counts.pass}/${counts.fail}/${counts.skipped})`);
   if (mode === 'write') {
-    fs.writeFileSync(ROADMAP_FILE, content.replace(ROADMAP_BLOCK_RE, roadmapBlock(counts, today)), 'utf8');
+    fs.writeFileSync(ROADMAP_FILE, content.replace(ROADMAP_BLOCK_RE, roadmapBlock(counts, today, eol)), 'utf8');
     report.push('  -> written');
   }
   return true;
