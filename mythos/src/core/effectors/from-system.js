@@ -1,12 +1,22 @@
 'use strict';
 
 // effectors/from-system.js — basic situational-awareness tools (same DI
-// convention as from-mission.js): get_time (system clock, no dependency) and
+// convention as from-mission.js): get_time (system clock, no dependency),
 // get_weather (Open-Meteo, no API key — same free provider the dashboard's
-// weather widget already uses: ui/public/js/widgets/kinds/weather.js). Both
+// weather widget already uses: ui/public/js/widgets/kinds/weather.js), and
+// get_directions (§7.9 — OSRM's free public routing demo, no API key,
+// reusing get_weather's geocode() helper for both endpoints). All three
 // are tier 0 (read-only, auto-allow — see TIER_TABLE) and never throw: a
 // network failure or bad timezone degrades to an honest error result, same
 // philosophy as edge-tts.js/groq-stt.js.
+//
+// get_directions mode note (verified live 2026-07-30): router.project-osrm.org
+// is a single-profile (car) demo — it accepts any string in the profile URL
+// segment (even nonsense) and silently returns the same driving-network
+// distance/duration regardless, rather than 404ing for walking/cycling. So
+// "walking"/"cycling" numbers from this free endpoint are really driving-network
+// estimates, not genuinely mode-specific routing — surfaced honestly via a
+// `note` field rather than presented as accurate foot/bike directions.
 
 const { effectorFromTool } = require('./adapter');
 
@@ -79,6 +89,48 @@ function buildTools(ctx) {
     }
   }
 
+  // profile map: driving is OSRM's real/well-supported demo profile; walking
+  // and cycling use OSRM's own foot/bike profile names (harmless even though
+  // the public demo ignores the segment entirely — see header note above).
+  var MODE_PROFILE = { driving: 'driving', walking: 'foot', cycling: 'bike' };
+
+  async function getDirections({ from, to, mode }) {
+    var normalizedMode = mode ? String(mode).trim().toLowerCase() : 'driving';
+    var profile = MODE_PROFILE[normalizedMode];
+    if (!profile) {
+      return { ok: false, result: 'Unsupported mode "' + mode + '". Use driving, walking, or cycling.' };
+    }
+    if (!from || !String(from).trim() || !to || !String(to).trim()) {
+      return { ok: false, result: 'Both from and to locations are required.' };
+    }
+    try {
+      var fromCoords = await geocode(String(from).trim());
+      var toCoords = await geocode(String(to).trim());
+      var url = 'https://router.project-osrm.org/route/v1/' + profile + '/' +
+        fromCoords.lon + ',' + fromCoords.lat + ';' + toCoords.lon + ',' + toCoords.lat +
+        '?overview=false&steps=true';
+      var res = await fetch(url);
+      if (!res.ok) throw new Error('OSRM HTTP ' + res.status);
+      var data = await res.json();
+      var route = data.routes && data.routes[0];
+      if (data.code !== 'Ok' || !route) throw new Error('no route found');
+      var result = {
+        fromLabel: fromCoords.label || String(from).trim(),
+        toLabel: toCoords.label || String(to).trim(),
+        distanceKm: Math.round((route.distance / 1000) * 10) / 10,
+        durationMin: Math.round(route.duration / 60),
+        mode: normalizedMode,
+      };
+      if (normalizedMode !== 'driving') {
+        result.note = "OSRM's free public routing demo does not genuinely differentiate travel modes — " +
+          'treat this as a driving-network estimate rather than accurate ' + normalizedMode + ' directions.';
+      }
+      return { ok: true, result: result };
+    } catch (err) {
+      return { ok: false, result: 'Directions are unavailable right now (' + err.message + ').' };
+    }
+  }
+
   return [
     {
       name: 'get_time',
@@ -93,6 +145,13 @@ function buildTools(ctx) {
       params: { location: 'string (optional)' },
       danger: false,
       fn: getWeather,
+    },
+    {
+      name: 'get_directions',
+      description: "Directions and travel distance/time between two places. Pass from and to (place names) and optionally mode (driving|walking|cycling, default driving — note: the free routing backend only genuinely differentiates driving; walking/cycling are returned as driving-network estimates).",
+      params: { from: 'string - starting location name', to: 'string - destination location name', mode: 'string (optional) - driving|walking|cycling, default driving' },
+      danger: false,
+      fn: getDirections,
     },
   ];
 }
