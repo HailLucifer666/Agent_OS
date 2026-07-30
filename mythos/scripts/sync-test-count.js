@@ -198,9 +198,19 @@ function readmeSlots(counts) {
     // itself by 32 tools. AD-10 says a tool count is generated, never
     // hand-typed; these are now generated too instead of being re-drifted by
     // hand every time the effector surface changes.
-    { file, pattern: /(- \[)(\d+)(-Tool Effectors\]\(#\d+-tool-effectors\))/, value: counts.effectors },
-    { file, pattern: /(- \[\d+-Tool Effectors\]\(#)(\d+)(-tool-effectors\))/, value: counts.effectors },
-    { file, pattern: /(## )(\d+)(-Tool Effectors)/, value: counts.effectors },
+    // The 2026-07-31 README redesign moved every one of these: the heading gained
+    // an emoji (`## 🧰 143-Tool Effectors`), the plain TOC bullet became an inline
+    // nav pill (`[**138 Tools**](#-138-tool-effectors)`), and a shields.io badge
+    // appeared with the count in BOTH its label and its href. The old anchored
+    // patterns stopped matching and reported MISSING PATTERN — correctly loud, but
+    // it meant the count drifted freely in the meantime. These are deliberately
+    // tolerant of decorative prefixes so a future restyle does not silently unhook
+    // the gate again; the `-Tool Effectors` / `-tool-effectors` suffix is what
+    // actually identifies the slot.
+    { file, pattern: /(## [^\n]*?)(\d+)(-Tool Effectors)/, value: counts.effectors },
+    { file, pattern: /(\]\(#-?)(\d+)(-tool-effectors\))/, value: counts.effectors },
+    { file, pattern: /(badge\/effectors-)(\d+)(%20tools)/, value: counts.effectors },
+    { file, pattern: /(\[\*\*)(\d+)( Tools\*\*\]\(#)/, value: counts.effectors },
     { file, pattern: /(EFF\[")(\d+)( Effectors"\])/, value: counts.effectors },
     { file, pattern: /(SENSORS   ←→   BUS   ←→   EFFECTORS             │  )(\d+)( sensors · \d+ effectors)/, value: counts.sensors },
     { file, pattern: /(sensors · )(\d+)( effectors)/, value: counts.effectors },
@@ -215,20 +225,29 @@ function applySlots(counts, mode, report) {
   const byFile = new Map();
   for (const slot of readmeSlots(counts)) {
     const content = byFile.get(slot.file) ?? fs.readFileSync(slot.file, 'utf8');
-    const m = content.match(slot.pattern);
-    if (!m) {
+    // EVERY occurrence, not just the first. `content.replace(nonGlobalRegex)`
+    // rewrites one match, and `content.match()` only ever inspected one — so a
+    // count that appears in a badge AND a nav link AND a heading was checked once
+    // and silently left stale everywhere else. Found 2026-07-31 when a README
+    // redesign left the effector badge reading 143 while the nav read 138 and the
+    // real count was 138, with --check reporting only a single slot.
+    const gre = new RegExp(slot.pattern.source, slot.pattern.flags.includes('g') ? slot.pattern.flags : slot.pattern.flags + 'g');
+    const matches = [...content.matchAll(gre)];
+    if (matches.length === 0) {
       report.push(`MISSING PATTERN in ${path.relative(REPO_ROOT, slot.file)}: ${slot.pattern}`);
       staleCount++;
       continue;
     }
-    const current = parseInt(m[2], 10);
-    if (current === slot.value) {
+    const stale = matches.filter((m) => parseInt(m[2], 10) !== slot.value);
+    if (stale.length === 0) {
       byFile.set(slot.file, content);
       continue;
     }
     staleCount++;
-    report.push(`${path.relative(REPO_ROOT, slot.file)}: found ${current}, expected ${slot.value}`);
-    const next = mode === 'write' ? content.replace(slot.pattern, `$1${slot.value}$3`) : content;
+    const found = [...new Set(stale.map((m) => m[2]))].join('/');
+    const where = matches.length > 1 ? ` (${stale.length} of ${matches.length} occurrences)` : '';
+    report.push(`${path.relative(REPO_ROOT, slot.file)}: found ${found}, expected ${slot.value}${where}`);
+    const next = mode === 'write' ? content.replace(gre, `$1${slot.value}$3`) : content;
     byFile.set(slot.file, next);
     if (mode === 'write') report.push('  -> written');
   }
