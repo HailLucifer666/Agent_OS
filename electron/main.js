@@ -19,18 +19,49 @@ const http = require('node:http');
 const fs = require('node:fs');
 const child_process = require('node:child_process');
 
+// ---- EPIPE guard --------------------------------------------------------------
+// When Electron runs double-clicked (no terminal), process.stdout/stderr point
+// at pipes nobody reads. Writing to a broken pipe throws EPIPE, and an uncaught
+// throw in the main process kills Electron with a crash dialog. The server
+// child is also chatty, so the inherited-stdio form (stdio:'inherit') was the
+// original EPIPE source. Two defences:
+//   1. log() below never throws (try/catch around the write).
+//   2. the child writes to its own log file, not the inherited pipe (see
+//      startChild). The parent's stdout/stderr are left untouched for `npm
+//      start` from a terminal, where they're useful.
+function log(...args) {
+  const line = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ') + '\n';
+  try { process.stderr.write(line); } catch { /* broken pipe in GUI mode — swallow */ }
+}
+function safeStringify(v) {
+  try { return v instanceof Error ? v.message : JSON.stringify(v); } catch { return String(v); }
+}
+
+// Defense-in-depth: an uncaught throw in the main process pops Electron's crash
+// dialog. The EPIPE guard above covers the known case; this catches anything
+// else (e.g. a future console path, an IPC race) so a logging error never kills
+// the app. We log and continue rather than quitting — a missing log line is a
+// strictly better failure mode than a dead desktop app.
+process.on('uncaughtException', (err) => {
+  log('main process uncaughtException:', err && err.stack ? err.stack : err);
+});
+
 // ---- resolved paths / ports (never hardcoded) ---------------------------------
 // The Electron app ships as <repo>/electron/, so the server entry is two levels
 // up under mythos/. path.resolve keeps this correct regardless of where the
 // binary is installed (dev checkout or asar-packed app).
 const SERVER_ENTRY = path.resolve(__dirname, '..', 'mythos', 'src', 'main.js');
+// mythos/ is the child's CWD: MYTHOS_VAULT_ROOT defaults to './vault' and is
+// resolved relative to process.cwd(), so forking without setting cwd made the
+// server use <repo>/vault (empty) instead of mythos/vault (the real one).
+const MYTHOS_DIR = path.resolve(__dirname, '..', 'mythos');
 const PORT = Number(process.env.MYTHOS_PORT) || 4478;
 const BIND = process.env.MYTHOS_BIND || '127.0.0.1';
 
 // ---- readiness probe ---------------------------------------------------------
 // Poll GET /health until the server answers { ok: true } before loading the
 // window — never load a dead URL. Bounded retries with backoff so a server that
-// never comes up fails loudly to console.error instead of hanging.
+// never comes up fails loudly (via log()) instead of hanging.
 const PROBE_ATTEMPTS = 50;
 const PROBE_INTERVAL_MS = 200;
 
@@ -95,7 +126,7 @@ function saveStore(map) {
     // (still-encrypted) blobs (security-reviewer LOW). No-op on Windows ACLs.
     fs.writeFileSync(storePath(), JSON.stringify(map, null, 2), { encoding: 'utf8', mode: 0o600 });
   } catch (err) {
-    console.error('safeStorage: failed to persist key store:', err.message);
+    log('safeStorage: failed to persist key store:', err.message);
   }
 }
 
@@ -107,7 +138,7 @@ function decryptedKeysForChild() {
   const store = loadStore();
   const out = {};
   const plain = !safeStorage.isEncryptionAvailable();
-  if (plain) console.warn('safeStorage: encryption unavailable — keys passed in plain env (dev fallback).');
+  if (plain) log('safeStorage: encryption unavailable — keys passed in plain env (dev fallback).');
   for (const [name, blob] of Object.entries(store)) {
     try {
       if (plain) {
@@ -122,7 +153,7 @@ function decryptedKeysForChild() {
         out[name] = safeStorage.decryptString(Buffer.from(blob, 'base64'));
       }
     } catch (err) {
-      console.error(`safeStorage: failed to decrypt "${name}":`, err.message);
+      log(`safeStorage: failed to decrypt "${name}":`, err.message);
     }
   }
   return out;
@@ -149,7 +180,7 @@ ipcMain.handle('mythos:set-key', async (_e, name, value) => {
     // {"type":"Buffer","data":[...]}. See decryptedKeysForChild() for why.
     store[name] = safeStorage.encryptString(value).toString('base64');
   } else {
-    console.warn(`safeStorage: storing "${name}" in plain text (encryption unavailable).`);
+    log(`safeStorage: storing "${name}" in plain text (encryption unavailable).`);
     store[name] = value;
   }
   saveStore(store);
@@ -172,12 +203,33 @@ let mainWindow = null;
 const BACKOFF_STEPS_MS = [1000, 2000, 5000];
 let backoffIndex = 0;
 
+// The child's stdout/stderr route to a log file under userData, NOT the
+// parent's inherited pipe. In GUI mode that pipe has no reader, so the child's
+// voluminous logging either filled it (EPIPE on the parent's own writes) or was
+// lost. A file keeps the logs diagnosable for the operator and removes the
+// EPIPE surface entirely. IPC (stdio slot 3) stays so fork() can message.
+let childLogStream = null;
+function childLogPath() {
+  return path.join(app.getPath('userData'), 'mythos-server.log');
+}
+
 function startChild() {
   if (child) return;
+  // Reopen the log stream per run (truncates, so it reflects the latest boot,
+  // not an accumulating tail). Append-mode would grow without bound across a
+  // crash-restart loop; truncate-on-start keeps it bounded and current.
+  try { childLogStream = fs.createWriteStream(childLogPath(), { flags: 'w' }); }
+  catch (err) { log('could not open child log:', err.message); }
+
   child = child_process.fork(SERVER_ENTRY, [], {
+    cwd: MYTHOS_DIR, // ./vault, .browser-agent.pid etc. resolve to mythos/
     env: { ...process.env, ...decryptedKeysForChild() },
-    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });
+  if (childLogStream) {
+    child.stdout.pipe(childLogStream);
+    child.stderr.pipe(childLogStream);
+  }
   // A fresh start (or a clean restart after uptime) resets the backoff to the
   // floor so a single past crash doesn't pin the delay at the 5s cap forever.
   backoffIndex = 0;
@@ -185,7 +237,8 @@ function startChild() {
   child.on('exit', (code, signal) => {
     // Record the dead child, then restart with backoff. Full immune-announcer
     // wiring is out of scope for this slice — just don't swallow the crash.
-    console.error(`mythos child exited (code=${code} signal=${signal}); restarting.`);
+    log(`mythos child exited (code=${code} signal=${signal}); restarting in ` +
+        BACKOFF_STEPS_MS[Math.min(backoffIndex, BACKOFF_STEPS_MS.length - 1)] + 'ms.');
     child = null;
     const delay = BACKOFF_STEPS_MS[Math.min(backoffIndex, BACKOFF_STEPS_MS.length - 1)];
     backoffIndex = Math.min(backoffIndex + 1, BACKOFF_STEPS_MS.length - 1);
@@ -195,7 +248,7 @@ function startChild() {
 
 function stopChild() {
   if (!child) return;
-  try { child.kill(); } catch (err) { console.error('failed to kill child:', err.message); }
+  try { child.kill(); } catch (err) { log('failed to kill child:', err.message); }
   child = null;
 }
 
@@ -219,7 +272,7 @@ if (!gotLock) {
     if (!ready) {
       // Server never came up. Fail loudly; loading a dead URL would show a
       // broken Chromium error page with no diagnostic.
-      console.error(`mythos server did not become ready at http://${BIND}:${PORT} after ${PROBE_ATTEMPTS} probes.`);
+      log(`mythos server did not become ready at http://${BIND}:${PORT} after ${PROBE_ATTEMPTS} probes. Server log: ${childLogPath()}`);
       // Still create the window so the operator sees something; the renderer
       // can surface its own error state. But log first so it's diagnosable.
     }
