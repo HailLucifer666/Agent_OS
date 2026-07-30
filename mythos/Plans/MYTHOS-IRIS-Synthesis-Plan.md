@@ -14,12 +14,12 @@
 |---|---|
 | **Status** | Merged-order steps 0-5 ✅ (unchanged from before this session) AND **6 ✅ the ADB phone bridge is closed.** Task 8 (`android-child` adapter — per-device queues over one-shot `adb` calls, not a copy of `pc-child`'s persistent daemon), Task 9 (`setup-android.js` — install/pair/connect, argv-only unit-tested, never executed for real), Task 10 (`from-android.js` — 14 registered tools/13 table rows, `phone_flashlight_toggle` omitted, `phone_shell` refused, WhatsApp resolved as option (b): honest deep-link-open, never a claimed send). Three commits, each red-first tested. security-reviewer (sonnet) ran on `from-android.js` before its commit and found 3 issues, all fixed same-session: HIGH (`deviceId`/`serial` never actually reached `adb`'s argv — a real multi-device-breaking bug, fixed with a new `buildAdbArgs()`, plus `checkDevice()` now confirms the serial is currently known, not merely truthy), MEDIUM-HIGH (`phone_file_pull` mistiered T1 despite being a local write — re-tiered to T3), LOW/informational (`resolveSandboxed()`'s pre-existing, repo-wide lack of symlink-awareness — flagged as a spawned background task, not fixed here, out of scope for this file). Real AD-9 proof, not just unit-green: booted the actual app with `adb` absent from PATH — `android-child.offline` with the exact install hint, `capabilities-manifest.written` lists it honestly, boot succeeds, all 139 other effectors register, `pc-child`/`cua-driver` come online normally. Baseline grew 1690→1727 tests, 125→139 effectors, 0 fail throughout. Physical-phone-dependent checkboxes (Task 9 Step 5, Task 10 Step 9, and Task 10's original Step 3 uiautomator-tap approach) are explicitly left unticked — no Android device exists on this machine, and nothing here fabricates that verification. **Post-step-6 integration (same session):** two local-only branches were reconciled into `main` rather than left to rot on one machine — `78a4c2d` (symlink/junction-aware `resolveSandboxed()`, merged as `e263ae1`) and `claude/stoic-williams-6a1c85` (CRLF-safe `sync-test-count.js` + the missing brain lanes in README's two mermaid diagrams). The first branch was cut from `39ceb00` and reported Task 10 as "never pushed" when it was already on `origin/main` — the BUG-037 stale-base shape, caught by `git merge-base` before any merge. Nothing was lost because that fix landed in the shared helper, so `from-android.js`'s two call sites inherited it despite the branch being blind to them. The CRLF fix is the root cause of a duplicate-sync-block bug hit by hand during the first merge: `ROADMAP_BLOCK_RE` hardcoded `
 `, so on any `core.autocrlf=true` clone `--check` reported "block missing" and `--write` then INSERTED a second block. Baseline 1727→1735 tests, 0 fail. |
-| **Next action** | Merged-order step 6.5, the licensing gate. **Read the "Step 6.5 — the licensing gate, with 2026-07-30's findings folded in" section below BEFORE starting — it changes what this step is.** Short version: the operator confirmed 2026-07-30 that MYTHOS **will be sold** (possibly with a free demo tier), so the gate is live; the repo's own edge-tts/openWakeWord warnings are **self-authored** (`git blame` → `532106d8`), not upstream rulings, so verify against real upstream licence files; edge-tts is a Terms-of-Use/business-risk problem plus an UNVERIFIED upstream package licence (check that first — cheapest unknown), while openWakeWord's NC weights are a genuine licence; and the gate blocks **shipping, not building**, so step 7 may proceed in parallel as long as nothing is released. Three decisions are needed from the operator before 6.5 can close — they are listed in that section. Do not write a legal conclusion into this file. |
-| **Blocked on** | **6.5 needs three operator decisions** (paid build bundles a TTS voice or stays BYO; free demo = same binary behind a flag or a separate build; licence audit as its own step or folded in) — see the 6.5 section. RESOLVED this session, no longer blockers: README's mermaid diagrams now show all 8 brain lanes; `setup-hermes.js` is committed (`34659d8`) instead of sitting dirty; `resolveSandboxed()` symlink/junction hardening is merged (`e263ae1`). Still open, needing the operator in person: (1) the persona has **not been judged by ear**; (2) V2 §14's live items 1-4 + Task 12 Step 5 need a microphone and speakers; (3) §7.3's PIN lock has a real backend but **no frontend enforcement point**; (4) §7.10's `generate_image` needs billing enabled on the Google AI Studio project; (5) §7.6's `calendar_upcoming` success path needs real Google OAuth creds; (6) Task 9 Step 5, Task 10 Step 9 and the option-(a) `phone_tap` alternative all need a physical Android phone; (7) Task 7's `--install` needs an account that can register a scheduled task (it hit a real Access-denied here, and escalation was deliberately refused). Open but unowned/low priority: (8) the S2S health-tile design decision from step 4; (9) the pre-existing `resolveSandboxed()`/`allowedRoots()` Windows 8.3 short-name mismatch (the new symlink test works around it via `realpathSync`; the underlying helper gap remains); (10) V2 §7.12's Scheduled-Task-backed alarms, judged not a thin reuse of Task 7's machinery and documented rather than built. |
+| **Next action** | Merged-order step 6.5 (licensing gate) is now mostly closed: the three operator decisions are recorded, and the edge-tts/openWakeWord licences are verified against real upstream sources (edge-tts=LGPLv3; openWakeWord weights=CC BY-NC-SA, code=Apache-2.0). **What remains is the single deferred wake-word decision** — train an own `hey_mythos` model (Apache-2.0 tooling + Piper samples), BYO the NC weights (risky — NC restricts use not just distribution), or exclude wake-word from the paid tier. Until that lands, 6.5 stays open. Meanwhile **step 7 is buildable in parallel** (Electron/installer/overlay) with one hard installer constraint from Decision 1: never bundle the LGPL edge-tts package — it's BYO like the API keys. The wider licence audit is now its own step 6.6. Do not write a legal conclusion into this file. |
+| **Blocked on** | **6.5 blocked on ONE deferred decision only**: how the paid product handles the openWakeWord NC wake-word weights (train-own / BYO / exclude). RESOLVED this session: the three 6.5 decisions are answered (TTS=BYO so no Piper swap needed; demo deferred; wider audit → step 6.6); upstream licences verified (not the repo's self-authored comments). Still open, needing the operator in person: (1) the persona has **not been judged by ear**; (2) V2 §14's live items 1-4 + Task 12 Step 5 need a microphone and speakers; (3) §7.3's PIN lock has a real backend but **no frontend enforcement point**; (4) §7.10's `generate_image` needs billing enabled on the Google AI Studio project; (5) §7.6's `calendar_upcoming` success path needs real Google OAuth creds; (6) Task 9 Step 5, Task 10 Step 9 and the option-(a) `phone_tap` alternative all need a physical Android phone; (7) Task 7's `--install` needs an account that can register a scheduled task (it hit a real Access-denied here, and escalation was deliberately refused). Open but unowned/low priority: (8) the S2S health-tile design decision from step 4; (9) the pre-existing `resolveSandboxed()`/`allowedRoots()` Windows 8.3 short-name mismatch (the new symlink test works around it via `realpathSync`; the underlying helper gap remains); (10) V2 §7.12's Scheduled-Task-backed alarms, judged not a thin reuse of Task 7's machinery and documented rather than built. |
 | **Two documents** | This file = delta/roadmap. V2 spine = source-level detail. Precedence rules in the V2-spine section below. |
 | **Last updated** | 2026-07-30 |
 
-**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ · 7 ☐
+**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (3 decisions answered + licences verified; one wake-word decision deferred — see below) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ (buildable now; installer must honour Decision 1)
 
 Ignore the older "Wave 0/1/1.5/2/3/4" numbering where it conflicts — the merged order table is authoritative.
 
@@ -63,6 +63,8 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 
 | 2026-07-30 | **Post-step-6 integration + cross-machine handoff prep:** merged both local-only branches into `main` (`e263ae1` symlink-aware `resolveSandboxed()`; CRLF-safe `sync-test-count.js` + README mermaid brain lanes), committed the stranded `setup-hermes.js` provider warning (`34659d8`) so it survives the machine move, pushed `phase5/production-and-docs` to origin for preservation, and folded this session's licensing findings into the new Step 6.5 section (commercial intent confirmed; warnings are self-authored not upstream; edge-tts is ToS + an unverified package licence; NC covers use not just distribution; the gate blocks shipping not building; three operator decisions required). | `e263ae1`, `34659d8` + this commit | yes — full suite re-run independently at 1735/1734/0 fail/1 skip/0 todo; `sync-test-count --check` green; CRLF fix verified by re-running `--check` (previously reported "block missing") and confirming exactly one sync block remains |
 
+| 2026-07-30 | **6.5 licensing gate — decisions + upstream licence verification (resume from second PC).** Synced `main` to `ac5032c` (stash→ff→pop over 2 local WIP files, then 2 commits: `035c2f3` test-count sync, `7db9d5c` hermes `v2026.7.20` tag pin + `env.download` gitignore). Full baseline: 1735/1735/0 fail/0 skip (the 1 documented skip runs as pass on this Node/Windows). **Both gate problems verified against REAL upstream sources, not this repo's self-authored comments** (`git blame`→`532106d8`): (a) edge-tts upstream Python package = **LGPLv3** — LICENSE file (`github.com/rany2/edge-tts`) is LGPLv3 for the lib (one MIT CLI entry file), PyPI classifier `License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)`, author `rany`, `7.2.8`; the package is NOT vendored anywhere tracked (`services/edge-tts-server.py` does `import edge_tts`, no requirements.txt) so the repo ships a Combined Work expecting the user to supply the library; (b) openWakeWord weights = **CC BY-NC-SA 4.0** (GitHub README + HuggingFace `davidscripka/openwakeword`, verbatim "due to the inclusion of datasets with unknown or restrictive licensing"), code/tooling Apache-2.0 — caught my own near-error of reading the code-only LICENSE and concluding "Apache for everything." **Three operator decisions answered:** D1 TTS stays BYO (removes the LGPL exposure WITHOUT a Piper swap — the planned swap is no longer required for TTS; constraint becomes step-7 installer "never bundle the LGPL package" + BYO docs, not a 6.5 code task); D2 free demo deferred; D3 wider licence audit split into new tracked step 6.6. **One decision deferred:** how the paid product handles the NC wake-word weights (train-own `hey_mythos` / BYO-risky / exclude). 6.5 stays open on that one point; step 7 buildable in parallel. | `035c2f3`, `7db9d5c` + this commit | yes — baseline reproduced via the pre-commit gate's own full-suite run (0 failures, 1735/1735); licences verified against live upstream URLs (raw LICENSE files + PyPI JSON), not search summaries or repo comments. No code changed; no legal conclusion written into any tracked file. |
+
 ---
 
 ## The V2 spine — found, committed, nothing to re-plan
@@ -98,8 +100,9 @@ Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract
 | 4 | S2S transport + latency instrumentation | §6–§10 + Task 12 |
 | 5 ✅ | Desktop gaps: clipboard, file ops, alarms, autostart, OCR, maps, image gen, code search, PIN, wallpaper, calendar | §7 + §17.2 + §18.2 |
 | 6 ✅ | ADB bridge: adapter, setup script, 14 tools, per-device queues, device registry | §17.1 + Tasks 8–10 |
-| **6.5** | **Licensing gate: edge-TTS → Piper, own wake-word model** | §18.3.3 — **blocks SHIPPING, see below** |
-| 7 | Electron shell + installer + overlay; Android app planned only | §13 |
+| **6.5** | **Licensing gate: TTS=BYO (no swap needed), wake-word model TBD — blocks SHIPPING, see below** | §18.3.3 |
+| **6.6** | **Wider third-party licence audit (Hermes, cua-driver, MediaPipe assets, provider ToS for resale) — split from 6.5 by Decision 3** | new |
+| 7 | Electron shell + installer + overlay; Android app planned only — buildable now (blocks release, not building); installer MUST honour Decision 1 (never bundle the LGPL edge-tts package) | §13 |
 
 ### Step 6.5 — the licensing gate, with 2026-07-30's findings folded in
 
@@ -128,14 +131,31 @@ they were external law.
   licence one.** The Read Aloud endpoint is undocumented and unauthenticated, so
   there is no Microsoft licence to violate — the exposure is charging money for a
   product that depends on unauthorised access to Microsoft's service. That gets a
-  product pulled rather than fined. **Separately and still UNVERIFIED: the
-  upstream `edge-tts` Python package has its own code licence.** If it is copyleft
-  and the installer bundles it, that is a real distribution obligation on a closed
-  paid binary, independent of the ToS question. Check this first — it is the
-  cheapest unknown to close.
-- **openWakeWord weights are a genuine upstream licence**: CC BY-NC-SA 4.0,
-  non-commercial, with share-alike obligations on derivatives. The tooling is
-  Apache-2.0, which is why training an own `hey_mythos` model is the clean fix.
+  product pulled rather than fined. **VERIFIED 2026-07-30 against real upstream
+  sources (not this repo's self-authored comments): the upstream `edge-tts`
+  Python package (`github.com/rany2/edge-tts`, PyPI `edge-tts` 7.2.8, author
+  `rany`) IS copyleft — LGPLv3.** Both sources agree: the LICENSE file is
+  LGPLv3 for the library (one CLI entry file is MIT), and the PyPI classifier is
+  `License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)`.
+  The package itself is NOT bundled or vendored anywhere in this repo
+  (`mythos/services/edge-tts-server.py` does `import edge_tts`, but there is no
+  `requirements.txt`/pip-install vendoring it) — so the repo ships a Combined Work
+  that expects the user to supply the library. Whether BYO fully clears the
+  LGPL bundling obligation is a lawyer's call, not a session's; see Decision 1
+  below for how the operator resolved the policy side.
+- **openWakeWord weights are a genuine upstream licence** — RE-VERIFIED
+  2026-07-30 against real upstream sources: the GitHub README
+  (`dscripka/openWakeWord`) and the Hugging Face model repo
+  (`davidscripka/openwakeword`) both state verbatim that the pre-trained models
+  are CC BY-NC-SA 4.0 "*due to the inclusion of datasets with unknown or
+  restrictive licensing.*" The code/tooling is Apache-2.0 (the LICENSE file).
+  **Trap a future session must not fall into:** reading only the code LICENSE
+  (Apache-2.0) and concluding "Apache for everything" — the weights are a
+  separate artefact under separate terms. NC restricts **use**, not just
+  distribution, with share-alike obligations on derivatives. Training an own
+  `hey_mythos` model with the Apache-2.0 tooling is the clean fix (using a tool
+  to train ≠ bundling it); see Decision on wake-word below for the unresolved
+  status.
 
 **The download-on-demand nuance, and why it is not a free pass.** MYTHOS never
 distributes the wake-word weights — `mythos/ui/public/models/wakeword/` is
@@ -166,20 +186,37 @@ Piper TTS, so installing Piper also supplies the sample generator for training
 `hey_mythos` — which additionally gets a wake word that is on-brand instead of
 "hey jarvis".
 
-**Wider audit surface nobody has checked yet** (do this as part of 6.5): the
-licences of **Hermes-Agent** and **cua-driver**, both external components the
-product depends on; the **MediaPipe model assets** (`@mediapipe/tasks-vision`
-code is Apache-2.0, but bundled model files often carry separate terms); and
-whether any brain provider's free tier prohibits use in a resold product. The
-seven npm dependencies themselves are permissive (MIT/Apache-2.0). **The
-BYO-API-key architecture is a genuine licensing asset** — the end user brings
-their own provider keys and accepts those providers' terms directly, so MYTHOS
-resells nobody's API. Preserve that deliberately.
+**Wider audit surface nobody has checked yet** (moved to its own tracked step 6.6
+by Decision 3 below): the licences of **Hermes-Agent** and **cua-driver**, both
+external components the product depends on; the **MediaPipe model assets**
+(`@mediapipe/tasks-vision` code is Apache-2.0, but bundled model files often
+carry separate terms); and whether any brain provider's free tier prohibits use
+in a resold product. The seven npm dependencies themselves are permissive
+(MIT/Apache-2.0). **The BYO-API-key architecture is a genuine licensing asset**
+— the end user brings their own provider keys and accepts those providers' terms
+directly, so MYTHOS resells nobody's API. Preserve that deliberately.
 
-**Three decisions needed from the operator before 6.5 can finish** (ask, do not
-assume): does the paid build bundle a TTS voice or stay BYO like the API keys; is
-the free demo the same binary behind a flag or a separate build; and should the
-third-party licence audit be its own tracked step rather than folded in here.
+**Three operator decisions — ANSWERED 2026-07-30** (each is a product/architecture
+choice, not derivable from code; recorded here verbatim):
+
+- **Decision 1 — Paid TTS: STAYS BYO, like the API keys.** This resolves the
+  edge-tts/LGPL exposure *without a code swap*. The paid installer ships no
+  `edge-tts` Python package; the user installs it themselves if they want that
+  fallback, accepting Microsoft's terms directly — the same "BYO-API-key asset"
+  framing above. Consequences that drop out: the planned Piper swap is **no
+  longer required** for the TTS side (exposure removed by not bundling, not by
+  swapping); `providers/edge-tts.js`/`services/edge-tts-server.py` are *this
+  repo's own* glue (not the LGPL package) and stay; edge-tts is already optional
+  in code (server autostarts only when `python + edge-tts module` are present),
+  so BYO is already true — no adapter rewrite. What remains is a **constraint on
+  step 7's installer** (never bundle the LGPL package) + clearer BYO docs, not a
+  6.5 code task. Whether BYO fully clears LGPL bundling is still a lawyer's call.
+- **Decision 2 — Free demo: DEFERRED.** No demo exists yet; revisit when it does.
+  Note (unchanged): a demo sharing the paid codebase would NOT rescue the
+  NC/LGPL problems, so the same licensing rules apply if/when it ships.
+- **Decision 3 — Wider licence audit: OWN TRACKED STEP 6.6**, not folded into 6.5.
+  Keeps the two known swaps separate from the un-scoped unknowns (Hermes/cua/
+  MediaPipe/provider-ToS); see the new 6.6 row in the merged-order table.
 
 **Standing limit:** an AI session can report what the licence files say and what
 the code does. Whether download-on-demand clears NC for a paid product is a
