@@ -1375,8 +1375,12 @@ Every phase is independently revertible, which is why they are ordered this way.
 
 **Known risks, stated up front:**
 
-- **Live quota (highest).** Free Google keys 429 on Pro-tier models. Mitigation: Phase 0.3
-  before any build; Phase 6 delivers most of the felt improvement regardless.
+- **Live quota (highest). RETIRED 2026-07-30.** Free Google keys 429 on Pro-tier models was
+  the concern; the access probe (`mythos/scripts/verify-gemini-live.js`) has now passed twice
+  — once per the roadmap's Progress log, and re-confirmed live in this session
+  (`models/gemini-3.1-flash-live-preview`, 67,202B audio, clean `turnComplete`). No 429s
+  observed either time. Phase 6 still delivers most of the felt improvement regardless if
+  quota ever does bite under sustained load.
 - **Cost.** Duplex audio bills for open-mic time. Mitigation: three-layer gate + real
   `usageMetadata`, measured in verification step 7 before going further.
 - **Preview-model churn.** `gemini-3.1-flash-live-preview` is a preview surface; fields move.
@@ -1474,7 +1478,7 @@ S2S transport) plus Task 11's §7.1/§7.3/§7.5/§7.6/§7.7 as *"must be re-plan
 sources."* **They are not lost.** This file is intact at:
 
 ```
-C:\Users\Arghya Chowdhury\.claude\plans\deep-compare-this-floofy-heron.md   (1,460 lines)
+%USERPROFILE%\.claude\plans\deep-compare-this-floofy-heron.md   (1,460 lines)
 ```
 
 Their verification was rigorous but scoped **entirely to the repo** — `git log --all`,

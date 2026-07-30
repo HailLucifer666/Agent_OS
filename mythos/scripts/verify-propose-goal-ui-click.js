@@ -172,9 +172,10 @@ async function main() {
   log('ℹ️', `using browser: ${execPath}`);
 
   // Prefer a long-form path (LOCALAPPDATA) over os.tmpdir(): on this machine
-  // os.tmpdir()/process.env.TEMP resolves to the 8.3 short-name form
-  // (C:\Users\ARGHYA~1\...), and fs.watch()'ing a directory under a
-  // short-name path has triggered a native libuv crash here
+  // os.tmpdir()/process.env.TEMP can resolve through an 8.3 short-name folder
+  // segment (a Windows-generated abbreviation ending in "~1"), and
+  // fs.watch()'ing a directory under a short-name path has triggered a native
+  // libuv crash here
   // ("Assertion failed: !_wcsnicmp(filename, dir, dirlen), file
   // src\win\fs-event.c") — sensors/file.js fs.watch()es the vault root, so
   // this is a real precondition for booting MYTHOS against ANY vault path,

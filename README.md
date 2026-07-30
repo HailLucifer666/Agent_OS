@@ -4,10 +4,10 @@
 
 **An always-on cognitive entity that perceives, reasons, acts, and self-heals.**
 
-Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1329 tests.
+Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1520 tests.
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-1328%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
+[![Tests](https://img.shields.io/badge/tests-1518%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9)](ROADMAP.md)
 [![Render](https://img.shields.io/badge/deploy-render-4fc08d?logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey)](#license)
@@ -37,7 +37,7 @@ Not a chatbot. Not an agent framework. A living system with an OODA loop, layere
 - [Immune System](#immune-system)
 - [Tiered Autonomy & Safety](#tiered-autonomy--safety)
 - [Voice System](#voice-system)
-- [45-Tool Effectors](#45-tool-effectors)
+- [107-Tool Effectors](#107-tool-effectors)
 - [Deploy](#deploy)
 - [Quickstart](#quickstart)
 - [Screenshots](#screenshots)
@@ -76,8 +76,8 @@ flowchart TB
             IMM["Immune<br/>Self-Heal"]
         end
         subgraph IOLayer["I/O"]
-            SENS["5 Sensors"]
-            EFF["45 Effectors"]
+            SENS["10 Sensors"]
+            EFF["107 Effectors"]
         end
         CORT --> BRN --> Cloud
         SENS --> BUS --> EFF
@@ -160,8 +160,9 @@ flowchart LR
 │              IDENTITY                                │  self.md · boundaries.md
 │         Human-editable persona                       │  Entity has no write path
 ├─────────────────────────────────────────────────────┤
-│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  5 sensors · 45 effectors
-│  timer·file·ws·job·metric                           │  Publish/subscribe, never direct
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  10 sensors · 107 effectors
+│  timer·file·ws·job·metric·gmail·screen·window·       │  Publish/subscribe, never direct
+│  reminder·calendar                                   │
 ├─────────────────────────────────────────────────────┤
 │              CORTEX (OODA)                            │  1s tick, generation guard
 │         observe → orient → decide → act               │  Breakers + timeouts
@@ -182,7 +183,7 @@ flowchart LR
 
 ## Brain — Multi-Provider Chain
 
-6 cloud providers, 2 NVIDIA keys with automatic rotation, walking ranked preference tables with per-model cooldown.
+7 cloud providers (NVIDIA NIM with 2-key rotation, Groq, Mistral, Cerebras, OpenRouter, Google, ZCode) plus a local Ollama fallback — 8 lanes total, walking ranked preference tables with per-model cooldown.
 
 ```mermaid
 flowchart LR
@@ -381,26 +382,53 @@ flowchart TB
 
 ---
 
-## 45-Tool Effectors
+## 107-Tool Effectors
 
-Every action MYTHOS can take goes through one of these 45 registered effectors:
+Every action MYTHOS can take goes through one of these 107 registered effectors. Counts are
+generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays
+plus the one directly-registered `speak` effector — not hand-typed:
 
 ```mermaid
 pie title Tool Distribution
-    "Dashboard" : 21
-    "PC Control" : 10
-    "Browser Automation" : 10
-    "Computer" : 4
-    "Project" : 1
+    "Dashboard" : 26
+    "PC Control" : 23
+    "Browser Automation" : 13
+    "Computer" : 7
+    "Spotify" : 7
+    "Gmail" : 4
+    "Memory" : 4
+    "Calendar & Timers" : 3
+    "Documents" : 3
+    "Forge (Multi-file Build)" : 3
+    "Mission Orchestrator" : 2
+    "Persona" : 2
+    "System" : 2
+    "Widgets" : 2
+    "Other (1 each)" : 7
 ```
 
 | Catalog | Count | Examples |
 |---------|:-----:|---------|
-| **Dashboard** | 21 | navigate, create_goal, pipeline_execute, kanban_build, ask_agent, monitor_snapshot, kill_session |
-| **PC Control** | 10 | launch_app, focus_window, screen_look, ui_click, ui_type, media_key |
-| **Browser** | 10 | browser_navigate, browser_click, browser_screenshot, browser_evaluate |
-| **Computer** | 4 | open_folder, list_folder, read_file, compose_email |
+| **Dashboard** | 26 | navigate, create_goal, pipeline_execute, kanban_build_card, ask_agent, read_status |
+| **PC Control** | 23 | launch_app, focus_window, screen_look, ui_click, ui_type, media_key |
+| **Browser Automation** | 13 | browser_navigate, browser_click, browser_screenshot, browser_evaluate |
+| **Computer** | 7 | open_folder, list_folder, read_file, delete_file, compose_email |
+| **Spotify** | 7 | spotify_play_pause, spotify_next, spotify_search, spotify_status |
+| **Gmail** | 4 | gmail_unread, gmail_read, gmail_send |
+| **Memory** | 4 | remember, recall_memory, log_incident, self_capabilities |
+| **Calendar & Timers** | 3 | reminder_add, reminder_list, reminder_cancel |
+| **Documents** | 3 | generate_spreadsheet, generate_deck, generate_pdf |
+| **Forge (Multi-file Build)** | 3 | build_project, revise_project, project_status |
+| **Mission Orchestrator** | 2 | run_mission, mission_status |
+| **Persona** | 2 | persona_status, set_persona_level |
+| **System** | 2 | get_time, get_weather |
+| **Widgets** | 2 | spawn_widget, manage_widget |
+| **Hermes Build Engine** | 1 | hermes_task |
+| **GitHub Installer** | 1 | install_from_github |
 | **Project** | 1 | start_project (auto-pipeline) |
+| **Command Runner** | 1 | run_command (allowlist-gated) |
+| **Skills** | 1 | use_skill |
+| **Voice** | 1 | speak (edge-tts, registered directly — not from a `from-*.js` file) |
 
 All dangerous tools (delete, execute, kill) require confirmation via the Leash system.
 
@@ -566,7 +594,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## Build History
 
-20 phases shipped. Linear history on `main`. 1329 tests green.
+20 phases shipped. Linear history on `main`. 1520 tests green.
 
 ```mermaid
 gantt
@@ -625,8 +653,8 @@ Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-AR
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 4 gestures: confirm, deny, mute, vision |
-| **Tests** | Built-in `node:test` | 1329 tests, zero test framework deps |
-| **Deps** | 4 total | `dotenv` · `express` · `playwright-core` · `ws` |
+| **Tests** | Built-in `node:test` | 1520 tests, zero test framework deps |
+| **Deps** | 7 total | `@mediapipe/tasks-vision` · `exceljs` · `express` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
 ### Project Layout
@@ -636,7 +664,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 4 deps, 1329 tests
+│   ├── package.json             # 7 deps, 1520 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -644,7 +672,7 @@ Agent_OS/
 │   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
 │   │       ├── config/          # Schema validation + env loading
 │   │       ├── cortex/          # OODA loop + orient/decide
-│   │       ├── effectors/       # 45 tools, build-runner, orchestrator
+│   │       ├── effectors/       # 107 tools, build-runner, orchestrator
 │   │       ├── goals/           # Arbitrage + budget system
 │   │       ├── identity/        # self.md + boundaries.md
 │   │       ├── immune/          # watchdog, healer, breakers, announcer
@@ -666,7 +694,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 1329 tests (node --test)
+│   ├── test/                    # 1520 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat            # Windows launcher

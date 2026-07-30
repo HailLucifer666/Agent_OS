@@ -31,16 +31,17 @@ const REPO_ROOT = path.join(MYTHOS_ROOT, '..');
 const ROADMAP_FILE = path.join(REPO_ROOT, 'ROADMAP.md');
 
 function runSuite() {
-  const testDir = path.join(MYTHOS_ROOT, 'test');
-  const files = fs.readdirSync(testDir)
-    .filter((f) => f.endsWith('.test.js'))
-    .sort()
-    .map((f) => path.join('test', f));
-
-  console.log(`sync-test-count: running ${files.length} test files (this takes ~60-90s)...`);
+  // BUG (found 2026-07-30): this used to glob only test/*.test.js directly —
+  // a shallow, non-recursive listing that silently missed every file one
+  // level deeper (test/assistant/*.test.js, test/engagements/*.test.js — 14
+  // files / ~188 tests). node's own recursive discovery (no path args at
+  // all, matching what a bare `node --test` from mythos/ does) is what
+  // actually finds all 154 files, so hand it nothing and let it walk the
+  // tree itself instead of re-deriving the file list.
+  console.log('sync-test-count: running full suite via recursive `node --test` (this takes ~40-90s)...');
   const result = spawnSync(
     process.execPath,
-    ['--test', '--test-reporter=tap', ...files],
+    ['--test', '--test-reporter=tap'],
     { cwd: MYTHOS_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
   return `${result.stdout || ''}\n${result.stderr || ''}`;
@@ -81,6 +82,91 @@ function parseCounts(out) {
   };
 }
 
+// AD-10 (V2 spine §1): "test count, tool count, provider count, sensor count in
+// README/CLAUDE.md are generated, never hand-typed." These four compute functions
+// are that generator — each reads reality (package.json, a directory, or the actual
+// effector registration surface) instead of trusting a number someone typed once.
+
+function computeDepsCount() {
+  const pkg = JSON.parse(fs.readFileSync(path.join(MYTHOS_ROOT, 'package.json'), 'utf8'));
+  return Object.keys(pkg.dependencies || {}).length;
+}
+
+function computeSensorCount() {
+  const dir = path.join(MYTHOS_ROOT, 'src/core/sensors');
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.js')).length;
+}
+
+function computeProviderCount() {
+  const dir = path.join(MYTHOS_ROOT, 'providers');
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.js')).length;
+}
+
+// A tool-safe inert stand-in for whatever ctx a buildTools()/createXEffector()
+// factory asks for. Every property access and every call just returns itself,
+// so `ctx.config.SOME_FLAG`, `ctx.fs.writeText(...)`, `ctx.bus.emit(...)` etc.
+// all resolve without throwing — factories only need ctx to *construct* their
+// tool-definition objects (closures over it), never to execute logic at
+// definition time, so a real vault/bus/brain is never required just to ask
+// "how many tools does this file define."
+function createInertCtx() {
+  const noop = function () { return handle; };
+  const handle = new Proxy(noop, {
+    get(_target, prop) {
+      if (prop === 'then' || prop === Symbol.iterator || prop === Symbol.toPrimitive) return undefined;
+      return handle;
+    },
+    apply() { return handle; },
+  });
+  return handle;
+}
+
+// Counts the real "how many tools does main.js end up registering on the hub"
+// number without booting the app (no server, no adapters, no vault writes) —
+// see AD-3 (declarations derive from the hub) and AD-9 (optional binaries never
+// gate boot). Walks every file in src/core/effectors/ and, per file, tries in
+// order: (1) a static TOOLS array export, (2) a build*Tools(ctx) factory whose
+// return value (or return value's .TOOLS) is an array, (3) a create*(ctx)
+// factory whose result matches hub.register()'s own shape check exactly
+// ({id: string, invoke: function}) — this is how the one non-from-*.js
+// registration (voice.js's `speak` effector) gets counted, on the same
+// contract hub.js enforces, not a special case hand-added for it.
+function computeEffectorCount() {
+  const dir = path.join(MYTHOS_ROOT, 'src/core/effectors');
+  const ctx = createInertCtx();
+  let total = 0;
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
+    let mod;
+    try {
+      mod = require(path.join(dir, file));
+    } catch {
+      continue; // not a requirable module in isolation — contributes 0, not a crash
+    }
+    if (Array.isArray(mod.TOOLS)) {
+      total += mod.TOOLS.length;
+      continue;
+    }
+    const buildFn = Object.keys(mod).find((k) => /^build.*Tools$/i.test(k) && typeof mod[k] === 'function');
+    if (buildFn) {
+      try {
+        let result = mod[buildFn](ctx);
+        if (!Array.isArray(result) && result && Array.isArray(result.TOOLS)) result = result.TOOLS;
+        if (Array.isArray(result)) { total += result.length; continue; }
+      } catch { /* needs real deps to build its tool list — not from-*.js shaped, skip */ }
+    }
+    const createFn = Object.keys(mod).find((k) => /^create/.test(k) && typeof mod[k] === 'function');
+    if (createFn) {
+      try {
+        const result = mod[createFn]({ config: ctx });
+        if (result && typeof result === 'object' && typeof result.id === 'string' && typeof result.invoke === 'function') {
+          total += 1;
+        }
+      } catch { /* not a single-tool effector factory (e.g. needs a real vault) — skip */ }
+    }
+  }
+  return total;
+}
+
 // Each slot is anchored on stable surrounding text (not a line number) so it
 // survives unrelated edits to the same file. Historical per-phase tables
 // (README's Build History table, ROADMAP's Commit Log) are deliberately not
@@ -92,8 +178,21 @@ function readmeSlots(counts) {
     { file, pattern: /(tests-)(\d+)(%20pass-)/, value: counts.pass },
     { file, pattern: /(Linear history on `main`\. )(\d+)( tests green\.)/, value: counts.tests },
     { file, pattern: /(\*\*Tests\*\* \| Built-in `node:test` \| )(\d+)( tests, zero test framework deps \|)/, value: counts.tests },
-    { file, pattern: /(package\.json\s+# 4 deps, )(\d+)( tests)/, value: counts.tests },
+    // NOTE: "4 deps" used to be baked into this pattern as a literal, which meant
+    // it silently stopped matching (and MISSING PATTERN-reported, not silently
+    // ignored) the moment deps count actually changed. Both numbers on this line
+    // are now their own slots, neither hand-typed into the regex.
+    { file, pattern: /(package\.json\s+# )(\d+)( deps, \d+ tests)/, value: counts.deps },
+    { file, pattern: /(package\.json\s+# \d+ deps, )(\d+)( tests)/, value: counts.tests },
     { file, pattern: /(test\/\s+# )(\d+)( tests \(node --test\))/, value: counts.tests },
+    // AD-10: tool/provider/sensor counts, generated from hub.catalog()-equivalent
+    // introspection (computeEffectorCount) and directory reads, not hand-typed.
+    { file, pattern: /(Every action MYTHOS can take goes through one of these )(\d+)( registered effectors\.)/, value: counts.effectors },
+    { file, pattern: /(SENSORS   ←→   BUS   ←→   EFFECTORS             │  )(\d+)( sensors · \d+ effectors)/, value: counts.sensors },
+    { file, pattern: /(sensors · )(\d+)( effectors)/, value: counts.effectors },
+    { file, pattern: /(effectors\/       # )(\d+)( tools, build-runner, orchestrator)/, value: counts.effectors },
+    { file, pattern: /(providers\/               # )(\d+)( providers \(openai-compat factory\))/, value: counts.providers },
+    { file, pattern: /(\*\*Deps\*\* \| )(\d+)( total \|)/, value: counts.deps },
   ];
 }
 
@@ -170,7 +269,16 @@ function main() {
   }
 
   const counts = parseCounts(getSuiteOutput());
-  console.log(`sync-test-count: tests=${counts.tests} pass=${counts.pass} fail=${counts.fail} skipped=${counts.skipped}`);
+  // AD-10: docs match reality — tool/provider/sensor/dep counts ride along with
+  // the test count as generated values, not hand-typed ones.
+  counts.deps = computeDepsCount();
+  counts.sensors = computeSensorCount();
+  counts.providers = computeProviderCount();
+  counts.effectors = computeEffectorCount();
+  console.log(
+    `sync-test-count: tests=${counts.tests} pass=${counts.pass} fail=${counts.fail} skipped=${counts.skipped} ` +
+    `deps=${counts.deps} sensors=${counts.sensors} providers=${counts.providers} effectors=${counts.effectors}`,
+  );
   if (counts.fail > 0) {
     console.warn(
       `sync-test-count: ${counts.fail} test(s) currently failing. This script only keeps ` +

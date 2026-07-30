@@ -14,7 +14,9 @@ jobs:
       - name: Run test suite + verify test-count docs are in sync (baseline 0 known failures)
         shell: pwsh
         run: |
-          node --test --test-reporter=tap test/*.test.js 2>&1 | Tee-Object -Variable out
+          # No path args: node's own recursive discovery, not a shallow test/*.test.js
+          # glob (which silently skipped 14 files one level deeper — found 2026-07-30).
+          node --test --test-reporter=tap 2>&1 | Tee-Object -Variable out
           $failLine = $out | Select-String -Pattern '^# fail (\d+)' | Select-Object -Last 1
           $fails = if ($failLine) { [int]$failLine.Matches[0].Groups[1].Value } else { 999 }
           Write-Host "fail count: $fails (baseline allows 0)"
