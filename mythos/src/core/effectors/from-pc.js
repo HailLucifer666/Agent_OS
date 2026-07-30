@@ -5,6 +5,9 @@
 
 const pcChild = require('../../../adapters/pc-child');
 const { effectorFromTool } = require('./adapter');
+// §7.7 (step 5) — set_wallpaper's path argument is sandboxed via
+// from-computer.js's existing resolveSandboxed (reused, not reimplemented).
+const { resolveSandboxed } = require('./from-computer');
 
 function ok(result) {
   return { ok: true, result };
@@ -198,6 +201,16 @@ async function screen_look({ query }) {
 // empty string presented as "no text on screen".
 async function screen_read_text() {
   return delegate({ cmd: 'screen_read_text' });
+}
+
+// §7.7 (step 5, desktop gaps) — wallpaper engine (SystemParametersInfo/
+// SPI_SETDESKWALLPAPER P/Invoke in ps-automation.ps1). The path is sandboxed
+// here, BEFORE it ever reaches pc-child — an out-of-sandbox path never
+// generates a PC command at all.
+async function set_wallpaper({ path: rawPath }) {
+  const sandboxed = resolveSandboxed(rawPath);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  return delegate({ cmd: 'set_wallpaper', path: sandboxed.resolved });
 }
 
 // ---- ambient_awareness (screen-sensor toggle) ----
@@ -394,6 +407,7 @@ const TOOLS = [
   { name: 'show_desktop', description: "Minimize all windows and show the desktop. Use for 'show desktop', 'minimize everything', 'go to desktop'.", params: {}, danger: false, fn: show_desktop },
   { name: 'media_status', description: 'Get currently playing media info (title, artist, album, position/duration, art) from Windows SMTC.', params: {}, danger: false, fn: media_status, needs_result: true },
   { name: 'screen_read_text', description: 'Read the literal text visible on the primary screen via real OCR (Windows.Media.Ocr) — use this to lift an error message, code snippet, or any on-screen text verbatim, not to describe an image (use screen_look for that).', params: {}, danger: false, fn: screen_read_text, needs_result: true },
+  { name: 'set_wallpaper', description: 'Set the Windows desktop wallpaper to an image file inside the allowed sandbox.', params: { path: 'string - path to an image file' }, danger: false, fn: set_wallpaper },
 ];
 
 function registerFromPc(hub, opts) {
@@ -414,7 +428,7 @@ module.exports = {
   TOOLS,
   KNOWN_DESKTOP_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
-  screen_look, capture_screenshot, screen_read_text, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
+  screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
   ambient_awareness, setScreenSensorHandle, show_desktop,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,

@@ -243,6 +243,16 @@ public static class NativeInput {
     public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
     public static readonly IntPtr HWND_TOP = IntPtr.Zero;
+
+    // §7.7 (step 5, desktop gaps) — wallpaper engine. SPI_SETDESKWALLPAPER
+    // (0x0014) with SPIF_UPDATEINIFILE|SPIF_SENDCHANGE (0x03) persists the
+    // change across reboots and broadcasts WM_SETTINGCHANGE so other apps
+    // (Explorer) pick it up immediately.
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
+    public const uint SPI_SETDESKWALLPAPER = 0x0014;
+    public const uint SPIF_UPDATEINIFILE = 0x01;
+    public const uint SPIF_SENDCHANGE = 0x02;
 }
 '@ -Language CSharp
 
@@ -1444,6 +1454,28 @@ function Handle-SetClipboard($text) {
     }
 }
 
+# §7.7 (step 5, desktop gaps) — wallpaper engine via SystemParametersInfo
+# P/Invoke (NativeInput class above). Path validation/sandboxing happens on
+# the JS side (from-pc.js's resolveSandboxed, reused from from-computer.js)
+# before this ever runs — this function only checks the resolved path
+# actually exists, matching this file's own Handle-X convention.
+function Handle-SetWallpaper($path) {
+    if (-not $path) { return 'A wallpaper image path is required.' }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "Wallpaper image not found: $path" }
+    try {
+        $full = (Resolve-Path -LiteralPath $path).Path
+        $ok = [NativeInput]::SystemParametersInfo([NativeInput]::SPI_SETDESKWALLPAPER, 0, $full,
+            ([NativeInput]::SPIF_UPDATEINIFILE -bor [NativeInput]::SPIF_SENDCHANGE))
+        if (-not $ok) {
+            $errCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            return "SystemParametersInfo failed (Win32 error $errCode)."
+        }
+        return @{ set = $true; path = $full }
+    } catch {
+        return ('set_wallpaper failed: ' + $_.Exception.Message)
+    }
+}
+
 function Handle-WriteNote($text, $title) {
     if (-not $text) { return 'Note text is required.' }
     try {
@@ -1610,6 +1642,10 @@ while ($true) {
         }
         'set_clipboard' {
             $result = Handle-SetClipboard $cmd.text
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'set_wallpaper' {
+            $result = Handle-SetWallpaper $cmd.path
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         default {

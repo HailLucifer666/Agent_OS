@@ -151,6 +151,9 @@ const TIER_TABLE = {
                                // same non-destructive/reversible risk class as snap_window's
                                // own 'minimize' position; unmapped names fail-safe to T3 via
                                // tierOf(), which would wrongly confirm-gate a danger:false tool.
+  'set_wallpaper':         2,  // §7.7 (step 5) — non-destructive, fully reversible local
+                               // action (same class as show_desktop/set_volume above),
+                               // sandboxed path via from-computer.js's resolveSandboxed
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,
