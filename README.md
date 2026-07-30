@@ -7,7 +7,7 @@
 Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1735 tests.
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-1734%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
+[![Tests](https://img.shields.io/badge/tests-1735%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9)](ROADMAP.md)
 [![Render](https://img.shields.io/badge/deploy-render-4fc08d?logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey)](#license)
