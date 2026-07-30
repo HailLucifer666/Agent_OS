@@ -23,6 +23,8 @@
 // Input/output tensor NAMES are also read from each loaded ONNX session at
 // runtime (session.inputNames/outputNames) rather than assumed, since the
 // exact exported name isn't recoverable from the Python source alone.
+import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
+
 export function createWakeWord({ threshold, onWake, onStatus }) {
   const THRESHOLD = typeof threshold === 'number' ? threshold : 0.5;
   const REFRACTORY_MS = 2000;
@@ -163,7 +165,7 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   }
 
   async function ensureAudio() {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     const source = audioCtx.createMediaStreamSource(stream);
     await audioCtx.audioWorklet.addModule('/js/voice/wakeword-worklet.js');

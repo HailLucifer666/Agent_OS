@@ -164,6 +164,25 @@
 .compose-cam-btn.cam-error { color: var(--status-warn); }
 .compose-cam-btn.cam-disabled { color: var(--text-faint); opacity: 0.4; }
 
+/* Mic settings button (gear, left of input beside the voice toggle) — mirrors
+   the cam button's sizing/states so the two icon buttons read as a pair. */
+.compose-mic-settings-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.compose-mic-settings-btn svg { width: 16px; height: 16px; }
+.compose-mic-settings-btn:hover { color: var(--text-dim); }
+
 /* Send button (right side of pill) */
 .compose-send-btn {
   flex-shrink: 0;

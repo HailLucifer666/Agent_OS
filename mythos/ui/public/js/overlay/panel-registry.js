@@ -15,6 +15,7 @@ export const PANELS = {
   engagements: { title: 'ENGAGEMENTS', loader: () => import('/js/views/engagements.js'), mutating: true },
   forge:    { title: 'BUILD',    loader: () => import('/js/views/forge.js'),    mutating: true },
   web:       { title: 'WEB',       loader: () => import('/js/views/web-panel.js'),  mutating: false },
+  'mic-settings': { title: 'MICROPHONE', loader: () => import('/js/views/mic-settings.js'), mutating: false },
 };
 
 export function getPanel(id) {

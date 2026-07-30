@@ -4,6 +4,9 @@
 // Prompt chips provide discoverability when the input is empty.
 
 const MIC_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>`;
+// Mic settings (device picker + live level meter). Reuses the cam button's
+// styling idiom: 34px circle, currentColor stroke, same idle/hover states.
+const GEAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const SEND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 const CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`;
 
@@ -15,7 +18,7 @@ const HINTS = [
   'Check the weather',
 ];
 
-export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle }) {
+export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings }) {
   const root = document.getElementById('compose-bar');
 
   root.innerHTML = `
@@ -23,6 +26,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     <div class="compose-hints" id="compose-hints"></div>
     <div class="compose-pill">
       <button class="compose-voice-btn mic-idle" id="compose-voice-btn" aria-label="Toggle voice input" title="Click to speak">${MIC_SVG}</button>
+      <button class="compose-mic-settings-btn" id="compose-mic-settings-btn" aria-label="Microphone settings" title="Mic device + test">${GEAR_SVG}</button>
       <input class="compose-input" id="compose-input" type="text" placeholder="Ask MYTHOS anything\u2026" autocomplete="off" aria-label="Message MYTHOS" />
       <button class="compose-cam-btn cam-idle" id="compose-cam-btn" aria-label="Toggle camera" title="Toggle camera">${CAM_SVG}</button>
       <button class="compose-send-btn" id="compose-send-btn" aria-label="Send message">${SEND_SVG}</button>
@@ -34,6 +38,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   const voiceBtn = document.getElementById('compose-voice-btn');
   const input = document.getElementById('compose-input');
   const camBtn = document.getElementById('compose-cam-btn');
+  const micSettingsBtn = document.getElementById('compose-mic-settings-btn');
   const sendBtn = document.getElementById('compose-send-btn');
   const captionEl = document.getElementById('compose-caption');
   const waveEl = document.getElementById('compose-wave');
@@ -113,6 +118,11 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Camera toggle
   camBtn.addEventListener('click', () => {
     if (onCamToggle) onCamToggle();
+  });
+
+  // Mic settings panel (device picker + live level meter)
+  micSettingsBtn.addEventListener('click', () => {
+    if (onMicSettings) onMicSettings();
   });
 
   // Keyboard shortcut: "/" focuses the input (like YouTube, GitHub)

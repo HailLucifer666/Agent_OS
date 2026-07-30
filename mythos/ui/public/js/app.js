@@ -122,6 +122,13 @@ const compose = createComposeBar({
   onActivity: (level) => { orb.setActivity(level); hud.setActivity(level); },
   onSubmitText: sendTextMessage,
   onCamToggle: () => ensureCamera().toggle(),
+  onMicSettings: () => {
+    // Ensure the voice loop exists so its setMicDevice/getMicDevice are live,
+    // then open the panel with them threaded through the overlay payload. The
+    // panel works even if voice is idle — it owns its own diagnostic AudioContext.
+    const v = ensureVoice();
+    overlays.openPanel('mic-settings', { voice: { setMicDevice: (id) => v.setMicDevice(id), getMicDevice: () => v.getMicDevice() } });
+  },
 });
 
 // mic indicator API still used by some caption calls below — keep a shim.

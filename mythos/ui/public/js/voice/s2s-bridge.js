@@ -37,6 +37,7 @@
 
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
+import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -84,9 +85,7 @@ export function createS2SBridge({ onState, onCaption } = {}) {
     sendMessage({ type: 'live-open' });
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
+      stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaStreamSource(stream);
       await audioCtx.audioWorklet.addModule('/js/voice/pcm-capture-worklet.js');

@@ -15,6 +15,7 @@
 // States: idle -> listening -> processing -> speaking -> listening.
 
 import { utterance, stopRequest, sendMessage } from '../ws.js';
+import { getMicDeviceId, setMicDeviceId, buildAudioConstraints, micErrorMessage } from './mic-device.js';
 
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
@@ -490,7 +491,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   async function ensureMic() {
     if (stream) return stream;
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -773,9 +774,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     try {
       await ensureMic();
     } catch (err) {
-      console.warn('[voice] microphone permission denied:', err);
+      console.warn('[voice] microphone unavailable (' + ((err && err.name) || 'unknown') + '):', err);
       setState('disabled');
-      caption('Microphone permission denied — enable it in the browser to use voice.', 'error');
+      caption(micErrorMessage(err), 'error');
       return false;
     }
     if (disposed) return false;
@@ -825,5 +826,14 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     // barge-in (stopSpeaking) can cancel synthesis for THEIR turns too, not
     // just handleCommand's own.
     setActiveReqId(reqId) { activeReqId = reqId || null; },
+    // Mic device selection (mic-settings panel): persist the chosen deviceId
+    // and drop any live stream so the next ensureMic() re-acquires on the new
+    // device. Selection is read fresh from localStorage inside ensureMic(), so
+    // s2s-bridge/wakeword honor the same key without a shared setter.
+    setMicDevice(id) {
+      setMicDeviceId(id);
+      if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    },
+    getMicDevice: () => getMicDeviceId(),
   };
 }

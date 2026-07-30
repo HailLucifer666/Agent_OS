@@ -1,0 +1,108 @@
+/* mic-settings.css — Microphone diagnostic panel. Token vars only (house style:
+   see semantic.css). The level bar reuses the health panel's status colors so
+   green/amber/red means the same thing across the HUD. */
+
+.mic-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 520px;
+}
+
+.mic-settings-intro {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.mic-settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mic-settings-label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--text-faint);
+}
+
+.mic-settings-select {
+  width: 100%;
+  background: var(--bg-raised-2);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.mic-settings-select:hover { border-color: var(--accent-dim); }
+.mic-settings-select:focus-visible { border-color: var(--accent); }
+.mic-settings-select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Level meter — a horizontal track with a fill whose color tracks the level. */
+.mic-settings-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mic-meter {
+  flex: 1;
+  height: 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.mic-meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: var(--radius-md);
+  transition: width 40ms linear, background var(--dur-fast) var(--ease);
+  background: var(--status-ok);
+}
+.mic-meter-fill.mic-meter-degraded { background: var(--status-degraded); }
+.mic-meter-fill.mic-meter-warn { background: var(--status-warn); }
+
+.mic-meter-pct {
+  font-size: 11px;
+  min-width: 34px;
+  text-align: right;
+}
+
+.mic-settings-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.mic-settings-test-btn {
+  padding: 8px 22px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.mic-settings-test-btn:hover {
+  background: rgba(79, 216, 255, 0.1);
+}
+.mic-settings-test-btn:active { transform: scale(0.97); }
+
+.mic-settings-status {
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 18px;
+}
+.mic-settings-status-error { color: var(--status-warn); }
