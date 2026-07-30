@@ -89,6 +89,7 @@ function createServer(deps) {
   const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
   const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
   const identity = deps.identity;                      // S2S (Phase 5) — identity.persona() for buildLiveSystemInstruction (may be undefined in tests)
+  const pinLock = deps.pinLock;                        // §7.3 — local PIN lock (may be undefined in tests)
   // Test-only seam, undefined in production (mirrors live-session.js's own
   // createSocket seam one level up): lets test/server-live-wiring.test.js
   // drive a fake Gemini socket through the real connection wiring without a
@@ -412,6 +413,10 @@ function createServer(deps) {
 
   // ---- /api/memory + /api/audit/recent (W9: extracted to routes/memory.js) ----
   require('./routes/memory').mountMemoryRoutes(app, { memory });
+
+  // ---- /api/pin — §7.3 local PIN lock (separate from Task 6's token gate
+  // both of these routes already sit behind) ----
+  require('./routes/pin').mountPinRoutes(app, { pinLock });
 
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/

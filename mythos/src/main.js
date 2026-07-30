@@ -71,6 +71,7 @@ const { registerFromDocs } = require('./core/effectors/from-docs');
 const { registerFromImageGen } = require('./core/effectors/from-image-gen');
 const { registerFromDocuments } = require('./core/effectors/from-documents');
 const { registerFromCodeSearch } = require('./core/effectors/from-code-search');
+const { createPinLock } = require('./core/security/pin-lock');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
@@ -523,8 +524,14 @@ async function main() {
         });
       }
 
+      // §7.3 (step 5) — local PIN lock gate, separate from Task 6's
+      // MYTHOS_AUTH_TOKEN (that gates network/remote access; this gates
+      // local physical presence).
+      var pinLock = createPinLock({ fs: memory.fs });
+
       var serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
+        pinLock: pinLock,
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,
         pipelineEffector: pipelineEffector,
