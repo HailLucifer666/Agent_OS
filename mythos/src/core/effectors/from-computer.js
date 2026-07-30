@@ -67,8 +67,42 @@ function hasReservedDeviceName(resolved) {
   });
 }
 
-// Resolves `raw` and verifies it lands inside one of VOICE_ALLOWED_DIRS. Returns
-// { ok:true, resolved } or { ok:false, reason }. Never throws.
+function realpathOrNull(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+// win32 paths are case-insensitive; normalize for the prefix comparison.
+function forCompare(p) {
+  return process.platform === 'win32' ? p.toLowerCase() : p;
+}
+
+function containedIn(candidate, root) {
+  const c = forCompare(candidate);
+  const r = forCompare(root);
+  return c === r || c.startsWith(r + path.sep);
+}
+
+// allowedRoots(), plus each root's symlink-resolved form. Without the resolved
+// form a root that is itself a junction — or is given as a Windows 8.3 short
+// path, which is what os.tmpdir() hands back — would never match the real
+// (canonical) path of its own contents, locking legitimate callers out.
+function comparableRoots() {
+  const out = [];
+  for (const root of allowedRoots()) {
+    out.push(root);
+    const real = realpathOrNull(root);
+    if (real && real !== root) out.push(real);
+  }
+  return out;
+}
+
+// Resolves `raw` and verifies it lands inside one of VOICE_ALLOWED_DIRS — both
+// lexically AND after symlink resolution (see isInsideAllowedRoots below).
+// Returns { ok:true, resolved } or { ok:false, reason }. Never throws.
 function resolveSandboxed(raw) {
   try {
     if (!raw || !String(raw).trim()) return { ok: false, reason: 'A path is required.' };
@@ -85,15 +119,14 @@ function resolveSandboxed(raw) {
     }
 
     const roots = allowedRoots();
-    // win32 paths are case-insensitive; normalize for the prefix comparison.
-    const resolvedForCompare = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-    const inside = roots.some((root) => {
-      const rootForCompare = process.platform === 'win32' ? root.toLowerCase() : root;
-      return resolvedForCompare === rootForCompare || resolvedForCompare.startsWith(rootForCompare + path.sep);
-    });
-    if (!inside) {
-      return { ok: false, reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.` };
-    }
+    const outside = { ok: false, reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.` };
+    // Lexical containment first (cheap, no fs access)...
+    if (!comparableRoots().some((root) => containedIn(resolved, root))) return outside;
+    // ...then the real-path check, so a junction/symlink planted inside an
+    // allowed root and pointing outside it cannot smuggle a path past the
+    // lexical test. Every caller gets this for free — do NOT drop it in favour
+    // of the lexical check alone.
+    if (!isInsideAllowedRoots(resolved)) return outside;
     return { ok: true, resolved };
   } catch (err) {
     return { ok: false, reason: err.message };
@@ -163,10 +196,12 @@ function read_file({ path: rawPath }) {
   }
 }
 
-// REMEDIATION P0-1: resolveSandboxed() only resolves a path lexically. A
-// directory INSIDE an allowed root that is itself a symlink/junction to
-// somewhere outside would otherwise let a write/delete escape the sandbox
-// even though the raw path looked contained. The check MUST run before any
+// REMEDIATION P0-1: a directory INSIDE an allowed root that is itself a
+// symlink/junction to somewhere outside would otherwise let a write/delete
+// escape the sandbox even though the raw path looked contained. (As of the
+// Task-10 review follow-up resolveSandboxed() calls this itself, so every
+// caller is covered; the explicit calls below are kept because they check the
+// resolved PARENT before a mutation.) The check MUST run before any
 // fs mutation (a prior version ran mkdirSync first and checked after — by
 // then the mutation had already landed outside the sandbox) and must walk up
 // to the NEAREST EXISTING ancestor of the target, not just the immediate
@@ -184,18 +219,9 @@ function nearestExistingAncestor(dir) {
 }
 
 function isInsideAllowedRoots(dir) {
-  let real;
-  try {
-    real = fs.realpathSync(nearestExistingAncestor(dir));
-  } catch {
-    return false; // couldn't resolve at all — fail CLOSED, not open
-  }
-  const roots = allowedRoots();
-  const realForCompare = process.platform === 'win32' ? real.toLowerCase() : real;
-  return roots.some((root) => {
-    const rootForCompare = process.platform === 'win32' ? root.toLowerCase() : root;
-    return realForCompare === rootForCompare || realForCompare.startsWith(rootForCompare + path.sep);
-  });
+  const real = realpathOrNull(nearestExistingAncestor(dir));
+  if (!real) return false; // couldn't resolve at all — fail CLOSED, not open
+  return comparableRoots().some((root) => containedIn(real, root));
 }
 
 // ---- write_file ----
