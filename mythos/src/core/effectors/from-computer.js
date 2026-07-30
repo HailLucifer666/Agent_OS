@@ -257,6 +257,137 @@ function delete_file({ path: rawPath }) {
   }
 }
 
+// ---- move_file / copy_file / rename_file ----
+// Task 4 (file-management tools): the source AND destination both go through
+// resolveSandboxed() (lexical check) then isInsideAllowedRoots() on the
+// resolved PARENT directory (realpath check, defeats a symlink placed inside
+// an allowed root) BEFORE any mutation — same two-step pattern write_file/
+// create_folder/delete_file already use above. A destination outside the
+// sandbox is rejected even when the source is safely inside — that is the
+// whole point of checking both sides, not just one.
+
+function sandboxParent(rawPath) {
+  const sandboxed = resolveSandboxed(rawPath);
+  if (!sandboxed.ok) return sandboxed;
+  if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
+    return { ok: false, reason: `"${rawPath}" is outside the folders I can access. I'm limited to: ${allowedRoots().join('; ')}.` };
+  }
+  return sandboxed;
+}
+
+function move_file({ from, to }) {
+  const src = sandboxParent(from);
+  if (!src.ok) return fail(src.reason);
+  const dst = sandboxParent(to);
+  if (!dst.ok) return fail(dst.reason);
+  try {
+    if (!fs.existsSync(src.resolved)) return fail(`File not found: ${src.resolved}`);
+    fs.mkdirSync(path.dirname(dst.resolved), { recursive: true });
+    const overwritten = fs.existsSync(dst.resolved);
+    fs.renameSync(src.resolved, dst.resolved);
+    return ok({ from: src.resolved, to: dst.resolved, overwritten });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
+// Files only — same scoped-down v1 as delete_file (no recursive directory copy).
+function copy_file({ from, to }) {
+  const src = sandboxParent(from);
+  if (!src.ok) return fail(src.reason);
+  const dst = sandboxParent(to);
+  if (!dst.ok) return fail(dst.reason);
+  try {
+    if (!fs.existsSync(src.resolved)) return fail(`File not found: ${src.resolved}`);
+    const stat = fs.statSync(src.resolved);
+    if (!stat.isFile()) return fail('Not a file — copy_file only copies files, not folders.');
+    fs.mkdirSync(path.dirname(dst.resolved), { recursive: true });
+    const overwritten = fs.existsSync(dst.resolved);
+    fs.copyFileSync(src.resolved, dst.resolved);
+    return ok({ from: src.resolved, to: dst.resolved, overwritten });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
+// rename_file is the same-parent case of move_file: it validates that `from`
+// and `to` resolve to the same parent directory, then delegates to
+// move_file's own sandboxing + fs.renameSync. Moving across folders is
+// move_file's job, not rename_file's.
+function rename_file({ from, to }) {
+  const src = resolveSandboxed(from);
+  if (!src.ok) return fail(src.reason);
+  const dst = resolveSandboxed(to);
+  if (!dst.ok) return fail(dst.reason);
+  const srcDir = path.dirname(src.resolved);
+  const dstDir = path.dirname(dst.resolved);
+  const sameParent = process.platform === 'win32' ? srcDir.toLowerCase() === dstDir.toLowerCase() : srcDir === dstDir;
+  if (!sameParent) {
+    return fail('rename_file only renames within the same folder — use move_file to move across folders.');
+  }
+  return move_file({ from, to });
+}
+
+// ---- search_files ----
+
+const MAX_SEARCH_DEPTH = 6; // safety cap — matches the "depth-capped walk" requirement
+const MAX_SEARCH_SCAN = 5000; // safety cap on total entries examined, independent of the 50-result cap below
+
+// Turns a simple glob (`*` = any run of chars, `?` = one char) into an
+// anchored, case-insensitive RegExp. Deliberately minimal — no brace/bracket
+// expansion, matching this file's "no new deps" constraint.
+function wildcardToRegExp(pattern) {
+  const escaped = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+function search_files({ root: rawRoot, pattern }) {
+  const sandboxed = resolveSandboxed(rawRoot);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (!pattern || !String(pattern).trim()) return fail('A search pattern is required.');
+  const matcher = wildcardToRegExp(pattern);
+  const entries = [];
+  let truncated = false;
+  let scanned = 0;
+
+  function walk(dir, depth) {
+    if (truncated || depth > MAX_SEARCH_DEPTH) return;
+    let dirEntries;
+    try {
+      dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // unreadable directory (permissions, race) — best-effort, skip it
+    }
+    for (const entry of dirEntries) {
+      if (truncated) return;
+      scanned++;
+      if (scanned > MAX_SEARCH_SCAN) { truncated = true; return; }
+      const full = path.join(dir, entry.name);
+      if (matcher.test(entry.name)) {
+        if (entries.length >= MAX_LIST_ENTRIES) { truncated = true; return; }
+        let size = null;
+        let mtime = null;
+        try {
+          const stat = fs.statSync(full);
+          size = entry.isDirectory() ? null : stat.size;
+          mtime = stat.mtime.toISOString();
+        } catch {
+          // best-effort — a race (entry deleted mid-walk) shouldn't fail the whole tool
+        }
+        entries.push({ name: entry.name, path: full, isDirectory: entry.isDirectory(), size, mtime });
+      }
+      if (entry.isDirectory()) walk(full, depth + 1);
+    }
+  }
+
+  try {
+    walk(sandboxed.resolved, 0);
+    return { ok: true, result: { root: sandboxed.resolved, pattern: String(pattern), entries, truncated }, needs_result: true };
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
 // ---- compose_email ----
 
 // Truncates BEFORE encoding, not after — encoding a truncated string never risks cutting
@@ -308,6 +439,10 @@ const TOOLS = [
   { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists).', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },
   { name: 'create_folder', description: 'Create a folder (and any missing parent folders) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: create_folder },
   { name: 'delete_file', description: 'Permanently delete a file (not a folder) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: delete_file },
+  { name: 'move_file', description: 'Move (or rename) a file or folder from one location to another inside the allowed sandbox.', params: { from: 'string', to: 'string' }, danger: true, fn: move_file },
+  { name: 'copy_file', description: 'Copy a file (not a folder) to a new location inside the allowed sandbox, leaving the original in place.', params: { from: 'string', to: 'string' }, danger: true, fn: copy_file },
+  { name: 'rename_file', description: 'Rename a file or folder in place (same folder only — use move_file to relocate across folders).', params: { from: 'string', to: 'string' }, danger: true, fn: rename_file },
+  { name: 'search_files', description: 'Search for files/folders by name (supports * and ? wildcards) under a folder inside the allowed sandbox (max depth 6, max 50 results).', params: { root: 'string', pattern: 'string' }, danger: false, fn: search_files },
   { name: 'compose_email', description: "Draft an email and open it in a browser Gmail compose tab (or the OS mail app if VOICE_EMAIL_MODE=mailto). Does NOT send it — human must click Send.", params: { to: 'string (optional)', subject: 'string', body: 'string' }, danger: false, fn: compose_email },
 ];
 
@@ -327,8 +462,13 @@ module.exports = {
   write_file,
   create_folder,
   delete_file,
+  move_file,
+  copy_file,
+  rename_file,
+  search_files,
   compose_email,
   resolveSandboxed,
+  isInsideAllowedRoots,
   allowedRoots,
   buildMailtoUrl,
   buildGmailUrl,
