@@ -1,60 +1,55 @@
 <div align="center">
 
-# 🔮 MYTHOS — Autonomous Entity OS
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:24243e&height=220&section=header&text=MYTHOS&fontSize=80&fontColor=43e5a0&fontAlignY=35&desc=Autonomous%20Entity%20OS&descSize=24&descAlignY=58&descColor=4fd8ff&animation=fadeIn" width="100%" alt="MYTHOS header"/>
 
-**An always-on cognitive entity that perceives, reasons, acts, and self-heals.**
+<a href="https://github.com/HailLucifer666/Agent_OS">
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;1761+tests+green.+Zero+build+step." alt="Typing SVG" />
+</a>
 
-Not a chatbot. Not an agent framework. A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1862 tests.
+<br/>
 
-[![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-1861%20pass-2dd4bf)](https://github.com/HailLucifer666/Agent_OS)
-[![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9)](ROADMAP.md)
-[![Render](https://img.shields.io/badge/deploy-render-4fc08d?logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
-[![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey)](#license)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Tests](https://img.shields.io/badge/tests-1761%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
+[![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9?style=for-the-badge)](ROADMAP.md)
+[![Effectors](https://img.shields.io/badge/effectors-143%20tools-eab308?style=for-the-badge)](#-143-tool-effectors)
+[![Deploy](https://img.shields.io/badge/deploy-render-4fc08d?style=for-the-badge&logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
+[![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey?style=for-the-badge)](#%EF%B8%8F-license)
+
+<br/>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="Dashboard Assets/built/mission-control.png">
   <img alt="MYTHOS JARVIS HUD" width="880" src="Dashboard Assets/built/mission-control.png">
 </picture>
 
-<em>The JARVIS HUD — radial neural map, live entity state, voice mesh.</em>
+<em>🛰️ The JARVIS HUD — radial neural map, live entity state, voice mesh.</em>
 
 </div>
 
 ---
 
-> **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you see that it doesn't work.
+> [!IMPORTANT]
+> **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you *see* that it doesn't work.
+
+A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 1761 tests.
+
+<div align="center">
+
+### 🧭 Navigate
+
+[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**138 Tools**](#-138-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
+
+</div>
 
 ---
 
-## Table of Contents
-
-- [Architecture Overview](#architecture-overview)
-- [The OODA Cognitive Loop](#the-ooda-cognitive-loop)
-- [Six-Layer Stack](#six-layer-stack)
-- [Brain — Multi-Provider Chain](#brain--multi-provider-chain)
-- [Memory System](#memory-system)
-- [Immune System](#immune-system)
-- [Tiered Autonomy & Safety](#tiered-autonomy--safety)
-- [Voice System](#voice-system)
-- [138-Tool Effectors](#138-tool-effectors)
-- [Deploy](#deploy)
-- [Quickstart](#quickstart)
-- [Screenshots](#screenshots)
-- [Build History](#build-history)
-- [Tech Stack](#tech-stack)
-- [Documentation](#documentation)
-- [License](#license)
-
----
-
-## Architecture Overview
+## 🌐 Architecture Overview
 
 ```mermaid
 flowchart TB
     subgraph Cloud["☁️ Cloud Providers"]
         direction LR
-        NIM["NVIDIA NIM<br/>2 keys · key rotation"]
+        NIM["NVIDIA NIM<br/>2 keys · rotation"]
         GQ["Groq<br/>70B · 1K RPD"]
         MI["Mistral<br/>Large · ∞ free"]
         CE["Cerebras<br/>Sub-100ms"]
@@ -66,7 +61,9 @@ flowchart TB
     subgraph MYTHOS["🔮 MYTHOS Entity"]
         direction TB
         subgraph Foundation["Foundation"]
-            CFG["Config"] BUS["Event Bus"] LIFE["Lifecycle"]
+            CFG["Config"]
+            BUS["Event Bus"]
+            LIFE["Lifecycle"]
         end
         subgraph Cognition["Cognition"]
             CORT["Cortex<br/>OODA Loop"]
@@ -78,7 +75,7 @@ flowchart TB
         end
         subgraph IOLayer["I/O"]
             SENS["10 Sensors"]
-            EFF["138 Effectors"]
+            EFF["143 Effectors"]
         end
         CORT --> BRN --> Cloud
         SENS --> BUS --> EFF
@@ -94,23 +91,23 @@ flowchart TB
     Interface <--> MYTHOS
 ```
 
-### Entity vs Agent
+### ⚔️ Entity vs Agent
 
-| Property | Traditional Agent | **MYTHOS Entity** |
-|----------|-------------------|---------------------|
-| Trigger | User request | OODA cognitive loop (1s tick) |
-| Cognition | On-demand chain walk | Continuous cortex tick |
-| Memory | Session-only | Layered persistent memory (5 stores) |
-| Safety | Confirm dialog | Tiered autonomy + audit trail + immune |
-| Failure | Return error | Self-diagnose → self-heal → degrade |
-| Idle | No work, no cost | Idle ticks call zero LLM APIs |
-| Deployment | Serverless | Long-running process + Docker |
+| Property | 🤖 Traditional Agent | 🔮 **MYTHOS Entity** |
+|----------|----------------------|----------------------|
+| **Trigger** | User request | OODA cognitive loop (1s tick) |
+| **Cognition** | On-demand chain walk | Continuous cortex tick |
+| **Memory** | Session-only | Layered persistent memory (5 stores) |
+| **Safety** | Confirm dialog | Tiered autonomy + audit trail + immune |
+| **Failure** | Return error | Self-diagnose → self-heal → degrade |
+| **Idle** | No work, no cost | Idle ticks call zero LLM APIs |
+| **Deployment** | Serverless | Long-running process + Docker |
 
 ---
 
-## The OODA Cognitive Loop
+## 🔄 The OODA Cognitive Loop
 
-Every second, MYTHOS runs a full observe-orient-decide-act cycle:
+Every second, MYTHOS runs a full **observe → orient → decide → act** cycle:
 
 ```mermaid
 flowchart LR
@@ -147,11 +144,12 @@ flowchart LR
     style REF fill:#1a3a1a,stroke:#22c55e,color:#fff
 ```
 
-**Key insight:** Idle ticks skip Brain entirely (no LLM call = no cost). Only salient perceptions trigger reasoning.
+> [!TIP]
+> **Key insight:** Idle ticks skip Brain entirely — no LLM call, no cost. Only salient perceptions trigger reasoning.
 
 ---
 
-## Six-Layer Stack
+## 🏛️ Six-Layer Stack
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -161,7 +159,7 @@ flowchart LR
 │              IDENTITY                                │  self.md · boundaries.md
 │         Human-editable persona                       │  Entity has no write path
 ├─────────────────────────────────────────────────────┤
-│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  10 sensors · 138 effectors
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  10 sensors · 143 effectors
 │  timer·file·ws·job·metric·gmail·screen·window·       │  Publish/subscribe, never direct
 │  reminder·calendar                                   │
 ├─────────────────────────────────────────────────────┤
@@ -178,13 +176,14 @@ flowchart LR
 └─────────────────────────────────────────────────────┘
 ```
 
-**Wiring rule:** Modules never call across layer boundaries directly — publish/subscribe on bus. Cortex is the only module that holds direct refs to memory, goals, brain, leash, and effectors.
+> [!NOTE]
+> **Wiring rule:** Modules never call across layer boundaries directly — publish/subscribe on bus. Cortex is the only module that holds direct refs to memory, goals, brain, leash, and effectors.
 
 ---
 
-## Brain — Multi-Provider Chain
+## 🧠 Brain — Multi-Provider Chain
 
-7 cloud providers (NVIDIA NIM with 2-key rotation, Groq, Mistral, Cerebras, OpenRouter, Google, ZCode) plus a local Ollama fallback — 8 lanes total, walking ranked preference tables with per-model cooldown.
+**7 cloud providers** (NVIDIA NIM with 2-key rotation, Groq, Mistral, Cerebras, OpenRouter, Google, ZCode) plus a **local Ollama fallback** — 8 lanes total, walking ranked preference tables with per-model cooldown.
 
 ```mermaid
 flowchart LR
@@ -212,10 +211,10 @@ flowchart LR
     style RESP fill:#0e4429,stroke:#22c55e
 ```
 
-### Provider Fleet
+### 🛰️ Provider Fleet
 
-| Provider | Model(s) | Free Tier | Lanes | Key Rotation |
-|----------|----------|-----------|-------|:---:|
+| Provider | Model(s) | Free Tier | Lanes | Rotation |
+|----------|----------|-----------|-------|:--------:|
 | **Groq** | `llama-3.3-70b-versatile` | 1K RPD / 100K TPD | voice, simple | — |
 | **Mistral** | `mistral-large-2512` | No cap · 1 req/sec | voice, build, simple, vision | — |
 | **Cerebras** | `gemma-4-31b`, `zai-glm-4.7`, `gpt-oss-120b` | 2.4K RPD | build, simple, text | — |
@@ -223,7 +222,7 @@ flowchart LR
 | **OpenRouter** | `hermes-3-405b`, `qwen3-coder`, `llama-3.3-70b` | 50 RPD | voice, build, simple, text | — |
 | **Ollama** | `qwen3:8b`, `ornith:9b`, `qwen3.5`, `qwen2.5vl` | Unlimited (local) | voice, build, simple, text, vision | — |
 
-### Failover Chains per Lane
+### 🔀 Failover Chains per Lane
 
 ```mermaid
 graph TD
@@ -243,7 +242,7 @@ graph TD
 
 ---
 
-## Memory System
+## 🗄️ Memory System
 
 Five persistent stores, vault-backed, layered from short-term to long-term:
 
@@ -269,16 +268,16 @@ flowchart LR
 
 | Store | Purpose | Retention | Format |
 |-------|---------|-----------|--------|
-| **Working Memory** | 15-item perception buffer, drain on orient | Tick-scoped | In-memory |
-| **Episodic** | Time-series of events and experiences | 30 days (config) | JSON files |
-| **Semantic** | Consolidated knowledge, relationships | Permanent | JSON + vector index |
-| **Skills** | Learned procedures and patterns | Permanent | JSON |
-| **Identity** | Persona sections (self.md, boundaries.md) | Permanent | Markdown |
-| **Audit** | Immutable action log for tier ≥ 3 | Permanent | JSON lines |
+| 🧠 **Working Memory** | 15-item perception buffer, drain on orient | Tick-scoped | In-memory |
+| 📼 **Episodic** | Time-series of events and experiences | 30 days (config) | JSON files |
+| 🕸️ **Semantic** | Consolidated knowledge, relationships | Permanent | JSON + vector index |
+| 🛠️ **Skills** | Learned procedures and patterns | Permanent | JSON |
+| 🪪 **Identity** | Persona sections (self.md, boundaries.md) | Permanent | Markdown |
+| 📜 **Audit** | Immutable action log for tier ≥ 3 | Permanent | JSON lines |
 
 ---
 
-## Immune System
+## 🛡️ Immune System
 
 Self-healing architecture with watchdog, healer, diagnostician, and circuit breakers:
 
@@ -301,24 +300,24 @@ flowchart TD
 
 | Component | Role | Trigger |
 |-----------|------|---------|
-| **Watchdog** | Detects cortex stalls | Polls every 2s |
-| **Diagnostician** | Classifies fault type | Stall or anomaly event |
-| **Breakers** | Trip on 3 consecutive fails | Provider-level circuit |
-| **Healer** | Restarts failed subsystems | Diagnostician dispatch |
-| **Announcer** | Voice status updates | Health events |
-| **Monitor** | Crash recovery on restart | Boot-time checkpoint scan |
+| 🐕 **Watchdog** | Detects cortex stalls | Polls every 2s |
+| 🔬 **Diagnostician** | Classifies fault type | Stall or anomaly event |
+| ⚡ **Breakers** | Trip on 3 consecutive fails | Provider-level circuit |
+| 🩹 **Healer** | Restarts failed subsystems | Diagnostician dispatch |
+| 📢 **Announcer** | Voice status updates | Health events |
+| 💾 **Monitor** | Crash recovery on restart | Boot-time checkpoint scan |
 
 ---
 
-## Tiered Autonomy & Safety
+## 🔐 Tiered Autonomy & Safety
 
-Four tiers of action autonomy with human sovereignty baked in:
+Four tiers of action autonomy with **human sovereignty baked in**:
 
 | Tier | Actions | Human Gate | Audit |
-|:----:|---------|:-----------:|:-----:|
-| **0** | Internal state changes | No | No |
-| **1** | Memory writes, perception routing | No | No |
-| **2** | Goal CRUD, kanban moves, pipeline advance | No | Yes |
+|:----:|---------|:----------:|:-----:|
+| **0** | Internal state changes | — | — |
+| **1** | Memory writes, perception routing | — | — |
+| **2** | Goal CRUD, kanban moves, pipeline advance | — | ✅ |
 | **3** | Code execution, file writes, agent dispatch | Confirm | ✅ |
 | **4** | System-level changes, destructive ops | Confirm + reason | ✅ |
 
@@ -336,11 +335,12 @@ flowchart LR
     style DENY fill:#4a0a0a,stroke:#ef4444,color:#fff
 ```
 
-**`MYTHOS_DRY_RUN=true`** — makes all tier ≥ 1 actions logged no-ops. Perfect for observing what the entity *would* do.
+> [!TIP]
+> **`MYTHOS_DRY_RUN=true`** — makes all tier ≥ 1 actions logged no-ops. Perfect for observing what the entity *would* do.
 
 ---
 
-## Voice System
+## 🎙️ Voice System
 
 Three integrated voice channels — browser push-to-talk, speech-to-speech pipeline, and gesture control:
 
@@ -369,30 +369,29 @@ flowchart TB
     style Output fill:#0e4429,stroke:#43e5a0,color:#fff
 ```
 
-### Gesture Control
+### ✋ Gesture Control
 
 | Gesture | Action |
-|---------|--------|
+|:-------:|--------|
 | 👍 **Thumb Up** | Accept confirmation |
 | ✊ **Closed Fist** | Reject confirmation |
 | 🖐️ **Open Palm** | Mute / stop voice |
 | ✌️ **Victory** | Vision Q&A — describe scene |
 
-### Voice Actions
-- **Dashboard:** navigate, goals CRUD, pipeline capture/advance, kanban build, ask agents
-- **Computer:** open folders, list files, read files, compose emails
-- **Safety:** dangerous actions require spoken confirmation (30s TTL)
+### 🗣️ Voice Actions
+
+- **Dashboard** — navigate, goals CRUD, pipeline capture/advance, kanban build, ask agents
+- **Computer** — open folders, list files, read files, compose emails
+- **Safety** — dangerous actions require spoken confirmation (30s TTL)
 
 ---
 
-## 138-Tool Effectors
+## 🧰 143-Tool Effectors
 
-Every action MYTHOS can take goes through one of these 138 registered effectors. Counts are
-generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays —
-not hand-typed:
+Every action MYTHOS can take goes through one of these 143 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
 
 ```mermaid
-pie title Tool Distribution
+pie showData title Tool Distribution
     "Dashboard" : 26
     "PC Control" : 23
     "Browser Automation" : 13
@@ -410,8 +409,13 @@ pie title Tool Distribution
     "Other (1 each)" : 7
 ```
 
+<details>
+<summary><b>📋 Full effector catalog (click to expand)</b></summary>
+
+<br/>
+
 | Catalog | Count | Examples |
-|---------|:-----:|---------|
+|---------|:-----:|----------|
 | **Dashboard** | 26 | navigate, create_goal, pipeline_execute, kanban_build_card, ask_agent, read_status |
 | **PC Control** | 23 | launch_app, focus_window, screen_look, ui_click, ui_type, media_key |
 | **Browser Automation** | 13 | browser_navigate, browser_click, browser_screenshot, browser_evaluate |
@@ -431,14 +435,18 @@ pie title Tool Distribution
 | **Project** | 1 | start_project (auto-pipeline) |
 | **Command Runner** | 1 | run_command (allowlist-gated) |
 | **Skills** | 1 | use_skill |
+| **Voice** | 1 | speak (edge-tts, registered directly) |
 
-All dangerous tools (delete, execute, kill) require confirmation via the Leash system.
+</details>
+
+> [!WARNING]
+> All dangerous tools (delete, execute, kill) require confirmation via the Leash system.
 
 ---
 
-## Engagement Layer — Structured Task Lifecycle
+## 📋 Engagement Layer — Structured Task Lifecycle
 
-Takes an intent (a sentence) and walks it through a structured lifecycle: interview, spec, plan, approval, execution, verification, repair, and completion.
+Takes an intent (a sentence) and walks it through a structured lifecycle: **interview → spec → plan → approval → execution → verification → repair → completion**.
 
 ```mermaid
 flowchart TB
@@ -472,7 +480,7 @@ flowchart TB
 ```
 
 | Capability | Modules | What it does |
-|-----------|---------|-------------|
+|-----------|---------|--------------|
 | **State Machine** | `state-machine.js`, `schema.js` | 12 states, 22 validated transitions with preconditions. Invalid transitions emit typed health anomalies. |
 | **Interview** | `interview.js`, `interview-card` UI | Up to 5 questions, 5 variants (text, choice, confirm, multi-select, numeric), per-type validation. |
 | **Spec Builder** | `spec-builder.js`, `recommendations.js` | Generates markdown specs from interview answers. Recommends build/research/hybrid approaches with confidence scores. |
@@ -482,18 +490,14 @@ flowchart TB
 | **Events** | `events.js` | 18 typed bus event factories covering the full lifecycle. |
 
 **Backend** (15 modules): `src/core/engagements/` (10) + `src/core/assistant/` (5).
-
-**Frontend** (8 component + 3 view modules): 3-column dashboard with Active/Recent/Completed filters, 5-tab detail panel, live WS-driven progress streaming, approval gate modals, interview cards (5 variants), verification check cards (5 types, 6 states), completion reports with artifact links.
-
+**Frontend** (8 component + 3 view modules): 3-column dashboard, 5-tab detail panel, live WS-driven progress streaming, approval gate modals, interview cards, verification check cards, completion reports.
 **Tests:** 166 tests (121 engagement + 45 assistant) across 14 test files.
-
-**Next:** REST routes for `/api/engagements`, boot sequence wiring, workspace/artifact/verification subsystems.
 
 ---
 
-## Deploy
+## 🚀 Deploy
 
-### Render (Cloud)
+### ☁️ Render (Cloud)
 
 ```yaml
 # render.yaml — auto-detected by Render Blueprint
@@ -517,10 +521,11 @@ services:
 
 **Dockerfile included** — Node 20 Alpine + edge-tts + zero build step.
 
-> 📋 **Environment variables you need to set** (in Render dashboard, NOT in the repo):
+> [!IMPORTANT]
+> **Environment variables** (set in Render dashboard, NOT in the repo):
 > `NIM_API_KEY` · `NIM_API_KEY_2` · `GROQ_API_KEY` · `MISTRAL_API_KEY` · `OPENROUTER_API_KEY` · `CEREBRAS_API_KEY`
 
-### Local (Windows)
+### 💻 Local (Windows)
 
 Double-click **`Start Agent OS.bat`** — that's it.
 
@@ -536,67 +541,31 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ---
 
-## Screenshots
+## 📸 Screenshots
 
-<p align="center">
-  <table>
-    <tr>
-      <td width="50%" align="center"><b>JARVIS HUD — Radial Neural Map</b></td>
-      <td width="50%" align="center"><b>Agent Kanban — Planner / Builder / Reviewer</b></td>
-    </tr>
-    <tr>
-      <td><img src="Dashboard Assets/built/mission-control.png" alt="JARVIS HUD" width="100%"></td>
-      <td><img src="Dashboard Assets/built/agent-kanban.png" alt="Agent Kanban" width="100%"></td>
-    </tr>
-    <tr>
-      <td align="center"><b>Memory Galaxy — Vault as a Starfield</b></td>
-      <td align="center"><b>Goals — CRUD + Voice Input</b></td>
-    </tr>
-    <tr>
-      <td><img src="Dashboard Assets/built/memory-galaxy.png" alt="Memory Galaxy" width="100%"></td>
-      <td><img src="Dashboard Assets/built/goals-completed.png" alt="Goals" width="100%"></td>
-    </tr>
-    <tr>
-      <td align="center"><b>Pipeline — Capture → Gate → Execute → Ship</b></td>
-      <td align="center"><b>The Radar — RSS Signal Aggregation</b></td>
-    </tr>
-    <tr>
-      <td><img src="Dashboard Assets/built/pipeline.png" alt="Pipeline" width="100%"></td>
-      <td><img src="Dashboard Assets/built/radar.png" alt="Radar" width="100%"></td>
-    </tr>
-    <tr>
-      <td align="center"><b>Mastermind — 13 Concurrent AI Seats</b></td>
-      <td align="center"><b>Agent Room — Multi-Model Streaming</b></td>
-    </tr>
-    <tr>
-      <td><img src="Dashboard Assets/built/agent-room.png" alt="Mastermind" width="100%"></td>
-      <td><img src="Dashboard Assets/built/hermes.png" alt="Hermes" width="100%"></td>
-    </tr>
-  </table>
-</p>
+<div align="center">
 
-<p align="center">
-  <table>
-    <tr>
-      <td width="25%" align="center"><b>Game Studio</b></td>
-      <td width="25%" align="center"><b>Music Studio</b></td>
-      <td width="25%" align="center"><b>Video Studio</b></td>
-      <td width="25%" align="center"><b>Thumbnail Studio</b></td>
-    </tr>
-    <tr>
-      <td><img src="Dashboard Assets/built/game-studio.png" alt="Game Studio" width="100%"></td>
-      <td><img src="Dashboard Assets/built/music-studio.png" alt="Music Studio" width="100%"></td>
-      <td><img src="Dashboard Assets/built/video-studio.png" alt="Video Studio" width="100%"></td>
-      <td><img src="Dashboard Assets/built/thumbnail-studio.png" alt="Thumbnail Studio" width="100%"></td>
-    </tr>
-  </table>
-</p>
+| 🛰️ JARVIS HUD — Radial Neural Map | 🗂️ Agent Kanban — Planner / Builder / Reviewer |
+|:---:|:---:|
+| <img src="Dashboard Assets/built/mission-control.png" alt="JARVIS HUD" width="100%"> | <img src="Dashboard Assets/built/agent-kanban.png" alt="Agent Kanban" width="100%"> |
+| 🌌 **Memory Galaxy — Vault as a Starfield** | 🎯 **Goals — CRUD + Voice Input** |
+| <img src="Dashboard Assets/built/memory-galaxy.png" alt="Memory Galaxy" width="100%"> | <img src="Dashboard Assets/built/goals-completed.png" alt="Goals" width="100%"> |
+| ⚙️ **Pipeline — Capture → Gate → Execute → Ship** | 📡 **The Radar — RSS Signal Aggregation** |
+| <img src="Dashboard Assets/built/pipeline.png" alt="Pipeline" width="100%"> | <img src="Dashboard Assets/built/radar.png" alt="Radar" width="100%"> |
+| 🧠 **Mastermind — 13 Concurrent AI Seats** | 🤖 **Agent Room — Multi-Model Streaming** |
+| <img src="Dashboard Assets/built/agent-room.png" alt="Mastermind" width="100%"> | <img src="Dashboard Assets/built/hermes.png" alt="Hermes" width="100%"> |
+
+| 🎮 Game Studio | 🎵 Music Studio | 🎬 Video Studio | 🖼️ Thumbnail Studio |
+|:---:|:---:|:---:|:---:|
+| <img src="Dashboard Assets/built/game-studio.png" alt="Game Studio" width="100%"> | <img src="Dashboard Assets/built/music-studio.png" alt="Music Studio" width="100%"> | <img src="Dashboard Assets/built/video-studio.png" alt="Video Studio" width="100%"> | <img src="Dashboard Assets/built/thumbnail-studio.png" alt="Thumbnail Studio" width="100%"> |
+
+</div>
 
 ---
 
-## Build History
+## 📈 Build History
 
-20 phases shipped. Linear history on `main`. 1862 tests green.
+**20 phases shipped.** Linear history on `main`. 1761 tests green.
 
 ```mermaid
 gantt
@@ -605,22 +574,27 @@ gantt
     axisFormat %b %d
     section Foundation
     P0 Foundation               :done, p0, 2026-07-08, 2d
-    P1 Memory                  :done, p1, after p0, 2d
-    P2 Brain                   :done, p2, after p1, 2d
-    P3 Cortex (OODA)          :done, p3, after p2, 2d
-    P4 Goals                   :done, p4, after p3, 1d
+    P1 Memory                   :done, p1, after p0, 2d
+    P2 Brain                    :done, p2, after p1, 2d
+    P3 Cortex (OODA)            :done, p3, after p2, 2d
+    P4 Goals                    :done, p4, after p3, 1d
     section Safety
-    P4.5 Spec Remediation      :done, p4b, after p4, 1d
-    P5 Leash                   :done, p5, after p4b, 2d
-    P6 Immune System           :done, p6, after p5, 2d
+    P4.5 Spec Remediation       :done, p4b, after p4, 1d
+    P5 Leash                    :done, p5, after p4b, 2d
+    P6 Immune System            :done, p6, after p5, 2d
     section I/O
-    P7 Sensors + 45 Effectors  :done, p7, after p6, 3d
-    P8 Identity                :done, p8, after p7, 2d
-    P9 UI v2 + JARVIS HUD     :done, p9, after p8, 3d
+    P7 Sensors + 45 Effectors   :done, p7, after p6, 3d
+    P8 Identity                 :done, p8, after p7, 2d
+    P9 UI v2 + JARVIS HUD       :done, p9, after p8, 3d
     section Hardening
-    P10 Chaos Drills          :done, p10, after p9, 2d
-    P11 Token Streaming       :done, p11, after p10, 1d
+    P10 Chaos Drills            :done, p10, after p9, 2d
+    P11 Token Streaming         :done, p11, after p10, 1d
 ```
+
+<details>
+<summary><b>📊 Test growth per phase (click to expand)</b></summary>
+
+<br/>
 
 | Phase | Scope | Tests |
 |:-----:|-------|:-----:|
@@ -639,11 +613,21 @@ gantt
 | **P11** | Token streaming, gap-closing (D-23/D-57 fixes) | 402 |
 | **P17/18** | Engagement Layer: lifecycle FSM, interview, spec, plan, store, assistant, UI | 568 |
 
-Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-ARCHITECTURE.md)
+</details>
+
+Full history: [ROADMAP.md](ROADMAP.md) · [MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHITECTURE.md)
 
 ---
 
-## Tech Stack
+## 🛠️ Tech Stack
+
+<div align="center">
+
+<img src="https://skillicons.dev/icons?i=nodejs,express,js,docker,powershell,py&theme=dark" alt="Tech stack icons"/>
+
+</div>
+
+<br/>
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
@@ -655,18 +639,21 @@ Full history: [`ROADMAP.md`](ROADMAP.md) · [`MYTHOS-ARCHITECTURE.md`](MYTHOS-AR
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 4 gestures: confirm, deny, mute, vision |
-| **Tests** | Built-in `node:test` | 1862 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 1761 tests, zero test framework deps |
 | **Deps** | 7 total | `@mediapipe/tasks-vision` · `exceljs` · `express` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
-### Project Layout
+<details>
+<summary><b>📁 Project layout (click to expand)</b></summary>
+
+<br/>
 
 ```
 Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 7 deps, 1862 tests
+│   ├── package.json             # 7 deps, 1761 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -674,7 +661,7 @@ Agent_OS/
 │   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
 │   │       ├── config/          # Schema validation + env loading
 │   │       ├── cortex/          # OODA loop + orient/decide
-│   │       ├── effectors/       # 138 tools, build-runner, orchestrator
+│   │       ├── effectors/       # 143 tools, build-runner, orchestrator
 │   │       ├── goals/           # Arbitrage + budget system
 │   │       ├── identity/        # self.md + boundaries.md
 │   │       ├── immune/          # watchdog, healer, breakers, announcer
@@ -683,7 +670,7 @@ Agent_OS/
 │   │       ├── memory/          # 5 stores + working memory
 │   │       ├── sensors/         # timer, file, ws, job, metric
 │   │       ├── engagements/     # 10 modules: lifecycle, FSM, interview, spec, plan, store
-│   │       └── assistant/       # 5 modules: gateway, intent routing, response planning
+│   │       ├── assistant/       # 5 modules: gateway, intent routing, response planning
 │   │       └── voice/           # Voice agent + spoken text
 │   ├── providers/               # 12 providers (openai-compat factory)
 │   │   ├── nim.js / nim2.js     # NVIDIA NIM (2-key rotation)
@@ -696,32 +683,47 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 1862 tests (node --test)
+│   ├── test/                    # 1761 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
-├── Start Agent OS.bat            # Windows launcher
+├── Start Agent OS.bat           # Windows launcher
 ├── ROADMAP.md                   # Full phase history
 ├── MYTHOS-ARCHITECTURE.md       # Architecture spec (16 sections)
 └── README.md                    # ← You are here
 ```
 
+</details>
+
 ---
 
-## Documentation
+## 📚 Documentation
 
 | Doc | What it covers |
-|-----|---------------|
+|-----|----------------|
 | 📜 **[ROADMAP.md](ROADMAP.md)** | Phase-by-phase build history, test counts, drift tracking |
 | 🏗️ **[MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHITECTURE.md)** | Complete 16-section architecture spec with code |
-| 🧠 **[app/BRAIN-MAP.md](app/BRAIN-MAP.md)** | Verified brain lane configuration, failover chains |
-| 🎯 **[MYTHOS-PHASE-BUILD-SPEC.md](MYTHOS-PHASE-BUILD-SPEC.md)** | Detailed build specifications per phase |
 | ⚙️ **[mythos/.env.example](mythos/.env.example)** | Every config knob, documented with defaults |
-| 📋 **[ENGAGEMENT-CHANGELOG.md](ENGAGEMENT-CHANGELOG.md)** | Engagement Layer changelog -- modules, test counts, event types |
-| 🚀 **[ENGAGEMENT-LAUNCH-NARRATIVE.md](ENGAGEMENT-LAUNCH-NARRATIVE.md)** | Launch announcement for the Engagement Layer |
+| 📋 **[ENGAGEMENT-CHANGELOG.md](ENGAGEMENT-CHANGELOG.md)** | Engagement Layer changelog — modules, test counts, event types |
+| 🔌 **[docs/WIRING-AUDIT.md](docs/WIRING-AUDIT.md)** | Wiring audit — what's connected, what's not |
+| 🧪 **[docs/live-verification-runbook.md](docs/live-verification-runbook.md)** | Live verification procedures |
 
 ---
 
-## License
+## 📊 Repository Stats
+
+<div align="center">
+
+<img src="https://github-readme-stats.vercel.app/api/pin/?username=HailLucifer666&repo=Agent_OS&theme=tokyonight&hide_border=true&bg_color=0d1117&title_color=43e5a0&icon_color=4fd8ff&text_color=c9d1d9" alt="Agent_OS repo card"/>
+
+<br/><br/>
+
+<img src="https://github-readme-activity-graph.vercel.app/graph?username=HailLucifer666&repo=Agent_OS&theme=tokyo-night&hide_border=true&bg_color=0d1117&color=43e5a0&line=4fd8ff&point=a78bfa&area=true&area_color=302b63" width="95%" alt="Activity graph"/>
+
+</div>
+
+---
+
+## ⚖️ License
 
 Personal / hobby use. The bundled **edge-tts** integration reverse-engineers Microsoft Edge's Read Aloud endpoint and is **not licensed for commercial deployment**. Provider integrations require their respective API keys and are subject to those providers' terms. No warranty.
 
@@ -729,8 +731,12 @@ Personal / hobby use. The bundled **edge-tts** integration reverse-engineers Mic
 
 <div align="center">
 
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:24243e,50:302b63,100:0f0c29&height=120&section=footer" width="100%" alt="footer"/>
+
 **Designed for the local-first operator. Built honestly. Deployed to the cloud.**
 
 *From NOVA request→respond dashboard → MYTHOS continuous autonomous entity.*
+
+⭐ **If this project interests you, drop a star — it helps.**
 
 </div>
