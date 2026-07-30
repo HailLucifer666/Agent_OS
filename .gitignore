@@ -14,6 +14,12 @@ _devtools/
 # Leading slash pins this to the repo root (see the /design/ note above for why).
 /Hermes Agent/
 
+# Android platform-tools (Google, Apache 2.0) — the ADB bridge's `adb`
+# binary, installed project-local via mythos/scripts/setup-android.js
+# --install. Same convention as /Hermes Agent/ above: a third-party tool
+# checkout never belongs in git, contributors fetch their own copy.
+/Android Platform Tools/
+
 # local data — real user vault content, never publish
 mythos/vault/
 
