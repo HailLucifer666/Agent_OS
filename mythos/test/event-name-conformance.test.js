@@ -187,6 +187,12 @@ const ALLOWED_EVENTS = new Set([
   'engagement.saved',
   'engagement.removed',
   'engagement.immune.hooks.registered',
+
+  // voice.live.* — Phase 1 (V2 §6, merged-order step 4): live-session.js's
+  // Gemini Live bridge lifecycle/barge-in/tool-cancellation signals.
+  'voice.live.state',
+  'voice.live.interrupted',
+  'voice.live.toolcancel',
 ]);
 
 // -- Static scan -------------------------------------------------------------
