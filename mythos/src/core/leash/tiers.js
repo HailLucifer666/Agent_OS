@@ -42,6 +42,7 @@ const TIER_TABLE = {
   'document_list':         0,  // read-only — lists ingested documents (doc-level metadata), §7.5
   'document_search':       0,  // read-only — semantic search over ingested document chunks, §7.5, writes nothing
   'search_code':           0,  // read-only — semantic search over indexed code chunks, §7.11, writes nothing
+  'phone_list_devices':    0,  // Task 10 (step 6, Android bridge) — read-only, `adb devices -l` via the adapter's own live status
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
@@ -78,6 +79,12 @@ const TIER_TABLE = {
                                // Documents store, §7.5; no destructive risk to the source file
   'index_project':         1,  // local write — chunks+embeds source files into the same Documents
                                // store, §7.11; reuses §7.5's index, not a second one
+  // Task 10 (step 6, Android bridge) — same privacy-read class as gmail_unread/
+  // calendar_upcoming above (screenshot/notifications/contacts read private
+  // on-device data).
+  'phone_screenshot':      1,
+  'phone_notifications':   1,
+  'phone_contacts_search': 1,
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
@@ -154,6 +161,14 @@ const TIER_TABLE = {
   'set_wallpaper':         2,  // §7.7 (step 5) — non-destructive, fully reversible local
                                // action (same class as show_desktop/set_volume above),
                                // sandboxed path via from-computer.js's resolveSandboxed
+  // Task 10 (step 6, Android bridge) — non-destructive local device actions,
+  // same class as launch_app/media_key above: toggling a radio or launching/
+  // closing an app is reversible and bounded, no confirm friction warranted.
+  'phone_wifi_toggle':      2,
+  'phone_bluetooth_toggle': 2,
+  'phone_hotspot_toggle':   2,
+  'phone_app_launch':       2,
+  'phone_app_close':        2,
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
   'delete_goal':           3,
@@ -196,6 +211,23 @@ const TIER_TABLE = {
   'copy_file':             3,
   'rename_file':           3,
   'search_files':          0,
+  // Task 10 (step 6, Android bridge) — outward-facing/irreversible-from-here
+  // actions (a real call, an opened-and-prefilled SMS/WhatsApp send needing
+  // only a human tap, a write onto the phone's filesystem): T3 confirm-once-
+  // per-goal, same class as compose_email/gmail_send/write_file above.
+  'phone_sms_send':        3,
+  'phone_call':            3,
+  'phone_whatsapp_send':   3,
+  'phone_file_push':       3,
+  // Security-review correction (Task 10): phone_file_pull was originally T1
+  // ("a read from the phone"), but from the PC-filesystem-integrity
+  // standpoint `adb pull` WRITES (creates or overwrites) an arbitrary local
+  // file chosen by resolveSandboxed() — content dictated entirely by
+  // whatever the phone has at remotePath. That is the same risk class as
+  // write_file (T3), not read_file (T0), and resolveSandboxed()'s
+  // allowedRoots() always includes the project root itself. Re-tiered here
+  // to match write_file/phone_file_push exactly.
+  'phone_file_pull':       3,
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,

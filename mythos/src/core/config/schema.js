@@ -195,6 +195,13 @@ const SCHEMA = {
   GMAIL_TRIAGE_POLL_MS:        { type: 'number', default: 300000, min: 60000 },
   GMAIL_TRIAGE_ENABLED:        { type: 'bool',   default: true },
 
+  // Android ADB bridge (Task 8-10, Wave 2) — optional. adapters/android-child
+  // degrades to OFFLINE with an install hint when adb isn't resolvable;
+  // boot is unaffected either way (AD-9). See mythos/.env.example.
+  ANDROID_ADB_BIN:             { type: 'string', default: 'adb' },
+  ANDROID_ADB_POLL_MS:         { type: 'number', default: 8000, min: 1000 },
+  ANDROID_CMD_TIMEOUT_MS:      { type: 'number', default: 15000, min: 1000 },
+
   // Engagement Layer (Phase 17/18 — structured task lifecycle)
   ENGAGEMENT_TTL_MS:           { type: 'number', default: 604800000, min: 3600000 },
   ENGAGEMENT_MAX_REPAIRS:      { type: 'number', default: 3, min: 0, max: 10 },

@@ -149,6 +149,19 @@ function refreshDevices() {
   });
 }
 
+// `-s <serial>` MUST precede the subcommand (adb -s <serial> shell ...), not
+// follow it. Exported/pure so it's independently unit-testable — this is
+// the only thing standing between "phone A" and "whichever device adb
+// happens to default to", which matters most exactly when it's silent: with
+// a single device attached, an unqualified `adb shell ...` still succeeds by
+// accident, hiding the bug until a second device (Pro-Plus's own explicit
+// 2-device requirement) is paired and every command starts racing which
+// phone it actually lands on.
+function buildAdbArgs(serial, args) {
+  if (!serial) return args.slice();
+  return ['-s', serial].concat(args);
+}
+
 function getQueue(serial) {
   if (!deviceQueues.has(serial)) {
     deviceQueues.set(serial, { queue: [], inFlight: false });
@@ -196,7 +209,7 @@ function sendCommand(opts) {
     }
 
     const q = getQueue(serial);
-    q.queue.push({ args: args, timeoutMs: timeoutMs, resolve: resolve });
+    q.queue.push({ args: buildAdbArgs(serial, args), timeoutMs: timeoutMs, resolve: resolve });
     processDeviceQueue(serial);
   });
 }
@@ -271,4 +284,5 @@ module.exports = {
   shutdownAndroidChild: shutdownAndroidChild,
   sendCommand: sendCommand,
   getStatus: getStatus,
+  buildAdbArgs: buildAdbArgs, // exported for unit testing only (security-review finding)
 };

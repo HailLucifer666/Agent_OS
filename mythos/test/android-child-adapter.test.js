@@ -75,6 +75,25 @@ describe('adapters/android-child — graceful degradation', function() {
     androidChild.shutdownAndroidChild();
   });
 
+  // Security-review finding (Task 10 integration): sendCommand's `serial` was
+  // being used only as a queue-partition key and never actually reached adb's
+  // argv, so a command silently ran against whatever device adb defaulted to
+  // instead of the requested one — invisible with exactly one device attached
+  // (it "worked" by accident), and outright broken with two (adb refuses to
+  // run anything without -s when 2+ devices are attached). `-s <serial>` must
+  // precede the subcommand, per `adb -s <serial> shell ...`.
+  it('buildAdbArgs prepends "-s <serial>" BEFORE the subcommand when a serial is given', function() {
+    var androidChild = require('../adapters/android-child');
+    assert.deepEqual(androidChild.buildAdbArgs('emulator-5554', ['shell', 'echo', 'hi']), ['-s', 'emulator-5554', 'shell', 'echo', 'hi']);
+    assert.deepEqual(androidChild.buildAdbArgs('emulator-5554', ['exec-out', 'screencap', '-p']), ['-s', 'emulator-5554', 'exec-out', 'screencap', '-p']);
+  });
+
+  it('buildAdbArgs leaves global (serial-less) commands untouched — e.g. `adb devices -l`', function() {
+    var androidChild = require('../adapters/android-child');
+    assert.deepEqual(androidChild.buildAdbArgs(null, ['devices', '-l']), ['devices', '-l']);
+    assert.deepEqual(androidChild.buildAdbArgs(undefined, ['version']), ['version']);
+  });
+
   it('per-device queues stay independent — a second device is never blocked by the first (offline reject-fast proves no shared queue head-of-line)', async function() {
     var androidChild = require('../adapters/android-child');
     var [a, b] = await Promise.all([

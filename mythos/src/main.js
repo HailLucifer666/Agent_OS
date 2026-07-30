@@ -48,6 +48,7 @@ const { createVoiceEffector } = require('./core/effectors/voice');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
+const { registerFromAndroid } = require('./core/effectors/from-android');
 const { registerFromBrowser, browser_launch_debug } = require('./core/effectors/from-browser');
 const skillsLoader = require('./core/skills/loader');
 const { registerFromDashboard } = require('./core/effectors/from-dashboard');
@@ -81,6 +82,7 @@ const fs = require('fs');
 const browserAgent = require('../adapters/browser-agent');
 const pcChild = require('../adapters/pc-child');
 const cuaDriver = require('../adapters/cua-driver');
+const androidChild = require('../adapters/android-child');
 
 async function main() {
   // Step 0: .env (DEGRADED — missing .env is not fatal, config falls back to schema defaults)
@@ -319,6 +321,7 @@ async function main() {
 
       registerFromComputer(hub);
       pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
+      registerFromAndroid(hub);
       registerFromSpotify(hub, { effectors: hub, bus: bus, memory: memory, goals: goals, config: config });
       // REMEDIATION P1-7: fs (vault fs-store) added so browser_navigate can
       // existence-check a /vault/... path via the same resolver open_artifact
@@ -516,6 +519,7 @@ async function main() {
         var adapterOnline = {};
         try { adapterOnline['pc-child'] = pcChild.getStatus().state === 'ONLINE'; } catch (_) {}
         try { adapterOnline['cua-driver'] = cuaDriver.getStatus().state === 'ONLINE'; } catch (_) {}
+        try { adapterOnline['android-child'] = androidChild.getStatus().state === 'ONLINE'; } catch (_) {}
         try { adapterOnline['browser-agent'] = browserAgent.getStatus().state === 'ONLINE'; } catch (_) {}
         return capabilities.summaryDigest({
           apps: KNOWN_DESKTOP_APPS,
@@ -624,6 +628,15 @@ async function main() {
       // spotify_play() falls back to the existing UIA/keystroke path unchanged.
       cuaDriver.startCuaDriver();
       logger.info('cua-driver.starting', {});
+
+      // Task 8 (step 6, Android bridge) — optional adb bridge. Degraded, not
+      // fatal: startAndroidChild() itself never throws, and an absent adb
+      // binary settles to OFFLINE with an install hint (AD-9) — every
+      // phone_* tool then fails honestly instead of blocking boot.
+      androidChild.startAndroidChild({
+        adbBin: config.ANDROID_ADB_BIN, pollMs: config.ANDROID_ADB_POLL_MS, cmdTimeoutMs: config.ANDROID_CMD_TIMEOUT_MS,
+      });
+      logger.info('android-child.starting', {});
     }},
 
     { name: 'capabilities-manifest', fail: 'degraded', fn: function() {
@@ -636,6 +649,7 @@ async function main() {
         var out = [];
         try { out.push(Object.assign({ name: 'pc-child' }, pcChild.getStatus())); } catch (_) {}
         try { out.push(Object.assign({ name: 'cua-driver' }, cuaDriver.getStatus())); } catch (_) {}
+        try { out.push(Object.assign({ name: 'android-child' }, androidChild.getStatus())); } catch (_) {}
         try { out.push(Object.assign({ name: 'browser-agent' }, browserAgent.getStatus())); } catch (_) {}
         return out;
       }
@@ -825,6 +839,7 @@ async function main() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     pcChild.shutdownPcChild();
     cuaDriver.shutdownCuaDriver();
+    androidChild.shutdownAndroidChild();
     browserAgent.stopAutoConnect();  // stop the poller before disconnect so it can't re-attach mid-shutdown
     browserAgent.disconnect();
     if (edgeTtsChild) edgeTtsChild.stop();
