@@ -12,9 +12,10 @@
 
 | | |
 |---|---|
-| **Status** | Merged-order steps 0-5 ✅ (unchanged from before this session) AND **6 ✅ the ADB phone bridge is closed.** Task 8 (`android-child` adapter — per-device queues over one-shot `adb` calls, not a copy of `pc-child`'s persistent daemon), Task 9 (`setup-android.js` — install/pair/connect, argv-only unit-tested, never executed for real), Task 10 (`from-android.js` — 14 registered tools/13 table rows, `phone_flashlight_toggle` omitted, `phone_shell` refused, WhatsApp resolved as option (b): honest deep-link-open, never a claimed send). Three commits, each red-first tested. security-reviewer (sonnet) ran on `from-android.js` before its commit and found 3 issues, all fixed same-session: HIGH (`deviceId`/`serial` never actually reached `adb`'s argv — a real multi-device-breaking bug, fixed with a new `buildAdbArgs()`, plus `checkDevice()` now confirms the serial is currently known, not merely truthy), MEDIUM-HIGH (`phone_file_pull` mistiered T1 despite being a local write — re-tiered to T3), LOW/informational (`resolveSandboxed()`'s pre-existing, repo-wide lack of symlink-awareness — flagged as a spawned background task, not fixed here, out of scope for this file). Real AD-9 proof, not just unit-green: booted the actual app with `adb` absent from PATH — `android-child.offline` with the exact install hint, `capabilities-manifest.written` lists it honestly, boot succeeds, all 139 other effectors register, `pc-child`/`cua-driver` come online normally. Baseline grew 1690→1727 tests, 125→139 effectors, 0 fail throughout. Physical-phone-dependent checkboxes (Task 9 Step 5, Task 10 Step 9, and Task 10's original Step 3 uiautomator-tap approach) are explicitly left unticked — no Android device exists on this machine, and nothing here fabricates that verification. |
-| **Next action** | Merged-order step 6.5: the licensing gate, which **BLOCKS step 7** (Electron). Verify in code (not from memory) that `providers/edge-tts.js:8` / `services/edge-tts-server.py:7` still label edge-tts personal/hobby-only and `THIRD_PARTY_NOTICES.md:25` still records the openWakeWord model weights as CC BY-NC-SA 4.0 non-commercial, then swap edge-TTS → Piper (MIT, local) and train an own `hey_mythos` wake-word model using openWakeWord's Apache-2.0 tooling (the tooling is permissive; only the pretrained weights are NC). This is a licensing problem, not a technical one, and it will never surface in testing — do not skip it to get to Phase 7 sooner. |
-| **Blocked on** | Nothing new for step 6.5. Carried over, still open, unchanged by this session: (1) README's two mermaid diagrams still show 6–7 of the real 8 brain-provider lanes; (2) `mythos/scripts/setup-hermes.js` carries an uncommitted prior-session change, deliberately left dirty — still true, do not touch it; (3) the persona has **not been judged by ear**; (4) V2 §14's live items 1-4 + Task 12 Step 5 still need an operator with a microphone; (5) the S2S health-tile design decision from step 4's close-out is still unmade, low priority; (6) §7.3's PIN lock has a real backend but **no frontend enforcement point**; (7) §7.10's `generate_image` cannot produce a real image until the operator enables billing on the Google AI Studio project; (8) §7.6's `calendar_upcoming`'s success path needs an operator with real Google OAuth creds to live-verify; (9) the pre-existing `resolveSandboxed()`/`allowedRoots()` Windows 8.3 short-name gap. **New from step 6's close-out:** (10) Task 9 Step 5 (`--check` against a real device), Task 10 Step 9 (real SMS/WhatsApp/WiFi-toggle verification), and the option-(a) `phone_tap` alternative for `phone_whatsapp_send` all need an operator with a physical Android phone — none of the three is fabricatable from this machine; (11) the newly-spawned `task_5836cdee` (harden `resolveSandboxed()` against symlink/junction escape) is open, low severity, pre-existing and repo-wide. |
+| **Status** | Merged-order steps 0-5 ✅ (unchanged from before this session) AND **6 ✅ the ADB phone bridge is closed.** Task 8 (`android-child` adapter — per-device queues over one-shot `adb` calls, not a copy of `pc-child`'s persistent daemon), Task 9 (`setup-android.js` — install/pair/connect, argv-only unit-tested, never executed for real), Task 10 (`from-android.js` — 14 registered tools/13 table rows, `phone_flashlight_toggle` omitted, `phone_shell` refused, WhatsApp resolved as option (b): honest deep-link-open, never a claimed send). Three commits, each red-first tested. security-reviewer (sonnet) ran on `from-android.js` before its commit and found 3 issues, all fixed same-session: HIGH (`deviceId`/`serial` never actually reached `adb`'s argv — a real multi-device-breaking bug, fixed with a new `buildAdbArgs()`, plus `checkDevice()` now confirms the serial is currently known, not merely truthy), MEDIUM-HIGH (`phone_file_pull` mistiered T1 despite being a local write — re-tiered to T3), LOW/informational (`resolveSandboxed()`'s pre-existing, repo-wide lack of symlink-awareness — flagged as a spawned background task, not fixed here, out of scope for this file). Real AD-9 proof, not just unit-green: booted the actual app with `adb` absent from PATH — `android-child.offline` with the exact install hint, `capabilities-manifest.written` lists it honestly, boot succeeds, all 139 other effectors register, `pc-child`/`cua-driver` come online normally. Baseline grew 1690→1727 tests, 125→139 effectors, 0 fail throughout. Physical-phone-dependent checkboxes (Task 9 Step 5, Task 10 Step 9, and Task 10's original Step 3 uiautomator-tap approach) are explicitly left unticked — no Android device exists on this machine, and nothing here fabricates that verification. **Post-step-6 integration (same session):** two local-only branches were reconciled into `main` rather than left to rot on one machine — `78a4c2d` (symlink/junction-aware `resolveSandboxed()`, merged as `e263ae1`) and `claude/stoic-williams-6a1c85` (CRLF-safe `sync-test-count.js` + the missing brain lanes in README's two mermaid diagrams). The first branch was cut from `39ceb00` and reported Task 10 as "never pushed" when it was already on `origin/main` — the BUG-037 stale-base shape, caught by `git merge-base` before any merge. Nothing was lost because that fix landed in the shared helper, so `from-android.js`'s two call sites inherited it despite the branch being blind to them. The CRLF fix is the root cause of a duplicate-sync-block bug hit by hand during the first merge: `ROADMAP_BLOCK_RE` hardcoded `
+`, so on any `core.autocrlf=true` clone `--check` reported "block missing" and `--write` then INSERTED a second block. Baseline 1727→1735 tests, 0 fail. |
+| **Next action** | Merged-order step 6.5, the licensing gate. **Read the "Step 6.5 — the licensing gate, with 2026-07-30's findings folded in" section below BEFORE starting — it changes what this step is.** Short version: the operator confirmed 2026-07-30 that MYTHOS **will be sold** (possibly with a free demo tier), so the gate is live; the repo's own edge-tts/openWakeWord warnings are **self-authored** (`git blame` → `532106d8`), not upstream rulings, so verify against real upstream licence files; edge-tts is a Terms-of-Use/business-risk problem plus an UNVERIFIED upstream package licence (check that first — cheapest unknown), while openWakeWord's NC weights are a genuine licence; and the gate blocks **shipping, not building**, so step 7 may proceed in parallel as long as nothing is released. Three decisions are needed from the operator before 6.5 can close — they are listed in that section. Do not write a legal conclusion into this file. |
+| **Blocked on** | **6.5 needs three operator decisions** (paid build bundles a TTS voice or stays BYO; free demo = same binary behind a flag or a separate build; licence audit as its own step or folded in) — see the 6.5 section. RESOLVED this session, no longer blockers: README's mermaid diagrams now show all 8 brain lanes; `setup-hermes.js` is committed (`34659d8`) instead of sitting dirty; `resolveSandboxed()` symlink/junction hardening is merged (`e263ae1`). Still open, needing the operator in person: (1) the persona has **not been judged by ear**; (2) V2 §14's live items 1-4 + Task 12 Step 5 need a microphone and speakers; (3) §7.3's PIN lock has a real backend but **no frontend enforcement point**; (4) §7.10's `generate_image` needs billing enabled on the Google AI Studio project; (5) §7.6's `calendar_upcoming` success path needs real Google OAuth creds; (6) Task 9 Step 5, Task 10 Step 9 and the option-(a) `phone_tap` alternative all need a physical Android phone; (7) Task 7's `--install` needs an account that can register a scheduled task (it hit a real Access-denied here, and escalation was deliberately refused). Open but unowned/low priority: (8) the S2S health-tile design decision from step 4; (9) the pre-existing `resolveSandboxed()`/`allowedRoots()` Windows 8.3 short-name mismatch (the new symlink test works around it via `realpathSync`; the underlying helper gap remains); (10) V2 §7.12's Scheduled-Task-backed alarms, judged not a thin reuse of Task 7's machinery and documented rather than built. |
 | **Two documents** | This file = delta/roadmap. V2 spine = source-level detail. Precedence rules in the V2-spine section below. |
 | **Last updated** | 2026-07-30 |
 
@@ -60,6 +61,8 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 | 2026-07-30 | **Merged-order step 6, Task 9 (`setup-android.js`).** New `mythos/scripts/setup-android.js`, modeled on `setup-hermes.js`'s `--check`/`--install` shape: `--check` resolves `adb` (env override → project-local install → PATH) and reports per-device pairing status + a smoke-test command; `--install` downloads Google's official platform-tools zip for the running OS into `<repo>/Android Platform Tools/` (gitignored) and unzips via the OS's own tool (Expand-Archive/`unzip`) — no new npm dependency, never `curl\|bash`/`iex(irm…)`; `--pair`/`--connect` relay to `adb pair`/`adb connect`, the latter persisting to `vault/Identity/android-devices.json` (vault, not `.env` — a growing list, not a static secret). `test/setup-android.test.js` (10 tests) covers only pure construction/parsing logic (URL building, path portability, arg shape, devices-output parsing, device-record merge/dedupe) — mirrors `setup-autostart.test.js`'s precedent of never touching the real tool. `--install`/`--pair`/`--connect` deliberately never run for real: no adb, no phone, and an unattended ~15MB download is the operator's call. Full suite: 1706 tests, 1705 pass, 0 fail, 1 skip, 0 todo. | `39ceb00` | Real, live `--check` on this machine (no adb on PATH): `adb: NOT FOUND (adb)` + the install hint, exit code 1 — matches `android-child`'s own OFFLINE state exactly. `--install`/`--pair`/`--connect` NOT run — no adb, no phone, deliberate per the task's own instruction not to attempt an unattended install. |
 | 2026-07-30 | **Merged-order step 6, Task 10 (`from-android.js`, 14 tools) — CLOSES STEP 6.** New `mythos/src/core/effectors/from-android.js` (14 registered effectors / 13 table rows — `phone_flashlight_toggle` omitted, `phone_shell` refused); `tiers.js` (+14 entries, cited per that file's own header requiring a spec update for any add/re-tier — this plan IS that update); `main.js` boot wiring (registration, start/shutdown, capability-manifest/status roll-up, identical to `pc-child`/`cua-driver`'s three wiring points); `config/schema.js` + `.env.example` (`ANDROID_ADB_BIN`/`ANDROID_ADB_POLL_MS`/`ANDROID_CMD_TIMEOUT_MS`); `.gitignore` (`/Android Platform Tools/`, mirroring `/Hermes Agent/`). WhatsApp resolved as option (b): dropped the "resolved send tap" step (Task 10's own Step 3), keeping the honest deep-link-open behaviour — no physical phone to verify a tap primitive against, and shipping one unverifiable would be the exact false-capability-claim failure mode this whole build exists to beat. `phone_sms_send`/`phone_whatsapp_send` report `{opened:true, sent:false}`, never a claimed send (AD-4). `test/from-android.test.js` (20 tests) against a MOCKED `androidChild` (module-singleton stubbing, same technique as `test/from-calendar-google.test.js`): exact tool count/no-flashlight/no-raw-shell, every tool degrading honestly OFFLINE, explicit-`deviceId` enforcement (missing AND unknown-serial), and the precise POSIX single-quote escaping of a malicious SMS body and a SQL-breakout contacts query (verified against the literal expected escaped token, not a substring guess). **security-reviewer (sonnet) dispatched per this task's own instruction — 3 findings, all fixed same-session:** (1) HIGH — `serial` was used only as the queue-partition key and never reached `adb`'s actual argv (`android-child/index.js`), so a command silently ran against whatever device adb defaulted to; invisible with one device attached, outright broken with 2+ (this task's own explicit multi-device goal) since adb refuses to run anything without `-s` when multiple devices are present — fixed with a new pure, exported, unit-tested `buildAdbArgs(serial, args)` prepending `['-s', serial]` before the subcommand, plus `from-android.js`'s `checkDevice()` now also confirms the supplied `deviceId` is a currently-known serial (not merely truthy), closing a stale-serial-silently-accepted gap too; (2) MEDIUM-HIGH — `phone_file_pull` was tiered T1 ("a read from the phone") despite `adb pull` being a local WRITE into whatever `resolveSandboxed()`-approved path is given (same risk class as `write_file`, and `allowedRoots()` always includes the project root) — re-tiered to T3, `danger:true`, matching `phone_file_push`/`write_file`; (3) LOW/informational — `resolveSandboxed()` (shared with `set_wallpaper`) doesn't follow symlinks the way `isInsideAllowedRoots()` does; confirmed pre-existing and repo-wide, not introduced here — flagged as a spawned background task (`task_5836cdee`) rather than fixed in this file, out of scope. Also aligned `phone_wifi_toggle`/`phone_bluetooth_toggle`/`phone_app_launch`/`phone_app_close` onto the same single-quoted-command pattern as sms/contacts/whatsapp (a reviewer consistency note, safe either way today since those four inputs are strictly enum/regex-validated, but more defensible if a validator is ever loosened). Full suite: 1727 tests, 1726 pass, 0 fail, 1 skip, 0 todo (was 1690/1689/0/1/0 before step 6; 125→139 effectors). | `7247d5c` | **Real AD-9 proof**: booted the actual app (`node src/main.js`) with `adb` absent from PATH — `{"msg":"effectors.ready","count":139}`, `{"msg":"android-child.offline","hint":"adb not found — run node mythos/scripts/setup-android.js --install"}`, `vault/Identity/capabilities.md` written listing `android-child: OFFLINE (adb not found — ...)` honestly, then `{"msg":"MYTHOS ALIVE","port":4478}` — boot succeeded, all 139 effectors registered, `pc-child`/`cua-driver` came online normally, unaffected by `android-child`'s absence. Unit-verified only, against a mocked adapter (explicitly, not claimed otherwise): every `phone_*` tool's OFFLINE-degrade behavior, device-id enforcement, and shell-injection resistance. NOT live-verified, and cannot be from this machine: Task 9 Step 5 (`--check` against a real device), Task 10 Step 9 (real SMS compose, real WhatsApp deep link, real WiFi toggle, real `adb shell echo` roundtrip) — no physical Android phone exists here. Left explicitly unticked for that reason. |
 
+| 2026-07-30 | **Post-step-6 integration + cross-machine handoff prep:** merged both local-only branches into `main` (`e263ae1` symlink-aware `resolveSandboxed()`; CRLF-safe `sync-test-count.js` + README mermaid brain lanes), committed the stranded `setup-hermes.js` provider warning (`34659d8`) so it survives the machine move, pushed `phase5/production-and-docs` to origin for preservation, and folded this session's licensing findings into the new Step 6.5 section (commercial intent confirmed; warnings are self-authored not upstream; edge-tts is ToS + an unverified package licence; NC covers use not just distribution; the gate blocks shipping not building; three operator decisions required). | `e263ae1`, `34659d8` + this commit | yes — full suite re-run independently at 1735/1734/0 fail/1 skip/0 todo; `sync-test-count --check` green; CRLF fix verified by re-running `--check` (previously reported "block missing") and confirming exactly one sync block remains |
+
 ---
 
 ## The V2 spine — found, committed, nothing to re-plan
@@ -94,9 +97,95 @@ Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract
 | 3 | Persona unclamp — hours, largest felt win, two-file rollback | §11 |
 | 4 | S2S transport + latency instrumentation | §6–§10 + Task 12 |
 | 5 ✅ | Desktop gaps: clipboard, file ops, alarms, autostart, OCR, maps, image gen, code search, PIN, wallpaper, calendar | §7 + §17.2 + §18.2 |
-| 6 | ADB bridge: adapter, setup script, 14 tools, per-device queues, device registry | §17.1 + Tasks 8–10 |
-| **6.5** | **Licensing gate: edge-TTS → Piper, own wake-word model** | §18.3.3 — **blocks 7** |
+| 6 ✅ | ADB bridge: adapter, setup script, 14 tools, per-device queues, device registry | §17.1 + Tasks 8–10 |
+| **6.5** | **Licensing gate: edge-TTS → Piper, own wake-word model** | §18.3.3 — **blocks SHIPPING, see below** |
 | 7 | Electron shell + installer + overlay; Android app planned only | §13 |
+
+### Step 6.5 — the licensing gate, with 2026-07-30's findings folded in
+
+**Read this before starting 6.5. It changes what the step is.**
+
+**The commercial intent is now confirmed, so the gate is live.** V2 §17.3 frames
+this step conditionally — "if the intent is to sell." The operator confirmed on
+2026-07-30 that **MYTHOS will be sold later, possibly with a free basic demo
+tier.** So the condition is satisfied and this step is real, not hypothetical.
+Note that a free demo does **not** rescue either problem below if it shares a
+codebase with the paid product: a demo that markets a commercial product is
+generally still commercial use, and maintaining two TTS paths so the demo can
+keep edge-tts is worse than swapping once.
+
+**The repo's own warnings are self-authored — do not treat them as upstream
+rulings.** `git blame` puts the `providers/edge-tts.js` warning at `532106d8`
+(2026-07-10, authored in this repo) and the `THIRD_PARTY_NOTICES.md` weights
+entry at `29e9891`. Nobody at Microsoft or upstream wrote "personal/hobby use
+only" anywhere. Verify against actual upstream licence files before planning
+around them; earlier revisions of this roadmap cited these comments as though
+they were external law.
+
+**The two problems are different in kind:**
+
+- **edge-tts is a Terms-of-Use and business-risk question, not a copyright
+  licence one.** The Read Aloud endpoint is undocumented and unauthenticated, so
+  there is no Microsoft licence to violate — the exposure is charging money for a
+  product that depends on unauthorised access to Microsoft's service. That gets a
+  product pulled rather than fined. **Separately and still UNVERIFIED: the
+  upstream `edge-tts` Python package has its own code licence.** If it is copyleft
+  and the installer bundles it, that is a real distribution obligation on a closed
+  paid binary, independent of the ToS question. Check this first — it is the
+  cheapest unknown to close.
+- **openWakeWord weights are a genuine upstream licence**: CC BY-NC-SA 4.0,
+  non-commercial, with share-alike obligations on derivatives. The tooling is
+  Apache-2.0, which is why training an own `hey_mythos` model is the clean fix.
+
+**The download-on-demand nuance, and why it is not a free pass.** MYTHOS never
+distributes the wake-word weights — `mythos/ui/public/models/wakeword/` is
+gitignored and `scripts/setup-wakeword.js` fetches them to the user's own machine.
+That mitigates *distribution*. It does not clearly clear NC, because NC restricts
+**use**, not only distribution. "Our paid product's wake word requires you to go
+download non-commercial weights yourself" is not a position worth betting a
+business on.
+
+**Scope narrowed by step 4.** The S2S path does its own TTS inside the Gemini
+Live stream and never touches edge-tts, so edge-tts now only affects the
+`VOICE_S2S_ENABLED=false` fallback path. Still shipped code, so still in scope,
+but no longer the primary voice path.
+
+**This gate blocks SHIPPING, not BUILDING.** Nothing is distributed until a
+release is published, so step 7's Electron shell, installer packaging and overlay
+are buildable in parallel — provided nothing is released until 6.5 closes. The
+earlier "blocks 7" framing would have idled weeks of buildable work for no
+licensing benefit.
+
+**Swap both on the merits anyway.** Piper is MIT and fully local: no network
+round trip to a reverse-engineered endpoint, no ToS surface, lower latency than
+an HTTP hop to a Python service. Honest trade-off — Edge Neural voices sound
+better than Piper's, so the operator must audition Piper voices by ear, and each
+voice model carries its own licence independent of Piper's MIT code. Useful
+interaction: openWakeWord's training pipeline generates synthetic samples using
+Piper TTS, so installing Piper also supplies the sample generator for training
+`hey_mythos` — which additionally gets a wake word that is on-brand instead of
+"hey jarvis".
+
+**Wider audit surface nobody has checked yet** (do this as part of 6.5): the
+licences of **Hermes-Agent** and **cua-driver**, both external components the
+product depends on; the **MediaPipe model assets** (`@mediapipe/tasks-vision`
+code is Apache-2.0, but bundled model files often carry separate terms); and
+whether any brain provider's free tier prohibits use in a resold product. The
+seven npm dependencies themselves are permissive (MIT/Apache-2.0). **The
+BYO-API-key architecture is a genuine licensing asset** — the end user brings
+their own provider keys and accepts those providers' terms directly, so MYTHOS
+resells nobody's API. Preserve that deliberately.
+
+**Three decisions needed from the operator before 6.5 can finish** (ask, do not
+assume): does the paid build bundle a TTS voice or stay BYO like the API keys; is
+the free demo the same binary behind a flag or a separate build; and should the
+third-party licence audit be its own tracked step rather than folded in here.
+
+**Standing limit:** an AI session can report what the licence files say and what
+the code does. Whether download-on-demand clears NC for a paid product is a
+lawyer's call. For a product that will be charged for, an hour with an IP lawyer
+is cheap next to fixing this after launch. Do not let a future session write a
+confident legal conclusion into this file.
 
 Two further notes carried from V2 §18.2. Decision 1 (cancelling the speculative sentence-chunk TTS parser) is correct and **stronger than this document states** — sentence-chunked TTS streaming already exists as `splitSentences` in `server/index.js` and `src/core/effectors/voice.js`, with `test/sentence-streamer.test.js` and `test/split-sentences.test.js`; the cancelled work was redundant twice over. And V2 §7.12 wants **real Windows Scheduled Tasks** for alarms so they survive a MYTHOS restart, which is more than Task 5's in-process timer delivers — reconcile when building Task 5, and note V2 §7.8 tiers `clipboard_write` at T2 against Task 3's T1.
 

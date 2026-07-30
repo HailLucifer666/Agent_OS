@@ -84,12 +84,28 @@ that, never synthesize a verdict. And the "two real test failures" the plan
 predicts are **unconfirmed** — the pre-commit hook reports 0 failures over its
 ~140-file subset, so reproduce with a full `node --test` before fixing anything.
 
-**Licensing gate before any paid/installer build (merged-order step 6.5):**
-`providers/edge-tts.js:8` and `services/edge-tts-server.py:7` label edge-tts
-personal/hobby only, commercial deployment prohibited; `THIRD_PARTY_NOTICES.md:25`
-records the openWakeWord **weights** as CC BY-NC-SA 4.0 non-commercial. Swap to
-Piper (MIT) and train an own `hey_mythos` model with openWakeWord's Apache-2.0
-tooling. This never surfaces in testing.
+**Licensing gate before any release, paid or free (merged-order step 6.5):**
+The operator confirmed on **2026-07-30 that MYTHOS will be sold later**, possibly
+alongside a free basic demo tier — so this gate is live, not hypothetical, and a
+free demo does not rescue it if it shares a codebase with the paid product.
+`providers/edge-tts.js` and `services/edge-tts-server.py` label edge-tts
+personal/hobby only; `THIRD_PARTY_NOTICES.md` records the openWakeWord **weights**
+as CC BY-NC-SA 4.0 non-commercial. Planned fix: swap to Piper (MIT, local) and
+train an own `hey_mythos` model with openWakeWord's Apache-2.0 tooling.
+
+**Two corrections a fresh session must not re-derive wrongly.** First, those
+edge-tts warnings are **self-authored in this repo** (`git blame` → `532106d8`),
+not licence text from Microsoft or upstream — there is no Microsoft licence for
+that endpoint at all, so the real exposure is Terms-of-Use and business risk,
+plus the upstream Python package's own (still **unverified**) code licence.
+openWakeWord's NC weights, by contrast, are a genuine upstream licence. Second,
+this gate blocks **shipping, not building**: step 7's Electron work distributes
+nothing until a release is published, so it may proceed in parallel. Full
+analysis, the wider audit surface (Hermes-Agent, cua-driver, MediaPipe model
+assets, provider ToS for resale) and the three decisions still needed from the
+operator live in the roadmap's "Step 6.5" section. This never surfaces in
+testing. Do not write a confident legal conclusion into any tracked file — that
+is a lawyer's call, not a session's.
 
 ## Previous session update (2026-07-27, commit `30385d7`)
 
@@ -163,16 +179,33 @@ don't discard it.
 - No fix is "done" until live-verified against the running system (or the
   relevant oracle: `media_status` for playback, window title for Spotify).
   Plausible theories have been wrong 3+ times in this repo's history.
-- Baseline (reproduced 2026-07-27, `node scripts/sync-test-count.js --check` /
-  `mythos/scripts/sync-test-count.js`): **1197 tests, 1196 pass, 0 fail, 1
-  skip.** The 1 skip is `test/sensors-file.test.js` honestly skipping via
-  `t.skip()` — an environment-specific `fs.watch` crash on this Node/Windows
-  build, not a real failure. There are currently no known deterministic
-  failures — anything failing is a regression. (`wakeword.test.js` has shown
-  one transient Windows `EPERM` directory-rename race under full-suite load;
-  it self-resolves on rerun and is a test-fixture timing issue, not a code
-  defect — rerun before assuming a regression, don't inflate the baseline to
-  cover it.)
+- Baseline (reproduced 2026-07-30 at commit `34659d8`, full `cd mythos &&
+  node --test`): **1735 tests, 1734 pass, 0 fail, 1 skip, 0 todo.** The 1 skip
+  is `test/sensors-file.test.js` honestly skipping via `t.skip()` — an
+  environment-specific `fs.watch` crash on this Node/Windows build, not a real
+  failure. There are currently no known deterministic failures — anything
+  failing is a regression.
+  - **The old "1197" baseline in this file was stale for days.** Until
+    `42c2b48` (2026-07-30) all three gates — `sync-test-count.js`, the
+    pre-commit hook and CI — globbed `test/*.test.js` **non-recursively**, so
+    the 14 files under `test/assistant/` and `test/engagements/` (~188 tests)
+    were invisible to every gate that had ever run here. All three now run a
+    bare recursive `node --test`. Trust the number `sync-test-count.js` emits,
+    not a hand-typed one.
+  - The default reporter is **spec, not TAP**: grepping `^# tests` / `^# fail`
+    silently matches nothing and looks like a clean run. The real summary lines
+    are `ℹ tests` / `ℹ pass` / `ℹ fail`.
+  - `wakeword.test.js` has shown a Windows `EPERM` directory-rename race under
+    full-suite load. **It does NOT reliably self-resolve** (an earlier revision
+    of this file claimed it does): it can strand the ONNX models in a
+    gitignored `wakeword.test-backup/`, which silently kills wake word and is
+    invisible to git. If you hit it, restore the models directory before
+    trusting anything else.
+  - A suite that exits 127 with no summary, or whose failures wander between
+    files run to run, is Windows fork/commit-limit exhaustion from orphaned
+    `node.exe` processes — not a regression. Count them
+    (`@(Get-Process node -ErrorAction SilentlyContinue).Count`), kill strays,
+    rerun.
 - README.md/ROADMAP.md test-count mentions are kept in sync with the real
   suite by `mythos/scripts/sync-test-count.js` (`--check` to verify, `--write`
   to fix) — run `--write` and commit the result whenever the test count
