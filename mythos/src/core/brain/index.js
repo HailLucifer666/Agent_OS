@@ -119,13 +119,19 @@ function createBrain({ config, bus, identity }) {
         // use it instead of the global identity persona. This enables specialized
         // agent seats (frontend-builder, backend-builder, reviewer) without
         // changing the global identity. When persona is absent, keep the default.
+        // Lane-aware brevity tail (V2 §11 row 1): voice is spoken aloud and
+        // already carries its own BREVITY rule (voice-agent.js RULES) — always
+        // appending "Be concise and actionable." here re-clamped it right back
+        // down to one-sentence replies. build/simple (JSON/text output, not
+        // spoken) keep the actionability tail.
+        var tail = (lane === 'voice') ? '' : ' Be concise and actionable.';
         var personaLine;
         if (persona) {
-          personaLine = persona + ' ' + versionLine + ' Be concise and actionable.';
+          personaLine = persona + ' ' + versionLine + tail;
         } else if (identity && typeof identity.persona === 'function') {
-          personaLine = identity.persona() + ' ' + versionLine + ' Be concise and actionable.';
+          personaLine = identity.persona() + ' ' + versionLine + tail;
         } else {
-          personaLine = 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. ' + versionLine + ' Be concise and actionable.';
+          personaLine = 'You are ' + ((config && config.MYTHOS_NAME) || 'MYTHOS') + '. ' + versionLine + tail;
         }
         msgs = [
           { role: 'system', content: personaLine },

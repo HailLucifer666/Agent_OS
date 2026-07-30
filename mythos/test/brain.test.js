@@ -394,7 +394,11 @@ describe('brain/index — P8 identity persona injection', function() {
     const identity = { persona: function() { return 'You are GALACTUS. Eater of worlds.'; } };
     const brain = createBrain({ config: { MYTHOS_NAME: 'MYTHOS' }, bus: null, identity });
 
-    return brain.think({ lane: 'voice', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
+    // build lane, not voice: V2 §11 row 1 dropped the actionability tail from
+    // the voice lane specifically (it's spoken aloud and has its own BREVITY
+    // rule) — build/simple still get it. This test is about persona
+    // composition, not brevity, so it exercises the lane that still has it.
+    return brain.think({ lane: 'build', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
       chain.complete = origComplete;
       assert.equal(capturedMsgs[0].role, 'system');
       // Persona prefix is injected verbatim; a version-context line is now
@@ -420,7 +424,8 @@ describe('brain/index — P8 identity persona injection', function() {
 
     const brain = createBrain({ config: { MYTHOS_NAME: 'MYTHOS' }, bus: null });
 
-    return brain.think({ lane: 'voice', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
+    // build lane — see the previous test's comment re: voice losing the tail.
+    return brain.think({ lane: 'build', messages: [{ role: 'user', content: 'hi' }] }).then(function() {
       chain.complete = origComplete;
       assert.equal(capturedMsgs[0].role, 'system');
       // Fallback persona starts with the name; version context is appended.

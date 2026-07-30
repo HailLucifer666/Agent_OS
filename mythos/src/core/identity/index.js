@@ -21,8 +21,30 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // ("dial up the humor") via set_persona_level; persona() turns them into
   // concrete style directives every brain call sees. Defaults = the "blend"
   // the operator chose: warm, lightly witty, a touch of sass, proactive.
+  // V2 §11 row 3 (2026-07-30 persona unclamp): humor 6→8 crosses the >=8 band
+  // into "weave in dry wit freely"; sass 4→7 crosses the >=5 band; warmth
+  // 6→7; proactivity 6→8 unlocks "volunteer observations in most replies".
+  // formality/strictness unchanged.
+  //
+  // terseness DELIBERATELY STAYS 5, against V2's literal "5→4" instruction.
+  // V2's own rationale for that number is self-contradictory: it says "not 3 —
+  // <5 lands on 'Explain thoroughly', which over-swings for speech", but 4 is
+  // also <5, so 3 and 4 hit the identical else-branch in styleDirectives()
+  // below and BOTH produce "Explain thoroughly; detail is welcome." Lowering
+  // the dial at all would therefore have shipped the exact directive V2 was
+  // trying to avoid — verified by dumping the composed voice prompt, which
+  // contained that sentence. Honouring the stated intent (conversational, not
+  // verbose) means keeping 5, which yields "Keep replies short; expand only
+  // when the matter is complex." The clamp V2 actually wanted gone was never
+  // this dial: it was voice-agent.js's "one short sentence / 10 words" BREVITY
+  // text and brain/index.js's "Be concise and actionable." tail on the voice
+  // lane, both of which row 1 and row 2 removed.
+  //
+  // This is the tracked shipping surface: vault/Identity/persona.json
+  // (gitignored, per-trait override via loadLevels() below) does not exist on
+  // a fresh clone, so these defaults are what every new user actually gets.
   var DEFAULT_LEVELS = {
-    humor: 6, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5, strictness: 4
+    humor: 8, warmth: 7, formality: 5, sass: 7, proactivity: 8, terseness: 5, strictness: 4
   };
   var TRAITS = Object.keys(DEFAULT_LEVELS);
 

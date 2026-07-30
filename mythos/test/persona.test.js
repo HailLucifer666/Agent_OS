@@ -30,9 +30,9 @@ describe('persona levels', () => {
 
   afterEach(function() { cleanupVaultDir(dir); });
 
-  it('defaults to the blend levels when persona.json is absent', () => {
+  it('defaults to the unclamped blend levels when persona.json is absent (V2 §11 row 3)', () => {
     assert.deepEqual(identity.getPersonaLevels(), {
-      humor: 6, warmth: 6, formality: 5, sass: 4, proactivity: 6, terseness: 5, strictness: 4
+      humor: 8, warmth: 7, formality: 5, sass: 7, proactivity: 8, terseness: 5, strictness: 4
     });
   });
 
@@ -126,7 +126,7 @@ describe('from-persona voice tools', () => {
   it('persona_status returns the live levels', () => {
     const res = toolByName('persona_status').fn({});
     assert.equal(res.ok, true);
-    assert.equal(res.result.levels.humor, 6);
+    assert.equal(res.result.levels.humor, 8); // V2 §11 row 3 default
   });
 
   it('set_persona_level accepts numeric values and synonyms', () => {
@@ -138,16 +138,16 @@ describe('from-persona voice tools', () => {
 
   it('set_persona_level nudges with up/down', () => {
     const up = toolByName('set_persona_level').fn({ trait: 'humor', value: 'up' });
-    assert.equal(up.result.value, 8); // 6 + 2
+    assert.equal(up.result.value, 10); // default 8 + 2
     const down = toolByName('set_persona_level').fn({ trait: 'humor', value: 'down' });
-    assert.equal(down.result.value, 6);
+    assert.equal(down.result.value, 8);
   });
 
   it('inverse synonyms flip direction: "more verbose" lowers terseness', () => {
     const res = toolByName('set_persona_level').fn({ trait: 'verbose', value: 'up' });
     assert.equal(res.ok, true);
     assert.equal(res.result.trait, 'terseness');
-    assert.equal(res.result.value, 3); // 5 - 2
+    assert.equal(res.result.value, 3); // default terseness 5 - 2
   });
 
   it('unknown trait fails honestly', () => {
