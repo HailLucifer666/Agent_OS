@@ -56,6 +56,22 @@ function parseParam(name, spec) {
     .trim() || name;
 
   const schema = { type, description };
+
+  // Gemini's Schema REQUIRES `items` on an ARRAY. Without it the API rejects the
+  // entire setup frame — not just the offending tool — so one array param with no
+  // item type silently disabled every S2S session. Found live 2026-07-31 on the
+  // first real connection: close code 1007, "function_declarations[5].parameters
+  // .properties[elementPath].items: missing field".
+  //
+  // ponytail: hardcoded string items, no inference. All three array params in the
+  // catalog today are string arrays (ui_click/ui_type elementPath, run_command
+  // args), and the obvious inference is a trap — elementPath's own prose reads
+  // "array of number strings", so matching /array of (\w+)/ would type it as
+  // number and break the tool at call time instead of at setup. Ceiling: a genuine
+  // array-of-number param would need a real item-type token in the param spec
+  // (e.g. 'array<number> - ...') and a branch here to read it.
+  if (type === 'array') schema.items = { type: 'string' };
+
   // Only treat quoted tokens as an enum when they look like a closed set, not prose.
   if (enumVals.length >= 2 && enumVals.every((v) => v.length <= 24)) schema.enum = enumVals;
   return { schema, optional };
