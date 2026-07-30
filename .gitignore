@@ -26,6 +26,11 @@ _devtools/
 
 # local data — real user vault content, never publish
 mythos/vault/
+# A vault rooted at the REPO level (not mythos/vault) can appear if MYTHOS is
+# ever launched with the wrong CWD (e.g. a transient Electron-shell mispath).
+# It's boot artifacts, never publish it. Leading slash pins it to repo root so
+# it does NOT also match a future tracked mythos/vault-equivalent elsewhere.
+/vault/
 
 # test-fixture vaults left behind by test/bug-019-audit-history.test.js (real
 # fs-store-backed temp vaults under a Date.now()-suffixed dir, never cleaned up)

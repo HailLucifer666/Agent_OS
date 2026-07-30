@@ -4,6 +4,16 @@ title MYTHOS - Desktop (Electron)
 chcp 65001 >nul
 cd /d "%~dp0"
 
+REM --- Capture everything to a launch log so an open-and-close failure leaves ---
+REM --- evidence even if the operator closes the launcher window fast.           ---
+REM The log is per-run (truncate on start). echo to BOTH console and the log via
+REM a helper, so we don't double-maintain messages.
+set "LAUNCH_LOG=%TEMP%\mythos-electron-launch.log"
+echo MYTHOS Electron launcher — %DATE% %TIME% > "%LAUNCH_LOG%"
+call :log "Working dir: %CD%"
+where node >nul 2>nul && call :log "Node found on PATH" || call :log "WARNING: node NOT on PATH"
+where npm >nul 2>nul && call :log "npm found on PATH" || call :log "WARNING: npm NOT on PATH"
+
 REM Start Electron App.bat — desktop launcher for the MYTHOS Electron shell
 REM (electron/main.js, spine §13). Electron wraps the existing server: it
 REM fork()s mythos/src/main.js on loopback and loads the HUD in a BrowserWindow.
@@ -63,8 +73,10 @@ echo.
 echo Launching MYTHOS Desktop (Electron)...
 echo Close the app window to exit. The server shuts down with it.
 echo.
+call :log "Launching: npm start (electron electron/main.js)"
 call npm start
 set "ELCODE=!errorlevel!"
+call :log "npm start exited with code !ELCODE!"
 
 REM Final safety net: ALWAYS pause before this window closes. The difference
 REM between "opens + closes silently" and "stays open so you can read any error".
@@ -75,6 +87,22 @@ if !ELCODE! neq 0 (
 ) else (
     echo MYTHOS Desktop exited.
 )
+echo.
+echo If the window opened and closed immediately, the launch log has the reason:
+echo   %LAUNCH_LOG%
+echo and the server's own boot log is at:
+echo   %APPDATA%\Electron\mythos-server.log
+echo Paste both to diagnose.
+echo.
 echo Press any key to close this launcher window.
 echo ============================================================
 pause >nul
+goto :eof
+
+REM --- :log helper — echoes a line to BOTH the console and the launch log. ---
+REM Keeps a single source of truth so the open-and-close failure mode (window
+REM vanishes before the operator can read it) still leaves a trace on disk.
+:log
+echo %~1
+echo [%TIME%] %~1>> "%LAUNCH_LOG%"
+goto :eof
