@@ -20,11 +20,8 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-07-30): **1727 tests, 1726 passing, 0 failing, 1 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-07-30): **1735 tests, 1734 passing, 0 failing, 1 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
-
----
-
 ## Keeping this file current
 
 Update `ROADMAP.md` (phase status, test count, commit log) as phases land —
