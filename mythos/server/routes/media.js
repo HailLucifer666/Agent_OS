@@ -2,20 +2,20 @@
 
 // server/routes/media.js — W9 god-file decomposition (Phase 2).
 // Extracted from server/index.js per the §4.2 factory contract.
-// Deps used: pcChild, leash, effectors. The route-private art-cache state
+// Deps used: pcChild, leash, dispatchAction. The route-private art-cache state
 // (lastArtPath/lastArtMime) is promoted INTO the factory per rule §4.2 #10 —
 // it was a closure `let` in createServer, now it lives with the only routes
 // that touch it.
 //
-// W10 (/api/media/control raw invoke) is deliberately NOT fixed here — W9 is
-// extraction-only (rule §4.4). The leash.check + raw effectors.invoke pair
-// is preserved byte-for-byte.
+// AD-1 (merged-order step 2): the raw-effectors.invoke fallback W10 left in
+// place is gone — dispatchAction is always wired by the real server, so this
+// route now has exactly one execution path, like every other dispatch surface.
 
 const path = require('path');
 const express = require('express');
 
 function mountMediaRoutes(app, deps) {
-  const { pcChild, leash, effectors, dispatchAction } = deps;
+  const { pcChild, leash, dispatchAction } = deps;
 
   // ---- /api/media — Windows SMTC now-playing (polls from media widget) ----
   // BUG-004/BUG-038: album art travels as a temp FILE written by the PS child
@@ -73,9 +73,11 @@ function mountMediaRoutes(app, deps) {
       if (!MEDIA_KEYS.includes(key)) return res.status(400).json({ ok: false, error: 'invalid media key' });
       const decision = leash.check({ tool: 'media_key', args: { key } }, { goalId: null });
       if (!decision.allow) return res.status(403).json({ ok: false, error: decision.reason });
-      const result = dispatchAction
-        ? await dispatchAction({ tool: 'media_key', args: { key } }, { tier: decision.tier, channel: 'dashboard-media-widget' })
-        : await effectors.invoke('media_key', { key }, {}); // fallback for callers/tests that don't wire dispatchAction
+      // AD-1: dispatchAction is always wired by the real server (server/index.js
+      // passes it into mountMediaRoutes' deps) — the raw effectors.invoke
+      // fallback this used to have was dead in production and bypassed the
+      // single execution surface (anti-drift-single-dispatch.test.js).
+      const result = await dispatchAction({ tool: 'media_key', args: { key } }, { tier: decision.tier, channel: 'dashboard-media-widget' });
       res.json({ ok: !!result.ok });
     } catch (err) {
       res.status(502).json({ ok: false, error: err.message });

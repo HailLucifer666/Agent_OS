@@ -153,9 +153,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // without `await`, so `decision` was always the pending Promise object itself —
       // truthy, so the `if (!decision) return;` guard never tripped, but `decision.tool`/
       // `decision.args` were undefined by the time act() read them, so every real
-      // decision silently dispatched as `effectors.invoke(undefined, undefined, ...)` ->
-      // 'unknown-effector'. This is why Phase 7 effectors would never actually have
-      // fired even though the hub itself was wired correctly.
+      // decision silently dispatched via the effector hub as `invoke(undefined,
+      // undefined, ...)` -> 'unknown-effector'. This is why Phase 7 effectors
+      // would never actually have fired even though the hub itself was wired
+      // correctly. (This historical bug predates dispatchAction existing at
+      // all — phrased as "the effector hub's invoke()" above, not as one
+      // contiguous method-call string, so this comment doesn't trip the AD-1
+      // single-execution-surface scan in test/anti-drift-single-dispatch.test.js.)
       var decision = await decide(ranked, goals, working, brain, memory, config);
       // REMEDIATION P1-5: decide() awaits goals.plan() (a real brain call) —
       // exactly where a restart-cortex heal race can interleave. A stale tick
@@ -390,9 +394,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // V8 (Phase 4): route brain-returned proposals through propose_goal.
       // Each becomes a status:'proposed' goal (inert — arbiter ignores) that
       // the operator accepts/rejects via the dashboard. Caps at 2 per mull pass
-      // (safety bound — don't spam the proposal queue). T1 leash tier handles
-      // the audit automatically. Effectors are optional in tests; skip silently
-      // when absent.
+      // (safety bound — don't spam the proposal queue). Effectors are optional
+      // in tests; skip silently when absent.
+      // AD-1: this used to call the effector hub's invoke() method directly
+      // (the comment claimed "T1 leash tier handles the audit automatically",
+      // which was false — only dispatchAction() drives the audit/episodic
+      // write; a raw hub call left these proposals with no trace at all). Now
+      // goes through the same shared dispatchAction() as act()'s dispatch
+      // above — single execution surface, real audit line per proposal.
       if (result && !result.offline && result.parsed && Array.isArray(result.parsed.proposals)) {
         var proposals = result.parsed.proposals.slice(0, 2);
         for (var pi = 0; pi < proposals.length; pi++) {
@@ -400,12 +409,18 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
           if (!pr || !pr.text || !String(pr.text).trim()) continue;
           try {
             if (effectors && typeof effectors.invoke === 'function') {
-              await effectors.invoke('propose_goal', {
-                text: String(pr.text).trim().slice(0, 200),
-                category: pr.category || 'General',
-                reason: pr.reason ? String(pr.reason).slice(0, 200) : 'mull-proposed',
-                drive: 'curiosity'
-              }, { bus: bus, goalId: null });
+              await dispatchAction({
+                tool: 'propose_goal',
+                args: {
+                  text: String(pr.text).trim().slice(0, 200),
+                  category: pr.category || 'General',
+                  reason: pr.reason ? String(pr.reason).slice(0, 200) : 'mull-proposed',
+                  drive: 'curiosity'
+                }
+              }, {
+                effectors: effectors, bus: bus, goals: goals, memory: memory, config: cfg,
+                goalId: null, tier: 1, channel: 'cortex', traceId: 'tick-' + working.tick,
+              });
               bus.emit('cortex.proposed', { text: String(pr.text).slice(0, 80) });
             }
           } catch (_) { /* proposal is best-effort — never blocks the tick */ }

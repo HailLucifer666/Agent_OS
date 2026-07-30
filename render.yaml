@@ -15,6 +15,12 @@ services:
         value: "MYTHOS"
       - key: LOG_LEVEL
         value: "info"
+      # V2 §7.2 — MYTHOS_BIND above is non-loopback, so server boot now
+      # refuses to start without this set (see mythos/.env.example). sync:
+      # false means Render prompts for a real value in its dashboard instead
+      # of one being committed here.
+      - key: MYTHOS_AUTH_TOKEN
+        sync: false
       # --- Brain provider keys (set these in Render dashboard, NOT here) ---
       # NIM_API_KEY=
       # NIM_API_KEY_2=

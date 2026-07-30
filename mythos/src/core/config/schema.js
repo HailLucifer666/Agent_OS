@@ -11,6 +11,11 @@ const SCHEMA = {
   MYTHOS_VERSION:           { type: 'string', default: '' },
   MYTHOS_PORT:              { type: 'number', default: 4478, min: 1024, max: 65535 },
   MYTHOS_BIND:              { type: 'string', default: '127.0.0.1' },
+  // V2 §7.2 — bearer token gating /api/*, /vault/builds, and the WS upgrade.
+  // '' = loopback-only mode (tokenOk() always passes). The boot guard in
+  // server/index.js refuses to start when MYTHOS_BIND is non-loopback and
+  // this is unset — see mythos/.env.example for the full story.
+  MYTHOS_AUTH_TOKEN:        { type: 'string', default: '' },
   MYTHOS_VAULT_ROOT:        { type: 'string', default: './vault' },
   MYTHOS_TICK_MS:           { type: 'number', default: 1000, min: 100, max: 60000 },
   MYTHOS_IDLE_SALIENCE:     { type: 'number', default: 0.3, min: 0, max: 1 },

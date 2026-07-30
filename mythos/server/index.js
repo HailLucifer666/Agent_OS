@@ -133,14 +133,21 @@ function createServer(deps) {
   const UNDUCK_SAFETY_MS = 15000; // restore even if the client never sends unduck (dropped connection, crash)
   let preDuckVolume = null;
   let unduckSafetyTimer = null;
+  // AD-1: these three calls used to go straight to the effector hub's
+  // invoke() method, bypassing the single execution surface (dispatchAction,
+  // defined below —
+  // a hoisted function declaration, safe to reference here). Now every duck/
+  // unduck volume change gets the same audit + episodic trail as any other
+  // dispatched action, tagged channel:'voice-ducking' so it's distinguishable
+  // from an operator-driven volume change.
   async function duckAudio() {
     if (preDuckVolume !== null) return; // already ducked
     if (!effectors || typeof effectors.invoke !== 'function') return;
     try {
-      const current = await effectors.invoke('get_volume', {}, {});
+      const current = await dispatchAction({ tool: 'get_volume', args: {} }, { tier: 0, channel: 'voice-ducking' });
       if (!current.ok || !current.result || typeof current.result.level !== 'number') return;
       preDuckVolume = current.result.level;
-      await effectors.invoke('set_volume', { level: DUCK_VOLUME_LEVEL }, {});
+      await dispatchAction({ tool: 'set_volume', args: { level: DUCK_VOLUME_LEVEL } }, { tier: 2, channel: 'voice-ducking' });
       clearTimeout(unduckSafetyTimer);
       unduckSafetyTimer = setTimeout(function() { unduckAudio(); }, UNDUCK_SAFETY_MS);
     } catch (err) {
@@ -155,7 +162,7 @@ function createServer(deps) {
     clearTimeout(unduckSafetyTimer);
     if (!effectors || typeof effectors.invoke !== 'function') return;
     try {
-      await effectors.invoke('set_volume', { level: restoreLevel }, {});
+      await dispatchAction({ tool: 'set_volume', args: { level: restoreLevel } }, { tier: 2, channel: 'voice-ducking' });
     } catch (err) {
       logger.warn('audio-unduck-failed', { error: err.message });
     }
@@ -163,6 +170,61 @@ function createServer(deps) {
 
   const PORT = config.MYTHOS_PORT;
   const BIND = config.MYTHOS_BIND;
+
+  // V2 §7.2 — the worst hole found: no login, no API key, no bearer check on
+  // any route; the only gate was origin allow-listing (verifyClient below),
+  // which any non-browser client spoofs with a header. Dockerfile and
+  // render.yaml both set MYTHOS_BIND=0.0.0.0. Fail closed, loudly, at boot,
+  // rather than silently exposing 107 tools (including T3 confirm-and-execute)
+  // to anyone who finds the URL.
+  const AUTH_TOKEN = config.MYTHOS_AUTH_TOKEN || '';
+  const isLoopbackBind = /^(127\.|::1|localhost)/i.test(String(BIND));
+  if (!isLoopbackBind && !AUTH_TOKEN) {
+    throw new Error(
+      `MYTHOS_BIND is non-loopback (${BIND}) but MYTHOS_AUTH_TOKEN is unset. ` +
+      'Refusing to expose 107 tools unauthenticated. Set MYTHOS_AUTH_TOKEN (see mythos/.env.example) or bind 127.0.0.1.'
+    );
+  }
+
+  // Timing-safe compare — the one place in this file where timing matters.
+  // No token configured => loopback-only mode, every request passes (total
+  // back-compat: the default config exercises none of the branches below).
+  function tokenOk(presented) {
+    if (!AUTH_TOKEN) return true;
+    const a = Buffer.from(String(presented || ''));
+    const b = Buffer.from(AUTH_TOKEN);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  // Shared by the /api|/vault/builds HTTP gate and the WS verifyClient below.
+  // Order: Authorization: Bearer header (any client) -> ?token= query (the
+  // §18.2 fix — a browser WebSocket cannot set headers, so this is how a
+  // remote HUD tab authenticates the WS upgrade) -> mythos_token cookie (set
+  // by the HUD once the operator enters the token, reused on plain HTTP nav).
+  function extractToken(req) {
+    const auth = req.headers && req.headers.authorization;
+    if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
+    try {
+      const fromQuery = new URL(req.url, 'http://internal').searchParams.get('token');
+      if (fromQuery) return fromQuery;
+    } catch (_) { /* malformed url — fall through to cookie */ }
+    const cookieHeader = req.headers && req.headers.cookie;
+    if (cookieHeader) {
+      const parts = cookieHeader.split(';');
+      for (let i = 0; i < parts.length; i++) {
+        const kv = parts[i].trim().split('=');
+        if (kv[0] === 'mythos_token') return decodeURIComponent(kv.slice(1).join('=') || '');
+      }
+    }
+    return null;
+  }
+
+  function requireToken(req, res, next) {
+    if (!tokenOk(extractToken(req))) {
+      return res.status(401).json({ error: 'Unauthorized — set MYTHOS_AUTH_TOKEN via Authorization: Bearer <token> or the mythos_token cookie.' });
+    }
+    next();
+  }
 
   // ALLOWED_ORIGINS mirrors NOVA exactly: comma-sep env passthrough, NOT schema-ized —
   // matches NOVA's own precedent of leaving this outside the coerced-type config.
@@ -229,6 +291,20 @@ function createServer(deps) {
     next();
   });
 
+  // security-reviewer finding (2026-07-30, step 2): globalLimit used to be
+  // mounted AFTER requireToken, so every unauthenticated/wrong-token request
+  // got rejected by the 401 before ever reaching the rate limiter — a flood
+  // of bad-token requests had no cap. Moved ahead of the auth gate so
+  // RATE_LIMIT_GLOBAL applies to all /api/* traffic regardless of auth outcome.
+  app.use('/api', globalLimit);
+
+  // V2 §7.2 / §18.2 — gate every /api/* route and /vault/builds (real
+  // generated content). The UI shell static mount below is deliberately left
+  // OPEN and unauthenticated: a remote browser must be able to load the app
+  // before it can enter a token, and no secret lives in those assets (AD-8).
+  app.use('/api', requireToken);
+  app.use('/vault/builds', requireToken);
+
   app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), { etag: false, maxAge: 0, lastModified: false }));
 
   // Build artifacts (open_artifact spawns the OS browser pointed at these
@@ -247,7 +323,6 @@ function createServer(deps) {
   // same convention as the mediapipe mount above).
   app.use('/vendor/onnxruntime', express.static(path.join(__dirname, '..', 'node_modules', 'onnxruntime-web', 'dist'), { etag: false, maxAge: 0, lastModified: false }));
 
-  app.use('/api', globalLimit);
   app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
 
   app.get('/api/status', async (req, res) => {
@@ -354,16 +429,36 @@ function createServer(deps) {
   });
 
   // ---- WS v2 ----
+  // security-reviewer finding (2026-07-30, step 2): the first version of this
+  // function only called tokenOk() inside the `if (origin)` branch, so a
+  // client presenting NO Origin header (any non-browser client, or — the
+  // real-world case that matters — every connection MYTHOS ever sees when
+  // it sits behind a reverse proxy that terminates the public connection and
+  // forwards to Node over loopback) fell through to the isLoopback(info.req)
+  // check and was accepted unconditionally, even with MYTHOS_AUTH_TOKEN set.
+  // isLoopback() itself isn't spoofable (keys off req.socket.remoteAddress,
+  // never a header), but "the TCP peer is 127.0.0.1" stopped being a safe
+  // proxy for "this is the operator" the moment a reverse proxy is in the
+  // picture — exactly the deployment this feature exists to protect. Fixed:
+  // origin/loopback are now pure accept/reject gates layered UNDER a single
+  // unconditional tokenOk() check, so a configured token is required on every
+  // branch; tokenOk() itself is a no-op when no MYTHOS_AUTH_TOKEN is set, so
+  // the loopback-no-token back-compat path is unaffected either way.
   function verifyClient(info, callback) {
     const origin = info.origin;
-    if (origin) {
-      if (ALLOWED_ORIGINS.has(origin)) return callback(true);
+    if (origin && !ALLOWED_ORIGINS.has(origin)) {
       logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
       return callback(false, 403, 'Forbidden');
     }
-    if (isLoopback(info.req)) return callback(true);
-    logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
-    return callback(false, 403, 'Forbidden');
+    if (!origin && !isLoopback(info.req)) {
+      logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
+      return callback(false, 403, 'Forbidden');
+    }
+    if (!tokenOk(extractToken(info.req))) {
+      logger.warn('ws-upgrade-rejected', { reason: 'bad or missing token' });
+      return callback(false, 401, 'Unauthorized');
+    }
+    return callback(true);
   }
 
   const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient });

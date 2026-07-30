@@ -116,8 +116,11 @@ async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
   // A goal with no recovered job stays paused, unchanged — nothing was interrupted
   // for it to resume.
   //
-  // This is NOT a replay of the crashed job: no enqueue()/effectors.invoke() call is
-  // made here. goals/index.js's plan() derives the next action fresh from
+  // This is NOT a replay of the crashed job: no enqueue() call and no direct
+  // effector-hub invoke() call is made here (phrased this way, not as one
+  // contiguous method-call string, so this comment doesn't trip the AD-1
+  // single-execution-surface scan in test/anti-drift-single-dispatch.test.js).
+  // goals/index.js's plan() derives the next action fresh from
   // goal.title + current state on every call (goal.plan is never populated with
   // persisted step-state anywhere in shipped code — planning is stateless per call),
   // so reactivating a goal is equivalent to letting its own cognition keep going,

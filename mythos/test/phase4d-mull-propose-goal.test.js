@@ -46,9 +46,11 @@ describe('Phase 4 / Area D — mull() prompt asks for proposals (V8)', function 
 
 describe('Phase 4 / Area D — mull() routes proposals through propose_goal (V8)', function () {
 
-  it('cortex/index.js invokes effectors.invoke("propose_goal", ...) when the brain returns proposals', function () {
-    assert.ok(CORTEX_SRC.indexOf("effectors.invoke('propose_goal'") !== -1,
-      'mull must route proposals through the propose_goal effector (leash + audit)');
+  it('cortex/index.js dispatches propose_goal through the shared dispatchAction(), not a raw effectors.invoke (AD-1)', function () {
+    assert.ok(CORTEX_SRC.indexOf("tool: 'propose_goal'") !== -1,
+      'mull must route proposals through the propose_goal effector (dispatchAction + audit)');
+    assert.ok(/await dispatchAction\(\{\s*\n\s*tool: 'propose_goal'/.test(CORTEX_SRC),
+      'mull must call the shared dispatchAction(), not effectors.invoke() directly (AD-1: single execution surface)');
   });
 
   it('mull caps proposals at 2 per pass (safety bound)', function () {
