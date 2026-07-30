@@ -19,6 +19,13 @@ const http = require('node:http');
 const fs = require('node:fs');
 const child_process = require('node:child_process');
 
+// Disable Chromium's background timer/media throttling process-wide. Pairs with
+// per-window backgroundThrottling:false below: the YouTube iframe's media
+// pipeline was being throttled whenever the window lost focus, producing the
+// reported 1-2s audio stutter. Must run before app.whenReady().
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+
 // ---- EPIPE guard --------------------------------------------------------------
 // When Electron runs double-clicked (no terminal), process.stdout/stderr point
 // at pipes nobody reads. Writing to a broken pipe throws EPIPE, and an uncaught
@@ -287,6 +294,37 @@ if (!gotLock) {
       return allowed.includes(permission);
     });
 
+    // --- Network-level ad/tracker blocking for in-app web embeds -----------------
+    // The YouTube/web `<iframe>` (ui/public/js/views/web-panel.js) loads
+    // cross-origin content Electron's renderer can't touch; the only layer that
+    // can intercept those requests is the main-process session.webRequest.
+    // @ghostery/adblocker-electron hooks it here. Gated by env so it can be
+    // disabled: MYTHOS_ADBLOCK=false. First boot fetches+compiles the filter
+    // lists (~7MB); the compiled engine is cached to userData and deserializes
+    // in ~30ms thereafter. read/write are promise-returning (fs.promises), the
+    // shape the blocker's caching contract expects (engine.js:99-102).
+    if (process.env.MYTHOS_ADBLOCK !== 'false') {
+      // AWAIT the blocker before loadURL: webRequest filters only see requests
+      // issued AFTER enableBlockingInSession runs. The previous fire-and-forget
+      // .then() attached the listener AFTER the YouTube iframe had already fired
+      // its pre-roll ad requests (cold cache = ~7MB fetch + compile, several
+      // seconds), so ads slipped through on first play. Blocking init failure is
+      // non-fatal — log and continue without blocking (the existing contract).
+      try {
+        const crossFetch = require('cross-fetch');
+        const { ElectronBlocker } = require('@ghostery/adblocker-electron');
+        const fsPromises = require('node:fs').promises;
+        const cachePath = path.join(app.getPath('userData'), 'adblock-engine.bin');
+        const blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(crossFetch, {
+          path: cachePath, read: fsPromises.readFile, write: fsPromises.writeFile,
+        });
+        blocker.enableBlockingInSession(session.defaultSession);
+        log('ad blocker enabled for session.defaultSession (cache: ' + cachePath + ')');
+      } catch (err) {
+        log('adblocker init failed — continuing WITHOUT blocking (YouTube pre-rolls will play):', err && err.message);
+      }
+    }
+
     const ready = await probeHealth(BIND, PORT, PROBE_ATTEMPTS);
     if (!ready) {
       // Server never came up. Fail loudly; loading a dead URL would show a
@@ -304,9 +342,29 @@ if (!gotLock) {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        // The YouTube `<iframe>` (ui/public/js/views/web-panel.js) shares this
+        // window's renderer. backgroundThrottling defaults to true, which chokes
+        // the media pipeline (audio cuts every 1-2s) whenever the window isn't
+        // foregrounded — the exact symptom reported 2026-07-31. Disable it so
+        // media playback stays smooth regardless of focus.
+        backgroundThrottling: false,
       },
     });
     mainWindow.loadURL(`http://${BIND}:${PORT}`);
+
+    // Trap window.open(_blank) from the renderer so it never spawns an external
+    // browser. Without this, the HUD's `window.open(url, '_blank')` (app.js,
+    // the 'newtab' branch) falls back to Electron's default — opening Chrome —
+    // which is exactly the "opened Chrome despite electron-only" bug reported
+    // 2026-07-31. Deny the external open; the HUD's own overlay/panel routing
+    // (openPanel('web', ...)) is the in-app path and is unaffected. For a
+    // genuine top-level navigation the renderer can't reach, drop it on the
+    // floor rather than leak to the OS browser — the operator can still click
+    // through in the HUD's web panel.
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      log('setWindowOpenHandler: denied external open for', url);
+      return { action: 'deny' };
+    });
 
     mainWindow.on('closed', () => { mainWindow = null; });
   });
