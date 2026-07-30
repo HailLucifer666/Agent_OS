@@ -20,6 +20,7 @@ const TIER_TABLE = {
   'get_directions':        0,  // §7.9 maps/routing — keyless OSRM+geocode, read-only
   'list_folder':           0,
   'read_file':             0,
+  'clipboard_read':        0,  // Task 3 (step 5) — read-only
   'list_windows':          0,
   'ui_elements':           0,
   'browser_get_title':     0,
@@ -85,6 +86,17 @@ const TIER_TABLE = {
                                // launch_app above, not the T3 confirm tier. Was previously unmapped
                                // and fell back to tierOf()'s T3 fail-safe.
   'media_key':             2,
+  'clipboard_write':       2,  // Task 3 (step 5) — conflict resolution: Task 3's own spec
+                               // proposed T1, V2 §7.8 proposed T2. Resolved T2 (the more
+                               // conservative of the two, per leash/index.js's check(): T1
+                               // and T2 both auto-allow at the default AUTONOMOUS_MAX_TIER=2,
+                               // but T2 additionally gates behind AUTONOMOUS_MAX_TIER when an
+                               // operator tightens it below 2, T1 never does). Semantically
+                               // this silently overwrites OS-level shared clipboard state
+                               // readable by every other app on the machine — the same "local
+                               // action touching real system state outside MYTHOS's own
+                               // store" class as set_volume/media_key above, not the T1 class
+                               // of local writes to MYTHOS's own notes/goals/screenshots.
   'set_volume':            2,  // REMEDIATION P1-8 — exact system volume set (0-100), same
                                // risk class as media_key's volume_up/down/mute.
   'get_volume':            0,  // read-only, same class as media_status

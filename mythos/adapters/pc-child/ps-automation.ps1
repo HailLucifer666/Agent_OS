@@ -1370,6 +1370,30 @@ function Handle-ClickAt($x, $y) {
     }
 }
 
+# Task 3 (step 5, desktop gaps) — clipboard read/write. Same Handle-*
+# convention as every other command here: return a hashtable on success, a
+# bare string on failure (the dispatch loop below treats a string result as
+# ok:false).
+function Handle-GetClipboard {
+    try {
+        $text = Get-Clipboard -Raw -ErrorAction Stop
+        if ($null -eq $text) { $text = '' }
+        return @{ text = $text }
+    } catch {
+        return ('get_clipboard failed: ' + $_.Exception.Message)
+    }
+}
+
+function Handle-SetClipboard($text) {
+    if ($null -eq $text) { return 'text is required.' }
+    try {
+        Set-Clipboard -Value ([string]$text) -ErrorAction Stop
+        return @{ set = $true }
+    } catch {
+        return ('set_clipboard failed: ' + $_.Exception.Message)
+    }
+}
+
 function Handle-WriteNote($text, $title) {
     if (-not $text) { return 'Note text is required.' }
     try {
@@ -1525,6 +1549,14 @@ while ($true) {
         }
         'write_note' {
             $result = Handle-WriteNote $cmd.text $cmd.title
+        }
+        'get_clipboard' {
+            $result = Handle-GetClipboard
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'set_clipboard' {
+            $result = Handle-SetClipboard $cmd.text
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         default {
             $err = ('Unknown command: ' + $command)

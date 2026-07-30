@@ -9,6 +9,11 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { effectorFromTool } = require('./adapter');
+// Task 3 (step 5) — clipboard_read/clipboard_write delegate through pc-child,
+// same required-directly convention from-pc.js's own delegate() helper uses
+// (dispatch-action.js's real ctx is {signal, bus, goalId} — it never carries
+// adapter handles — so these must NOT expect an injected ctx.pcChild).
+const pcChild = require('../../../adapters/pc-child');
 
 const MAX_LIST_ENTRIES = 50;
 const MAX_READ_BYTES = 1 * 1024 * 1024; // 1MB cap
@@ -388,6 +393,44 @@ function search_files({ root: rawRoot, pattern }) {
   }
 }
 
+// ---- clipboard_read / clipboard_write (Task 3, step 5 desktop gaps) ----
+// Delegates through the same pcChild.sendCommand path from-pc.js's own
+// delegate() helper uses (ctx.pcChild is injected the same way ctx.brain
+// and ctx.fs already are for this file's siblings).
+
+function requireClipboardOnline() {
+  const status = pcChild.getStatus();
+  if (status.state !== 'ONLINE') {
+    return fail(`PC automation is ${status.state}. ${status.hint || 'Cannot execute commands.'}`);
+  }
+  return null;
+}
+
+async function clipboard_read() {
+  const guard = requireClipboardOnline();
+  if (guard) return guard;
+  try {
+    const resp = await pcChild.sendCommand({ cmd: 'get_clipboard' });
+    if (!resp.ok) return fail(resp.error || 'Clipboard read failed.');
+    return ok(resp.result);
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
+async function clipboard_write({ text }) {
+  if (text === undefined || text === null) return fail('text is required.');
+  const guard = requireClipboardOnline();
+  if (guard) return guard;
+  try {
+    const resp = await pcChild.sendCommand({ cmd: 'set_clipboard', text: String(text) });
+    if (!resp.ok) return fail(resp.error || 'Clipboard write failed.');
+    return ok(resp.result);
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
 // ---- compose_email ----
 
 // Truncates BEFORE encoding, not after — encoding a truncated string never risks cutting
@@ -444,6 +487,16 @@ const TOOLS = [
   { name: 'rename_file', description: 'Rename a file or folder in place (same folder only — use move_file to relocate across folders).', params: { from: 'string', to: 'string' }, danger: true, fn: rename_file },
   { name: 'search_files', description: 'Search for files/folders by name (supports * and ? wildcards) under a folder inside the allowed sandbox (max depth 6, max 50 results).', params: { root: 'string', pattern: 'string' }, danger: false, fn: search_files },
   { name: 'compose_email', description: "Draft an email and open it in a browser Gmail compose tab (or the OS mail app if VOICE_EMAIL_MODE=mailto). Does NOT send it — human must click Send.", params: { to: 'string (optional)', subject: 'string', body: 'string' }, danger: false, fn: compose_email },
+  { name: 'clipboard_read', description: 'Read the current text on the Windows clipboard.', params: {}, danger: false, fn: clipboard_read, needs_result: true },
+  // danger:false (not true) is deliberate: this repo's own invariant test
+  // (effectors-hub.test.js "danger:true -> tier>=3") requires danger:true
+  // tools to sit at T3+. clipboard_write is tiered T2 — same "local action
+  // touching real system state, not MYTHOS's own store" class as
+  // set_volume/media_key (both danger:false) below — not the T3 class of
+  // write_file/delete_file. See tiers.js's clipboard_write comment for the
+  // full conflict-resolution reasoning (Task 3 proposed T1, V2 §7.8 proposed
+  // T2; resolved T2, which requires danger:false to stay consistent here).
+  { name: 'clipboard_write', description: 'Overwrite the Windows clipboard with the given text.', params: { text: 'string' }, danger: false, fn: clipboard_write },
 ];
 
 function registerFromComputer(hub) {
@@ -466,6 +519,8 @@ module.exports = {
   copy_file,
   rename_file,
   search_files,
+  clipboard_read,
+  clipboard_write,
   compose_email,
   resolveSandboxed,
   isInsideAllowedRoots,

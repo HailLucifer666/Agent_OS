@@ -115,7 +115,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 82 registered count', () => {
+describe('gate: 84 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -152,12 +152,13 @@ describe('gate: 82 registered count', () => {
     // REMEDIATION P1-8 2026-07-29 — spotify_volume's level:0-100 param routes
     // through these two new real-master-volume tools) = 78,
     // + move_file/copy_file/rename_file/search_files (from-computer, Task 4,
-    // step 5 desktop gaps) = 82.
+    // step 5 desktop gaps) = 82, + clipboard_read/clipboard_write
+    // (from-computer, Task 3, step 5 desktop gaps) = 84.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
     // (not called here).
-    assert.equal(hub.count(), 82);
+    assert.equal(hub.count(), 84);
   });
 });
 
