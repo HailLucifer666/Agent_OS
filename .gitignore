@@ -67,3 +67,6 @@ mythos/ui/public/models/wakeword.test-backup/
 # zcode session logs/scratch (never publish)
 .zcode/tmp/
 .gstack/
+
+# secrets scratch file — never commit (live API keys)
+/env.download

@@ -124,13 +124,19 @@ async function install() {
   console.log('Installing Hermes-Agent into ' + HERMES_HOME);
   fs.mkdirSync(HERMES_HOME, { recursive: true });
 
+  // ponytail: pin to a specific release tag instead of main HEAD. Hermes uses
+  // date-based versioning (vYYYY.M.D), not semver — v0.19.0/Quicksilver (the
+  // 2026.7.20 release) is tag v2026.7.20. Upgrade path: bump this tag, re-run --install.
+  const TAG = 'v2026.7.20';
   if (fs.existsSync(path.join(INSTALL_DIR, '.git'))) {
-    console.log('\n[1/2] existing clone found — fetching latest');
-    const pulled = await run('git', ['-C', INSTALL_DIR, 'pull', '--ff-only']);
-    if (!pulled.ok) return console.log('git pull failed (exit ' + pulled.code + ')'), 1;
+    console.log('\n[1/2] existing clone found — checking out ' + TAG);
+    const fetched = await run('git', ['-C', INSTALL_DIR, 'fetch', '--tags', '--force']);
+    if (!fetched.ok) return console.log('git fetch failed (exit ' + fetched.code + ')'), 1;
+    const checked = await run('git', ['-C', INSTALL_DIR, 'checkout', TAG]);
+    if (!checked.ok) return console.log('git checkout ' + TAG + ' failed (exit ' + checked.code + ')'), 1;
   } else {
-    console.log('\n[1/2] cloning ' + REPO_URL);
-    const cloned = await run('git', ['clone', REPO_URL, INSTALL_DIR]);
+    console.log('\n[1/2] cloning ' + REPO_URL + ' @ ' + TAG);
+    const cloned = await run('git', ['clone', '--branch', TAG, REPO_URL, INSTALL_DIR]);
     if (!cloned.ok) return console.log('git clone failed (exit ' + cloned.code + ')'), 1;
   }
 
