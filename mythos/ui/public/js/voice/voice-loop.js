@@ -167,6 +167,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   let chunks = [];
   let recordingSince = 0;
   let silenceSince = null;
+  // Task 12 (V2 Decision 1, latency instrumentation): the true mic-stop
+  // moment, stamped in stopRecording() below and threaded through the
+  // outbound utterance() call so the server can measure real mic-stop ->
+  // first-audio-frame latency (AD-5: real samples only, never estimated).
+  let lastMicStoppedAt = 0;
   let aboveCount = 0;        // consecutive above-threshold VAD ticks (see SPEECH_HOLD_TICKS)
   let peakRms = 0;           // loudest VAD tick seen during the current recording (see MIN_PEAK_RMS)
   let bargeAboveCount = 0;   // Item 8: consecutive above-barge-threshold ticks while assistantSpeaking (see decideBargeIn)
@@ -245,6 +250,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }, 35000);
     const req = utterance({
       text: command,
+      // Task 12: real mic-stop timestamp for server-side latency measurement.
+      // 0 (the initial value, no recording ever happened this session — e.g.
+      // a nav/close command dispatched with no speech) is falsy and ws.js
+      // omits it, so an unmeasured turn contributes no sample (AD-5).
+      micStoppedAt: lastMicStoppedAt || undefined,
       onChunk: (msg) => enqueueChunk(msg, session),
       onDone: (msg) => {
         if (done) return;
@@ -656,6 +666,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   }
 
   function stopRecording() {
+    // Task 12: stamp BEFORE the async stop/transcribe/dispatch chain begins —
+    // this is the true mic-stop moment the latency measurement is anchored to.
+    lastMicStoppedAt = Date.now();
     if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch { /* ok */ } }
     silenceSince = null;
     aboveCount = 0;

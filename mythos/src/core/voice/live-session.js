@@ -28,6 +28,15 @@ function createLiveSession(deps) {
     onTranscript,           // ({role:'user'|'assistant', text, final}) => void
     onState,                // ({state, reason}) => void
     onTurnComplete,         // ({userText, assistantText}) => void
+    // Phase 5 wiring fix: a direct per-session callback for barge-in, in
+    // addition to the shared bus.emit('voice.live.interrupted') below. The
+    // bus event alone is not connection-scoped — with 2+ concurrent Live
+    // sessions on the shared process bus, every connection's bus.subscribe
+    // would fire for every OTHER connection's interruption too. This callback
+    // is what server/index.js actually wires per-connection; the bus emit
+    // stays for any other observer (e.g. future health/metrics taps).
+    onInterrupted,          // () => void
+
     // Test-only seam: the wire protocol is frozen, the transport constructor is
     // not. Defaults to the real 'ws' WebSocket against the real endpoint.
     createSocket,
@@ -159,7 +168,10 @@ function createLiveSession(deps) {
         if (p.inlineData && p.inlineData.data && onAudioOut) onAudioOut(p.inlineData.data);
         if (p.text && onTranscript) onTranscript({ role: 'assistant', text: p.text, final: false });
       }
-      if (sc.interrupted && bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
+      if (sc.interrupted) {
+        if (onInterrupted) onInterrupted();
+        if (bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
+      }
       if (sc.turnComplete) {
         if (breakers && typeof breakers.success === 'function') breakers.success(BREAKER);
         const turn = { userText: userText.trim(), assistantText: assistantText.trim() };

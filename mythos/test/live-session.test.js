@@ -127,10 +127,19 @@ describe('live-session (Phase 1, V2 §6)', () => {
     session.close();
   });
 
-  test('interrupted emits voice.live.interrupted on the bus', async () => {
+  test('interrupted emits voice.live.interrupted on the bus AND fires the direct per-session onInterrupted callback', async () => {
+    // Phase 5 fix: the bus event alone is not connection-scoped — with 2+
+    // concurrent Live sessions on the shared process bus, a bare
+    // bus.subscribe would fire for every OTHER connection's interruption
+    // too. onInterrupted is the direct, per-session callback server/index.js
+    // actually wires; the bus emit stays as a secondary observability signal.
     process.env.GOOGLE_API_KEY = 'test-key';
     const busEvents = [];
-    const { deps, sockets } = fakeDeps({ bus: { emit: (name, payload) => busEvents.push({ name, payload }) } });
+    let interruptedCalls = 0;
+    const { deps, sockets } = fakeDeps({
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+      onInterrupted: () => { interruptedCalls += 1; },
+    });
     const session = createLiveSession(deps);
     const openPromise = session.open();
     sockets[0].simulateOpen();
@@ -139,6 +148,7 @@ describe('live-session (Phase 1, V2 §6)', () => {
 
     sockets[0].serverFrame({ serverContent: { interrupted: true } });
     assert.ok(busEvents.some((e) => e.name === 'voice.live.interrupted'));
+    assert.equal(interruptedCalls, 1, 'the direct onInterrupted callback must fire exactly once');
     session.close();
   });
 

@@ -297,6 +297,23 @@ const SCHEMA = {
   // RUN_COMMAND_TIMEOUT_MS's 60s default, and raising that default would loosen
   // every run_command call too.
   INSTALL_TIMEOUT_MS:          { type: 'number', default: 600000, min: 1000 },
+
+  // Native speech-to-speech (Gemini Live, V2 §6-§10, merged-order step 4).
+  // Opt-in, default false — voice-agent.js's batch STT path is the untouched
+  // fallback; flipping this back to false is a total, zero-code rollback
+  // (V2 §16). See .env.example for the full story on each key, including the
+  // GEMINI_LIVE_VOICE choice.
+  VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
+  GEMINI_LIVE_MODEL:           { type: 'string', default: 'models/gemini-3.1-flash-live-preview' },
+  // Aoede | Kore | Leda | Zephyr | Puck | Charon — Aoede kept as default (see
+  // .env.example): auditioning by ear across all six needs a human with
+  // speakers, which cannot happen in this environment.
+  GEMINI_LIVE_VOICE:           { type: 'string', default: 'Aoede' },
+  LIVE_IDLE_TIMEOUT_MS:        { type: 'number', default: 45000, min: 1000 },
+  LIVE_SESSION_MAX_MS:         { type: 'number', default: 600000, min: 10000 },
+  // Comma-separated tool-name allowlist; empty = live-tools.js's curated
+  // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
+  LIVE_TOOL_ALLOWLIST:         { type: 'string', default: '' },
 };
 
 module.exports = { SCHEMA };

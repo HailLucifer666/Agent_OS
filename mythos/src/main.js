@@ -526,6 +526,7 @@ async function main() {
         engagementStore: engagementStore, engagementManager: engagementManager,
         conversationGateway: conversationGateway,
         getCapabilityDigest: getCapabilityDigest,
+        identity: identity, // S2S (Phase 5) — buildLiveSystemInstruction()'s persona compose
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.

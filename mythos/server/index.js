@@ -15,10 +15,17 @@ const edgeTts = require('../providers/edge-tts');
 const groqStt = require('../providers/groq-stt');
 const { splitSentences, createSentenceStreamer } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
-const { createVoiceAgent } = require('../src/core/voice/voice-agent');
+const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
+// S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
+// hub->functionDeclarations conversion, and the tool-adapter safety seam.
+const { createLiveSession } = require('../src/core/voice/live-session');
+const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
+const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
+const { createLatencyTracker } = require('../src/core/voice/latency-tracker');
+const skillsLoader = require('../src/core/skills/loader');
 // createNewsFeed moved to routes/news.js (W9 god-file decomposition).
 const pcChild = require('../adapters/pc-child');
 const version = require('../src/core/identity/version');
@@ -80,6 +87,41 @@ function createServer(deps) {
   const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction; Phase 1 executor lives on it (may be undefined in tests)
   const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
   const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
+  const identity = deps.identity;                      // S2S (Phase 5) — identity.persona() for buildLiveSystemInstruction (may be undefined in tests)
+  // Test-only seam, undefined in production (mirrors live-session.js's own
+  // createSocket seam one level up): lets test/server-live-wiring.test.js
+  // drive a fake Gemini socket through the real connection wiring without a
+  // real network call. Passed straight through to createLiveSession's
+  // createSocket option, which no-ops to the real 'ws' library when absent.
+  const createLiveSocket = deps.createLiveSocket;
+
+  // Task 12 (latency instrumentation, V2 Decision 1): a capped ring buffer of
+  // real mic-stop -> first-audio-frame deltas, shared across both the batch
+  // and S2S voice paths, surfaced honestly via /api/status (AD-5 — an
+  // unmeasured turn contributes no sample rather than an estimate).
+  const voiceLatencyTracker = createLatencyTracker();
+
+  // V2 §11 row 5 (persona unclamp, deferred from step 3 to here because
+  // live-session.js didn't exist yet): compose the FULL system prompt ONCE
+  // per Live session rather than once per turn — RULES (not OUTPUT_CONTRACT;
+  // Live's tool-calling is native functionDeclarations, not the batch path's
+  // embedded-JSON contract) + persona + version + capability digest + skills
+  // catalog. Same content as today's per-turn voice prompt, assembled once —
+  // V2 estimates ~50x cheaper under S2S (today ~3,524 tokens x every turn).
+  function buildLiveSystemInstruction() {
+    const parts = [RULES];
+    try {
+      const persona = identity && typeof identity.persona === 'function' ? identity.persona() : null;
+      if (persona) parts.push(persona);
+    } catch (err) { logger.warn('live.persona-compose-failed', { error: err.message }); }
+    try { parts.push(version.contextLine()); } catch (err) { logger.warn('live.version-compose-failed', { error: err.message }); }
+    try {
+      const digest = getCapabilityDigest ? getCapabilityDigest() : null;
+      if (digest) parts.push(digest);
+    } catch (err) { logger.warn('live.capability-digest-failed', { error: err.message }); }
+    try { parts.push(skillsLoader.catalogBlock()); } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    return parts.filter(Boolean).join('\n\n');
+  }
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
   // with the camera actively watching answers with one JPEG frame. 8s timeout.
@@ -327,7 +369,9 @@ function createServer(deps) {
 
   app.get('/api/status', async (req, res) => {
     try {
-      res.json(await probes.getStatus());
+      const status = await probes.getStatus();
+      // Task 12: real voiceLatency samples only — see latency-tracker.js.
+      res.json(Object.assign({}, status, { voiceLatency: voiceLatencyTracker.stats() }));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -819,6 +863,81 @@ function createServer(deps) {
 
     function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
 
+    // ---- S2S Live voice (V2 §10, merged-order step 4, Phase 5) ----
+    // One session per WS connection, created LAZILY on liveOpen() (wake-word/
+    // cost gate) — never at boot, never at connection time. liveAdapter is
+    // lazy for the same reason: constructing it unconditionally for every
+    // connection would require every test fixture's fake `leash` to implement
+    // `.check()` even when the S2S path is never exercised, breaking back-
+    // compat with existing fixtures (and wasting a real allocation on a path
+    // most connections never touch).
+    let liveSession = null;
+    let liveAdapter = null;
+    // Task 12: latency instrumentation for the S2S path. Live has no discrete
+    // "recording stopped" moment the way batch STT does (the model's own VAD
+    // decides that internally) — the honest reference point available here is
+    // the first user-speech transcription CONFIRMED for this turn. Reset on
+    // every turnComplete so a slow turn never bleeds its timing into the next.
+    let liveTurnUserSpeechAt = null;
+    let liveTurnAudioRecorded = false;
+
+    async function liveOpen() {
+      if (!config.VOICE_S2S_ENABLED) {
+        send({ type: 'live-state', state: 'closed', reason: 'disabled' });
+        return;
+      }
+      if (liveSession && liveSession.isOpen()) return;
+      if (!liveAdapter) {
+        // AD-1/AD-2/AD-4: identical gate -> dispatch path as this connection's
+        // own executeAction()/handleConfirmReply() — leash.check() -> dispatchAction().
+        liveAdapter = createLiveToolAdapter({
+          leash, dispatchAction, bus, logger, connectionId,
+          memory, historyAppend, reflection,
+          summarizeActionsForResult,
+          getLiveSession: () => liveSession,
+          sanitizeErrorForClient,
+        });
+      }
+      if (!liveSession) {
+        const { declarations, withheld } = buildFunctionDeclarations(effectors, {
+          allowlist: String(config.LIVE_TOOL_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
+          log: (m) => logger.info('live-tools', { detail: m }),
+        });
+        if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
+        liveSession = createLiveSession({
+          config, bus, logger, spend, breakers: effectors.breakers,
+          createSocket: createLiveSocket, // test-only seam; undefined in production
+          systemInstruction: buildLiveSystemInstruction(),
+          functionDeclarations: declarations,
+          onToolCall: liveAdapter.handleLiveToolCalls,
+          onAudioOut: (b64) => {
+            send({ type: 'live-audio-out', data: b64 });
+            if (liveTurnUserSpeechAt !== null && !liveTurnAudioRecorded) {
+              voiceLatencyTracker.record(Date.now() - liveTurnUserSpeechAt);
+              liveTurnAudioRecorded = true;
+            }
+          },
+          onTranscript: (t) => {
+            send({ type: 'live-transcript', role: t.role, text: t.text });
+            if (t.role === 'user' && liveTurnUserSpeechAt === null) liveTurnUserSpeechAt = Date.now();
+          },
+          onState: (s) => send({ type: 'live-state', state: s.state, reason: s.reason }),
+          onTurnComplete: (turn) => {
+            liveAdapter.onLiveTurnComplete(turn);
+            liveTurnUserSpeechAt = null;
+            liveTurnAudioRecorded = false;
+          },
+          // Direct per-connection barge-in callback — NOT the shared bus (see
+          // live-session.js's onInterrupted comment: a bare bus.subscribe here
+          // would fire for every OTHER connection's interruption too).
+          onInterrupted: () => send({ type: 'live-interrupted' }),
+        });
+      }
+      const ok = await liveSession.open();
+      // Honest-inert: never claim S2S is up when it isn't.
+      if (!ok) send({ type: 'live-state', state: 'closed', reason: 'open-failed' });
+    }
+
     // Initial entity-state snapshot: lifecycle.* events are broadcast-only, so a
     // client connecting AFTER boot would otherwise sit on 'booting' forever.
     send({ type: 'entity-state', payload: { name: config.MYTHOS_NAME, status: entityStatus, tick: memory.working.tick } });
@@ -848,7 +967,7 @@ function createServer(deps) {
     // is down, chunks are sent with audioB64:null and the client falls back
     // to browser speechSynthesis exactly as before. Shared by handleUtterance
     // and handleVisionQuery — one reply-emission path, one protocol.
-    async function sendSpokenReply(reqId, say, meta) {
+    async function sendSpokenReply(reqId, say, meta, micStoppedAt) {
       const speak = sanitizeSpoken(say);
       const ttsUp = await edgeTts.isAvailable();
       const chunks = ttsUp ? splitSentences(speak) : [];
@@ -858,6 +977,11 @@ function createServer(deps) {
       // has already stopped playback locally.
       const ctrl = new AbortController();
       inflightSpeech.set(reqId, ctrl);
+      // Task 12: record the real mic-stop -> first-audio-frame delta exactly
+      // once, on the first chunk that actually ships real audio (AD-5 — a
+      // turn with no client-supplied micStoppedAt, or that never produces
+      // real audio, contributes no sample rather than an estimate).
+      let latencyRecorded = false;
       try {
         if (ttsUp && chunks.length) {
           for (let i = 0; i < chunks.length; i++) {
@@ -870,6 +994,10 @@ function createServer(deps) {
               logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
             }
             if (ctrl.signal.aborted) break;
+            if (audioB64 && typeof micStoppedAt === 'number' && !latencyRecorded) {
+              voiceLatencyTracker.record(Date.now() - micStoppedAt);
+              latencyRecorded = true;
+            }
             send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
           }
         }
@@ -1033,7 +1161,9 @@ function createServer(deps) {
           actions: (result.actions || []).map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
           confirmPending: result.confirmPending ? { confirmId: result.confirmPending.confirmId, summary: result.confirmPending.summary } : null,
         };
-        await sendSpokenReply(msg.reqId, say, meta);
+        // Task 12: thread the client's real mic-stop timestamp through, if any.
+        const micStoppedAt = typeof msg.micStoppedAt === 'number' ? msg.micStoppedAt : undefined;
+        await sendSpokenReply(msg.reqId, say, meta, micStoppedAt);
       } catch (err) {
         clearTimeout(timer);
         logger.warn('voice-utterance-error', { error: err.message, reqId: msg.reqId });
@@ -1175,6 +1305,11 @@ function createServer(deps) {
             });
           }
         } catch (_) {}
+        // S2S (Phase 5): tell the Live session the operator declined, so the
+        // model reports that accurately instead of waiting silently. A no-op
+        // if this confirmId never came from the voice-live path, or if S2S
+        // was never engaged on this connection at all (liveAdapter is lazy).
+        if (liveAdapter) { try { await liveAdapter.resolveLiveConfirm(confirmId, null, false); } catch (_) {} }
         return;
       }
       // A3 FIX: only allow 'system' scope fallback for low-risk (T0-T2) actions.
@@ -1197,7 +1332,13 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId });
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId });
+        // S2S (Phase 5): feed the real outcome back to the Live session as a
+        // realtimeInput text turn, so the model reports what ACTUALLY
+        // happened (AD-4) rather than whatever it assumed while waiting. A
+        // no-op if this confirmId never came from the voice-live path, or if
+        // S2S was never engaged on this connection at all (liveAdapter is lazy).
+        if (liveAdapter) { try { await liveAdapter.resolveLiveConfirm(confirmId, outcome, true); } catch (_) {} }
       } catch (err) {
         // dispatchAction awaits effectors.invoke + memory.episodic.write +
         // goals.debitBudget — any of these can throw (disk full, EPERM, vault
@@ -1276,6 +1417,18 @@ function createServer(deps) {
         const ctrl = inflightSpeech.get(msg.reqId);
         if (ctrl) ctrl.abort();
       }
+      // ---- S2S Live voice (V2 §10, Phase 5) ----
+      else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
+      else if (msg.type === 'live-audio') { if (liveSession) liveSession.sendAudio(msg.data); }
+      else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
+      else if (msg.type === 'live-text') { if (liveSession) liveSession.sendText(String(msg.text || '')); }
+    });
+
+    // Tear down any open Live session when the socket itself closes — a
+    // dangling Gemini socket would otherwise keep billing for open-mic time
+    // with no client left to hear the reply.
+    ws.on('close', () => {
+      if (liveSession) liveSession.close('ws-closed');
     });
   });
 
@@ -1520,7 +1673,11 @@ function createServer(deps) {
 
   // `ready` resolves once the ephemeral port is bound — httpServer.address() is
   // null until the 'listening' event fires (async on Windows), so tests await it.
-  return { app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel };
+  return {
+    app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
+    // Test-only introspection (Task 12) — never used by production callers.
+    _internal: { voiceLatencyTracker },
+  };
 }
 
 module.exports = { createServer };

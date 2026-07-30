@@ -621,5 +621,9 @@ module.exports = {
   CATALOG,
   MAX_ITERATIONS,
   buildCatalogFromHub,
+  // RULES (not OUTPUT_CONTRACT — Live's tool-calling is native functionDeclarations,
+  // not the batch path's embedded-JSON contract) is reused by
+  // live-session.js's buildLiveSystemInstruction() (V2 §11 row 5, Phase 5).
+  RULES,
   _internal: { buildPrompt, normalizeParsed, stripThink },
 };

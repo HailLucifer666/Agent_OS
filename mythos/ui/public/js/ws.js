@@ -133,11 +133,15 @@ function makeReplyHandler(reqId, { onDone, onChunk }) {
   };
 }
 
-export function utterance({ text, onDone, onChunk }) {
+// micStoppedAt (Task 12, latency instrumentation): optional real client
+// timestamp of the true mic-stop moment (voice-loop.js's stopRecording()).
+// undefined is dropped by JSON.stringify, so existing callers that omit it
+// see zero behavior change.
+export function utterance({ text, onDone, onChunk, micStoppedAt }) {
   connect();
   const reqId = nextReqId();
   handlers.set(reqId, makeReplyHandler(reqId, { onDone, onChunk }));
-  sendMessage({ type: 'utterance', reqId, text });
+  sendMessage({ type: 'utterance', reqId, text, micStoppedAt });
   return { reqId, stop: () => stopRequest(reqId) };
 }
 
