@@ -16,6 +16,16 @@
 // A wrong-but-plausible artifact is worse than a missing one: the whole reason
 // this repo keeps getting burned is work that reports success it didn't earn.
 //
+// BRAIN FALLBACK (2026-07-31): a guarded fallback to brain.think was added for
+// the case where Hermes is WIRED (HERMES_CLI set, provider configured) but
+// transiently unreachable at runtime (binary moved, provider outage, network).
+// Distinct from the original "no fallback" stance, which was about not hiding
+// an UNWIRED Hermes behind silent brain output. With Hermes wired and verified,
+// a brain fallback on transient offline is safer than hard-failing every build
+// — and the downstream verifier.verify() gate (build-runner.js) still rejects
+// fabricated/garbage output, so the "no reported success it didn't earn"
+// principle holds. Anomaly-emitted + engine-stamped so a fallback is visible.
+//
 // RETURN SHAPE is intentionally brain.think-compatible
 // ({ content, offline, aborted, ... }) so the existing call sites keep their
 // null/offline checks, their verifier gate, their retry and their review step
@@ -51,6 +61,7 @@ function createBuildEngine(deps) {
   var hermes = deps && deps.hermes;
   var vault = deps && deps.vault;
   var bus = deps && deps.bus;
+  var brain = deps && deps.brain; // optional — for the guarded offline fallback
   if (!hermes || typeof hermes.runTask !== 'function') {
     throw new Error('createBuildEngine requires the hermes-agent adapter');
   }
@@ -76,6 +87,32 @@ function createBuildEngine(deps) {
     try { require('fs').rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
   }
 
+  // Brain fallback for when Hermes is transiently unreachable. Only used when
+  // brain is wired AND the failure looks like a runtime/availability issue
+  // (not an empty-prompt programmer error, which should stay a hard error).
+  // Returns brain.think's result tagged engine:'brain-fallback', or the
+  // original offline result if brain is absent or also fails. The downstream
+  // verifier.verify() gate (build-runner.js) still vets the content, so this
+  // never ships unaudited output.
+  async function brainFallback(prompt, source, offlineResult) {
+    if (!brain || typeof brain.think !== 'function') return offlineResult;
+    try {
+      var r = await brain.think({
+        lane: 'build',
+        messages: [{ role: 'user', content: prompt }],
+        source: source || 'build-engine-fallback',
+      });
+      if (r && r.content) {
+        if (bus) bus.emit('health.anomaly', { kind: 'build-engine-fallback-used', engine: 'brain-fallback', hermesError: offlineResult && offlineResult.error });
+        return { content: String(r.content), engine: 'brain-fallback', offline: false, aborted: !!r.aborted };
+      }
+      // brain itself returned offline — propagate the combined failure honestly.
+      return { offline: true, engine: 'hermes', error: 'Hermes offline (' + (offlineResult && offlineResult.error) + ') and brain also offline (' + (r && r.error) + ')' };
+    } catch (e) {
+      return { offline: true, engine: 'hermes', error: 'Hermes offline (' + (offlineResult && offlineResult.error) + '); brain fallback threw: ' + ((e && e.message) || e) };
+    }
+  }
+
   // generate({ prompt, source, timeoutMs }) -> brain.think-shaped result.
   // Never throws: every failure becomes { offline: true, error } so callers can
   // keep the control flow they already have.
@@ -86,6 +123,7 @@ function createBuildEngine(deps) {
     }
     var full = OUTPUT_CONTRACT + '\n\n' + String(o.prompt);
     var dir = scratchDir(o.source);
+    var offline;
     try {
       var reply = await hermes.runTask(full, {
         requireCli: true,       // the gateway cannot be cwd-pinned; builds need the CLI
@@ -94,21 +132,21 @@ function createBuildEngine(deps) {
         maxPromptChars: 24000,
       });
       if (!reply || !String(reply).trim()) {
-        return { offline: true, engine: 'hermes', error: 'Hermes returned an empty reply' };
+        offline = { offline: true, engine: 'hermes', error: 'Hermes returned an empty reply' };
+        return await brainFallback(full, o.source, offline);
       }
       if (HERMES_ERROR_REPLY_RE.test(String(reply))) {
         var reported = String(reply).trim().slice(0, 300);
         if (bus) bus.emit('health.anomaly', { kind: 'build-engine-provider-error', engine: 'hermes', error: reported });
-        return { offline: true, engine: 'hermes', error: 'Hermes provider error (exit 0, error on stdout): ' + reported };
+        offline = { offline: true, engine: 'hermes', error: 'Hermes provider error (exit 0, error on stdout): ' + reported };
+        return await brainFallback(full, o.source, offline);
       }
       return { content: String(reply), engine: 'hermes', offline: false, aborted: false };
     } catch (err) {
       var msg = String((err && err.message) || err);
       if (bus) bus.emit('health.anomaly', { kind: 'build-engine-failed', engine: 'hermes', error: msg });
-      // offline:true is how both call sites already recognise "no content" —
-      // reusing it keeps their existing branch, and `error` carries the real
-      // reason (usually the adapter's install hint) instead of a generic one.
-      return { offline: true, engine: 'hermes', error: msg };
+      offline = { offline: true, engine: 'hermes', error: msg };
+      return await brainFallback(full, o.source, offline);
     } finally {
       cleanup(dir);
     }

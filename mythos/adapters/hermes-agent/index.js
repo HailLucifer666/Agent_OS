@@ -120,6 +120,18 @@ function scrubbedEnv(extra) {
       if (entry.rekeyTo) {
         env[entry.rekeyTo] = process.env[entry.key];
         if (entry.base && process.env[entry.base]) env[entry.rekeyBaseTo] = process.env[entry.base];
+        // MYTHOS wires one provider via HERMES_PROVIDER_KEY (rekeyed to the
+        // OpenAI-compatible OPENAI_API_KEY above). Hermes's config.yaml may
+        // instead select a provider that reads a provider-specific env name
+        // (e.g. provider:"nvidia" reads NVIDIA_API_KEY, ignoring OPENAI_API_KEY).
+        // When the forwarded base_url identifies such an endpoint, alias the SAME
+        // key value to the provider-specific name — one secret, two labels, so
+        // config.yaml's provider choice resolves credentials. No unrelated keys
+        // leak (the test suite enforces exactly-one-provider forwarding).
+        var baseUrl = entry.base && process.env[entry.base] ? process.env[entry.base] : '';
+        if (/integrate\.api\.nvidia\.com/.test(baseUrl)) {
+          env.NVIDIA_API_KEY = process.env[entry.key];
+        }
       } else {
         env[entry.key] = process.env[entry.key];
         if (entry.base && process.env[entry.base]) env[entry.base] = process.env[entry.base];

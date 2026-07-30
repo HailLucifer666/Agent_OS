@@ -47,6 +47,7 @@ const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
+const { registerFromCua } = require('./core/effectors/from-cua');
 const { registerFromAndroid } = require('./core/effectors/from-android');
 const { registerFromBrowser, browser_launch_debug } = require('./core/effectors/from-browser');
 const skillsLoader = require('./core/skills/loader');
@@ -202,7 +203,8 @@ async function main() {
       const healer = createHealer({
         bus: bus, config: config, memory: memory,
         getCortex: function() { return cortex; },
-        getGoals: function() { return goals; }
+        getGoals: function() { return goals; },
+        getEffectors: function() { return effectors; }
       });
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
       const announcer = createAnnouncer({
@@ -291,7 +293,7 @@ async function main() {
       // never calls brain.think for content — there is no fallback by design
       // (see build-engine.js). brain is still passed for the verifier/review
       // machinery that legitimately uses it.
-      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus });
+      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus, brain: brain });
       buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine });
 
       // Integration 2 + 4: agent actions with design system + persona dispatch
@@ -330,6 +332,12 @@ async function main() {
 
       registerFromComputer(hub);
       pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
+      // CUA driver tools (cua_list_windows / cua_bring_to_front / cua_get_window_state
+      // / cua_click) — the Chromium-capable click path that complements pc-child's
+      // ui_click (which fails on apps exposing no named UIA leaf: Spotify, YouTube
+      // web, Electron overlays). Each tool degrades to a clear {ok:false} when the
+      // cua-driver binary is absent, so the brain falls back to pc-child honestly.
+      registerFromCua(hub);
       registerFromAndroid(hub);
       registerFromSpotify(hub, { effectors: hub, bus: bus, memory: memory, goals: goals, config: config });
       // REMEDIATION P1-7: fs (vault fs-store) added so browser_navigate can
