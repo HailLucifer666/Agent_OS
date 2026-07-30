@@ -268,6 +268,25 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     startChild();
 
+    // --- Microphone permission for the HUD's getUserMedia() -----------------
+    // This is a VOICE assistant: the HUD's mic capture (ui/public/js/voice/)
+    // calls navigator.mediaDevices.getUserMedia({audio:true}), which Electron
+    // DENIES by default — there is no browser-style permission prompt, so the
+    // call silently rejects and the app appears "mic not working". Auto-grant
+    // media for the loopback origin only (never for arbitrary origins). The
+    // renderer is sandboxed + contextIsolated; it can request but not bypass.
+    const { session } = require('electron');
+    const loopbackOrigin = `http://${BIND}:${PORT}`;
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+      const allowed = ['media', 'audioCapture', 'microphone'];
+      callback(allowed.includes(permission));
+    });
+    // Pre-seed the permission so getUserMedia doesn't even have to ask:
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
+      const allowed = ['media', 'audioCapture', 'microphone'];
+      return allowed.includes(permission);
+    });
+
     const ready = await probeHealth(BIND, PORT, PROBE_ATTEMPTS);
     if (!ready) {
       // Server never came up. Fail loudly; loading a dead URL would show a

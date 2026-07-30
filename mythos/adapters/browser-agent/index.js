@@ -24,6 +24,15 @@ const CONNECT_TIMEOUT_MS = 10000;
 const PAGE_TIMEOUT_MS = 15000;
 const NAVIGATE_TIMEOUT_MS = 30000;
 
+// BROWSER_PAGE_TIMEOUT_MS (schema.js) overrides the per-page action timeout so
+// the operator can raise it for a slow SPA without code. Read from process.env
+// at CALL time (config lives in env after loadConfig) — the constant stays as
+// the fallback. Kept as a getter so env changes mid-session take effect.
+function pageTimeoutMs() {
+  const n = Number(process.env.BROWSER_PAGE_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 1000 ? n : PAGE_TIMEOUT_MS;
+}
+
 // BUG-029: the launched browser is a real OS process MYTHOS owns. If the app
 // dies without a clean shutdown (Windows terminal closed — SIGINT never
 // delivered, see main.js), that Chrome survives invisibly and keeps playing
@@ -360,7 +369,7 @@ async function withPage(callback) {
       if (!page) { ctx = contexts[0]; page = await ctx.newPage(); }
     }
 
-    page.setDefaultTimeout(PAGE_TIMEOUT_MS);
+    page.setDefaultTimeout(pageTimeoutMs());
     page.setDefaultNavigationTimeout(NAVIGATE_TIMEOUT_MS);
 
     return await callback(page, ctx);
@@ -432,7 +441,7 @@ async function withNewPage(callback) {
     }
 
     if (!page) page = await ctx.newPage();
-    page.setDefaultTimeout(PAGE_TIMEOUT_MS);
+    page.setDefaultTimeout(pageTimeoutMs());
     page.setDefaultNavigationTimeout(NAVIGATE_TIMEOUT_MS);
 
     return await callback(page, ctx);
