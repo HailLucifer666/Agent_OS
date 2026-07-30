@@ -11,6 +11,7 @@ const { createIdentityStore } = require('./identity');
 const { createWorkingMemory } = require('./working');
 const { createAuditWriter } = require('./audit-writer');
 const { createCheckpointStore } = require('./checkpoints');
+const { createDocumentsStore } = require('./documents');
 const { createVectorIndex, rrfMerge } = require('./vector-index');
 const embeddings = require('../../../providers/embeddings');
 
@@ -25,17 +26,27 @@ function createMemory({ config, bus, logger, brain }) {
   const audit = createAuditWriter({ fs, config, bus, logger });
   const checkpoints = createCheckpointStore({ fs, config, bus, logger });
   const working = createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints });
+  const documents = createDocumentsStore({ fs });
 
-  // ---- semantic recall layer (vector indexes over episodic + semantic) ----
+  // ---- semantic recall layer (vector indexes over episodic + semantic + documents) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
   // their shape); embedding happens fire-and-forget on write, and the async
   // recallHybrid() facade below fuses keyword + vector rankings. Embeddings
   // unavailable -> hybrid degrades to exactly the keyword behavior.
   // Intentionally NOT indexed: skills/identity/audit are browsed, not searched (Phase 1 scope decision).
+  //
+  // `documents` (§7.5 Document RAG + §7.11 code search) is the ONLY new
+  // vector-index partition added by that work — both uploaded prose chunks
+  // (from-documents.js) and indexed source-code chunks (from-code-search.js)
+  // write into this SAME partition, differentiated by the `sourceType` field
+  // on each chunk record (see memory/documents.js), not by a second
+  // createVectorIndex(...) call. Do not add another one.
   const vecIndexes = {
     episodic: createVectorIndex({ fs, store: 'episodic' }),
     semantic: createVectorIndex({ fs, store: 'semantic' }),
+    documents: createVectorIndex({ fs, store: 'documents' }),
   };
+  const RECALL_STORES = { episodic: episodic, semantic: semantic, documents: documents };
 
   function indexAsync(store, ref, text) {
     if (!ref || !text) return;
@@ -163,10 +174,12 @@ function createMemory({ config, bus, logger, brain }) {
     audit,
     checkpoints,
     working,
+    documents,                          // §7.5/§7.11 chunk store — shared by both
+    documentsIndex: vecIndexes.documents, // the ONE shared vector-index partition
 
     async init() {
       // Ensure all store directories exist
-      const dirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints'];
+      const dirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints', 'Documents'];
       for (let i = 0; i < dirs.length; i++) {
         fs.ensureDir(fs.vaultPath(dirs[i]));
       }
@@ -181,6 +194,7 @@ function createMemory({ config, bus, logger, brain }) {
       fs.ensureDir(fs.vaultPath('Index'));
       vecIndexes.episodic.init();
       vecIndexes.semantic.init();
+      vecIndexes.documents.init();
     },
 
     // Hybrid recall: keyword scorer (both stores, unchanged) fused with
@@ -194,11 +208,14 @@ function createMemory({ config, bus, logger, brain }) {
       const vector = [];
       const q = await embeddings.embed(query);
       if (q) {
-        for (const storeName of ['episodic', 'semantic']) {
+        // documents (§7.5/§7.11) is a THIRD source in this same fan-out —
+        // added here, not as a parallel recall path. RECALL_STORES maps each
+        // vecIndexes partition name to the real store it's backed by.
+        for (const storeName of ['episodic', 'semantic', 'documents']) {
           const hits = vecIndexes[storeName].search(q, limit);
           for (const h of hits) {
             if (h.score < VECTOR_MIN_SCORE) continue;
-            const store = storeName === 'episodic' ? episodic : semantic;
+            const store = RECALL_STORES[storeName];
             let rec = null;
             try { rec = store.get(h.ref); } catch { /* pruned/archived ref */ }
             if (!rec) continue;
@@ -211,7 +228,7 @@ function createMemory({ config, bus, logger, brain }) {
               ref: h.ref,
               score: h.score,
               record,
-              snippet: String(record.summary || rec.snippet || '').slice(0, 200),
+              snippet: String(record.summary || record.text || rec.snippet || '').slice(0, 200),
               store: storeName,
             });
           }
