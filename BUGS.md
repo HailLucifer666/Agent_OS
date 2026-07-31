@@ -1266,6 +1266,19 @@ Operator held a ~70-minute voice conversation (35 turns, 23:22–00:33) and repo
 | **Deleting a goal did not delete it, and it came back.** `DELETE /api/goals/:id` → 200, audited `'ok'`, goal still listed with `id: null` (unaddressable forever). | `writeBack()` rebuilds Goals.md **from its existing rows**, so it can never remove one; the row survived unmapped. Worse: `sync()` creates a user-service goal for every unmapped row at boot, so the goal was **resurrected on restart**. | `deleteGoal()` captures the rows the id owns *before* dropping the mapping (afterwards they are unidentifiable — that is the bug) and removes them. `test/goal-delete-removes-row.test.js` proves the resurrection path specifically. |
 | **`truncateAtSentenceBoundary()` was dead code** — defined, exported, called by nothing — while four paths hard-sliced spoken text mid-word. Its own file header claimed it was "live". | Never wired since it was written. | All four call sites now use it (boot greeting, vision reply, and voice-agent's `say` + fallback caps). |
 
+### ⚠️ CORRECTION 2026-07-31 (later the same day) — the clipping diagnosis above is WRONG
+
+The "speech cut off at the end" row states edge-tts was down for every turn and the reply therefore went out as one long `SpeechSynthesisUtterance`. **Both halves are false.** Two errors compounded:
+
+1. **Timezone.** `ls --time-style` prints LOCAL time; a literal `Z` had been appended to the format string and the result was then read as UTC. In real local time (machine is UTC+5:30): `edge_tts` was installed at **04:01**, the session ran **04:52–06:03** — so edge-tts was live *before* the session, not 3.5h after it.
+2. **Wrong transport entirely.** Every conversation record carries `detail.transport`. **43 of 44 turns were `s2s`**, not batch — the lone `batch` entry is a test probe. The S2S path plays PCM through `pcm-player.js` and never touches `speechSynthesis`, so the browser-utterance theory cannot apply.
+
+**What is actually true:** the boot greeting rides `proactiveSpeak` → edge-tts → `en-GB-RyanNeural` (male); every turn after it rode S2S → `Aoede` (female). That is the real, fully-evidenced explanation of the operator's "British guy at the start, then the female voice" — and the Ryan→Sonia change remains the correct fix for it.
+
+**The clipping cause is therefore still OPEN.** On the S2S path exactly one thing stops audio: `live-interrupted` → `player.flush()` (`s2s-bridge.js:77`). Gemini Live's own server-side VAD (`realtimeInputConfig.automaticActivityDetection`) emits `interrupted` when it believes the user has begun speaking; music or room noise trips it and playback is cut mid-sentence. The same session's incident log independently records *"Playback interruption … interrupted by user singing/feedback"*, which is the same mechanism. **Not yet proven and not fixed** — proving it needs the `live-interrupted` frames counted against a turn that the operator confirms was clipped.
+
+The per-sentence chunking fix shipped in `0cd4e4d` is still a real bug fix (sending zero chunks when TTS is down genuinely does produce one over-long utterance) — it simply is not the fix for THIS report, and was mis-attributed as such in that commit message and in the roadmap row for it.
+
 **NOT fixed, deliberately — acoustic, needs a human present.** The third incident (playback interrupted by the operator singing / speaker feedback) cannot be fixed in-browser: the mic already requests `echoCancellation`, `noiseSuppression` and `autoGainControl`, and browser AEC cannot cancel Spotify because it is a **separate process**. Barge-in is level-based and fires before transcription, so `isEcho()` (a post-hoc text match) cannot catch it either.
 
 ### Electron bring-up findings (`npm install` + `npm start`, first real boot)
