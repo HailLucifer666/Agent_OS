@@ -57,6 +57,18 @@ var OUTPUT_CONTRACT = [
 // general-purpose "does this look like an error" heuristic.
 var HERMES_ERROR_REPLY_RE = /^\s*(?:API call failed after \d+ retries:|HTTP \d{3}:)/;
 
+// Timeout headroom for a text build. No caller has ever passed timeoutMs, so
+// every build here silently ran under the hermes adapter's generic 3-minute
+// default (HERMES_TASK_TIMEOUT_MS) — while hermes-runner.js, the OTHER Hermes
+// path, gives its builds 30 minutes because "builds run a real agent loop and
+// need real headroom" (.env.example). A grounded build stacks research + skill
+// resolution + a possible review-retry against that one budget. Defaulted here
+// rather than threaded through three call sites, so no caller can forget it.
+// Below hermes-runner's 30 min: this path generates one artifact, not a tree.
+function textBuildTimeoutMs() {
+  return Number(process.env.HERMES_TEXT_BUILD_TIMEOUT_MS) || 600000; // 10 min
+}
+
 function createBuildEngine(deps) {
   var hermes = deps && deps.hermes;
   var vault = deps && deps.vault;
@@ -128,7 +140,7 @@ function createBuildEngine(deps) {
       var reply = await hermes.runTask(full, {
         requireCli: true,       // the gateway cannot be cwd-pinned; builds need the CLI
         cwd: dir,
-        timeoutMs: o.timeoutMs,
+        timeoutMs: o.timeoutMs || textBuildTimeoutMs(),
         maxPromptChars: 24000,
       });
       if (!reply || !String(reply).trim()) {

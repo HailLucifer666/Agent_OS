@@ -304,6 +304,11 @@ async function main() {
         buildRunner: buildRunner,
         designSystem: true,  // Integration 2: enables design-system prompt injection
         brain: brain,  // P22: for visual verification + reviewer/reality-check
+        // Content generation goes through the SAME single engine as build-runner.
+        // Without this, the research-grounded regeneration and the review-retry
+        // below silently fell back to brain.think and overwrote Hermes's output
+        // with it — see the comment at those call sites in agent-actions.js.
+        buildEngine: buildEngine,
         webSearch: require('./core/effectors/web-search').web_search,  // P22: research gate
         webFetch: require('./core/effectors/web-fetch').web_fetch,     // P22: research gate
         browserAgent: browserAgent,  // P22: visual verification (render + screenshot)

@@ -20,8 +20,32 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-07-31): **1956 tests, 1955 passing, 0 failing, 1 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-07-31): **1964 tests, 1963 passing, 0 failing, 1 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
+## Build content comes from Hermes-Agent, not the brain (2026-07-29 onward)
+
+This file described builds for a long time without ever naming the engine that
+performs them, which is how a regression hid in plain sight. Recording it here:
+
+- `src/core/effectors/build-engine.js` is the **single build-content engine**
+  (commit `37953ca`). It shells out to the Hermes-Agent CLI. The brain's `build`
+  lane is now largely vestigial — it serves only `build-engine.js`'s guarded
+  fallback for a transient Hermes outage (tagged `engine:'brain-fallback'` plus a
+  `health.anomaly`, never silent) and any stray `brain.think({lane:'build'})`
+  caller.
+- The swap exists because the brain-backed generators invented titles and topics
+  (see `build-engine.js`'s header and BUG-051). **A build with no engine FAILS
+  with an install hint rather than shipping a plausible-but-wrong artifact.**
+- `37953ca` wired `build-runner.js` and the engagement executor but missed
+  `agent-actions.js`, so the research-grounded regeneration and the
+  review-rejection retry kept overwriting Hermes output with `brain.think` for
+  every `risk='feature'` build — i.e. almost all of them. Fixed 2026-07-31; see
+  BUG-051 and `test/build-single-engine-regeneration.test.js`. When adding any new
+  content-generation path, route it through `buildEngine.generate()`.
+- Forge (`build_project` → `hermes-runner.js`) is Hermes-exclusive with no
+  fallback at all, and has **no research gate** — the web-research step lives only
+  in the pipeline/kanban path.
+
 ## Keeping this file current
 
 Update `ROADMAP.md` (phase status, test count, commit log) as phases land —

@@ -79,6 +79,10 @@ function pluginRoots(home) {
   packs.forEach(function(pack) {
     roots.push(path.join(marketplaces, pack, 'src'));
     roots.push(path.join(marketplaces, pack, '.claude', 'skills'));
+    // Third layout: <pack>/skills/<name>. Real packs in the wild use all three
+    // (frontend-ui-engineering ships this way), and a skill in an unsearched
+    // layout fails exactly like an uninstalled one — silently.
+    roots.push(path.join(marketplaces, pack, 'skills'));
   });
   return roots;
 }
@@ -260,15 +264,40 @@ function loadContent(name) {
   }
 }
 
-// Load the condensed essence (SKILL-CORE.md, repo-local vendored skills only).
-// Build-lane prompts inject essences, not full skills — the free/low-context
-// brain models can't afford 80KB of guidance per call. Returns null when the
-// skill has no essence (callers skip it — never a hard failure).
+// How much of an external SKILL.md to use when it has no vendored essence.
+// Enough to carry the skill's actual guidance, small enough that several can
+// share one build prompt.
+var ESSENCE_FALLBACK_LINES = 40;
+var ESSENCE_FALLBACK_CHARS = 4000;
+
+// Load the condensed essence for build-lane prompt injection. Build prompts
+// inject essences, not full skills — the free/low-context brain models can't
+// afford 80KB of guidance per call.
+//
+// Prefers the repo-vendored SKILL-CORE.md (hand-condensed, ~26 lines). Falls
+// back to the HEAD of an installed skill's own SKILL.md, so a skill cloned from
+// GitHub into any search root contributes to builds immediately instead of
+// needing someone to hand-write an essence into this repo first. Without the
+// fallback, `git clone`ing a skill made it visible to use_skill but left it
+// silently absent from the automatic injection every UI build depends on.
+//
+// Returns null when the skill has no essence anywhere (callers skip it — never a
+// hard failure).
 function loadEssence(name) {
   if (!name) return null;
   try {
     var raw = fs.readFileSync(path.join(REPO_SKILLS_DIR, name, 'SKILL-CORE.md'), 'utf8');
     return raw.trim();
+  } catch (_) { /* no vendored essence — try the installed skill itself */ }
+  try {
+    var dir = resolveSkillFile(name, 'SKILL.md');
+    if (!dir) return null;
+    var full = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+    // Drop frontmatter: it is metadata for the loader, not guidance for a build.
+    var body = full.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '').trim();
+    if (!body) return null;
+    var head = body.split(/\r?\n/).slice(0, ESSENCE_FALLBACK_LINES).join('\n');
+    return head.slice(0, ESSENCE_FALLBACK_CHARS).trim() || null;
   } catch (_) {
     return null;
   }

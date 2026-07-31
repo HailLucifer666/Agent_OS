@@ -1287,3 +1287,225 @@ The per-sentence chunking fix shipped in `0cd4e4d` is still a real bug fix (send
 - **`electron`'s postinstall extraction fails SILENTLY on this machine.** `npm install` exits 0, the 108MB zip downloads and caches correctly, but `node_modules/electron/dist/` ends up containing only `locales/` and no `path.txt` — surfacing later as `Error: Electron failed to install correctly`. Workaround: extract the cached zip by hand (`$env:LOCALAPPDATA\electron\Cache\<hash>\electron-v<ver>-win32-x64.zip`) into `dist/` and write `path.txt` containing `electron.exe`. Worth knowing before Slice 4 builds the installer.
 - **`ELECTRON_RUN_AS_NODE=1` inherited from a VS Code extension host makes `electron.exe` run as plain Node**, so `require('electron')` returns the npm path shim and every destructured API is `undefined` — crashing at `electron/main.js:167` on `ipcMain.handle`. Not a MYTHOS defect; launch with that variable cleared.
 - **Verified working:** window titled "MYTHOS", forked child server on `127.0.0.1:4478`, HUD served, `/js/app.js` 8,800B gzipped (the perf work carries into the desktop app), `/api/config/s2s` → `{"enabled":true}`.
+
+---
+
+## Session 2026-07-31 (later) — brain smartness + build pipeline
+
+Four operator reports, all root-caused to code rather than to model quality.
+Every entry below is ✅ FIXED with tests unless marked otherwise.
+
+### BUG-047 — "It forgets what we were talking about" (in-session)
+
+**Symptom.** Mid-conversation, MYTHOS loses the thread; sometimes it forgets a
+build it started three turns earlier.
+
+**Root cause — three defects in one 16-line block** (`mythos/server/index.js`,
+the conversation-history block):
+
+1. The history lived inside `wss.on('connection', ...)`, so it was
+   **per-connection** state. The dashboard reconnects on any network blip or tab
+   sleep (`ui/public/js/ws.js` `scheduleReconnect`), and each reconnect silently
+   started an empty conversation. This is the one that produced the complaint.
+2. `HISTORY_MAX_TURNS = 12` counted **mixed** entries (user + assistant +
+   action-outcome notes) — roughly 4-6 real exchanges.
+3. A 10-minute idle TTL wiped everything, and nothing survived a restart.
+
+**Fix.** Hoisted to `createServer` scope; 40 entries bounded by a 12000-char
+total budget (real voice turns run 50-400 chars, so this holds ~12-18 exchanges
+while costing LESS at the worst case than the old 12 x 2000 = 24000-char
+ceiling); idle TTL 45 min; persisted to `vault/Conversation/session.json` and
+restored when younger than the TTL. `VOICE_HISTORY_MAX_TURNS` /
+`VOICE_HISTORY_MAX_CHARS` added to the schema.
+
+**Gotcha for anyone editing this block.** The `memory.fs.readJSON/writeJSON`
+calls MUST stay inside `try/catch`: the server test fakes expose only
+`memory.fs.vaultPath`, so an unguarded call is a `TypeError` on every turn across
+the whole server suite. Same guard shape as the `LAST_BOOT_PATH` read above it.
+
+**Tests.** `test/voice-session-memory.test.js` (6 cases, real bus/server/WS).
+
+### BUG-048 — Durable facts evicted by trivia (cross-session)
+
+**Symptom.** It forgets things it was explicitly told days ago, while remembering
+recent noise.
+
+**Root cause.** `persona()` folded in `topLearnedPrefs(5)`, and that list is
+**newest-first**. A day-one durable fact was pushed out by five newer
+preferences. Raising the cap only delays the eviction.
+
+**Fix.** New pinned `Identity/operator-profile.txt` on the proven
+`operator-style.txt` pattern, folded into `persona()` as "Operator profile
+(durable facts — never contradict these)". `identity/reflection.js` REWRITES it
+whole each pass, preserving everything still true — that is what makes it
+accumulate *and* self-compact with no append log and no eviction policy. A
+too-short model reply can never blank an existing profile. Preference cap 5 -> 10;
+reflection's conversation window 2 -> 7 days. Recall widened from 8 hits/7 days to
+12/21 (measured +20ms on a real 2.2MB vault; 21 days stays inside
+`EPISODIC_RETENTION_DAYS`).
+
+**Tests.** `test/persona.test.js`, `test/reflection.test.js`.
+
+### BUG-049 — Replies feel like "just another chatbot"
+
+**Root cause.** Not the model. `RULES` in `voice-agent.js` carried ~39
+prohibition tokens against 3 permissions, so the prompt itself trained
+disengagement. Two specific offenders: the FRUSTRATION RULE fired on **any**
+frustration, so venting about the world was answered with a `read_status` +
+`list_goals` probe; and CLARIFYING QUESTIONS had no "they are just chatting"
+branch.
+
+**Fix.** A `CHARACTER` block placed FIRST (where the model weights it) granting
+opinions, dry wit, teasing and callbacks; FRUSTRATION scoped to frustration with
+MYTHOS/the system; MEMORY RULE's no-write path no longer reads as no-engagement;
+CLARIFYING QUESTIONS tells it not to interrogate small talk; `OUTPUT_CONTRACT`'s
+style line (last in the prompt) says personality is expected. Dial VALUES
+untouched — the tests pin them and the `terseness:5` rationale is deliberate.
+
+**Cost note.** `RULES` 15051 -> 16162 chars. A test caps it at 18000 so future
+prompt edits stay deliberate: this string is re-sent on EVERY voice turn.
+
+**Not unit-testable.** Whether it actually *feels* witty is only answerable by
+talking to it. The tests assert the permissions are present and the contract is
+intact.
+
+### BUG-050 — `cortex.thought` had zero subscribers (no proactivity)
+
+**Symptom.** MYTHOS never follows up on a loose end unprompted.
+
+**Root cause.** `cortex/index.js` has emitted `cortex.thought` after every
+productive idle mull since Phase 4. **Nothing subscribed to it.** The entity
+formed follow-up thoughts and never said one; they surfaced only as prompt
+context if the operator happened to speak first. Separately, the pending-thought
+injection had no consumption marker, so one thought was prepended to **every**
+prompt for 24h — an "earlier I noticed..." that read as a stuck record.
+
+**Fix.** One subscriber -> the existing `proactiveSpeak` path (same event class as
+`reminder.due`), behind four guards: `priority === 'high'` only, nothing within
+`FOLLOWUP_QUIET_MS` of the operator's last turn, at most one per
+`FOLLOWUP_MIN_GAP_MS` (0 disables), non-empty text. The mull prompt now reserves
+"high" for the two cases worth breaking a silence over: a question the operator
+never answered, or a stalled goal/build. Thought injection now de-dupes by
+record ref.
+
+**Known limitation, documented not fixed.** `mull` only runs on fully-idle ticks
+with no active goals (`cortex/index.js`), so follow-ups stay quiet while a goal
+is active. Changing that is a cortex-tick change, not a conversation change.
+
+**Tests.** `test/proactive-followup.test.js` (6 cases).
+
+### BUG-051 — Builds shipped content from the engine the repo had already retired
+
+**Symptom (operator's words).** Builds fail "drastically"; the few that land are
+"ugly as shit", blank, or about the wrong topic entirely.
+
+**Root cause.** Commit `37953ca` made Hermes-Agent the single build-content
+engine "so there is one engine with one behaviour", precisely because the
+brain-backed generators invented titles and topics (the fabricated "Week of
+November 20, 2023" page in `build-engine.js`'s header; live failures where a
+"DESIGN SYSTEM" spec shipped as "Kinetic Depth | Parallax Engine"). That commit
+wired `build-runner.js` and the engagement executor — **it never touched
+`agent-actions.js`**. So the Hermes first draft was then OVERWRITTEN by a direct
+`brain.think({lane:'build'})` call in two places: the research-grounded
+regeneration and the review-rejection retry. Both fire for `risk='feature'`,
+which `risk-classifier.js` assigns to nearly every real request ("landing page",
+"dashboard", and the verbs build/create/design). Net effect: the artifact the
+operator actually received came from the exact engine the swap existed to retire.
+
+**Fix.** One `generateContent()` seam in `agent-actions.js` routes all four
+regeneration sites through `buildEngine.generate()`; `main.js` injects the
+engine. `buildEngine`'s own guarded brain fallback still covers a transient
+Hermes outage, tagged `engine:'brain-fallback'` with a `health.anomaly` rather
+than silently. Hermes has no `persona` parameter, so the kanban builder voice is
+folded into the prompt instead of being dropped.
+
+**Tests.** `test/build-single-engine-regeneration.test.js` (4 cases).
+
+### BUG-052 — Every text build silently ran on a 3-minute timeout
+
+**Root cause.** `build-engine.js` passed `timeoutMs: o.timeoutMs` and **no
+caller has ever set it**, so every build inherited the hermes adapter's generic
+`HERMES_TASK_TIMEOUT_MS` (180000). Meanwhile `hermes-runner.js` — the other
+Hermes path — gives its builds 30 minutes because (.env.example) "builds run a
+real agent loop and need real headroom". A grounded build stacks research +
+skill resolution + a possible review-retry into that one budget.
+
+**Fix.** Defaulted inside `build-engine.js` (`HERMES_TEXT_BUILD_TIMEOUT_MS`,
+10 min) rather than threaded through three call sites, so no caller can forget
+it. Below hermes-runner's 30 min: this path generates one artifact, not a tree.
+
+### BUG-053 — Built pages had no images, by construction
+
+**Symptom.** "There are no pictures. There is nothing. It is just blank pages."
+
+**Root cause.** There is **no image or asset step anywhere in the build
+pipeline** — no `generate_image` reference in `agent-actions.js`, and nothing in
+`design/system.js` about placeholder assets. Worse, `DELIVERABLE_PREAMBLE` said
+"no external resources", which reads as "no pictures at all". Whatever imagery
+appeared was whatever the model happened to invent. The standalone
+`generate_image` tool cannot fill the gap either: its own header records that the
+configured free-tier Google key has a **permanent zero-quota entitlement** for
+every image model.
+
+**Fix (free, keyless).** A `VISUALS` section in both build preambles: inline
+`<svg>` for logos/icons/patterns, `https://picsum.photos/seed/<word>/<w>/<h>` for
+photographs, an explicit ban on inventing `images.unsplash.com/photo-<id>` URLs
+(those ids are real — a guessed one 404s into a broken image), real `alt` text,
+and CSS sizing so a failed load degrades gracefully. The blanket "no external
+resources" is narrowed to images-only while CSS/JS stay inline.
+
+**Still open (operator decision, not a code bug).** Real image *generation* needs
+a paid key. Not attempted.
+
+### BUG-054 — Installed skills reached builds only partly
+
+**Root cause.** The 2026-07-31 multi-root loader fix (`7d95f42`) was real but
+incomplete in two ways:
+
+1. `pluginRoots()` searched `<pack>/src` and `<pack>/.claude/skills` but not
+   `<pack>/skills` — a third layout real packs use. A skill in an unsearched
+   layout fails exactly like an uninstalled one: silently.
+2. `loadEssence()` read ONLY the repo-vendored
+   `mythos/skills/<name>/SKILL-CORE.md`. Since essences are what get
+   auto-injected into every build prompt, a skill cloned from GitHub was visible
+   to `use_skill` but absent from the automatic injection — the operator's "add
+   skills from GitHub in future" requirement could not work.
+
+**Fix.** Third layout added; `loadEssence()` falls back to the head (~40 lines /
+4000 chars) of an installed skill's own `SKILL.md`, frontmatter stripped. A
+vendored essence still wins, so a fresh clone stays deterministic.
+
+**Live-verified on this machine** (not just unit-tested): the allowlisted catalog
+went **9 -> 15 skills**, and `resolveSkillTool()` returns **2596 chars** of real
+ui-ux-pro-max design-system output (pattern, style, palette) that is prepended to
+UI build prompts, alongside 3797 chars of skill essences.
+
+**Tests.** `test/skills-external-roots.test.js` (6 new cases).
+
+### Two-brain provider key — ⚠️ OPERATOR ACTION REQUIRED
+
+`mythos/.env` used the **same Mistral key** for `MISTRAL_API_KEY` (the Mythos
+brain) and `HERMES_PROVIDER_KEY` (the build engine) — verified byte-identical by
+hash. `.env.example` had warned about exactly this ("a shared key reintroduces
+the exact voice stutter this separation avoids") as a *preference*; it is now
+stated as REQUIRED, with the observable symptom named. Boot logs
+`hermes.shared-provider-key` when it detects the condition (a boolean only —
+never a key value).
+
+**The operator must mint a second Mistral workspace key for Hermes and rotate the
+shared one.** Code cannot do this. Until then, a 20-60-call build shares one
+workspace rate limit with voice, vision and memory consolidation — and Mistral
+was independently observed flapping (3,622 `provider-down` anomalies on
+2026-07-21 alone).
+
+### Not reproduced — the reported failure volume
+
+The operator reports "tens of thousands of attempts" failing. The authoritative
+ledger (`vault/Checkpoints/build-jobs.json`, capped at 100 and holding only 25
+records since 2026-07-10, so nothing was evicted) shows **25 jobs: 15 done, 10
+failed**. The 10 failures are fully explained: 8 pre-Hermes brain-engine
+spec/quality rejections, and 2 honest `hermes-agent OFFLINE` hard-fails from
+2026-07-29 before Hermes was installed. Either most attempts die before reaching
+`buildRunner.enqueue()` (voice/engagement level, never persisted as jobs), or the
+figure counts in-session retries. **Worth re-measuring after these fixes rather
+than theorising.**

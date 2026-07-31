@@ -16,7 +16,8 @@ var personas = require('../agents/personas');
 var DELIVERABLE_PREAMBLE = [
   'You are the Pipeline build agent. Take the captured idea below and produce the single',
   'most useful self-contained deliverable for it: EITHER a complete single-file HTML page/app',
-  '(all CSS/JS inline, no external resources, starting with <!DOCTYPE html>) OR a thorough',
+  '(all CSS/JS inline, starting with <!DOCTYPE html>; images are the one allowed external',
+  'resource — see VISUALS) OR a thorough',
   'markdown document (plan, spec, draft, or write-up, starting with a # title line).',
   'Choose whichever genuinely fits the idea. Output ONLY the raw file content — no',
   'commentary, no markdown fences around the whole output.',
@@ -31,6 +32,21 @@ var DELIVERABLE_PREAMBLE = [
   '- Content MUST be about the spec topic, not a generic template',
   '- NO invented brand names, NO generic templates',
   '- Include hero section, CTA, animations as specified in the idea',
+  // Pages were shipping visually empty: nothing in this pipeline supplies or
+  // generates imagery, and the preamble's blanket "no external resources" was
+  // read as "no pictures at all". There is no image-generation step to lean on
+  // either (the standalone generate_image tool is entitlement-blocked on a
+  // free-tier key), so the free, reliable options are named explicitly here.
+  'VISUALS (a page with no imagery reads as unfinished — never ship a wall of text):',
+  '- Use inline <svg> for logos, icons, patterns, and decorative shapes. It always renders,',
+  '  needs no network, and keeps the file self-contained. Prefer it for anything non-photographic.',
+  '- For photographs use https://picsum.photos/seed/<distinct-word>/<w>/<h> — keyless, always',
+  '  resolves, and the seed keeps each image stable and distinct from the others.',
+  '- Do NOT invent https://images.unsplash.com/photo-<id> URLs: those ids are real and a guessed',
+  '  one 404s into a broken image. Only use a specific image URL if it appeared in the research',
+  '  brief below or in the idea itself.',
+  '- Give every image a real alt attribute and CSS sizing so a failed load degrades gracefully.',
+  '- Use CSS gradients, shadows and spacing for polish rather than leaving areas blank.',
   'Idea: '
 ].join(' ');
 
@@ -46,7 +62,13 @@ var BUILDER_PREAMBLE = [
   'for this task: EITHER a complete single-file HTML page/app (all CSS/JS inline, starting',
   'with <!DOCTYPE html>) OR a markdown document (starting with a # title). Output ONLY the',
   'raw file content, no commentary, no fences around the whole output.',
-  'Title the deliverable using words FROM the task, not an invented brand name.\nTask: '
+  'Title the deliverable using words FROM the task, not an invented brand name.',
+  // Same visual gap as DELIVERABLE_PREAMBLE above — kept short here since kanban
+  // tasks are narrower than a full page brief.
+  'VISUALS: use inline <svg> for icons/logos/patterns, and',
+  'https://picsum.photos/seed/<word>/<w>/<h> for photographs (keyless, always resolves).',
+  'Never invent images.unsplash.com photo ids — a guessed id 404s. Every image needs alt text.',
+  '\nTask: '
 ].join(' ');
 
 var REVIEWER_PREAMBLE = [
@@ -90,7 +112,7 @@ function extractJsonBlock(raw) {
 
 var riskClassifierLib = require('./risk-classifier');
 
-function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, webSearch, webFetch, browserAgent, evidenceValidator, bus }) {
+function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, buildEngine, webSearch, webFetch, browserAgent, evidenceValidator, bus }) {
   if (!fs || typeof fs.writeText !== 'function' || typeof fs.exists !== 'function') {
     throw new Error('createAgentActions requires a vault fs-store with writeText/exists');
   }
@@ -102,6 +124,39 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
   }
   if (!buildRunner || typeof buildRunner.enqueue !== 'function') {
     throw new Error('createAgentActions requires a buildRunner with enqueue()');
+  }
+
+  // Single content-generation seam (2026-07-31). build-runner already routes
+  // FIRST-DRAFT content through buildEngine (Hermes-Agent, the one build engine
+  // per build-engine.js), but the research-grounded regeneration and the
+  // review-retry below called brain.think directly and OVERWROTE that draft with
+  // the result. Because risk='feature' covers nearly every real request (landing
+  // page, dashboard, and the verbs build/create/design — see risk-classifier.js),
+  // the artifact that actually shipped came from the brain build lane whose
+  // documented failure mode is inventing titles and topics: exactly the "I asked
+  // for X and got Y" this repo swapped engines to stop, and the reason
+  // build-engine.js exists at all. commit 37953ca made Hermes the single engine
+  // but never touched this file.
+  //
+  // Routing both regenerations here keeps ONE engine end to end. buildEngine's
+  // own guarded brain fallback still covers a transient Hermes outage — tagged
+  // engine:'brain-fallback' with a health.anomaly, not silently.
+  //
+  // brain stays the fallback for callers that inject no engine (unit tests).
+  // `persona` is the kanban builder voice. brain.think takes it as a field;
+  // Hermes has no such parameter, so for the engine path it is prepended to the
+  // prompt rather than silently dropped.
+  async function generateContent(prompt, source, persona) {
+    if (buildEngine && typeof buildEngine.generate === 'function') {
+      var text = persona ? String(persona) + '\n\n' + prompt : prompt;
+      return await buildEngine.generate({ prompt: text, source: source });
+    }
+    if (brain && typeof brain.think === 'function') {
+      var req = { lane: 'build', messages: [{ role: 'user', content: prompt }], source: source };
+      if (persona) req.persona = persona;
+      return await brain.think(req);
+    }
+    return { offline: true, error: 'no build engine or brain available' };
   }
 
   // BUG-025: buildRunner.enqueue() refuses (returns { ok: false, result: { error } })
@@ -493,14 +548,10 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
             throw new Error('Research gate failed: unable to fetch live data for "' + card.text + '" (required for risk=' + risk + ')');
           }
 
-          if (researchBrief && brain) {
+          if (researchBrief) {
             researchStatus = 'grounded';
             try {
-              var grounded = await brain.think({
-                lane: 'build',
-                messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
-                source: 'pipeline-grounded:' + j.id
-              });
+              var grounded = await generateContent(basePrompt + '\n\n' + researchBrief, 'pipeline-grounded:' + j.id);
               if (grounded && !grounded.offline && grounded.content) {
                 raw = grounded.content;
               }
@@ -515,18 +566,15 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
 
         // If rejected, retry once with the issues fed back to the builder
-        if (review.verdict === 'reject' && !j._reviewRetried && brain) {
+        if (review.verdict === 'reject' && !j._reviewRetried) {
           j._reviewRetried = true;
           try {
-            var retryResult = await brain.think({
-              lane: 'build',
-              messages: [{ role: 'user', content:
-                basePrompt + '\n\nYour previous output was rejected by review for these reasons:\n' +
-                review.issues.map(function(i) { return '- ' + i; }).join('\n') +
-                '\nFix ALL of these issues and regenerate the complete deliverable.'
-              }],
-              source: 'pipeline-retry:' + j.id
-            });
+            var retryResult = await generateContent(
+              basePrompt + '\n\nYour previous output was rejected by review for these reasons:\n' +
+              review.issues.map(function(i) { return '- ' + i; }).join('\n') +
+              '\nFix ALL of these issues and regenerate the complete deliverable.',
+              'pipeline-retry:' + j.id
+            );
             if (retryResult && !retryResult.offline && retryResult.content) {
               // Overwrite the artifact with the retry
               artifact = saveDeliverable(retryResult.content, card.text, 'pipeline');
@@ -674,15 +722,10 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           var socialBrief = await socialResearchForBuild(String(researchTopic).slice(0, 120));
           if (researchBrief && socialBrief) researchBrief += '\n\n' + socialBrief;
           else if (!researchBrief && socialBrief) researchBrief = socialBrief;
-          if (researchBrief && brain) {
+          if (researchBrief) {
             researchStatus = 'grounded';
             try {
-              var grounded = await brain.think({
-                lane: 'build',
-                persona: builderPersona,
-                messages: [{ role: 'user', content: basePrompt + '\n\n' + researchBrief }],
-                source: 'kanban-grounded:' + j.id
-              });
+              var grounded = await generateContent(basePrompt + '\n\n' + researchBrief, 'kanban-grounded:' + j.id, builderPersona);
               if (grounded && !grounded.offline && grounded.content) {
                 raw = grounded.content;
               }
@@ -699,19 +742,16 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
 
         // If rejected, retry once with the issues fed back
-        if (review.verdict === 'reject' && !j._reviewRetried && brain) {
+        if (review.verdict === 'reject' && !j._reviewRetried) {
           j._reviewRetried = true;
           try {
-            var retryResult = await brain.think({
-              lane: 'build',
-              persona: builderPersona,
-              messages: [{ role: 'user', content:
-                basePrompt + '\n\nYour previous output was rejected by review for these reasons:\n' +
-                review.issues.map(function(i) { return '- ' + i; }).join('\n') +
-                '\nFix ALL of these issues and regenerate the complete deliverable.'
-              }],
-              source: 'kanban-retry:' + j.id
-            });
+            var retryResult = await generateContent(
+              basePrompt + '\n\nYour previous output was rejected by review for these reasons:\n' +
+              review.issues.map(function(i) { return '- ' + i; }).join('\n') +
+              '\nFix ALL of these issues and regenerate the complete deliverable.',
+              'kanban-retry:' + j.id,
+              builderPersona
+            );
             if (retryResult && !retryResult.offline && retryResult.content) {
               artifact = saveDeliverable(retryResult.content, slug + '-' + j.id + '-r', 'kanban');
               review = await fullReview(card, artifact, brain);

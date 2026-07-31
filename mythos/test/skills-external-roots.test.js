@@ -240,4 +240,68 @@ describe('skills loader — external root resolution', function() {
     assert.equal(/\/home\/[a-z]/.test(src), false, 'no Unix home path literal');
     assert.ok(/USERPROFILE|homedir/.test(src), 'home must be derived from the environment');
   });
+
+  // Packs in the wild use three different layouts. A skill sitting in an
+  // unsearched one fails exactly like an uninstalled skill: silently.
+  it('searches all three plugin-pack layouts (src, .claude/skills, skills)', function() {
+    const home = path.join(tmp, 'home3');
+    const pack = path.join(home, '.claude', 'plugins', 'marketplaces', 'somepack');
+    fs.mkdirSync(path.join(pack, 'skills'), { recursive: true });
+    process.env.USERPROFILE = home;
+    process.env.HOME = home;
+    delete process.env.MYTHOS_SKILLS_DIR;
+
+    writeSkill(path.join(pack, 'skills'), 'layout-three', {
+      'SKILL.md': '---\nname: layout-three\ndescription: third layout\n---\nGuidance body here.',
+      'scripts/search.py': 'print("hi")',
+    });
+
+    const loader = freshLoader();
+    assert.notEqual(loader.resolveSkillFile('layout-three', 'scripts/search.py'), '',
+      '<pack>/skills/<name> must be a searched root');
+    assert.match(loader.loadContent('layout-three'), /Guidance body here/);
+  });
+
+  // A skill cloned from GitHub has no hand-written SKILL-CORE.md in this repo.
+  // Before the fallback it was visible to use_skill but silently absent from the
+  // automatic essence injection that every UI build relies on.
+  it('loadEssence falls back to the head of an installed SKILL.md when no essence is vendored', function() {
+    const custom = path.join(tmp, 'cloned');
+    fs.mkdirSync(custom, { recursive: true });
+    process.env.MYTHOS_SKILLS_DIR = custom;
+
+    const body = Array.from({ length: 80 }, (_, i) => 'guidance line ' + (i + 1)).join('\n');
+    writeSkill(custom, 'from-github', {
+      'SKILL.md': '---\nname: from-github\ndescription: cloned skill\n---\n' + body,
+    });
+
+    const loader = freshLoader();
+    const essence = loader.loadEssence('from-github');
+    assert.ok(essence, 'a cloned skill must still contribute an essence');
+    assert.match(essence, /guidance line 1/);
+    assert.doesNotMatch(essence, /^---$/m, 'frontmatter is metadata, not guidance');
+    assert.doesNotMatch(essence, /guidance line 80/, 'only the head is injected, to bound prompt cost');
+  });
+
+  it('loadEssence prefers the vendored essence over an installed SKILL.md', function() {
+    const custom = path.join(tmp, 'shadow');
+    fs.mkdirSync(custom, { recursive: true });
+    process.env.MYTHOS_SKILLS_DIR = custom;
+    writeSkill(custom, 'ponytail', { 'SKILL.md': '---\nname: ponytail\n---\nEXTERNAL BODY' });
+
+    const loader = freshLoader();
+    const vendored = path.join(__dirname, '..', 'skills', 'ponytail', 'SKILL-CORE.md');
+    if (!fs.existsSync(vendored)) return; // fixture guard
+    assert.doesNotMatch(loader.loadEssence('ponytail'), /EXTERNAL BODY/,
+      'the hand-condensed vendored essence wins, so a fresh clone is deterministic');
+  });
+
+  it('loadEssence returns null for a skill that exists nowhere', function() {
+    const home = path.join(tmp, 'bare');
+    fs.mkdirSync(home, { recursive: true });
+    process.env.USERPROFILE = home;
+    process.env.HOME = home;
+    delete process.env.MYTHOS_SKILLS_DIR;
+    assert.equal(freshLoader().loadEssence('does-not-exist'), null);
+  });
 });
