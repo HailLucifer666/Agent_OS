@@ -137,8 +137,18 @@ describe('WAVE 1 — a window-title match is never the launched app (node side)'
       assert.match(res.evidence.observed, /14556/);
       // Notepad restores yesterday's tabs, so the fresh-document step must still
       // run on the resolved path — Wave 1 narrows it, it does not remove it.
-      const sent = cmds.filter((c) => c.cmd === 'send_key').map((c) => c.key);
-      assert.deepEqual(sent, ['ctrl+n'], 'the resolved path keeps its clean-document behaviour');
+      // WAVE 9 (BUG-062): that step is now `new_document`, not `send_key ctrl+n`.
+      // ctrl+n rides SendInput, which Win11's packaged Notepad silently discards,
+      // so it opened nothing while freshDocument:true claimed otherwise.
+      assert.deepEqual(
+        cmds.filter((c) => c.cmd === 'new_document').map((c) => c.pid),
+        [14556],
+        'the resolved path keeps its clean-document behaviour, now via an oracle-backed new tab',
+      );
+      assert.equal(
+        cmds.some((c) => c.cmd === 'send_key' && c.key === 'ctrl+n'), false,
+        'ctrl+n must not be the mechanism — it cannot be verified and does not work here',
+      );
     });
   });
 

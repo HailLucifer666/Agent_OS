@@ -244,14 +244,37 @@ function createLiveToolAdapter(deps) {
     // the entry only when a session happens to be open was a memory leak on
     // every accept/reject that raced a closed/gone session.
     livePendingConfirms.delete(confirmId);
+
+    // Wave 0's evidence contract, on the confirm path. This string is the ONLY
+    // thing the model learns about an approved action's outcome, and on
+    // 2026-07-31 20:03 it said "It succeeded" over a ui_type that had come back
+    // ok:true + unverified:true — which the model then read out as "the typing
+    // has finally been sent through successfully" into an empty Notepad.
+    // A confirmation gates INTENT; only evidence gates OUTCOME.
+    const ok = Boolean(accepted && outcome && outcome.ok);
+    const unverified = ok && Boolean(outcome.unverified);
+    let verdict;
+    if (!accepted) {
+      verdict = 'The operator DECLINED that action.';
+    } else if (!ok) {
+      verdict = `The operator APPROVED ${pending.name} but it FAILED: ${String((outcome && outcome.result) || 'unknown')}`;
+    } else if (unverified) {
+      verdict = `The operator APPROVED ${pending.name} and it ran, but the outcome is UNVERIFIED: ` +
+        String(outcome.reason || 'no confirmation available') +
+        '. Do NOT claim it completed — tell the operator exactly what could not be confirmed.';
+    } else {
+      verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`;
+    }
+
+    // Record BEFORE the session check: this entry feeds AD-4 reconciliation and
+    // the audit, not just the model, so a socket that closed while the human was
+    // deciding must not erase what happened. reportLateOutcome already ordered
+    // it this way.
+    liveTurnActions.push({ tool: pending.name, ok: ok && !unverified, unverified, summary: verdict });
+
     const liveSession = getLiveSession ? getLiveSession() : null;
     if (!liveSession || !liveSession.isOpen()) return; // nothing left to tell — best-effort
-    const verdict = !accepted ? 'The operator DECLINED that action.'
-      : (outcome && outcome.ok)
-        ? `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`
-        : `The operator APPROVED ${pending.name} but it FAILED: ${String((outcome && outcome.result) || 'unknown')}`;
     liveSession.sendText(`[SYSTEM] ${verdict} Report this to the operator accurately.`);
-    liveTurnActions.push({ tool: pending.name, ok: Boolean(accepted && outcome && outcome.ok), summary: verdict });
   }
 
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic

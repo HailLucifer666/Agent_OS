@@ -185,6 +185,14 @@ public static class NativeInput {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    // WAVE 9 (BUG-060): a window can be the foreground window while MINIMIZED.
+    // On 2026-07-31 Notepad sat at -32000,-32000 (the minimized parking
+    // coordinate) for 80+ seconds after focus_window reported focused:true, so
+    // GetForegroundWindow alone is not proof the operator can see anything.
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsIconic(IntPtr hWnd);
+
     [DllImport("user32.dll")]
     public static extern short VkKeyScan(char ch);
 
@@ -874,7 +882,21 @@ function Handle-FocusWindow($TargetPid) {
         if ([NativeInput]::GetForegroundWindow() -ne $hwnd) {
             return ('Failed to bring PID ' + $TargetPid + ' to the foreground (blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore).')
         }
-        return @{ pid = $TargetPid; focused = $true; method = $method }
+
+        # WAVE 9 (BUG-060) — foreground is not the same as visible. Windows will
+        # happily name a MINIMIZED window as foreground, and on 2026-07-31 that is
+        # exactly what happened: focus_window returned focused:true while Notepad
+        # sat at -32000,-32000, so the operator watched an empty desktop while
+        # MYTHOS reported success. One more restore, then an honest failure.
+        if ([NativeInput]::IsIconic($hwnd)) {
+            [NativeInput]::ShowWindow($hwnd, [NativeInput]::SW_RESTORE) | Out-Null
+            Start-Sleep -Milliseconds 200
+            if ([NativeInput]::IsIconic($hwnd)) {
+                return ('PID ' + $TargetPid + ' is the foreground window but is still MINIMIZED after a restore, so nothing is visible on screen and typing into it cannot be trusted.')
+            }
+            $method = $method + '+restore-iconic'
+        }
+        return @{ pid = $TargetPid; focused = $true; visible = $true; method = $method }
     } catch {
         return ('Cannot focus PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
@@ -1435,6 +1457,131 @@ function Test-TextLanded($Haystack, $Needle) {
     return $h.Contains($n)
 }
 
+# Every editable, keyboard-focusable, on-screen descendant of $Root, as candidate
+# records. Extracted from Handle-FocusMessageBox (Wave 7) so Handle-UiType can use
+# the same live-proven search — measured 2026-07-31 against a real Electron window:
+# 7 candidates found, SetFocus via TextPattern.
+#
+# Callers rank the results themselves, because "the place text goes" differs by
+# intent: a chat app's compose box is the LOWEST box on screen, while a text
+# editor's document is the LARGEST. One shared search, two honest pick strategies.
+function Find-EditableDescendants($Root) {
+    $candidates = @()
+    if (-not $Root) { return $candidates }
+    # Bounded by UIA itself; a window's tree is small enough that this is not slow.
+    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($el in $all) {
+        try {
+            if (-not $el.Current.IsKeyboardFocusable) { continue }
+            if ($el.Current.IsOffscreen) { continue }
+            $editable = $false
+            $via = $null
+            try {
+                $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
+                if ($vp -and -not $vp.Current.IsReadOnly) { $editable = $true; $via = 'ValuePattern' }
+            } catch { }
+            if (-not $editable) {
+                try {
+                    $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) -as [System.Windows.Automation.TextPattern]
+                    if ($tp) { $editable = $true; $via = 'TextPattern' }
+                } catch { }
+            }
+            if (-not $editable) { continue }
+            $r = $el.Current.BoundingRectangle
+            if ($r.Width -le 0 -or $r.Height -le 0) { continue }
+            # ControlType matters for the editor case: a read-only document also
+            # exposes TextPattern, so Edit/Document is the signal that this is
+            # where typing belongs rather than merely somewhere text can be read.
+            $ctName = 'unknown'
+            try { $ctName = [string]$el.Current.ControlType.ProgrammaticName } catch { }
+            $candidates += @{
+                element = $el
+                name = [string]$el.Current.Name
+                via = $via
+                controlType = $ctName
+                isTextEntry = ($ctName -match 'ControlType\.(Edit|Document)$')
+                area = [double]($r.Width * $r.Height)
+                bottom = [double]($r.Y + $r.Height)
+                cx = [int]($r.X + $r.Width / 2)
+                cy = [int]($r.Y + $r.Height / 2)
+            }
+        } catch { }
+    }
+    return $candidates
+}
+
+# WAVE 9 (BUG-059) — put the caret in a real edit control before injecting.
+#
+# 2026-07-31 20:03: focus_window reported focused:true, ui_type's foreground
+# pre-check passed, typedIntoTitle read "Untitled - Notepad", SendInput injected 7
+# events — and the document stayed empty, with the read-back finding a focused
+# element exposing NEITHER ValuePattern NOR TextPattern. That combination only
+# happens when the focused element is the window frame, not its editor: a
+# SYNTHETIC foreground grant (AttachThreadInput / lock-timeout / minimize-restore)
+# activates a window without giving any child keyboard focus, so the keystrokes
+# had no editable target at all.
+#
+# So the read-back's $null was never only a verification gap — it was the symptom
+# of the typing failure itself. Finding an editable descendant and focusing it
+# fixes both halves: the keystrokes get a target, and the oracle gets a patterned
+# element to read.
+function Focus-EditableDescendant($Hwnd) {
+    try {
+        if ($Hwnd -eq [IntPtr]::Zero) { return @{ focused = $false; reason = 'no foreground window' } }
+        # FromHandle, not FindFirst-by-pid: an app with several windows must have
+        # the caret placed in the one that is actually in front.
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle($Hwnd)
+        if (-not $root) { return @{ focused = $false; reason = 'the foreground window exposes no UI Automation element' } }
+
+        $candidates = Find-EditableDescendants $root
+        if ($candidates.Count -eq 0) {
+            return @{ focused = $false; reason = 'the foreground window contains no editable, keyboard-focusable element' }
+        }
+
+        # A text editor's document is the biggest editable surface in its window;
+        # Edit/Document control types outrank anything else that merely exposes a
+        # text pattern (toolbars, read-only panes).
+        $pick = $candidates | Sort-Object -Property @{ Expression = 'isTextEntry'; Descending = $true },
+                                                    @{ Expression = 'area'; Descending = $true } |
+                Select-Object -First 1
+
+        $method = $null
+        try { $pick.element.SetFocus(); $method = 'uia-setfocus'; Start-Sleep -Milliseconds 120 } catch { }
+
+        $read = Read-FocusedElementText
+        if ($null -eq $read) {
+            # SetFocus is advisory — some controls ignore it. A click on the
+            # element's centre is what a human would do.
+            try {
+                Click-AtScreenCoords $pick.cx $pick.cy
+                $method = 'click-center'
+                Start-Sleep -Milliseconds 180
+                $read = Read-FocusedElementText
+            } catch { }
+        }
+
+        if ($null -eq $read) {
+            return @{
+                focused = $false
+                reason = ('found ' + $candidates.Count + ' editable element(s) in the foreground window but could not put the caret in one (tried UIA SetFocus and a click)')
+                candidateCount = $candidates.Count
+            }
+        }
+
+        return @{
+            focused = $true
+            method = $method
+            via = $pick.via
+            controlType = $pick.controlType
+            name = $pick.name
+            candidateCount = $candidates.Count
+        }
+    } catch {
+        return @{ focused = $false; reason = ('could not search the foreground window for an edit control: ' + $_.Exception.Message) }
+    }
+}
+
 function Handle-UiType($text, $TargetPid, $elementPath) {
     if (-not $text) { return 'Text is required.' }
     try {
@@ -1484,6 +1631,42 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         # the content to have CHANGED as well is what makes this a real oracle.
         $beforeRead = Read-FocusedElementText
 
+        # WAVE 9 (BUG-059) — no editable control has the caret. Foreground is not
+        # focus: a synthetic activation puts the window in front without focusing
+        # anything inside it, and SendInput then injects into nothing. Place the
+        # caret first, then read the BEFORE state again from the element we chose.
+        $caretPlacement = $null
+        if ($null -eq $beforeRead) {
+            $curFg = [NativeInput]::GetForegroundWindow()
+            $caretPlacement = Focus-EditableDescendant $curFg
+            if ($caretPlacement.focused) {
+                $beforeRead = Read-FocusedElementText
+            }
+        }
+
+        # WAVE 9 (BUG-061) — TRY, VERIFY, ESCALATE. The real root cause of BUG-051.
+        #
+        # Measured 2026-07-31 against Win11 Notepad, with diagnose_type fixed so its
+        # inter-route clear no longer rides the mechanism under test:
+        #
+        #   uia-valuepattern-setvalue     LANDED
+        #   uia-setfocus-then-sendinput   did NOT land  (48 events "injected")
+        #   sendinput-unicode             did NOT land  (48 events "injected")
+        #   wm-char-post                  LANDED
+        #
+        # SendInput is documented to fail silently when blocked by UIPI: "neither
+        # GetLastError nor the return value will indicate the failure". Win11's
+        # packaged Notepad is such a target, so the production path reported a full
+        # injection into a document that never received a character. No amount of
+        # focus or window work fixes that — the MECHANISM is blocked.
+        #
+        # SendInput stays FIRST: it is the only route that honours the caret's
+        # position, and the only one proven against Chromium/Electron (BUG-053's
+        # stray Enter reached a real Slack DM). The Wave 2 read-back then decides
+        # whether to escalate, which turns verification into recovery instead of
+        # just reporting.
+        $mechanism = 'sendinput-unicode'
+        $mechanismsTried = @('sendinput-unicode')
         $script:LastVkSent = $null
         Send-UnicodeText $text
         # BUG-042-class honest failure: SendInput injected zero events (UIPI /
@@ -1493,7 +1676,80 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             return "Type failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
         }
 
+        # Escalate ONLY on proof that nothing landed: the oracle answered, the text
+        # is absent, AND the content is byte-identical to the before-state. An
+        # unreadable or partially-changed control is ambiguous, and retrying there
+        # would type the text twice — a duplicated message is worse than an honest
+        # "I could not confirm this".
+        Start-Sleep -Milliseconds 120
+        $probe = Read-FocusedElementText
+        $provablyAbsent = ($null -ne $probe) -and ($null -ne $beforeRead) -and
+                          (-not (Test-TextLanded $probe.text $text)) -and
+                          ([string]$probe.text -eq [string]$beforeRead.text)
+
+        if ($provablyAbsent) {
+            # Route 2 — UIA ValuePattern.SetValue, which does not travel through the
+            # input stack at all, so UIPI cannot block it. SetValue REPLACES the
+            # whole value, so the existing content is re-supplied explicitly and the
+            # new text appended; passing $text alone would silently wipe the
+            # operator's document. Caret position is lost (append-at-end), which is
+            # why this is the fallback and not the default.
+            $mechanismsTried += 'uia-setvalue'
+            try {
+                $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+                $vp = $null
+                if ($el) { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern] }
+                if ($vp -and -not $vp.Current.IsReadOnly) {
+                    $vp.SetValue(([string]$beforeRead.text) + $text)
+                    Start-Sleep -Milliseconds 120
+                    $probe = Read-FocusedElementText
+                    if ($null -ne $probe -and (Test-TextLanded $probe.text $text)) { $mechanism = 'uia-setvalue' }
+                }
+            } catch { }
+
+            if ($mechanism -eq 'sendinput-unicode') {
+                # Route 3 — WM_CHAR posted straight to the focused child control.
+                # GetFocus is thread-local, so our input queue must be attached to
+                # the foreground thread's first, or it reports our own (windowless)
+                # focus and the characters go nowhere.
+                $mechanismsTried += 'wm-char-post'
+                try {
+                    $fgH2 = [NativeInput]::GetForegroundWindow()
+                    $fgP2 = 0
+                    $fgThread = [NativeInput]::GetWindowThreadProcessId($fgH2, [ref]$fgP2)
+                    $ourThread = [NativeInput]::GetCurrentThreadId()
+                    $attached2 = [NativeInput]::AttachThreadInput($ourThread, $fgThread, $true)
+                    $target = [IntPtr]::Zero
+                    try { if ($attached2) { $target = [NativeInput]::GetFocus() } }
+                    finally { if ($attached2) { [void][NativeInput]::AttachThreadInput($ourThread, $fgThread, $false) } }
+                    if ($target -eq [IntPtr]::Zero) { $target = $fgH2 }
+                    foreach ($ch in $text.ToCharArray()) {
+                        [void][NativeInput]::PostMessage($target, [NativeInput]::WM_CHAR, [IntPtr][int][char]$ch, [IntPtr]0)
+                        Start-Sleep -Milliseconds 3
+                    }
+                    Start-Sleep -Milliseconds 150
+                    $probe = Read-FocusedElementText
+                    if ($null -ne $probe -and (Test-TextLanded $probe.text $text)) { $mechanism = 'wm-char-post' }
+                } catch { }
+            }
+        }
+
         $result = @{ typed = $true; length = $text.Length; typedIntoPid = [int]$typedIntoPid; typedIntoTitle = $typedIntoTitle }
+        $result.mechanism = $mechanism
+        if ($mechanismsTried.Count -gt 1) { $result.mechanismsTried = $mechanismsTried }
+
+        # Whether the caret had to be placed, and how. This is the diagnostic that
+        # was missing on 2026-07-31: "unavailable" alone could not distinguish
+        # "this surface has no readable pattern" from "nothing was focused at all".
+        if ($null -ne $caretPlacement) {
+            $result.caretPlaced = [bool]$caretPlacement.focused
+            if ($caretPlacement.focused) {
+                $result.caretPlacedVia = [string]$caretPlacement.method
+                $result.caretControlType = [string]$caretPlacement.controlType
+            } else {
+                $result.caretPlacementReason = [string]$caretPlacement.reason
+            }
+        }
 
         # Read back. A brief settle first: SendInput is asynchronous, so the control
         # has usually not processed the last character when SendInput returns.
@@ -1503,7 +1759,14 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         if ($null -eq $afterRead) {
             # No readable pattern. Genuinely unknown — not a failure.
             $result.readBack = 'unavailable'
-            $result.readBackReason = 'the focused control exposes neither ValuePattern nor TextPattern, so its text cannot be read back'
+            if ($null -ne $caretPlacement -and -not $caretPlacement.focused) {
+                # The stronger statement, and the one that was true tonight: nothing
+                # editable held the caret, so the keystrokes most likely went nowhere.
+                $result.readBackReason = 'nothing editable had the keyboard caret and one could not be focused (' +
+                    [string]$caretPlacement.reason + '), so the keystrokes probably went nowhere'
+            } else {
+                $result.readBackReason = 'the focused control exposes neither ValuePattern nor TextPattern, so its text cannot be read back'
+            }
         } elseif (Test-TextLanded $afterRead.text $text) {
             $changed = ($null -eq $beforeRead) -or ($beforeRead.text -ne $afterRead.text)
             if ($changed) {
@@ -1562,41 +1825,7 @@ function Handle-FocusMessageBox($TargetPid) {
         $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
         if (-not $win) { return ('No window found for PID ' + $TargetPid + '.') }
 
-        # Every descendant, then filter to genuinely editable ones. Bounded by UIA
-        # itself; a chat window's tree is small enough that this is not slow.
-        $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-            [System.Windows.Automation.Condition]::TrueCondition)
-
-        $candidates = @()
-        foreach ($el in $all) {
-            try {
-                if (-not $el.Current.IsKeyboardFocusable) { continue }
-                if ($el.Current.IsOffscreen) { continue }
-                $editable = $false
-                $via = $null
-                try {
-                    $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
-                    if ($vp -and -not $vp.Current.IsReadOnly) { $editable = $true; $via = 'ValuePattern' }
-                } catch { }
-                if (-not $editable) {
-                    try {
-                        $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) -as [System.Windows.Automation.TextPattern]
-                        if ($tp) { $editable = $true; $via = 'TextPattern' }
-                    } catch { }
-                }
-                if (-not $editable) { continue }
-                $r = $el.Current.BoundingRectangle
-                if ($r.Width -le 0 -or $r.Height -le 0) { continue }
-                $candidates += @{
-                    element = $el
-                    name = [string]$el.Current.Name
-                    via = $via
-                    bottom = [double]($r.Y + $r.Height)
-                    cx = [int]($r.X + $r.Width / 2)
-                    cy = [int]($r.Y + $r.Height / 2)
-                }
-            } catch { }
-        }
+        $candidates = Find-EditableDescendants $win
 
         if ($candidates.Count -eq 0) {
             return ('Found the window for PID ' + $TargetPid + ' but no editable, keyboard-focusable element in it — cannot locate a message box.')
@@ -1637,6 +1866,104 @@ function Handle-FocusMessageBox($TargetPid) {
         }
     } catch {
         return ('Could not find a message box: ' + $_.Exception.Message)
+    }
+}
+
+# WAVE 9 (BUG-062) — "open notepad" must mean a BLANK document, every time.
+#
+# Win11 Notepad is a single-instance, TAB-BASED app with session restore. On
+# 2026-07-31 the operator asked for a fresh Notepad and got their own .env file
+# reopened in a restored tab; the launch had reported freshDocument:true because
+# it fired ctrl+n and only checked that send_key returned ok. Measured tonight:
+# ctrl+n does NOT open a tab, because it rides SendInput, which this app silently
+# discards (see BUG-061). The claim was unfalsifiable and false.
+#
+# So the new tab is opened the way UIA can prove: invoke the Add-New-Tab button
+# (AutomationId 'AddButton', read off the live app rather than guessed — its Name
+# is localised, its AutomationId is not) and require the TAB COUNT to rise and the
+# active document to be EMPTY. Keystrokes are only a fallback, and they have to
+# pass the same check.
+function Handle-NewDocument($TargetPid) {
+    if (-not $TargetPid) { return 'PID is required.' }
+    try {
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+        $cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$TargetPid)
+        $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+        if (-not $win) { return ('No window found for PID ' + $TargetPid + '.') }
+
+        $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::TabItem)
+        $countTabs = { @($win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)).Count }
+
+        # The active document is the one holding the caret; fall back to the first
+        # Document element when nothing is focused yet.
+        $activeText = {
+            $r = Read-FocusedElementText
+            if ($null -ne $r) { return [string]$r.text }
+            $d = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Document)))
+            if (-not $d) { return $null }
+            try {
+                $tp = $d.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) -as [System.Windows.Automation.TextPattern]
+                if ($tp) { return [string]$tp.DocumentRange.GetText(-1) }
+            } catch { }
+            return $null
+        }
+
+        $tabsBefore = & $countTabs
+        $textBefore = & $activeText
+
+        # Already blank: opening another empty tab would just litter the app.
+        if ($null -ne $textBefore -and -not $textBefore.Trim()) {
+            return @{ fresh = $true; created = $false; via = 'already-blank'; tabs = $tabsBefore }
+        }
+
+        $via = $null
+        $add = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'AddButton')))
+        if ($add) {
+            try {
+                $ip = $add.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern]
+                if ($ip) { $ip.Invoke(); $via = 'uia-invoke-addbutton'; Start-Sleep -Milliseconds 500 }
+            } catch { }
+        }
+
+        $tabsAfter = & $countTabs
+        $textAfter = & $activeText
+
+        # Fallback: ctrl+n. Held to the SAME oracle — a keystroke that reports
+        # "sent" proves nothing about whether a tab appeared.
+        if (($tabsAfter -le $tabsBefore) -or ($null -eq $textAfter) -or $textAfter.Trim()) {
+            try {
+                Send-VkCombo @(0x11) 0x4E    # ctrl+n
+                Start-Sleep -Milliseconds 600
+                $via = if ($via) { $via + '+ctrl-n' } else { 'ctrl-n' }
+            } catch { }
+            $tabsAfter = & $countTabs
+            $textAfter = & $activeText
+        }
+
+        if ($null -eq $textAfter) {
+            return ('Asked PID ' + $TargetPid + ' for a new document but its text cannot be read, so a blank document cannot be confirmed.')
+        }
+        if ($textAfter.Trim()) {
+            return ('Asked PID ' + $TargetPid + ' for a new document but the active document still contains text, so it is NOT a fresh one (tried ' + [string]$via + ').')
+        }
+
+        return @{
+            fresh = $true
+            created = $true
+            via = $via
+            tabsBefore = $tabsBefore
+            tabsAfter = $tabsAfter
+        }
+    } catch {
+        return ('Could not open a new document: ' + $_.Exception.Message)
     }
 }
 
@@ -1697,19 +2024,33 @@ function Handle-DiagnoseType($text, $TargetPid) {
     $probe = Read-FocusedElementText
     $attempts = @()
 
-    # Clear the field between mechanisms; best-effort, and reported so a route that
-    # only "worked" because the field was dirty is visible as such.
+    # Clear the field between mechanisms. This MUST NOT use keystrokes: ctrl+a +
+    # delete ride SendInput, the very mechanism under test, so when SendInput is
+    # blocked the clear silently does nothing and every later route reports
+    # landed:$true on the FIRST route's leftover text. Measured 2026-07-31 against
+    # Win11 Notepad: routes 2-4 all claimed success over text that UIA SetValue
+    # (route 1) had put there. An instrument that rides the mechanism it measures
+    # cannot falsify it — the screen_look/Wave 4 mistake in a different costume.
+    #
+    # UIA SetValue is independent of the input stack, so it clears honestly. It
+    # returns whether the field was actually emptied, and each attempt records
+    # that, so a route riding a dirty field is visible instead of invisible.
     $clear = {
         try {
-            Send-VkCombo @(0x11) 0x41   # ctrl+a
-            Start-Sleep -Milliseconds 60
-            Send-VkKey 0x2E             # delete
+            $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+            if ($el) {
+                $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
+                if ($vp -and -not $vp.Current.IsReadOnly) { $vp.SetValue('') }
+            }
             Start-Sleep -Milliseconds 80
-        } catch { }
+            $chk = Read-FocusedElementText
+            if ($null -eq $chk) { return $null }          # unknown
+            return [bool](-not [string]$chk.text)          # $true when genuinely empty
+        } catch { return $null }
     }
 
     $record = {
-        param($Name, $Detail)
+        param($Name, $Detail, $FieldWasEmpty)
         Start-Sleep -Milliseconds 150
         $after = Read-FocusedElementText
         $landed = $false
@@ -1719,18 +2060,26 @@ function Handle-DiagnoseType($text, $TargetPid) {
             $seen = [string]$after.text
             if ($seen.Length -gt 200) { $seen = $seen.Substring(0, 200) }
         }
+        # A "landed" over a field that was never emptied proves nothing: the text
+        # may be a previous route's. Downgrade it and say so.
+        $trustworthy = ($FieldWasEmpty -eq $true)
+        if ($landed -and -not $trustworthy) {
+            $landed = $false
+            $Detail = [string]$Detail + ' — INCONCLUSIVE: the field could not be cleared first, so matching text may be left over from an earlier route'
+        }
         return @{
             mechanism = $Name
             landed = $landed
             readable = [bool]($null -ne $after)
             via = if ($after) { $after.via } else { $null }
             observed = $seen
+            fieldClearedFirst = $FieldWasEmpty
             detail = $Detail
         }
     }
 
     # --- 1: UIA ValuePattern.SetValue — no keystrokes at all -----------------
-    & $clear
+    $wasEmpty = & $clear
     $d1 = 'not attempted'
     try {
         $el = [System.Windows.Automation.AutomationElement]::FocusedElement
@@ -1741,10 +2090,10 @@ function Handle-DiagnoseType($text, $TargetPid) {
             else { $vp.SetValue($text); $d1 = 'SetValue called' }
         } else { $d1 = 'no ValuePattern on the focused element' }
     } catch { $d1 = 'threw: ' + $_.Exception.Message }
-    $attempts += (& $record 'uia-valuepattern-setvalue' $d1)
+    $attempts += (& $record 'uia-valuepattern-setvalue' $d1 $wasEmpty)
 
     # --- 2: UIA SetFocus, then SendInput ------------------------------------
-    & $clear
+    $wasEmpty = & $clear
     $d2 = 'not attempted'
     try {
         $el2 = [System.Windows.Automation.AutomationElement]::FocusedElement
@@ -1754,22 +2103,22 @@ function Handle-DiagnoseType($text, $TargetPid) {
         Send-UnicodeText $text
         $d2 += ' (events=' + [string]$script:LastVkSent + ')'
     } catch { $d2 = 'threw: ' + $_.Exception.Message }
-    $attempts += (& $record 'uia-setfocus-then-sendinput' $d2)
+    $attempts += (& $record 'uia-setfocus-then-sendinput' $d2 $wasEmpty)
 
     # --- 3: SendInput unicode — the current production path ------------------
-    & $clear
+    $wasEmpty = & $clear
     $d3 = 'not attempted'
     try {
         $script:LastVkSent = $null
         Send-UnicodeText $text
         $d3 = 'events=' + [string]$script:LastVkSent
     } catch { $d3 = 'threw: ' + $_.Exception.Message }
-    $attempts += (& $record 'sendinput-unicode' $d3)
+    $attempts += (& $record 'sendinput-unicode' $d3 $wasEmpty)
 
     # --- 4: WM_CHAR posted to the focused CONTROL ---------------------------
     # GetFocus is thread-local, so the foreground thread's input queue has to be
     # attached to ours first, otherwise it reports our own (windowless) focus.
-    & $clear
+    $wasEmpty = & $clear
     $d4 = 'not attempted'
     try {
         $fgThread = [NativeInput]::GetWindowThreadProcessId($fgHwnd, [ref]$fgPid)
@@ -1787,9 +2136,12 @@ function Handle-DiagnoseType($text, $TargetPid) {
             [void][NativeInput]::PostMessage($target, [NativeInput]::WM_CHAR, [IntPtr][int][char]$ch, [IntPtr]0)
         }
     } catch { $d4 = 'threw: ' + $_.Exception.Message }
-    $attempts += (& $record 'wm-char-post' $d4)
+    $attempts += (& $record 'wm-char-post' $d4 $wasEmpty)
 
-    & $clear
+    # Leave the field as we found it. $clear now RETURNS a verdict, so discard it
+    # explicitly — an unassigned call would emit into this function's output and
+    # turn the returned hashtable into an array.
+    $null = & $clear
 
     $worked = @($attempts | Where-Object { $_.landed } | ForEach-Object { $_.mechanism })
     return @{
@@ -2282,6 +2634,10 @@ while ($true) {
         }
         'focus_message_box' {
             $result = Handle-FocusMessageBox $cmd.pid
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'new_document' {
+            $result = Handle-NewDocument $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'click_at' {

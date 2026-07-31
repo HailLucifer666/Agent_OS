@@ -126,7 +126,7 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
 // and nothing enforced it.
 var SESSION_RESTORING_APPS = /^notepad(\.exe)?$/i;
 
-async function launch_app({ name }) {
+async function launch_app({ name, existing }) {
   if (!name) return fail('App name is required.');
   var res = await delegate({ cmd: 'launch_app', name });
 
@@ -143,20 +143,33 @@ async function launch_app({ name }) {
   if (res.ok && byProcess) {
     lastLaunchedPid = r.pid;
 
-    // Fresh document. Best-effort by design: if focus or the keystroke fails the
+    // Fresh document. Best-effort by design: if focus or the new-tab step fails the
     // launch itself still succeeded, and reporting a launch failure because a
     // convenience step didn't land would be its own dishonesty. The outcome is
     // reported so the voice layer can be accurate about which document it typed
     // into rather than assuming a blank one.
-    if (SESSION_RESTORING_APPS.test(String(name).trim())) {
+    //
+    // WAVE 9 (BUG-062). This used to fire `send_key ctrl+n` and set
+    // freshDocument:true on nothing more than send_key returning ok. Measured
+    // 2026-07-31: ctrl+n does not open a Notepad tab at all, because it rides
+    // SendInput and Win11's packaged Notepad silently discards it (BUG-061). So
+    // the operator asked for a fresh Notepad, got their own .env restored in a
+    // tab, and was told freshDocument:true. new_document instead invokes the
+    // Add-New-Tab button through UIA and requires the tab count to rise AND the
+    // active document to be empty before it will claim anything.
+    if (!existing && SESSION_RESTORING_APPS.test(String(name).trim())) {
       // NOTE: fail() puts its message in .result, not .error (see the helper at
       // the top of this file) — reading .error here would silently discard the
       // real reason and report a generic one.
       var focused = await delegate({ cmd: 'focus_window', pid: lastLaunchedPid });
       if (focused.ok) {
-        var fresh = await delegate({ cmd: 'send_key', key: 'ctrl+n' });
-        res.result.freshDocument = Boolean(fresh.ok);
-        if (!fresh.ok) res.result.freshDocumentError = String(fresh.result || 'ctrl+n failed');
+        var fresh = await delegate({ cmd: 'new_document', pid: lastLaunchedPid });
+        res.result.freshDocument = Boolean(fresh.ok && fresh.result && fresh.result.fresh);
+        if (!res.result.freshDocument) {
+          res.result.freshDocumentError = String((fresh.result && fresh.result.error) || fresh.result || 'could not confirm a blank document');
+        } else if (fresh.result.via) {
+          res.result.freshDocumentVia = String(fresh.result.via);
+        }
       } else {
         res.result.freshDocument = false;
         res.result.freshDocumentError = String(focused.result || 'could not focus the window to open a new document');
@@ -707,7 +720,7 @@ async function capture_screenshot() {
 const KNOWN_DESKTOP_APPS = ['slack', 'discord', 'teams'];
 
 const TOOLS = [
-  { name: 'launch_app', description: 'Launch an application by name (e.g. "notepad", "chrome", "code").', params: { name: 'string - application name or path' }, danger: false, fn: launch_app },
+  { name: 'launch_app', description: 'Launch an application by name (e.g. "notepad", "chrome", "code"). Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name or path', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app },
   { name: 'list_windows', description: 'List all open windows with their PIDs, titles, process names, and visibility status.', params: {}, danger: false, fn: list_windows, needs_result: true },
   { name: 'focus_window', description: 'Bring a window to the foreground and restore it if minimized.', params: { pid: 'number - process ID of the window' }, danger: false, fn: focus_window },
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },

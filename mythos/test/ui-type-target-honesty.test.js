@@ -140,19 +140,27 @@ describe('launch_app opens a fresh document for session-restoring apps', () => {
     delete require.cache[FROM_PC_PATH];
   });
 
-  it('focuses and sends ctrl+n after launching notepad', async () => {
+  it('focuses and opens a verified new document after launching notepad', async () => {
+    // WAVE 9 (BUG-062). This test used to assert `ctrl+n` was sent, and passed
+    // while the real behaviour was broken: ctrl+n rides SendInput, which Win11's
+    // packaged Notepad silently discards (BUG-061), so no tab ever opened and the
+    // operator got their restored .env with freshDocument:true on top. Asserting
+    // the keystroke was sent could never have caught that — only asserting the
+    // OUTCOME can, which is what new_document reports.
     const { fake, fromPc } = withFakeChild((cmd) => {
       if (cmd.cmd === 'launch_app') return { ok: true, result: { pid: 321, name: cmd.name, launched: true } };
-      if (cmd.cmd === 'focus_window') return { ok: true, result: { pid: cmd.pid, focused: true } };
-      if (cmd.cmd === 'send_key') return { ok: true, result: { key: cmd.key, sent: true, combo: true } };
+      if (cmd.cmd === 'focus_window') return { ok: true, result: { pid: cmd.pid, focused: true, visible: true } };
+      if (cmd.cmd === 'new_document') return { ok: true, result: { fresh: true, created: true, via: 'uia-invoke-addbutton', tabsBefore: 1, tabsAfter: 2 } };
       return { ok: true, result: {} };
     });
 
     const res = await fromPc.launch_app({ name: 'notepad' });
     assert.equal(res.ok, true);
     assert.equal(res.result.freshDocument, true);
-    const keys = fake.calls.filter((c) => c.cmd === 'send_key').map((c) => c.key);
-    assert.deepEqual(keys, ['ctrl+n'], 'Windows 11 Notepad restores previous tabs, so a new document is required');
+    assert.equal(res.result.freshDocumentVia, 'uia-invoke-addbutton');
+    assert.deepEqual(fake.calls.filter((c) => c.cmd === 'new_document').map((c) => c.pid), [321]);
+    assert.equal(fake.calls.some((c) => c.cmd === 'send_key'), false,
+      'Windows 11 Notepad restores previous tabs, and a keystroke cannot prove a new one opened');
   });
 
   it('reports the launch as successful but flags an unconfirmed fresh document', async () => {
@@ -176,6 +184,7 @@ describe('launch_app opens a fresh document for session-restoring apps', () => {
     });
     await fromPc.launch_app({ name: 'spotify' });
     assert.equal(fake.calls.filter((c) => c.cmd === 'send_key').length, 0);
+    assert.equal(fake.calls.filter((c) => c.cmd === 'new_document').length, 0);
   });
 });
 

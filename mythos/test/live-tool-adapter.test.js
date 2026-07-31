@@ -152,6 +152,89 @@ describe('live-tool-adapter — resolveLiveConfirm', () => {
     assert.match(sent[0], /succeeded/);
   });
 
+  // 2026-07-31 20:03:38 — the operator approved ui_type into Notepad; the
+  // effector returned ok:true with unverified:true ("the focused control exposes
+  // neither ValuePattern nor TextPattern"), and this seam told the model
+  // "It succeeded", which it read out as "Excellent. The typing has finally been
+  // sent through successfully". reportLateOutcome already spoke the evidence
+  // contract; this path predated it.
+  test('an APPROVED but UNVERIFIED outcome is never described as succeeded', async () => {
+    const sent = [];
+    const liveSession = { isOpen: () => true, sendText: (t) => sent.push(t) };
+    let capturedConfirmId = null;
+    const { deps } = baseDeps({
+      leash: {
+        check: () => ({ allow: false, requireConfirm: true, tier: 3, reason: 'tier-3-requires-confirm' }),
+        confirm: { create: () => { capturedConfirmId = 'confirm-unver'; return capturedConfirmId; } },
+      },
+      getLiveSession: () => liveSession,
+    });
+    const adapter = createLiveToolAdapter(deps);
+    await adapter.handleLiveToolCalls([{ id: 'call-unver', name: 'ui_type', args: { text: 'Hi Alex' } }], { sendToolResponse: () => {} });
+
+    await adapter.resolveLiveConfirm(capturedConfirmId, {
+      ok: true,
+      unverified: true,
+      reason: 'the focused control exposes neither ValuePattern nor TextPattern, so its text cannot be read back',
+      result: { typed: true, readBack: 'unavailable' },
+    }, true);
+
+    assert.equal(sent.length, 1);
+    assert.match(sent[0], /APPROVED/, 'the approval itself is still reported');
+    assert.doesNotMatch(sent[0], /succeeded/i, 'an unproven outcome must never be called a success');
+    assert.match(sent[0], /UNVERIFIED|could NOT be confirmed/i);
+    assert.match(sent[0], /ValuePattern/, 'the reason must reach the model so it can say WHAT is unproven');
+
+    const entry = adapter._internal.liveTurnActions.at(-1);
+    assert.equal(entry.ok, false, 'AD-4: the turn record must not count an unproven action as ok');
+    assert.equal(entry.unverified, true);
+  });
+
+  test('an APPROVED and VERIFIED outcome is still reported as succeeded', async () => {
+    // Guards against over-correcting Wave 3 into never confirming anything.
+    const sent = [];
+    const liveSession = { isOpen: () => true, sendText: (t) => sent.push(t) };
+    let capturedConfirmId = null;
+    const { deps } = baseDeps({
+      leash: {
+        check: () => ({ allow: false, requireConfirm: true, tier: 3, reason: 'tier-3-requires-confirm' }),
+        confirm: { create: () => { capturedConfirmId = 'confirm-ver'; return capturedConfirmId; } },
+      },
+      getLiveSession: () => liveSession,
+    });
+    const adapter = createLiveToolAdapter(deps);
+    await adapter.handleLiveToolCalls([{ id: 'call-ver', name: 'ui_type', args: { text: 'Hi Alex' } }], { sendToolResponse: () => {} });
+    await adapter.resolveLiveConfirm(capturedConfirmId, {
+      ok: true,
+      unverified: false,
+      evidence: { oracle: 'read-back', observed: 'Hi Alex' },
+      result: { typed: true, readBack: 'confirmed', readBackText: 'Hi Alex' },
+    }, true);
+    assert.match(sent[0], /succeeded/i);
+    assert.equal(adapter._internal.liveTurnActions.at(-1).ok, true);
+  });
+
+  test('the turn record survives a session that closed before the operator replied', async () => {
+    // The honesty record is for the audit and AD-4 reconciliation, not only for
+    // the model — losing it when the socket happens to be gone is the same class
+    // of defect as not recording it at all. reportLateOutcome pushes before its
+    // session check; this path returned first.
+    let capturedConfirmId = null;
+    const { deps } = baseDeps({
+      leash: {
+        check: () => ({ allow: false, requireConfirm: true, tier: 3, reason: 'tier-3-requires-confirm' }),
+        confirm: { create: () => { capturedConfirmId = 'confirm-closed'; return capturedConfirmId; } },
+      },
+      getLiveSession: () => null,
+    });
+    const adapter = createLiveToolAdapter(deps);
+    await adapter.handleLiveToolCalls([{ id: 'call-closed', name: 'ui_type', args: {} }], { sendToolResponse: () => {} });
+    await adapter.resolveLiveConfirm(capturedConfirmId, { ok: true, unverified: true, reason: 'no read-back' }, true);
+    const entry = adapter._internal.liveTurnActions.at(-1);
+    assert.ok(entry, 'the action must be recorded even with no live session to notify');
+    assert.equal(entry.unverified, true);
+  });
+
   test('a rejected confirm sends a DECLINED system text', async () => {
     const sent = [];
     const liveSession = { isOpen: () => true, sendText: (t) => sent.push(t) };
