@@ -1825,7 +1825,14 @@ function createServer(deps) {
 
   // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
   bus.subscribe('action.*', (e) => {
-    const payload = { tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId, reason: e.payload.reason };
+    // `unverified` is relayed alongside `ok` (Wave 0 evidence contract): the HUD
+// must be able to draw "attempted, unconfirmed" as its own state. Dropping it
+    // here is what made the Agent Actions panel tick three ui_type calls that had
+    // typed nothing into a visibly empty Notepad.
+    const payload = {
+      tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId,
+      reason: e.payload.reason, unverified: e.payload.unverified,
+    };
     pushReplay('action', payload);
     broadcastAll({ type: 'action', payload });
   });

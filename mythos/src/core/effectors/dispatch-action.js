@@ -86,6 +86,18 @@ async function dispatchAction(decision, ctx) {
   //       the next tick dispatches the next step instead of step[0] forever.
   // Both are best-effort: failures here MUST NOT mask the action's own result.
   const actionOk = !!(result && result.ok);
+  // Wave 0 evidence contract (effectors/evidence.js): a world-changing effector
+  // may return ok:true WITHOUT having proved the world changed, in which case it
+  // sets unverified:true plus a spoken-usable reason. That is neither success nor
+  // failure and must not be flattened into either — a ✓ on an unverified action
+  // is exactly how three ui_type calls came to be reported as delivered text into
+  // an empty Notepad. Carried alongside `ok` rather than folded into it so the
+  // existing outcome:'ok'|'fail' audit vocabulary (asserted by the AD-4 tests)
+  // keeps its meaning.
+  const actionUnverified = actionOk && !!(result && result.unverified);
+  const unverifiedReason = actionUnverified
+    ? String((result && result.reason) || 'not confirmed').slice(0, 300)
+    : undefined;
   if (decision.skillRef && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
     try {
       // FIX-2: recordUse is async and was previously fire-and-forget with no
@@ -109,7 +121,10 @@ async function dispatchAction(decision, ctx) {
   }
 
   // 5. Emit completion event
-  bus.emit('action.completed', { tool: decision.tool, ok: actionOk, goalId: goalId });
+  bus.emit('action.completed', {
+    tool: decision.tool, ok: actionOk, goalId: goalId,
+    unverified: actionUnverified, reason: unverifiedReason,
+  });
 
   // B4: Audit-log the action outcome for traceability.
   if (memory && memory.audit && typeof memory.audit.write === 'function') {
@@ -121,7 +136,11 @@ async function dispatchAction(decision, ctx) {
         // shape) and was never carried over — outcome:'fail' alone is
         // useless for diagnosing WHY. Truncated: audit lines persist
         // forever in JSONL.
-        reason: actionOk ? undefined : reasonText(result && result.result).slice(0, 300),
+        reason: actionOk ? unverifiedReason : reasonText(result && result.result).slice(0, 300),
+        // Present only when true, so the JSONL an operator greps a year from now
+        // stays readable. This is the field that makes "MYTHOS said it typed the
+        // text" auditable after the fact.
+        unverified: actionUnverified || undefined,
         goalId: goalId,
         // REMEDIATION P2-12: this call never passed `actor`, so audit-writer's
         // own default (`entry.actor = 'cortex'`) silently applied to EVERY
