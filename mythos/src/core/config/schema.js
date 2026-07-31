@@ -46,6 +46,17 @@ const SCHEMA = {
   // the split comes straight back.
   VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-SoniaNeural' },
 
+  // Which engine speaks the NON-Live paths (boot greeting, proactive speech,
+  // batch replies). 'edge' = edge-tts (~900ms/sentence, free, unofficial
+  // Microsoft endpoint labelled personal/hobby-only). 'gemini' = Gemini TTS
+  // (~3.9s/sentence, metered) using the SAME prebuilt voice as the Live path, so
+  // the entity sounds like one person everywhere instead of edge-tts for the
+  // greeting and Aoede for the conversation. Defaults to 'edge' for latency.
+  VOICE_TTS_PROVIDER:       { type: 'string', default: 'edge' },
+  // Non-streaming TTS model. gemini-2.5-flash-preview-tts measured ~3.9s/sentence;
+  // gemini-3.1-flash-tts-preview measured ~17.6s and is NOT a sane default.
+  GEMINI_TTS_MODEL:         { type: 'string', default: 'gemini-2.5-flash-preview-tts' },
+
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
   // thresholds; defaults match the previously-hardcoded constants exactly,
   // zero behavior change until overridden). Exposed to the HUD via

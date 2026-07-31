@@ -13,7 +13,7 @@ const zlib = require('zlib');           // static-asset gzip (no `compression` d
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
-const edgeTts = require('../providers/edge-tts');
+const { selectTts, mimeFor, voiceFor } = require('../providers/tts');
 const groqStt = require('../providers/groq-stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
@@ -618,6 +618,20 @@ function createServer(deps) {
 
   let resolveReady;
   const ready = new Promise((resolve) => { resolveReady = resolve; });
+
+  // Which engine speaks the non-Live paths (boot greeting, proactive speech, batch
+  // replies). Defaults to edge-tts and, in that case, IS the edge-tts module object
+  // — so the tests that monkey-patch that singleton keep working. Set
+  // VOICE_TTS_PROVIDER=gemini to use the same prebuilt voice the Live path uses.
+  const tts = selectTts(config);
+  const ttsMime = mimeFor(tts);
+  // Voice ids are engine-specific and the namespaces are disjoint — see voiceFor().
+  const ttsVoice = voiceFor(tts, config);
+  // Gemini TTS returns WAV; edge-tts returns MP3, which is the client's default
+  // when no mime is declared. Only send the field when it differs, so existing
+  // chunk payloads stay byte-identical on the default path.
+  const chunkMime = ttsMime === 'audio/mpeg' ? undefined : ttsMime;
+  if (tts.name !== 'edge-tts') logger.info('tts.provider', { provider: tts.name, mime: ttsMime });
   const httpServer = app.listen(PORT, BIND, () => {
     logger.info('server.listening', { url: `http://${BIND}:${PORT}`, bind: BIND });
     resolveReady();
@@ -714,7 +728,7 @@ function createServer(deps) {
     sendOut({ type: 'proactive-speech', reqId, text, speak });
     let ttsUp = false;
     try {
-      ttsUp = await edgeTts.isAvailable();
+      ttsUp = await tts.isAvailable();
     } catch (err) {
       // The availability probe itself can throw (network error hitting the TTS
       // endpoint, provider init failure). Previously this rejected out of
@@ -749,14 +763,14 @@ function createServer(deps) {
         let audioB64 = null;
         if (ttsUp) {
           try {
-            const buf = await edgeTts.synthesize({ text: textChunks[i], voice: config.VOICE_TTS_VOICE });
+            const buf = await tts.synthesize({ text: textChunks[i], voice: ttsVoice });
             audioB64 = buf.toString('base64');
           } catch (err) {
-            logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+            logger.warn('tts.proactive-chunk-failed', { error: err.message, index: i });
           }
         }
         if (ctrl.signal.aborted) break;
-        sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, text: textChunks[i] });
+        sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] });
         idx++;
       }
       // chunked forced true on abort, or when the alert tone alone was sent
@@ -1162,7 +1176,7 @@ function createServer(deps) {
     // and handleVisionQuery — one reply-emission path, one protocol.
     async function sendSpokenReply(reqId, say, meta, micStoppedAt) {
       const speak = sanitizeSpoken(say);
-      const ttsUp = await edgeTts.isAvailable();
+      const ttsUp = await tts.isAvailable();
       // ALWAYS split, even with TTS down. This used to be `ttsUp ? split : []`,
       // which contradicted the comment directly above and truncated the entity's
       // speech: with no chunks the client fell through to speaking the WHOLE
@@ -1195,10 +1209,10 @@ function createServer(deps) {
             // sentence per utterance instead of one utterance per reply.
             if (ttsUp) {
               try {
-                const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
+                const buf = await tts.synthesize({ text: chunks[i], voice: ttsVoice });
                 audioB64 = buf.toString('base64');
               } catch (err) {
-                logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+                logger.warn('tts.chunk-failed', { error: err.message, index: i });
               }
             }
             if (ctrl.signal.aborted) break;
@@ -1206,7 +1220,7 @@ function createServer(deps) {
               voiceLatencyTracker.record(Date.now() - micStoppedAt);
               latencyRecorded = true;
             }
-            send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, text: chunks[i] });
+            send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] });
           }
         }
         // chunked forced true on abort (even with zero chunks sent): routes the
@@ -1415,7 +1429,7 @@ function createServer(deps) {
         }
         const text = String(msg.text || 'Describe what you see, briefly.').slice(0, 500);
 
-        const ttsUp = await edgeTts.isAvailable();
+        const ttsUp = await tts.isAvailable();
         const streamer = createSentenceStreamer();
         let chunkIndex = 0;
         let sendChain = Promise.resolve(); // serializes synth+send so chunks stay in order
@@ -1430,12 +1444,12 @@ function createServer(deps) {
             if (!spoken) return;
             let audioB64 = null;
             try {
-              const buf = await edgeTts.synthesize({ text: spoken, voice: config.VOICE_TTS_VOICE });
+              const buf = await tts.synthesize({ text: spoken, voice: ttsVoice });
               audioB64 = buf.toString('base64');
             } catch (err) {
-              logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+              logger.warn('tts.chunk-failed', { error: err.message, index: i });
             }
-            send({ type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, text: spoken });
+            send({ type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, mime: chunkMime, text: spoken });
           });
         }
 
