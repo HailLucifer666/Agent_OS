@@ -729,7 +729,12 @@ function createServer(deps) {
     const ctrl = new AbortController();
     inflightSpeech.set(reqId, ctrl);
     try {
-      const textChunks = ttsUp ? splitSentences(speak) : [];
+      // Always split — same fix and same reason as sendSpokenReply() below (see
+      // its comment). With TTS down this used to send zero text chunks, so the
+      // client spoke the whole thing as one SpeechSynthesisUtterance and Chrome
+      // clipped the tail. The boot greeting rides this path, which is why the
+      // operator heard the greeting cut short too.
+      const textChunks = splitSentences(speak);
       // Alert tone counts as chunk 0 of the SAME reqId's sequence (not a
       // separate turn) so it plays through the existing chunk-queue ordering
       // instead of racing a second, unregistered reqId on the client.
@@ -742,11 +747,13 @@ function createServer(deps) {
       for (let i = 0; i < textChunks.length; i++) {
         if (ctrl.signal.aborted) break;
         let audioB64 = null;
-        try {
-          const buf = await edgeTts.synthesize({ text: textChunks[i], voice: config.VOICE_TTS_VOICE });
-          audioB64 = buf.toString('base64');
-        } catch (err) {
-          logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+        if (ttsUp) {
+          try {
+            const buf = await edgeTts.synthesize({ text: textChunks[i], voice: config.VOICE_TTS_VOICE });
+            audioB64 = buf.toString('base64');
+          } catch (err) {
+            logger.warn('edge-tts.proactive-chunk-failed', { error: err.message, index: i });
+          }
         }
         if (ctrl.signal.aborted) break;
         sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, text: textChunks[i] });
@@ -757,7 +764,7 @@ function createServer(deps) {
       // the session-checked chunk-queue path, never the non-chunked
       // speechSynthesis fallback (which would otherwise speak the just-
       // barged-in-on reply after the fact, or skip the alert chunk's queue).
-      const chunked = ctrl.signal.aborted ? true : (ttsUp || Boolean(alertB64));
+      const chunked = ctrl.signal.aborted ? true : (totalChunks > 0);
       sendOut({ type: 'done', reqId, say: text, speak, chunked, proactive: true });
     } finally {
       inflightSpeech.delete(reqId);
@@ -1151,7 +1158,16 @@ function createServer(deps) {
     async function sendSpokenReply(reqId, say, meta, micStoppedAt) {
       const speak = sanitizeSpoken(say);
       const ttsUp = await edgeTts.isAvailable();
-      const chunks = ttsUp ? splitSentences(speak) : [];
+      // ALWAYS split, even with TTS down. This used to be `ttsUp ? split : []`,
+      // which contradicted the comment directly above and truncated the entity's
+      // speech: with no chunks the client fell through to speaking the WHOLE
+      // reply as one SpeechSynthesisUtterance, and Chrome clips long ones. The
+      // operator reported it as "consistently cut off at the end, losing the last
+      // one or two words" on 2026-07-31 — a session where edge-tts happened to be
+      // uninstalled for every turn, so every reply took that path. The text was
+      // never at fault (all 29 replies round-trip splitSentences losslessly).
+      // Chunk-per-sentence keeps each utterance short enough to finish.
+      const chunks = splitSentences(speak);
       // Item B: register an abort controller so a 'stop' for this reqId
       // (barge-in) can cancel remaining chunk synthesis below — otherwise
       // edge-tts keeps synthesizing chunks nobody will hear after the client
@@ -1164,15 +1180,21 @@ function createServer(deps) {
       // real audio, contributes no sample rather than an estimate).
       let latencyRecorded = false;
       try {
-        if (ttsUp && chunks.length) {
+        if (chunks.length) {
           for (let i = 0; i < chunks.length; i++) {
             if (ctrl.signal.aborted) break;
             let audioB64 = null;
-            try {
-              const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
-              audioB64 = buf.toString('base64');
-            } catch (err) {
-              logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+            // Only synthesize when the sidecar is actually up. A TTS-down chunk
+            // ships text with audioB64:null and the client speaks it via
+            // speechSynthesis (playNextChunk's existing else-branch) — one
+            // sentence per utterance instead of one utterance per reply.
+            if (ttsUp) {
+              try {
+                const buf = await edgeTts.synthesize({ text: chunks[i], voice: config.VOICE_TTS_VOICE });
+                audioB64 = buf.toString('base64');
+              } catch (err) {
+                logger.warn('edge-tts.chunk-failed', { error: err.message, index: i });
+              }
             }
             if (ctrl.signal.aborted) break;
             if (audioB64 && typeof micStoppedAt === 'number' && !latencyRecorded) {
@@ -1186,7 +1208,7 @@ function createServer(deps) {
         // client's 'done' handling through the session-checked chunk-queue path,
         // never the non-chunked speechSynthesis fallback (which would otherwise
         // speak the just-barged-in-on reply after the fact).
-        send({ type: 'done', reqId, say, speak, chunked: ctrl.signal.aborted ? true : (ttsUp && chunks.length > 0), ...meta });
+        send({ type: 'done', reqId, say, speak, chunked: ctrl.signal.aborted ? true : chunks.length > 0, ...meta });
       } finally {
         inflightSpeech.delete(reqId);
       }

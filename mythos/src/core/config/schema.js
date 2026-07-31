@@ -34,8 +34,17 @@ const SCHEMA = {
   OPENROUTER_API_KEY:       { type: 'string', default: '' },
   CEREBRAS_API_KEY:         { type: 'string', default: '' },
 
-  // Voice reply TTS (edge-tts Microsoft Neural voice id)
-  VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-RyanNeural' },
+  // Voice reply TTS (edge-tts Microsoft Neural voice id).
+  //
+  // FEMALE, deliberately, and it must STAY female: the entity has three separate
+  // speech paths and the operator hears all three in one session — this edge-tts
+  // voice (boot greeting + batch replies), GEMINI_LIVE_VOICE (the S2S duplex
+  // path), and the browser's speechSynthesis fallback when edge-tts is down.
+  // Until 2026-07-31 this default was en-GB-RyanNeural (male) while
+  // GEMINI_LIVE_VOICE was Aoede (female), so the entity greeted the operator as a
+  // British man and then answered as a woman. Change one, change all three, or
+  // the split comes straight back.
+  VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-SoniaNeural' },
 
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
   // thresholds; defaults match the previously-hardcoded constants exactly,

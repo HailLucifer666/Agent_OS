@@ -106,6 +106,38 @@ export function decideBargeIn({ level, assistantSpeaking, bargeAboveCount, thres
   return { shouldBargeIn: false, newBargeAboveCount };
 }
 
+// The entity speaks through three different engines and the operator hears all
+// of them in one session: server edge-tts (VOICE_TTS_VOICE), Gemini Live S2S
+// (GEMINI_LIVE_VOICE), and — when edge-tts is down — this browser fallback.
+// The fallback used to set NO voice at all, so it inherited the OS default,
+// which on Windows is Microsoft David: male. Combined with a male edge-tts
+// default, the entity greeted the operator as a British man and then answered
+// as a woman. All three are female now; this picks the closest available match
+// instead of taking whatever the OS hands over.
+//
+// Pure and exported so it can be unit-tested against fixture voice lists —
+// getVoices() is unavailable and unstubbable in the test runner.
+const PREFERRED_VOICES = [
+  // en-GB female first: pairs with edge-tts en-GB-SoniaNeural.
+  'Sonia', 'Libby', 'Hazel', 'Susan',
+  // then en-US female, then any known-female name.
+  'Aria', 'Jenny', 'Michelle', 'Zira', 'Samantha', 'Victoria',
+];
+export function pickSpeechVoice(voices) {
+  if (!Array.isArray(voices) || voices.length === 0) return null;
+  for (const wanted of PREFERRED_VOICES) {
+    // Prefer an en-GB match for this name, then the name anywhere.
+    const gb = voices.find((v) => v && typeof v.name === 'string' && v.name.includes(wanted)
+      && typeof v.lang === 'string' && v.lang.toLowerCase().startsWith('en-gb'));
+    if (gb) return gb;
+    const any = voices.find((v) => v && typeof v.name === 'string' && v.name.includes(wanted));
+    if (any) return any;
+  }
+  // Nothing recognised: return null and let the browser choose, rather than
+  // grabbing an arbitrary voice that might be a worse match than the default.
+  return null;
+}
+
 export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline, vad }) {
   // BUG-020: optional per-instance VAD tuning overrides — partial overrides
   // only (unspecified fields keep the module-level defaults declared above).
@@ -373,9 +405,22 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
   }
 
+  // Memoised: getVoices() is cheap but the list is stable for the page's life,
+  // and in Chrome it is empty until 'voiceschanged' fires — so a null result is
+  // NOT cached, letting a later call pick the voice up once the list populates.
+  let _pickedVoice = null;
+  function preferredVoice() {
+    if (_pickedVoice) return _pickedVoice;
+    if (!window.speechSynthesis || typeof window.speechSynthesis.getVoices !== 'function') return null;
+    try { _pickedVoice = pickSpeechVoice(window.speechSynthesis.getVoices()); } catch { return null; }
+    return _pickedVoice;
+  }
+
   function speakChunkFallback(text, session, onDone) {
     if (window.speechSynthesis && !disposed) {
       const u = new SpeechSynthesisUtterance(sanitizeForTts(text));
+      const v = preferredVoice();
+      if (v) u.voice = v;
       u.onend = () => { if (speakSession === session) onDone(); };
       u.onerror = () => { if (speakSession === session) onDone(); };
       try { window.speechSynthesis.speak(u); return; } catch { /* fall through to silent finish */ }
@@ -427,6 +472,8 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     };
     if (window.speechSynthesis && !disposed) {
       const u = new SpeechSynthesisUtterance(sanitizeForTts(spoken));
+      const v = preferredVoice();
+      if (v) u.voice = v;
       u.onend = finish;
       u.onerror = finish;
       try {
