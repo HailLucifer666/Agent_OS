@@ -34,6 +34,48 @@ var PACKS = {
   code: ['ponytail', 'karpathy-guidelines'],
 };
 
+// ui-ux-pro-max's search.py keyword-matches the WHOLE query string against its
+// pattern / style / typography databases, so passing the raw card text let the
+// ARTICLE CONTENT choose the design.
+//
+// Live on 2026-07-31 (operator-reported): a news-digest card whose copy
+// mentioned "price-performance", "security tests" and "agents" resolved to
+// pattern "Pricing Page + CTA", style "Trust & Authority" (certificate and
+// security badges) and JetBrains Mono for both heading and body. The built page
+// therefore carried a <section id="pricing">, ISO/SOC2/GDPR badge carousel and
+// terminal typography — for a news site. The same brief with the content
+// stripped resolves to Newsreader/Roboto and an editorial section order.
+//
+// So the query is the design INTENT only: the leading design sentence, plus any
+// style word that appears later in the brief and would otherwise be lost.
+var CONTENT_MARKER_RE = /\b(main feature|headline|supporting stor|based on|featuring|content:|stories:|articles:|copy:|topics?:)\b/i;
+var STYLE_WORDS = [
+  'dark mode', 'dark-themed', 'dark theme', 'light mode', 'glassmorphism',
+  'neumorphism', 'claymorphism', 'brutalist', 'minimal', 'editorial',
+  'premium', 'luxury', 'playful', 'corporate', 'retro', 'bento', 'neon',
+];
+var MAX_QUERY_CHARS = 160;
+
+function designQuery(brief) {
+  var text = String(brief == null ? '' : brief).replace(/\s+/g, ' ').trim();
+  if (!text) return 'web landing page';
+
+  var head = text;
+  var marker = text.search(CONTENT_MARKER_RE);
+  if (marker > 20) head = head.slice(0, marker);
+  var sentence = head.search(/\.\s/);
+  if (sentence > 20) head = head.slice(0, sentence);
+  head = head.slice(0, MAX_QUERY_CHARS).trim().replace(/[,;:.]+$/, '');
+  if (!head) return 'web landing page';
+
+  var lower = head.toLowerCase();
+  var tail = text.slice(head.length).toLowerCase();
+  var missed = STYLE_WORDS.filter(function (w) {
+    return tail.indexOf(w) !== -1 && lower.indexOf(w) === -1;
+  });
+  return missed.length ? head + ' ' + missed.join(' ') : head;
+}
+
 // Skill-tool routes: kind → { skill, script, buildArgs(brief) }.
 // Only kinds with a runnable skill tool belong here. Others rely on essences.
 var ROUTES = {
@@ -42,9 +84,11 @@ var ROUTES = {
     script: 'scripts/search.py',
     // --design-system resolves a full design system (pattern/style/colors/
     // typography/effects) from the skill's database; -f markdown keeps it
-    // prompt-friendly; the brief carries the product/industry signal.
+    // prompt-friendly. --stack html-tailwind matches what this pipeline
+    // actually emits (one self-contained HTML file using Tailwind), so the
+    // guidance comes back for the right stack instead of a generic one.
     buildArgs: function(brief) {
-      return [String(brief || 'web landing page'), '--design-system', '-f', 'markdown'];
+      return [designQuery(brief), '--design-system', '-f', 'markdown', '--stack', 'html-tailwind'];
     },
   },
 };
@@ -92,6 +136,7 @@ async function resolveSkillTool(brief) {
 
 module.exports = {
   classifyDeliverable: classifyDeliverable,
+  designQuery: designQuery,
   packBlock: packBlock,
   packBlockFor: packBlockFor,
   resolveSkillTool: resolveSkillTool,

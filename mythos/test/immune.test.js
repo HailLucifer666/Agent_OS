@@ -540,9 +540,15 @@ describe('immune/healer — cooldown + actions', function() {
     });
     // Real probe() against the real hermes-agent adapter — a genuine live
     // re-probe, not a mock. Poll instead of a fixed sleep: the CLI spawn this
-    // triggers is a real child process (~1s typical, more under load).
+    // triggers is a real child process (~1.5s measured idle, far more under load).
+    //
+    // The budget must exceed the adapter's OWN probe timeout, otherwise this
+    // test races it and fails on a busy machine while the code is fine: with a
+    // 10s budget it failed in a full-suite run (real child spawn starved by
+    // suite parallelism) yet passed in 1.5s in isolation. The poll exits as soon
+    // as the event lands, so a healthy machine still costs ~1.5s, not 40s.
     var healed = [];
-    for (var attempt = 0; attempt < 50 && healed.length === 0; attempt++) {
+    for (var attempt = 0; attempt < 200 && healed.length === 0; attempt++) {
       await sleep(200);
       healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
     }

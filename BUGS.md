@@ -1562,6 +1562,116 @@ bridge's own header documents why it has no meaningful Node-side double).
 **Needs live confirmation by the operator**, ideally once on speakers and once
 on headphones.
 
+### BUG-057 — The article copy was choosing the design system
+
+**Reported by the operator 2026-07-31** with the artifact attached: a news digest
+that "does not match" the requested dark-theme/ui-ux-pro-max expectation. It was
+worse than a miss — it shipped a **pricing section** and an **ISO/SOC2/GDPR badge
+carousel** on a news page, in monospace type.
+
+**Root cause.** `build-pack.js` passed the WHOLE card text to ui-ux-pro-max's
+`search.py`, which keyword-matches the entire query string against its pattern /
+style / typography databases. The card text was mostly *article copy*, so the news
+content picked the design:
+
+| Words in the copy | What the skill returned |
+|---|---|
+| "price-performance" | pattern **Pricing Page + CTA** — sections: price cards, comparison table, FAQ |
+| "security tests", "breach" | style **Trust & Authority** — "certificates/badges displayed, security badges" |
+| "agents", "systems" | typography **JetBrains Mono** for heading AND body, mood "terminal, hacker, matrix" |
+
+Verified by re-running the same brief with the content stripped: **Newsreader /
+Roboto** and an editorial section order, no pricing, no badges.
+
+**Fix, three parts.**
+1. `designQuery()` sends the design intent only — the leading design sentence,
+   cut at the first content marker ("main feature", "headline:", "supporting
+   stories", …), capped at 160 chars, plus any style word ("dark-themed",
+   "glassmorphism") that appears later and would otherwise be lost with the copy.
+2. `--stack html-tailwind` is now passed, matching what the pipeline actually
+   emits, instead of taking generic guidance.
+3. The build preambles state the precedence that was missing: a design-system
+   block is **colour/type/spacing/effects, not a content outline** — the idea
+   decides which sections exist and **the idea wins**. Sections the brief never
+   asked for must be left out.
+
+**Also fixed: dark themes looked muddy.** Every palette the skill returns is
+light-first (Background `#FFFBEB`, Foreground `#0F172A`). Asked for a dark theme,
+the model simply swapped those two — amber-800 accents on near-black. The preamble
+now says to derive a real dark ramp (near-black neutral surface, elevated card
+steps, foreground ≥ `#E6E8EB`, accent hue kept but lightened until it clears
+4.5:1) and never to invert a light palette.
+
+**And the reviewer was blind to it.** It checked five things, all about *missing*
+or *wrong* content — nothing about content **nobody asked for**, which is why it
+approved a pricing table on a news site. It now flags extra sections as defects.
+(For the record, the reviewer did catch real problems on that build and correctly
+rejected it: inconsistent branding, a missing story, an unsupported statistic.)
+
+**Tests.** `test/design-query-intent.test.js` (10 cases).
+
+### BUG-058 — Every build failed as "hermes-agent not installed" on a busy machine
+
+**The likely explanation for the operator's "everything fails" and "tens of
+thousands of attempts".** Measured 2026-07-31 while MYTHOS was running:
+
+```
+$ time hermes --version      # the adapter's availability probe
+real  0m21.212s              # probe cap was 15000ms
+→ hermes-agent.cli-probe-failed  kind: timeout
+→ "hermes-agent OFFLINE: hermes-agent not installed/running — install from ..."
+```
+
+Hermes was installed, licensed and working — the same command takes ~800ms on an
+idle machine, which is how a 15s cap ever looked generous. Under load (Electron
+running, venv Python 3.11 importing the OpenAI SDK on Windows) it does not
+finish, and **since Hermes is the only build-content engine by design, every
+build fails with an install hint.** The failure is loudest exactly when the
+operator is using the app, which is exactly when they try to build.
+
+**Root cause, and it is a policy bug not a number bug.** A probe timeout was
+treated as evidence of absence. It is evidence of *slowness*. ENOENT, EACCES and
+a non-zero exit are real evidence; a child that did not finish is not.
+
+**Fix.** The probe resolves `true | false | 'timeout'`. A timeout keeps the
+adapter **ONLINE** in `cli` mode, still records the `timeout` diagnostic, and logs
+`hermes-agent.cli-probe-slow` with a hint that says why it is trusting thin
+evidence. The real task call has its own 10-minute timeout and will fail with the
+actual error if the binary genuinely cannot run — so an optimistic probe costs at
+most one slow build attempt, while a pessimistic one costs every build. The
+default cap also went 15s → 30s, since 21.2s is measured reality here.
+
+**Contract change:** `test/p0-1-hermes-probe-diagnostics.test.js` asserted
+`probe() === false` on timeout. That test encoded the wrong policy and was
+updated deliberately, with the reason recorded in it. The ENOENT and
+exit-nonzero cases still assert OFFLINE.
+
+### BUG-059 — Ad blocking silently gave up entirely, over a cosmetic-only API
+
+From a real launch log the operator pasted:
+
+```
+adblocker init failed — continuing WITHOUT blocking (YouTube pre-rolls will play):
+this.session.registerPreloadScript is not a function
+```
+
+**Root cause.** `session.registerPreloadScript()` arrived in **Electron 35**; this
+app pins `^32` (32.3.3 installed). `@ghostery/adblocker-electron` declares
+`peerDependencies: {electron: ">11"}`, so npm never warned. The library uses that
+API for **cosmetic filtering only** and gates network filtering separately
+(`dist/commonjs/index.js:88-100`) — but `enableBlockingInSession()` does both in
+one call, so the throw took the **network** filters down with it. Those are the
+ones that stop pre-rolls.
+
+**Fix.** Feature-detect the API. Present → full path unchanged. Absent → register
+the two network listeners directly (`onBeforeRequest`, `onHeadersReceived`, both
+public on the blocker) and log "network only — cosmetic filtering needs Electron
+>= 35 (running 32.3.3)". No Electron bump, no dependency change, and no
+third-party preload injected into the HUD's own session — which is the better
+default here anyway, given AD-8.
+
+**Tests.** `test/electron-adblock-fallback.test.js` (5 source-shape cases).
+
 ### Gemini TTS free tier is 10 requests/day — ⚠️ OPERATOR DECISION
 
 Not a code bug; found while verifying the above and worth recording because it

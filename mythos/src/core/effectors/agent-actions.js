@@ -47,6 +47,21 @@ var DELIVERABLE_PREAMBLE = [
   '  brief below or in the idea itself.',
   '- Give every image a real alt attribute and CSS sizing so a failed load degrades gracefully.',
   '- Use CSS gradients, shadows and spacing for polish rather than leaving areas blank.',
+  // A resolved design system (ui-ux-pro-max) is prepended ABOVE this preamble.
+  // Two failures came from taking it too literally, both live on 2026-07-31:
+  // its "Sections:" list added a pricing table and certification badges to a
+  // NEWS DIGEST, and its palettes are light-first, so "dark theme" was honoured
+  // by swapping Background and Foreground — amber-on-near-black, muddy.
+  'DESIGN SYSTEM (only if a design-system block appears above):',
+  '- It is a source of COLOR, TYPE, SPACING and EFFECTS. It is NOT a content outline.',
+  '  The idea below decides which sections exist. If the block lists sections the idea',
+  '  never asked for — pricing tiers, certification/security badges, testimonials, FAQ —',
+  '  leave them out. Where the block and the idea disagree, the IDEA WINS.',
+  '- If the idea asks for a dark theme and the block Background is light, do NOT simply',
+  '  swap Background and Foreground. Build a real dark ramp: a near-black neutral surface,',
+  '  one or two lighter elevated steps for cards, foreground text at least #E6E8EB, borders',
+  '  as low-alpha white, and keep the accent HUE while raising its lightness until it clears',
+  '  4.5:1 on that surface. An inverted light palette is what makes a dark page look cheap.',
   'Idea: '
 ].join(' ');
 
@@ -68,6 +83,12 @@ var BUILDER_PREAMBLE = [
   'VISUALS: use inline <svg> for icons/logos/patterns, and',
   'https://picsum.photos/seed/<word>/<w>/<h> for photographs (keyless, always resolves).',
   'Never invent images.unsplash.com photo ids — a guessed id 404s. Every image needs alt text.',
+  // Same two rules as DELIVERABLE_PREAMBLE, condensed: a design-system block is
+  // tokens, not a section list, and a dark theme is a derived ramp, not an
+  // inverted light palette.
+  'A design-system block above supplies COLOR/TYPE/EFFECTS only — the task decides which',
+  'sections exist, and the task wins where they disagree. For a dark theme, derive a',
+  'near-black surface ramp with a brightened accent; never just swap background and text.',
   '\nTask: '
 ].join(' ');
 
@@ -79,6 +100,12 @@ var REVIEWER_PREAMBLE = [
   '3. Is the content topically related to the task (not a generic template)?',
   '4. Are there placeholder texts, fake testimonials, or fabricated statistics?',
   '5. Does it match any design requirements (dark theme, animations, etc.) from the spec?',
+  // The reviewer approved a news digest carrying a pricing table and ISO/SOC2
+  // badge carousel (2026-07-31) — it was checking for MISSING content, never for
+  // content nobody asked for.
+  '6. Does it contain sections the task never asked for — pricing tiers, certification or',
+  '   security badges, testimonials, team bios? Extra sections are a defect, not a bonus:',
+  '   flag each one.',
   'Respond with ONLY a JSON object, no commentary, no markdown fence:',
   '{"verdict": "approve" | "reject", "issues": ["specific issue 1", ...], "notes": "1-2 sentences"}'
 ].join(' ');

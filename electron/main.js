@@ -318,8 +318,28 @@ if (!gotLock) {
         const blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(crossFetch, {
           path: cachePath, read: fsPromises.readFile, write: fsPromises.writeFile,
         });
-        blocker.enableBlockingInSession(session.defaultSession);
-        log('ad blocker enabled for session.defaultSession (cache: ' + cachePath + ')');
+        // enableBlockingInSession() ALSO turns on cosmetic filtering, which
+        // needs session.registerPreloadScript() — added in Electron 35. This app
+        // pins ^32, and the library's peerDependency (">11") does not warn, so
+        // the whole call threw and boot logged "adblocker init failed —
+        // continuing WITHOUT blocking" (reported from a real launch 2026-07-31).
+        //
+        // The NETWORK filters are what actually stop YouTube pre-rolls, they
+        // only need webRequest (present since forever), and the library gates the
+        // two independently (dist/commonjs/index.js:88-100). So on an older
+        // Electron, register the network listeners directly rather than losing
+        // blocking altogether. It also keeps a third-party preload out of the
+        // HUD's own session, which is the right default here regardless.
+        if (typeof session.defaultSession.registerPreloadScript === 'function') {
+          blocker.enableBlockingInSession(session.defaultSession);
+          log('ad blocker enabled, network + cosmetic (cache: ' + cachePath + ')');
+        } else {
+          const wr = session.defaultSession.webRequest;
+          wr.onHeadersReceived({ urls: ['<all_urls>'] }, (d, cb) => blocker.onHeadersReceived(d, cb));
+          wr.onBeforeRequest({ urls: ['<all_urls>'] }, (d, cb) => blocker.onBeforeRequest(d, cb));
+          log('ad blocker enabled, network only — cosmetic filtering needs Electron >= 35 (running '
+            + process.versions.electron + ', cache: ' + cachePath + ')');
+        }
       } catch (err) {
         log('adblocker init failed — continuing WITHOUT blocking (YouTube pre-rolls will play):', err && err.message);
       }

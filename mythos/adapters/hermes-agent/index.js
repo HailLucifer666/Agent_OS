@@ -41,7 +41,13 @@ function taskTimeoutMs() { return Number(process.env.HERMES_TASK_TIMEOUT_MS) || 
 // actually the bottleneck for the 2026-07-29 incident, but a slow/cold-start
 // machine deserves headroom; still overridable per the same env-driven
 // pattern as taskTimeoutMs() above.
-function cliProbeTimeoutMs() { return Number(process.env.HERMES_CLI_PROBE_TIMEOUT_MS) || 15000; }
+// 2026-07-31, measured on the operator's machine WHILE MYTHOS was running:
+// `hermes --version` took 21.2s (venv Python 3.11 importing the OpenAI SDK on
+// Windows under load). Against the old 15s cap the probe timed out, the adapter
+// declared OFFLINE, and every build failed with "hermes-agent not
+// installed/running" — with Hermes installed and working. Same command took
+// ~800ms on an idle machine, which is how 15s ever looked generous.
+function cliProbeTimeoutMs() { return Number(process.env.HERMES_CLI_PROBE_TIMEOUT_MS) || 30000; }
 
 // Last CLI probe's failure diagnostic — {kind, code?, signal?, detail?} or
 // null when the last probe succeeded. Surfaced via getStatus() so a P0-1-class
@@ -169,7 +175,12 @@ async function probe(force) {
   } catch (_) { /* gateway not running */ }
 
   lastCliProbeDiagnostic = null;
-  var cliOk = await new Promise(function(resolve) {
+  // Resolves true | false | 'timeout'. 'timeout' is deliberately NOT false: a
+  // probe that did not finish is evidence of SLOWNESS, not of absence, and the
+  // only thing that reading it as absence achieved was failing every build on a
+  // busy machine (see cliProbeTimeoutMs above). ENOENT, EACCES and a non-zero
+  // exit remain real evidence and stay false.
+  var cliProbe = await new Promise(function(resolve) {
     var child;
     var settled = false;
     try {
@@ -193,7 +204,7 @@ async function probe(force) {
       // given up waiting on this child and asked to kill it, its continued
       // existence must never block OUR process from exiting.
       if (typeof child.unref === 'function') child.unref();
-      resolve(false);
+      resolve('timeout');
     }, cliProbeTimeoutMs());
     child.on('error', function(err) {
       if (settled) return;
@@ -215,12 +226,25 @@ async function probe(force) {
     });
   });
 
-  caps = { http: httpOk, cli: cliOk };
+  var cliSlow = cliProbe === 'timeout';
+  var cliOk = cliProbe === true;
+  var cliUsable = cliOk || cliSlow;
+  caps = { http: httpOk, cli: cliUsable };
 
-  if (httpOk || cliOk) {
+  if (httpOk || cliUsable) {
     state = 'ONLINE';
-    mode = cliOk ? 'cli' : 'http'; // CLI preferred — builds need cwd pinning HTTP can't offer
-    hint = cliOk ? 'one-shot via `' + cliBin() + ' -z <prompt>`' : 'gateway at ' + apiUrl();
+    mode = cliUsable ? 'cli' : 'http'; // CLI preferred — builds need cwd pinning HTTP can't offer
+    if (cliSlow) {
+      // Honest about WHY it is online on thin evidence. The real task call has
+      // its own (much larger) timeout and will fail with the actual error if the
+      // binary genuinely cannot run, so an optimistic probe costs one slow build
+      // attempt; a pessimistic one costs every build.
+      hint = 'one-shot via `' + cliBin() + ' -z <prompt>` — version probe did not exit within '
+        + cliProbeTimeoutMs() + 'ms, assuming present (a slow probe is not evidence of absence)';
+      logger.warn('hermes-agent.cli-probe-slow', { bin: cliBin(), timeoutMs: cliProbeTimeoutMs() });
+    } else {
+      hint = cliOk ? 'one-shot via `' + cliBin() + ' -z <prompt>`' : 'gateway at ' + apiUrl();
+    }
     return true;
   }
   state = 'OFFLINE'; mode = null;

@@ -69,15 +69,25 @@ describe('hermes-agent CLI probe: distinct failure diagnostics (P0-1)', () => {
     assert.equal(status.cliProbeDiagnostic.code, 7);
   });
 
-  it('a hung child is reported as a timeout, distinct from ENOENT/exit-nonzero', async function() {
+  // CONTRACT CHANGED 2026-07-31 (operator-reported: every build failing with
+  // "hermes-agent not installed/running" on a machine where Hermes works).
+  // A timeout used to resolve false, i.e. OFFLINE, i.e. no builds at all. But
+  // `hermes --version` measured 21.2s on the operator's machine while MYTHOS was
+  // running — a slow probe is evidence of SLOWNESS, not of absence. It now stays
+  // ONLINE and still reports the timeout diagnostic, so the condition is visible
+  // without being fatal. ENOENT / EACCES / exit-nonzero are real evidence and
+  // remain OFFLINE (the two tests above).
+  it('a hung child stays ONLINE but still reports the timeout diagnostic', async function() {
     if (process.platform !== 'win32') { this.skip(); return; }
     process.env.HERMES_CLI_PROBE_TIMEOUT_MS = '300';
     process.env.HERMES_CLI = writeTempCmd('mythos-test-hermes-hang.cmd', '@echo off\r\nping -n 5 127.0.0.1 >nul\r\n');
     const online = await hermes.probe(true);
-    assert.equal(online, false);
+    assert.equal(online, true, 'a slow probe must not be reported as "not installed"');
     const status = hermes.getStatus();
+    assert.equal(status.state, 'ONLINE');
+    assert.equal(status.mode, 'cli');
     assert.equal(status.cliProbeDiagnostic.kind, 'timeout');
-    assert.match(status.hint, /CLI probe: timeout/);
+    assert.match(status.hint, /slow probe is not evidence of absence/);
   });
 
   it('a healthy CLI clears any prior diagnostic (no stale failure carried forward)', async function() {

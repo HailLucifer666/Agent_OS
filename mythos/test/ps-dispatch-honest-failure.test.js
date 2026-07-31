@@ -36,7 +36,16 @@ function sendOneCommand(cmdObj, timeoutMs) {
       settled = true;
       proc.kill();
       reject(new Error('timed out waiting for a response line'));
-    }, timeoutMs || 15000);
+      // Each test here spawns its OWN powershell.exe running the whole script,
+      // whose prologue Add-Type-compiles C# (SendInput, DPI awareness) — seconds
+      // of CPU per spawn. Run alone, a command answers in ~0.8s; run inside the
+      // full suite, competing spawns starved it past the old 15s ceiling and it
+      // failed reproducibly at ~15.1s while the code was fine. The real adapter
+      // spawns this script ONCE at boot and keeps it alive, so this cold-start
+      // cost is a test artefact, not a product defect. A genuine dispatch bug
+      // still fails on its assertion in under a second; only the wall-clock
+      // ceiling moved.
+    }, timeoutMs || 60000);
 
     proc.stdout.on('data', (chunk) => {
       buf += chunk.toString('utf8');
