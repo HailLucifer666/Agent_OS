@@ -68,6 +68,7 @@ const { registerFromMemory } = require('./core/effectors/from-memory');
 const { registerFromCalendar } = require('./core/effectors/from-calendar');
 const { registerFromSkills } = require('./core/effectors/from-skills');
 const { registerFromSpotify } = require('./core/effectors/from-spotify');
+const { registerFromWhatsapp } = require('./core/effectors/from-whatsapp');
 const { registerFromWidgets } = require('./core/effectors/from-widgets');
 const { registerFromDocs } = require('./core/effectors/from-docs');
 const { registerFromImageGen } = require('./core/effectors/from-image-gen');
@@ -347,6 +348,9 @@ async function main() {
       registerFromCua(hub);
       registerFromAndroid(hub);
       registerFromSpotify(hub, { effectors: hub, bus: bus, memory: memory, goals: goals, config: config });
+      // WhatsApp desktop. Needs memory.fs to read vault/Contacts/contacts.json,
+      // so a contact name ("dad") can resolve to a number.
+      registerFromWhatsapp(hub, { memory: memory, logger: logger });
       // REMEDIATION P1-7: fs (vault fs-store) added so browser_navigate can
       // existence-check a /vault/... path via the same resolver open_artifact
       // uses (vault-url.js), instead of forwarding it into a file:// URL.

@@ -49,16 +49,18 @@ function installElectronStub(stubExports) {
 }
 
 describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
-  it('exposes exactly { getKeyNames, setKey, hasKey }, each forwarding to its named IPC channel', async () => {
+  it('exposes exactly { getKeyNames, setKey, hasKey, onHotkey }, each forwarding to its named IPC channel', async () => {
     let exposedName = null;
     let exposedApi = null;
     const invokeCalls = [];
+    const onCalls = [];
     const restore = installElectronStub({
       contextBridge: {
         exposeInMainWorld: (name, api) => { exposedName = name; exposedApi = api; },
       },
       ipcRenderer: {
         invoke: async (...args) => { invokeCalls.push(args); return { ok: true }; },
+        on: (channel, handler) => { onCalls.push({ channel, handler }); },
       },
     });
     try {
@@ -71,8 +73,8 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // EXACT surface shape — sorted deep-equal, no more, no fewer.
       assert.deepEqual(
         Object.keys(exposedApi).sort(),
-        ['getKeyNames', 'hasKey', 'setKey'],
-        'preload must expose exactly getKeyNames/setKey/hasKey',
+        ['getKeyNames', 'hasKey', 'onHotkey', 'setKey'],
+        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey',
       );
 
       // setKey(name, value) → ipcRenderer.invoke('mythos:set-key', name, value)
@@ -98,6 +100,29 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
         ['mythos:has-key', 'GOOGLE_API_KEY'],
         'hasKey must invoke channel mythos:has-key with (name)',
       );
+
+      // onHotkey(cb) subscribes to exactly one named channel. It is the only
+      // main->renderer listener on the surface: the global push-to-talk
+      // accelerator lives in the main process (a web page cannot claim one) and
+      // has to reach the HUD somehow.
+      const received = [];
+      exposedApi.onHotkey((action) => received.push(action));
+      assert.equal(onCalls.length, 1, 'onHotkey must subscribe to exactly one channel');
+      assert.equal(onCalls[0].channel, 'mythos:hotkey');
+
+      // The payload is re-derived as a plain string rather than forwarded, so a
+      // structured (and therefore possibly secret-bearing) event cannot ride the
+      // channel into the renderer — AD-8 applies to inbound events too.
+      onCalls[0].handler({ senderId: 1 }, 'talk');
+      assert.deepEqual(received, ['talk']);
+      onCalls[0].handler({}, { value: 'a-secret-object' });
+      assert.equal(typeof received[1], 'string', 'a non-string payload must be stringified, never passed through');
+      assert.doesNotMatch(received[1], /a-secret-object/, 'object payloads must not leak their contents');
+
+      // A non-function argument must be ignored rather than throwing or
+      // registering a second listener.
+      exposedApi.onHotkey('not-a-function');
+      assert.equal(onCalls.length, 1);
     } finally {
       restore();
     }

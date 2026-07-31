@@ -238,6 +238,22 @@ async function toggleVoice() {
 // Orb click still toggles voice (legacy affordance)
 // (onClick already wired in mountCoreOrb above)
 
+// ---- Global push-to-talk hotkey (Electron only) ----------------------------
+// electron/main.js claims an OS-wide accelerator (Alt+Space by default) and
+// forwards it here as 'talk', so the operator can start talking without finding
+// the window. Routed through toggleVoice() rather than at the mic directly, so
+// it inherits transport selection AND the PIN-gate refusal — a keypress must not
+// be able to open the mic on a locked HUD.
+//
+// window.mythos exists only under Electron; in a plain browser tab this block is
+// a no-op, which is the honest degradation (a web page cannot claim a global
+// hotkey at all).
+if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHotkey === 'function') {
+  window.mythos.onHotkey((action) => {
+    if (action === 'talk') toggleVoice();
+  });
+}
+
 // camera + hand-gesture control (Part A/B, P16). Camera is OFF by default,
 // same privacy posture as the mic — only starts on an explicit toggle click.
 // State renders through the compose-bar's cam button (compose.setCamState);

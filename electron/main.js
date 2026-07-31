@@ -13,7 +13,7 @@
 // preload surface (preload.js) exposes no value-returning channel to the
 // renderer — names + booleans only.
 
-const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, globalShortcut } = require('electron');
 const path = require('node:path');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -367,6 +367,8 @@ if (!gotLock) {
     });
 
     mainWindow.on('closed', () => { mainWindow = null; });
+
+    registerTalkHotkey();
   });
 
   // Clean shutdown: stop the child before quitting so we never orphan the server.
@@ -378,4 +380,71 @@ if (!gotLock) {
   app.on('before-quit', () => {
     stopChild();
   });
+
+  // globalShortcut registrations are process-wide OS claims; releasing them on
+  // quit keeps the accelerator usable by other apps (and by the next run) rather
+  // than relying on process teardown.
+  app.on('will-quit', () => {
+    try { globalShortcut.unregisterAll(); } catch { /* nothing registered */ }
+  });
+}
+
+// ---- Push-to-talk hotkey ------------------------------------------------------
+// Talk to MYTHOS without finding its window: the accelerator toggles the same
+// voice path as clicking the orb or saying the wake word (app.js toggleVoice(),
+// which owns transport choice AND the PIN-gate check — the hotkey deliberately
+// goes through it rather than touching the mic directly, so a locked HUD cannot
+// be made to listen by a keypress).
+//
+// Deliberately does NOT steal focus or raise the window. The point of a global
+// hotkey is talking while working in another app; yanking focus would defeat it,
+// and Chromium background throttling is already disabled process-wide so the
+// renderer keeps capturing while unfocused.
+//
+// Alt+Space is the default because it is the common push-to-talk convention, but
+// it is also frequently taken (it opens the window menu in some shells, and
+// launchers like PowerToys Run claim it). So: try the configured accelerator,
+// then fall back down a list, and log which one actually won. A hotkey that
+// silently failed to register is indistinguishable from a broken mic.
+const TALK_HOTKEY_FALLBACKS = ['Alt+Space', 'Control+Alt+Space', 'Control+Shift+Space', 'Control+Alt+M'];
+
+function talkHotkeyCandidates() {
+  const configured = String(process.env.MYTHOS_HOTKEY_TALK || '').trim();
+  if (configured.toLowerCase() === 'false' || configured.toLowerCase() === 'off') return [];
+  const list = configured ? [configured] : [];
+  for (const fb of TALK_HOTKEY_FALLBACKS) if (!list.includes(fb)) list.push(fb);
+  return list;
+}
+
+function registerTalkHotkey() {
+  const candidates = talkHotkeyCandidates();
+  if (!candidates.length) {
+    log('push-to-talk hotkey disabled (MYTHOS_HOTKEY_TALK=false)');
+    return null;
+  }
+  for (const accel of candidates) {
+    let registered = false;
+    try {
+      registered = globalShortcut.register(accel, () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        try {
+          mainWindow.webContents.send('mythos:hotkey', 'talk');
+        } catch (err) {
+          log('push-to-talk hotkey: send failed:', err && err.message);
+        }
+      });
+    } catch (err) {
+      log('push-to-talk hotkey: register threw for', accel, '-', err && err.message);
+      registered = false;
+    }
+    // register() returns false when the OS already owns the accelerator; also
+    // double-check isRegistered, which is the authoritative answer.
+    if (registered && globalShortcut.isRegistered(accel)) {
+      log('push-to-talk hotkey registered:', accel, '(press it to start/stop talking)');
+      return accel;
+    }
+    log('push-to-talk hotkey unavailable (already claimed by another app):', accel);
+  }
+  log('push-to-talk hotkey: every candidate was taken — set MYTHOS_HOTKEY_TALK to a free accelerator');
+  return null;
 }

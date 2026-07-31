@@ -223,6 +223,13 @@ const TIER_TABLE = {
   'phone_call':            3,
   'phone_whatsapp_send':   3,
   'phone_file_push':       3,
+  // WhatsApp from the DESKTOP app. Strictly more consequential than its phone
+  // sibling above: phone_whatsapp_send only pre-fills and waits for a human tap,
+  // whereas this one presses Enter, so the message actually leaves. A message
+  // sent to the wrong human is not recoverable — T3, never auto-allowed.
+  'whatsapp_send':         3,
+  // Names only, no numbers, no side effects.
+  'whatsapp_contacts':     0,
   // Security-review correction (Task 10): phone_file_pull was originally T1
   // ("a read from the phone"), but from the PC-filesystem-integrity
   // standpoint `adb pull` WRITES (creates or overwrites) an arbitrary local
