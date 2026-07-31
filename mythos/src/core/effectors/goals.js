@@ -202,15 +202,40 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
     return (toggled && toggled.degraded) ? markDegraded(list) : list;
   }
 
+  // Remove the given Goals.md rows (matched on the same {text, created} key the
+  // bridge map uses). Exists because writeBack() rebuilds Goals.md FROM its
+  // existing rows and therefore can never delete one.
+  function removeRowsFromMd(rowsToDrop) {
+    if (!rowsToDrop.length) return;
+    var rows = parseGoalsMd(fs.readText('Goals.md', ''));
+    var kept = rows.filter(function(row) {
+      for (var i = 0; i < rowsToDrop.length; i++) {
+        if (rowsToDrop[i].text === row.text && rowsToDrop[i].created === row.created) return false;
+      }
+      return true;
+    });
+    if (kept.length === rows.length) return; // nothing matched — leave the file untouched
+    fs.writeText('Goals.md', kept.map(serializeLine).join('\n') + (kept.length ? '\n' : ''));
+  }
+
   function deleteGoal(id) {
     var loaded = loadBridgeMap();
     // Unreadable map: don't remove anything. Writing a filtered version of a map
     // we never read would drop every OTHER mapping, not just this goal's. Flagged
     // so the caller reports a refusal instead of a deletion that never happened.
     if (loaded === null) return markDegraded(listGoals());
+    // Capture the rows this id owns BEFORE the mapping is dropped — once it is
+    // gone the row is unidentifiable, which is precisely how the bug worked.
+    var owned = loaded.filter(function(m) { return m.goalId === id; });
     var map = loaded.filter(function(m) { return m.goalId !== id; });
     saveBridgeMap(map);
     goalSystem.remove(id);
+    // Delete the Goals.md row too. Without this the row survived every delete as
+    // an unmapped orphan: listGoals() resolved its id to null so nothing could
+    // ever remove it, and sync() re-created it as a BRAND NEW user-service goal
+    // on the next boot — the goal came back while the API reported 200 and
+    // audited 'ok'. Found live 2026-07-31; see test/goal-delete-removes-row.test.js.
+    removeRowsFromMd(owned);
     writeBack();
     return listGoals();
   }
