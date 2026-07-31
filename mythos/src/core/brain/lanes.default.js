@@ -44,8 +44,15 @@ const PREF_VOICE = [
   { provider: 'groq',     model: 'llama-3.3-70b-versatile' },     // 656ms — fastest good 70B (Groq LPU)
   { provider: 'mistral',  model: 'mistral-medium-latest' },       // 414ms — 2x faster than -large for the same job
   { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms
-  { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms
+  // gemini-flash-lite is slower than the 8B below but far better at this lane's
+  // actual job: persona-heavy JSON tool-calling against a ~40k-char prompt.
+  // The 8B sat at position 4, so whenever the top three were rate-limited (the
+  // shared-Mistral-key case) the operator heard the flattest model in the table
+  // — exactly when personality matters most for trust. Latency order is not
+  // capability order; only demote/promote entries with a real completion call
+  // behind the claim (see this file's header discipline).
   { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 643ms
+  { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms — fast but flat; last cloud resort
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 

@@ -5,6 +5,52 @@ const fs = require('fs');
 const path = require('path');
 
 // ---------------------------------------------------------------------------
+// Persona prompt guards. The operator's complaint was that replies felt like
+// "just another chatbot": RULES carried ~39 prohibitions against 3 permissions,
+// so the model was trained by its own prompt to disengage. These assert the
+// permissions are present and that the fix stayed cheap — RULES is re-sent on
+// EVERY voice turn, so unbounded prose here is a latency and token cost per
+// utterance, not a one-off.
+// ---------------------------------------------------------------------------
+describe('voice-agent persona prompt', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'voice', 'voice-agent.js'), 'utf8');
+  const RULES = src.match(/const RULES = `([\s\S]*?)`;/)[1];
+  const CONTRACT = src.match(/const OUTPUT_CONTRACT = `([\s\S]*?)`;/)[1];
+
+  it('leads with a CHARACTER block granting opinions, callbacks and small talk', () => {
+    assert.match(RULES, /^CHARACTER:/m, 'CHARACTER block missing');
+    const charIdx = RULES.indexOf('CHARACTER:');
+    const brevityIdx = RULES.indexOf('BREVITY:');
+    assert.ok(charIdx < brevityIdx, 'CHARACTER must come first, where the model weights it');
+    assert.match(RULES, /not a service/);
+    assert.match(RULES, /chatting rather than tasking/);
+    assert.match(RULES, /How can I help you today/, 'must explicitly ban the chatbot opener');
+  });
+
+  it('permits callbacks to earlier in the current conversation, not just past ones', () => {
+    assert.match(RULES, /earlier in THIS one/);
+  });
+
+  it('scopes the frustration probe to frustration with MYTHOS, not general venting', () => {
+    assert.match(RULES, /frustration AT YOU OR THE SYSTEM/);
+    assert.match(RULES, /Venting about the world/);
+  });
+
+  it('keeps the output contract exactly three keys', () => {
+    assert.match(CONTRACT, /"say"/);
+    assert.match(CONTRACT, /"actions"/);
+    assert.match(CONTRACT, /"needs_result"/);
+    assert.match(CONTRACT, /ONLY a single JSON object/);
+  });
+
+  it('RULES stays inside its per-turn size ceiling', () => {
+    // Ceiling, not a target: it exists so future prompt edits have to be
+    // deliberate about cost. Raise it consciously, never reflexively.
+    assert.ok(RULES.length < 18000, 'RULES grew to ' + RULES.length + ' chars — trim before raising this ceiling');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CATALOG integrity — verify the source has all expected tools
 // ---------------------------------------------------------------------------
 describe('voice-agent CATALOG integrity', () => {

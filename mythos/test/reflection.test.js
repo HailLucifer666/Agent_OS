@@ -67,6 +67,31 @@ describe('reflection learning loop', () => {
     assert.match(identity.persona(), /Prefers short spoken answers/);
   });
 
+  // The durable-facts counterpart to the capped preference list: reflection
+  // rewrites the whole profile each pass, so it accumulates without an eviction
+  // policy — and a degenerate reply must not blank what is already there.
+  it('rewrites the durable operator profile and folds it into persona()', async () => {
+    brainReplies.push({
+      preferences: [],
+      style: '',
+      profile: 'Address them as sir.\nDaughter: Mira.\nBuilding MYTHOS on two machines.',
+    });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    const res = await reflection.runNow('test');
+    assert.equal(res.profileUpdated, true);
+    assert.match(identity.getOperatorProfile(), /Daughter: Mira/);
+    assert.match(identity.persona(), /Operator profile \(durable facts/);
+  });
+
+  it('a missing or too-short profile field leaves an existing profile intact', async () => {
+    identity.setOperatorProfile('Address them as sir.\nDaughter: Mira.');
+    brainReplies.push({ preferences: [], style: '', profile: '' });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    const res = await reflection.runNow('test');
+    assert.equal(res.profileUpdated, false);
+    assert.match(identity.getOperatorProfile(), /Daughter: Mira/);
+  });
+
   it('second pass skips near-duplicates', async () => {
     brainReplies.push({ preferences: ['Prefers short spoken answers'], style: '' });
     brainReplies.push({ preferences: ['prefers short spoken answers', 'A genuinely new fact about workflow'], style: '' });

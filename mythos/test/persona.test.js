@@ -91,14 +91,32 @@ describe('persona levels', () => {
     assert.doesNotMatch(identity.persona(), /Drill-sergeant|Hold the user to their plan|Gentle nudges only/);
   });
 
-  it('persona() folds in the newest learned preferences (max 5)', async () => {
-    for (let i = 1; i <= 7; i++) {
+  it('persona() folds in the newest learned preferences (max 10)', async () => {
+    for (let i = 1; i <= 14; i++) {
       await identity.learn({ signal: null, text: 'Pref number ' + i, sourceEpId: 'ep-' + i });
     }
     const p = identity.persona();
     assert.match(p, /What you know about the operator:/);
-    assert.match(p, /Pref number 7/);   // newest first
-    assert.doesNotMatch(p, /Pref number 1/); // older than the top 5
+    assert.match(p, /Pref number 14/);  // newest first
+    assert.doesNotMatch(p, /Pref number 1\b/); // older than the top 10
+  });
+
+  // The preference list is newest-first and capped, so a durable day-one fact
+  // ("my daughter is called X") is evicted by a week of newer trivia. The
+  // profile is the pinned counterpart: rewritten whole by reflection.js and
+  // never rotated out.
+  it('persona() folds in the durable operator profile, and omits it when empty', () => {
+    assert.doesNotMatch(identity.persona(), /Operator profile/);
+    identity.setOperatorProfile('Address them as sir.\nDaughter: Mira.\nBuilding MYTHOS.');
+    const p = identity.persona();
+    assert.match(p, /Operator profile \(durable facts — never contradict these\):/);
+    assert.match(p, /Daughter: Mira/);
+  });
+
+  it('setOperatorProfile refuses an empty write rather than blanking the file', () => {
+    identity.setOperatorProfile('Address them as sir.');
+    assert.equal(identity.setOperatorProfile('   ').ok, false);
+    assert.match(identity.getOperatorProfile(), /Address them as sir/);
   });
 });
 

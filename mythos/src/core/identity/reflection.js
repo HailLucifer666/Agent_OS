@@ -55,7 +55,10 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
     try {
       var convos = [];
       try {
-        convos = memory.episodic.recall('', { kind: 'conversation', limit: 30, windowDays: 2 }) || [];
+        // 7-day window (was 2): the profile rewrite below needs enough history to
+        // reconstruct durable facts, and a 2-day view forgets anything the
+        // operator mentioned earlier in the week.
+        convos = memory.episodic.recall('', { kind: 'conversation', limit: 30, windowDays: 7 }) || [];
       } catch (_) {}
       if (convos.length < 5) return { skipped: 'too-few-conversations' };
 
@@ -63,6 +66,13 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
       var convoLines = convos.map(function(hit) {
         return (hit.record && hit.record.summary) || hit.snippet || '';
       }).filter(Boolean);
+
+      var currentProfile = '';
+      try {
+        if (typeof identity.getOperatorProfile === 'function') {
+          currentProfile = identity.getOperatorProfile() || '';
+        }
+      } catch (_) {}
 
       var prompt = [
         'You are reviewing your recent conversations with your operator to learn about them.',
@@ -76,9 +86,20 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         'RECENT CONVERSATION TURNS (newest first):',
         convoLines.join('\n'),
         '',
+        // The profile is REWRITTEN, not appended to. That is what makes it both
+        // accumulate and stay small without an eviction policy: everything still
+        // true is carried forward, stale lines simply are not re-emitted.
+        'YOUR CURRENT OPERATOR PROFILE (rewrite it in full below):',
+        currentProfile || '(empty — build it from scratch)',
+        '',
         'Respond with ONE JSON object, nothing else:',
         '{"preferences": ["0-3 one-line facts, empty array if nothing new"],',
-        ' "style": "one line describing how the operator speaks/works, or empty string"}'
+        ' "style": "one line describing how the operator speaks/works, or empty string",',
+        ' "profile": "the COMPLETE rewritten profile, at most 6 short lines separated by newlines:',
+        'how to address them, the people who matter to them, recurring projects, standing',
+        'preferences, what they are focused on now. PRESERVE every fact above that is still true —',
+        'this replaces the old profile entirely, so anything you leave out is forgotten. Empty',
+        'string only if you have nothing at all."}'
       ].join('\n');
 
       var result = await brain.think({
@@ -107,10 +128,18 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         styleWritten = identity.setOperatorStyle(style).ok === true;
       }
 
-      if (written || styleWritten) {
-        log.info('reflection.learned', { preferences: written, styleUpdated: styleWritten });
+      // Never let a degenerate reply blank an existing profile: a too-short
+      // rewrite is treated as "the model had nothing", not as a deletion.
+      var profileWritten = false;
+      var profile = typeof result.parsed.profile === 'string' ? result.parsed.profile.trim() : '';
+      if (profile && profile.length >= 8 && typeof identity.setOperatorProfile === 'function') {
+        profileWritten = identity.setOperatorProfile(profile).ok === true;
       }
-      return { written: written, styleUpdated: styleWritten };
+
+      if (written || styleWritten || profileWritten) {
+        log.info('reflection.learned', { preferences: written, styleUpdated: styleWritten, profileUpdated: profileWritten });
+      }
+      return { written: written, styleUpdated: styleWritten, profileUpdated: profileWritten };
     } finally {
       running = false;
     }

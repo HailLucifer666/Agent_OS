@@ -930,6 +930,18 @@ function createServer(deps) {
       facts.push('You received a code upgrade since your last boot' +
         (bootUpgrade.changes.length ? ' — recent changes: ' + bootUpgrade.changes.join('; ') : ''));
     }
+    // Session carryover: greet by picking up the thread instead of booting
+    // cold. recall('') with a kind filter scores by recency alone (episodic.js),
+    // so this is simply the three most recent conversation records — no new
+    // query path. Best-effort: a greeting must never depend on memory.
+    try {
+      const recent = memory.episodic.recall('', { kind: 'conversation', limit: 3, windowDays: 3 }) || [];
+      const lines = recent
+        .map((hit) => (hit.record && hit.record.summary) || hit.snippet || '')
+        .filter(Boolean)
+        .slice(0, 3);
+      if (lines.length) facts.push('Last time we spoke: ' + lines.join(' / '));
+    } catch (_) { /* no vault, fake fs, or empty history — greet cold */ }
     let text = null;
     try {
       const result = await Promise.race([
@@ -941,6 +953,8 @@ function createServer(deps) {
               'Greet them aloud the way JARVIS greets Tony Stark: brief, in character, ' +
               'with a one-line situational status woven in naturally. Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
+              'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
+              'the way someone resumes a conversation rather than starting one.\n' +
               'Reply with ONLY the spoken greeting: one to three short sentences, plain natural speech, no markdown, no quotes.',
           }],
           source: 'boot-greeting',

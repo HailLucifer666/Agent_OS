@@ -16,6 +16,12 @@ function createIdentity({ bus, config, fs, identityStore }) {
   var BOUNDARIES_PATH = 'Identity/boundaries.md';
   var PERSONA_LEVELS_PATH = 'Identity/persona.json';
   var OPERATOR_STYLE_PATH = 'Identity/operator-style.txt';
+  // Durable operator facts (who they are, who matters to them, what they are
+  // working on). Separate from Learned Preferences because that list is
+  // NEWEST-first and capped: a day-one fact ("my daughter is called X") gets
+  // evicted by a week of newer trivia. reflection.js rewrites this file whole,
+  // preserving anything still true, so it accumulates AND self-compacts.
+  var OPERATOR_PROFILE_PATH = 'Identity/operator-profile.txt';
 
   // Tunable personality dials, 0-10 each. The operator adjusts them by voice
   // ("dial up the humor") via set_persona_level; persona() turns them into
@@ -94,7 +100,7 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // free/low-context brain models.
   function styleDirectives(l) {
     var parts = [];
-    if (l.humor >= 8) parts.push('Weave in dry wit freely — a quip in most replies is welcome.');
+    if (l.humor >= 8) parts.push('Weave in dry wit freely — a quip in most replies is welcome, and a callback to something the operator said earlier lands better than a generic joke.');
     else if (l.humor >= 5) parts.push('Use dry wit occasionally, when it fits naturally.');
     else if (l.humor >= 3) parts.push('Humor only rarely.');
     else parts.push('No jokes — strictly matter-of-fact.');
@@ -208,13 +214,19 @@ function createIdentity({ bus, config, fs, identityStore }) {
       // the entity learns about the operator visibly shapes how it speaks.
       var l = levels || DEFAULT_LEVELS;
       out += ' Style: ' + styleDirectives(l);
-      var prefs = topLearnedPrefs(5);
+      var prefs = topLearnedPrefs(10);
       if (prefs.length) {
         out += ' What you know about the operator: ' + prefs.join('; ') + '.';
       }
       var opStyle = this.getOperatorStyle();
       if (opStyle) {
         out += ' Operator speaking style (mirror it, tolerate transcription noise): ' + opStyle;
+      }
+      // Durable facts outrank the rolling preference list: these are the things
+      // it must never contradict or forget between sessions.
+      var opProfile = this.getOperatorProfile();
+      if (opProfile) {
+        out += ' Operator profile (durable facts — never contradict these): ' + opProfile;
       }
       out += ' ' + STYLE_GUARDRAIL;
       return out;
@@ -235,6 +247,26 @@ function createIdentity({ bus, config, fs, identityStore }) {
         return { ok: true };
       } catch (err) {
         bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'operator-style', error: err.message });
+        return { ok: false, error: err.message };
+      }
+    },
+
+    // Durable operator profile — same store-and-fold pattern as the style note
+    // above, with a larger cap because it carries several facts rather than one
+    // sentence. Rewritten whole by identity/reflection.js.
+    getOperatorProfile() {
+      var text = fs.readText(OPERATOR_PROFILE_PATH, '').trim();
+      return text ? text.slice(0, 1200) : null;
+    },
+
+    setOperatorProfile(text) {
+      var body = String(text || '').trim().slice(0, 1200);
+      if (!body) return { ok: false, error: 'empty profile' };
+      try {
+        fs.writeText(OPERATOR_PROFILE_PATH, body);
+        return { ok: true };
+      } catch (err) {
+        bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'operator-profile', error: err.message });
         return { ok: false, error: err.message };
       }
     },
