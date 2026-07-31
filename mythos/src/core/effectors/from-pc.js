@@ -253,7 +253,80 @@ async function screen_look({ query }) {
     source: 'screen-look',
   });
   if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the screen.');
-  return ok({ description: String(result.content).trim().slice(0, 600) });
+
+  // WAVE 4 — the tool that is supposed to catch the lie was itself lying.
+  //
+  // 11:21:51 on 2026-07-31: screen_look returned
+  //   {"description":"https://i.imgur.com/SYP5Cfi.png"}
+  // a bare, almost certainly hallucinated URL. At 11:28:36, asked to confirm the
+  // Notepad text, it returned a generic tutorial paragraph ("When you type text in
+  // Notepad, it immediately appears...") — describing how Notepad works in general
+  // rather than what was on screen, which was an EMPTY document. MYTHOS relayed
+  // that as visual confirmation that the typing had worked. This function passed
+  // the model's reply through with zero validation.
+  //
+  // OCR is the ground truth; the vision model's prose is commentary. A cheap token
+  // overlap is enough to catch the two real failure modes (a URL, and generic prose
+  // about the app rather than the screen) without a second model call.
+  var description = String(result.content).trim();
+
+  if (!description) {
+    return fail('The vision model returned an empty description — nothing about the screen was actually observed.');
+  }
+  if (/^https?:\/\/\S+$/i.test(description)) {
+    return fail('The vision model returned a bare URL instead of a description ("' +
+      description.slice(0, 120) + '"). That is a fabrication, not an observation of your screen.');
+  }
+
+  // OCR the screen for ground truth. This is a second capture a few hundred ms
+  // later, not the same frame — a deliberate simplification, and the window for
+  // the screen to change materially is small. It never blocks: no OCR language
+  // pack is a legitimate degrade, and then there is simply nothing to check against.
+  var ocrText = '';
+  var ocrLines = [];
+  try {
+    var ocr = await delegate({ cmd: 'screen_read_text' });
+    if (ocr.ok && ocr.result && typeof ocr.result.text === 'string') {
+      ocrText = ocr.result.text;
+      ocrLines = ocrText.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    }
+  } catch (_) { /* OCR is best-effort ground truth, never a hard dependency */ }
+
+  var ocrTokens = tokenSet(ocrText);
+  var descTokens = tokenSet(description);
+  var grounded = false;
+
+  // Only meaningful when the screen actually HAS readable text. A screen that is
+  // all imagery gives OCR nothing, and then overlap proves nothing either way.
+  if (ocrTokens.size >= 5) {
+    var shared = 0;
+    descTokens.forEach(function (t) { if (ocrTokens.has(t)) shared++; });
+    grounded = shared > 0;
+    if (!grounded && descTokens.size >= 5) {
+      return fail('The vision description does not match the screen. OCR reads ' + ocrTokens.size +
+        ' words from the display and the description shares none of them, which is what a generic ' +
+        'or invented answer looks like. Raw reply: "' + description.slice(0, 200) + '"');
+    }
+  }
+
+  return ok({
+    description: description.slice(0, 600),
+    // Literal screen text, so the voice layer can quote what is actually there
+    // instead of paraphrasing a model's guess about it.
+    ocrSample: ocrLines.slice(0, 12),
+    ocrLineCount: ocrLines.length,
+    grounded: grounded,
+  });
+}
+
+// Words of 4+ characters, lowercased. Long enough to be meaningful, short enough
+// that a real description of a text-bearing screen will share several.
+function tokenSet(s) {
+  var out = new Set();
+  String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').forEach(function (w) {
+    if (w.length >= 4) out.add(w);
+  });
+  return out;
 }
 
 // §7.1 (step 5, desktop gaps) — real screen OCR via Windows.Media.Ocr
