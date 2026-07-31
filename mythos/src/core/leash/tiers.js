@@ -165,6 +165,14 @@ const TIER_TABLE = {
   'set_wallpaper':         2,  // §7.7 (step 5) — non-destructive, fully reversible local
                                // action (same class as show_desktop/set_volume above),
                                // sandboxed path via from-computer.js's resolveSandboxed
+  'app_reply':             2,  // WAVE 7 — composes a reply into an already-open chat app's
+                               // message box and STOPS. T2 rather than ui_type's T3 because
+                               // it cannot send: there is no code path to Enter in
+                               // from-app-reply.js, the text stays visible on screen, and the
+                               // human closes the loop. Nothing leaves the machine, which is
+                               // the same risk class as typing into a local window — and it is
+                               // strictly safer than the ui_type it wraps, since it refuses
+                               // unless it has proven the caret is in a real editable box.
   // Task 10 (step 6, Android bridge) — non-destructive local device actions,
   // same class as launch_app/media_key above: toggling a radio or launching/
   // closing an app is reversible and bounded, no confirm friction warranted.

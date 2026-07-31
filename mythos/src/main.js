@@ -69,6 +69,7 @@ const { registerFromCalendar } = require('./core/effectors/from-calendar');
 const { registerFromSkills } = require('./core/effectors/from-skills');
 const { registerFromSpotify } = require('./core/effectors/from-spotify');
 const { registerFromWhatsapp } = require('./core/effectors/from-whatsapp');
+const { registerFromAppReply } = require('./core/effectors/from-app-reply');
 const { registerFromWidgets } = require('./core/effectors/from-widgets');
 const { registerFromDocs } = require('./core/effectors/from-docs');
 const { registerFromImageGen } = require('./core/effectors/from-image-gen');
@@ -351,6 +352,10 @@ async function main() {
       // WhatsApp desktop. Needs memory.fs to read vault/Contacts/contacts.json,
       // so a contact name ("dad") can resolve to a number.
       registerFromWhatsapp(hub, { memory: memory, logger: logger });
+      // WAVE 7 — reply into whatever chat app is already open, composing only.
+      // Takes no collaborators: it reaches pc-child directly (like from-pc) and
+      // reuses from-pc's ui_type so it inherits the Wave 2 read-back oracle.
+      registerFromAppReply(hub);
       // REMEDIATION P1-7: fs (vault fs-store) added so browser_navigate can
       // existence-check a /vault/... path via the same resolver open_artifact
       // uses (vault-url.js), instead of forwarding it into a file:// URL.

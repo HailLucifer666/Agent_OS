@@ -34,6 +34,7 @@ const { registerFromPc } = require('../src/core/effectors/from-pc');
 const { registerFromAndroid } = require('../src/core/effectors/from-android');
 const { registerFromSpotify } = require('../src/core/effectors/from-spotify');
 const { registerFromWhatsapp } = require('../src/core/effectors/from-whatsapp');
+const { registerFromAppReply } = require('../src/core/effectors/from-app-reply');
 const { registerFromBrowser } = require('../src/core/effectors/from-browser');
 const { registerFromDashboard } = require('../src/core/effectors/from-dashboard');
 const { registerFromProject } = require('../src/core/effectors/from-project');
@@ -119,6 +120,7 @@ describe('anti-drift: TIER_TABLE <-> effector hub conformance', () => {
     registerFromAndroid(hub);
     registerFromSpotify(hub, { effectors: hub, bus, memory: {}, goals: {}, config });
     registerFromWhatsapp(hub, { memory: { fs: vault }, logger: { warn() {}, info() {} } });
+    registerFromAppReply(hub);
     registerFromBrowser(hub, { config, fs: vault });
     registerFromDashboard(hub, {
       goalsEffector, pipeline, kanban, agentActions, buildRunner,

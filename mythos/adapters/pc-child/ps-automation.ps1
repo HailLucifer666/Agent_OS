@@ -1520,6 +1520,109 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
     }
 }
 
+# WAVE 7 — find and focus a real message box inside a window, then PROVE the
+# caret is in it.
+#
+# app_reply needs to type into the compose box of whatever chat app is already
+# open. Guessing a coordinate is how you type into a search field, a channel name,
+# or someone's message history. So the box is located through UIA: an element that
+# is genuinely editable (ValuePattern that is not read-only, or TextPattern) AND
+# keyboard-focusable, preferring the one lowest on screen — in every chat client
+# the compose box sits at the bottom, while search sits at the top.
+#
+# SetFocus first (reliable, no pointer involved), falling back to a click at the
+# element's centre for surfaces that ignore programmatic focus — the same
+# escalation philosophy as Handle-UiClick. Either way it then re-reads
+# FocusedElement and confirms the thing now holding the caret is editable. No
+# editable element, or focus that will not take, is an honest stop: "I can see the
+# app, I cannot find its message box" beats typing into the wrong field.
+function Handle-FocusMessageBox($TargetPid) {
+    if (-not $TargetPid) { return 'PID is required.' }
+    try {
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+        $cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$TargetPid)
+        $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+        if (-not $win) { return ('No window found for PID ' + $TargetPid + '.') }
+
+        # Every descendant, then filter to genuinely editable ones. Bounded by UIA
+        # itself; a chat window's tree is small enough that this is not slow.
+        $all = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+
+        $candidates = @()
+        foreach ($el in $all) {
+            try {
+                if (-not $el.Current.IsKeyboardFocusable) { continue }
+                if ($el.Current.IsOffscreen) { continue }
+                $editable = $false
+                $via = $null
+                try {
+                    $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
+                    if ($vp -and -not $vp.Current.IsReadOnly) { $editable = $true; $via = 'ValuePattern' }
+                } catch { }
+                if (-not $editable) {
+                    try {
+                        $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) -as [System.Windows.Automation.TextPattern]
+                        if ($tp) { $editable = $true; $via = 'TextPattern' }
+                    } catch { }
+                }
+                if (-not $editable) { continue }
+                $r = $el.Current.BoundingRectangle
+                if ($r.Width -le 0 -or $r.Height -le 0) { continue }
+                $candidates += @{
+                    element = $el
+                    name = [string]$el.Current.Name
+                    via = $via
+                    bottom = [double]($r.Y + $r.Height)
+                    cx = [int]($r.X + $r.Width / 2)
+                    cy = [int]($r.Y + $r.Height / 2)
+                }
+            } catch { }
+        }
+
+        if ($candidates.Count -eq 0) {
+            return ('Found the window for PID ' + $TargetPid + ' but no editable, keyboard-focusable element in it — cannot locate a message box.')
+        }
+
+        # Lowest on screen: the compose box, not the search field.
+        $pick = $candidates | Sort-Object -Property bottom -Descending | Select-Object -First 1
+
+        $method = $null
+        try { $pick.element.SetFocus(); $method = 'uia-setfocus'; Start-Sleep -Milliseconds 120 } catch { }
+
+        $focused = Read-FocusedElementText
+        if ($null -eq $focused) {
+            # SetFocus did not take (or the focused element is unreadable) — click it.
+            try {
+                Click-AtScreenCoords $pick.cx $pick.cy
+                $method = 'click-center'
+                Start-Sleep -Milliseconds 180
+                $focused = Read-FocusedElementText
+            } catch { }
+        }
+
+        if ($null -eq $focused) {
+            return ('Located a message box in PID ' + $TargetPid + ' but could not put the caret in it (tried UIA SetFocus and a click), so typing there cannot be trusted.')
+        }
+
+        return @{
+            focused = $true
+            method = $method
+            via = $pick.via
+            name = $pick.name
+            x = $pick.cx
+            y = $pick.cy
+            candidateCount = $candidates.Count
+            # What is already sitting in the box. app_reply reports this so a draft
+            # someone else was writing is never silently appended to.
+            existingText = [string]$focused.text
+        }
+    } catch {
+        return ('Could not find a message box: ' + $_.Exception.Message)
+    }
+}
+
 # WAVE 2 — which window has the keyboard RIGHT NOW. The foreground-pid oracle.
 # Needed because "is Enter about to send a Slack message" cannot be answered from
 # anything remembered: focus moves without telling us (the operator alt-tabs, a
@@ -2158,6 +2261,10 @@ while ($true) {
         }
         'get_foreground_window' {
             $result = Handle-GetForegroundWindow
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'focus_message_box' {
+            $result = Handle-FocusMessageBox $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'click_at' {
