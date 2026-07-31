@@ -50,9 +50,11 @@ const WORLD_CHANGING = [
 
 // name -> why it cannot prove itself YET, and which wave removes this entry.
 const MIGRATION_LEDGER = {
-  ui_type: 'Wave 2 adds UIA read-back of the focused control; today typed:true means only "SendInput accepted the events".',
-  send_key: 'Wave 2 adds the messaging-app guard requiring a preceding verified ui_type; today an Enter is unconditional.',
-  ui_click: 'Wave 2/7 — a click has no oracle of its own; it is verified by what it produced (editable focus, read-back).',
+  // ui_type RETIRED in Wave 2: reads the focused control back via
+  // ValuePattern/TextPattern (test/ui-type-readback.test.js).
+  // send_key RETIRED in Wave 2: bare Enter in a messaging app requires a
+  // preceding verified type (test/send-key-messaging-guard.test.js).
+  ui_click: 'Wave 7 — a click has no oracle of its own; it is verified by what it produced (editable focus, then read-back).',
   focus_window: 'Wave 2 verifies foreground via the foreground-pid oracle; today ok:true means the focus call returned.',
   // launch_app RETIRED in Wave 1: ps-automation.ps1 no longer resolves by window
   // title, and from-pc.js reports the process-window oracle or an honest

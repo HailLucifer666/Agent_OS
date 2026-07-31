@@ -237,6 +237,25 @@ public static class NativeInput {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
 
+    // WAVE 2 — an alternative injection route for diagnose_type. SendInput is a
+    // whole-desktop, foreground-dependent mechanism; posting WM_CHAR addresses one
+    // specific control and so survives some cases where SendInput is dropped
+    // (and fails in others, e.g. controls that only read real key events). Which
+    // one actually works per app class is a question to be MEASURED, not guessed:
+    // on 2026-07-31 SendInput reported a full 23-character injection into a
+    // confirmed-foreground Notepad that a screenshot showed empty.
+    //
+    // GetFocus is thread-local — it reports the focused control of the CALLING
+    // thread's input queue, so it is only meaningful between AttachThreadInput
+    // calls (already declared above for exactly that reason).
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetFocus();
+
+    public const uint WM_CHAR = 0x0102;
+
     public const int SW_RESTORE = 9;
     public const int SW_MINIMIZE = 6;
     public const int SW_MAXIMIZE = 3;
@@ -1351,6 +1370,54 @@ function Handle-UiClick($TargetPid, $elementPath) {
     }
 }
 
+# WAVE 2 — the read-back oracle. Nothing in this file could previously READ text
+# back out of a control, which is why "SendInput accepted 46 events" was the
+# strongest evidence ui_type had, and why an empty Notepad could be reported as
+# holding 23 typed characters.
+#
+# Reads the text of the currently FOCUSED element (whatever actually received the
+# keystrokes, which is the honest thing to inspect — not the element we hoped for).
+# Two patterns, in order of directness:
+#   ValuePattern  — edit boxes, most Win32/WinForms/WPF single-line controls.
+#   TextPattern   — documents; Notepad, Word, and most rich editors expose this.
+# Returns @{ text; via } or $null when the element exposes neither. $null is a
+# legitimate, common answer (games, canvas-drawn Electron surfaces) and MUST be
+# reported as "cannot confirm" rather than as failure.
+#
+# TextPattern is READ-ONLY in UI Automation — it has no insertion API, so it can
+# serve as an oracle but never as a typing mechanism.
+function Read-FocusedElementText() {
+    try {
+        $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+        if (-not $el) { return $null }
+
+        try {
+            $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
+            if ($vp) { return @{ text = [string]$vp.Current.Value; via = 'ValuePattern' } }
+        } catch { }
+
+        try {
+            $tp = $el.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) -as [System.Windows.Automation.TextPattern]
+            if ($tp) { return @{ text = [string]$tp.DocumentRange.GetText(-1); via = 'TextPattern' } }
+        } catch { }
+
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+# Whitespace-insensitive containment. Typing normalises newlines and some controls
+# report a trailing NUL or \r\n the caller never sent, so an exact compare would
+# report false mismatches on text that genuinely landed.
+function Test-TextLanded($Haystack, $Needle) {
+    if ($null -eq $Haystack) { return $false }
+    $h = ([string]$Haystack) -replace '\s', ''
+    $n = ([string]$Needle) -replace '\s', ''
+    if (-not $n) { return $false }
+    return $h.Contains($n)
+}
+
 function Handle-UiType($text, $TargetPid, $elementPath) {
     if (-not $text) { return 'Text is required.' }
     try {
@@ -1394,6 +1461,12 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             $typedIntoTitle = $sb.ToString()
         } catch { }
 
+        # WAVE 2 — snapshot the target's text BEFORE injecting. Comparing only the
+        # AFTER state is not enough: Notepad hands back the whole document, so text
+        # left over from an earlier run would read as a successful type. Requiring
+        # the content to have CHANGED as well is what makes this a real oracle.
+        $beforeRead = Read-FocusedElementText
+
         $script:LastVkSent = $null
         Send-UnicodeText $text
         # BUG-042-class honest failure: SendInput injected zero events (UIPI /
@@ -1402,9 +1475,214 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
             return "Type failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
         }
-        return @{ typed = $true; length = $text.Length; typedIntoPid = [int]$typedIntoPid; typedIntoTitle = $typedIntoTitle }
+
+        $result = @{ typed = $true; length = $text.Length; typedIntoPid = [int]$typedIntoPid; typedIntoTitle = $typedIntoTitle }
+
+        # Read back. A brief settle first: SendInput is asynchronous, so the control
+        # has usually not processed the last character when SendInput returns.
+        Start-Sleep -Milliseconds 120
+        $afterRead = Read-FocusedElementText
+
+        if ($null -eq $afterRead) {
+            # No readable pattern. Genuinely unknown — not a failure.
+            $result.readBack = 'unavailable'
+            $result.readBackReason = 'the focused control exposes neither ValuePattern nor TextPattern, so its text cannot be read back'
+        } elseif (Test-TextLanded $afterRead.text $text) {
+            $changed = ($null -eq $beforeRead) -or ($beforeRead.text -ne $afterRead.text)
+            if ($changed) {
+                $result.readBack = 'confirmed'
+                $result.readBackVia = $afterRead.via
+                # Bounded: a whole document could be megabytes, and this value is
+                # spoken aloud and written to episodic memory.
+                $t = [string]$afterRead.text
+                if ($t.Length -gt 400) { $t = $t.Substring($t.Length - 400) }
+                $result.readBackText = $t
+            } else {
+                # The text is present but nothing changed: it was already there, so
+                # this injection cannot be shown to have done anything.
+                $result.readBack = 'unchanged'
+                $result.readBackVia = $afterRead.via
+                $result.readBackReason = 'the control already contained this text and its contents did not change, so the keystrokes cannot be confirmed to have landed'
+            }
+        } else {
+            # The oracle spoke and contradicted us. This is the empty-Notepad case.
+            $result.readBack = 'mismatch'
+            $result.readBackVia = $afterRead.via
+            $a = [string]$afterRead.text
+            if ($a.Length -gt 400) { $a = $a.Substring(0, 400) }
+            $result.readBackText = $a
+            $result.readBackReason = 'the control does not contain the text after injection'
+        }
+
+        return $result
     } catch {
         return ('Type failed: ' + $_.Exception.Message)
+    }
+}
+
+# WAVE 2 — which window has the keyboard RIGHT NOW. The foreground-pid oracle.
+# Needed because "is Enter about to send a Slack message" cannot be answered from
+# anything remembered: focus moves without telling us (the operator alt-tabs, a
+# confirm dialog closes), and on 2026-07-31 two Enters went into a real Slack DM
+# before any text had verifiably reached it.
+function Handle-GetForegroundWindow() {
+    try {
+        $hwnd = [NativeInput]::GetForegroundWindow()
+        if ($hwnd -eq [IntPtr]::Zero) { return 'No foreground window.' }
+        $fgPid = 0
+        [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgPid)
+        $sb = New-Object System.Text.StringBuilder 512
+        [void][NativeInput]::GetWindowText($hwnd, $sb, 512)
+        $procName = $null
+        try { $procName = (Get-Process -Id $fgPid -ErrorAction Stop).ProcessName } catch { }
+        return @{
+            pid = [int]$fgPid
+            title = $sb.ToString()
+            process = $procName
+        }
+    } catch {
+        return ('Could not read the foreground window: ' + $_.Exception.Message)
+    }
+}
+
+# WAVE 2 STEP A — the mechanism experiment, not a guess.
+#
+# On 2026-07-31 11:28:09, against a foreground window confirmed as "Untitled -
+# Notepad", SendInput reported a full 23-character injection and the screenshot 28
+# seconds later showed an empty document. The plausible explanation is a Win11
+# Notepad UIPI/injection quirk, but this codebase has had plausible theories be
+# wrong at least three times, so the mechanism is MEASURED instead.
+#
+# Tries each route against the currently focused control and READS THE TEXT BACK
+# after each, reporting which ones actually landed. Every attempt is preceded by a
+# select-all + delete so the routes cannot contaminate one another, and the whole
+# thing is a diagnostic: it types junk into whatever is focused and is never on a
+# voice path.
+#
+# Deliberate deviation from the plan: "UIA TextPattern insertion" is not a
+# mechanism. TextPattern is read-only in UI Automation — no insertion API exists.
+# Route 2 is instead UIA SetFocus followed by SendInput, which is a genuinely
+# different route (it fixes focus through UIA rather than trusting the OS
+# foreground) and is the one most likely to explain the Notepad case.
+function Handle-DiagnoseType($text, $TargetPid) {
+    if (-not $text) { $text = 'MYTHOS diagnostic ' + [DateTime]::UtcNow.ToString('HHmmss') }
+    $text = [string]$text
+
+    $fgHwnd = [NativeInput]::GetForegroundWindow()
+    $fgPid = 0
+    [void][NativeInput]::GetWindowThreadProcessId($fgHwnd, [ref]$fgPid)
+    $sb = New-Object System.Text.StringBuilder 512
+    [void][NativeInput]::GetWindowText($fgHwnd, $sb, 512)
+
+    $probe = Read-FocusedElementText
+    $attempts = @()
+
+    # Clear the field between mechanisms; best-effort, and reported so a route that
+    # only "worked" because the field was dirty is visible as such.
+    $clear = {
+        try {
+            Send-VkCombo @(0x11) 0x41   # ctrl+a
+            Start-Sleep -Milliseconds 60
+            Send-VkKey 0x2E             # delete
+            Start-Sleep -Milliseconds 80
+        } catch { }
+    }
+
+    $record = {
+        param($Name, $Detail)
+        Start-Sleep -Milliseconds 150
+        $after = Read-FocusedElementText
+        $landed = $false
+        $seen = $null
+        if ($after) {
+            $landed = Test-TextLanded $after.text $text
+            $seen = [string]$after.text
+            if ($seen.Length -gt 200) { $seen = $seen.Substring(0, 200) }
+        }
+        return @{
+            mechanism = $Name
+            landed = $landed
+            readable = [bool]($null -ne $after)
+            via = if ($after) { $after.via } else { $null }
+            observed = $seen
+            detail = $Detail
+        }
+    }
+
+    # --- 1: UIA ValuePattern.SetValue — no keystrokes at all -----------------
+    & $clear
+    $d1 = 'not attempted'
+    try {
+        $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+        $vp = $null
+        if ($el) { $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern] }
+        if ($vp) {
+            if ($vp.Current.IsReadOnly) { $d1 = 'ValuePattern present but read-only' }
+            else { $vp.SetValue($text); $d1 = 'SetValue called' }
+        } else { $d1 = 'no ValuePattern on the focused element' }
+    } catch { $d1 = 'threw: ' + $_.Exception.Message }
+    $attempts += (& $record 'uia-valuepattern-setvalue' $d1)
+
+    # --- 2: UIA SetFocus, then SendInput ------------------------------------
+    & $clear
+    $d2 = 'not attempted'
+    try {
+        $el2 = [System.Windows.Automation.AutomationElement]::FocusedElement
+        if ($el2) { $el2.SetFocus(); Start-Sleep -Milliseconds 80; $d2 = 'SetFocus + SendInput' }
+        else { $d2 = 'no focused element; SendInput only' }
+        $script:LastVkSent = $null
+        Send-UnicodeText $text
+        $d2 += ' (events=' + [string]$script:LastVkSent + ')'
+    } catch { $d2 = 'threw: ' + $_.Exception.Message }
+    $attempts += (& $record 'uia-setfocus-then-sendinput' $d2)
+
+    # --- 3: SendInput unicode — the current production path ------------------
+    & $clear
+    $d3 = 'not attempted'
+    try {
+        $script:LastVkSent = $null
+        Send-UnicodeText $text
+        $d3 = 'events=' + [string]$script:LastVkSent
+    } catch { $d3 = 'threw: ' + $_.Exception.Message }
+    $attempts += (& $record 'sendinput-unicode' $d3)
+
+    # --- 4: WM_CHAR posted to the focused CONTROL ---------------------------
+    # GetFocus is thread-local, so the foreground thread's input queue has to be
+    # attached to ours first, otherwise it reports our own (windowless) focus.
+    & $clear
+    $d4 = 'not attempted'
+    try {
+        $fgThread = [NativeInput]::GetWindowThreadProcessId($fgHwnd, [ref]$fgPid)
+        $ourThread = [NativeInput]::GetCurrentThreadId()
+        $attached = [NativeInput]::AttachThreadInput($ourThread, $fgThread, $true)
+        $target = [IntPtr]::Zero
+        try {
+            if ($attached) { $target = [NativeInput]::GetFocus() }
+        } finally {
+            if ($attached) { [void][NativeInput]::AttachThreadInput($ourThread, $fgThread, $false) }
+        }
+        if ($target -eq [IntPtr]::Zero) { $target = $fgHwnd; $d4 = 'no focused child; posted to the top-level window' }
+        else { $d4 = 'posted to the focused child control' }
+        foreach ($ch in $text.ToCharArray()) {
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_CHAR, [IntPtr][int][char]$ch, [IntPtr]0)
+        }
+    } catch { $d4 = 'threw: ' + $_.Exception.Message }
+    $attempts += (& $record 'wm-char-post' $d4)
+
+    & $clear
+
+    $worked = @($attempts | Where-Object { $_.landed } | ForEach-Object { $_.mechanism })
+    return @{
+        text = $text
+        foregroundPid = [int]$fgPid
+        foregroundTitle = $sb.ToString()
+        readableVia = if ($probe) { $probe.via } else { $null }
+        readable = [bool]($null -ne $probe)
+        attempts = $attempts
+        worked = $worked
+        # The honest headline: with no readable pattern this run proves nothing
+        # about any mechanism, because the oracle itself was unavailable.
+        conclusive = [bool]($null -ne $probe)
     }
 }
 
@@ -1872,6 +2150,14 @@ while ($true) {
         }
         'send_key' {
             $result = Handle-SendKey $cmd.key
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'diagnose_type' {
+            $result = Handle-DiagnoseType $cmd.text $cmd.pid
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'get_foreground_window' {
+            $result = Handle-GetForegroundWindow
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'click_at' {

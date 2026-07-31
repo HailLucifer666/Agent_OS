@@ -368,7 +368,61 @@ async function ui_type({ text, pid, elementPath }) {
         'the MYTHOS dashboard itself ("' + landedTitle + '"). Launch or focus the app first, then type.');
     }
   }
-  return res;
+  if (!res || !res.ok) return res;
+
+  // WAVE 2 — the read-back oracle. Every guard above still only proves the
+  // keystrokes were ACCEPTED and aimed at the right window. On 2026-07-31 at
+  // 11:28:09 all of them passed: pid 14556, foreground confirmed "Untitled -
+  // Notepad", SendInput reported the full 23 events, typed:true — and the
+  // screenshot 28 seconds later showed an empty document. ps-automation.ps1 now
+  // reads the focused control's text back and says whether the text is actually
+  // in there; this converts that answer into the evidence contract.
+  var rr = (res.result && typeof res.result === 'object') ? res.result : {};
+  var typedText = String(text);
+
+  if (rr.readBack === 'confirmed') {
+    // Records the only state in which a later Enter is safe in a messaging app.
+    noteVerifiedType(rr.typedIntoPid, typedText, rr.typedIntoTitle);
+    return evidence.verifiedOk(res, {
+      oracle: 'read-back',
+      expected: typedText,
+      observed: String(rr.readBackText || typedText),
+    });
+  }
+  if (rr.readBack === 'mismatch') {
+    // The oracle contradicted us outright. This is the empty-Notepad case, and it
+    // is a failure however cleanly SendInput reported.
+    return evidence.mismatch(res, {
+      oracle: 'read-back',
+      expected: typedText,
+      observed: String(rr.readBackText || ''),
+      error: 'The keystrokes were accepted but the text is not in the window: ' +
+        (rr.readBackText ? 'it reads "' + String(rr.readBackText).slice(0, 120) + '"' : 'it is empty') +
+        '. Nothing was actually typed where you asked.',
+    });
+  }
+  // 'unavailable' (no readable pattern) and 'unchanged' (text was already there,
+  // nothing moved) are both honest unknowns — the keystrokes may well have landed.
+  return evidence.unverified(res, String(
+    rr.readBackReason || 'the text could not be read back out of the window, so I cannot confirm it landed'
+  ));
+}
+
+// WAVE 2 STEP C — apps where a stray Enter SENDS something irreversible.
+// Matched on the landed window's title/process, because that is what actually has
+// the keyboard. On 2026-07-31 send_key('enter') fired twice into a real Slack DM
+// at 11:23:33 and 11:24:15, and the first ui_type that could have put text there
+// did not succeed until 11:25:17 — so MYTHOS pressed Send on an empty compose box
+// twice, then told the operator "I have typed the message and sent it."
+var MESSAGING_APPS = /(slack|teams|whatsapp|discord|telegram|signal|messenger|outlook|thunderbird)/i;
+
+// The last ui_type whose text was PROVEN present, by landed pid. Only a verified
+// read-back counts: an unverified type is exactly the state in which pressing
+// Enter is most dangerous, because nobody knows what is in the box.
+var lastVerifiedType = null;
+
+function noteVerifiedType(landedPid, text, title) {
+  lastVerifiedType = { pid: landedPid, text: String(text), title: String(title || ''), at: Date.now() };
 }
 
 async function show_desktop() {
@@ -414,12 +468,61 @@ async function send_key({ key }) {
     }
     const badMod = mods.find((m) => !KEY_MODIFIERS.includes(m));
     if (badMod) return fail(`Invalid modifier: "${badMod}". Valid: ${KEY_MODIFIERS.join(', ')}`);
-    return delegate({ cmd: 'send_key', key: raw });
+    return keyPressed(await delegate({ cmd: 'send_key', key: raw }), raw);
   }
   if (!isValidKeyName(raw)) {
     return fail(`Invalid key: "${key}". Valid: ${NAMED_KEYS.join(', ')}, a single letter, or a combo like ctrl+n.`);
   }
-  return delegate({ cmd: 'send_key', key: raw });
+
+  // WAVE 2 STEP C — refuse a bare Enter in a messaging app unless this session
+  // has PROVEN text into that same window. Enter there is the Send button: the
+  // action is irreversible and lands in someone else's notifications.
+  if (raw === 'enter') {
+    var guard = await guardMessagingEnter();
+    if (guard) return guard;
+  }
+  return keyPressed(await delegate({ cmd: 'send_key', key: raw }), raw);
+}
+
+// A keystroke has no oracle for what it DID. sent:true means "SendInput accepted
+// the key", which is precisely the class of claim that made ui_type lie — so
+// send_key reports its effect as unverified rather than as success. Pressing Enter
+// is accepted; whether a message left the box is a different question, and the
+// only honest answer here is that this tool did not check.
+//
+// (The upgrade, when Wave 7's editable-element lookup is in place: read the
+// compose box back and treat "it is now empty" as evidence the message went. That
+// is a real oracle and would let a send be genuinely confirmed.)
+function keyPressed(res, raw) {
+  if (!res || !res.ok) return res;
+  return evidence.unverified(res,
+    'pressed ' + raw + ' — the keystroke was accepted, but I did not verify what it did');
+}
+
+// Returns a fail() when Enter must be refused, or null to allow it. Reads the
+// LIVE foreground window rather than trusting anything remembered: what has the
+// keyboard now is the only thing that matters for where Enter goes.
+async function guardMessagingEnter() {
+  var fg = await delegate({ cmd: 'get_foreground_window' });
+  if (!fg || !fg.ok || !fg.result) return null; // no oracle, no basis to refuse
+
+  var title = String(fg.result.title || '');
+  var proc = String(fg.result.process || '');
+  var fgPid = fg.result.pid;
+  if (!MESSAGING_APPS.test(title) && !MESSAGING_APPS.test(proc)) return null;
+
+  var app = proc || title;
+  if (!lastVerifiedType) {
+    return fail('Refusing to press Enter in ' + app + ': Enter sends the message there, and nothing ' +
+      'has been verifiably typed into it this session. Type the message first and I will read it back ' +
+      'to you before sending.');
+  }
+  if (typeof fgPid === 'number' && typeof lastVerifiedType.pid === 'number' && fgPid !== lastVerifiedType.pid) {
+    return fail('Refusing to press Enter in ' + app + ' (pid ' + fgPid + '): the last text I could actually ' +
+      'verify went to a different window ("' + lastVerifiedType.title + '", pid ' + lastVerifiedType.pid +
+      '). Sending from here would send whatever is already in that box.');
+  }
+  return null;
 }
 
 async function click_at({ x, y }) {

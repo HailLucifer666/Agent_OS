@@ -199,7 +199,13 @@ describe('send_key accepts modifier combos', () => {
   it('still accepts the original named keys', async () => {
     const { fake, fromPc } = withFakeChild(() => ({ ok: true, result: { sent: true } }));
     assert.equal((await fromPc.send_key({ key: 'enter' })).ok, true);
-    assert.equal(fake.calls[0].key, 'enter');
+    // WAVE 2: a bare `enter` now probes get_foreground_window first, to refuse
+    // pressing Send in a messaging app with nothing verifiably typed. So the
+    // keystroke is no longer necessarily calls[0] — assert on the send_key call
+    // itself rather than on its position, which is what this test cares about.
+    const keyCall = fake.calls.find((c) => c.cmd === 'send_key');
+    assert.ok(keyCall, 'the keystroke must still be forwarded');
+    assert.equal(keyCall.key, 'enter');
   });
 
   it('rejects an unknown modifier and an unknown base key', async () => {
