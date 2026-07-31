@@ -304,6 +304,10 @@ const SCHEMA = {
   VOICE_HISTORY_MAX_TURNS:     { type: 'number', default: 40, min: 2, max: 200 },      // conversation entries kept
   VOICE_HISTORY_MAX_CHARS:     { type: 'number', default: 12000, min: 1000, max: 60000 }, // total history prompt budget
   VOICE_MAX_TOOL_ITERATIONS:   { type: 'number', default: 4, min: 1, max: 20 },
+  // WAVE 8 — how long a SPOKEN send-confirm stays armed before it releases
+  // itself. Short by design: an armed send is a loaded action, and the operator
+  // saying "yes" to something else a minute later must not fire it.
+  VOICE_SPOKEN_CONFIRM_TTL_MS: { type: 'number', default: 60000, min: 1, max: 600000 },
   VOICE_EMAIL_MODE:            { type: 'string', default: 'gmail', enum: ['gmail', 'mailto'] },
   VOICE_ALLOWED_DIRS:          { type: 'string', default: '%USERPROFILE%' },    // semicolon-separated list_folder whitelist
 

@@ -446,7 +446,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // is unchanged in shape; the difference is that the accept now comes from a
   // human.
 
-  async function executeAction(action, { connectionId, traceId } = {}) {
+  async function executeAction(action, { connectionId, traceId, channel } = {}) {
     // H4: Guard against empty/invalid args before dispatch.
     if (!action || !action.tool) return { tool: '?', args: {}, ok: false, summary: 'no tool specified' };
     if (action.args && typeof action.args === 'object') {
@@ -492,6 +492,26 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     if (verdict.requireConfirm) {
       const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${humanizeArgs(decision.args)})` : ''}`;
       const confirmId = leash.confirm.create(summary, { decision, goalId: null, tier: verdict.tier }, connectionId || 'system');
+
+      // WAVE 8 — a send the operator just asked for out loud is confirmed out
+      // loud, not with a popup. The leash is untouched: same tier, same
+      // confirm.create/accept plumbing, same audit line. Only the UI changes.
+      //
+      // The modal was also protecting nothing on 2026-07-31: the operator
+      // approved a Notepad type and it went to the IDE anyway, because a
+      // confirmation gates INTENT while only evidence gates OUTCOME. Waves 1 and
+      // 2 supply the outcome half, which is why this wave is safe to land now and
+      // would not have been first.
+      if (isOperatorInitiatedSend(decision, channel)) {
+        armSpokenConfirm(connectionId, { confirmId, decision, tier: verdict.tier });
+        return {
+          tool: decision.tool, args: decision.args, ok: false,
+          confirmPending: true, confirmId, summary,
+          spokenConfirm: true,
+          confirmPrompt: describeSendForSpeech(decision),
+        };
+      }
+
       bus.emit('confirm-request', { ...decision, confirmId, summary, tier: verdict.tier });
       return { tool: decision.tool, args: decision.args, ok: false, confirmPending: true, confirmId, summary };
     }
@@ -511,9 +531,128 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     };
   }
 
+  // ---- WAVE 8: spoken confirm for operator-initiated sends ----------------
+  //
+  // Tools where the confirm exists because the action LEAVES THE MACHINE and
+  // cannot be taken back. These get a spoken confirm. Everything else T3
+  // (delete_file, run_command, close_window...) keeps the modal, because "yes"
+  // said into a room is a worse gate for a destructive local change than a
+  // deliberate click.
+  //
+  // send_key is absent on purpose: its Enter-in-a-messaging-app case is already
+  // refused at the effector by Wave 2's guard unless a verified read-back exists,
+  // which is a stronger check than any confirmation.
+  const SEND_TOOLS = { whatsapp_send: true, gmail_send: true };
+
+  // Channels that represent the operator talking, right now. An explicit
+  // allowlist: anything else — cortex, engagements, goals, an unknown caller —
+  // falls through to the modal. Autonomous actions are additionally capped at
+  // AUTONOMOUS_MAX_TIER=2 and never reach a T3 send at all; this is the second
+  // lock, not the first.
+  const SPOKEN_CONFIRM_CHANNELS = { voice: true, 'voice-live': true };
+
+  // Config-read rather than a bare constant so expiry is genuinely testable —
+  // otherwise the only honest test of it would be one that waits a real minute,
+  // and the tempting alternative is a test named "expires" that proves nothing.
+  const SPOKEN_CONFIRM_TTL_MS = (config && config.VOICE_SPOKEN_CONFIRM_TTL_MS) || 60000;
+  const AFFIRMATIVE_RE = /^(?:ok(?:ay)?|yes|yeah|yep|yup|sure|do it|go|go ahead|send|send it|send that|confirm(?:ed)?|affirmative|please do)\b[\s.!]*$/i;
+  const NEGATIVE_RE = /\b(?:no|nope|don'?t|do not|stop|cancel|nevermind|never mind|wait|hold on|abort|scratch that)\b/i;
+
+  // One armed confirm per connection. A second send supersedes the first rather
+  // than queueing: two pending "say send" prompts is how the wrong message gets
+  // sent by an ambiguous "yes".
+  const armedSpokenConfirms = new Map();
+
+  function isOperatorInitiatedSend(decision, channel) {
+    return Boolean(SEND_TOOLS[decision.tool]) && Boolean(SPOKEN_CONFIRM_CHANNELS[channel]);
+  }
+
+  function armSpokenConfirm(connectionId, entry) {
+    armedSpokenConfirms.set(connectionId || 'system', Object.assign({ armedAt: Date.now() }, entry));
+  }
+
+  // What MYTHOS says instead of showing a modal: recipient and the exact text, so
+  // the operator confirms the real thing rather than a tool name.
+  function describeSendForSpeech(decision) {
+    const a = decision.args || {};
+    const to = a.to || a.number || a.recipient || 'them';
+    const body = a.text || a.body || a.message || '';
+    const what = decision.tool === 'gmail_send'
+      ? (a.subject ? `"${a.subject}" — ${body}` : body)
+      : body;
+    const medium = decision.tool === 'gmail_send' ? 'email' : 'WhatsApp';
+    return `Ready to send this ${medium} to ${to}: "${String(what).slice(0, 300)}". Say send and I'll send it.`;
+  }
+
+  // Resolves an armed confirm against the operator's next utterance. Returns null
+  // when there is nothing armed (the overwhelmingly common case).
+  async function resolveSpokenConfirm(text, ctx) {
+    const key = ctx.connectionId || 'system';
+    const armed = armedSpokenConfirms.get(key);
+    if (!armed) return null;
+
+    const said = String(text || '').trim();
+
+    if (Date.now() - armed.armedAt > SPOKEN_CONFIRM_TTL_MS) {
+      armedSpokenConfirms.delete(key);
+      leash.confirm.reject(armed.confirmId, key);
+      return null; // expired silently; the new utterance is handled normally
+    }
+    if (NEGATIVE_RE.test(said)) {
+      armedSpokenConfirms.delete(key);
+      leash.confirm.reject(armed.confirmId, key);
+      return { say: "Right — not sent. It's still sitting there if you want to change it.", actions: [], confirmPending: null };
+    }
+    if (!AFFIRMATIVE_RE.test(said)) {
+      // Anything else supersedes it. A stale send accepted three turns later by a
+      // stray "yes" is exactly the class of accident this whole plan is about.
+      armedSpokenConfirms.delete(key);
+      leash.confirm.reject(armed.confirmId, key);
+      return null;
+    }
+
+    armedSpokenConfirms.delete(key);
+    const accepted = leash.confirm.accept(armed.confirmId, key);
+    if (!accepted) {
+      return { say: 'That confirmation had already expired — nothing was sent. Ask me again and I will re-read it to you.', actions: [], confirmPending: null };
+    }
+
+    const decision = (accepted.decision) || armed.decision;
+    const outcome = await dispatch(decision, { tier: armed.tier, traceId: ctx.traceId });
+    const sentOk = Boolean(outcome && outcome.ok);
+    const unverified = Boolean(outcome && outcome.unverified);
+    const raw = outcome && outcome.result;
+
+    const action = {
+      tool: decision.tool, args: decision.args, ok: sentOk, unverified: unverified,
+      summary: sentOk ? `${decision.tool} done.` : String((raw && raw.error) || raw || 'Failed.').slice(0, 200),
+      raw: outcome,
+    };
+
+    let say;
+    if (!sentOk) {
+      say = `That didn't send — ${action.summary}`;
+    } else if (unverified) {
+      // Wave 0's contract holds even here: an accepted confirm does not turn an
+      // unconfirmable outcome into a confirmed one.
+      say = `Sent it as far as I can tell, but I couldn't confirm it went — ${String((outcome && outcome.reason) || 'no confirmation available')}.`;
+    } else {
+      say = 'Sent.';
+    }
+    return { say, actions: [action], confirmPending: null };
+  }
+
   // ---- main loop (CA of NOVA handleUtterance) ----
 
   async function handleUtterance({ text, ctx = {}, signal, onAction } = {}) {
+    // WAVE 8 — an armed spoken send-confirm is resolved BEFORE anything else, so
+    // "send it" is never re-interpreted as a fresh request by the model.
+    const resolvedConfirm = await resolveSpokenConfirm(text, ctx);
+    if (resolvedConfirm) {
+      if (onAction) resolvedConfirm.actions.forEach((a) => onAction(a));
+      return resolvedConfirm;
+    }
+
     // B2: pre-context capability digest, computed once per turn. Optional —
     // callers that don't pass getCapabilityDigest see no behavior change.
     let capabilityDigest = null;
@@ -551,7 +690,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         if (signal && signal.aborted) {
           return { say: finalSay, actions: executedActions, aborted: true };
         }
-        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId });
+        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId, channel: ctx.channel });
         executedActions.push(result);
         // B2: Track failures across all iterations.
         if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);
@@ -560,6 +699,10 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         if (onAction) onAction(result);
         if (result.confirmPending) {
           confirmPending = result;
+          // WAVE 8 — with no modal to read, the confirmation has to BE the spoken
+          // reply, and it has to be exact: recipient plus the real text, not the
+          // model's paraphrase of what it thinks it is sending.
+          if (result.spokenConfirm && result.confirmPrompt) finalSay = result.confirmPrompt;
           break; // stop the turn on a confirm-gated action
         }
       }

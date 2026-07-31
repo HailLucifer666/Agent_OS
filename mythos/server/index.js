@@ -1430,7 +1430,11 @@ function createServer(deps) {
               // REMEDIATION P2-12: thread the WS message's own reqId through
               // as traceId so every action this turn dispatches can be
               // correlated back to it in the audit trail.
-              ctx: { history: historyGet(), connectionId, memoryContext: memoryContext, traceId: msg.reqId },
+              // channel:'voice' is what entitles this turn to a SPOKEN send
+              // confirm instead of the HUD modal (Wave 8). It is an explicit
+              // allowlist in voice-agent.js — an absent or unknown channel falls
+              // back to the modal, so no non-operator caller can inherit it.
+              ctx: { history: historyGet(), connectionId, memoryContext: memoryContext, traceId: msg.reqId, channel: 'voice' },
               signal: ctrl.signal,
             });
         clearTimeout(timer);
