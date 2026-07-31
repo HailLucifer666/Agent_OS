@@ -364,6 +364,16 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
           'work patterns, things that seem important. If yes, respond with JSON: ' +
           '{"thoughts": "what to mention", "priority": "low|medium|high"}\n' +
           'If nothing is worth mentioning, respond: {"thoughts": "", "priority": "low"}\n\n' +
+          // "high" is not a general importance rating — it is the trigger for
+          // SPEAKING UP UNPROMPTED (server/index.js subscribes to cortex.thought
+          // and says high-priority thoughts aloud). Reserve it for the two cases
+          // worth breaking a silence over; everything else rides along as context
+          // on the operator's next turn instead.
+          'PRIORITY RULES: use "high" ONLY for (a) a question you asked that the ' +
+          'operator never answered, or (b) a goal or build that has stalled. ' +
+          '"high" means you will SAY IT ALOUD unprompted, so it must be worth ' +
+          'interrupting silence for. Everything else is "medium" or "low" — those ' +
+          'are only mentioned if the operator speaks first.\n\n' +
           // V8 (Phase 4): also surface goal PROPOSALS — things the operator might
           // want to do that MYTHOS noticed but shouldn't auto-pursue. The cortex
           // cannot mint active goals (AUTONOMOUS_EXCLUDED), but it CAN propose

@@ -894,6 +894,16 @@ function createServer(deps) {
     logger.warn('boot-greeting.version-check-failed', { error: err.message });
   }
 
+  // Two-brain key separation (.env.example's HERMES_PROVIDER_KEY block): the
+  // Hermes build engine and the Mythos brain must not share one Mistral
+  // workspace key — a 20-60-call build then eats the same rate limit as voice,
+  // vision and memory consolidation, and voice turns fall back to the weakest
+  // model in the chain mid-conversation. Logs a BOOLEAN only; never a key value.
+  if (config.MISTRAL_API_KEY && process.env.HERMES_PROVIDER_KEY &&
+      config.MISTRAL_API_KEY === process.env.HERMES_PROVIDER_KEY) {
+    logger.warn('hermes.shared-provider-key', { sameAsMistral: true });
+  }
+
   async function deliverBootGreeting(targetWs) {
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -979,6 +989,30 @@ function createServer(deps) {
     if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
   });
 
+  // Idle-mull follow-ups (cortex/index.js emits 'cortex.thought' after every
+  // mull that produces something). Until now this event had ZERO subscribers:
+  // the entity formed follow-up thoughts and never said one — the loose end you
+  // asked it to track only surfaced if you happened to speak first, as prompt
+  // context. Same delivery path and event class as reminder.due above.
+  //
+  // Four guards keep "alive" from becoming "annoying": only high-priority
+  // thoughts (the mull prompt reserves that for an unanswered question or a
+  // stalled goal/build — medium/low stay next-turn context), never within
+  // FOLLOWUP_QUIET_MS of the operator's last turn (don't interrupt), at most one
+  // per FOLLOWUP_MIN_GAP_MS (don't nag; 0 disables), and non-empty text.
+  bus.subscribe('cortex.thought', (e) => {
+    if (!e || !e.payload || !e.payload.text) return;
+    if (e.payload.priority !== 'high') return;
+    const quietMs = config.FOLLOWUP_QUIET_MS != null ? config.FOLLOWUP_QUIET_MS : 120000;
+    const gapMs = config.FOLLOWUP_MIN_GAP_MS != null ? config.FOLLOWUP_MIN_GAP_MS : 3600000;
+    if (!gapMs) return; // 0 = feature off
+    const now = Date.now();
+    if (lastTurnAt && now - lastTurnAt < quietMs) return;
+    if (lastFollowupAt && now - lastFollowupAt < gapMs) return;
+    lastFollowupAt = now;
+    proactiveSpeak(String(e.payload.text));
+  });
+
   // Gmail triage — proactive speech when the gmail-sensor finds genuinely new
   // unread mail. Mirrors the reminder.due wiring above: same bus.subscribe +
   // proactiveSpeak() pattern, different event/payload shape.
@@ -1002,6 +1036,75 @@ function createServer(deps) {
     });
   }
 
+  // Conversation memory (CA of NOVA app/lib/voice/intake.js). SERVER-scoped, not
+  // per-connection: the browser reconnects on every network blip or tab sleep
+  // (ui/public/js/ws.js scheduleReconnect), and while this lived inside
+  // wss.on('connection') each reconnect silently erased the entire conversation
+  // mid-chat. Server scope also means two open dashboards share ONE conversation
+  // — desired for a single-operator loopback-bound entity ("same conversation,
+  // different device"), so don't "fix" it back to per-connection.
+  //
+  // Deliberately NOT wiped after start_project succeeds — an earlier version
+  // cleared it on the theory that the intake conversation shouldn't bleed into
+  // post-build turns, but that also erased the only record that a build was ever
+  // started: "is it done?" a few turns later had zero context and the voice-agent
+  // asked what to build, as if starting fresh.
+  //
+  // Budget: capped by BOTH turn count and TOTAL chars. Real voice turns run
+  // 50-400 chars, so 12000 chars holds ~12-18 exchanges (vs 4-6 under the old
+  // 12-entry cap) while costing LESS in the worst case than the old ceiling of
+  // 12 x 2000 = 24000 chars — which rivalled the whole tool catalog.
+  // Literal fallbacks mirror the schema defaults: a fixture (or any partial
+  // config object) must not silently disable the caps by yielding undefined,
+  // which compares false in every bound check below.
+  const HISTORY_MAX_TURNS = config.VOICE_HISTORY_MAX_TURNS || 40;
+  const HISTORY_MAX_CHARS = config.VOICE_HISTORY_MAX_CHARS || 12000;
+  const HISTORY_IDLE_TTL_MS = config.VOICE_INTAKE_IDLE_MS || 45 * 60 * 1000;
+  const SESSION_PATH = 'Conversation/session.json';
+  let history = [];
+  let historyAt = 0;
+  // Cortex-thought bookkeeping: which thought has already been shown as context
+  // (see the injection site), when the operator last spoke, and when a proactive
+  // follow-up last fired (both gate the cortex.thought subscriber below).
+  let lastThoughtRef = null;
+  let lastTurnAt = 0;
+  let lastFollowupAt = 0;
+
+  // Survive a restart: the conversation shouldn't die because the process did.
+  // The try/catch is load-bearing, not garnish — test fakes expose only
+  // memory.fs.vaultPath, so an unguarded call is a TypeError across the server
+  // suite (same guard shape as the LAST_BOOT_PATH read above).
+  try {
+    const saved = memory.fs.readJSON(SESSION_PATH, null);
+    if (saved && Array.isArray(saved.turns) && Date.now() - (saved.savedAt || 0) < HISTORY_IDLE_TTL_MS) {
+      history = saved.turns.filter((t) => t && typeof t.content === 'string' && t.role);
+      historyAt = saved.savedAt;
+    }
+  } catch (_) { /* no vault, unreadable, or a fake fs — start fresh */ }
+
+  function historyGet() {
+    if (Date.now() - historyAt > HISTORY_IDLE_TTL_MS) history = [];
+    return history;
+  }
+  function historyTrim() {
+    if (history.length > HISTORY_MAX_TURNS) history = history.slice(-HISTORY_MAX_TURNS);
+    let chars = 0;
+    for (let i = 0; i < history.length; i++) chars += history[i].content.length;
+    // Always keep the newest entry even if it alone exceeds the char budget.
+    while (history.length > 1 && chars > HISTORY_MAX_CHARS) {
+      chars -= history[0].content.length;
+      history.shift();
+    }
+  }
+  function historyAppend(role, content) {
+    if (!content) return;
+    historyGet(); // apply TTL first
+    history.push({ role, content: String(content).slice(0, 2000) });
+    historyTrim();
+    historyAt = Date.now();
+    try { memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt }); } catch (_) {}
+  }
+
   wss.on('connection', (ws) => {
     const connectionId = crypto.randomUUID();
     const subscriptions = new Set(); // which OUT types this client wants relayed
@@ -1010,33 +1113,6 @@ function createServer(deps) {
     ws.on('error', (err) => {
       logger.warn('ws-connection-error', { error: err.message, connectionId });
     });
-
-    // Per-connection conversation memory (CA of NOVA app/lib/voice/intake.js,
-    // folded into the connection closure): last 12 turns, 2000 chars each,
-    // 10-minute idle TTL. Deliberately NOT wiped after start_project succeeds —
-    // an earlier version cleared it here on the theory that the intake
-    // conversation shouldn't bleed into post-build turns, but that also erased
-    // the only record that a build was ever started: "is it done?" a few turns
-    // later had zero context and the voice-agent asked what to build, as if
-    // starting fresh. The rolling window (already capped at 12 turns / 10 min
-    // idle) is exactly the mechanism that should carry "I started building X"
-    // forward to a later "is it done" — so it's left alone.
-    const HISTORY_MAX_TURNS = 12;
-    const HISTORY_IDLE_TTL_MS = Number(process.env.VOICE_INTAKE_IDLE_MS) || 10 * 60 * 1000;
-    let history = [];
-    let historyAt = 0;
-
-    function historyGet() {
-      if (Date.now() - historyAt > HISTORY_IDLE_TTL_MS) history = [];
-      return history;
-    }
-    function historyAppend(role, content) {
-      if (!content) return;
-      historyGet(); // apply TTL first
-      history.push({ role, content: String(content).slice(0, 2000) });
-      history = history.slice(-HISTORY_MAX_TURNS);
-      historyAt = Date.now();
-    }
 
     // C3: Serialize utterances per-connection to prevent concurrent races.
     let turnChain = Promise.resolve();
@@ -1284,7 +1360,11 @@ function createServer(deps) {
           // FIX G: exclude the boot greeting's own episodic record from being
           // recalled back into context and re-spoken on a fresh conversation
           // (empty history / idle-TTL wipe).
-          var recalled = await recallWithTimeout(memory.recallHybrid(text, { limit: 8, excludeKinds: ['proactive-speech'] }), RECALL_TIMEOUT_MS);
+          // limit 12 / windowDays 21 (was 8 / the 7-day default): measured at
+          // +20ms against a real 2.2MB vault, well inside RECALL_TIMEOUT_MS, and
+          // 21 days stays inside EPISODIC_RETENTION_DAYS (30). Cheapest available
+          // fix for "it forgot what we discussed last week".
+          var recalled = await recallWithTimeout(memory.recallHybrid(text, { limit: 12, windowDays: 21, excludeKinds: ['proactive-speech'] }), RECALL_TIMEOUT_MS);
           if (recalled === RECALL_TIMED_OUT) {
             logger.warn('memory-recall-timeout', { store: 'hybrid', timeoutMs: RECALL_TIMEOUT_MS });
             recalled = [];
@@ -1305,9 +1385,17 @@ function createServer(deps) {
         // mentioned naturally ("earlier I noticed that...").
         try {
           var pending = memory.episodic.recall('', { kind: 'thought', limit: 1, windowDays: 1 });
-          if (pending.length > 0 && pending[0].record && pending[0].record.detail) {
+          // Inject each thought ONCE. There is no consumption marker on the
+          // record, so without this guard the same mull thought is prepended to
+          // every prompt for a full 24h — prompt waste, and an "earlier I
+          // noticed..." that reads like a stuck record. Also a prerequisite for
+          // the cortex.thought follow-up speech below: a spoken thought must not
+          // then be re-injected as context on the next turn.
+          if (pending.length > 0 && pending[0].record && pending[0].record.detail &&
+              pending[0].ref !== lastThoughtRef) {
             var thoughtText = pending[0].record.detail.text || pending[0].record.summary;
             if (thoughtText) {
+              lastThoughtRef = pending[0].ref;
               memoryContext = (memoryContext ? memoryContext + '\n' : '') +
                 'YOU NOTED EARLIER (mention naturally if relevant, do not force): ' + thoughtText;
             }
@@ -1610,6 +1698,9 @@ function createServer(deps) {
       // utterance — keeps a silently-idle-but-focused tab as the target
       // over a tab that's just replaying subscriptions on load.
       lastActiveWs = ws;
+      // Quiet-gate reference for proactive follow-ups: an unprompted remark must
+      // never land while the operator is mid-conversation.
+      if (msg.type === 'utterance' || msg.type === 'vision-query') lastTurnAt = Date.now();
       if (msg.type === 'utterance') queueTurn(function() { return handleUtterance(msg); });
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);

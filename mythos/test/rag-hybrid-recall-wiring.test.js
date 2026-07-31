@@ -107,7 +107,10 @@ test('handleUtterance recalls via memory.recallHybrid, not direct episodic/seman
 
   assert.equal(calls.recallHybrid.length, 1, 'recallHybrid should be called exactly once');
   assert.equal(calls.recallHybrid[0].query, 'what coffee do I like');
-  assert.equal(calls.recallHybrid[0].opts.limit, 8);
+  assert.equal(calls.recallHybrid[0].opts.limit, 12);
+  // 21-day window (inside EPISODIC_RETENTION_DAYS=30): measured +20ms on a real
+  // 2.2MB vault, so "what did we discuss last week" stops falling off the edge.
+  assert.equal(calls.recallHybrid[0].opts.windowDays, 21);
 
   assert.equal(calls.semanticRecall.length, 0, 'semantic.recall must not be called directly anymore');
   assert.ok(

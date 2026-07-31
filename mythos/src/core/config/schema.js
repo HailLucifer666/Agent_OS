@@ -300,7 +300,9 @@ const SCHEMA = {
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply
-  VOICE_INTAKE_IDLE_MS:        { type: 'number', default: 600000, min: 10000 }, // idle history retention
+  VOICE_INTAKE_IDLE_MS:        { type: 'number', default: 2700000, min: 10000 }, // idle history retention (45 min)
+  VOICE_HISTORY_MAX_TURNS:     { type: 'number', default: 40, min: 2, max: 200 },      // conversation entries kept
+  VOICE_HISTORY_MAX_CHARS:     { type: 'number', default: 12000, min: 1000, max: 60000 }, // total history prompt budget
   VOICE_MAX_TOOL_ITERATIONS:   { type: 'number', default: 4, min: 1, max: 20 },
   VOICE_EMAIL_MODE:            { type: 'string', default: 'gmail', enum: ['gmail', 'mailto'] },
   VOICE_ALLOWED_DIRS:          { type: 'string', default: '%USERPROFILE%' },    // semicolon-separated list_folder whitelist
@@ -308,6 +310,8 @@ const SCHEMA = {
   // Identity / reflection / immune speech
   BOOT_GREETING:               { type: 'string', default: '' },    // '' = on; 'false' = off
   REFLECTION_EVERY_TURNS:      { type: 'number', default: 15, min: 1 },
+  FOLLOWUP_QUIET_MS:           { type: 'number', default: 120000, min: 0 },   // silence needed before a proactive follow-up
+  FOLLOWUP_MIN_GAP_MS:         { type: 'number', default: 3600000, min: 0 },  // min gap between follow-ups; 0 = off
   IMMUNE_EXPLAIN:              { type: 'string', default: 'true' }, // 'false' disables anomaly speech
   ANNOUNCER_REANNOUNCE_MS:     { type: 'number', default: 600000, min: 10000 },
 
