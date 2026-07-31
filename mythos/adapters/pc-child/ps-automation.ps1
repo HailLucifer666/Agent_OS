@@ -1386,7 +1386,24 @@ function Handle-UiClick($TargetPid, $elementPath) {
 #
 # TextPattern is READ-ONLY in UI Automation — it has no insertion API, so it can
 # serve as an oracle but never as a typing mechanism.
+# Chromium/Electron builds its accessibility tree LAZILY, on first UIA query — the
+# gotcha this repo already documents for Spotify. Measured live 2026-07-31 against
+# an Electron editor: the first Read-FocusedElementText returned $null, and every
+# call in a later process returned via=ValuePattern immediately, because the first
+# query is what triggered the tree to build.
+#
+# Without a retry, the FIRST type into a freshly-started Slack/Discord/Electron app
+# would report unverified even though the text landed — honest, but needlessly so,
+# and it would also deny that type its Enter under Wave 2's messaging guard. One
+# retry converts that into a real confirmation.
 function Read-FocusedElementText() {
+    $r = Read-FocusedElementTextOnce
+    if ($null -ne $r) { return $r }
+    Start-Sleep -Milliseconds 250
+    return Read-FocusedElementTextOnce
+}
+
+function Read-FocusedElementTextOnce() {
     try {
         $el = [System.Windows.Automation.AutomationElement]::FocusedElement
         if (-not $el) { return $null }
