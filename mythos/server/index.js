@@ -13,7 +13,7 @@ const zlib = require('zlib');           // static-asset gzip (no `compression` d
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
-const { selectTts, mimeFor, voiceFor } = require('../providers/tts');
+const { createTtsChain } = require('../providers/tts');
 const groqStt = require('../providers/groq-stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
@@ -619,19 +619,14 @@ function createServer(deps) {
   let resolveReady;
   const ready = new Promise((resolve) => { resolveReady = resolve; });
 
-  // Which engine speaks the non-Live paths (boot greeting, proactive speech, batch
-  // replies). Defaults to edge-tts and, in that case, IS the edge-tts module object
-  // — so the tests that monkey-patch that singleton keep working. Set
-  // VOICE_TTS_PROVIDER=gemini to use the same prebuilt voice the Live path uses.
-  const tts = selectTts(config);
-  const ttsMime = mimeFor(tts);
-  // Voice ids are engine-specific and the namespaces are disjoint — see voiceFor().
-  const ttsVoice = voiceFor(tts, config);
-  // Gemini TTS returns WAV; edge-tts returns MP3, which is the client's default
-  // when no mime is declared. Only send the field when it differs, so existing
-  // chunk payloads stay byte-identical on the default path.
-  const chunkMime = ttsMime === 'audio/mpeg' ? undefined : ttsMime;
-  if (tts.name !== 'edge-tts') logger.info('tts.provider', { provider: tts.name, mime: ttsMime });
+  // ONE VOICE PER SESSION. The chain resolves once and sticks, so the boot greeting,
+  // every proactive announcement and every batch reply all come from the SAME engine
+  // — the operator must never hear the voice change partway through a session. It
+  // only moves on a real provider failure, and then stays moved (see providers/tts.js).
+  // synthesize() returns { audio, mime, provider }: the engines emit different
+  // containers (edge=MP3, gemini/piper=WAV) so the mime travels PER CHUNK.
+  const tts = createTtsChain({ config, logger });
+  logger.info('tts.chain', { chain: tts.chainNames.join(',') });
   const httpServer = app.listen(PORT, BIND, () => {
     logger.info('server.listening', { url: `http://${BIND}:${PORT}`, bind: BIND });
     resolveReady();
@@ -761,10 +756,12 @@ function createServer(deps) {
       for (let i = 0; i < textChunks.length; i++) {
         if (ctrl.signal.aborted) break;
         let audioB64 = null;
+        let chunkMime;
         if (ttsUp) {
           try {
-            const buf = await tts.synthesize({ text: textChunks[i], voice: ttsVoice });
-            audioB64 = buf.toString('base64');
+            const out = await tts.synthesize({ text: textChunks[i], signal: ctrl.signal });
+            audioB64 = out.audio.toString('base64');
+            chunkMime = out.mime;
           } catch (err) {
             logger.warn('tts.proactive-chunk-failed', { error: err.message, index: i });
           }
@@ -1203,14 +1200,16 @@ function createServer(deps) {
           for (let i = 0; i < chunks.length; i++) {
             if (ctrl.signal.aborted) break;
             let audioB64 = null;
+        let chunkMime;
             // Only synthesize when the sidecar is actually up. A TTS-down chunk
             // ships text with audioB64:null and the client speaks it via
             // speechSynthesis (playNextChunk's existing else-branch) — one
             // sentence per utterance instead of one utterance per reply.
             if (ttsUp) {
               try {
-                const buf = await tts.synthesize({ text: chunks[i], voice: ttsVoice });
-                audioB64 = buf.toString('base64');
+                const out = await tts.synthesize({ text: chunks[i], signal: ctrl.signal });
+                audioB64 = out.audio.toString('base64');
+                chunkMime = out.mime;
               } catch (err) {
                 logger.warn('tts.chunk-failed', { error: err.message, index: i });
               }
@@ -1443,9 +1442,11 @@ function createServer(deps) {
             const spoken = sanitizeSpoken(rawText);
             if (!spoken) return;
             let audioB64 = null;
+        let chunkMime;
             try {
-              const buf = await tts.synthesize({ text: spoken, voice: ttsVoice });
-              audioB64 = buf.toString('base64');
+              const out = await tts.synthesize({ text: spoken });
+              audioB64 = out.audio.toString('base64');
+              chunkMime = out.mime;
             } catch (err) {
               logger.warn('tts.chunk-failed', { error: err.message, index: i });
             }

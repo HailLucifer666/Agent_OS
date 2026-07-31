@@ -57,6 +57,20 @@ const SCHEMA = {
   // gemini-3.1-flash-tts-preview measured ~17.6s and is NOT a sane default.
   GEMINI_TTS_MODEL:         { type: 'string', default: 'gemini-2.5-flash-preview-tts' },
 
+  // ORDERED TTS chain, comma-separated, same convention as the brain's CHAIN_*.
+  // Resolved ONCE per session and sticky: the boot greeting, proactive speech and
+  // every batch reply all come from the same engine, and it only moves on a real
+  // failure (never flaps back). The operator must not hear the voice change
+  // partway through a session — see providers/tts.js.
+  //   gemini  Aoede, matches the Live/S2S voice. ~3.9s/sentence, metered.
+  //   edge    edge-tts. ~1011ms, free, unofficial MS endpoint (hobby-only label).
+  //   piper   local, OFFLINE, ~350ms, free, MIT + open voices — the shippable one.
+  // Falls back to VOICE_TTS_PROVIDER, then 'edge', so existing configs are unchanged.
+  VOICE_TTS_CHAIN:          { type: 'string', default: '' },
+  PIPER_PORT:               { type: 'number', default: 5051, min: 1024, max: 65535 },
+  PIPER_VOICE:              { type: 'string', default: 'en_US-hfc_female-medium' },
+  PIPER_MODEL_DIR:          { type: 'string', default: '' },
+
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
   // thresholds; defaults match the previously-hardcoded constants exactly,
   // zero behavior change until overridden). Exposed to the HUD via

@@ -45,6 +45,7 @@ const { createKanbanEffector } = require('./core/effectors/kanban');
 const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
+const { createPiperChild } = require('./core/effectors/piper-child');
 const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
 const { registerFromCua } = require('./core/effectors/from-cua');
@@ -153,6 +154,7 @@ async function main() {
   let wsSensor = null;
   let jobSensor = null;
   let edgeTtsChild = null;
+  let piperChild = null;
   let calendarWiring = null;
   let gmailUnread = null;         // bound fn — goes through the hub, wired to gmail-sensor in the 'sensors' step
   let checkpoints = null;          // P22 checkpoint approval registry
@@ -852,6 +854,16 @@ async function main() {
       // means the client falls back to browser speechSynthesis.
       edgeTtsChild = createEdgeTtsChild({ logger: logger });
       edgeTtsChild.start();
+    }},
+
+    { name: 'piper', fail: 'degraded', fn: function() {
+      // Local Piper TTS — fully offline (no API, no key, proven with sockets
+      // blocked), ~350ms/sentence, and the only TTS engine here that is licensed
+      // for a product that is sold. Degraded by design: no python, no piper
+      // module or an empty mythos/models/piper just means this entry of
+      // VOICE_TTS_CHAIN reports unavailable and the chain uses the next one.
+      piperChild = createPiperChild({ logger: logger, config: config });
+      piperChild.start();
     }}
   ]);
 
@@ -865,6 +877,7 @@ async function main() {
     browserAgent.stopAutoConnect();  // stop the poller before disconnect so it can't re-attach mid-shutdown
     browserAgent.disconnect();
     if (edgeTtsChild) edgeTtsChild.stop();
+    if (piperChild) piperChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
     if (screenSensor) screenSensor.stop();

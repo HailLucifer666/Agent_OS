@@ -87,3 +87,7 @@ mythos/.tmp-doc-rag-test/
 
 # secrets scratch file — never commit (live API keys)
 /env.download
+
+# Piper TTS voice models — 60MB each, downloaded per-machine like the wake-word
+# models. Install with: node mythos/scripts/setup-piper.js --install
+/mythos/models/piper/
