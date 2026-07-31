@@ -83,16 +83,34 @@ export function createS2SBridge({ onState, onCaption } = {}) {
   const MAX_SUSPEND_MS = 30000;
   let captureSuspended = false;
   let suspendTimer = null;
-  function setCaptureSuspended(flag) {
+  function setCaptureSuspended(flag, holdMs) {
     const next = Boolean(flag);
     if (suspendTimer) { clearTimeout(suspendTimer); suspendTimer = null; }
     captureSuspended = next;
     if (next) {
+      const ceiling = Math.min(Number(holdMs) || MAX_SUSPEND_MS, MAX_SUSPEND_MS);
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
         captureSuspended = false;   // fail open: a deaf assistant is the worse failure
-      }, MAX_SUSPEND_MS);
+      }, ceiling);
     }
+  }
+
+  // WAVE 5 — MEDIA echo, the sibling of our own TTS above. When an effector starts
+  // playback (spotify_play, open_web type:"youtube"), the media's own audio comes
+  // out of the same speakers and Gemini transcribes it as the OPERATOR. In the
+  // 2026-07-31 session a German YouTube narration arrived as two "User:" turns.
+  //
+  // The tradeoff is real and is NOT resolved in favour of silence: a song plays
+  // for minutes, and suspending capture for its whole duration would leave MYTHOS
+  // deaf exactly when the operator is most likely to say "next" or "stop that".
+  // So this suspends only the opening burst — long enough to swallow the intro
+  // narration that actually produced the false turns — and then fails open. Pass a
+  // larger hold (bounded by MAX_SUSPEND_MS) if the operator prefers deafness to
+  // false transcripts; that is their call, not a default worth choosing for them.
+  const MEDIA_START_SUSPEND_MS = 8000;
+  function suspendForMedia(holdMs) {
+    setCaptureSuspended(true, Number(holdMs) || MEDIA_START_SUSPEND_MS);
   }
 
   function arrayBufferToBase64(buf) {
@@ -171,6 +189,7 @@ export function createS2SBridge({ onState, onCaption } = {}) {
     start,
     stop,
     setCaptureSuspended,
+    suspendForMedia,
     isActive: () => active,
     isCaptureSuspended: () => captureSuspended,
     isSpeaking: () => (player ? player.isSpeaking() : false),

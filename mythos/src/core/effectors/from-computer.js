@@ -9,6 +9,8 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { effectorFromTool } = require('./adapter');
+// Spawning explorer.exe is not a window existing — see evidence.js's header.
+const evidence = require('./evidence');
 // Task 3 (step 5) — clipboard_read/clipboard_write delegate through pc-child,
 // same required-directly convention from-pc.js's own delegate() helper uses
 // (dispatch-action.js's real ctx is {signal, bus, goalId} — it never carries
@@ -135,14 +137,55 @@ function resolveSandboxed(raw) {
 
 // ---- open_folder ----
 
-function open_folder({ path: rawPath }) {
+// WAVE 6. This tool already existed — the Trust Plan's assumption that it was
+// missing is wrong, and adding a second one would have collided on the name. What
+// was actually wrong is two things:
+//
+//   1. It returned ok({opened: path}) on the strength of having spawned
+//      explorer.exe. That is the Wave 0 defect exactly: the spawn succeeding is
+//      not a window existing, and explorer.exe exits non-zero even when it works,
+//      so its exit code is not evidence either. The oracle is a real Explorer
+//      window whose title is the folder's leaf name.
+//   2. Its description was one terse sentence, which is why the model reached for
+//      launch_app('explorer.exe "D:\\..."') three times in the 2026-07-31 session
+//      instead — a shape that cannot work, since launch_app takes an app NAME and
+//      never parsed arguments.
+async function open_folder({ path: rawPath }) {
+  if (!rawPath) return fail('A folder path is required.');
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
   try {
     if (!fs.existsSync(sandboxed.resolved)) return fail(`Folder not found: ${sandboxed.resolved}`);
+    let stat;
+    try { stat = fs.statSync(sandboxed.resolved); } catch (_) { stat = null; }
+    if (stat && !stat.isDirectory()) {
+      return fail(`That is a file, not a folder: ${sandboxed.resolved}. Use open_artifact for files.`);
+    }
+
     const child = spawn('explorer.exe', [sandboxed.resolved], { detached: true, stdio: 'ignore' });
     child.unref();
-    return ok({ opened: sandboxed.resolved });
+
+    const leaf = path.basename(sandboxed.resolved);
+    const base = { ok: true, result: { opened: sandboxed.resolved, name: leaf } };
+
+    // Explorer needs a moment to create and title the window.
+    await new Promise((r) => setTimeout(r, 700));
+    let win = null;
+    try {
+      const fromPc = require('./from-pc');
+      if (typeof fromPc.findExplorerWindow === 'function') win = await fromPc.findExplorerWindow(leaf);
+    } catch (_) { /* pc-child may be offline; that only costs us the oracle */ }
+
+    if (win) {
+      return evidence.verifiedOk(base, {
+        oracle: 'window-title',
+        expected: leaf,
+        observed: String(win.title) + ' (pid ' + win.pid + ')',
+      });
+    }
+    return evidence.unverified(base,
+      'asked Explorer to open ' + leaf + ', but no window with that name showed up — it may have ' +
+      'reused a window you already had open, or pc-child is not running to check');
   } catch (err) {
     return fail(err.message);
   }
@@ -502,7 +545,7 @@ function compose_email({ to, subject, body }) {
 }
 
 const TOOLS = [
-  { name: 'open_folder', description: 'Open a folder in Windows Explorer.', params: { path: 'string' }, danger: false, fn: open_folder },
+  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - the folder path to open' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
   { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists).', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },

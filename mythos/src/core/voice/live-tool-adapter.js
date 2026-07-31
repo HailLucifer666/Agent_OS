@@ -61,6 +61,18 @@ function createLiveToolAdapter(deps) {
   const PENDING_CONFIRM_TTL_MS = 10 * 60 * 1000;
   const MAX_SUMMARY_CHARS = 300;
 
+  // WAVE 3 — tools whose wall-clock exceeds a Live turn, so awaiting them inside
+  // the turn guarantees the model narrates before the answer exists. Membership is
+  // about DURATION, not risk: spotify_play drives cua-driver (5-10s per click
+  // sequence), hermes_task runs an agent (minutes), and the cua_* tools each do a
+  // full UIA hit-test round trip. Everything else is fast enough to await.
+  const SLOW_TOOLS = {
+    spotify_play: true,
+    hermes_task: true,
+    cua_click: true,
+    cua_get_window_state: true,
+  };
+
   const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt}
   const liveTurnActions = [];            // AD-4: reconciled on turnComplete
   // Security-review fix: onToolCall (live-session.js) is fire-and-forget, so a
@@ -146,6 +158,31 @@ function createLiveToolAdapter(deps) {
         continue;
       }
 
+      // WAVE 3 — tools that take longer than a Live turn get an explicit
+      // started/done split instead of being awaited inside the turn.
+      //
+      // The Live turn completes while a cua-driven Spotify click (5-10s) or a
+      // hermes task (minutes) is still running, so the model reached turnComplete
+      // with no outcome and narrated a guess. That is what the 9+
+      // live-tool-outcome-late-for-turn anomalies on 2026-07-31 were: not a bug in
+      // the anomaly detector, but the model being asked to speak before the answer
+      // existed. Awaiting harder cannot fix it — the turn boundary is the model's,
+      // not ours. So say "started", and deliver the real outcome afterwards through
+      // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
+      if (SLOW_TOOLS[call.name]) {
+        commitAction({ tool: call.name, ok: false, started: true, summary: `${call.name} started — outcome pending.` });
+        responses.push({ id: call.id, name: call.name, response: {
+          status: 'started',
+          message: 'This action takes longer than this turn. Say what you are DOING, not what happened — ' +
+            'do NOT claim completion. The real outcome will arrive as a [SYSTEM] message; report it then.',
+        }});
+        // Deliberately not awaited: the whole point is that the turn does not wait.
+        dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
+          .then((outcome) => reportLateOutcome(call.name, outcome))
+          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }));
+        continue;
+      }
+
       try {
         const outcome = await dispatchAction(decision, {
           tier: verdict.tier, channel: 'voice-live', traceId: call.id,
@@ -164,6 +201,35 @@ function createLiveToolAdapter(deps) {
       }
     }
     if (responses.length) sendToolResponse(responses);
+  }
+
+  // WAVE 3 — deliver a slow tool's real outcome after its turn has ended.
+  // Pushes straight to liveTurnActions rather than through commitAction: this
+  // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
+  // exists to catch accidental misattribution.
+  function reportLateOutcome(toolName, outcome) {
+    const ok = Boolean(outcome && outcome.ok);
+    const unverified = Boolean(outcome && outcome.unverified);
+    let verdict;
+    if (!ok) {
+      // Same unwrapping as the awaited path above: effectors put the message in
+      // result.error, and handing the whole object to sanitizeResultError loses it.
+      const res = outcome && outcome.result;
+      const rawError = (res && res.error) || res || 'Failed.';
+      verdict = `${toolName} FAILED: ${sanitizeResultError(rawError)}`;
+    } else if (unverified) {
+      // Wave 0's contract, on the slow path too.
+      verdict = `${toolName} ran but could NOT be confirmed: ` +
+        String((outcome && outcome.reason) || 'no confirmation available') +
+        '. Do not tell the operator it worked.';
+    } else {
+      verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(outcome && outcome.result))}`;
+    }
+    liveTurnActions.push({ tool: toolName, ok: ok && !unverified, unverified, summary: verdict });
+
+    const liveSession = getLiveSession ? getLiveSession() : null;
+    if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as confirms
+    liveSession.sendText(`[SYSTEM] ${verdict} Report this to the operator accurately.`);
   }
 
   // Hook the EXISTING confirm-accept path so an approval/rejection feeds the

@@ -342,7 +342,10 @@ function buildPrompt({ text, history, toolResults, corrective, originalSay, memo
     }
   }
   if (corrective) {
-    parts.push('', 'CORRECTIVE PASS: your previous spoken reply (' + JSON.stringify(originalSay) + ') was WRONG because the tool calls in that same turn FAILED. Look at TOOL RESULTS, admit what actually happened in exactly one short sentence, and do NOT call any tools again.');
+    // WAVE 3: this fires for two different kinds of wrong now, and conflating them
+    // would make MYTHOS apologise for a failure that never happened. An entry with
+    // "unverified": true DID run — nothing could confirm its effect.
+    parts.push('', 'CORRECTIVE PASS: your previous spoken reply (' + JSON.stringify(originalSay) + ') is not supported by what the tools in that same turn actually returned. Read TOOL RESULTS carefully: an entry with "ok": false FAILED, and an entry with "unverified": true RAN but could not be confirmed to have had any effect — those are different, and you must not describe one as the other. Say what actually happened in one short sentence, using its "reason" where there is one, and do NOT call any tools again.');
   }
   parts.push('', OUTPUT_CONTRACT, '', `USER SAID: "${text}"`);
   if (toolResults) {
@@ -522,11 +525,21 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     const outcome = await dispatch(decision, { tier: verdict.tier, traceId: traceId });
     const ok = Boolean(outcome && outcome.ok);
     const raw = outcome && outcome.result;
+    // WAVE 3 — carry `unverified` onto the action. Without this the flag died here:
+    // the evidence contract set it on the effector result, and the turn loop that
+    // decides whether to re-derive the spoken reply could not see it, so an
+    // ok-but-unproven outcome still read as a plain success.
+    const unverified = ok && Boolean(outcome && outcome.unverified);
     return {
       tool: decision.tool,
       args: decision.args,
       ok,
-      summary: ok ? `${decision.tool} done.` : String((raw && raw.error) || raw || 'Failed.').slice(0, 200),
+      unverified,
+      summary: !ok
+        ? String((raw && raw.error) || raw || 'Failed.').slice(0, 200)
+        : unverified
+          ? `${decision.tool} ran but could not be confirmed: ${String((outcome && outcome.reason) || 'no confirmation available')}`.slice(0, 200)
+          : `${decision.tool} done.`,
       raw: outcome,
     };
   }
@@ -543,6 +556,19 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // refused at the effector by Wave 2's guard unless a verified read-back exists,
   // which is a stronger check than any confirmation.
   const SEND_TOOLS = { whatsapp_send: true, gmail_send: true };
+
+  // WAVE 3 — tools whose UNVERIFIED result the operator will hear as an outcome,
+  // and which therefore justify a corrective brain call to re-derive the reply.
+  //
+  // Not every unverified action belongs here. send_key is unverified by nature
+  // now (a keystroke cannot observe its own effect), so including it would fire an
+  // extra brain call on every Ctrl+N — real cost for no honesty gained, since
+  // nobody hears "I pressed ctrl+n" as a claim about the world. These are the ones
+  // where an unproven result gets spoken as an accomplishment.
+  const OUTCOME_CLAIMED_TOOLS = {
+    ui_type: true, app_reply: true, whatsapp_send: true, gmail_send: true,
+    spotify_play: true, launch_app: true, ui_click: true,
+  };
 
   // Channels that represent the operator talking, right now. An explicit
   // allowlist: anything else — cortex, engagements, goals, an unknown caller —
@@ -673,6 +699,11 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     // what the corrective pass produced (the model can still claim success in
     // its corrective output; this overrides that). Sibling of BUG-007/BUG-046.
     let anySuccess = false;
+    // WAVE 3 — actions that came back ok:true but UNVERIFIED. finalSay is composed
+    // BEFORE actions run, and until now only an ok:false could force it to be
+    // re-derived — so an ok-but-unproven result (the empty Notepad, the wrong
+    // Spotify track) sailed straight through as "done".
+    const allUnverifiedActions = [];
 
     for (;;) {
       if (signal && signal.aborted) {
@@ -694,6 +725,9 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         executedActions.push(result);
         // B2: Track failures across all iterations.
         if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);
+        if (result && result.ok === true && result.unverified === true && OUTCOME_CLAIMED_TOOLS[result.tool]) {
+          allUnverifiedActions.push(result);
+        }
         // Slice-2: track any success across the whole turn for the honesty guard.
         if (result && result.ok === true) anySuccess = true;
         if (onAction) onAction(result);
@@ -743,7 +777,16 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     // B2: Check allFailedActions (accumulator across iterations) instead of
     // executedActions (which is cleared each iteration). Also wrap in try/catch
     // so a brain failure during corrective doesn't discard the original response.
-    if (!didRetry && allFailedActions.some((a) => a && a.ok === false && !a.confirmPending)) {
+    // WAVE 3 — an unverified outcome now forces the same re-derivation as a
+    // failure. This is the say-before-act gap: voice-agent composes finalSay from
+    // the model's first response, BEFORE the actions run, and only re-derives it
+    // when something returned ok:false. An ok:true-but-unproven result therefore
+    // kept whatever the model had already said — which is how "I'm pleased to
+    // report I have successfully typed" survived a Notepad that stayed empty.
+    const needsCorrective = allFailedActions.some((a) => a && a.ok === false && !a.confirmPending) ||
+      allUnverifiedActions.length > 0;
+
+    if (!didRetry && needsCorrective) {
       didRetry = true;
       try {
         // P6 Jarvis upgrade: give the corrective pass the failing tool's
@@ -753,8 +796,11 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         const correctivePrompt = buildPrompt({
           text,
           history: ctx.history,
-          toolResults: allFailedActions.map((a) => {
+          toolResults: allFailedActions.concat(allUnverifiedActions).map((a) => {
             const entry = { tool: a.tool, ok: a.ok, summary: a.summary };
+            // The corrective pass has to see WHICH kind of wrong this was, or it
+            // will apologise for a failure that did not happen.
+            if (a.unverified) { entry.unverified = true; entry.reason = (a.raw && a.raw.reason) || a.summary; }
             try {
               const breaker = hub && hub.breakers && typeof hub.breakers.get === 'function' ? hub.breakers.get(a.tool) : null;
               if (breaker && breaker.stats) entry.breaker = { state: breaker.stats.state, failCount: breaker.stats.failCount };

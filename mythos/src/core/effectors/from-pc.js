@@ -189,6 +189,20 @@ async function list_windows() {
   return delegate({ cmd: 'list_windows' });
 }
 
+// Exported for from-computer.js's open_folder, which needs a window oracle and
+// has no pc-child delegate of its own. Kept here because this file owns the
+// list_windows seam.
+async function findExplorerWindow(leafName) {
+  const leaf = String(leafName || '').trim().toLowerCase();
+  if (!leaf) return null;
+  const wins = await delegate({ cmd: 'list_windows' });
+  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) return null;
+  return wins.result.windows.find(function (w) {
+    return String(w.title || '').trim().toLowerCase() === leaf &&
+      /explorer/i.test(String(w.process || w.processName || ''));
+  }) || null;
+}
+
 async function focus_window({ pid }) {
   // A non-numeric placeholder pid (e.g. "Notepad PID") must not be forwarded
   // toward PS's Get-Process -Id (Int32) — coerce it away so it degrades to the
@@ -739,7 +753,7 @@ module.exports = {
   KNOWN_DESKTOP_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
-  ambient_awareness, setScreenSensorHandle, show_desktop,
+  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,
 };

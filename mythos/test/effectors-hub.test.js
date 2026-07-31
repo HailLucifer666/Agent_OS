@@ -34,14 +34,24 @@ describe('effectors/hub: createEffectorHub', () => {
     assert.throws(() => hub.register({ id: 'x' })); // missing invoke()
   });
 
-  it('invoke("unknown", ...) returns {ok:false, result: "unknown-effector"}', async () => {
+  it('invoke("unknown", ...) fails with an "unknown-effector" reason naming the tool', async () => {
+    // WAVE 6 widened this deliberately. The bare string was a dead end: MYTHOS
+    // called status({}) in the 2026-07-31 session, got exactly 'unknown-effector'
+    // back, and had nothing pointing at read_status. The prefix is still exact —
+    // cortex/index.js matches that literal — but the message now names the tool
+    // and, when there is a near match, suggests it (see
+    // test/open-folder-and-suggestions.test.js). Asserting the whole object by
+    // deepEqual pinned the dead end in place.
     const bus = fakeBus();
     const hub = createEffectorHub({ bus, config: {} });
     hub.register({ id: 'a', invoke: async () => ({ ok: true, result: 1 }) });
     hub.register({ id: 'b', invoke: async () => ({ ok: true, result: 2 }) });
     hub.register({ id: 'c', invoke: async () => ({ ok: true, result: 3 }) });
     const result = await hub.invoke('unknown', {}, {});
-    assert.deepEqual(result, { ok: false, result: 'unknown-effector' });
+    assert.equal(result.ok, false);
+    assert.match(String(result.result), /^unknown-effector/);
+    assert.match(String(result.result), /unknown/);
+    assert.deepEqual(result.suggestions, [], 'a, b, c are nothing like "unknown" — no bad guesses');
   });
 
   it('three failures trip the breaker -> circuit-open, and hub.breakers.allow(name) works directly', async () => {

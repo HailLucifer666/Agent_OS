@@ -88,9 +88,70 @@ function createEffectorHub({ bus, config }) {
     return out;
   }
 
+  // WAVE 6 — 'unknown-effector' with no further information is a dead end for the
+  // model AND for the operator reading the transcript. In the 2026-07-31 session
+  // MYTHOS called status({}) and got exactly that string back, with no indication
+  // that read_status exists. Offer the nearest registered names instead.
+  //
+  // Prefix and substring first (they catch the real cases: a truncated or
+  // pluralised name), then a bounded edit distance for typos. Cheap: this runs
+  // only on the failure path.
+  function nearestToolNames(name, limit) {
+    var wanted = String(name || '').toLowerCase();
+    if (!wanted) return [];
+    var names = Array.from(effectors.keys());
+    var scored = [];
+    for (var i = 0; i < names.length; i++) {
+      var candidate = names[i];
+      var lower = candidate.toLowerCase();
+      var score = null;
+      if (lower === wanted) score = 0;
+      else if (lower.indexOf(wanted) !== -1 || wanted.indexOf(lower) !== -1) score = 1;
+      else {
+        var d = editDistance(wanted, lower);
+        // Only near-misses; beyond a third of the name it is a different word.
+        if (d <= Math.max(2, Math.floor(lower.length / 3))) score = 2 + d;
+      }
+      if (score !== null) scored.push({ name: candidate, score: score });
+    }
+    scored.sort(function(a, b) { return a.score - b.score || a.name.length - b.name.length; });
+    return scored.slice(0, limit || 3).map(function(s) { return s.name; });
+  }
+
+  // Iterative two-row Levenshtein — no recursion, no allocation per character.
+  function editDistance(a, b) {
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+    var prev = new Array(b.length + 1);
+    var cur = new Array(b.length + 1);
+    for (var j = 0; j <= b.length; j++) prev[j] = j;
+    for (var i = 1; i <= a.length; i++) {
+      cur[0] = i;
+      for (var k = 1; k <= b.length; k++) {
+        var cost = a.charCodeAt(i - 1) === b.charCodeAt(k - 1) ? 0 : 1;
+        cur[k] = Math.min(cur[k - 1] + 1, prev[k] + 1, prev[k - 1] + cost);
+      }
+      for (var m = 0; m <= b.length; m++) prev[m] = cur[m];
+    }
+    return prev[b.length];
+  }
+
   async function invoke(name, params, ctx) {
     var effector = effectors.get(name);
-    if (!effector) return { ok: false, result: 'unknown-effector' };
+    if (!effector) {
+      var near = nearestToolNames(name, 3);
+      return {
+        ok: false,
+        // The bare string is preserved as a prefix: cortex/index.js and several
+        // tests match on 'unknown-effector', and this must stay recognisable.
+        result: 'unknown-effector' + (near.length
+          ? ': no tool named "' + name + '". Did you mean ' + near.join(', ') + '?'
+          : ': no tool named "' + name + '".'),
+        unknownTool: String(name || ''),
+        suggestions: near,
+      };
+    }
 
     if (!breakers.allow(name)) {
       return { ok: false, result: 'circuit-open' };

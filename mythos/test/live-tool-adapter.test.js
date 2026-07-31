@@ -117,7 +117,13 @@ describe('live-tool-adapter — handleLiveToolCalls', () => {
     const { deps } = baseDeps({ dispatchAction: async () => ({ ok: false, result: { error: 'circuit-open' } }) });
     const adapter = createLiveToolAdapter(deps);
     const responses = [];
-    await adapter.handleLiveToolCalls([{ id: 'call-6', name: 'spotify_play', args: {} }], { sendToolResponse: (r) => responses.push(...r) });
+    // WAVE 3: this must exercise the AWAITED path, so the tool has to be a fast
+    // one. spotify_play moved onto the slow started/done path (it drives
+    // cua-driver, 5-10s per click sequence) and now answers status:'started'
+    // within the turn, with its real outcome delivered afterwards — that case is
+    // covered in narration-waits-for-outcome.test.js. The assertion here is about
+    // a failure that resolves inside the turn, which is unchanged.
+    await adapter.handleLiveToolCalls([{ id: 'call-6', name: 'set_volume', args: { level: 20 } }], { sendToolResponse: (r) => responses.push(...r) });
     assert.equal(responses[0].response.status, 'failed');
     assert.match(responses[0].response.error, /circuit-open/);
   });

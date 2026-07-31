@@ -159,6 +159,18 @@ function onVoiceState(s) {
   if (s2s && typeof s2s.setCaptureSuspended === 'function') s2s.setCaptureSuspended(s === 'speaking');
 }
 
+// WAVE 5 — the same gate, for media WE started. An effector that begins playback
+// puts audio through the same speakers, and Gemini transcribes it as the operator
+// (a German YouTube narration arrived as two "User:" turns on 2026-07-31). Only
+// the opening burst is suppressed — see suspendForMedia's comment for why the
+// whole track is deliberately not.
+const PLAYBACK_TOOLS = { spotify_play: true, open_web: true, spotify_next: true, spotify_previous: true };
+subscribe(['action'], (msg) => {
+  const p = (msg && msg.payload) || {};
+  if (!p.ok || !PLAYBACK_TOOLS[p.tool]) return;
+  if (s2s && typeof s2s.suspendForMedia === 'function') s2s.suspendForMedia();
+});
+
 function ensureVoice() {
   if (!voice) {
     voice = createVoiceLoop({

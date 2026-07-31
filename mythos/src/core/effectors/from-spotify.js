@@ -24,6 +24,8 @@ const { dispatchAction } = require('./dispatch-action');
 // (2026-07-17) — see adapters/cua-driver/index.js header for the tool list.
 // Direct require (not ctx-injected), matching from-pc.js's own pcChild require style.
 const cuaDriver = require('../../../adapters/cua-driver');
+// A click landing is not the right song playing — see evidence.js's header.
+const evidence = require('./evidence');
 
 function ok(result) {
   return { ok: true, result };
@@ -281,18 +283,53 @@ async function cuaPlayViaDriver(query) {
     await new Promise(r => setTimeout(r, 2500));
     const title = (await cuaSpotifyWindowTitle()) || '';
     const matched = terms.filter(t => title.toLowerCase().includes(t)).length;
-    if (matched >= requiredMatches) {
+    // WAVE 5 — the majority bar above is still cleared by the ARTIST NAME ALONE
+    // when the artist is more than one token, which is the whole failure. From the
+    // recorded session of 2026-07-31 (vault/Episodic): query "The Kid LAROI Down"
+    // gives terms [kid, laroi, down] and requiredMatches 2; the title
+    // "The Kid LAROI - SHE DON'T NEED TO KNOW" matches kid and laroi and nothing
+    // else, so it returned verified:true with a nowPlaying that REFUTES it — four
+    // times, including "The Kid LAROI - BACK 2 LOVE". The comment above claims
+    // this case was closed; it was closed for 2-token queries only.
+    //
+    // So the TRACK half of the title has to earn its own match. Spotify's playing
+    // title is "Artist - Track", so require at least one query term in the track
+    // portion. A correct play always clears this ("The Kid LAROI - DOWN" contains
+    // "down"); a right-artist-wrong-song never does.
+    if (matched >= requiredMatches && trackPortionMatches(title, terms)) {
       return ok({ clickedElement: target.label || null, verified: true, nowPlaying: title });
     }
   }
   if (!lastClicked) return fail('cua: every candidate click failed');
-  // Clicked but the playing title never matched the query — report honestly
-  // (BUG-007 discipline) instead of claiming the requested song is on.
-  return ok({
-    clickedElement: lastClicked.label || null,
-    verified: false,
-    note: 'clicked a play control but the playing title did not match the query'
-  });
+  // Clicked but the playing title never matched the query. ok:true because a
+  // click DID land and something is playing — unverified because it is not what
+  // was asked for, and the voice layer must say which song is actually on rather
+  // than confirming the requested one.
+  const actual = (await cuaSpotifyWindowTitle()) || '';
+  return evidence.unverified({
+    ok: true,
+    result: {
+      clickedElement: lastClicked.label || null,
+      verified: false,
+      nowPlaying: actual,
+      note: 'clicked a play control but the playing title did not match the query'
+    }
+  }, actual
+    ? 'clicked play, but Spotify is playing "' + actual + '", which is not what was asked for'
+    : 'clicked a play control but could not read back what Spotify is playing');
+}
+
+// True when at least one query term appears in the TRACK half of a Spotify
+// "Artist - Track" window title. Falls back to the whole title when it has no
+// separator (podcasts, ads, some local files), because then there is no artist
+// portion to be fooled by.
+function trackPortionMatches(title, terms) {
+  const lower = String(title || '').toLowerCase();
+  if (!lower) return false;
+  const sep = lower.indexOf(' - ');
+  const track = sep === -1 ? lower : lower.slice(sep + 3);
+  if (!track.trim()) return false;
+  return terms.some(t => track.includes(t));
 }
 
 async function searchAndPlay({ query, pid }) {
@@ -653,5 +690,9 @@ module.exports = {
   spotify_volume,
   spotify_play,
   spotify_search,
-  spotify_status
+  spotify_status,
+  // WAVE 5 — exported for test/spotify-nowplaying-honesty.test.js. This predicate
+  // IS the fix for the right-artist-wrong-song case, and verifying it needs no
+  // live Spotify window, unlike the cua path around it.
+  _internal: { trackPortionMatches }
 };
