@@ -253,6 +253,14 @@ public static class NativeInput {
     public const uint SPI_SETDESKWALLPAPER = 0x0014;
     public const uint SPIF_UPDATEINIFILE = 0x01;
     public const uint SPIF_SENDCHANGE = 0x02;
+
+    // Same export, integer pvParam. Needed for the foreground-lock timeout,
+    // whose pvParam is a value, not a string — the declaration above marshals
+    // pvParam as a string and cannot express it.
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW", CharSet = CharSet.Unicode)]
+    public static extern bool SystemParametersInfoValue(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
+    public const uint SPI_GETFOREGROUNDLOCKTIMEOUT = 0x2000;
+    public const uint SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001;
 }
 '@ -Language CSharp
 
@@ -459,6 +467,50 @@ function Resolve-RealProcessAfterLaunch($StartedProc, $Name) {
     return $null
 }
 
+# Resolve a windowed process for an app by NAME ALONE, with no started process to
+# start from. Needed for the shell:AppsFolder launch path (Store/MSIX apps such as
+# Windows 11 Notepad and WhatsApp), which used to return no pid at all -- and a
+# missing pid is not cosmetic: from-pc.js then cannot foreground the target, so
+# ui_type falls back to "type into whatever has focus", which after a human clicks
+# Approve in the dashboard is MYTHOS's own window. That is the reproduced
+# wrong-window typing bug.
+#
+# Polls because packaged-app activation is asynchronous: the window belongs to a
+# process that may not exist yet when Start-Process returns. Matches on process
+# name first, then window title, so "whatsapp" finds the WhatsApp process and
+# "notepad" finds Notepad. Never throws: StartTime is access-denied on protected
+# processes, so ordering is by pid (newer processes get higher pids) rather than
+# by start time.
+function Resolve-WindowedProcessByName($Name, $TimeoutMs) {
+    if (-not $Name) { return $null }
+    if (-not $TimeoutMs) { $TimeoutMs = 6000 }
+    $needle = ([string]$Name).Trim()
+    if ($needle.ToLowerInvariant().EndsWith('.exe')) { $needle = $needle.Substring(0, $needle.Length - 4) }
+    $needle = $needle -replace '\s', ''
+    if (-not $needle) { return $null }
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $windowed = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+            # Exact process-name match wins, then a partial one, then window title.
+            $hit = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -ieq $needle } |
+                Sort-Object Id -Descending | Select-Object -First 1
+            if (-not $hit) {
+                $hit = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -like ('*' + $needle + '*') } |
+                    Sort-Object Id -Descending | Select-Object -First 1
+            }
+            if (-not $hit) {
+                $hit = $windowed | Where-Object { $_.MainWindowTitle -and (($_.MainWindowTitle -replace '\s', '') -like ('*' + $needle + '*')) } |
+                    Sort-Object Id -Descending | Select-Object -First 1
+            }
+            if ($hit) { return $hit.Id }
+        } catch { }
+        Start-Sleep -Milliseconds 300
+    }
+    return $null
+}
+
 function Handle-LaunchApp($name) {
     if (-not $name) { return 'App name is required.' }
     # A bare non-string JSON value (e.g. a number) reaches here as-is; coerce
@@ -526,6 +578,7 @@ function Handle-LaunchApp($name) {
                 $proc = Start-Process -FilePath $regPath -PassThru -ErrorAction Stop
                 Start-Sleep -Milliseconds 500
                 $realPid = Resolve-RealProcessAfterLaunch $proc $name
+                if (-not $realPid) { $realPid = Resolve-WindowedProcessByName $name 6000 }
                 if ($realPid) { return @{ pid = $realPid; name = $name; launched = $true; resolvedVia = 'registry-app-paths' } }
                 return @{ launched = $true; name = $name; resolvedVia = 'registry-app-paths'; note = 'launched but process pid could not be confirmed (packaged-app activation likely exited its launcher stub)' }
             } catch { $attempted += ('registry path ' + $regPath + ': ' + $_.Exception.Message) }
@@ -536,7 +589,13 @@ function Handle-LaunchApp($name) {
             try {
                 Start-Process "shell:AppsFolder\$appId" -ErrorAction Stop
                 Start-Sleep -Milliseconds 800
-                return @{ launched = $true; name = $name; resolvedVia = 'start-apps'; note = 'Store/UWP app; no per-process pid resolvable for this app model.' }
+                # A Store/UWP activation has no launcher process to follow, but the
+                # app it activates does own a real windowed process — find it by
+                # name. Returning no pid here is what left ui_type with nothing to
+                # foreground (see Resolve-WindowedProcessByName's comment).
+                $realPid = Resolve-WindowedProcessByName $name 8000
+                if ($realPid) { return @{ pid = $realPid; name = $name; launched = $true; resolvedVia = 'start-apps' } }
+                return @{ launched = $true; name = $name; resolvedVia = 'start-apps'; note = 'Store/UWP app activated, but no windowed process matching the name was found; a later focus_window/ui_type cannot target it.' }
             } catch { $attempted += ('shell:AppsFolder ' + $appId + ': ' + $_.Exception.Message) }
         } else { $attempted += 'Get-StartApps: no match' }
     }
@@ -546,6 +605,7 @@ function Handle-LaunchApp($name) {
         $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
         Start-Sleep -Milliseconds 500
         $realPid = Resolve-RealProcessAfterLaunch $proc $name
+        if (-not $realPid) { $realPid = Resolve-WindowedProcessByName $name 6000 }
         if ($realPid) { return @{ pid = $realPid; name = $name } }
         return @{ launched = $true; name = $name; note = 'launched but process pid could not be confirmed (packaged-app activation likely exited its launcher stub)' }
     } catch {
@@ -681,10 +741,60 @@ function Handle-FocusWindow($TargetPid) {
 
         # Verify it actually took instead of trusting the return value blind —
         # SetForegroundWindow can return true yet still be denied in edge cases.
-        if ([NativeInput]::GetForegroundWindow() -ne $hwnd) {
-            return ('Failed to bring PID ' + $TargetPid + ' to the foreground (blocked by the OS foreground-lock).')
+        $method = 'attach-thread-input'
+
+        # ESCALATION LADDER (2026-07-31). AttachThreadInput alone was denied 5/5 in
+        # live testing, and a denied focus means ui_type has no target — which is
+        # how keystrokes ended up in MYTHOS's own window. Two further attempts,
+        # both self-contained (no cooperation needed from the foreground app):
+        #
+        #   2. Drop SPI_..._FOREGROUNDLOCKTIMEOUT to 0. That timeout is the whole
+        #      reason the lock exists; it is restored in the finally below so this
+        #      never leaks a system-wide setting change.
+        #   3. Minimize then restore. A restore is an activation Windows performs
+        #      itself, so it is allowed where a direct steal is not. Visibly
+        #      flickers the window, hence last.
+        $lockTimeoutChanged = $false
+        $savedTimeout = [IntPtr]::Zero
+        try {
+            if ([NativeInput]::GetForegroundWindow() -ne $hwnd) {
+                $method = 'foreground-lock-timeout'
+                try {
+                    $buf = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+                    try {
+                        if ([NativeInput]::SystemParametersInfoValue([NativeInput]::SPI_GETFOREGROUNDLOCKTIMEOUT, 0, $buf, 0)) {
+                            $savedTimeout = [IntPtr][System.Runtime.InteropServices.Marshal]::ReadInt32($buf)
+                        }
+                    } finally {
+                        [System.Runtime.InteropServices.Marshal]::FreeHGlobal($buf)
+                    }
+                    if ([NativeInput]::SystemParametersInfoValue([NativeInput]::SPI_SETFOREGROUNDLOCKTIMEOUT, 0, [IntPtr]::Zero, [NativeInput]::SPIF_SENDCHANGE)) {
+                        $lockTimeoutChanged = $true
+                    }
+                } catch { }
+                [NativeInput]::SetForegroundWindow($hwnd) | Out-Null
+                Start-Sleep -Milliseconds 60
+            }
+
+            if ([NativeInput]::GetForegroundWindow() -ne $hwnd) {
+                $method = 'minimize-restore'
+                [NativeInput]::ShowWindow($hwnd, [NativeInput]::SW_MINIMIZE) | Out-Null
+                Start-Sleep -Milliseconds 120
+                [NativeInput]::ShowWindow($hwnd, [NativeInput]::SW_RESTORE) | Out-Null
+                Start-Sleep -Milliseconds 180
+                [NativeInput]::SetForegroundWindow($hwnd) | Out-Null
+                Start-Sleep -Milliseconds 80
+            }
+        } finally {
+            if ($lockTimeoutChanged) {
+                try { [void][NativeInput]::SystemParametersInfoValue([NativeInput]::SPI_SETFOREGROUNDLOCKTIMEOUT, 0, $savedTimeout, [NativeInput]::SPIF_SENDCHANGE) } catch { }
+            }
         }
-        return @{ pid = $TargetPid; focused = $true }
+
+        if ([NativeInput]::GetForegroundWindow() -ne $hwnd) {
+            return ('Failed to bring PID ' + $TargetPid + ' to the foreground (blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore).')
+        }
+        return @{ pid = $TargetPid; focused = $true; method = $method }
     } catch {
         return ('Cannot focus PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
@@ -1248,11 +1358,94 @@ $VK_CODES = @{
     down   = 0x28
     left   = 0x25
     right  = 0x27
+    # Letters, so modifier combos like ctrl+n (new document) and ctrl+a (select
+    # all) are expressible. Bare letters are intentionally NOT useful on their own
+    # -- plain text goes through ui_type/SendInput Unicode, not virtual keys.
+    a = 0x41; b = 0x42; c = 0x43; d = 0x44; e = 0x45; f = 0x46; g = 0x47
+    h = 0x48; i = 0x49; j = 0x4A; k = 0x4B; l = 0x4C; m = 0x4D; n = 0x4E
+    o = 0x4F; p = 0x50; q = 0x51; r = 0x52; s = 0x53; t = 0x54; u = 0x55
+    v = 0x56; w = 0x57; x = 0x58; y = 0x59; z = 0x5A
+    delete = 0x2E
+    home   = 0x24
+    end    = 0x23
+}
+
+$VK_MODIFIERS = @{
+    ctrl    = 0x11
+    control = 0x11
+    shift   = 0x10
+    alt     = 0x12
+    win     = 0x5B
+}
+
+# Send a modifier combo ("ctrl+n", "ctrl+shift+t"): modifiers down in order, the
+# base key down/up, then modifiers up in reverse. Without this, send_key could
+# only press one virtual key at a time, so Ctrl+N -- the only reliable way to get
+# a blank Notepad document on Windows 11, which restores previous tabs on launch
+# -- was not expressible at all.
+function Send-VkCombo($modifierVks, $vk) {
+    $script:LastVkSent = 0
+    $total = 0
+    foreach ($m in $modifierVks) {
+        Send-VkKeyDown $m
+        $total += $script:LastVkSent
+    }
+    Send-VkKey $vk
+    $total += $script:LastVkSent
+    $reversed = @($modifierVks)
+    [array]::Reverse($reversed)
+    foreach ($m in $reversed) {
+        Send-VkKeyUp $m
+        $total += $script:LastVkSent
+    }
+    $script:LastVkSent = $total
+}
+
+# Single key-down / key-up events. SizeOf is taken from the INSTANCE, matching
+# Send-VkKey above -- the [Type] overload is unreliable for a nested type name on
+# PowerShell 5.1.
+function Send-VkKeyDown($vk) {
+    $inputs = @((New-Object 'NativeInput+INPUT'))
+    $inputs[0].type = [NativeInput]::INPUT_KEYBOARD
+    $inputs[0].u.ki.wVk = $vk
+    $inputs[0].u.ki.dwFlags = 0
+    $script:LastVkSent = [NativeInput]::SendInput(1, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
+}
+
+function Send-VkKeyUp($vk) {
+    $inputs = @((New-Object 'NativeInput+INPUT'))
+    $inputs[0].type = [NativeInput]::INPUT_KEYBOARD
+    $inputs[0].u.ki.wVk = $vk
+    $inputs[0].u.ki.dwFlags = [NativeInput]::KEYEVENTF_KEYUP
+    $script:LastVkSent = [NativeInput]::SendInput(1, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
 }
 
 function Handle-SendKey($key) {
     if (-not $key) { return 'Key name is required.' }
-    $vk = $VK_CODES[$key.ToLower()]
+    $raw = ([string]$key).ToLower().Trim()
+
+    if ($raw.Contains('+')) {
+        $parts = @($raw.Split('+') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($parts.Count -lt 2) { return "Unknown key: $key." }
+        $baseName = $parts[$parts.Count - 1]
+        $modNames = @($parts[0..($parts.Count - 2)])
+        $vk = $VK_CODES[$baseName]
+        if (-not $vk) { return @("Unknown key: $baseName. Valid: $($VK_CODES.Keys -join ', ')") }
+        $modVks = @()
+        foreach ($m in $modNames) {
+            $mv = $VK_MODIFIERS[$m]
+            if (-not $mv) { return @("Unknown modifier: $m. Valid: $($VK_MODIFIERS.Keys -join ', ')") }
+            $modVks += $mv
+        }
+        $script:LastVkSent = $null
+        Send-VkCombo $modVks $vk
+        if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
+            return "Send key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
+        }
+        return @{ key = $raw; sent = $true; combo = $true }
+    }
+
+    $vk = $VK_CODES[$raw]
     if (-not $vk) {
         return @("Unknown key: $key. Valid: $($VK_CODES.Keys -join ', ')")
     }
@@ -1262,7 +1455,7 @@ function Handle-SendKey($key) {
     if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
         return "Send key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
     }
-    return @{ key = $key; sent = $true }
+    return @{ key = $raw; sent = $true }
 }
 
 function Handle-MediaStatus {

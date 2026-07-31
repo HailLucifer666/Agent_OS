@@ -113,11 +113,41 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
 
 // ---- Tool implementations ----
 
+// Apps that restore their previous session on launch, so "open X and type" lands
+// in yesterday's document unless a new one is opened first. Windows 11's Notepad
+// is the confirmed case: it is single-instance AND tab-restoring, so launching it
+// surfaces the old window with old content (see Resolve-RealProcessAfterLaunch's
+// comment in ps-automation.ps1 — that resolution is honest, not a bug).
+// vault/Semantic/user-facts.md already recorded the operator's preference here
+// ("Always open a new Notepad instance unless the user specifies a filename"),
+// and nothing enforced it.
+var SESSION_RESTORING_APPS = /^notepad(\.exe)?$/i;
+
 async function launch_app({ name }) {
   if (!name) return fail('App name is required.');
   var res = await delegate({ cmd: 'launch_app', name });
   if (res.ok && res.result && typeof res.result.pid === 'number') {
     lastLaunchedPid = res.result.pid;
+
+    // Fresh document. Best-effort by design: if focus or the keystroke fails the
+    // launch itself still succeeded, and reporting a launch failure because a
+    // convenience step didn't land would be its own dishonesty. The outcome is
+    // reported so the voice layer can be accurate about which document it typed
+    // into rather than assuming a blank one.
+    if (SESSION_RESTORING_APPS.test(String(name).trim())) {
+      // NOTE: fail() puts its message in .result, not .error (see the helper at
+      // the top of this file) — reading .error here would silently discard the
+      // real reason and report a generic one.
+      var focused = await delegate({ cmd: 'focus_window', pid: lastLaunchedPid });
+      if (focused.ok) {
+        var fresh = await delegate({ cmd: 'send_key', key: 'ctrl+n' });
+        res.result.freshDocument = Boolean(fresh.ok);
+        if (!fresh.ok) res.result.freshDocumentError = String(fresh.result || 'ctrl+n failed');
+      } else {
+        res.result.freshDocument = false;
+        res.result.freshDocumentError = String(focused.result || 'could not focus the window to open a new document');
+      }
+    }
   }
   return res;
 }
@@ -255,6 +285,10 @@ async function ui_click({ pid, elementPath }) {
   return foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
 }
 
+// Windows titles that mean "this is MYTHOS's own UI", i.e. the dashboard the
+// operator just clicked Approve in. Typing into itself is never the intent.
+var SELF_WINDOW_RE = /^(MYTHOS|Mythos)\b/;
+
 async function ui_type({ text, pid, elementPath }) {
   if (!text) return fail('Text is required.');
   // FIX 1: default the omitted pid to the last app launch_app opened — the
@@ -269,8 +303,39 @@ async function ui_type({ text, pid, elementPath }) {
   // keyboard focus off the target window, so SendInput keystrokes landed
   // nowhere while still reporting typed:true. No pid means "type into whatever
   // is focused right now" — nothing to foreground, so keep the plain delegate.
-  if (targetPid) return foregroundThenRetry(targetPid, cmdObj, { attempts: 3 });
-  return delegate(cmdObj);
+  var res = targetPid
+    ? await foregroundThenRetry(targetPid, cmdObj, { attempts: 3 })
+    : await delegate(cmdObj);
+
+  // TARGET CROSS-CHECK (2026-07-31). ps-automation.ps1 honestly reports which
+  // window actually received the keystrokes (typedIntoPid/typedIntoTitle), and
+  // NOTHING here ever compared it to the intended target. Reproduced live in
+  // vault/Episodic/2026-07-31.jsonl: launch_app("notepad") returned ok with NO
+  // pid (MSIX activation stub exits, so lastLaunchedPid stayed null), the human
+  // clicked Approve which put OS focus on the MYTHOS dashboard, ui_type fell to
+  // the no-pid branch and SendInput typed all 24 characters into MYTHOS's own
+  // window — returning ok:true with typedIntoTitle:"MYTHOS". Both voice-agent
+  // honesty guards only trigger on ok:false, so MYTHOS said "Message delivered,
+  // Sir. Notepad is now displaying..." — a total fabrication that no layer could
+  // catch, because the TOOL was the thing lying, by omission.
+  //
+  // Converting this to an honest failure is what lets the existing corrective
+  // pass and deterministic guard in voice-agent.js do their job.
+  if (res && res.ok && res.result && typeof res.result === 'object') {
+    var landedPid = res.result.typedIntoPid;
+    var landedTitle = String(res.result.typedIntoTitle || '');
+    if (targetPid && typeof landedPid === 'number' && landedPid !== targetPid) {
+      return fail('Typed into the wrong window: the text went to "' + landedTitle +
+        '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
+    }
+    // No target to compare against: at least refuse to pretend that typing into
+    // our own dashboard satisfied a request to type into an app.
+    if (!targetPid && SELF_WINDOW_RE.test(landedTitle)) {
+      return fail('Refusing to claim success: with no target window resolved, the keystrokes landed in ' +
+        'the MYTHOS dashboard itself ("' + landedTitle + '"). Launch or focus the app first, then type.');
+    }
+  }
+  return res;
 }
 
 async function show_desktop() {
@@ -294,11 +359,34 @@ async function media_status() {
   return delegate({ cmd: 'media_status' });
 }
 
+// Named keys, plus single letters and modifier combos ("ctrl+n", "ctrl+shift+t").
+// Letters exist only to make combos expressible — plain text goes through
+// ui_type's Unicode SendInput path, never through virtual keys.
+const NAMED_KEYS = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right', 'delete', 'home', 'end'];
+const KEY_MODIFIERS = ['ctrl', 'control', 'shift', 'alt', 'win'];
+
+function isValidKeyName(name) {
+  return NAMED_KEYS.includes(name) || /^[a-z]$/.test(name);
+}
+
 async function send_key({ key }) {
-  if (!key) return fail('Key name is required (enter, tab, escape, space, up, down, left, right).');
-  const validKeys = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right'];
-  if (!validKeys.includes(key)) return fail(`Invalid key: "${key}". Valid: ${validKeys.join(', ')}`);
-  return delegate({ cmd: 'send_key', key });
+  if (!key) return fail(`Key name is required (${NAMED_KEYS.join(', ')}, a single letter, or a combo like ctrl+n).`);
+  const raw = String(key).toLowerCase().trim();
+  if (raw.includes('+')) {
+    const parts = raw.split('+').map((p) => p.trim()).filter(Boolean);
+    const base = parts[parts.length - 1];
+    const mods = parts.slice(0, -1);
+    if (parts.length < 2 || !isValidKeyName(base)) {
+      return fail(`Invalid key: "${key}". Combo form is <modifier>+<key>, e.g. ctrl+n.`);
+    }
+    const badMod = mods.find((m) => !KEY_MODIFIERS.includes(m));
+    if (badMod) return fail(`Invalid modifier: "${badMod}". Valid: ${KEY_MODIFIERS.join(', ')}`);
+    return delegate({ cmd: 'send_key', key: raw });
+  }
+  if (!isValidKeyName(raw)) {
+    return fail(`Invalid key: "${key}". Valid: ${NAMED_KEYS.join(', ')}, a single letter, or a combo like ctrl+n.`);
+  }
+  return delegate({ cmd: 'send_key', key: raw });
 }
 
 async function click_at({ x, y }) {
