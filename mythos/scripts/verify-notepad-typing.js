@@ -16,7 +16,17 @@
 //   Sir. Notepad is now displaying..." — a fabrication no layer could catch,
 //   because the TOOL was the thing lying, by omission.
 //
+// THE SECOND BUG, same session, 11:25:57 (WAVE 1): with no notepad process
+//   running, Resolve-WindowedProcessByName's third fallback matched on WINDOW
+//   TITLE and returned the operator's editor, whose title read "Agent_OS-main -
+//   Antigravity IDE - Fix notepad typing...". It came back as a bare pid,
+//   indistinguishable from a real process-name match, so two ui_type calls put 23
+//   characters each into the IDE — and the cross-check below PASSED, because the
+//   landed pid and the target pid were the same wrong pid. Step 0 recreates that
+//   decoy deliberately.
+//
 // What this verifies, in order:
+//   0. A window whose TITLE merely mentions "notepad" is never targeted.
 //   1. launch_app("notepad") returns a REAL numeric pid (the MSIX resolver).
 //   2. The launch opened a FRESH document (Ctrl+N after focus).
 //   3. focus_window on that pid actually reports focused, and says which method
@@ -34,6 +44,7 @@
 //   node scripts/verify-notepad-typing.js
 
 const path = require('path');
+const { spawn } = require('child_process');
 
 const TEXT = 'Hi Alex, this is Mythos verifying its own typing path.';
 
@@ -81,12 +92,69 @@ function bad(label, detail) {
     process.exit(1);
   }
 
+  let decoy = null;
   try {
+    // ---- 0: a decoy window whose TITLE says "notepad" must not be targeted ----
+    // Recreates 11:25:57. A console window is used because its title is settable
+    // and it is unmistakably NOT a notepad process.
+    console.log('Step 0 — decoy window titled "...Fix notepad typing...":');
+    decoy = spawn('powershell.exe', [
+      '-NoProfile', '-NoExit', '-Command',
+      "$host.UI.RawUI.WindowTitle='Agent_OS-main - Antigravity IDE - Fix notepad typing'; Start-Sleep 120",
+    ], { detached: true, stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const before = await call('list_windows', {});
+    const decoyWin = ((before.result && before.result.windows) || [])
+      .find((w) => /fix notepad typing/i.test(String(w.title || '')));
+    if (decoyWin) {
+      console.log('    decoy is visible to list_windows: pid ' + decoyWin.pid + ' "' + decoyWin.title + '"');
+    } else {
+      console.log('    NOTE: decoy window not found in list_windows — Step 0 is inconclusive, not passed.');
+    }
+
+    const bait = await call('launch_app', { name: 'notepad' });
+    console.log('    raw:', JSON.stringify(bait.result || bait.error));
+    const baitPid = bait.ok && bait.result ? bait.result.pid : null;
+
+    if (decoyWin) {
+      allOk = (baitPid !== decoyWin.pid
+        ? ok('the title-only decoy was NOT returned as the launched app')
+        : bad('launch_app returned the DECOY pid — the window-title fallback is back',
+          'this is the 11:25:57 wrong-window type, verbatim')) && allOk;
+    }
+    // Whatever it resolved, it must be a genuine notepad process or nothing.
+    if (typeof baitPid === 'number') {
+      const names = await call('list_windows', {});
+      const hit = ((names.result && names.result.windows) || []).find((w) => w.pid === baitPid);
+      const proc = hit ? String(hit.process || hit.processName || '') : '';
+      allOk = (/notepad/i.test(proc) || !proc
+        ? ok('the resolved pid belongs to a notepad process', proc || '(process name unavailable)')
+        : bad('the resolved pid belongs to "' + proc + '", not notepad')) && allOk;
+      allOk = (bait.unverified !== true
+        ? ok('a resolved launch is reported as confirmed')
+        : bad('resolved but still marked unverified')) && allOk;
+    } else {
+      allOk = (bait.unverified === true && /not targeting|could not be confirmed/i.test(String(bait.reason || ''))
+        ? ok('an unresolved launch is reported as UNVERIFIED, not success', String(bait.reason).slice(0, 110))
+        : bad('an unresolved launch was not honestly reported', JSON.stringify(bait.reason || bait.result))) && allOk;
+    }
+
+    try { process.kill(-decoy.pid); } catch (_) { try { decoy.kill(); } catch (_) {} }
+    decoy = null;
+    await new Promise((r) => setTimeout(r, 500));
+
     // ---- 1 + 2: launch resolves a real pid, and opens a fresh document ----
-    console.log('Step 1-2 — launch_app("notepad"):');
+    console.log('\nStep 1-2 — launch_app("notepad"):');
     const launched = await call('launch_app', { name: 'notepad' });
     console.log('    raw:', JSON.stringify(launched.result || launched.error));
     const pid = launched.ok && launched.result ? launched.result.pid : null;
+    if (launched.ok) {
+      allOk = (launched.evidence && launched.evidence.oracle === 'process-window'
+        ? ok('the launch carries the process-window oracle', String(launched.evidence.observed))
+        : bad('no process-window evidence on a launch reported ok',
+          'evidence: ' + JSON.stringify(launched.evidence || null) + ' unverified: ' + launched.unverified)) && allOk;
+    }
     allOk = (typeof pid === 'number'
       ? ok('launch_app returned a real numeric pid', 'pid ' + pid)
       : bad('launch_app returned NO pid — the MSIX resolver did not find a windowed process',
@@ -141,6 +209,11 @@ function bad(label, detail) {
     console.log('\nNote: a Notepad window is now open with the test text. Close it without saving.');
     console.log('\n' + (allOk ? 'RESULT: all checks passed' : 'RESULT: FAILURES above'));
   } finally {
+    // The decoy is a detached console window: leaving it behind on a crash would
+    // poison every later run of this very script.
+    if (decoy) {
+      try { process.kill(-decoy.pid); } catch (_) { try { decoy.kill(); } catch (_) {} }
+    }
     try { await pcChild.shutdownPcChild(); } catch (_) {}
   }
   process.exit(allOk ? 0 : 1);

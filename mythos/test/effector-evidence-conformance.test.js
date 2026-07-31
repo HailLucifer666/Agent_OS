@@ -53,8 +53,10 @@ const MIGRATION_LEDGER = {
   ui_type: 'Wave 2 adds UIA read-back of the focused control; today typed:true means only "SendInput accepted the events".',
   send_key: 'Wave 2 adds the messaging-app guard requiring a preceding verified ui_type; today an Enter is unconditional.',
   ui_click: 'Wave 2/7 — a click has no oracle of its own; it is verified by what it produced (editable focus, read-back).',
-  focus_window: 'Wave 1/2 verify foreground via the foreground-pid oracle; today ok:true means the focus call returned.',
-  launch_app: 'Wave 1 removes the window-title fallback and reports resolved:false with a candidate instead of guessing.',
+  focus_window: 'Wave 2 verifies foreground via the foreground-pid oracle; today ok:true means the focus call returned.',
+  // launch_app RETIRED in Wave 1: ps-automation.ps1 no longer resolves by window
+  // title, and from-pc.js reports the process-window oracle or an honest
+  // unverified. See test/launch-resolution-no-title-fallback.test.js.
   spotify_play: 'Wave 5 compares nowPlaying/media_status against the request; today verified:true only means the CLICK verified.',
   whatsapp_send: 'Wave 7/8 route sending through app_reply + a spoken confirm over verified read-back text.',
 };
@@ -70,7 +72,7 @@ function naivePcChild() {
         case 'ui_type': return { ok: true, result: { typed: true, length: 5, typedIntoPid: cmdObj.pid || 4242, typedIntoTitle: 'Untitled - Notepad' } };
         case 'send_key': return { ok: true, result: { sent: true, key: cmdObj.key } };
         case 'ui_click': return { ok: true, result: { clicked: true } };
-        case 'launch_app': return { ok: true, result: { pid: 4242, name: cmdObj.name, resolved: true } };
+        case 'launch_app': return { ok: true, result: { pid: 4242, name: cmdObj.name, resolved: true, matchedBy: 'process' } };
         case 'list_windows': return { ok: true, result: { windows: [{ pid: 4242, title: 'Untitled - Notepad', process: 'notepad' }] } };
         default: return { ok: true, result: {} };
       }

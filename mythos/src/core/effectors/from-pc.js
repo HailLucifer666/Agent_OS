@@ -8,6 +8,9 @@ const { effectorFromTool } = require('./adapter');
 // §7.7 (step 5) — set_wallpaper's path argument is sandboxed via
 // from-computer.js's existing resolveSandboxed (reused, not reimplemented).
 const { resolveSandboxed } = require('./from-computer');
+// The evidence contract: a world-changing effector may only report ok:true with
+// proof from an oracle other than its own call. See evidence.js's header.
+const evidence = require('./evidence');
 
 function ok(result) {
   return { ok: true, result };
@@ -126,8 +129,19 @@ var SESSION_RESTORING_APPS = /^notepad(\.exe)?$/i;
 async function launch_app({ name }) {
   if (!name) return fail('App name is required.');
   var res = await delegate({ cmd: 'launch_app', name });
-  if (res.ok && res.result && typeof res.result.pid === 'number') {
-    lastLaunchedPid = res.result.pid;
+
+  // WAVE 1. ps-automation.ps1 now distinguishes a real resolution
+  // (matchedBy:'process') from a mere window-TITLE coincidence
+  // (matchedBy:'title', reported as candidatePid with NO pid field). The title
+  // case is why launch_app("notepad") returned the operator's IDE and two
+  // ui_type calls typed into it. Both guards below are deliberate: the absent
+  // pid already stops us, and the explicit matchedBy check keeps it stopped if a
+  // future PS change ever starts returning a pid for a title match.
+  var r = res.result || {};
+  var byProcess = typeof r.pid === 'number' && r.matchedBy !== 'title';
+
+  if (res.ok && byProcess) {
+    lastLaunchedPid = r.pid;
 
     // Fresh document. Best-effort by design: if focus or the keystroke fails the
     // launch itself still succeeded, and reporting a launch failure because a
@@ -149,7 +163,26 @@ async function launch_app({ name }) {
       }
     }
   }
-  return res;
+
+  if (!res.ok) return res;
+
+  // Evidence contract (effectors/evidence.js). The oracle for a launch is that a
+  // live process whose NAME matches owns a real window — an enumeration of what
+  // exists afterwards, not the launch call's own say-so. Without a resolution we
+  // report the launch as attempted: the app may genuinely have started, but there
+  // is no window we can honestly claim as the target, and saying so is what stops
+  // the next ui_type from guessing.
+  if (byProcess) {
+    return evidence.verifiedOk(res, {
+      oracle: 'process-window',
+      expected: String(name).trim(),
+      observed: String(r.name || name) + ' (pid ' + r.pid + ')',
+    });
+  }
+  return evidence.unverified(res, r.candidateTitle
+    ? 'no process named like "' + name + '" owns a window — the only match was an unrelated window titled "' +
+      r.candidateTitle + '", which I am not targeting'
+    : String(r.note || 'launched, but no windowed process matching the name could be confirmed'));
 }
 
 async function list_windows() {

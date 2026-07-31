@@ -476,11 +476,29 @@ function Resolve-RealProcessAfterLaunch($StartedProc, $Name) {
 # wrong-window typing bug.
 #
 # Polls because packaged-app activation is asynchronous: the window belongs to a
-# process that may not exist yet when Start-Process returns. Matches on process
-# name first, then window title, so "whatsapp" finds the WhatsApp process and
-# "notepad" finds Notepad. Never throws: StartTime is access-denied on protected
-# processes, so ordering is by pid (newer processes get higher pids) rather than
-# by start time.
+# process that may not exist yet when Start-Process returns. Never throws:
+# StartTime is access-denied on protected processes, so ordering is by pid (newer
+# processes get higher pids) rather than by start time.
+#
+# WAVE 1, and this is the whole point of the function now: matching on WINDOW
+# TITLE is not resolution. It used to be the third fallback and it returned a
+# bare pid indistinguishable from a real process-name match, which produced the
+# 2026-07-31 11:25:57 failure: launch_app("notepad") matched the operator's IDE
+# because its title read "Agent_OS-main - Antigravity IDE - Fix notepad
+# typing...". Two ui_type calls then put 23 characters each into the IDE, and
+# from-pc.js's honesty cross-check PASSED because the landed pid and the target
+# pid were the same wrong pid (16800). A Ctrl+N intended to give Notepad a fresh
+# document went to the IDE too.
+#
+# So: a process-name match is a RESOLUTION; a title match is at most a CANDIDATE
+# for a human (or the model) to disambiguate out loud. Returns
+#   @{ pid = <id>; matchedBy = 'process' }                     -- usable
+#   @{ pid = <id>; matchedBy = 'title'; title = <window text> } -- NOT usable as the target
+#   $null
+# A title hit deliberately does NOT short-circuit the poll: we keep waiting for a
+# real process to appear and only fall back to the candidate at the deadline,
+# because "the app is still starting" is far more common than "the app is named
+# after someone else's window title".
 function Resolve-WindowedProcessByName($Name, $TimeoutMs) {
     if (-not $Name) { return $null }
     if (-not $TimeoutMs) { $TimeoutMs = 6000 }
@@ -489,26 +507,70 @@ function Resolve-WindowedProcessByName($Name, $TimeoutMs) {
     $needle = $needle -replace '\s', ''
     if (-not $needle) { return $null }
 
+    $candidate = $null
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
             $windowed = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
-            # Exact process-name match wins, then a partial one, then window title.
+            # Exact process-name match wins, then a partial one. Both are real
+            # resolutions and return immediately.
             $hit = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -ieq $needle } |
                 Sort-Object Id -Descending | Select-Object -First 1
             if (-not $hit) {
                 $hit = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -like ('*' + $needle + '*') } |
                     Sort-Object Id -Descending | Select-Object -First 1
             }
-            if (-not $hit) {
-                $hit = $windowed | Where-Object { $_.MainWindowTitle -and (($_.MainWindowTitle -replace '\s', '') -like ('*' + $needle + '*')) } |
+            if ($hit) { return @{ pid = $hit.Id; matchedBy = 'process' } }
+
+            # Title-only hit: remember it, keep polling for a real process.
+            if (-not $candidate) {
+                $titleHit = $windowed | Where-Object { $_.MainWindowTitle -and (($_.MainWindowTitle -replace '\s', '') -like ('*' + $needle + '*')) } |
                     Sort-Object Id -Descending | Select-Object -First 1
+                if ($titleHit) {
+                    $candidate = @{ pid = $titleHit.Id; matchedBy = 'title'; title = $titleHit.MainWindowTitle }
+                }
             }
-            if ($hit) { return $hit.Id }
         } catch { }
         Start-Sleep -Milliseconds 300
     }
+    if ($candidate) { return $candidate }
     return $null
+}
+
+# Build a launch_app response without ever presenting a title match as the
+# launched app. Shared by all three launch paths (registry App Paths,
+# shell:AppsFolder, bare Start-Process) so the rule cannot hold in one and leak
+# in another.
+#
+# A resolved launch carries `pid` + resolved:$true. An unresolved one carries NO
+# `pid` at all — deliberately, because from-pc.js keys lastLaunchedPid and the
+# fresh-document Ctrl+N off its presence, and a pid it cannot trust is worse than
+# no pid: no pid degrades to "I could not confirm which window", while a wrong
+# pid types into a stranger's window and reports success.
+function New-LaunchResult($Name, $ResolvedPid, $Resolution, $Via) {
+    $r = @{ name = $Name; launched = $true }
+    if ($Via) { $r.resolvedVia = $Via }
+
+    if ($ResolvedPid) {
+        $r.pid = $ResolvedPid; $r.resolved = $true; $r.matchedBy = 'process'
+        return $r
+    }
+    if ($Resolution -and $Resolution.matchedBy -eq 'process') {
+        $r.pid = $Resolution.pid; $r.resolved = $true; $r.matchedBy = 'process'
+        return $r
+    }
+
+    $r.resolved = $false
+    if ($Resolution -and $Resolution.matchedBy -eq 'title') {
+        $r.matchedBy = 'title'
+        $r.candidatePid = $Resolution.pid
+        $r.candidateTitle = $Resolution.title
+        $r.note = ('No process named like "' + $Name + '" owns a window. One unrelated window''s TITLE mentions it (' +
+                   $Resolution.title + '), which is not the same thing and is NOT being targeted. Ask which window is meant, or launch the app again.')
+    } else {
+        $r.note = 'launched but no windowed process matching the name could be confirmed; a later focus_window/ui_type has no trustworthy target.'
+    }
+    return $r
 }
 
 function Handle-LaunchApp($name) {
@@ -578,9 +640,9 @@ function Handle-LaunchApp($name) {
                 $proc = Start-Process -FilePath $regPath -PassThru -ErrorAction Stop
                 Start-Sleep -Milliseconds 500
                 $realPid = Resolve-RealProcessAfterLaunch $proc $name
-                if (-not $realPid) { $realPid = Resolve-WindowedProcessByName $name 6000 }
-                if ($realPid) { return @{ pid = $realPid; name = $name; launched = $true; resolvedVia = 'registry-app-paths' } }
-                return @{ launched = $true; name = $name; resolvedVia = 'registry-app-paths'; note = 'launched but process pid could not be confirmed (packaged-app activation likely exited its launcher stub)' }
+                $resolution = $null
+                if (-not $realPid) { $resolution = Resolve-WindowedProcessByName $name 6000 }
+                return (New-LaunchResult $name $realPid $resolution 'registry-app-paths')
             } catch { $attempted += ('registry path ' + $regPath + ': ' + $_.Exception.Message) }
         } else { $attempted += 'registry App Paths: no match' }
 
@@ -593,9 +655,8 @@ function Handle-LaunchApp($name) {
                 # app it activates does own a real windowed process — find it by
                 # name. Returning no pid here is what left ui_type with nothing to
                 # foreground (see Resolve-WindowedProcessByName's comment).
-                $realPid = Resolve-WindowedProcessByName $name 8000
-                if ($realPid) { return @{ pid = $realPid; name = $name; launched = $true; resolvedVia = 'start-apps' } }
-                return @{ launched = $true; name = $name; resolvedVia = 'start-apps'; note = 'Store/UWP app activated, but no windowed process matching the name was found; a later focus_window/ui_type cannot target it.' }
+                $resolution = Resolve-WindowedProcessByName $name 8000
+                return (New-LaunchResult $name $null $resolution 'start-apps')
             } catch { $attempted += ('shell:AppsFolder ' + $appId + ': ' + $_.Exception.Message) }
         } else { $attempted += 'Get-StartApps: no match' }
     }
@@ -605,9 +666,9 @@ function Handle-LaunchApp($name) {
         $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
         Start-Sleep -Milliseconds 500
         $realPid = Resolve-RealProcessAfterLaunch $proc $name
-        if (-not $realPid) { $realPid = Resolve-WindowedProcessByName $name 6000 }
-        if ($realPid) { return @{ pid = $realPid; name = $name } }
-        return @{ launched = $true; name = $name; note = 'launched but process pid could not be confirmed (packaged-app activation likely exited its launcher stub)' }
+        $resolution = $null
+        if (-not $realPid) { $resolution = Resolve-WindowedProcessByName $name 6000 }
+        return (New-LaunchResult $name $realPid $resolution $null)
     } catch {
         # FIX 4: an unresolvable name must report an honest failure, not
         # silently fall back to opening File Explorer / triggering a browser

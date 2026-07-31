@@ -42,6 +42,12 @@ var ORACLES = [
   'foreground-pid', // the OS reports the intended window as foreground
   'media-status',   // the player itself reports the requested track as playing
   'window-title',   // the target window's title reflects the change
+  // A live process whose PROCESS NAME matches the request and which owns a real
+  // top-level window. Independent of the launch call: it is an enumeration of
+  // what actually exists afterwards. Deliberately NOT satisfied by a window
+  // TITLE match — that is what targeted the operator's IDE for a launch of
+  // "notepad" on 2026-07-31 (ps-automation.ps1, Resolve-WindowedProcessByName).
+  'process-window',
 ];
 
 function isPlainObject(v) {
