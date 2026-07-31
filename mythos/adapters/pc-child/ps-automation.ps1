@@ -193,6 +193,17 @@ public static class NativeInput {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsIconic(IntPtr hWnd);
 
+    // WAVE 9 (BUG-071): WM_CHAR delivers TEXT to React editors but not editing keys.
+    // Measured 2026-08-01 against WhatsApp: WM_CHAR backspace (0x08) left the text
+    // untouched, because React listens for keydown, not char, for Backspace/Enter.
+    // WM_KEYDOWN/WM_KEYUP carry those.
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_KEYUP = 0x0101;
+    public const int VK_BACK = 0x08;
+    public const int VK_DELETE = 0x2E;
+    public const int VK_A = 0x41;
+    public const int VK_CONTROL = 0x11;
+
     [DllImport("user32.dll")]
     public static extern short VkKeyScan(char ch);
 
@@ -1511,6 +1522,38 @@ function Find-EditableDescendants($Root) {
     return $candidates
 }
 
+# WAVE 9 (BUG-070) — "is this the same application?" by process ancestry.
+#
+# A WebView2 app spans two processes: the shell owns the window the caller knows
+# about, the renderer child owns the text boxes AND takes the foreground once
+# anything inside it is focused. So a guard written as `foregroundPid -ne callerPid`
+# rejects the app's own renderer. That already bit the Enter guard (BUG-066) and then
+# bit clear_focused_box and focus_message_box the same way.
+#
+# Ancestry in EITHER direction counts: the caller may hold the shell pid while the
+# renderer is foreground, or the reverse.
+function Test-SameApp($PidA, $PidB) {
+    if (-not $PidA -or -not $PidB) { return $false }
+    $a = [int]$PidA; $b = [int]$PidB
+    if ($a -eq $b) { return $true }
+    $parentOf = @{}
+    try {
+        foreach ($proc in (Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
+            $parentOf[[int]$proc.ProcessId] = [int]$proc.ParentProcessId
+        }
+    } catch { return $false }
+    foreach ($pair in @(@($a, $b), @($b, $a))) {
+        $cur = $pair[0]
+        for ($h = 0; $h -lt 8; $h++) {
+            if (-not $parentOf.ContainsKey($cur)) { break }
+            $cur = $parentOf[$cur]
+            if ($cur -eq 0) { break }
+            if ($cur -eq $pair[1]) { return $true }
+        }
+    }
+    return $false
+}
+
 # WAVE 9 (BUG-065) — find the surface that actually holds the text boxes.
 #
 # A window's own UIA tree is not always where its UI lives. WhatsApp Desktop's
@@ -1676,8 +1719,13 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             $fgHwnd = [NativeInput]::GetForegroundWindow()
             $fgPid = 0
             [void][NativeInput]::GetWindowThreadProcessId($fgHwnd, [ref]$fgPid)
-            if ($fgPid -ne [uint32]$TargetPid) {
-                return ('Type aborted: foreground window belongs to PID ' + $fgPid + ', not target PID ' + $TargetPid + '.')
+            # Same-APP, not same-pid (BUG-070). A WebView2 app's renderer child owns
+            # the foreground window once one of its text boxes has focus, so strict
+            # equality aborted a legitimate type into WhatsApp. Typing into a
+            # DIFFERENT application is still refused, which is the property that matters.
+            if (-not (Test-SameApp $fgPid $TargetPid)) {
+                return ('Type aborted: foreground window belongs to PID ' + $fgPid +
+                    ', which is not part of target PID ' + $TargetPid + "'s application.")
             }
         }
 
@@ -1900,7 +1948,18 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
 # FocusedElement and confirms the thing now holding the caret is editable. No
 # editable element, or focus that will not take, is an honest stop: "I can see the
 # app, I cannot find its message box" beats typing into the wrong field.
-function Handle-FocusMessageBox($TargetPid) {
+# WAVE 9 (BUG-068): $Role selects WHICH box. Measured 2026-08-01 — typing into a
+# chat app's search field cannot go through ui_type alone, because ui_type places the
+# caret in the LARGEST text entry when nothing readable holds it, and a composer
+# (612x34 in WhatsApp) always beats a search field (367x31). A search term therefore
+# landed in the operator's message composer. The box has to be chosen deliberately.
+#
+#   'compose' (default) — lowest on screen, unchanged behaviour for app_reply.
+#   'search'            — an editable element whose Name says search, else the
+#                         HIGHEST on screen. Both chat clients tested put search at
+#                         the top; the name match is preferred because position is a
+#                         weaker signal than the app's own label.
+function Handle-FocusMessageBox($TargetPid, $Role) {
     if (-not $TargetPid) { return 'PID is required.' }
     try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -1909,14 +1968,47 @@ function Handle-FocusMessageBox($TargetPid) {
         $win = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
         if (-not $win) { return ('No window found for PID ' + $TargetPid + '.') }
 
+        # A WebView2 app (WhatsApp, Teams) keeps its text boxes in a child process's
+        # own desktop window, so searching this window's tree alone finds nothing.
         $candidates = Find-EditableDescendants $win
+        if ($candidates.Count -eq 0) {
+            # Try the pid's own main window first, then whatever is actually in front
+            # — once a WebView2 app's box has been focused its RENDERER owns the
+            # foreground window, and that is the tree holding the text boxes.
+            $proc = $null
+            try { $proc = Get-Process -Id $TargetPid -ErrorAction Stop } catch { }
+            if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
+                $surface = Resolve-EditableSurface $proc.MainWindowHandle
+                if ($surface) { $candidates = $surface.candidates }
+            }
+            if ($candidates.Count -eq 0) {
+                $fgH = [NativeInput]::GetForegroundWindow()
+                $fgP = 0
+                [void][NativeInput]::GetWindowThreadProcessId($fgH, [ref]$fgP)
+                if (Test-SameApp $fgP $TargetPid) {
+                    $surface2 = Resolve-EditableSurface $fgH
+                    if ($surface2) { $candidates = $surface2.candidates }
+                }
+            }
+        }
 
         if ($candidates.Count -eq 0) {
             return ('Found the window for PID ' + $TargetPid + ' but no editable, keyboard-focusable element in it — cannot locate a message box.')
         }
 
-        # Lowest on screen: the compose box, not the search field.
-        $pick = $candidates | Sort-Object -Property bottom -Descending | Select-Object -First 1
+        $wantSearch = ([string]$Role -eq 'search')
+        if ($wantSearch) {
+            $named = @($candidates | Where-Object { [string]$_.name -match 'search' })
+            if ($named.Count -gt 0) {
+                $pick = $named | Sort-Object -Property bottom | Select-Object -First 1
+            } else {
+                # Highest on screen — search sits above the conversation.
+                $pick = $candidates | Sort-Object -Property bottom | Select-Object -First 1
+            }
+        } else {
+            # Lowest on screen: the compose box, not the search field.
+            $pick = $candidates | Sort-Object -Property bottom -Descending | Select-Object -First 1
+        }
 
         $method = $null
         try { $pick.element.SetFocus(); $method = 'uia-setfocus'; Start-Sleep -Milliseconds 120 } catch { }
@@ -1976,8 +2068,9 @@ function Handle-ReadComposeBox($TargetPid) {
         if ($TargetPid) {
             $fgP = 0
             [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
-            if ($fgP -ne [uint32]$TargetPid) {
-                return ('The foreground window belongs to PID ' + $fgP + ', not ' + $TargetPid + '.')
+            # Same-APP, not same-pid — see Test-SameApp (BUG-070).
+            if (-not (Test-SameApp $fgP $TargetPid)) {
+                return ('The foreground window belongs to PID ' + $fgP + ', which is not part of PID ' + $TargetPid + "'s application.")
             }
         }
         # The text boxes are not always in the foreground window’s own tree: a
@@ -2036,6 +2129,97 @@ function Handle-ReadComposeBox($TargetPid) {
     }
 }
 
+# WAVE 9 (BUG-069) — empty a text box, provably.
+#
+# Needed because ctrl+a and Delete both ride SendInput, which MSIX/WebView2 apps
+# silently discard (BUG-061), and UIA SetValue('') is ignored by React-controlled
+# inputs like WhatsApp's composer. WM_CHAR is the one mechanism measured to reach
+# them, so this deletes character by character with WM_CHAR backspace and then reads
+# the box to confirm it is actually empty.
+#
+# Used to clear a stale draft before typing, and to put a box back as it was found
+# after a probe. Returns honestly if the box will not empty rather than assuming it did.
+function Handle-ClearFocusedBox($TargetPid, $Count) {
+    try {
+        $hwnd = [NativeInput]::GetForegroundWindow()
+        if ($TargetPid) {
+            $fgP = 0
+            [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
+            # Same-APP, not same-pid: focusing a WebView2 app's text box makes its
+            # renderer child the foreground window (BUG-070).
+            if (-not (Test-SameApp $fgP $TargetPid)) {
+                return ('The foreground window belongs to PID ' + $fgP + ', which is not part of PID ' + $TargetPid + "'s application.")
+            }
+        }
+
+        $before = Read-FocusedElementText
+        if ($null -eq $before) { return 'Nothing readable holds the caret, so there is no box to clear.' }
+
+        $beforeText = [string]$before.text
+        if (-not $beforeText.Trim()) {
+            return @{ cleared = $true; wasEmpty = $true; removed = 0 }
+        }
+
+        # A generous bound: the caret may sit mid-text, so delete forwards as well.
+        # Explicit count wins when the caller knows the length.
+        $n = 0
+        if ($Count) { $n = [int]$Count } else { $n = $beforeText.Length + 4 }
+        if ($n -gt 4000) { $n = 4000 }
+
+        $fgP2 = 0
+        $fgThread = [NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP2)
+        $ourThread = [NativeInput]::GetCurrentThreadId()
+        $attached = [NativeInput]::AttachThreadInput($ourThread, $fgThread, $true)
+        $target = [IntPtr]::Zero
+        try { if ($attached) { $target = [NativeInput]::GetFocus() } }
+        finally { if ($attached) { [void][NativeInput]::AttachThreadInput($ourThread, $fgThread, $false) } }
+        if ($target -eq [IntPtr]::Zero) { $target = $hwnd }
+
+        # WM_KEYDOWN/WM_KEYUP first: React editors handle Backspace and Delete as KEY
+        # events, and WM_CHAR 0x08 is silently ignored by them (measured against
+        # WhatsApp — the text was completely untouched). WM_CHAR is kept as a fallback
+        # for plain Win32 edit controls, which do honour it.
+        $via = $null
+        for ($i = 0; $i -lt $n; $i++) {
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_KEYDOWN, [IntPtr][NativeInput]::VK_BACK, [IntPtr]0)
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_KEYUP, [IntPtr][NativeInput]::VK_BACK, [IntPtr]0)
+            Start-Sleep -Milliseconds 2
+        }
+        for ($i = 0; $i -lt 8; $i++) {
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_KEYDOWN, [IntPtr][NativeInput]::VK_DELETE, [IntPtr]0)
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_KEYUP, [IntPtr][NativeInput]::VK_DELETE, [IntPtr]0)
+            Start-Sleep -Milliseconds 2
+        }
+        Start-Sleep -Milliseconds 300
+        $after = Read-FocusedElementText
+        if ($null -ne $after -and -not ([string]$after.text).Trim()) { $via = 'wm-keydown-backspace' }
+
+        if (-not $via) {
+            for ($i = 0; $i -lt $n; $i++) {
+                [void][NativeInput]::PostMessage($target, [NativeInput]::WM_CHAR, [IntPtr]8, [IntPtr]0)
+                Start-Sleep -Milliseconds 2
+            }
+            Start-Sleep -Milliseconds 250
+            $after = Read-FocusedElementText
+            if ($null -ne $after -and -not ([string]$after.text).Trim()) { $via = 'wm-char-backspace' }
+        }
+
+        $afterText = if ($null -eq $after) { $null } else { [string]$after.text }
+        if ($null -eq $afterText) {
+            return 'The box cannot be read after clearing, so it cannot be confirmed empty.'
+        }
+        if (-not $via) {
+            $left = $afterText
+            if ($left.Length -gt 120) { $left = $left.Substring(0, 120) }
+            return ('Tried ' + $n + ' backspaces as key events and as characters, and the box still contains "' +
+                $left.Trim() + '", so it was NOT cleared.')
+        }
+        return @{ cleared = $true; wasEmpty = $false; removed = $beforeText.Length; via = $via }
+    } catch {
+        return ('Could not clear the box: ' + $_.Exception.Message)
+    }
+}
+
 # WAVE 9 (BUG-067) — a send that can be PROVEN, because Enter cannot.
 #
 # 2026-08-01: whatsapp_send reported sent:true and the message was still sitting in
@@ -2063,8 +2247,11 @@ function Handle-SubmitMessage($TargetPid) {
         if ($TargetPid) {
             $fgP = 0
             [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
-            if ($fgP -ne [uint32]$TargetPid) {
-                return ('Refusing to submit: the foreground window belongs to PID ' + $fgP + ', not ' + $TargetPid + '.')
+            # Same-APP, not same-pid (BUG-070). Submitting in a DIFFERENT application
+            # is still refused — that is the property protecting the operator here.
+            if (-not (Test-SameApp $fgP $TargetPid)) {
+                return ('Refusing to submit: the foreground window belongs to PID ' + $fgP +
+                    ', which is not part of PID ' + $TargetPid + "'s application.")
             }
         }
 
@@ -2925,7 +3112,7 @@ while ($true) {
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'focus_message_box' {
-            $result = Handle-FocusMessageBox $cmd.pid
+            $result = Handle-FocusMessageBox $cmd.pid $cmd.role
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'new_document' {
@@ -2938,6 +3125,10 @@ while ($true) {
         }
         'submit_message' {
             $result = Handle-SubmitMessage $cmd.pid
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'clear_focused_box' {
+            $result = Handle-ClearFocusedBox $cmd.pid $cmd.count
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'click_at' {
