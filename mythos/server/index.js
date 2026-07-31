@@ -15,7 +15,7 @@ const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const edgeTts = require('../providers/edge-tts');
 const groqStt = require('../providers/groq-stt');
-const { splitSentences, createSentenceStreamer } = require('../src/core/effectors/voice');
+const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
@@ -930,7 +930,12 @@ function createServer(deps) {
         }),
       ]);
       if (result && !result.offline && result.content) {
-        text = String(result.content).trim().replace(/^["']+|["']+$/g, '').slice(0, 400);
+        // Cap at a sentence (or at worst a word) boundary, never mid-word.
+        // truncateAtSentenceBoundary() exists for exactly this and was dead code
+        // — defined, exported, and called by nothing — while both spoken paths
+        // hard-sliced. A greeting chopped to "...and your calendar is cle" is a
+        // cut the operator hears.
+        text = truncateAtSentenceBoundary(String(result.content).trim().replace(/^["']+|["']+$/g, ''), 400);
       }
     } catch (err) {
       logger.warn('boot-greeting.brain-failed', { error: err.message });
@@ -1451,7 +1456,8 @@ function createServer(deps) {
           send({ type: 'done', reqId: msg.reqId, say: 'All my vision providers are offline right now.', offline: true });
           return;
         }
-        const say = String(result.content).trim().slice(0, 400);
+        // Sentence-boundary cap, not a mid-word chop — see the boot greeting above.
+        const say = truncateAtSentenceBoundary(String(result.content).trim(), 400);
         historyAppend('user', '[showed camera] ' + text);
         historyAppend('assistant', say);          // vision answers join conversation memory
 

@@ -2,6 +2,7 @@
 
 // F3: Import tierOf to compute danger flags dynamically from the tier table.
 const { tierOf } = require('../leash/tiers');
+const { truncateAtSentenceBoundary } = require('../effectors/voice');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -352,7 +353,11 @@ function stripThink(raw) {
 
 function normalizeParsed(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
-  const say = typeof parsed.say === 'string' ? parsed.say.slice(0, MAX_SAY_CHARS) : '';
+  // Sentence-boundary cap. A hard .slice() here chops mid-word and the operator
+  // HEARS it — effectors/voice.js has carried truncateAtSentenceBoundary() for
+  // exactly this since it was written, and nothing ever called it. Safe to
+  // import: effectors/voice.js has no requires of its own, so there is no cycle.
+  const say = typeof parsed.say === 'string' ? truncateAtSentenceBoundary(parsed.say, MAX_SAY_CHARS) : '';
   const actions = Array.isArray(parsed.actions)
     ? parsed.actions.filter((a) => a && typeof a.tool === 'string').map((a) => ({ tool: a.tool, args: a.args || {} }))
     : [];
@@ -411,7 +416,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     if (reparsed) return reparsed;
 
     const fallbackText = stripThink(second.content) || stripThink(first.content) || "I couldn't process that.";
-    return { say: fallbackText.slice(0, maxSayChars), actions: [], needs_result: false };
+    return { say: truncateAtSentenceBoundary(fallbackText, maxSayChars), actions: [], needs_result: false };
   }
 
   // ---- execution: leash gate first, then the server's dispatch path ----
