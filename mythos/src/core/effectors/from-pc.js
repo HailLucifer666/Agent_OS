@@ -205,6 +205,38 @@ async function list_windows() {
 // Exported for from-computer.js's open_folder, which needs a window oracle and
 // has no pc-child delegate of its own. Kept here because this file owns the
 // list_windows seam.
+// WAVE 9 (BUG-064) — read the foreground app's message box and, crucially, WHO it
+// says it is addressed to. Not a model-facing tool: it exists so a send path can
+// prove the right conversation is open before typing a word. WhatsApp names its
+// composer "Type a message to <recipient>", which is the app itself telling us the
+// target; the conversation header is returned as a second, independent opinion.
+async function readComposeBox(pid) {
+  const targetPid = coercePid(pid);
+  const cmd = { cmd: 'read_compose_box' };
+  if (targetPid) cmd.pid = targetPid;
+  return delegate(cmd);
+}
+
+// WAVE 9 (BUG-067) — submit the composed message and PROVE it left the box.
+// Not a model-facing tool: send paths call it instead of send_key('enter'), which
+// cannot be verified and, for MSIX apps like WhatsApp, does not work at all.
+async function submitMessage(pid) {
+  const targetPid = coercePid(pid);
+  const cmd = { cmd: 'submit_message' };
+  if (targetPid) cmd.pid = targetPid;
+  const res = await delegate(cmd);
+  if (!res.ok) return res;
+  const r = (res.result && typeof res.result === 'object') ? res.result : {};
+  // The oracle is the composer emptying, which the PS side already confirmed
+  // before returning submitted:true — so this is a genuine verified send, the
+  // first in this codebase. Delivery by WhatsApp's servers is still not claimed.
+  return evidence.verifiedOk(res, {
+    oracle: 'read-back',
+    expected: String(r.clearedText || 'the composed message'),
+    observed: 'the message box is now empty (was: "' + String(r.clearedText || '') + '")',
+  });
+}
+
 async function findExplorerWindow(leafName) {
   const leaf = String(leafName || '').trim().toLowerCase();
   if (!leaf) return null;
@@ -482,7 +514,7 @@ async function ui_type({ text, pid, elementPath }) {
 
   if (rr.readBack === 'confirmed') {
     // Records the only state in which a later Enter is safe in a messaging app.
-    noteVerifiedType(rr.typedIntoPid, typedText, rr.typedIntoTitle);
+    noteVerifiedType(rr.typedIntoPid, typedText, rr.typedIntoTitle, rr.focusedPid);
     return evidence.verifiedOk(res, {
       oracle: 'read-back',
       expected: typedText,
@@ -521,8 +553,20 @@ var MESSAGING_APPS = /(slack|teams|whatsapp|discord|telegram|signal|messenger|ou
 // Enter is most dangerous, because nobody knows what is in the box.
 var lastVerifiedType = null;
 
-function noteVerifiedType(landedPid, text, title) {
-  lastVerifiedType = { pid: landedPid, text: String(text), title: String(title || ''), at: Date.now() };
+// WAVE 9 (BUG-066): record BOTH the foreground window's pid and the pid that
+// actually owns the caret. For a WebView2 app (WhatsApp, Teams) those differ — the
+// shell is foreground while its renderer child holds the text box — and Enter goes
+// to the caret. Storing one pid made the guard below refuse a legitimate WhatsApp
+// send, so it stores the set of pids that all mean "this same app".
+function noteVerifiedType(landedPid, text, title, focusedPid) {
+  var pids = [landedPid, focusedPid].filter(function (p) { return typeof p === 'number' && p > 0; });
+  lastVerifiedType = {
+    pid: landedPid,
+    pids: pids,
+    text: String(text),
+    title: String(title || ''),
+    at: Date.now(),
+  };
 }
 
 async function show_desktop() {
@@ -617,9 +661,15 @@ async function guardMessagingEnter() {
       'has been verifiably typed into it this session. Type the message first and I will read it back ' +
       'to you before sending.');
   }
-  if (typeof fgPid === 'number' && typeof lastVerifiedType.pid === 'number' && fgPid !== lastVerifiedType.pid) {
+  // The verified type may have been recorded against the app's shell pid, its
+  // renderer's pid, or both (see noteVerifiedType). Enter is safe if the window
+  // about to receive it is any of them; a genuinely different app still refuses.
+  var known = Array.isArray(lastVerifiedType.pids) && lastVerifiedType.pids.length
+    ? lastVerifiedType.pids
+    : [lastVerifiedType.pid];
+  if (typeof fgPid === 'number' && known.indexOf(fgPid) === -1) {
     return fail('Refusing to press Enter in ' + app + ' (pid ' + fgPid + '): the last text I could actually ' +
-      'verify went to a different window ("' + lastVerifiedType.title + '", pid ' + lastVerifiedType.pid +
+      'verify went to a different window ("' + lastVerifiedType.title + '", pid ' + known.join('/') +
       '). Sending from here would send whatever is already in that box.');
   }
   return null;
@@ -766,7 +816,7 @@ module.exports = {
   KNOWN_DESKTOP_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
-  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow,
+  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,
 };

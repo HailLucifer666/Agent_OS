@@ -1511,6 +1511,77 @@ function Find-EditableDescendants($Root) {
     return $candidates
 }
 
+# WAVE 9 (BUG-065) — find the surface that actually holds the text boxes.
+#
+# A window's own UIA tree is not always where its UI lives. WhatsApp Desktop's
+# foreground window is a WinUI shell (~8 elements) while the whole interface is a
+# msedgewebview2 CHILD PROCESS registered as a SEPARATE desktop child, so walking
+# down from the foreground hwnd finds nothing editable at all. Teams and other
+# WebView2 apps share this shape.
+#
+# The link is PROCESS PARENTAGE. Geometry was tried first and was wrong: "the
+# window whose centre lies inside the foreground window" matched a Notepad that
+# merely overlapped WhatsApp and offered ITS document as the message box — BUG-052
+# (right-looking target, wrong app) with a human on the other end. Titles are no
+# better; they break on localisation and on the unread prefix ("(194) WhatsApp").
+#
+# Returns @{ root; candidates; embeddedPid } or $null. embeddedPid is non-null only
+# when the surface was found in a descendant process rather than the window itself.
+function Resolve-EditableSurface($Hwnd) {
+    if ($Hwnd -eq [IntPtr]::Zero) { return $null }
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($Hwnd)
+    if (-not $root) { return $null }
+
+    $candidates = Find-EditableDescendants $root
+    if ($candidates.Count -eq 0) {
+        # Chromium builds its accessibility tree lazily, on first query.
+        Start-Sleep -Milliseconds 300
+        $candidates = Find-EditableDescendants $root
+    }
+    if ($candidates.Count -gt 0) {
+        return @{ root = $root; candidates = $candidates; embeddedPid = $null }
+    }
+
+    $fgPid = 0
+    [void][NativeInput]::GetWindowThreadProcessId($Hwnd, [ref]$fgPid)
+
+    $parentOf = @{}
+    try {
+        foreach ($proc in (Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
+            $parentOf[[int]$proc.ProcessId] = [int]$proc.ParentProcessId
+        }
+    } catch { }
+    $isDescendant = {
+        param($CandidatePid)
+        if ($CandidatePid -eq $fgPid) { return $true }
+        $cur = $CandidatePid
+        for ($hops = 0; $hops -lt 8; $hops++) {
+            if (-not $parentOf.ContainsKey($cur)) { return $false }
+            $cur = $parentOf[$cur]
+            if ($cur -eq 0) { return $false }
+            if ($cur -eq $fgPid) { return $true }
+        }
+        return $false
+    }
+
+    $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+    $siblings = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children,
+        [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($s in $siblings) {
+        try {
+            if ($s.Current.IsOffscreen) { continue }
+            $spid = [int]$s.Current.ProcessId
+            if ($spid -eq $fgPid) { continue }              # already searched above
+            if (-not (& $isDescendant $spid)) { continue }
+            $found = Find-EditableDescendants $s
+            if ($found.Count -gt 0) {
+                return @{ root = $s; candidates = $found; embeddedPid = $spid }
+            }
+        } catch { }
+    }
+    return $null
+}
+
 # WAVE 9 (BUG-059) — put the caret in a real edit control before injecting.
 #
 # 2026-07-31 20:03: focus_window reported focused:true, ui_type's foreground
@@ -1529,15 +1600,15 @@ function Find-EditableDescendants($Root) {
 function Focus-EditableDescendant($Hwnd) {
     try {
         if ($Hwnd -eq [IntPtr]::Zero) { return @{ focused = $false; reason = 'no foreground window' } }
-        # FromHandle, not FindFirst-by-pid: an app with several windows must have
-        # the caret placed in the one that is actually in front.
-        $root = [System.Windows.Automation.AutomationElement]::FromHandle($Hwnd)
-        if (-not $root) { return @{ focused = $false; reason = 'the foreground window exposes no UI Automation element' } }
-
-        $candidates = Find-EditableDescendants $root
-        if ($candidates.Count -eq 0) {
-            return @{ focused = $false; reason = 'the foreground window contains no editable, keyboard-focusable element' }
+        # Resolve-EditableSurface, not FromHandle alone: a WebView2 app (WhatsApp,
+        # Teams) keeps its text boxes in a child process's separate desktop window,
+        # so searching only the foreground window's own tree finds nothing and the
+        # caret is never placed — measured against WhatsApp on 2026-07-31.
+        $surface = Resolve-EditableSurface $Hwnd
+        if (-not $surface) {
+            return @{ focused = $false; reason = 'neither the foreground window nor any surface it embeds contains an editable, keyboard-focusable element' }
         }
+        $candidates = $surface.candidates
 
         # A text editor's document is the biggest editable surface in its window;
         # Edit/Document control types outrank anything else that merely exposes a
@@ -1751,6 +1822,19 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             }
         }
 
+        # WAVE 9 (BUG-066) — which process actually owns the caret.
+        #
+        # typedIntoPid is the FOREGROUND window's pid, and for a WebView2 app that is
+        # the shell (WhatsApp.Root), while the caret sits in its renderer child
+        # (msedgewebview2). Enter goes to the caret, not to the shell, so a guard
+        # comparing Enter's target against typedIntoPid refuses a legitimate send —
+        # measured against WhatsApp on 2026-07-31. Report the caret's real owner so
+        # the Enter guard can tell "a child of the same app" from "a different app".
+        try {
+            $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+            if ($fe) { $result.focusedPid = [int]$fe.Current.ProcessId }
+        } catch { }
+
         # Read back. A brief settle first: SendInput is asynchronous, so the control
         # has usually not processed the last character when SendInput returns.
         Start-Sleep -Milliseconds 120
@@ -1866,6 +1950,214 @@ function Handle-FocusMessageBox($TargetPid) {
         }
     } catch {
         return ('Could not find a message box: ' + $_.Exception.Message)
+    }
+}
+
+# WAVE 9 (BUG-064) — WHO is this message addressed to?
+#
+# whatsapp_send verified the WINDOW it typed into and never the RECIPIENT. The
+# window title is "(194) WhatsApp" whether the open conversation is your mother or
+# your employer, so if the deep link failed to switch conversations the message
+# would be typed into whichever chat happened to be open and Enter pressed on it.
+# That is BUG-052's mistake (right pid, wrong target) pointed at a human instead of
+# a text editor, and it is not a recoverable error.
+#
+# Measured against WhatsApp Desktop 2026-07-31: its compose box is
+# ControlType.Edit with Name "Type a message to <recipient>" and a WRITABLE
+# ValuePattern. The Name is the oracle — the app itself telling us who it will send
+# to. A second, independent one exists as the conversation-header Button
+# ("<recipient> ... Message yourself"), returned as headerName.
+#
+# The compose box is the LOWEST writable Edit in the window (y~898 versus the
+# search box's y~254), which is Wave 7's message-box heuristic reused.
+function Handle-ReadComposeBox($TargetPid) {
+    try {
+        $hwnd = [NativeInput]::GetForegroundWindow()
+        if ($TargetPid) {
+            $fgP = 0
+            [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
+            if ($fgP -ne [uint32]$TargetPid) {
+                return ('The foreground window belongs to PID ' + $fgP + ', not ' + $TargetPid + '.')
+            }
+        }
+        # The text boxes are not always in the foreground window’s own tree: a
+        # WebView2 app (WhatsApp, Teams) keeps them in a child process registered
+        # as a separate desktop window. Resolve-EditableSurface handles that, by
+        # process parentage rather than geometry — see its header for why geometry
+        # offered up an overlapping Notepad as the message box.
+        $surface = Resolve-EditableSurface $hwnd
+        if (-not $surface) {
+            return 'No editable element found in the foreground window (or any surface embedded in it), so its message box cannot be identified.'
+        }
+        $candidates = $surface.candidates
+        $root = $surface.root
+        $readFromPid = $surface.embeddedPid
+
+        $pick = $candidates | Sort-Object -Property bottom -Descending | Select-Object -First 1
+
+        # The conversation header: an independent second opinion on who is open.
+        $headerName = $null
+        try {
+            $btns = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button)))
+            $best = $null
+            foreach ($b in $btns) {
+                try {
+                    $rb = $b.Current.BoundingRectangle
+                    # Header row: above the message area, right of the chat list.
+                    if ($rb.Y -gt 260 -or $rb.Y -lt 60) { continue }
+                    if ($rb.Width -lt 200) { continue }
+                    if ($null -eq $best -or $rb.Width -gt $best.Current.BoundingRectangle.Width) { $best = $b }
+                } catch { }
+            }
+            if ($best) { $headerName = [string]$best.Current.Name }
+        } catch { }
+
+        return @{
+            name = [string]$pick.name
+            controlType = [string]$pick.controlType
+            currentText = [string](& {
+                try {
+                    $vp = $pick.element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
+                    if ($vp) { return [string]$vp.Current.Value }
+                } catch { }
+                return ''
+            })
+            headerName = $headerName
+            candidateCount = $candidates.Count
+            # Non-null when the compose box was found in a surface EMBEDDED in the
+            # foreground window rather than in the window's own tree.
+            readFromPid = $readFromPid
+        }
+    } catch {
+        return ('Could not read the message box: ' + $_.Exception.Message)
+    }
+}
+
+# WAVE 9 (BUG-067) — a send that can be PROVEN, because Enter cannot.
+#
+# 2026-08-01: whatsapp_send reported sent:true and the message was still sitting in
+# the composer. Enter rides SendInput, which this MSIX app silently discards
+# (BUG-061), so `send_key enter` was "accepted" and nothing was submitted — the
+# exact shape of lie this whole plan exists to remove, one layer further out.
+#
+# from-pc.js's keyPressed() already predicted both the problem and the fix in a
+# comment: "read the compose box back and treat 'it is now empty' as evidence the
+# message went. That is a real oracle." That is what this does.
+#
+# Mechanisms, in order of provability, each verified by the same oracle:
+#   1. Invoke the app's own Send button through UIA (measured present in WhatsApp as
+#      Button name='Send', invokable) — no input stack involved at all.
+#   2. WM_CHAR carriage return to the focused control (WM_CHAR is the mechanism that
+#      succeeded for TYPING into this app, so it is the best keystroke bet).
+#   3. SendInput Enter — the old path, kept last because it is the one measured to
+#      fail here.
+#
+# The oracle is the composer emptying. A composer that was empty to begin with is
+# reported as "nothing to send" rather than as a success.
+function Handle-SubmitMessage($TargetPid) {
+    try {
+        $hwnd = [NativeInput]::GetForegroundWindow()
+        if ($TargetPid) {
+            $fgP = 0
+            [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
+            if ($fgP -ne [uint32]$TargetPid) {
+                return ('Refusing to submit: the foreground window belongs to PID ' + $fgP + ', not ' + $TargetPid + '.')
+            }
+        }
+
+        $surface = Resolve-EditableSurface $hwnd
+        if (-not $surface) { return 'No message box found in the foreground window, so there is nothing to submit.' }
+
+        $box = $surface.candidates | Sort-Object -Property bottom -Descending | Select-Object -First 1
+        $readBox = {
+            try {
+                $vp = $box.element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern) -as [System.Windows.Automation.ValuePattern]
+                if ($vp) { return [string]$vp.Current.Value }
+            } catch { }
+            try {
+                $tp = $box.element.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern) -as [System.Windows.Automation.TextPattern]
+                if ($tp) { return [string]$tp.DocumentRange.GetText(-1) }
+            } catch { }
+            return $null
+        }
+
+        $before = & $readBox
+        if ($null -eq $before) {
+            return 'The message box cannot be read, so a send could not be verified either way. Nothing was submitted.'
+        }
+        if (-not ([string]$before).Trim()) {
+            return 'The message box is empty — there is nothing to send.'
+        }
+
+        $tried = @()
+        $mechanism = $null
+
+        # 1. The app's own Send button.
+        $tried += 'uia-invoke-send'
+        try {
+            $btns = $surface.root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button)))
+            foreach ($b in $btns) {
+                try {
+                    if ([string]$b.Current.Name -notmatch '^\s*send\s*$') { continue }
+                    $ip = $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern]
+                    if ($ip) { $ip.Invoke(); Start-Sleep -Milliseconds 600; break }
+                } catch { }
+            }
+        } catch { }
+        $after = & $readBox
+        if ($null -ne $after -and -not ([string]$after).Trim()) { $mechanism = 'uia-invoke-send' }
+
+        # 2. WM_CHAR carriage return — the mechanism that works for typing here.
+        if (-not $mechanism) {
+            $tried += 'wm-char-return'
+            try {
+                $fgP2 = 0
+                $fgThread = [NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP2)
+                $ourThread = [NativeInput]::GetCurrentThreadId()
+                $attached = [NativeInput]::AttachThreadInput($ourThread, $fgThread, $true)
+                $target = [IntPtr]::Zero
+                try { if ($attached) { $target = [NativeInput]::GetFocus() } }
+                finally { if ($attached) { [void][NativeInput]::AttachThreadInput($ourThread, $fgThread, $false) } }
+                if ($target -eq [IntPtr]::Zero) { $target = $hwnd }
+                [void][NativeInput]::PostMessage($target, [NativeInput]::WM_CHAR, [IntPtr]13, [IntPtr]0)
+                Start-Sleep -Milliseconds 600
+            } catch { }
+            $after = & $readBox
+            if ($null -ne $after -and -not ([string]$after).Trim()) { $mechanism = 'wm-char-return' }
+        }
+
+        # 3. SendInput Enter, last because it is measured to fail for this app class.
+        if (-not $mechanism) {
+            $tried += 'sendinput-enter'
+            try { Send-VkKey 0x0D; Start-Sleep -Milliseconds 600 } catch { }
+            $after = & $readBox
+            if ($null -ne $after -and -not ([string]$after).Trim()) { $mechanism = 'sendinput-enter' }
+        }
+
+        if (-not $mechanism) {
+            $stillThere = [string]$after
+            if ($stillThere.Length -gt 200) { $stillThere = $stillThere.Substring(0, 200) }
+            return ('Tried ' + ($tried -join ', ') + ' and the message is STILL in the box ("' +
+                $stillThere.Trim() + '"), so it was NOT sent.')
+        }
+
+        $sentText = [string]$before
+        if ($sentText.Length -gt 400) { $sentText = $sentText.Substring(0, 400) }
+        return @{
+            submitted = $true
+            mechanism = $mechanism
+            mechanismsTried = $tried
+            # The oracle, stated: this text was in the box and the box is now empty.
+            clearedText = $sentText.Trim()
+        }
+    } catch {
+        return ('Could not submit the message: ' + $_.Exception.Message)
     }
 }
 
@@ -2638,6 +2930,14 @@ while ($true) {
         }
         'new_document' {
             $result = Handle-NewDocument $cmd.pid
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'read_compose_box' {
+            $result = Handle-ReadComposeBox $cmd.pid
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'submit_message' {
+            $result = Handle-SubmitMessage $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'click_at' {

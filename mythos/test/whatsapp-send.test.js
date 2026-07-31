@@ -33,6 +33,24 @@ function load(pcOverrides) {
       return { ok: true, result: { typed: true, length: String(a.text).length, typedIntoPid: a.pid, typedIntoTitle: 'WhatsApp' } };
     },
     send_key: async (a) => { calls.push({ fn: 'send_key', ...a }); return { ok: true, result: { key: a.key, sent: true } }; },
+    // WAVE 9 (BUG-064): the composer names its recipient, and whatsapp_send now
+    // refuses to type until that names the person it was asked to message.
+    // Modelled on the real app: the deep link asked for a number, so the chat that
+    // opens is addressed to that number. Deriving it from the launch call rather
+    // than hardcoding it keeps every case (contact, raw number, alias) honest.
+    readComposeBox: async (pid) => {
+      calls.push({ fn: 'readComposeBox', pid });
+      const launch = calls.filter((c) => c.fn === 'launch_app' && /phone=/.test(String(c.name || ''))).pop();
+      const digits = launch ? String(launch.name).replace(/^.*phone=/, '') : '';
+      return { ok: true, result: { name: 'Type a message to +' + digits, currentText: '', headerName: null } };
+    },
+    // WAVE 9 (BUG-067): Enter is unverifiable and, for MSIX WhatsApp, silently
+    // discarded. Submitting invokes the app's Send button and requires the composer
+    // to empty before a send is claimed.
+    submitMessage: async (pid) => {
+      calls.push({ fn: 'submitMessage', pid });
+      return { ok: true, unverified: false, result: { submitted: true, mechanism: 'uia-invoke-send', clearedText: 'x' } };
+    },
   };
   Object.assign(fakePc, pcOverrides || {});
   require.cache[FROM_PC_PATH] = { id: FROM_PC_PATH, filename: FROM_PC_PATH, loaded: true, exports: fakePc };
@@ -66,11 +84,14 @@ describe('whatsapp_send', () => {
     assert.equal(launch.name, 'whatsapp://send?phone=15551234567',
       'the deep link is what makes WhatsApp resolve the contact instead of us guessing');
 
-    // Order matters: focus (verified) -> type (verified) -> Enter.
+    // Order matters, and WAVE 9 inserted two steps into it: the composer is read
+    // BEFORE typing (so the wrong conversation is caught before a character is
+    // typed), and submitting replaced Enter (which this app silently discards).
     const order = calls.map((c) => c.fn);
-    assert.deepEqual(order, ['launch_app', 'focus_window', 'ui_type', 'send_key']);
+    assert.deepEqual(order, ['launch_app', 'focus_window', 'readComposeBox', 'ui_type', 'submitMessage']);
     assert.equal(calls.find((c) => c.fn === 'ui_type').text, 'Hi, how are you doing?');
-    assert.equal(calls.find((c) => c.fn === 'send_key').key, 'enter');
+    assert.equal(calls.some((c) => c.fn === 'send_key'), false,
+      'Enter is not the submit path — it cannot be verified and does not work for MSIX WhatsApp');
   });
 
   it('does not claim delivery it cannot verify', async () => {
@@ -141,9 +162,15 @@ describe('whatsapp_send', () => {
     assert.equal(calls.filter((c) => c.fn === 'send_key').length, 0);
   });
 
-  it('reports the message as composed-but-unsent when Enter fails', async () => {
+  it('reports the message as composed-but-unsent when the submit cannot be proven', async () => {
+    // WAVE 9 (BUG-067): the failure that matters is no longer "the keystroke was
+    // rejected" but "the message is still in the box". On 2026-08-01 Enter was
+    // ACCEPTED and the message never left, and this function reported sent:true.
     const { wa } = load({
-      send_key: async () => ({ ok: false, result: 'SendInput injected 0 events' }),
+      submitMessage: async () => ({
+        ok: false,
+        result: 'Tried uia-invoke-send, wm-char-return, sendinput-enter and the message is STILL in the box ("hi"), so it was NOT sent.',
+      }),
     });
     withContacts(wa, { dad: '+15551234567' });
     const res = await wa.whatsapp_send({ to: 'dad', text: 'hi' });

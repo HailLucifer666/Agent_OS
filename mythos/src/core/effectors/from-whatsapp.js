@@ -48,6 +48,25 @@ function fail(reason) {
   return { ok: false, result: reason };
 }
 
+// WAVE 9. Effectors return their failure reason in .result, which is USUALLY a
+// string but is an object whenever the underlying call failed with a structured
+// result — and `String(obj)` renders that as "[object Object]". A real failure was
+// reported to the operator exactly that way on 2026-08-01, which is a reporting
+// defect of the same family as the rest of this plan: the information existed and
+// the message threw it away.
+function reasonText(res) {
+  const r = res && typeof res === 'object' ? res.result : res;
+  if (r == null) return 'no reason given';
+  if (typeof r === 'string') return r;
+  if (typeof r === 'object') {
+    if (typeof r.error === 'string' && r.error) return r.error;
+    if (typeof r.reason === 'string' && r.reason) return r.reason;
+    if (typeof (res && res.reason) === 'string' && res.reason) return res.reason;
+    try { return JSON.stringify(r); } catch (_) { return 'unreportable failure'; }
+  }
+  return String(r);
+}
+
 // vault/Contacts/contacts.json — { "dad": "+15551234567", "mom": "+15559876543" }
 // Lives in the vault (gitignored) because these are personal phone numbers: they
 // must never be committed, and the open-source portability rule forbids baking
@@ -161,7 +180,7 @@ async function whatsapp_send({ to, text, send }) {
   const uri = 'whatsapp://send?phone=' + recipient.number.replace(/^\+/, '');
   const launched = await fromPc.launch_app({ name: uri });
   if (!launched.ok) {
-    return fail('Could not open WhatsApp for ' + label + ': ' + String(launched.result) +
+    return fail('Could not open WhatsApp for ' + label + ': ' + reasonText(launched) +
       ' — is WhatsApp Desktop installed?');
   }
 
@@ -183,14 +202,57 @@ async function whatsapp_send({ to, text, send }) {
   const focused = await fromPc.focus_window({ pid });
   if (!focused.ok) {
     return fail('WhatsApp is open on the chat with ' + label + ', but I could not bring its window to the ' +
-      'foreground (' + String(focused.result) + '), so I did not type anything. The message is NOT sent.');
+      'foreground (' + reasonText(focused) + '), so I did not type anything. The message is NOT sent.');
   }
+
+  // 3.5. WAVE 9 (BUG-064) — WHO is the composer addressed to?
+  //
+  // Everything above verifies the WINDOW. WhatsApp's window title is
+  // "(194) WhatsApp" whether the open conversation is your mother or your employer,
+  // so a deep link that silently failed to switch conversations would leave the
+  // PREVIOUS chat open and every check so far would still pass. The message would
+  // then be typed there and Enter pressed. Sending to the wrong human is not a
+  // recoverable error, so this refuses before a single character is typed.
+  //
+  // The oracle is the app's own words: measured 2026-07-31, WhatsApp names its
+  // composer "Type a message to <recipient>", with the conversation header as an
+  // independent second opinion. Either naming the intended recipient is enough;
+  // neither is a refusal.
+  const composer = await fromPc.readComposeBox(pid);
+  const cbox = (composer && composer.ok && composer.result) || null;
+  if (!cbox) {
+    return fail('WhatsApp is open and focused for ' + label + ', but I could not read its message box (' +
+      String((composer && composer.result) || 'no message box found') + '), so I cannot prove the chat on ' +
+      'screen is the right one. Nothing was typed and nothing was sent.');
+  }
+
+  const wantDigits = recipient.number.replace(/\D/g, '');
+  const addressee = String(cbox.name || '') + '   ' + String(cbox.headerName || '');
+  const seenDigits = addressee.replace(/\D/g, '');
+  // A saved contact opens by NAME in the header ("Mom"), not by number, so accept
+  // either. Digits are compared with the country code stripped as well, because
+  // WhatsApp renders local numbers without it once a contact is known.
+  const matchedByNumber = Boolean(wantDigits) &&
+    (seenDigits.includes(wantDigits) || seenDigits.includes(wantDigits.slice(-10)));
+  const matchedByName = Boolean(recipient.name) &&
+    addressee.toLowerCase().includes(String(recipient.name).toLowerCase());
+
+  if (!matchedByNumber && !matchedByName) {
+    return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
+      ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
+      (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
+      '. Nothing was typed and nothing was sent — open the right chat, or check the saved number.');
+  }
+
+  // Anything already sitting in the composer is the operator's draft. Report it
+  // rather than silently appending this message to the end of it.
+  const existingDraft = String(cbox.currentText || '').trim();
 
   // 4. Type the message, verified against the target window.
   const typed = await fromPc.ui_type({ text: message, pid });
   if (!typed.ok) {
     return fail('The chat with ' + label + ' is open but I could not type the message: ' +
-      String(typed.result) + '. Nothing was sent.');
+      reasonText(typed) + '. Nothing was sent.');
   }
 
   const typedInto = (typed.result && typed.result.typedIntoTitle) || '';
@@ -198,16 +260,24 @@ async function whatsapp_send({ to, text, send }) {
     return ok({
       recipient: label, number: recipient.number, message,
       sent: false, composed: true, window: typedInto,
-      note: 'Typed the message into the chat with ' + label + ' and left it unsent, as asked.',
+      addressedTo: String(cbox.name || ''),
+      priorDraft: existingDraft || undefined,
+      note: 'Typed the message into the chat with ' + label + ' and left it unsent, as asked.' +
+        (existingDraft ? ' NOTE: the composer already contained "' + existingDraft + '" — this was added after it.' : ''),
     });
   }
 
-  // 5. Submit. Enter goes to the foreground window, which step 3 verified and
-  //    step 4 confirmed again by reporting the pid the text landed in.
-  const submitted = await fromPc.send_key({ key: 'enter' });
+  // 5. Submit, and PROVE it left the box.
+  //
+  // This was `send_key('enter')`, which on 2026-08-01 returned ok while the message
+  // sat in the composer untouched — WhatsApp is MSIX-packaged and silently discards
+  // SendInput (BUG-061), so Enter was accepted and did nothing, and this function
+  // reported sent:true. submitMessage invokes WhatsApp's own Send button through UIA
+  // and only succeeds when the composer has actually emptied.
+  const submitted = await fromPc.submitMessage(pid);
   if (!submitted.ok) {
-    return fail('The message to ' + label + ' is typed into the chat but pressing Enter failed (' +
-      String(submitted.result) + '), so it is NOT sent. It is sitting in the composer.');
+    return fail('The message to ' + label + ' is typed into the chat but I could not submit it (' +
+      reasonText(submitted) + '), so it is NOT sent. It is sitting in the composer.');
   }
 
   return ok({
@@ -216,9 +286,19 @@ async function whatsapp_send({ to, text, send }) {
     message,
     sent: true,
     window: typedInto,
-    // Precise about the evidence: the keystrokes are verified, delivery is not.
-    note: 'Typed the message into WhatsApp\'s chat with ' + label + ' (verified it went to that window) ' +
-      'and pressed Enter. I have not read the conversation back, so I cannot confirm WhatsApp delivered it.',
+    // WAVE 9: the recipient is now evidence rather than an assumption — this is
+    // WhatsApp's own label for the conversation the text went into.
+    addressedTo: String(cbox.name || ''),
+    priorDraft: existingDraft || undefined,
+    submittedVia: String((submitted.result && submitted.result.mechanism) || ''),
+    // Precise about the evidence at each step: the addressee was verified before
+    // typing, the text was read back out of the box, and the box then emptied. What
+    // is still NOT claimed is delivery — WhatsApp's servers are not an oracle we read.
+    note: 'Sent to ' + label + '. Verified before typing that the message box was addressed to "' +
+      String(cbox.name || '') + '", read the text back out of the box, then submitted it via ' +
+      String((submitted.result && submitted.result.mechanism) || 'the send control') +
+      ' and confirmed the box emptied. I have not read the conversation back, so I cannot confirm ' +
+      'WhatsApp delivered it to the recipient.',
   });
 }
 
