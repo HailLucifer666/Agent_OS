@@ -151,6 +151,12 @@ function onVoiceState(s) {
   compose.setVoiceState(s);
   orb.setVoiceState(s);
   hud.setVoiceState(s);
+  // 'speaking' means OUR OWN server-side TTS is coming out of the speakers
+  // (proactive speech, reminders, the boot greeting — the voice-loop chunk
+  // queue sets it; the S2S bridge never does). While that plays, stop feeding
+  // the Live microphone or Gemini transcribes MYTHOS as the operator and
+  // answers itself — see s2s-bridge.js's setCaptureSuspended.
+  if (s2s && typeof s2s.setCaptureSuspended === 'function') s2s.setCaptureSuspended(s === 'speaking');
 }
 
 function ensureVoice() {

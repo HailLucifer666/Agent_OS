@@ -59,6 +59,42 @@ export function createS2SBridge({ onState, onCaption } = {}) {
 
   function setState(s) { if (onState) onState(s); }
 
+  // Half-duplex gate for MYTHOS's OWN server-side TTS — the boot greeting,
+  // reminders, build announcements and idle thoughts. Those play through the
+  // speakers from a SEPARATE <audio> element (voice-loop.js's chunk queue)
+  // while this bridge is streaming the microphone, so Gemini hears them and
+  // answers itself.
+  //
+  // Not a theory: vault/Episodic/2026-07-31.jsonl has the boot greeting coming
+  // back as three USER transcripts ("All systems are online and the build is
+  // green") with the model replying to each, and the operator heard its own
+  // words repeated. getUserMedia's echoCancellation is already on (mic-device.js)
+  // and did not stop it on speakers.
+  //
+  // This is NOT the text-similarity echo guard the header rejects — that one
+  // fights the model's VAD over what the OPERATOR said. This drops mic frames
+  // only while we are knowingly making noise ourselves.
+  //
+  // Frames are dropped rather than the stream stopped: no permission churn, no
+  // worklet teardown, and the mic indicator stays honest about being open. The
+  // timeout matters — a 'speaking' state that never clears (a
+  // SpeechSynthesisUtterance whose onend never fires) would otherwise leave
+  // Live permanently deaf with no symptom except silence.
+  const MAX_SUSPEND_MS = 30000;
+  let captureSuspended = false;
+  let suspendTimer = null;
+  function setCaptureSuspended(flag) {
+    const next = Boolean(flag);
+    if (suspendTimer) { clearTimeout(suspendTimer); suspendTimer = null; }
+    captureSuspended = next;
+    if (next) {
+      suspendTimer = setTimeout(() => {
+        suspendTimer = null;
+        captureSuspended = false;   // fail open: a deaf assistant is the worse failure
+      }, MAX_SUSPEND_MS);
+    }
+  }
+
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let bin = '';
@@ -93,7 +129,7 @@ export function createS2SBridge({ onState, onCaption } = {}) {
         processorOptions: { targetRate: TARGET_RATE, frameMs: FRAME_MS },
       });
       captureNode.port.onmessage = (e) => {
-        if (!active) return;
+        if (!active || captureSuspended) return;   // see setCaptureSuspended
         sendMessage({ type: 'live-audio', data: arrayBufferToBase64(e.data) });
       };
       source.connect(captureNode);
@@ -134,7 +170,9 @@ export function createS2SBridge({ onState, onCaption } = {}) {
   return {
     start,
     stop,
+    setCaptureSuspended,
     isActive: () => active,
+    isCaptureSuspended: () => captureSuspended,
     isSpeaking: () => (player ? player.isSpeaking() : false),
   };
 }

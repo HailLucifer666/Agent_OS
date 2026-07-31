@@ -1482,6 +1482,110 @@ UI build prompts, alongside 3797 chars of skill essences.
 
 **Tests.** `test/skills-external-roots.test.js` (6 new cases).
 
+### BUG-055 — One chunk spoken twice: the "5-6 word repetition"
+
+**Reported by the operator 2026-07-31**, mid-session: "the voice glitches, I am
+hearing 5-6 words repetitions". Two separate defects were behind it; this is the
+first.
+
+**Root cause.** `voice-loop.js`'s `playNextChunk()` wired the same unguarded
+fallback to two handlers:
+
+```js
+audio.onerror = () => speakChunkFallback(chunk.text, session, onOneDone);
+audio.play().catch(() => speakChunkFallback(chunk.text, session, onOneDone));
+```
+
+An `<audio>` element whose data fails to decode does BOTH — fires `error` and
+rejects the pending `play()` promise. That is specified resource-selection
+behaviour, not an edge case. `speakChunkFallback()` **queues** a
+`SpeechSynthesisUtterance` rather than replacing the current one, so the chunk
+(one sentence, i.e. about 5-6 words) was spoken twice back to back.
+
+The same double fire also called `onOneDone` twice, advancing the chunk queue
+by two and **skipping the next chunk**. Landing on the second-to-last chunk
+silently dropped the end of the reply — which is the *"speech consistently cut
+off at the end, losing the last one or two words"* the entity logged as an
+incident earlier the same day. `test/tts-down-sentence-chunks.test.js` fixed a
+different cause of that symptom (zero chunks sent while TTS was down); both are
+real, and this is the one that survives with TTS up.
+
+**Fix.** `createChunkCompletion()` — exported and pure, the same testability seam
+as `decideBargeIn()`. A chunk now advances the queue at most once and falls back
+to `speechSynthesis` at most once, and a late error after successful playback is
+ignored instead of re-speaking what was already heard.
+
+**Tests.** `test/voice-chunk-double-speak.test.js` (6 cases, including a
+source-shape gate so an unguarded handler cannot be re-wired).
+
+### BUG-056 — MYTHOS talks to itself: own TTS fed back into the Live mic
+
+**The other half of the repetition report**, and the more consequential one.
+
+**Root cause.** In S2S (Gemini Live) mode the microphone streams continuously
+while MYTHOS's *server-side* TTS — the boot greeting, reminders, build
+announcements, idle thoughts — plays out of the speakers from a **separate**
+`<audio>` element (`voice-loop.js`'s chunk queue). Gemini hears it, transcribes
+it as the operator, and answers itself.
+
+**Evidence, not theory** — `vault/Episodic/2026-07-31.jsonl`, three consecutive
+user-role transcripts:
+
+```
+06:37:43  User: Sir. All systems are online and the build is green.
+06:37:50  User: Yes, go go ahead. Good afternoon. Sir, all systems are online and the build is green.
+06:38:04  User: Good afternoon, sir. All systems are online and the build is green.  | MYTHOS: Very good, sir. ...
+```
+
+That is the entity's own boot greeting arriving as operator speech, with a reply
+generated to each. `getUserMedia`'s `echoCancellation` was already on
+(`mic-device.js`) and did not stop it on speakers.
+
+`s2s-bridge.js`'s header explicitly declines an echo guard for S2S, and that
+reasoning is still correct — but it only covers a **text-similarity** guard on
+transcripts, which would fight the model's own VAD over what the operator said.
+It never covered "we are knowingly making noise ourselves right now".
+
+**Fix.** A half-duplex gate: `setCaptureSuspended()` drops mic frames (stream
+stays open — no permission churn, no worklet teardown, mic indicator stays
+honest) while the voice loop reports state `speaking`, which is set only by our
+own TTS playback and never by the bridge. It **fails open** after
+`MAX_SUSPEND_MS` (30s): a `speaking` state that never clears would otherwise
+leave Live permanently deaf with no symptom except silence.
+
+**Known trade-off, deliberate:** voice barge-in over a *proactive* announcement
+is not possible while the gate is closed. The hotkey and the HUD still stop it,
+and the alternative is the model interrupting itself, which is strictly worse.
+
+**Tests.** `test/voice-chunk-double-speak.test.js` (3 source-shape cases — the
+bridge's own header documents why it has no meaningful Node-side double).
+**Needs live confirmation by the operator**, ideally once on speakers and once
+on headphones.
+
+### Gemini TTS free tier is 10 requests/day — ⚠️ OPERATOR DECISION
+
+Not a code bug; found while verifying the above and worth recording because it
+looks exactly like a bug from the outside.
+
+`VOICE_TTS_CHAIN` is `gemini,edge,piper` and every **sentence** is a separate
+TTS request. A real synthesis run on this machine returned:
+
+```
+gemini-tts audio/wav bytes=115770 RIFF ok          <- first chunk fine
+WARN tts.provider-failed gemini-tts: 429 ... limit: 10,
+     model: gemini-2.5-flash-tts ... retry in 47.7s
+```
+
+So the Gemini voice is exhausted after roughly two replies per day, mid-reply,
+and the sticky chain then fails over to edge-tts — **the voice changes in the
+middle of a sentence and stays changed for the session**. The chain behaved
+correctly; the quota is the constraint.
+
+Options, operator's call: put `edge` first in `VOICE_TTS_CHAIN` (local,
+unmetered, consistent — costs the Gemini voice), or supply a paid Google key.
+Leaving it as-is means one nice-sounding reply per session followed by a
+different voice.
+
 ### Two-brain provider key — ⚠️ OPERATOR ACTION REQUIRED
 
 `mythos/.env` used the **same Mistral key** for `MISTRAL_API_KEY` (the Mythos

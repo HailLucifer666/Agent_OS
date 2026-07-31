@@ -106,6 +106,45 @@ export function decideBargeIn({ level, assistantSpeaking, bargeAboveCount, thres
   return { shouldBargeIn: false, newBargeAboveCount };
 }
 
+// One played chunk must produce exactly ONE queue advance and at most ONE
+// speechSynthesis fallback.
+//
+// REPORTED BY THE OPERATOR 2026-07-31: "the voice glitches, I am hearing 5-6
+// words repetitions". Cause, in playNextChunk() below: an <audio> element whose
+// data fails to decode fires BOTH the `error` event AND rejects the promise
+// returned by play() — that is specified behavior (resource-selection failure
+// sets the error and rejects any pending play), not an edge case. Both handlers
+// called speakChunkFallback() with no guard between them, and
+// speakChunkFallback() QUEUES a SpeechSynthesisUtterance rather than replacing
+// the current one, so the same sentence-sized chunk (~5-6 words) was spoken
+// twice back to back.
+//
+// The same unguarded pair also advanced the queue twice, which SKIPS the next
+// chunk. When it hit the second-to-last chunk the reply lost its final words —
+// the "speech cut off at the end" the operator reported earlier the same day
+// (test/tts-down-sentence-chunks.test.js fixed a different cause of that
+// symptom: zero chunks sent while TTS was down. Both are real; this is the one
+// that survives with TTS up).
+//
+// Pure and exported for the same reason decideBargeIn() is: the chunk queue
+// itself needs Audio/speechSynthesis, this decision does not.
+export function createChunkCompletion({ advance, fallback }) {
+  let advanced = false;
+  let fellBack = false;
+  function done() {
+    if (advanced) return;
+    advanced = true;
+    if (typeof advance === 'function') advance();
+  }
+  function fail() {
+    if (advanced || fellBack) return;   // already finished, or already re-speaking
+    fellBack = true;
+    if (typeof fallback === 'function') fallback(done);
+    else done();
+  }
+  return { done, fail };
+}
+
 // The entity speaks through three different engines and the operator hears all
 // of them in one session: server edge-tts (VOICE_TTS_VOICE), Gemini Live S2S
 // (GEMINI_LIVE_VOICE), and — when edge-tts is down — this browser fallback.
@@ -385,11 +424,17 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     processing = false;     // mic stays live during playback — barge-in
     setState('speaking');
     const isLast = chunk.index === chunk.total - 1;
-    const onOneDone = () => {
-      if (speakSession !== session) return;
-      if (isLast) lastChunkPlayed = true;
-      playNextChunk(session);
-    };
+    // Idempotent completion — see createChunkCompletion() above for why both
+    // handlers below can fire for one chunk and what the operator heard when
+    // they did.
+    const step = createChunkCompletion({
+      advance: () => {
+        if (speakSession !== session) return;
+        if (isLast) lastChunkPlayed = true;
+        playNextChunk(session);
+      },
+      fallback: (done) => speakChunkFallback(chunk.text, session, done),
+    });
     if (chunk.audioB64) {
       // Task 5 (step 5, alarms/timers): the bundled alert tone is a real WAV,
       // not edge-tts's MP3 — chunk.mime lets a sender declare that explicitly.
@@ -397,11 +442,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       // hardcoded behavior unchanged.
       const audio = new Audio('data:' + (chunk.mime || 'audio/mpeg') + ';base64,' + chunk.audioB64);
       currentAudio = audio;
-      audio.onended = onOneDone;
-      audio.onerror = () => speakChunkFallback(chunk.text, session, onOneDone);
-      audio.play().catch(() => speakChunkFallback(chunk.text, session, onOneDone));
+      audio.onended = step.done;
+      audio.onerror = step.fail;
+      audio.play().catch(step.fail);
     } else {
-      speakChunkFallback(chunk.text, session, onOneDone);
+      speakChunkFallback(chunk.text, session, step.done);
     }
   }
 
