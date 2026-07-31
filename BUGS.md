@@ -9,7 +9,9 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-07-22 (HUD session — media controls, YouTube embeds, weather location, widget resize)
+Last updated: 2026-07-31 (evening — the Trust Plan: BUG-051..BUG-058, the evidence
+contract and the nine waves built on it; see the last section, which also carries the
+live-verification runbook that is still OUTSTANDING)
 Maintainer: update this file as issues are resolved. Strike through the status.
 
 ---
@@ -1723,3 +1725,148 @@ spec/quality rejections, and 2 honest `hermes-agent OFFLINE` hard-fails from
 `buildRunner.enqueue()` (voice/engagement level, never persisted as jobs), or the
 figure counts in-session retries. **Worth re-measuring after these fixes rather
 than theorising.**
+
+---
+
+## Session (2026-07-31, evening) — the Trust Plan: nine waves, one root cause
+
+Commits `05ec87d` (pre-flight), `731fcb6`, `28ac5ab`, `94f6006`, `7e77d5a`,
+`01e2e2e`, `871deb9`, `607e2e2`. All pushed to `origin/main`.
+
+**The single root cause.** Every effector in this codebase returned "the API call
+succeeded" and the voice layer spoke it as "the thing happened". SendInput
+accepting 46 events is not text in Notepad. A cua click landing is not the right
+song playing. A vision model producing prose is not what is on the screen. Four
+previous waves of fixes each killed one symptom and the next session surfaced its
+sibling. This work fixed the CONTRACT (`src/core/effectors/evidence.js`) and then
+brought each surface onto it.
+
+**BUG-051 — `ui_type` reported 23 characters into an empty Notepad.** 11:28:09.
+Target pid resolved, foreground confirmed "Untitled - Notepad", SendInput returned
+its full event count, `typed:true`. The screenshot MYTHOS took 28s later shows an
+empty document. Every guard verified the CALL; nothing read the window back.
+🔧 FIXED (Wave 2): `Read-FocusedElementText` (ValuePattern then TextPattern), a
+before/after comparison that also requires the content to have CHANGED, and four
+verdicts (confirmed / mismatch / unchanged / unavailable) mapped onto the evidence
+contract. ⚠️ **HONEST, NOT YET CORRECT** — typing into Win11 Notepad may still
+fail; it will now say so instead of claiming success. Which injection mechanism
+actually works is still UNMEASURED: run `node scripts/diagnose-type-mechanisms.js`
+against Notepad, Slack and the IDE and record the answers here.
+
+**BUG-052 — `launch_app("notepad")` targeted the operator's IDE.** 11:25:57.
+`Resolve-WindowedProcessByName`'s third fallback matched on window TITLE
+("...Fix notepad typing...") and returned that pid as a bare number,
+indistinguishable from a real process-name match. Two `ui_type` calls put 23 chars
+each into the IDE, and the honesty cross-check PASSED because landed pid equalled
+target pid equalled the same wrong pid.
+🔧 FIXED (Wave 1), live-verified with a decoy window on this machine: a title match
+is now labelled `matchedBy:'title'` and an unresolved launch carries NO `pid` at
+all, only `candidatePid`.
+
+**BUG-053 — Enter was pressed in a real Slack DM before anything was typed.**
+`send_key('enter')` at 11:23:33 and 11:24:15, both ok:true; the first successful
+`ui_type` was 11:25:17. MYTHOS then said "I have typed the message and sent it."
+🔧 FIXED (Wave 2): a bare Enter in a messaging app requires a preceding VERIFIED
+read-back into that same live-foreground window.
+
+**BUG-054 — `screen_look` fabricated, and it is the verification step.** 11:21:51
+returned a bare imgur URL; 11:28:36 returned a generic Notepad tutorial paragraph
+while the screen showed an empty document, and MYTHOS relayed it as visual
+confirmation.
+🔧 FIXED (Wave 4): OCR is ground truth, the vision model's prose is commentary;
+empty replies, bare URLs and zero-overlap descriptions are rejected, and
+`ocrSample` carries literal screen text for the voice layer to quote.
+
+**BUG-055 — Spotify returned `verified:true` next to refuting evidence.** The plan
+blamed a missing comparison; the comparison exists and is FOOLED. Real queries
+(vault/Episodic + vault/Audit) were "The Kid LAROI Down" and "down by the kid
+laroi": terms [kid, laroi, down] need ceil(3*0.6)=2, and "The Kid LAROI - SHE DON'T
+NEED TO KNOW" matches kid+laroi = 2. **The artist name alone clears the majority bar
+whenever the artist is more than one token** — the in-file comment claiming this case
+was closed was true only for two-token queries.
+🔧 FIXED (Wave 5): the TRACK half of "Artist - Track" must earn its own match.
+
+**BUG-056 — the HUD ticked a checkmark for "called", not "worked".** `action.*`
+relayed only `{tool, ok, goalId, reason}`, so `unverified` could not reach the
+widget at all.
+🔧 FIXED (Wave 0): threaded through `dispatch-action.js`, the server, and the
+widget, which now draws verified / attempted / failed as three distinct states.
+`actions.js` was also interpolating tool/reason into innerHTML against the HUD's
+own rule — escaped, which matters because Wave 2 puts read-back text (i.e. operator
+dictation) into `reason`.
+
+**BUG-057 — narration outran outcomes.** `finalSay` is composed BEFORE actions run
+and was only re-derived on ok:false, so an ok-but-unproven result sailed through.
+Separately, `executeAction` never copied `unverified` onto the action it returns, so
+the turn loop could not see it even in principle. On the Live path, awaiting a slow
+tool inside the turn guarantees the model speaks first — the 9+
+`live-tool-outcome-late-for-turn` anomalies were that, not a broken detector.
+🔧 FIXED (Wave 3): unverified forces the corrective pass (scoped to tools whose
+result is heard as an outcome, so a Ctrl+N does not cost a brain call); slow tools
+answer `status:'started'` and report the real outcome via `[SYSTEM]` afterwards.
+
+**BUG-058 — `open_folder` already existed and nobody noticed.** The plan called for
+a new tool; `from-computer.js` has had one since NOVA, tiered T2 and sandboxed.
+Adding a second collided on the tool name and duplicated its TIER_TABLE key (last
+duplicate wins, so an entry written as `1` read back as `2`). The real defects: it
+returned `ok({opened})` because `spawn()` did not throw — the Wave 0 defect in a tool
+nobody had audited, and `explorer.exe` exits non-zero even on success — and its
+one-sentence description is the likely reason the model reached for
+`launch_app('explorer.exe "D:\...")` three times instead.
+🔧 FIXED (Wave 6): window-title oracle, and a description that names the wrong turn.
+Unknown tool names now suggest the nearest registered ones (`status` offers
+`read_status`) with the `unknown-effector` prefix preserved for `cortex/index.js`.
+
+**Wave 8 — the modal is gone for operator-initiated sends.** Spoken confirm
+(recipient + exact text, "say send") for `whatsapp_send`/`gmail_send` from
+`channel:'voice'` only. The leash is untouched: same tier, same
+confirm.create/accept, same audit. Every other T3 tool keeps the modal;
+cortex/engagements/absent-channel keep the modal; `AUTONOMOUS_MAX_TIER` stays 2.
+Worth recording that the modal was **protecting nothing** — the operator approved the
+Notepad type and it went to the IDE anyway, because a confirmation gates INTENT and
+only evidence gates OUTCOME.
+
+### Test-harness defects found while proving the above
+
+All of the kind that make a green suite meaningless, and all now fixed:
+- `try/finally` around an **un-awaited** async fn restored a module stub before the
+  code under test had finished, so a lazily-required oracle silently loaded the real
+  offline adapter and the test failed while the code was right.
+- Two tests were spawning real Explorer windows on the machine running the suite.
+- Two suite-only failures were hardcoded per-test child-spawn ceilings starved by
+  suite parallelism (`ps-dispatch-honest-failure` answers in ~830ms alone but hit a
+  15s ceiling in-suite; `immune.test.js`'s poll budget was shorter than the probe
+  timeout it waits on). Reproducible on an idle machine — NOT the orphaned-`node.exe`
+  cause this file documents elsewhere.
+- One test of mine was named "an expired confirm sends nothing" while actually
+  re-asserting the decline path. A test whose name lies is the same defect as an
+  effector whose `ok:true` lies; the TTL is now config-read so expiry is testable.
+
+### ⚠️ NOT LIVE-VERIFIED — the operator deferred verification to the end
+
+Everything above is unit-verified (2133 tests, 0 fail, 1 pre-existing honest skip)
+plus two live checks: Wave 1's decoy-title resolution, and `get_foreground_window`
+round-tripping through the real PowerShell child. **Restart MYTHOS before any live
+check** — nothing was running during this work.
+
+Run these, in order:
+1. `node scripts/diagnose-type-mechanisms.js` against Win11 Notepad, then Slack, then
+   the IDE. Record which mechanisms land. This decides whether typing WORKS; Wave 2
+   only guarantees it stops lying.
+2. `node scripts/verify-notepad-typing.js` — now includes the decoy-title case (Step
+   0) and asserts the `process-window` oracle.
+3. Fresh Notepad + "type Hi Alex": the screenshot must show the text, and the
+   read-back must be quoted in the result.
+4. A real Slack DM + "reply that I am on my way": typed, quoted back, NOT sent.
+5. "play <song> on Spotify": either it plays, or MYTHOS says which song is actually
+   playing.
+6. "whatsapp <contact> ...": spoken confirm, no popup; "send it" sends.
+7. Check `vault/Episodic` for zero `live-tool-outcome-late-for-turn` anomalies and
+   zero spoken "done" over an unverified action.
+
+**Open operator decision (flagged, not silently chosen):** media-echo suppression is
+bounded to the opening ~8s of playback rather than the whole track, because
+suspending capture for a full song leaves MYTHOS deaf exactly when you would say
+"next" or "stop". Full-duration deafness is available by passing a larger hold. Pick
+one after hearing both.
+
