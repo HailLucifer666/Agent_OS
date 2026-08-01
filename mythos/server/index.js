@@ -26,6 +26,7 @@ const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispat
 const { createLiveSession } = require('../src/core/voice/live-session');
 const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
 const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
+const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
 const { createLatencyTracker } = require('../src/core/voice/latency-tracker');
 const skillsLoader = require('../src/core/skills/loader');
 // createNewsFeed moved to routes/news.js (W9 god-file decomposition).
@@ -1158,24 +1159,10 @@ function createServer(deps) {
       return next;
     }
 
-    // Build a system-note summarizing action outcomes for the history and
-    // episodic record. Returns null when there are no actions (pure chat turns
-    // produce no note). Failed actions are flagged explicitly so future turns
-    // know the model's spoken claim was wrong — this is the anti-fabrication
-    // fix: without it, MYTHOS recalls "deleting now" as fact after a failed delete.
-    function summarizeActionsForResult(actions) {
-      if (!actions || !actions.length) return null;
-      var parts = [];
-      for (var i = 0; i < actions.length; i++) {
-        var a = actions[i];
-        if (!a || !a.tool) continue;
-        if (a.confirmPending) continue; // confirm-pending = deferred, not an outcome
-        var status = a.ok ? 'succeeded' : 'FAILED';
-        parts.push(a.tool + ' ' + status + (a.summary ? ': ' + a.summary : ''));
-      }
-      if (!parts.length) return null;
-      return 'Action outcomes: ' + parts.join('; ') + '.';
-    }
+    // Stage 3 (BUG-063): extracted to src/core/voice/action-outcome-summary.js
+    // so it's independently testable and the "started" in-progress marker
+    // (WAVE 3 slow tools) doesn't get conflated with a real failure — see
+    // that module's header for the exact defect this closed.
 
     function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
 
@@ -1925,15 +1912,29 @@ function createServer(deps) {
   // card only ever accumulated "down" entries. Mirrors the anomaly
   // subscription exactly.
   bus.subscribe('health.healed', (e) => {
-    anomalyLog.push(Object.assign({ healed: true }, e.payload));
+    const p = e.payload || {};
+    // Stage 3 (BUG-069): healer.js's onDiagnosed emits 'health.healed' on
+    // EVERY diagnosis outcome, not just a real fix — 'no-match' (no playbook
+    // recognized the anomaly) and 'cooldown'/'error' all go out on the same
+    // event name, carrying an explicit `outcome` field that says so. This
+    // subscriber used to ignore that field entirely and label every one of
+    // them 'healed:<kind>' — 36 such no-match pairs were found in the
+    // episodic logs, each claiming a fix that never happened. probes.js's
+    // own 'provider-recovered' event (a genuine down->up transition) carries
+    // NO `outcome` field at all, so its absence still means "yes, this really
+    // recovered" — only an EXPLICIT outcome other than 'applied' means the
+    // healer took no corrective action.
+    const actuallyHealed = !('outcome' in p) || p.outcome === 'applied';
+    anomalyLog.push(Object.assign({ healed: actuallyHealed }, p));
     if (anomalyLog.length > 200) anomalyLog.shift();
     broadcastHealth(lastStatus);
     try {
+      const label = actuallyHealed ? 'healed' : 'unhandled';
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
-        summary: 'healed: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.target || ''),
-        detail: { kind: e.payload.kind, target: e.payload.target, playbookId: e.payload.playbookId, outcome: e.payload.outcome },
-        outcome: 'healed', salience: 0.6,
+        summary: label + ': ' + (p.kind || 'unknown') + ' — ' + (p.target || ''),
+        detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome },
+        outcome: label, salience: actuallyHealed ? 0.6 : 0.5,
       });
     } catch (_) {}
   });

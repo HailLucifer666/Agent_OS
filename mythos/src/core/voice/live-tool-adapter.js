@@ -104,6 +104,32 @@ function createLiveToolAdapter(deps) {
     } catch { return String(result).slice(0, 4000); }
   }
 
+  // Stage 3 (BUG-068): shared "did this outcome actually succeed" verdict —
+  // previously only the slow/late path (reportLateOutcome) treated
+  // outcome.unverified as anything other than plain success. The awaited
+  // (fast) branch below built `ok` from outcome.ok alone, so a real record
+  // ("the focused control exposes neither ValuePattern nor TextPattern",
+  // ui_type @14:33:38) that happened to resolve inside the turn was reported
+  // to the model as status:'ok'. One extraction, used by both branches.
+  function evaluateOutcome(outcome) {
+    const dispatchOk = Boolean(outcome && outcome.ok);
+    const isUnverified = dispatchOk && Boolean(outcome.unverified);
+    const result = outcome && outcome.result;
+    const rawError = (result && result.error) || result || 'Failed.';
+    return {
+      ok: dispatchOk && !isUnverified,
+      dispatchOk,
+      unverified: isUnverified,
+      result,
+      rawError,
+      reason: isUnverified ? String(outcome.reason || 'no confirmation available') : null,
+    };
+  }
+
+  function unverifiedNarration(toolName, reason) {
+    return `${toolName} ran but could NOT be confirmed: ${reason || 'no confirmation available'}. Do not tell the operator it worked.`;
+  }
+
   async function handleLiveToolCalls(calls, { sendToolResponse }) {
     sweepPendingConfirms();
     const myGeneration = turnGeneration;
@@ -187,14 +213,26 @@ function createLiveToolAdapter(deps) {
         const outcome = await dispatchAction(decision, {
           tier: verdict.tier, channel: 'voice-live', traceId: call.id,
         });
-        const ok = Boolean(outcome && outcome.ok);
-        const result = outcome && outcome.result;
-        const rawError = (result && result.error) || result || 'Failed.';
-        commitAction({ tool: call.name, ok,
-          summary: ok ? `${call.name} done.` : sanitizeResultError(rawError).slice(0, 200) });
-        responses.push({ id: call.id, name: call.name, response: ok
-          ? { status: 'ok', result: truncateForModel(result) }
-          : { status: 'failed', error: sanitizeResultError(rawError).slice(0, 500) } });
+        const ev = evaluateOutcome(outcome);
+        let summary, response;
+        if (!ev.dispatchOk) {
+          summary = sanitizeResultError(ev.rawError).slice(0, 200);
+          response = { status: 'failed', error: sanitizeResultError(ev.rawError).slice(0, 500) };
+        } else if (ev.unverified) {
+          // Wave 0's evidence contract, on the awaited path too: ok:true +
+          // unverified:true must never reach the model as status:'ok'.
+          summary = unverifiedNarration(call.name, ev.reason).slice(0, 200);
+          response = {
+            status: 'unverified',
+            message: unverifiedNarration(call.name, ev.reason) + ' Report only that it was attempted.',
+            result: truncateForModel(ev.result),
+          };
+        } else {
+          summary = `${call.name} done.`;
+          response = { status: 'ok', result: truncateForModel(ev.result) };
+        }
+        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, summary });
+        responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         commitAction({ tool: call.name, ok: false, summary: sanitize(err) });
         responses.push({ id: call.id, name: call.name, response: { status: 'error', error: sanitize(err) } });
@@ -208,24 +246,19 @@ function createLiveToolAdapter(deps) {
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
   function reportLateOutcome(toolName, outcome) {
-    const ok = Boolean(outcome && outcome.ok);
-    const unverified = Boolean(outcome && outcome.unverified);
+    const ev = evaluateOutcome(outcome);
     let verdict;
-    if (!ok) {
+    if (!ev.dispatchOk) {
       // Same unwrapping as the awaited path above: effectors put the message in
       // result.error, and handing the whole object to sanitizeResultError loses it.
-      const res = outcome && outcome.result;
-      const rawError = (res && res.error) || res || 'Failed.';
-      verdict = `${toolName} FAILED: ${sanitizeResultError(rawError)}`;
-    } else if (unverified) {
+      verdict = `${toolName} FAILED: ${sanitizeResultError(ev.rawError)}`;
+    } else if (ev.unverified) {
       // Wave 0's contract, on the slow path too.
-      verdict = `${toolName} ran but could NOT be confirmed: ` +
-        String((outcome && outcome.reason) || 'no confirmation available') +
-        '. Do not tell the operator it worked.';
+      verdict = unverifiedNarration(toolName, ev.reason);
     } else {
-      verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(outcome && outcome.result))}`;
+      verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
     }
-    liveTurnActions.push({ tool: toolName, ok: ok && !unverified, unverified, summary: verdict });
+    liveTurnActions.push({ tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict });
 
     const liveSession = getLiveSession ? getLiveSession() : null;
     if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as confirms
