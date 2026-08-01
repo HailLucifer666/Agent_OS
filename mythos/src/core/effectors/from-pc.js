@@ -106,10 +106,33 @@ async function delegateWithRetry(cmdObj, opts) {
 // has a PS-side pre-type pid check (FIX 3) as backstop, but ui_click has none:
 // its coordinate fallback would click whatever window is topmost and still
 // report clicked:true. Honest abort beats a silent wrong-window action.
+//
+// WAVE 9 (BUG-072) — a DEAD pid (process exited, or Windows recycled the pid
+// onto something with no window) used to abort on the very first focus_window
+// miss, which threw away all 3 of delegateWithRetry's attempts before they ever
+// ran. Real dead pids from the logs: 5168, 26428, 7448 ("Process 7448 has no
+// main window"); the model reused a stale pid from an earlier list_windows call
+// rather than one it just resolved. Two changes:
+//   1. One re-resolve attempt on the first miss — a window that hasn't settled
+//      yet (fresh launch, foreground-lock blip) is not the same as a corpse,
+//      and a single retry is what the original phase-3 retry discipline in
+//      delegateWithRetry already assumes should happen before giving up.
+//   2. If it STILL fails, the pid is treated as gone: lastLaunchedPid is
+//      cleared if it matches (so the next omitted-pid call doesn't retarget the
+//      same corpse), and the message names list_windows literally — that is
+//      the recovery tool, and the model must re-resolve, not retry a pid that
+//      is never coming back.
 async function foregroundThenRetry(pid, cmdObj, opts) {
   if (pid) {
-    const focus = await delegate({ cmd: 'focus_window', pid: pid });
-    if (!focus.ok) return focus;
+    let focus = await delegate({ cmd: 'focus_window', pid: pid });
+    if (!focus.ok) {
+      focus = await delegate({ cmd: 'focus_window', pid: pid });
+    }
+    if (!focus.ok) {
+      if (pid === lastLaunchedPid) lastLaunchedPid = null;
+      return fail('That window is gone (' + (focus.result || 'could not focus it') +
+        '). Call list_windows again to find the right target — retrying this pid will not help.');
+    }
   }
   return delegateWithRetry(cmdObj, opts);
 }
@@ -447,12 +470,40 @@ async function ui_click({ pid, elementPath }) {
   if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
   // Phase 3 hardening: focus the target window first, then retry on failure —
   // a flaky ui_click often lands once the window is foregrounded.
-  return foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
+  var res = await foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
+  if (!res.ok) return res;
+
+  // WAVE 9 (BUG-073) — ui_click had never earned its evidence: it returned
+  // whatever pc-child said about the CLICK CALL itself, which per evidence.js's
+  // header is not "the thing that was supposed to happen". The cheapest oracle
+  // actually available at this call site is one foregroundThenRetry already
+  // paid for: the target window was just confirmed foreground before the
+  // click. Re-checking it is STILL foreground right after is a single existing
+  // get_foreground_window round trip — no new UIA work — and it catches the
+  // real failure mode (the click dismissed/switched away from the target).
+  // ponytail: this does NOT prove the specific element reacted (that needs a
+  // per-element oracle — a state change, a new window — picked per element
+  // type); ceiling is "clicked in the right window", upgrade path is a
+  // per-element post-condition if a false-positive click surfaces live.
+  var fg = await delegate({ cmd: 'get_foreground_window' });
+  if (fg.ok && fg.result && fg.result.pid === targetPid) {
+    return evidence.verifiedOk(res, {
+      oracle: 'foreground-pid',
+      expected: String(targetPid),
+      observed: 'pid ' + fg.result.pid + ' ("' + String(fg.result.title || '') + '") is still foreground right after the click',
+    });
+  }
+  return evidence.unverified(res,
+    'clicked, but could not re-confirm the target window is still foreground afterward — it may have landed on the right element or may not have');
 }
 
 // Windows titles that mean "this is MYTHOS's own UI", i.e. the dashboard the
 // operator just clicked Approve in. Typing into itself is never the intent.
 var SELF_WINDOW_RE = /^(MYTHOS|Mythos)\b/;
+
+// WAVE 9 (BUG-074) — window titles that mean "a console host has the caret",
+// where read-back can never be trusted (see the ui_type comment below).
+var CONSOLE_HOST_TITLE_RE = /\b(cmd\.exe|powershell\.exe|pwsh\.exe|conhost\.exe|command prompt|windows powershell)\b/i;
 
 async function ui_type({ text, pid, elementPath }) {
   if (!text) return fail('Text is required.');
@@ -511,6 +562,23 @@ async function ui_type({ text, pid, elementPath }) {
   // in there; this converts that answer into the evidence contract.
   var rr = (res.result && typeof res.result === 'object') ? res.result : {};
   var typedText = String(text);
+
+  // WAVE 9 (BUG-074) — console hosts have no oracle here. Real incident: pid
+  // 9152 (cmd.exe) returned typed:true, mechanism:'sendinput-unicode', the
+  // correct typedIntoPid — and was graded a failure, because a console host's
+  // TextPattern hands back the WHOLE scrollback, not the line just typed, so
+  // read-back can never honestly confirm OR deny a console type. Checked this
+  // file and ps-automation.ps1 for an existing process-name detection to reuse
+  // — none exists yet, so this is new. ponytail: keyed on window TITLE, because
+  // pc-child does not surface a process-name field for ui_type today (unlike
+  // get_foreground_window's `process`); upgrade path is threading
+  // typedIntoProcess through Handle-UiType the same way if title matching
+  // proves too loose.
+  if (CONSOLE_HOST_TITLE_RE.test(String(rr.typedIntoTitle || ''))) {
+    return evidence.unverified(res,
+      'typed into what looks like a console host ("' + String(rr.typedIntoTitle || '') +
+      '") — its read-back reflects the whole scrollback, not just what was typed, so this cannot be honestly confirmed or denied');
+  }
 
   if (rr.readBack === 'confirmed') {
     // Records the only state in which a later Enter is safe in a messaging app.

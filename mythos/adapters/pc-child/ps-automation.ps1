@@ -2844,7 +2844,22 @@ function Handle-MediaStatus {
     }
 }
 
+# WAVE 9 (BUG-072) — Chromium/Electron builds its a11y tree LAZILY, on first UIA
+# query (the same gotcha Read-FocusedElementText already retries once for,
+# elsewhere in this file). A path resolved against an earlier turn's snapshot
+# can go stale before a freshly-opened window's tree has settled, surfacing as
+# "Element path index 0 out of range (parent has 0 children)" — a real example
+# against WhatsApp at 20:10:36. One retry after a short settle, reusing that
+# same precedent, before treating the path as genuinely gone.
 function Resolve-UIAElement($TargetPid, $elementPath) {
+    $result = Resolve-UIAElementOnce $TargetPid $elementPath
+    if (-not $result.error) { return $result }
+    if ($result.error -notmatch 'out of range') { return $result }
+    Start-Sleep -Milliseconds 250
+    return Resolve-UIAElementOnce $TargetPid $elementPath
+}
+
+function Resolve-UIAElementOnce($TargetPid, $elementPath) {
     try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
         $condition = New-Object System.Windows.Automation.PropertyCondition(
@@ -2862,7 +2877,16 @@ function Resolve-UIAElement($TargetPid, $elementPath) {
             if ($i -ge 0 -and $i -lt $children.Count) {
                 $current = $children[$i]
             } else {
-                return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)') }
+                # Report what the tree actually holds RIGHT NOW, so the model can
+                # re-address the element instead of getting a bare index error.
+                $labels = @()
+                foreach ($c in $children) {
+                    try {
+                        $labels += ([string]$c.Current.ControlType.LocalizedControlType + ':' + [string]$c.Current.Name)
+                    } catch { }
+                }
+                $labelText = if ($labels.Count -gt 0) { ' — current children: ' + ($labels -join ', ') } else { '' }
+                return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)' + $labelText) }
             }
         }
         return @{ element = $current }
