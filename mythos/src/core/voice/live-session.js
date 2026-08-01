@@ -47,6 +47,13 @@ function createLiveSession(deps) {
   const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 120000; // BUG-059: was 45000, see schema.js
   const MAX_MS = Number(config.LIVE_SESSION_MAX_MS) || 10 * 60 * 1000;
   const BREAKER = 'gemini-live';
+  // ponytail: an unattended mic left open would otherwise rotate a brand new
+  // Gemini Live session every IDLE_MS forever — real cost on BYO keys with
+  // per-day ceilings (this repo has a documented case of a 10-req/day voice
+  // model). 3 idle rotations with zero real user speech in between is the
+  // ceiling; a genuine conversation resets it on the first recognized word.
+  // Upgrade path if 3 is wrong in practice: make it operator-configurable.
+  const MAX_IDLE_ROTATIONS_WITHOUT_SPEECH = 3;
 
   const openSocket = createSocket || ((url) => new WebSocket(url));
 
@@ -56,6 +63,7 @@ function createLiveSession(deps) {
   let idleTimer = null, maxTimer = null;
   let userText = '', assistantText = '';
   let closedByUs = false;
+  let idleRotationsWithoutSpeech = 0;
 
   function setState(next, reason) {
     if (state === next) return;
@@ -73,14 +81,40 @@ function createLiveSession(deps) {
     // branch checks to decide NOT to reconnect. That made an idle timeout
     // indistinguishable from an intentional shutdown and killed the session
     // silently — "I have to click you every time."
-    idleTimer = setTimeout(() => close('idle-timeout', { final: false }), IDLE_MS);
+    idleTimer = setTimeout(handleIdleTimeout, IDLE_MS);
     if (idleTimer.unref) idleTimer.unref();
+  }
+
+  // BUG-059 follow-up (adversarial review): rotating forever with nobody in
+  // the room is a cost leak, not a fix. Count idle rotations that saw zero
+  // real user speech since the last one; past the ceiling, do a genuinely
+  // FINAL close instead of another rotation — the client's own auto-reopen
+  // (or a wake-word/click) revives it, same as any other closed session.
+  function handleIdleTimeout() {
+    idleRotationsWithoutSpeech += 1;
+    if (idleRotationsWithoutSpeech > MAX_IDLE_ROTATIONS_WITHOUT_SPEECH) {
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('health.anomaly', { kind: 'live-idle-exhausted', rotations: idleRotationsWithoutSpeech });
+      }
+      close('idle-timeout-exhausted');
+      return;
+    }
+    close('idle-timeout', { final: false });
   }
 
   function sendRaw(frame) {
     if (!ws || ws.readyState !== ws.OPEN) return false;
     try { ws.send(JSON.stringify(frame)); return true; }
     catch (err) { logger.warn('live.send-failed', { error: err.message }); return false; }
+  }
+
+  // BUG-079: systemInstruction may be a plain string (existing callers, most
+  // tests) or a function (server/index.js's buildLiveSystemInstruction) —
+  // calling it fresh here means it re-renders on every open(), including
+  // idle/session-max/goAway reconnects, so time-sensitive content in it
+  // (local date/time) never goes stale across a long-running session.
+  function currentSystemInstruction() {
+    return typeof systemInstruction === 'function' ? systemInstruction() : systemInstruction;
   }
 
   function buildSetup() {
@@ -90,7 +124,7 @@ function createLiveSession(deps) {
         responseModalities: ['AUDIO'],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
       },
-      systemInstruction: { parts: [{ text: systemInstruction }] },
+      systemInstruction: { parts: [{ text: currentSystemInstruction() }] },
       tools: (functionDeclarations && functionDeclarations.length) ? [{ functionDeclarations }] : undefined,
       realtimeInputConfig: { automaticActivityDetection: {} },
       inputAudioTranscription: {},   // AD-6
@@ -183,6 +217,7 @@ function createLiveSession(deps) {
     if (sc) {
       if (sc.inputTranscription && sc.inputTranscription.text) {
         userText += sc.inputTranscription.text;
+        idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
         if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
@@ -276,7 +311,17 @@ function createLiveSession(deps) {
     // oldWs.close() would clobber that reassignment.
     const oldWs = ws;
     ws = null;
-    if (oldWs) { try { oldWs.close(); } catch {} }
+    if (oldWs) {
+      // Adversarial-review fix: leave the 'close' listener attached (that's
+      // what fires reconnect() above) but strip 'error' — once we've decided
+      // to abandon this socket, a late error from it must not trip the
+      // breaker or stomp the REPLACEMENT session's state back to 'closed'.
+      // A bare removeAllListeners('error') would leave zero error listeners,
+      // and Node throws on an unlistened 'error' event — attach a no-op
+      // instead of just removing.
+      try { oldWs.removeAllListeners('error'); oldWs.on('error', () => {}); } catch {}
+      try { oldWs.close(); } catch {}
+    }
     if (!final) return; // ws.on('close') settles state + reconnects
     setState('closed', reason || 'closed');
   }
