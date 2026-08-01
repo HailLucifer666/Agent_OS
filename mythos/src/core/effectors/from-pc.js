@@ -7,7 +7,9 @@ const pcChild = require('../../../adapters/pc-child');
 const { effectorFromTool } = require('./adapter');
 // §7.7 (step 5) — set_wallpaper's path argument is sandboxed via
 // from-computer.js's existing resolveSandboxed (reused, not reimplemented).
-const { resolveSandboxed } = require('./from-computer');
+// open_folder (BUG-058) is reused the same way by launch_app below, for the
+// explorer.exe mis-routing guard.
+const { resolveSandboxed, open_folder } = require('./from-computer');
 // The evidence contract: a world-changing effector may only report ok:true with
 // proof from an oracle other than its own call. See evidence.js's header.
 const evidence = require('./evidence');
@@ -149,8 +151,52 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
 // and nothing enforced it.
 var SESSION_RESTORING_APPS = /^notepad(\.exe)?$/i;
 
-async function launch_app({ name, existing }) {
+// BUG-075 (Stage 5, "open YouTube on the Electron app"). launch_app("youtube")
+// was logged failing 3x on 2026-07-31 — correctly, since nothing named
+// YouTube is installed on Windows, but three wasted retries with no better
+// path offered. These names are web destinations, not executables; route
+// them through the SAME 'ui.open-web' signal open_web already emits
+// (dispatch-action.js -> server/index.js -> electron/main.js's media-window
+// bridge, added this stage), so they open in a real Electron window instead
+// of failing all 3 launch tiers.
+//
+// ponytail: intentionally tiny — only the names actually seen failing in the
+// transcript. Upgrade path: anything else still gets an explicit pointer to
+// open_web below instead of a silent PS-tier failure.
+var KNOWN_WEB_APPS = {
+  youtube: 'https://www.youtube.com',
+  gmail: 'https://mail.google.com',
+  maps: 'https://maps.google.com',
+};
+
+// BUG-075 (Stage 5). launch_app("explorer.exe \"D:\\...\"") was logged 3x on
+// 2026-07-31 — a shape that can never resolve, since launch_app takes an app
+// NAME and never parses arguments. open_folder (BUG-058) already exists for
+// exactly "open this folder path"; redirect instead of failing a fourth time.
+var EXPLORER_PATH_ARG = /^explorer(\.exe)?\s+"?([a-zA-Z]:\\[^"]*?)"?$/i;
+
+async function launch_app({ name, existing }, ctx) {
   if (!name) return fail('App name is required.');
+  var trimmed = String(name).trim();
+
+  var explorerMatch = EXPLORER_PATH_ARG.exec(trimmed);
+  if (explorerMatch) {
+    return open_folder({ path: explorerMatch[2] });
+  }
+
+  var webApp = KNOWN_WEB_APPS[trimmed.toLowerCase()];
+  if (webApp) {
+    var payload = { widgetType: 'web', embedUrl: webApp, title: trimmed };
+    if (ctx && ctx.bus && typeof ctx.bus.emit === 'function') {
+      ctx.bus.emit('ui.open-web', payload);
+    }
+    // Same shape/oracle-honesty as open_web (from-dashboard.js): opening a
+    // dashboard/Electron UI surface is not itself evidence-contract "world
+    // changing" state, so open_web doesn't wrap its result in evidence.js
+    // either — matched here for consistency, not an oversight.
+    return ok(payload);
+  }
+
   var res = await delegate({ cmd: 'launch_app', name });
 
   // WAVE 1. ps-automation.ps1 now distinguishes a real resolution
@@ -838,7 +884,7 @@ async function capture_screenshot() {
 const KNOWN_DESKTOP_APPS = ['slack', 'discord', 'teams'];
 
 const TOOLS = [
-  { name: 'launch_app', description: 'Launch an application by name (e.g. "notepad", "chrome", "code"). Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name or path', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app },
+  { name: 'launch_app', description: 'Launch a Windows application by name (e.g. "notepad", "chrome", "code"). Also accepts a small set of web destinations that are not real Windows apps ("youtube", "gmail", "maps") and opens them in MYTHOS\'s own Electron window — use this, not open_web, when the operator says "open X app" or "on the Electron/desktop app". For a specific YouTube video/search instead of the site itself, use open_web(type:"youtube") instead. Never pass a folder path or a command with arguments (e.g. explorer.exe "D:\\...") — use open_folder for that; this takes an app NAME only. Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name or path', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app },
   { name: 'list_windows', description: 'List all open windows with their PIDs, titles, process names, and visibility status.', params: {}, danger: false, fn: list_windows, needs_result: true },
   { name: 'focus_window', description: 'Bring a window to the foreground and restore it if minimized.', params: { pid: 'number - process ID of the window' }, danger: false, fn: focus_window },
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },
@@ -882,6 +928,7 @@ module.exports = {
   registerFromPc,
   TOOLS,
   KNOWN_DESKTOP_APPS,
+  KNOWN_WEB_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
   ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,

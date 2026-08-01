@@ -81,6 +81,18 @@ function buildTools(ctx) {
     closePanelProvider = fn;
   }
 
+  // Stage 5 (BUG-075) — the fix for "a German video played that could not be
+  // stopped with standard playback controls". close_panel already means
+  // "close whatever MYTHOS opened as UI"; this extends that same vocabulary
+  // to the Electron media window (electron/main.js) instead of adding a
+  // separate close_media_window tool. Injected via setMediaWindowCloser
+  // (server/index.js's requestCloseMediaWindow — same request/ack shape as
+  // closePanelProvider, just over the fork IPC channel instead of WS).
+  let mediaWindowCloser = null;
+  function setMediaWindowCloser(fn) {
+    mediaWindowCloser = fn;
+  }
+
   async function close_panel({ all }) {
     try {
       if (!closePanelProvider) {
@@ -92,9 +104,16 @@ function buildTools(ctx) {
       }
       const overlaysClosed = ack.overlaysClosed || 0;
       const widgetsClosed = ack.widgetsClosed || 0;
+      // Best-effort: unset (not running under Electron) or nothing open both
+      // report false, never an error — the panel/widget close above already
+      // succeeded independently of whether a media window exists.
+      let mediaWindowClosed = false;
+      if (mediaWindowCloser) {
+        try { mediaWindowClosed = Boolean(await mediaWindowCloser()); } catch (_) { mediaWindowClosed = false; }
+      }
       return ok({
-        closed: (overlaysClosed + widgetsClosed) > 0,
-        overlaysClosed, widgetsClosed, all: Boolean(all)
+        closed: (overlaysClosed + widgetsClosed) > 0 || mediaWindowClosed,
+        overlaysClosed, widgetsClosed, mediaWindowClosed, all: Boolean(all)
       });
     } catch (err) {
       return fail(err.message);
@@ -836,8 +855,8 @@ function buildTools(ctx) {
 
   const TOOLS = [
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
-    { name: 'close_panel', description: 'Close dashboard panel(s) AND floating widgets (search/weather/flights/image cards spawned by open_web). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
-    { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Renders content INSIDE the MYTHOS dashboard, NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
+    { name: 'close_panel', description: 'Close dashboard panel(s), floating widgets (search/weather/flights/image cards spawned by open_web), AND the Electron media window if one is open (e.g. a YouTube video that will not stop with standard playback controls). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed/mediaWindowClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
+    { name: 'open_web', description: 'Open web content in MYTHOS\'s own UI (dashboard overlay + a real Electron window for youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     // REMEDIATION P3-8: needs_result:true added to every status/check/list/
@@ -869,7 +888,7 @@ function buildTools(ctx) {
     { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];
 
-  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setPlannerHandle, setClosePanelProvider };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -882,7 +901,7 @@ function registerFromDashboard(hub, ctx) {
   return {
     count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch,
     setCameraFrameProvider: built.setCameraFrameProvider, setPlannerHandle: built.setPlannerHandle,
-    setClosePanelProvider: built.setClosePanelProvider
+    setClosePanelProvider: built.setClosePanelProvider, setMediaWindowCloser: built.setMediaWindowCloser
   };
 }
 

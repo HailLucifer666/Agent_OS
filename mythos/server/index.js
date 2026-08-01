@@ -1869,7 +1869,48 @@ function createServer(deps) {
   // cards, etc.) so the dashboard opens a panel or floating widget.
   bus.subscribe('ui.open-web', (e) => {
     broadcastAll({ type: 'open-web', payload: e.payload });
+    // Stage 5 (BUG-075): "open YouTube on the Electron app" (operator,
+    // verbatim) needs a real second BrowserWindow, which only electron/main.js
+    // (a SEPARATE OS process — the fork() parent) can create. The broadcast
+    // above only ever reaches this process's own WS clients (the dashboard's
+    // browser JS), never the Electron main process. process.send() is the
+    // fork() IPC channel already set up for lifecycle when running under
+    // Electron (stdio slot 3, 'ipc') — reused here, not a new channel. Absent
+    // under a plain `node mythos/src/main.js` boot (no send()), which is fine:
+    // there is no Electron window to open in that mode anyway.
+    if (typeof process.send === 'function') {
+      try { process.send({ channel: 'mythos:ui.open-web', payload: e.payload }); }
+      catch { /* no parent listening (non-Electron boot) — nothing to relay to */ }
+    }
   });
+
+  // Stage 5 (BUG-075) — the Electron-side counterpart of requestClosePanel's
+  // request/ack shape (same 3s-timeout pattern), but over the fork IPC channel
+  // instead of the WS broadcast: process.send() the close request, resolve
+  // when electron/main.js acks back on the same channel name + '-ack'. Only
+  // one media window exists at a time, so a single pending slot (not a Map
+  // keyed by reqId, unlike requestClosePanel/requestCameraFrame) is enough.
+  let pendingCloseMediaWindow = null; // { resolve, timer }
+  if (typeof process.on === 'function') {
+    process.on('message', (msg) => {
+      if (msg && msg.channel === 'mythos:close-media-window-ack' && pendingCloseMediaWindow) {
+        clearTimeout(pendingCloseMediaWindow.timer);
+        const pending = pendingCloseMediaWindow;
+        pendingCloseMediaWindow = null;
+        pending.resolve(Boolean(msg.closed));
+      }
+    });
+  }
+  function requestCloseMediaWindow() {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') { resolve(false); return; } // not under Electron
+      if (pendingCloseMediaWindow) { clearTimeout(pendingCloseMediaWindow.timer); pendingCloseMediaWindow.resolve(false); }
+      const timer = setTimeout(() => { pendingCloseMediaWindow = null; resolve(false); }, 3000);
+      pendingCloseMediaWindow = { resolve, timer };
+      try { process.send({ channel: 'mythos:close-media-window' }); }
+      catch { pendingCloseMediaWindow = null; clearTimeout(timer); resolve(false); }
+    });
+  }
 
   // Widget commands — voice-driven HUD widget hide/show (manage_widget
   // effector, from-widgets.js). Payload is a pre-resolved {mode, targets}
@@ -2043,6 +2084,7 @@ function createServer(deps) {
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
+    requestCloseMediaWindow,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: { voiceLatencyTracker },
   };

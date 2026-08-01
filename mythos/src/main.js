@@ -598,6 +598,12 @@ async function main() {
       if (dashboardWiring && typeof dashboardWiring.setClosePanelProvider === 'function' && typeof serverHandle.requestClosePanel === 'function') {
         dashboardWiring.setClosePanelProvider(serverHandle.requestClosePanel);
       }
+      // Stage 5 (BUG-075) — same wiring shape, for close_panel's Electron
+      // media-window counterpart (electron/main.js's BrowserWindow, opened via
+      // 'ui.open-web' relayed over the fork IPC channel).
+      if (dashboardWiring && typeof dashboardWiring.setMediaWindowCloser === 'function' && typeof serverHandle.requestCloseMediaWindow === 'function') {
+        dashboardWiring.setMediaWindowCloser(serverHandle.requestCloseMediaWindow);
+      }
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
 

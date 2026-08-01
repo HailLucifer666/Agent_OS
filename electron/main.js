@@ -18,6 +18,7 @@ const path = require('node:path');
 const http = require('node:http');
 const fs = require('node:fs');
 const child_process = require('node:child_process');
+const { createMediaWindowController } = require('./media-window');
 
 // Disable Chromium's background timer/media throttling process-wide. Pairs with
 // per-window backgroundThrottling:false below: the YouTube iframe's media
@@ -205,6 +206,16 @@ ipcMain.handle('mythos:has-key', async (_e, name) => {
 // ---- child lifecycle ----------------------------------------------------------
 let child = null;
 let mainWindow = null;
+
+// Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
+// the fork() IPC channel below — see server/index.js's process.send() call in
+// its bus.subscribe('ui.open-web', ...) handler) into a real second
+// BrowserWindow, instead of only the in-page overlay app.js already renders.
+// preloadPath is resolved once here since it never changes across opens/closes.
+const mediaWindowController = createMediaWindowController({
+  BrowserWindowCtor: BrowserWindow,
+  preloadPath: path.join(__dirname, 'preload.js'),
+});
 // Capped backoff so a repeatedly-crashing child doesn't spin a tight loop or
 // grow unbounded delays. Reset to the floor on a clean start.
 const BACKOFF_STEPS_MS = [1000, 2000, 5000];
@@ -237,6 +248,23 @@ function startChild() {
     child.stdout.pipe(childLogStream);
     child.stderr.pipe(childLogStream);
   }
+
+  // Stage 5 (BUG-075) — the child's only outbound channel to us is this fork()
+  // IPC (stdio slot 3, 'ipc'), already established for lifecycle only. Reuse
+  // it rather than opening a new one: 'ui.open-web' opens/updates the media
+  // window; 'close-media-window' (close_panel's Electron-side counterpart)
+  // closes it and acks back so close_panel can report what really happened.
+  child.on('message', (msg) => {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.channel === 'mythos:ui.open-web') {
+      const res = mediaWindowController.handleOpenWeb(msg.payload);
+      log('media-window: open-web ->', JSON.stringify(res));
+    } else if (msg.channel === 'mythos:close-media-window') {
+      const closed = mediaWindowController.closeMediaWindow();
+      try { child.send({ channel: 'mythos:close-media-window-ack', closed }); }
+      catch (err) { log('media-window: close ack send failed:', err.message); }
+    }
+  });
   // A fresh start (or a clean restart after uptime) resets the backoff to the
   // floor so a single past crash doesn't pin the delay at the 5s cap forever.
   backoffIndex = 0;
@@ -399,6 +427,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     stopChild();
+    mediaWindowController.closeMediaWindow();
   });
 
   // globalShortcut registrations are process-wide OS claims; releasing them on
