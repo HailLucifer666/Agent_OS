@@ -32,7 +32,7 @@ const DEFAULT_ALLOWLIST = [
   // vault/Episodic/2026-08-02.jsonl is a fabricated path checked against a tree the
   // model was never allowed to read, not a stale path and not lazy Chromium a11y.
   // Any click tool added here must ship with its corresponding read tool.
-  'ui_elements','ui_click','ui_type','send_key',
+  'ui_elements','ui_click','ui_type','send_key','click_at','see_and_click',
   // The Chromium-capable read+click pair. Their own descriptions say to use them
   // "when pc-child ui_elements returns no usable named element (common for
   // Chromium/CEF/Electron apps like Spotify desktop, YouTube web, Electron

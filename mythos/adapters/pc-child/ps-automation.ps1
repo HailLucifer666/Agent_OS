@@ -1300,8 +1300,46 @@ function Handle-ScreenReadText {
         $engine = $ocrEngineType::TryCreateFromUserProfileLanguages()
         if ($null -eq $engine) { return 'no OCR language pack installed' }
         $ocr = Await-WinRTOperation ($engine.RecognizeAsync($bitmap)) $ocrResultType
-        $lines = @($ocr.Lines | ForEach-Object { $_.Text })
-        return @{ text = ($lines -join "`n"); lineCount = $lines.Count }
+
+        # 2026-08-02: this used to be `$ocr.Lines | ForEach-Object { $_.Text }` — it read
+        # the screen and then threw away WHERE everything was. Every OcrWord carries a
+        # BoundingRect in the same screen-absolute pixel space that click_at consumes
+        # (CopyFromScreen above captures PrimaryScreen.Bounds, and this process is
+        # DPI-aware per the block at the top of this file), so the coordinates needed to
+        # click a piece of text were being computed by Windows and discarded here.
+        #
+        # Line-level boxes, unioned from the words: a click target is a label, not a
+        # word, and per-word boxes would make "Type a message" three targets.
+        # ADDITIVE ONLY — text/lineCount keep their exact previous shape because
+        # screen_read_text has existing callers.
+        $lines = @()
+        $regions = @()
+        foreach ($line in $ocr.Lines) {
+            $lines += $line.Text
+            $minX = $null; $minY = $null; $maxX = $null; $maxY = $null
+            foreach ($word in $line.Words) {
+                $r = $word.BoundingRect
+                if ($null -eq $r) { continue }
+                $x2 = $r.X + $r.Width
+                $y2 = $r.Y + $r.Height
+                if ($null -eq $minX -or $r.X -lt $minX) { $minX = $r.X }
+                if ($null -eq $minY -or $r.Y -lt $minY) { $minY = $r.Y }
+                if ($null -eq $maxX -or $x2  -gt $maxX) { $maxX = $x2 }
+                if ($null -eq $maxY -or $y2  -gt $maxY) { $maxY = $y2 }
+            }
+            # A line whose words carry no geometry is still real text — it belongs in
+            # `text` (appended above) but must NOT become an un-clickable region with a
+            # zero box, which a caller would happily click at 0,0.
+            if ($null -eq $minX) { continue }
+            $regions += @{
+                text   = $line.Text
+                x      = [int][Math]::Round($minX)
+                y      = [int][Math]::Round($minY)
+                width  = [int][Math]::Round($maxX - $minX)
+                height = [int][Math]::Round($maxY - $minY)
+            }
+        }
+        return @{ text = ($lines -join "`n"); lineCount = $lines.Count; regions = $regions }
     } catch {
         return ('OCR failed: ' + $_.Exception.Message)
     } finally {

@@ -802,6 +802,114 @@ async function click_at({ x, y }) {
   return delegateWithRetry({ cmd: 'click_at', x, y }, { attempts: 3 });
 }
 
+// ---- see_and_click: click a piece of text because you can SEE it ----
+//
+// 2026-08-02. ui_click needs an elementPath into a UIA tree. WhatsApp Desktop's tree
+// enumerates to ZERO children, so no path exists to pass and the model invented them
+// ("Element path index 2 out of range (parent has 0 children)", Episodic/2026-08-02).
+// OCR does not care about the a11y tree: a chat name in a search result is rendered
+// pixels, and Windows.Media.Ocr already reports where those pixels are.
+//
+// PROVIDER SEAM (plan Stage 3): everything below consumes `regions` —
+// [{text,x,y,width,height}] in screen-absolute pixels. readScreenRegions() is the only
+// thing that knows Windows.Media.Ocr produced them. A second engine (PaddleOCR, for
+// non-Latin scripts and small dark-theme text) drops in here without touching the
+// matcher, the effector, or their tests.
+// ponytail: one function boundary, not a provider-registry — upgrade to the chain
+// shape providers/tts.js uses only when there is a second engine to chain.
+async function readScreenRegions() {
+  const res = await delegate({ cmd: 'screen_read_text' });
+  if (!res.ok) return { ok: false, error: reasonOf(res) };
+  const result = res.result || {};
+  const regions = Array.isArray(result.regions) ? result.regions : [];
+  return { ok: true, regions, text: String(result.text || '') };
+}
+
+function reasonOf(res) {
+  const r = res && res.result;
+  if (r && typeof r === 'object' && r.error) return String(r.error);
+  return typeof r === 'string' ? r : 'screen OCR failed';
+}
+
+// Exported for tests: pure, no I/O. Progressively looser so an exact label always beats
+// a coincidental substring — "Mou" must not win over "Mousumi" when both are present.
+function matchRegions(regions, query) {
+  const want = String(query || '').trim().toLowerCase();
+  if (!want) return [];
+  const usable = (regions || []).filter((r) =>
+    r && typeof r.x === 'number' && typeof r.y === 'number' &&
+    r.width > 0 && r.height > 0 && String(r.text || '').trim());
+  const norm = (r) => String(r.text).trim().toLowerCase();
+
+  const exact = usable.filter((r) => norm(r) === want);
+  if (exact.length) return exact;
+  const startsWith = usable.filter((r) => norm(r).startsWith(want));
+  if (startsWith.length) return startsWith;
+  return usable.filter((r) => norm(r).includes(want));
+}
+
+function centreOf(r) {
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}
+
+async function see_and_click({ text, occurrence, expect }) {
+  const want = String(text || '').trim();
+  if (!want) return fail('What text should I click? Give the label as it appears on screen.');
+
+  const before = await readScreenRegions();
+  if (!before.ok) return fail('I could not read the screen, so I will not guess where to click: ' + before.error);
+
+  const hits = matchRegions(before.regions, want);
+  if (!hits.length) {
+    // Say what WAS on screen. A bare "not found" sends the operator hunting for the
+    // wrong bug — the label may be present but spelled differently, or OCR may have
+    // returned nothing at all, and those need opposite responses.
+    const sample = before.regions.slice(0, 12).map((r) => r.text).join(' | ');
+    return fail('I cannot see "' + want + '" on screen. ' + (before.regions.length
+      ? 'What I can read: ' + sample + (before.regions.length > 12 ? ' …' : '')
+      : 'OCR returned no text regions at all — the screen may be blank, or this text may be an image or an icon rather than rendered text.'));
+  }
+
+  // Ambiguity is refused, not guessed — same rule as resolveRecipient() in
+  // from-whatsapp.js. Clicking the wrong one of two identical labels is not something
+  // the operator can undo by asking again.
+  const nth = Number(occurrence);
+  let target;
+  if (hits.length > 1) {
+    if (!Number.isFinite(nth) || nth < 1 || nth > hits.length) {
+      const where = hits.map((r, i) => (i + 1) + ') "' + r.text + '" at ' + centreOf(r).x + ',' + centreOf(r).y);
+      return fail('"' + want + '" matches ' + hits.length + ' things on screen: ' + where.join('; ') +
+        '. Say which one (occurrence: 1-' + hits.length + ') — I will not pick for you.');
+    }
+    target = hits[nth - 1];
+  } else {
+    target = hits[0];
+  }
+
+  const point = centreOf(target);
+  const clicked = await click_at(point);
+  if (!clicked.ok) return fail('Found "' + target.text + '" at ' + point.x + ',' + point.y +
+    ' but the click failed: ' + reasonOf(clicked));
+
+  // Evidence (evidence.js's 'ocr' oracle): a click landing is not the thing happening.
+  // Re-read the screen — if nothing changed, the click hit nothing that mattered.
+  const after = await readScreenRegions();
+  if (!after.ok) {
+    return evidence.unverified(
+      { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
+      'clicked "' + target.text + '" but the screen could not be re-read afterwards, so I cannot confirm anything happened');
+  }
+  if (expect && after.text.toLowerCase().includes(String(expect).trim().toLowerCase())) {
+    return ok({ clicked: target.text, x: point.x, y: point.y, evidence: 'ocr', confirmed: String(expect) });
+  }
+  if (after.text !== before.text) {
+    return ok({ clicked: target.text, x: point.x, y: point.y, evidence: 'ocr', note: 'the screen changed after the click' });
+  }
+  return evidence.unverified(
+    { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
+    'clicked "' + target.text + '" but the screen reads exactly the same afterwards, so I cannot tell that anything happened');
+}
+
 // ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
 
 async function move_window({ pid, x, y, width, height }) {
@@ -904,6 +1012,7 @@ const TOOLS = [
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
+  { name: 'see_and_click', description: 'Click a piece of text because you can SEE it on screen — OCRs the screen, finds the label, and clicks the middle of it. PREFER THIS over ui_click for chat apps, Electron and browser UIs (WhatsApp, Spotify, YouTube), where the UIA tree is often empty and ui_click has no valid element path to use. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it will list the matches and refuse rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked' }, danger: true, fn: see_and_click },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
   { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },
   { name: 'scroll_at', description: 'Scroll the mouse wheel at a screen coordinate. Moves to (x,y) first, then scrolls. Defaults: amount 3 ticks, direction down.', params: { x: 'number - absolute screen x', y: 'number - absolute screen y', amount: 'number (optional) - ticks to scroll, default 3', direction: 'string (optional) - up or down, default down' }, danger: false, fn: scroll_at },
@@ -936,7 +1045,9 @@ module.exports = {
   KNOWN_DESKTOP_APPS,
   KNOWN_WEB_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
-  screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
+  screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
+  // pure, no I/O — exported so the matcher can be tested without a screen
+  _seeAndClickInternal: { matchRegions, centreOf },
   ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,

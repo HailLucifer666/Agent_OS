@@ -191,6 +191,9 @@ const TIER_TABLE = {
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable
   'ui_type':               3,  // ELEVATED — same reasoning
   'click_at':              3,  // ELEVATED — autonomous clicking unpredictable
+  // Same blast radius as click_at: it ends in a real mouse click at a real
+  // coordinate. Reading the screen first makes it better AIMED, not safer.
+  'see_and_click':         3,
   'right_click_at':        3,  // Phase 3 — autonomous right-click, context menus unpredictable
   'drag':                  3,  // Phase 3 — autonomous drag, drop targets unpredictable
   'browser_click':         3,
