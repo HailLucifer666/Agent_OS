@@ -66,12 +66,14 @@ function createLiveSession(deps) {
 
   function armIdle() {
     if (idleTimer) clearTimeout(idleTimer);
-    // BUG-059: idle timeout must ROTATE the session (preserve resumeHandle,
-    // reopen), never close() it — close() sets closedByUs=true, which is
-    // exactly the flag the ws.on('close') reconnect branch below checks to
-    // decide NOT to reconnect. An idle timeout used to be indistinguishable
-    // from an intentional shutdown and killed the session silently.
-    idleTimer = setTimeout(() => rotate('idle-timeout'), IDLE_MS);
+    // BUG-059: a non-final close (see close(), below) so the existing
+    // ws.on('close') reconnect branch does the reopening — not a second
+    // reconnect path. Previously this called close('idle-timeout'), which
+    // unconditionally set closedByUs=true, which is exactly the flag that
+    // branch checks to decide NOT to reconnect. That made an idle timeout
+    // indistinguishable from an intentional shutdown and killed the session
+    // silently — "I have to click you every time."
+    idleTimer = setTimeout(() => close('idle-timeout', { final: false }), IDLE_MS);
     if (idleTimer.unref) idleTimer.unref();
   }
 
@@ -124,11 +126,17 @@ function createLiveSession(deps) {
           settled = true;
           setState('open');
           armIdle();
-          // BUG-059: same reasoning as armIdle() above — contextWindowCompression's
-          // slidingWindow (buildSetup(), above) already keeps the session content
-          // window healthy past 10 minutes, so this is housekeeping, not a real
-          // failure. Rotate, don't close().
-          maxTimer = setTimeout(() => rotate('session-max'), MAX_MS);
+          // BUG-059: same non-final-close reasoning as armIdle() above. Per
+          // Google's Live API docs (session management guide, checked
+          // 2026-08-01 — do not trust this repo's own comments on this
+          // point, they've been wrong before): contextWindowCompression's
+          // slidingWindow extends an audio session "to an unlimited amount
+          // of time", but the underlying connection itself still has a
+          // ~10min ceiling independent of that — session resumption exists
+          // specifically to reconnect across that ceiling. So MAX_MS firing
+          // is expected and load-bearing, not self-inflicted; it must
+          // reconnect via resumeHandle, never dead-end.
+          maxTimer = setTimeout(() => close('session-max', { final: false }), MAX_MS);
           if (maxTimer.unref) maxTimer.unref();
           resolve(true);
         }
@@ -143,9 +151,12 @@ function createLiveSession(deps) {
       ws.on('close', (code, reason) => {
         const why = `code=${code} ${String(reason || '')}`.trim();
         if (!settled) { settled = true; setState('closed', why); return resolve(false); }
-        // Unexpected mid-session drop with a resume handle → transparent reconnect,
-        // treated as a breaker event, never a crash.
-        if (!closedByUs && resumeHandle) { setState('reconnecting', why); reconnect(); }
+        // Any close we did not deliberately request (idle-timeout, session-max,
+        // goAway, or a genuinely unexpected drop) must reconnect — never leave
+        // the client streaming into a dead session. resumeHandle is carried
+        // into the new connection when present (buildSetup()) but its absence
+        // must not block reconnecting; it would just start fresh.
+        if (!closedByUs) { setState('reconnecting', why); reconnect(); }
         else setState('closed', why);
       });
     });
@@ -156,32 +167,6 @@ function createLiveSession(deps) {
     const ok = await open();
     if (!ok && bus && typeof bus.emit === 'function') {
       bus.emit('health.anomaly', { kind: 'live-reconnect-failed', reason: 'session-resume' });
-    }
-  }
-
-  // BUG-059: the idle-timeout/session-max lifecycle rotation. Unlike
-  // reconnect() (used for unexpected mid-session drops), this is a
-  // deliberate, healthy rotation — it must NOT trip the breaker (breakers.fail)
-  // the way an actual connection failure does. resumeHandle is left untouched
-  // so buildSetup() carries it into the new connection (sessionResumption),
-  // and closedByUs is never set, so this is not mistakable for an intentional
-  // shutdown anywhere else in this module.
-  async function rotate(reason) {
-    if (idleTimer) clearTimeout(idleTimer);
-    if (maxTimer) clearTimeout(maxTimer);
-    logger.info('live.rotate', { reason });
-    setState('reconnecting', reason);
-    const oldWs = ws;
-    ws = null;
-    if (oldWs) {
-      // Detach first: the old close handler's own reconnect branch would
-      // otherwise race this function's explicit open() call below.
-      try { oldWs.removeAllListeners('close'); } catch {}
-      try { oldWs.close(); } catch {}
-    }
-    const ok = await open();
-    if (!ok && bus && typeof bus.emit === 'function') {
-      bus.emit('health.anomaly', { kind: 'live-reconnect-failed', reason });
     }
   }
 
@@ -241,12 +226,10 @@ function createLiveSession(deps) {
       }
     }
     if (msg.goAway) {
-      // Server is about to hang up. Reconnect proactively so the operator hears no seam.
+      // Server is about to hang up. Same non-final close as idle/max above —
+      // one reconnect path (the ws.on('close') branch), not a second one.
       logger.info('live.goaway', { timeLeft: msg.goAway.timeLeft });
-      setState('reconnecting', 'goaway');
-      try { closedByUs = true; ws.close(); } catch {}
-      closedByUs = false;
-      reconnect();
+      close('goaway', { final: false });
     }
     if (msg.usageMetadata && spend && typeof spend.recordCall === 'function') {
       // Honest spend: real counts from the API, never estimated (AD-5).
@@ -275,12 +258,26 @@ function createLiveSession(deps) {
     return sendRaw({ toolResponse: { functionResponses } });
   }
 
-  function close(reason) {
-    closedByUs = true;
+  // BUG-059: `final` (default true) is what the caller means by "goodbye".
+  // A final close is indistinguishable-on-purpose from a client shutdown:
+  // closedByUs=true, state settles to 'closed', no reconnect.
+  // A non-final close (idle-timeout, session-max, goAway) leaves closedByUs
+  // false and resumeHandle intact, then does nothing else — the existing
+  // ws.on('close') handler above (the ONLY reconnect path in this module)
+  // sees !closedByUs && resumeHandle and reconnects on its own.
+  function close(reason, { final = true } = {}) {
+    if (final) closedByUs = true;
     if (idleTimer) clearTimeout(idleTimer);
     if (maxTimer) clearTimeout(maxTimer);
-    if (ws) { try { ws.close(); } catch {} }
+    // Null out `ws` BEFORE closing the old socket, not after: a non-final
+    // close's own 'close' handler can synchronously call reconnect()->open()
+    // (fake sockets emit 'close' synchronously; real ones may coalesce too),
+    // which reassigns `ws` to the new socket — assigning `ws = null` after
+    // oldWs.close() would clobber that reassignment.
+    const oldWs = ws;
     ws = null;
+    if (oldWs) { try { oldWs.close(); } catch {} }
+    if (!final) return; // ws.on('close') settles state + reconnects
     setState('closed', reason || 'closed');
   }
 

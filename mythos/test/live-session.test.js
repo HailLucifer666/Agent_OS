@@ -211,7 +211,10 @@ describe('live-session (Phase 1, V2 §6)', () => {
     await new Promise((r) => setTimeout(r, 60));
 
     assert.equal(sockets.length, 2, 'idle-timeout must open a fresh socket automatically, not just die');
-    assert.ok(events.state.some((s) => s.state === 'reconnecting' && s.reason === 'idle-timeout'),
+    // The reason string comes from the fake socket's own close event (matching
+    // the real ws.on('close') handler both idle-timeout and goAway now share —
+    // see close(reason, {final:false}) in live-session.js), not a bespoke label.
+    assert.ok(events.state.some((s) => s.state === 'reconnecting'),
       'the rotation must be observable as a reconnecting state, not a silent death');
 
     sockets[1].simulateOpen();
