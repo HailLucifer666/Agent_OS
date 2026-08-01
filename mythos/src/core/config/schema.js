@@ -77,6 +77,14 @@ const SCHEMA = {
   KOKORO_VOICE:             { type: 'string', default: 'af_heart' },
   KOKORO_MODEL_DIR:         { type: 'string', default: '' },
 
+  // ORDERED STT chain (providers/stt.js), same convention as VOICE_TTS_CHAIN.
+  // Default 'groq': unchanged behaviour for anyone who sets nothing — the
+  // /api/voice/transcribe route used to call providers/groq-stt.js directly.
+  //   groq   Groq Whisper API. Needs GROQ_API_KEY + network.
+  //   local  On-device Whisper (providers/local-whisper-stt.js). No network
+  //          after the model is cached; WAV audio only.
+  VOICE_STT_CHAIN:          { type: 'string', default: '' },
+
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
   // thresholds; defaults match the previously-hardcoded constants exactly,
   // zero behavior change until overridden). Exposed to the HUD via

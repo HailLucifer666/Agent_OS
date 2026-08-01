@@ -14,7 +14,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
-const groqStt = require('../providers/groq-stt');
+const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
@@ -583,23 +583,24 @@ function createServer(deps) {
     engagementManager, auditRest, sanitizeErrorForClient
   });
 
-  // Speech-to-text — Groq Whisper transcribes audio recorded client-side.
-  // Replaces the browser's own SpeechRecognition: Google's cloud speech backend
-  // and Chrome's on-device model download are both unreachable on this network
+  // Speech-to-text — VOICE_STT_CHAIN decides who transcribes (providers/stt.js;
+  // default 'groq', unchanged behavior for anyone who sets nothing). Replaces
+  // the browser's own SpeechRecognition: Google's cloud speech backend and
+  // Chrome's on-device model download are both unreachable on this network
   // ('network' error / stalled 'downloading' state, confirmed live); Groq's host
   // is the same one already proven reachable all session for chat completions.
   // express.raw() is scoped to this one route only — the global express.json()
   // above only matches 'application/json' and won't consume this body.
   app.post('/api/voice/transcribe', express.raw({ type: '*/*', limit: '15mb' }), expensiveLimit, async (req, res) => {
     try {
-      if (!groqStt.isAvailable()) return res.status(503).json({ error: 'Speech-to-text unavailable — GROQ_API_KEY missing.' });
       let text;
       try {
-        text = await groqStt.transcribe(req.body, req.headers['content-type']);
-      } catch (groqErr) {
-        // Groq failed — surface it honestly; the UI shows a caption and the
-        // operator knows to retry instead of hearing dead silence.
-        bus.emit('health.anomaly', { kind: 'stt-failed', error: String(groqErr && groqErr.message || groqErr) });
+        text = await sttChain.transcribe(req.body, req.headers['content-type'], config);
+      } catch (sttErr) {
+        // Every provider in the chain failed — surface it honestly; the UI
+        // shows a caption and the operator knows to retry instead of hearing
+        // dead silence.
+        bus.emit('health.anomaly', { kind: 'stt-failed', error: String(sttErr && sttErr.message || sttErr) });
         return res.status(503).json({ ok: false, error: 'stt-down', fallback: 'browser', message: 'Speech-to-text service is temporarily unavailable. Use browser speech recognition.' });
       }
       res.json({ ok: true, text });

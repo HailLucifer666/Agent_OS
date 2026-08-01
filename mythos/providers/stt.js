@@ -1,0 +1,52 @@
+'use strict';
+
+// providers/stt.js — smallest possible STT router, parallel to
+// providers/tts.js but deliberately much simpler: unlike TTS engines, STT
+// engines don't have a "sticky voice identity" the operator can hear change
+// mid-session, so there's no reason to generalize createTtsChain to cover
+// both (the plan for this work is explicit about that). Every call just
+// tries the chain fresh, first-available-wins — no cached "active" state.
+//
+// VOICE_STT_CHAIN is an ordered, comma-separated provider list. Default
+// 'groq': /api/voice/transcribe used to call providers/groq-stt.js directly,
+// and an unset (or all-invalid) chain reproduces that exactly.
+//
+//   groq   — Groq Whisper API. Needs GROQ_API_KEY + network.
+//   local  — on-device Whisper (providers/local-whisper-stt.js). No network
+//            after the model is cached; WAV audio only (see that file for why).
+
+const groqStt = require('./groq-stt');
+const localWhisperStt = require('./local-whisper-stt');
+
+const BY_NAME = { groq: groqStt, local: localWhisperStt };
+
+function parseChain(config) {
+  const raw = String((config && config.VOICE_STT_CHAIN) || process.env.VOICE_STT_CHAIN || 'groq');
+  const names = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const out = [];
+  for (const n of names) {
+    if (BY_NAME[n] && out.indexOf(BY_NAME[n]) === -1) out.push(BY_NAME[n]);
+  }
+  return out.length ? out : [groqStt];
+}
+
+// Try each provider in the chain in order; the first one that is available
+// AND doesn't throw wins. A provider returning '' (e.g. groq-stt's own
+// no-speech/hallucination filtering) is a legitimate result, not a failure —
+// it is returned as-is, matching the pre-existing single-provider behavior.
+async function transcribe(buffer, mimeType, config) {
+  const chain = parseChain(config);
+  let lastErr = null;
+  for (const p of chain) {
+    try {
+      const available = await p.isAvailable();
+      if (!available) { lastErr = lastErr || new Error(`${p.name} unavailable`); continue; }
+      return await p.transcribe(buffer, mimeType);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('no STT provider available');
+}
+
+module.exports = { parseChain, transcribe, BY_NAME };
