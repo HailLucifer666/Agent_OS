@@ -24,7 +24,26 @@ const DEFAULT_ALLOWLIST = [
   'reminder_add','reminder_list','reminder_cancel',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   'spotify_play','spotify_play_pause','spotify_next','spotify_volume','spotify_status',
-  'media_status','launch_app','focus_window','list_windows','ui_click','ui_type','send_key',
+  'media_status','launch_app','focus_window','list_windows','close_window',
+  // ui_elements is NOT optional next to ui_click. Withholding it (as this list did
+  // until 2026-08-02) leaves the model holding ui_click(pid, elementPath) with no
+  // way on earth to OBTAIN an elementPath — so it invents them. Every
+  // "Element path index N out of range (parent has 0 children)" in
+  // vault/Episodic/2026-08-02.jsonl is a fabricated path checked against a tree the
+  // model was never allowed to read, not a stale path and not lazy Chromium a11y.
+  // Any click tool added here must ship with its corresponding read tool.
+  'ui_elements','ui_click','ui_type','send_key',
+  // The Chromium-capable read+click pair. Their own descriptions say to use them
+  // "when pc-child ui_elements returns no usable named element (common for
+  // Chromium/CEF/Electron apps like Spotify desktop, YouTube web, Electron
+  // overlays)" — advice the Live model could not follow, because none of the three
+  // were reachable from this path while cua-driver was ONLINE and serving Spotify.
+  'cua_list_windows','cua_get_window_state','cua_click',
+  // whatsapp_send was missing while its sibling gmail_send was present, so MYTHOS
+  // truthfully answered "I don't currently have a tool to send WhatsApp messages"
+  // and then improvised with ui_type into whatever box had focus. app_reply is the
+  // generic form of the same job (reply into whatever chat app is already open).
+  'whatsapp_send','whatsapp_contacts','whatsapp_contact_save','app_reply',
   'screen_look','screen_read_text','capture_screenshot',
   'browser_navigate','browser_click','browser_type','browser_get_text',
   'set_persona_level','ask_agent',
