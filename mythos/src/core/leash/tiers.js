@@ -204,6 +204,16 @@ const TIER_TABLE = {
   'install_from_github':   3,  // clones + installs a GitHub repo; shares run_command's allowlist gate. Runs the
                                // repo's own build hooks (npm postinstall, setup.py), so it is at least as
                                // dangerous as run_command — never map it below T3
+  // MCP transport (effectors/from-mcp.js). The listing tools are read-only;
+  // mcp_call_tool is T3 and must never drop below it. An MCP server runs with
+  // the operator's own privileges and MYTHOS's guards — RUN_COMMAND_ALLOWLIST,
+  // allowedRoots, the shell-metachar reject — apply to MYTHOS's effectors, NOT
+  // to a call routed through this transport. Desktop Commander's write_file
+  // reaches the whole disk; browser-use's tools drive a real browser. So the
+  // tier is the only gate, and it is deliberately the same as run_command's.
+  'mcp_list_servers':      0,
+  'mcp_list_tools':        0,
+  'mcp_call_tool':         3,
   'delete_artifact':       3,  // permanently deletes an artifact file + card (danger:true) — same
                                // unmapped-fail-safe bug class as open_artifact/BUG-008, mapped explicitly
                                // here so it resolves to T3 from the table, not tierOf()'s fail-safe

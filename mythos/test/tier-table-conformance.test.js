@@ -47,6 +47,7 @@ const { registerFromPersona } = require('../src/core/effectors/from-persona');
 const { registerFromHermes } = require('../src/core/effectors/from-hermes');
 const { registerFromRunner } = require('../src/core/effectors/from-runner');
 const { registerFromInstaller } = require('../src/core/effectors/from-installer');
+const { registerFromMcp } = require('../src/core/effectors/from-mcp');
 const { registerFromCalendar } = require('../src/core/effectors/from-calendar');
 const { registerFromWidgets } = require('../src/core/effectors/from-widgets');
 const { registerFromDocs } = require('../src/core/effectors/from-docs');
@@ -138,6 +139,10 @@ describe('anti-drift: TIER_TABLE <-> effector hub conformance', () => {
     registerFromHermes(hub);
     registerFromRunner(hub, { vault, config });
     registerFromInstaller(hub, { vault, config });
+    // MCP client. config.MCP_SERVERS stays empty here on purpose: registration
+    // must be complete (all three tools present in the hub) with no server
+    // configured, which is also the fail-closed state a fresh install ships in.
+    registerFromMcp(hub, { config, logger: { debug() {}, info() {}, warn() {} } });
     registerFromCalendar(hub, { fs: vault, bus });
     registerFromWidgets(hub, { bus });
     registerFromDocs(hub, { vault });

@@ -384,6 +384,27 @@ const SCHEMA = {
   // every run_command call too.
   INSTALL_TIMEOUT_MS:          { type: 'number', default: 600000, min: 1000 },
 
+  // MCP client (adapters/mcp-client + effectors/from-mcp.js). Lets MYTHOS talk
+  // to Model Context Protocol servers over stdio — Desktop Commander,
+  // browser-use, or anything else the operator points it at.
+  //
+  // MCP_SERVERS is a JSON array; empty → fail-closed, no server is contacted
+  // and every mcp_* tool reports disabled. Each entry:
+  //   {"name":"desktop_commander",         // [A-Za-z0-9_-], becomes part of the tool name
+  //    "command":"npx","args":["-y","@wonderwhy-er/desktop-commander@latest"],
+  //    "env":{"OPENAI_API_KEY":"${OPENAI_API_KEY}"},   // ${VAR} expands from the real env
+  //    "autostart":false}                              // connect at boot, or lazily on first use
+  // Ambient env is scrubbed of secrets before the server is spawned; the "env"
+  // block is the ONLY way a key reaches it, per server, by name.
+  //
+  // MCP_TOOL_ALLOWLIST is an optional second gate: a ;/,/newline-separated list
+  // of fully-qualified tool names (mcp__<server>__<tool>). Empty means every
+  // tool the configured servers advertise is callable — which is why every call
+  // is tier 3 regardless. An MCP server is NOT sandboxed by MYTHOS.
+  MCP_SERVERS:                 { type: 'string', default: '' },
+  MCP_TOOL_ALLOWLIST:          { type: 'string', default: '' },
+  MCP_TIMEOUT_MS:              { type: 'number', default: 30000, min: 1000 },
+
   // Native speech-to-speech (Gemini Live, V2 §6-§10, merged-order step 4).
   // Default true — Gemini Live (real-time duplex audio via s2s-bridge.js) is
   // now the primary voice path. voice-agent.js's batch STT path remains the

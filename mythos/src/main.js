@@ -60,6 +60,7 @@ const { createExplainer } = require('./core/immune/explainer');
 const { registerFromHermes } = require('./core/effectors/from-hermes');
 const { registerFromRunner } = require('./core/effectors/from-runner');
 const { registerFromInstaller } = require('./core/effectors/from-installer');
+const { registerFromMcp } = require('./core/effectors/from-mcp');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
@@ -165,6 +166,7 @@ async function main() {
   let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
   let windowSensor = null;         // V8 (Phase 4) — opt-in active-window perception
   let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
+  let mcpWiring = null;            // from-mcp.js's registerFromMcp() return (holds autostart/shutdown)
   let dailyPlanner = null;         // Phase 3 Jarvis upgrade — daily planning + accountability
 
   // Engagement Layer
@@ -419,6 +421,18 @@ async function main() {
       // runs its package manager, reporting every stage's real subprocess output.
       // Shares run_command's RUN_COMMAND_ALLOWLIST gate, so it is fail-closed too.
       registerFromInstaller(hub, { vault: memory.fs, config: config });
+      // MCP transport — mcp_list_servers / mcp_list_tools / mcp_call_tool.
+      // Fail-closed when MCP_SERVERS is empty (nothing spawned, tools report
+      // disabled). Servers connect lazily on first use unless an entry sets
+      // autostart, so registration here costs nothing on a machine with none
+      // configured.
+      mcpWiring = registerFromMcp(hub, { config: config, logger: logger });
+      // Deliberately not awaited: a server that is slow to start, or not
+      // installed at all, must never delay or fail boot. autostart() logs what
+      // connected and what did not.
+      mcpWiring.autostart().catch(function(err) {
+        logger.warn('mcp.autostart-failed', { error: err && err.message });
+      });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
       // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.
@@ -896,6 +910,11 @@ async function main() {
     androidChild.shutdownAndroidChild();
     browserAgent.stopAutoConnect();  // stop the poller before disconnect so it can't re-attach mid-shutdown
     browserAgent.disconnect();
+    // MCP servers are real OS child processes MYTHOS spawned. Not closing them
+    // leaves an orphan holding a browser or a filesystem session open after
+    // MYTHOS is gone — the BUG-029 failure mode. Fire-and-forget: this step is
+    // synchronous, and close() is best-effort by contract.
+    if (mcpWiring && mcpWiring.shutdown) { try { mcpWiring.shutdown(); } catch (_) { /* best-effort */ } }
     if (edgeTtsChild) edgeTtsChild.stop();
     if (piperChild) piperChild.stop();
     if (timerSensor) timerSensor.stop();
