@@ -41,13 +41,18 @@ const ALLOWLIST = new Set([
   'src/core/effectors/pipeline.js:41',
   'server/index.js:96',
   'server/index.js:114',
-  // HUD canvas animation jitter (visual-only spark/burst timing, not a metric)
-  'ui/public/js/neural-map/core-orb.js:85',
-  'ui/public/js/neural-map/core-orb.js:310',
-  'ui/public/js/neural-map/core-orb.js:312',
-  'ui/public/js/neural-map/core-orb.js:334',
-  'ui/public/js/neural-map/core-orb.js:528',
-  'ui/public/js/neural-map/hud-canvas.js:327',
+  // HUD canvas animation jitter (visual-only spark/burst timing, not a metric).
+  // Line numbers re-synced 2026-08 after the iridescent-swarm redesign shifted
+  // these calls within core-orb.js (the swarm port grew the file by ~200 lines).
+  // Same 5 legitimate sites: spark-timer init, neural-web firing edge + cadence,
+  // synapse-spark angle/length, and the ambient spark-timer reset. None
+  // synthesize a status/metric/telemetry value — all are pure animation jitter.
+  'ui/public/js/neural-map/core-orb.js:109',
+  'ui/public/js/neural-map/core-orb.js:550',
+  'ui/public/js/neural-map/core-orb.js:552',
+  'ui/public/js/neural-map/core-orb.js:574',
+  'ui/public/js/neural-map/core-orb.js:772',
+  'ui/public/js/neural-map/hud-canvas.js:369',
 ]);
 
 function collectJsFiles(dir) {

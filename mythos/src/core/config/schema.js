@@ -364,11 +364,12 @@ const SCHEMA = {
   INSTALL_TIMEOUT_MS:          { type: 'number', default: 600000, min: 1000 },
 
   // Native speech-to-speech (Gemini Live, V2 §6-§10, merged-order step 4).
-  // Opt-in, default false — voice-agent.js's batch STT path is the untouched
-  // fallback; flipping this back to false is a total, zero-code rollback
-  // (V2 §16). See .env.example for the full story on each key, including the
-  // GEMINI_LIVE_VOICE choice.
-  VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
+  // Default true — Gemini Live (real-time duplex audio via s2s-bridge.js) is
+  // now the primary voice path. voice-agent.js's batch STT path remains the
+  // untouched fallback if GOOGLE_API_KEY is missing or a live session fails.
+  // Flipping this back to false is a total, zero-code rollback (V2 §16). See
+  // .env.example for the full story on each key, including the voice choice.
+  VOICE_S2S_ENABLED:           { type: 'bool',   default: true },
   GEMINI_LIVE_MODEL:           { type: 'string', default: 'models/gemini-3.1-flash-live-preview' },
   // Aoede | Kore | Leda | Zephyr | Puck | Charon — Aoede kept as default (see
   // .env.example): auditioning by ear across all six needs a human with

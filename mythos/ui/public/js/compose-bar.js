@@ -136,6 +136,9 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Sync voice button state from the voice loop
   function setVoiceState(s) {
     voiceBtn.className = `compose-voice-btn mic-${s}`;
+    // Mirror the state onto the pill so CSS can tint its border/glow to match
+    // the orb (one organism: input surface catches the orb's current hue).
+    voiceBtn.parentElement.dataset.voiceState = s;
     if (onVoiceState) onVoiceState(s);
   }
 

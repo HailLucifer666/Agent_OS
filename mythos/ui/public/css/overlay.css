@@ -22,7 +22,10 @@
   max-height: 84vh;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--accent-glow), 0 24px 80px rgba(0, 0, 0, 0.6);
+  /* Matches .glass's "lit from above" inset highlight, plus the accent glow
+     and a deeper drop shadow so floating panels read as elevated glass. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
+              var(--accent-glow), 0 24px 80px rgba(0, 0, 0, 0.6);
   animation: fadeInUp var(--dur-med) var(--ease) both;
 }
 

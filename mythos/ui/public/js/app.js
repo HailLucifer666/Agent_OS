@@ -171,6 +171,16 @@ subscribe(['action'], (msg) => {
   if (s2s && typeof s2s.suspendForMedia === 'function') s2s.suspendForMedia();
 });
 
+// TTS speaking pulse — each speech-chunk WS msg (server-side TTS audio en route)
+// kicks the orb's speaking-state exhale. The mic is muted during playback
+// (voice-loop BUG-027) so onActivity() never fires while speaking; this is the
+// synthetic amplitude signal that makes the orb pulse in rhythm with MYTHOS's
+// voice. Spikes an envelope that decays in core-orb's frame loop.
+subscribe(['speech-chunk'], () => {
+  if (typeof orb.pulseSpeaking === 'function') orb.pulseSpeaking();
+  if (typeof hud.pulseSpeaking === 'function') hud.pulseSpeaking();
+});
+
 function ensureVoice() {
   if (!voice) {
     voice = createVoiceLoop({

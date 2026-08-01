@@ -24,7 +24,7 @@ import { layoutGraph } from './graph-layout.js';
 import { mountHudA11yLayer } from './hud-a11y-layer.js';
 
 const RESYNC_EVERY_TICKS = 100;
-const BG_DOT_COUNT = 130;          // ambient starfield cap
+const BG_DOT_COUNT = 60;           // reduced: the GlitterWrap flow field now carries ambient background dots; these remain as fixed center-biased twinkle depth
 const ELECTRONS_PER_EDGE = 3;      // continuous ambient electrons per tendril
 const PATH_SEGMENTS = 26;          // polyline resolution per tendril
 
@@ -119,7 +119,8 @@ function savePan(pan) {
 
 export function mountHud(canvas, ctx) {
   const c2d = canvas.getContext('2d');
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  // Cap DPR at 1.5: full-screen canvas with additive flow particles + tendrils per frame; 2x/3x DPR on retina is a fill-rate cliff for no visible gain.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Screen-reader mirror of the node graph — see hud-a11y-layer.js. Synced
@@ -206,6 +207,47 @@ export function mountHud(canvas, ctx) {
       a: 0.06 + bgRand() * 0.30,
       tw: bgRand() * Math.PI * 2,          // twinkle phase
       tws: 0.3 + bgRand() * 1.2,           // twinkle speed
+    };
+  });
+
+  // ---- GlitterWrap flow field: ambient particle drift radiating outward from
+  // the core. The new BASE background layer — drawn before bloom/tendrils/nodes.
+  // Ported from a Canvas2D warp/starfield reference, but tuned AMBIENT/SLOW
+  // (stepZ ~half the warp value, low max speed, subtle glitter): particles
+  // drift gently outward from the core, not streak past as a hyperspace jump.
+  // Reinforces the radial HUD metaphor: energy slowly radiating from the center.
+  //
+  // ponytail: a WebGL points shader could push this to thousands of stars with
+  // real bloom on GPU machines — see redesign PLAN.
+  const FLOW_COUNT = 320;
+  const FLOW_FOCAL = 0.15;    // virtual focal depth — lower = stars survive to a nearer z = bigger persp
+                              // multiplier = longer streaks before they cull past the edge (dramatic warp rush)
+  const FLOW_TRAIL = 0.86;    // per-second trail keep (framerate-independent decay)
+  const FLOW_COLOR = [
+    COLORS.accent,            // color1 — --accent cyan, ties to the orb
+    '#0ADED3',                // color2 — reference teal
+    '#E1E1DA',                // color3 — reference off-white
+  ];
+  const flowRand = mulberry32(0x85E1A37); // seeded so the field is stable across frames
+  // Pool built ONCE at mount — zero per-frame allocation in the loop.
+  const flow = Array.from({ length: FLOW_COUNT }, () => {
+    // Spawn across the FULL field [-1,1]. Stars exist across the whole viewport;
+    // as z shrinks the perspective projection accelerates them outward toward
+    // and past the screen edges — the starfield-warp read (Star Wars opening
+    // crawl, Windows starfield screensaver). The previous tiny core-ring spawn
+    // (rad 0.02-0.12) trapped every star inside ~134px of center, buried inside
+    // the orb; full-field spawn lets them actually reach the edges.
+    return {
+      x: (flowRand() - 0.5) * 2,
+      y: (flowRand() - 0.5) * 2,
+      z: FLOW_FOCAL + flowRand() * (1.0 - FLOW_FOCAL),    // FLOW_FOCAL (near) .. 1.0 (far)
+      px: 0, py: 0,
+      seeded: false,
+      seed: flowRand() * 1000,
+      vmul: 0.6 + flowRand() * 0.9,
+      colorIdx: (flowRand() * 3) | 0,
+      flashUntil: 0,
+      nextFlash: flowRand() * 6,
     };
   });
 
@@ -581,6 +623,150 @@ export function mountHud(canvas, ctx) {
     c2d.fillText(value.split('').join(' '), width / 2, 44);
   }
 
+  // ---- GlitterWrap flow field render. The ambient outward particle drift.
+  // Does its OWN trail-fade (destination-out) + additive star draw, then resets
+  // composite to source-over and globalAlpha to 1 so bloom/tendrils draw after
+  // normally. Reused scratch vars only — zero per-frame allocation.
+  function drawFlowField(dt) {
+    if (reduced) return; // no rAF-driven motion under prefers-reduced-motion
+
+    const cx = width / 2, cy = height / 2;
+    // Projection scale: max(w,h)*0.5 so stars reach past the horizontal edges
+    // on widescreen (was min*1.4, which height-clamped stars to ~400px reach on
+    // 1280x800 and left the sides empty). max gives ~640px reach — stars at
+    // tx=1.0 fly off the sides, filling the whole viewport with motion.
+    const projScale = Math.max(width, height) * 0.5;
+    const elapsed = t;
+
+    // State reactivity — small multiplicative tweaks on stepZ / brightness from
+    // the orb's voiceState + activity, not branchy per-particle logic:
+    //   listening: field leans inward (reverse z step) — toward the mic
+    //   speaking : radiates faster + density pulse with activity amplitude
+    //   default  : gentle outward drift
+    let dirMul = 1;          // +1 outward, -1 inward
+    let speedMul = 1;
+    let brightMul = 1;
+    if (voiceState === 'listening') {
+      dirMul = -1;           // particles drift inward toward the mic
+      speedMul = 0.8;
+      brightMul = 1.05;
+    } else if (voiceState === 'speaking') {
+      speedMul = 1.5 + activity * 0.8; // faster radiation + density pulse
+      brightMul = 1.0 + activity * 0.4;
+    } else if (voiceState === 'processing') {
+      speedMul = 1.1;
+      brightMul = 1.05;
+    }
+
+    // Warp speed. Old value (0.0003) was ~5x too slow AND compounded by a dt
+    // bug: the GlitterWrap reference multiplies deltaSec*60 to normalize to
+    // "frames at 60fps", but this port passed raw seconds (~0.0167), so the
+    // effective motion was ~60x too slow — stars took minutes to cross, reading
+    // as static dots. Raised to a real warp speed and the dt*60 normalization
+    // is applied below at the z step. persp = FOCAL/z means stars accelerate
+    // exponentially as z->0 (the signature warp rush toward the camera).
+    const stepZ = 0.0028 * speedMul;
+
+    // NOTE: the GlitterWrap reference fades prior pixels each frame via a
+    // destination-out rect to build a smear/trail buffer. That does NOT work
+    // here: frame() clears the whole canvas with clearRect before drawFlowField
+    // runs, so a trail buffer can never accumulate — and the rest of the HUD
+    // (tendrils, nodes, EKG) REQUIRES that full clear each frame. We rely on the
+    // streak-from-previous-position + dot head for the motion look instead. The
+    // streak's px,py carries over from the previous frame, which is what gives
+    // the flow its sense of motion. FLOW_TRAIL is kept (unused) for parity with
+    // the reference and a future opt-in persistent-canvas path.
+    void FLOW_TRAIL;
+
+    // additive draw of the particles themselves
+    c2d.globalCompositeOperation = 'lighter';
+    c2d.lineCap = 'round';
+
+    for (let i = 0; i < FLOW_COUNT; i++) {
+      const s = flow[i];
+      // advance depth — inward when listening, outward otherwise. dt*60
+      // normalizes to "frames at 60fps" (matches the GlitterWrap reference) so
+      // warp speed is framerate-independent: stepZ is tuned per-1/60s.
+      s.z -= stepZ * s.vmul * (dt * 60) * dirMul;
+      // respawn at far plane when it has flown past (z<=focal) or, on listening,
+      // when it has receded past the far plane (z>=1). Cull off-screen stars too.
+      if (s.z <= FLOW_FOCAL || s.z >= 1.0001) {
+        // Respawn across the FULL field [-1,1] at the far plane. Matches the
+        // pool init: stars spread across the viewport at z=1, then accelerate
+        // outward as z shrinks. (Core-ring respawn was the bug that trapped
+        // every star inside the orb's footprint.)
+        s.x = (flowRand() - 0.5) * 2;
+        s.y = (flowRand() - 0.5) * 2;
+        s.z = dirMul >= 0 ? 1.0 : FLOW_FOCAL + 0.02;
+        s.seeded = false;
+        s.nextFlash = elapsed + 2 + flowRand() * 7;
+        continue;
+      }
+
+      // perspective project (guard divisor like the reference)
+      const persp = FLOW_FOCAL / Math.max(s.z, 0.0001);
+      // turbulence: gentle sinusoidal wobble growing as the star approaches
+      const amp = (1 - s.z) * 0.04;
+      const tx = s.x + Math.sin(elapsed * 1.2 + s.seed) * amp;
+      const ty = s.y + Math.cos(elapsed * 1.0 + s.seed * 1.3) * amp;
+      const sx = cx + tx * persp * projScale;
+      const sy = cy + ty * persp * projScale;
+
+      // cull off-screen — respawn next frame (keeps the pool alive)
+      if (sx < -40 || sx > width + 40 || sy < -40 || sy > height + 40) {
+        s.z = 0; // triggers respawn on the next pass
+        continue;
+      }
+
+      const color = FLOW_COLOR[s.colorIdx];
+      // depth-faded brightness: nearer (low z) reads brighter. Clamp raised
+      // from [0.04,0.55] to [0.18,0.85] — the old floor was below visibility
+      // on a near-black base, which is why the field read as invisible.
+      const depthA = Math.max(0.18, Math.min(0.85, (1 - s.z) * 0.9 + 0.1)) * brightMul;
+
+      // streak from previous to current position. At warp speed near stars
+      // move many px/frame, so the raw prev->curr line is already a real tail;
+      // far stars barely move and read as dots. The extrapolation (3x delta)
+      // lengthens near-star tails into dramatic light-speed streaks while
+      // leaving far stars as points — the depth contrast IS the warp read.
+      if (s.seeded) {
+        const dx = sx - s.px, dy = sy - s.py;
+        const tailX = sx + dx * 3, tailY = sy + dy * 3;
+        c2d.strokeStyle = color;
+        c2d.globalAlpha = depthA * 0.75;
+        c2d.lineWidth = 1.1;
+        c2d.beginPath();
+        c2d.moveTo(tailX, tailY);
+        c2d.lineTo(sx, sy);
+        c2d.stroke();
+      } else {
+        s.seeded = true;
+      }
+
+      // glitter flash scheduling -> boost size/brightness briefly
+      let flashMult = 1;
+      if (elapsed >= s.nextFlash) {
+        s.flashUntil = elapsed + 0.04 + flowRand() * 0.07; // 40-110ms sparkle
+        s.nextFlash = elapsed + 4 + flowRand() * 8;
+      }
+      if (elapsed < s.flashUntil) flashMult = 2.4;
+
+      // dot head — 1.5px (was 1px) so it reads at distance on pure black.
+      const head = 1.5 * flashMult;
+      c2d.fillStyle = color;
+      c2d.globalAlpha = Math.min(1, depthA * flashMult);
+      c2d.fillRect(sx - head * 0.5, sy - head * 0.5, head, head);
+
+      s.px = sx;
+      s.py = sy;
+    }
+
+    // reset composite + alpha so bloom wash + tendrils draw normally after
+    c2d.globalCompositeOperation = 'source-over';
+    c2d.globalAlpha = 1;
+    c2d.lineCap = 'butt';
+  }
+
   // ---- ambient bloom — full-viewport voice-state wash, drawn first (behind
   // the starfield/tendrils/nodes) so listening/speaking/thinking read as an
   // atmosphere shift, not just an orb-local effect ----
@@ -593,8 +779,11 @@ export function mountHud(canvas, ctx) {
     const pulse = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 1.4);
     const rad = Math.min(width, height) * (0.28 + 0.05 * boost * pulse);
     const g = c2d.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, rad);
-    g.addColorStop(0, hexA(hue, 0.055 * boost + 0.02));
-    g.addColorStop(0.6, hexA(hue, 0.025 * boost));
+    // Opacities trimmed ~40% (0.055->0.033, 0.025->0.015) so the bloom wash no
+    // longer fights the pure-black base — it's a faint state tint now, not a
+    // haze. The flow-field particles read clearly through it.
+    g.addColorStop(0, hexA(hue, 0.033 * boost + 0.012));
+    g.addColorStop(0.6, hexA(hue, 0.015 * boost));
     g.addColorStop(1, 'rgba(0,0,0,0)');
     c2d.fillStyle = g;
     c2d.fillRect(0, 0, width, height);
@@ -623,6 +812,11 @@ export function mountHud(canvas, ctx) {
     c2d.save();
     c2d.scale(dpr, dpr);
     c2d.clearRect(0, 0, width, height);
+
+    // Base layer FIRST: the GlitterWrap flow field (ambient outward particle
+    // drift). Drawn before bloom so the voice-state wash reads through it.
+    // The dt here is the existing frame dt, already capped at 0.05s.
+    drawFlowField(dt);
 
     drawBloom();
     drawFaintHudRings();

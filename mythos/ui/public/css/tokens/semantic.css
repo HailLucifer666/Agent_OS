@@ -19,8 +19,10 @@
      600px  "narrow"  : panels fullscreen, non-essential widgets auto-hide */
 
 :root {
-  /* base palette — Jarvis: near-black navy, single cyan accent */
-  --bg: #05080f;
+  /* base palette — Jarvis: pure black base (was #05080f near-black navy; the
+     cyan radial washes that tinted it navy are removed in base.css so the
+     flowing particle field reads against true #000), single cyan accent */
+  --bg: #000000;
   --bg-raised: #0a101c;
   --bg-raised-2: #101828;
   --bg-hover: #162034;
@@ -48,6 +50,27 @@
   --status-degraded: #eab308;
   --status-offline: #5f7391;
   --status-warn: #ff5f66;
+
+  /* orb-state palette — the SINGLE source of truth for the central orb's hue
+     per resolved state. Read by core-orb.js's STATE_COLOR map (and, for the
+     action/task flash, ACTION_COLORS) via cssVar('--orb-<state>', '#fallback').
+     Composed from the role tokens above so a global accent change still
+     propagates: idle tracks --accent, listening tracks --status-ok, thinking
+     tracks --module-goals, confirm tracks --status-degraded, degraded tracks
+     --danger. --orb-speaking is a unique warm yellow (no existing role token
+     matches) kept here as a literal so the whole palette lives in one place.
+     Phase 4 also reads --orb-* so the compose bar / background warm with the
+     orb — one state, one color, everywhere. */
+  --orb-idle: var(--accent);
+  --orb-online: var(--accent);
+  --orb-listening: var(--status-ok);
+  --orb-speaking: #f5d020;
+  --orb-thinking: var(--module-goals);
+  --orb-task: var(--accent);
+  --orb-confirm: var(--status-degraded);
+  --orb-degraded: var(--danger);
+  --orb-offline: var(--text-dim);
+  --orb-booting: var(--text-dim);
 
   /* per-HUD-module accents — read by hud-canvas.js/core-orb.js's node/state
      color maps and by each module's own view CSS (goals.css, kanban.css,

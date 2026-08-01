@@ -44,7 +44,10 @@ function mulberry32(seed) {
 
 export function mountCoreOrb(canvas, ctx) {
   const c2d = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
+  // dpr capped at 1.5: the ~800-particle swarm is fill-cost-bound (each glowDot
+  // is 2 arc fills), and on 2x/3x screens that cost scales with dpr^2 while the
+  // visual gain past 1.5 is negligible for these soft additive dots.
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const ACCENT = cssVar('--accent', '#4fd8ff');
@@ -53,10 +56,24 @@ export function mountCoreOrb(canvas, ctx) {
   const DANGER = cssVar('--danger', '#ff5f66');
   const WARN = cssVar('--status-degraded', '#eab308');
   const THINKING = cssVar('--module-goals', '#a78bfa'); // matches mic-processing (voice.css)
-  // Orb glow colors per user spec:
-  //   idle = cyan, listening = green, speaking = yellow, error = red
-  const LISTENING = '#43e5a0';   // green
-  const SPEAKING = '#f5d020';    // warm yellow, readable on dark navy
+
+  // ---- orb state palette: the SINGLE source of truth is the --orb-* CSS tokens
+  // (Phase 1 shipped them in semantic.css). All hardcoded state hues are gone;
+  // these read tokens with the SAME fallback hexes so a missing token is a no-op.
+  const STATE_HEX = {
+    offline: cssVar('--orb-offline', '#8ba3c4'),
+    booting: cssVar('--orb-booting', '#8ba3c4'),
+    confirm: cssVar('--orb-confirm', '#eab308'),
+    degraded: cssVar('--orb-degraded', '#ff5f66'),
+    thinking: cssVar('--orb-thinking', '#a78bfa'),
+    listening: cssVar('--orb-listening', '#43e5a0'),
+    speaking: cssVar('--orb-speaking', '#f5d020'),
+    online: cssVar('--orb-online', '#4fd8ff'),
+  };
+  // idle/online share the accent token; legacy local aliases kept for ACTION_COLORS
+  // and the per-state plasma/orbital code below, which still read named consts.
+  const LISTENING = STATE_HEX.listening;
+  const SPEAKING = STATE_HEX.speaking;
 
   const ACTION_COLORS = {
     goals: THINKING,
@@ -81,6 +98,13 @@ export function mountCoreOrb(canvas, ctx) {
   let activity = 0;             // live voice amplitude 0..1 (speaking halo waves)
   let ringR = 46;                // updated each frame; sparks/particles read this
   let actionFlash = null;        // { color, ok, decay }
+  let shockwave = 0;             // swarm kick envelope 0..1 (decays like `level`);
+                                 // briefly expands the swarm radius in the action color.
+  let speakPulse = 0;            // TTS-cadence envelope 0..1 (decays like `level`).
+                                 // Fed by pulseSpeaking() on each speech-chunk WS msg,
+                                 // because the mic is muted during playback (voice-loop
+                                 // BUG-027) so setActivity() never fires while speaking.
+                                 // Drives the speaking-state exhale wobble.
   let sparks = [];               // { angle, life, len, color }
   let sparkTimer = 0.9 + Math.random() * 0.8;
 
@@ -97,10 +121,9 @@ export function mountCoreOrb(canvas, ctx) {
   syncSize();
 
   // ---- unified state resolution — one hue, one priority chain ----
-  const STATE_COLOR = {
-    offline: DIM, booting: DIM, confirm: WARN, degraded: DANGER,
-    thinking: THINKING, listening: LISTENING, speaking: SPEAKING, online: ACCENT,
-  };
+  // STATE_COLOR now aliases STATE_HEX (token-backed). Local consts (DIM/WARN/...)
+  // are kept above only for ACTION_COLORS / plasma tinting reads.
+  const STATE_COLOR = STATE_HEX;
   const STATE_LINE = {
     offline: 'ENTITY OFFLINE', booting: 'ENTITY BOOTING', confirm: 'AWAITING CONFIRM',
     degraded: 'ENTITY DEGRADED', thinking: 'PROCESSING', listening: 'LISTENING',
@@ -133,13 +156,179 @@ export function mountCoreOrb(canvas, ctx) {
     if (statusLiveEl) statusLiveEl.textContent = STATE_LINE[state];
   }
 
-  // ---- halo particles orbiting just outside the ring (depth-sorted, state-reactive) ----
-  const orbRand = mulberry32(0xA11CE0DE);
-  const particles = Array.from({ length: 48 }, () => ({
-    angle0: orbRand() * TAU, band: orbRand(), dir: orbRand() < 0.5 ? 1 : -1,
-    speed: 0.06 + orbRand() * 0.16, r: 0.5 + orbRand() * 0.9,
-    phase: orbRand() * TAU, tws: 0.3 + orbRand() * 0.5, depth: orbRand(), // 0 far .. 1 near
-  }));
+  // ---- Fibonacci-sphere iridescent swarm (~800 particles) ----
+  // Replaces the old 48-particle halo. Built ONCE with mulberry32 (stable across
+  // frames/resizes — never flickers). Each particle stores its Fibonacci base
+  // direction (x,y,z) on the unit sphere plus a per-particle phase/size seed;
+  // the per-frame physics (curl turbulence, breathing, rotation, hue) is computed
+  // in the draw loop from those fixed bases + time + state. No allocation in the
+  // hot loop: positions reuse a typed array, color reuses the scratch object below.
+  // ponytail: WebGL instanced-points shader is the ceiling for higher counts /
+  // true bloom on GPU-capable machines — see redesign PLAN.
+  const SWARM_COUNT = 800;
+  const GOLDEN_ANGLE = 2.399963229728653;          // golden angle for Fibonacci sphere
+  const swarmRand = mulberry32(0xA11CE0DE);
+  // SoA layout: x,y,z = unit-sphere base direction; phase = per-particle hue/size
+  // seed; size = base dot radius (px, before depth scaling). Float32 so the loop
+  // is cache-friendly and there is zero GC pressure.
+  const swarmX = new Float32Array(SWARM_COUNT);
+  const swarmY = new Float32Array(SWARM_COUNT);
+  const swarmZ = new Float32Array(SWARM_COUNT);
+  const swarmPhase = new Float32Array(SWARM_COUNT);
+  const swarmSize = new Float32Array(SWARM_COUNT);
+  for (let i = 0; i < SWARM_COUNT; i++) {
+    const frac = (i + 0.5) / SWARM_COUNT;
+    const y0 = 1.0 - 2.0 * frac;
+    const r0 = Math.sqrt(Math.max(0.0, 1.0 - y0 * y0));
+    const th = GOLDEN_ANGLE * i;
+    swarmX[i] = r0 * Math.cos(th);
+    swarmY[i] = y0;
+    swarmZ[i] = r0 * Math.sin(th);
+    swarmPhase[i] = swarmRand() * TAU;
+    swarmSize[i] = 0.7 + swarmRand() * 1.1;
+  }
+
+  // module-level reusable HSL->RGB scratch (THREE.Color.setHSL equivalent, inline
+  // so the swarm loop never calls `new` and never allocates a string per particle
+  // — we set c2d.fillStyle once to the rgba string built into `colorRGBA`).
+  const rgbScratch = { r: 0, g: 0, b: 0 };
+  function hslToRgb(h, s, l) {
+    // h in [0,1); s,l in [0,1]. Writes into rgbScratch and returns it.
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => {
+      const k = (n + h * 12) % 12;
+      return l - a * Math.max(-1, Math.min(Math.min(k - 3, 9 - k), 1));
+    };
+    rgbScratch.r = f(0); rgbScratch.g = f(8); rgbScratch.b = f(4);
+    return rgbScratch;
+  }
+
+  // hex '#rrggbb' -> hue in [0,1) (used to pull the iridescent palette toward the
+  // resolved state's base color). Cheap avg of the RGB->HSV hue; saturation/light
+  // still come from the reference iridescent formula so the swarm shimmers.
+  function hexHue(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    if (mx === mn) return 0.52;             // grey -> default cyan-violet base
+    const d = mx - mn;
+    let h;
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h /= 6;
+    return h < 0 ? h + 1 : h;
+  }
+  // Precomputed iridescent palette. Hue is continuous across the swarm, so we
+  // quantize it to HUE_BINS bins and cache the rgb() strings ONCE. sat/light
+  // vary per state, so the palette is rebuilt ONLY when they change (state
+  // transitions are infrequent — a few/sec at most — so this rebuild is ~0 GC
+  // pressure in the 60fps hot loop). This is the fix for the per-particle
+  // template-literal `rgb(...)` that would otherwise churn ~48k short-lived
+  // strings/sec at 800 particles — the exact pattern the GlitterWrap reference
+  // calls out as the main cause of GC-pause stutter.
+  const HUE_BINS = 36; // 10deg resolution — imperceptible across an additive shimmer
+  const SWARM_PALETTE = new Array(HUE_BINS);
+  let _paletteSat = -1, _paletteLight = -1;
+  function buildSwarmPalette(sat, light) {
+    if (sat === _paletteSat && light === _paletteLight) return;
+    _paletteSat = sat; _paletteLight = light;
+    for (let b = 0; b < HUE_BINS; b++) {
+      const rgb = hslToRgb(b / HUE_BINS, sat, light);
+      SWARM_PALETTE[b] = `rgb(${(rgb.r * 255) | 0},${(rgb.g * 255) | 0},${(rgb.b * 255) | 0})`;
+    }
+  }
+
+  // Precompute the base hue for each state once (state set is closed & tiny) so
+  // the loop reads a single number, not hexHue() per particle.
+  const STATE_HUE = Object.fromEntries(
+    Object.entries(STATE_HEX).map(([k, hex]) => [k, hexHue(hex)])
+  );
+
+  // Reusable per-frame physics factors (filled once at the top of drawSwarm from
+  // `state`, then read inside the loop — no per-particle branching on state).
+  const swarmFx = {
+    flowMul: 1,        // time scale
+    rotMul: 1,         // golden-angle spin speed (t*0.25 base)
+    turbMul: 1,        // curl turbulence amplitude
+    radiusMul: 1,      // base radius multiplier (inhale/exhale/shockwave)
+    radiusWobble: 0,   // additive sinusoidal radius term (speaking pulse)
+    wobbleFreq: 7,     // frequency of that wobble
+    sat: 0.75,         // HSL saturation
+    light: 0.6,        // HSL lightness
+    alphaMul: 1,       // global alpha multiplier (offline dim)
+    hueBase: STATE_HUE.online,
+  };
+  function applySwarmFx(state) {
+    // Reset to defaults then layer state-specific multiplicative terms. These are
+    // SMALL additions, not branchy overrides — the iridescent shimmer + breathing
+    // still run underneath.
+    swarmFx.flowMul = 1;
+    swarmFx.rotMul = 1;
+    swarmFx.turbMul = 1;
+    swarmFx.radiusMul = 1;
+    swarmFx.radiusWobble = 0;
+    swarmFx.wobbleFreq = 7;
+    swarmFx.sat = 0.75;
+    swarmFx.light = 0.6;
+    swarmFx.alphaMul = 1;
+    swarmFx.hueBase = STATE_HUE[state] ?? STATE_HUE.online;
+    if (reduced) {
+      // prefers-reduced-motion: freeze time evolution. We still draw the swarm so
+      // the orb reads as a textured sphere, but t contributions are clamped.
+      swarmFx.flowMul = 0;
+      swarmFx.turbMul = 0;
+      swarmFx.radiusWobble = 0;
+    }
+    // action-flash shockwave decays like `level` and briefly expands the swarm.
+    if (shockwave > 0) swarmFx.radiusMul *= 1 + shockwave * 0.15;
+    switch (state) {
+      case 'listening':
+        // inhale: radius breathes IN (contracts), turbulence tightens, green tint.
+        swarmFx.radiusMul *= reduced ? 1 : (1 - 0.08 * Math.sin(t * 2.618));
+        swarmFx.turbMul *= 0.8;
+        swarmFx.sat = 0.7; swarmFx.light = 0.58;
+        break;
+      case 'speaking':
+        // exhale/pulse outward, warm yellow. The mic is muted during TTS playback
+        // (voice-loop BUG-027) so `activity` stays 0 — we pulse from the TTS
+        // chunk cadence instead (speakPulse, fed by pulseSpeaking() on each
+        // speech-chunk WS msg). max() so a nonzero mic activity still wins if
+        // the S2S duplex path ever feeds one.
+        swarmFx.radiusWobble = 0.12 * Math.max(activity, speakPulse);
+        swarmFx.sat = 0.8; swarmFx.light = 0.62;
+        break;
+      case 'thinking':
+      case 'processing':
+        // faster vortex: spin multiplier up, turbulence up, purple.
+        swarmFx.rotMul = 2.4;     // t*0.25 -> ~t*0.6
+        swarmFx.turbMul = 1.4;
+        swarmFx.sat = 0.72; swarmFx.light = 0.6;
+        break;
+      case 'confirm':
+        // slow shimmer, near-freeze — dampen all motion toward 0.3x, amber.
+        swarmFx.flowMul *= 0.3;
+        swarmFx.rotMul *= 0.3;
+        swarmFx.turbMul *= 0.3;
+        swarmFx.radiusWobble = 0;
+        swarmFx.sat = 0.75; swarmFx.light = 0.58;
+        break;
+      case 'degraded':
+        // scatter: boost turbulence, reduce coherence (lower sat so it reads sickly).
+        swarmFx.turbMul = 1.8;
+        swarmFx.sat = 0.6; swarmFx.light = 0.55;
+        break;
+      case 'offline':
+      case 'booting':
+        // dim stillness: motion ~0, alpha ~0.4x.
+        swarmFx.flowMul = 0;
+        swarmFx.rotMul = 0;
+        swarmFx.turbMul = 0.2;
+        swarmFx.alphaMul = 0.4;
+        break;
+      // idle/online: default iridescent drift — no modulation needed.
+    }
+  }
 
   function glowDot(x, y, r, color, alpha) {
     c2d.beginPath();
@@ -154,22 +343,73 @@ export function mountCoreOrb(canvas, ctx) {
     c2d.globalAlpha = 1;
   }
 
-  function drawHaloParticles(c, R, color, state) {
-    particles.forEach((p) => {
-      const angle = reduced ? p.angle0 : p.angle0 + t * p.speed * p.dir;
-      let radMul = 1.10 + p.band * 0.42;
-      if (!reduced && state === 'listening') {
-        radMul *= 1 - 0.05 * (0.5 + 0.5 * Math.sin(t * 2.618));               // inhale, breathe-synced
-      } else if (!reduced && state === 'speaking') {
-        radMul *= 1 + 0.10 * activity * Math.sin(t * 7 + p.phase);            // rhythmic outward waves
-      } else if (!reduced) {
-        radMul *= 1 + Math.sin(t * p.tws + p.phase) * 0.03;                   // calm drift
-      }
-      const x = c + Math.cos(angle) * R * radMul;
-      const y = c + Math.sin(angle) * R * radMul;
-      const alpha = (0.08 + p.depth * 0.22) * (reduced ? 1 : 0.7 + 0.3 * Math.sin(t * p.tws + p.phase));
-      glowDot(x, y, p.r * (0.6 + p.depth * 0.7), color, alpha);
-    });
+  function drawSwarm(c, R, color, state) {
+    // Port of the reference ai_orb.jsx frame-body, converted Three.js -> Canvas2D.
+    // The Fibonacci bases are unit-sphere; we project (px,py,pz in [-1,1]) onto
+    // R*0.9 so the swarm fills ~0.9 of the ring (sits just inside the glass disc).
+    applySwarmFx(state);
+    const fx = swarmFx;
+    // Rebuild the cached palette only when sat/light actually change (state
+    // transitions) — then the hot loop does an integer bin lookup, zero allocs.
+    buildSwarmPalette(fx.sat, fx.light);
+    const projScale = R * 0.9;                       // unit-sphere coords -> canvas px
+    // reference constants (kept named so the port is auditable against ai_orb.jsx)
+    const flow = 0.8;
+    const turb = 0.45;
+    const shell = 0.25;
+    const hueShift = 0.35;
+    const tt = t * flow * fx.flowMul;                // frozen when reduced/offline
+    const dist = turb * 0.22 * fx.turbMul;
+    const rotA = tt * (0.25 * fx.rotMul);
+    const cA = Math.cos(rotA), sA = Math.sin(rotA);
+
+    // Additive blending for the swarm — overlapping dots accumulate into a glow.
+    c2d.save();
+    c2d.globalCompositeOperation = 'lighter';
+
+    for (let i = 0; i < SWARM_COUNT; i++) {
+      const bx = swarmX[i], by = swarmY[i], bz = swarmZ[i], ph = swarmPhase[i];
+      // layered sine "curl" turbulence (reference w1/w2/w3)
+      const w1 = Math.sin(3.0 * bx + tt * 1.7 + Math.cos(2.0 * bz - tt)) * Math.cos(2.0 * by - tt * 1.3);
+      const w2 = Math.sin(4.0 * bz - tt * 1.1 + Math.cos(3.0 * bx + tt * 0.7)) * Math.cos(3.0 * by + tt);
+      const w3 = Math.sin(2.0 * by + tt * 2.1 + Math.cos(4.0 * bx - tt * 0.5)) * Math.cos(2.0 * bz + tt * 0.9);
+      // breathing + band shell (radial modulation). Reference uses golden-angle*0.5
+      // inside the shell gate; we approximate with the particle's base angle so the
+      // gate still varies per-particle without re-deriving th from i each frame.
+      const breath = 1.0 + 0.06 * Math.sin(tt * 1.2) + 0.03 * Math.sin(tt * 2.7 + 1.3);
+      const band = 0.5 + 0.5 * Math.sin(ph + tt * 0.6);     // ph replaces frac*6.28318*3.0 band term
+      const shellMix = band * shell;
+      const shellGate = 0.55 + 0.35 * Math.sin(ph * 0.5 + tt);
+      const rMod = breath * (1.0 - shellMix * shellGate);
+      // Y-rotation (project x/z through rotA)
+      const xr = bx * cA - bz * sA;
+      const zr = bx * sA + bz * cA;
+      // 3D position in unit-sphere space, scaled by breath*rMod
+      const pxU = (xr + w1 * dist) * rMod;
+      const pyU = (by + w2 * dist * 1.15) * rMod;
+      const pzU = (zr + w3 * dist) * rMod;
+      // orthographic projection onto the canvas, with depth for size/alpha
+      const sx = c + pxU * projScale;
+      const sy = c + pyU * projScale;
+      const depth = (pzU + 1) * 0.5;                        // 0 back .. 1 front
+      // state-reactive radius modulation (inhale/exhale/shockwave)
+      const radState = fx.radiusMul * (1 + fx.radiusWobble * Math.sin(tt * fx.wobbleFreq + ph));
+      // iridescent HSL palette pulled toward the state's base hue. Hue quantized
+      // to HUE_BINS and looked up in the prebuilt SWARM_PALETTE — zero per-
+      // particle string alloc, zero hslToRgb calls in the hot loop.
+      const swirl = 0.5 + 0.5 * Math.sin(by * 2.0 + xr * 1.5 + tt * 1.4 + w1 * 2.0);
+      let hue = fx.hueBase + hueShift * 0.28 * swirl + 0.05 * Math.sin(tt * 0.5 + ph);
+      hue = hue - Math.floor(hue);                          // wrap to [0,1) (hue % 1.0)
+      const bin = (hue * HUE_BINS) | 0;                     // 0..HUE_BINS-1
+      const pcolor = SWARM_PALETTE[bin < HUE_BINS ? bin : HUE_BINS - 1];
+      // depth-scaled size + alpha; back particles smaller/dimmer. projScale carries R.
+      const sz = swarmSize[i] * (0.6 + depth * 0.8) * radState;
+      const a = (0.10 + depth * 0.32) * fx.alphaMul;
+      // glowDot does the soft halo + core dot (2 arc fills); per-particle a via globalAlpha.
+      glowDot(sx, sy, sz, pcolor, a);
+    }
+    c2d.globalAlpha = 1;
+    c2d.restore();              // resets globalCompositeOperation to 'source-over'
   }
 
   // ---- plasma core — drifting additive radial gradients, bloom rides state + activity ----
@@ -389,11 +629,13 @@ export function mountCoreOrb(canvas, ctx) {
   // ---- drawing ----
   function drawRing(c, R, color, state) {
     // faint fill disc — a touch lighter than the page, glassy (alphas trimmed
-    // ~15%: the plasma core now provides the orb's body underneath this)
+    // ~30% vs the 48-halo era: the ~800-particle additive swarm + plasma core
+    // now provide the orb's body luminance underneath this, so the disc only
+    // needs to read as tinted glass rather than re-darken the whole sphere).
     const disc = c2d.createRadialGradient(c, c - R * 0.5, R * 0.1, c, c, R);
-    disc.addColorStop(0, 'rgba(30, 45, 70, 0.47)');
-    disc.addColorStop(0.7, 'rgba(12, 20, 34, 0.64)');
-    disc.addColorStop(1, 'rgba(6, 10, 18, 0.77)');
+    disc.addColorStop(0, 'rgba(30, 45, 70, 0.33)');
+    disc.addColorStop(0.7, 'rgba(12, 20, 34, 0.45)');
+    disc.addColorStop(1, 'rgba(6, 10, 18, 0.54)');
     c2d.beginPath();
     c2d.arc(c, c, R, 0, TAU);
     c2d.fillStyle = disc;
@@ -517,6 +759,8 @@ export function mountCoreOrb(canvas, ctx) {
     lastTime = timestamp;
     if (!reduced) t += dt;
     level = Math.max(0, level - dt * 1.6); // pulse decay
+    shockwave = Math.max(0, shockwave - dt * 1.6); // swarm-kick decay (same envelope as level)
+    speakPulse = Math.max(0, speakPulse - dt * 2.2); // TTS-cadence decay — slightly faster than shockwave so each chunk pops
     if (actionFlash) {
       actionFlash.decay -= dt * 1.6;
       if (actionFlash.decay <= 0) actionFlash = null;
@@ -540,8 +784,8 @@ export function mountCoreOrb(canvas, ctx) {
     announceState(state);
     drawPlasmaCore(c, R, color, state);      // behind everything
     drawOrbitals(c, R, color);               // tilted ellipses + comets
-    drawHaloParticles(c, R, color, state);
-    drawRing(c, R, color, state);
+    drawSwarm(c, R, color, state);           // ~800-particle Fibonacci iridescent swarm (additive)
+    drawRing(c, R, color, state);            // glass disc + base ring sit on top of the swarm
     drawArcRings(c, R, color, state);        // Jarvis broken arcs
     drawNeuralWeb(c, R, color, state, dt);   // internal synapse web
     drawSynapseSparks(c, dt);
@@ -598,11 +842,17 @@ export function mountCoreOrb(canvas, ctx) {
     // live voice amplitude 0..1 — drives the speaking-state plasma boost, arc
     // speed, and outward halo waves. Harmless no-op at other states.
     setActivity(v) { activity = Math.max(0, Math.min(1, Number(v) || 0)); },
+    // TTS-cadence kick — called by app.js on each speech-chunk WS msg while
+    // MYTHOS is speaking. The mic is muted during playback so setActivity gets
+    // no signal; this is the synthetic pulse that drives the speaking exhale.
+    // Spikes speakPulse to 1, decays in the frame loop. Harmless at other states.
+    pulseSpeaking() { speakPulse = 1; },
     // category comes from hud-canvas.js's toolTarget() — single source of
     // truth for tool->category mapping, never re-derived here.
     flashAction(category, ok) {
       const color = ACTION_COLORS[category] || ACCENT;
       actionFlash = { color, ok, decay: 1 };
+      shockwave = 1;                          // kick the swarm: expands radius outward briefly
       spawnSpark(color, 6, ringR * 0.26);
     },
     cleanup() {

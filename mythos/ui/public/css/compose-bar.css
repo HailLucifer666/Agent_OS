@@ -60,7 +60,7 @@
 .compose-hint:hover {
   color: var(--text-dim);
   border-color: var(--accent-dim);
-  box-shadow: 0 0 8px rgba(79, 216, 255, 0.12);
+  box-shadow: var(--accent-glow);
 }
 .compose-hint:active {
   transform: scale(0.97);
@@ -87,7 +87,30 @@
 }
 .compose-pill:focus-within {
   border-color: var(--accent-dim);
-  box-shadow: 0 0 0 1px rgba(79, 216, 255, 0.15), 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 1px var(--accent-dim), 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* State-reactive glow — compose-bar.js writes data-voice-state on the pill so
+   the input surface catches the orb's current hue (listening/speaking/
+   processing). One organism: type a reply while MYTHOS talks and the bar you're
+   typing into warms with it. Idle falls back to the focus accent. */
+.compose-pill[data-voice-state="listening"] {
+  border-color: var(--orb-listening);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--orb-listening) 35%, transparent),
+              0 0 24px color-mix(in srgb, var(--orb-listening) 18%, transparent),
+              0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.compose-pill[data-voice-state="speaking"] {
+  border-color: var(--orb-speaking);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--orb-speaking) 35%, transparent),
+              0 0 24px color-mix(in srgb, var(--orb-speaking) 18%, transparent),
+              0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.compose-pill[data-voice-state="processing"] {
+  border-color: var(--orb-thinking);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--orb-thinking) 35%, transparent),
+              0 0 24px color-mix(in srgb, var(--orb-thinking) 18%, transparent),
+              0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 /* Voice toggle button (left side of pill) */
@@ -109,18 +132,19 @@
 .compose-voice-btn:hover { color: var(--text-dim); }
 .compose-voice-btn svg { width: 18px; height: 18px; }
 
-/* Voice states mirror the mic ring colors */
+/* Voice states mirror the orb's state palette (--orb-* tokens, single source
+   of truth shared with core-orb.js). */
 .compose-voice-btn.listening {
-  color: var(--accent);
-  background: rgba(79, 216, 255, 0.1);
+  color: var(--orb-listening);
+  background: color-mix(in srgb, var(--orb-listening) 12%, transparent);
   animation: mic-breathe 2.4s var(--ease) infinite;
 }
 .compose-voice-btn.processing,
 .compose-voice-btn.downloading {
-  color: var(--module-goals, #a78bfa);
+  color: var(--orb-thinking);
 }
 .compose-voice-btn.speaking {
-  color: var(--accent);
+  color: var(--orb-speaking);
 }
 .compose-voice-btn.error { color: var(--status-warn); }
 
