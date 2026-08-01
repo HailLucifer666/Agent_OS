@@ -26,6 +26,9 @@
 //            hobby-only, which is a live problem for a product that is sold).
 //   piper  — local Piper. ~350ms, fully OFFLINE (proven: works with sockets
 //            blocked), free, MIT + open voices, and the only one shippable.
+//   kokoro — local Kokoro-82M (onnxruntime, in-process). Offline after the
+//            model is cached, Apache-2.0 code AND weights. A second offline
+//            option beside Piper, not a replacement for it.
 //
 // BACK-COMPAT, load-bearing: a single-entry 'edge' chain resolves to the edge-tts
 // module OBJECT ITSELF, because server/index.js requires that singleton directly and
@@ -35,8 +38,9 @@
 const edgeTts = require('./edge-tts');
 const geminiTts = require('./gemini-tts');
 const piperTts = require('./piper-tts');
+const kokoroTts = require('./kokoro-tts');
 
-const BY_NAME = { edge: edgeTts, gemini: geminiTts, piper: piperTts };
+const BY_NAME = { edge: edgeTts, gemini: geminiTts, piper: piperTts, kokoro: kokoroTts };
 
 function parseChain(config) {
   const raw = String(
@@ -70,6 +74,7 @@ function voiceFor(provider, config) {
   const name = provider && provider.name;
   if (name === 'gemini-tts') return cfg.GEMINI_LIVE_VOICE || process.env.GEMINI_LIVE_VOICE || 'Aoede';
   if (name === 'piper-tts') return cfg.PIPER_VOICE || process.env.PIPER_VOICE || undefined;
+  if (name === 'kokoro-tts') return cfg.KOKORO_VOICE || process.env.KOKORO_VOICE || 'af_heart';
   return cfg.VOICE_TTS_VOICE || process.env.VOICE_TTS_VOICE || undefined;
 }
 

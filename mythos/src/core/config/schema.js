@@ -71,6 +71,20 @@ const SCHEMA = {
   PIPER_VOICE:              { type: 'string', default: 'en_US-hfc_female-medium' },
   PIPER_MODEL_DIR:          { type: 'string', default: '' },
 
+  // Kokoro-82M TTS (providers/kokoro-tts.js) — in-process onnxruntime, no
+  // child service. Weights fetch from Hugging Face on first use into a
+  // gitignored cache dir, never committed (see .env.example, THIRD_PARTY_NOTICES.md).
+  KOKORO_VOICE:             { type: 'string', default: 'af_heart' },
+  KOKORO_MODEL_DIR:         { type: 'string', default: '' },
+
+  // ORDERED STT chain (providers/stt.js), same convention as VOICE_TTS_CHAIN.
+  // Default 'groq': unchanged behaviour for anyone who sets nothing — the
+  // /api/voice/transcribe route used to call providers/groq-stt.js directly.
+  //   groq   Groq Whisper API. Needs GROQ_API_KEY + network.
+  //   local  On-device Whisper (providers/local-whisper-stt.js). No network
+  //          after the model is cached; WAV audio only.
+  VOICE_STT_CHAIN:          { type: 'string', default: '' },
+
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
   // thresholds; defaults match the previously-hardcoded constants exactly,
   // zero behavior change until overridden). Exposed to the HUD via
@@ -79,6 +93,13 @@ const SCHEMA = {
   VAD_MIN_PEAK_RMS:         { type: 'number', default: 0.06,  min: 0, max: 1 },
   VAD_HOLD_TICKS:           { type: 'number', default: 3,     min: 1, max: 20 },
   VAD_SILENCE_MS:           { type: 'number', default: 1800,  min: 100, max: 10000 },
+  // Which speech-detector drives voice-loop.js. 'rms' (default) is the
+  // hand-tuned volume-threshold detector above. 'silero' runs a trained
+  // speech/non-speech ONNX model (ui/public/js/voice/silero-vad.js) client-side
+  // instead — fetched by scripts/setup-silero.js, gitignored, opt-in. When
+  // 'silero' is active, VAD_SPEECH_RMS/VAD_MIN_PEAK_RMS above are read as
+  // speech-probability thresholds (0..1), not RMS amplitude.
+  VAD_ENGINE:               { type: 'string', default: 'rms', enum: ['rms', 'silero'] },
 
   // Wake-word (hands-free "hey jarvis" — ui/public/js/voice/wakeword.js).
   // Opt-in: models are CC BY-NC-SA and fetched by scripts/setup-wakeword.js,
@@ -375,7 +396,13 @@ const SCHEMA = {
   // .env.example): auditioning by ear across all six needs a human with
   // speakers, which cannot happen in this environment.
   GEMINI_LIVE_VOICE:           { type: 'string', default: 'Aoede' },
-  LIVE_IDLE_TIMEOUT_MS:        { type: 'number', default: 45000, min: 1000 },
+  // BUG-059: was 45000. The browser bridge (s2s-bridge.js) suspends mic
+  // capture for up to 30s (MAX_SUSPEND_MS) while MYTHOS's own TTS or media
+  // playback is out of the speakers — sendAudio() stops being called for
+  // that whole window, so 45s left no margin before the idle timer fired
+  // mid-turn. Raised to comfortably clear a 30s suspend plus slack; still
+  // operator-overridable via env, not removed.
+  LIVE_IDLE_TIMEOUT_MS:        { type: 'number', default: 120000, min: 1000 },
   LIVE_SESSION_MAX_MS:         { type: 'number', default: 600000, min: 10000 },
   // Comma-separated tool-name allowlist; empty = live-tools.js's curated
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).

@@ -44,9 +44,16 @@ function createLiveSession(deps) {
 
   const MODEL = config.GEMINI_LIVE_MODEL || 'models/gemini-3.1-flash-live-preview';
   const VOICE = config.GEMINI_LIVE_VOICE || 'Aoede';
-  const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 45000;
+  const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 120000; // BUG-059: was 45000, see schema.js
   const MAX_MS = Number(config.LIVE_SESSION_MAX_MS) || 10 * 60 * 1000;
   const BREAKER = 'gemini-live';
+  // ponytail: an unattended mic left open would otherwise rotate a brand new
+  // Gemini Live session every IDLE_MS forever — real cost on BYO keys with
+  // per-day ceilings (this repo has a documented case of a 10-req/day voice
+  // model). 3 idle rotations with zero real user speech in between is the
+  // ceiling; a genuine conversation resets it on the first recognized word.
+  // Upgrade path if 3 is wrong in practice: make it operator-configurable.
+  const MAX_IDLE_ROTATIONS_WITHOUT_SPEECH = 3;
 
   const openSocket = createSocket || ((url) => new WebSocket(url));
 
@@ -56,6 +63,7 @@ function createLiveSession(deps) {
   let idleTimer = null, maxTimer = null;
   let userText = '', assistantText = '';
   let closedByUs = false;
+  let idleRotationsWithoutSpeech = 0;
 
   function setState(next, reason) {
     if (state === next) return;
@@ -66,14 +74,47 @@ function createLiveSession(deps) {
 
   function armIdle() {
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => close('idle-timeout'), IDLE_MS);
+    // BUG-059: a non-final close (see close(), below) so the existing
+    // ws.on('close') reconnect branch does the reopening — not a second
+    // reconnect path. Previously this called close('idle-timeout'), which
+    // unconditionally set closedByUs=true, which is exactly the flag that
+    // branch checks to decide NOT to reconnect. That made an idle timeout
+    // indistinguishable from an intentional shutdown and killed the session
+    // silently — "I have to click you every time."
+    idleTimer = setTimeout(handleIdleTimeout, IDLE_MS);
     if (idleTimer.unref) idleTimer.unref();
+  }
+
+  // BUG-059 follow-up (adversarial review): rotating forever with nobody in
+  // the room is a cost leak, not a fix. Count idle rotations that saw zero
+  // real user speech since the last one; past the ceiling, do a genuinely
+  // FINAL close instead of another rotation — the client's own auto-reopen
+  // (or a wake-word/click) revives it, same as any other closed session.
+  function handleIdleTimeout() {
+    idleRotationsWithoutSpeech += 1;
+    if (idleRotationsWithoutSpeech > MAX_IDLE_ROTATIONS_WITHOUT_SPEECH) {
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('health.anomaly', { kind: 'live-idle-exhausted', rotations: idleRotationsWithoutSpeech });
+      }
+      close('idle-timeout-exhausted');
+      return;
+    }
+    close('idle-timeout', { final: false });
   }
 
   function sendRaw(frame) {
     if (!ws || ws.readyState !== ws.OPEN) return false;
     try { ws.send(JSON.stringify(frame)); return true; }
     catch (err) { logger.warn('live.send-failed', { error: err.message }); return false; }
+  }
+
+  // BUG-079: systemInstruction may be a plain string (existing callers, most
+  // tests) or a function (server/index.js's buildLiveSystemInstruction) —
+  // calling it fresh here means it re-renders on every open(), including
+  // idle/session-max/goAway reconnects, so time-sensitive content in it
+  // (local date/time) never goes stale across a long-running session.
+  function currentSystemInstruction() {
+    return typeof systemInstruction === 'function' ? systemInstruction() : systemInstruction;
   }
 
   function buildSetup() {
@@ -83,7 +124,7 @@ function createLiveSession(deps) {
         responseModalities: ['AUDIO'],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
       },
-      systemInstruction: { parts: [{ text: systemInstruction }] },
+      systemInstruction: { parts: [{ text: currentSystemInstruction() }] },
       tools: (functionDeclarations && functionDeclarations.length) ? [{ functionDeclarations }] : undefined,
       realtimeInputConfig: { automaticActivityDetection: {} },
       inputAudioTranscription: {},   // AD-6
@@ -119,7 +160,17 @@ function createLiveSession(deps) {
           settled = true;
           setState('open');
           armIdle();
-          maxTimer = setTimeout(() => close('session-max'), MAX_MS);
+          // BUG-059: same non-final-close reasoning as armIdle() above. Per
+          // Google's Live API docs (session management guide, checked
+          // 2026-08-01 — do not trust this repo's own comments on this
+          // point, they've been wrong before): contextWindowCompression's
+          // slidingWindow extends an audio session "to an unlimited amount
+          // of time", but the underlying connection itself still has a
+          // ~10min ceiling independent of that — session resumption exists
+          // specifically to reconnect across that ceiling. So MAX_MS firing
+          // is expected and load-bearing, not self-inflicted; it must
+          // reconnect via resumeHandle, never dead-end.
+          maxTimer = setTimeout(() => close('session-max', { final: false }), MAX_MS);
           if (maxTimer.unref) maxTimer.unref();
           resolve(true);
         }
@@ -134,9 +185,12 @@ function createLiveSession(deps) {
       ws.on('close', (code, reason) => {
         const why = `code=${code} ${String(reason || '')}`.trim();
         if (!settled) { settled = true; setState('closed', why); return resolve(false); }
-        // Unexpected mid-session drop with a resume handle → transparent reconnect,
-        // treated as a breaker event, never a crash.
-        if (!closedByUs && resumeHandle) { setState('reconnecting', why); reconnect(); }
+        // Any close we did not deliberately request (idle-timeout, session-max,
+        // goAway, or a genuinely unexpected drop) must reconnect — never leave
+        // the client streaming into a dead session. resumeHandle is carried
+        // into the new connection when present (buildSetup()) but its absence
+        // must not block reconnecting; it would just start fresh.
+        if (!closedByUs) { setState('reconnecting', why); reconnect(); }
         else setState('closed', why);
       });
     });
@@ -151,13 +205,20 @@ function createLiveSession(deps) {
   }
 
   function handleFrame(msg) {
+    // BUG-059: any server frame proves the connection is alive — reset the
+    // idle clock unconditionally here rather than only from a few specific
+    // branches below. Previously a long run of e.g. only usageMetadata
+    // frames (or a frame type a future protocol revision adds) could starve
+    // the timer even though the server was clearly still talking to us.
+    armIdle();
+
     // ---- serverContent: EVERY field, no else-if (see module header) ----
     const sc = msg.serverContent;
     if (sc) {
       if (sc.inputTranscription && sc.inputTranscription.text) {
         userText += sc.inputTranscription.text;
+        idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
         if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
-        armIdle();
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
         assistantText += sc.outputTranscription.text;
@@ -181,13 +242,11 @@ function createLiveSession(deps) {
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript' });
         }
         if (onTurnComplete) onTurnComplete(turn);
-        armIdle();
       }
     }
 
     // ---- tool calls → delegated, never executed here (AD-1) ----
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
-      armIdle();
       Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText }))
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
     }
@@ -202,12 +261,10 @@ function createLiveSession(deps) {
       }
     }
     if (msg.goAway) {
-      // Server is about to hang up. Reconnect proactively so the operator hears no seam.
+      // Server is about to hang up. Same non-final close as idle/max above —
+      // one reconnect path (the ws.on('close') branch), not a second one.
       logger.info('live.goaway', { timeLeft: msg.goAway.timeLeft });
-      setState('reconnecting', 'goaway');
-      try { closedByUs = true; ws.close(); } catch {}
-      closedByUs = false;
-      reconnect();
+      close('goaway', { final: false });
     }
     if (msg.usageMetadata && spend && typeof spend.recordCall === 'function') {
       // Honest spend: real counts from the API, never estimated (AD-5).
@@ -236,12 +293,36 @@ function createLiveSession(deps) {
     return sendRaw({ toolResponse: { functionResponses } });
   }
 
-  function close(reason) {
-    closedByUs = true;
+  // BUG-059: `final` (default true) is what the caller means by "goodbye".
+  // A final close is indistinguishable-on-purpose from a client shutdown:
+  // closedByUs=true, state settles to 'closed', no reconnect.
+  // A non-final close (idle-timeout, session-max, goAway) leaves closedByUs
+  // false and resumeHandle intact, then does nothing else — the existing
+  // ws.on('close') handler above (the ONLY reconnect path in this module)
+  // sees !closedByUs && resumeHandle and reconnects on its own.
+  function close(reason, { final = true } = {}) {
+    if (final) closedByUs = true;
     if (idleTimer) clearTimeout(idleTimer);
     if (maxTimer) clearTimeout(maxTimer);
-    if (ws) { try { ws.close(); } catch {} }
+    // Null out `ws` BEFORE closing the old socket, not after: a non-final
+    // close's own 'close' handler can synchronously call reconnect()->open()
+    // (fake sockets emit 'close' synchronously; real ones may coalesce too),
+    // which reassigns `ws` to the new socket — assigning `ws = null` after
+    // oldWs.close() would clobber that reassignment.
+    const oldWs = ws;
     ws = null;
+    if (oldWs) {
+      // Adversarial-review fix: leave the 'close' listener attached (that's
+      // what fires reconnect() above) but strip 'error' — once we've decided
+      // to abandon this socket, a late error from it must not trip the
+      // breaker or stomp the REPLACEMENT session's state back to 'closed'.
+      // A bare removeAllListeners('error') would leave zero error listeners,
+      // and Node throws on an unlistened 'error' event — attach a no-op
+      // instead of just removing.
+      try { oldWs.removeAllListeners('error'); oldWs.on('error', () => {}); } catch {}
+      try { oldWs.close(); } catch {}
+    }
+    if (!final) return; // ws.on('close') settles state + reconnects
     setState('closed', reason || 'closed');
   }
 

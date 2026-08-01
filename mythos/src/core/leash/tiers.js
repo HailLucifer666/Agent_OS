@@ -191,6 +191,9 @@ const TIER_TABLE = {
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable
   'ui_type':               3,  // ELEVATED — same reasoning
   'click_at':              3,  // ELEVATED — autonomous clicking unpredictable
+  // Same blast radius as click_at: it ends in a real mouse click at a real
+  // coordinate. Reading the screen first makes it better AIMED, not safer.
+  'see_and_click':         3,
   'right_click_at':        3,  // Phase 3 — autonomous right-click, context menus unpredictable
   'drag':                  3,  // Phase 3 — autonomous drag, drop targets unpredictable
   'browser_click':         3,
@@ -238,6 +241,10 @@ const TIER_TABLE = {
   'whatsapp_send':         3,
   // Names only, no numbers, no side effects.
   'whatsapp_contacts':     0,
+  // Writes a phone number into the vault that whatsapp_send will later message
+  // without asking again — a wrong digit here misdirects every future message to
+  // that name, so it is confirmed once at save time rather than silently accepted.
+  'whatsapp_contact_save': 3,
   // Security-review correction (Task 10): phone_file_pull was originally T1
   // ("a read from the phone"), but from the PC-filesystem-integrity
   // standpoint `adb pull` WRITES (creates or overwrites) an arbitrary local

@@ -57,6 +57,11 @@ export function createS2SBridge({ onState, onCaption } = {}) {
   let onLiveStateMsg = null;
   let onTranscriptMsg = null;
 
+  // BUG-059: debounce for the auto-reopen below, so a persistent server-side
+  // failure (e.g. breaker tripped) can't turn into a tight live-open retry loop.
+  const AUTO_REOPEN_COOLDOWN_MS = 3000;
+  let lastAutoReopenAt = 0;
+
   function setState(s) { if (onState) onState(s); }
 
   // Half-duplex gate for MYTHOS's OWN server-side TTS — the boot greeting,
@@ -129,7 +134,32 @@ export function createS2SBridge({ onState, onCaption } = {}) {
 
     onAudioOutMsg = (msg) => { if (player && msg && msg.data) player.enqueue(msg.data); };
     onInterruptedMsg = () => { if (player) player.flush(); };
-    onLiveStateMsg = (msg) => { setState(msg && msg.state === 'open' ? 'listening' : (msg && msg.state) || 'idle'); };
+    onLiveStateMsg = (msg) => {
+      const s = msg && msg.state;
+      setState(s === 'open' ? 'listening' : s || 'idle');
+      // BUG-059: the server-side session (live-session.js) now rotates itself
+      // transparently through idle-timeout/session-max, so a terminal 'closed'
+      // reaching the browser while the operator never pressed stop() (active
+      // is still true) means a genuine failure the server couldn't recover
+      // from on its own (no API key, breaker open, an unexpected drop with no
+      // resume handle yet). Previously this just repainted the mic indicator
+      // and left the operator talking to a dead session until they noticed
+      // and re-armed it by hand ("I have to click you every time"). Resend
+      // live-open to give the server a fresh liveSession — the mic capture
+      // pipeline here was never torn down, so nothing else needs rebuilding.
+      // Config-permanent failures (disabled/no key) are excluded since
+      // retrying those cannot succeed and would just loop. 'reconnecting' is
+      // deliberately NOT handled here: the server is already mid-transparent-
+      // reconnect for that state, and sending live-open now would stomp its
+      // in-flight liveSession with a brand new one.
+      if (s === 'closed' && active && msg.reason !== 'disabled' && msg.reason !== 'no-key') {
+        const now = Date.now();
+        if (now - lastAutoReopenAt > AUTO_REOPEN_COOLDOWN_MS) {
+          lastAutoReopenAt = now;
+          sendMessage({ type: 'live-open' });
+        }
+      }
+    };
     onTranscriptMsg = (msg) => { if (onCaption && msg) onCaption(msg.text, msg.role === 'user' ? 'heard' : 'reply'); };
     onBroadcast('live-audio-out', onAudioOutMsg);
     onBroadcast('live-interrupted', onInterruptedMsg);

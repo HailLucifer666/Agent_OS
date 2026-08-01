@@ -137,8 +137,19 @@ function createEffectorHub({ bus, config }) {
     return prev[b.length];
   }
 
+  // BUG-076 — 'status' kept dead-ending on 'unknown-effector' even after the
+  // Wave 6 suggestion text named read_status: the operator saw "did you mean
+  // read_status?", approved it, and the NEXT call still asked for literal
+  // 'status' and still got unknown-effector — a suggestion was never wired to
+  // an actual retry. A tiny alias table lets the one name MYTHOS actually
+  // reaches for resolve instead of merely being described.
+  var ALIASES = {
+    'status': 'read_status',
+  };
+
   async function invoke(name, params, ctx) {
-    var effector = effectors.get(name);
+    var resolvedName = (!effectors.has(name) && ALIASES.hasOwnProperty(name)) ? ALIASES[name] : name;
+    var effector = effectors.get(resolvedName);
     if (!effector) {
       var near = nearestToolNames(name, 3);
       return {
@@ -153,7 +164,7 @@ function createEffectorHub({ bus, config }) {
       };
     }
 
-    if (!breakers.allow(name)) {
+    if (!breakers.allow(resolvedName)) {
       return { ok: false, result: 'circuit-open' };
     }
 
@@ -164,14 +175,14 @@ function createEffectorHub({ bus, config }) {
       // invoke() contract says effectors never throw, but hub must not trust that —
       // an uncaught throw here must still count as a breaker failure, not crash Cortex.
       // B5: Emit anomaly for observability so operator can see the root cause.
-      if (bus) bus.emit('health.anomaly', { kind: 'effector-throw', target: name, error: err.message });
+      if (bus) bus.emit('health.anomaly', { kind: 'effector-throw', target: resolvedName, error: err.message });
       result = { ok: false, result: err.message };
     }
 
     if (result && result.ok) {
-      breakers.recordSuccess(name);
+      breakers.recordSuccess(resolvedName);
     } else {
-      breakers.recordFailure(name);
+      breakers.recordFailure(resolvedName);
     }
 
     return result;

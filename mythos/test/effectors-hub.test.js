@@ -126,7 +126,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 90 registered count', () => {
+describe('gate: 91 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -171,12 +171,17 @@ describe('gate: 90 registered count', () => {
     // + 4 cua_* tools (cua_list_windows/cua_bring_to_front/cua_get_window_state/
     // cua_click from from-cua — the Chromium-capable click path that complements
     // pc-child's ui_click, un-breaking Spotify-native search-then-play and general
-    // click-inside-rendered-content — Slice 2, 2026-07-31) = 90.
+    // click-inside-rendered-content — Slice 2, 2026-07-31) = 90,
+    // + see_and_click (from-pc, 2026-08-02) = 91 — OCRs the screen and clicks a
+    // visible label by its bounding box, for the case that defeated ui_click on
+    // WhatsApp Desktop: a UIA tree that enumerates to zero children, so no valid
+    // elementPath exists to pass and the model was inventing them.
     // spawn_widget (Item 11) lives in from-widgets.js, wired via a separate
     // registerFromWidgets() this gate test does not call, so it is NOT
     // counted here. use_skill is registered separately via registerFromSkills
-    // (not called here).
-    assert.equal(hub.count(), 90);
+    // (not called here). whatsapp_* likewise: registerFromWhatsapp is not called
+    // here, so whatsapp_contact_save (2026-08-02) does not move this number.
+    assert.equal(hub.count(), 91);
   });
 });
 

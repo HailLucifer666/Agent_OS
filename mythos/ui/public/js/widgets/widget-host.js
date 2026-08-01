@@ -207,9 +207,19 @@ export function mountWidgets(root, ctx) {
 
   // Stash the spawn function on root so app.js can call it via the returned API.
   const spawnedCleanups = [];
+  // BUG-081 (Stage 7): widgetType -> teardown, so a second open_web call for
+  // the SAME surface reuses/replaces it instead of stacking a new card. Only
+  // tracked for non-'dynamic' types — Item 11's generative-UI cards are
+  // deliberately multi-instance (several independent stat panels can be
+  // live at once), so 'dynamic' keeps the old stack-a-new-card behavior.
+  const spawnedByType = new Map();
 
   function spawnWebWidget(payload) {
     if (!payload || !payload.widgetType) return;
+    const dedupeKey = payload.widgetType !== 'dynamic' ? payload.widgetType : null;
+    if (dedupeKey && spawnedByType.has(dedupeKey)) {
+      spawnedByType.get(dedupeKey)(); // tear down the stale card for this surface first
+    }
     const card = document.createElement('div');
     card.className = 'widget-card glass web-widget-card';
     card.dataset.widgetType = payload.widgetType;
@@ -237,6 +247,7 @@ export function mountWidgets(root, ctx) {
     const teardown = () => {
       let idx = spawnedCleanups.indexOf(teardown);
       if (idx !== -1) spawnedCleanups.splice(idx, 1);
+      if (dedupeKey && spawnedByType.get(dedupeKey) === teardown) spawnedByType.delete(dedupeKey);
       card.remove();
     };
     closeBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -256,6 +267,7 @@ export function mountWidgets(root, ctx) {
       card.querySelector('.web-result-body').innerHTML = `<span class="widget-sub mono">failed: ${err.message}</span>`;
     }
     spawnedCleanups.push(teardown);
+    if (dedupeKey) spawnedByType.set(dedupeKey, teardown);
   }
 
   // REMEDIATION P1-5: close_panel was structurally unable to reach floating

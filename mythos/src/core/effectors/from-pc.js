@@ -7,7 +7,9 @@ const pcChild = require('../../../adapters/pc-child');
 const { effectorFromTool } = require('./adapter');
 // §7.7 (step 5) — set_wallpaper's path argument is sandboxed via
 // from-computer.js's existing resolveSandboxed (reused, not reimplemented).
-const { resolveSandboxed } = require('./from-computer');
+// open_folder (BUG-058) is reused the same way by launch_app below, for the
+// explorer.exe mis-routing guard.
+const { resolveSandboxed, open_folder } = require('./from-computer');
 // The evidence contract: a world-changing effector may only report ok:true with
 // proof from an oracle other than its own call. See evidence.js's header.
 const evidence = require('./evidence');
@@ -106,10 +108,33 @@ async function delegateWithRetry(cmdObj, opts) {
 // has a PS-side pre-type pid check (FIX 3) as backstop, but ui_click has none:
 // its coordinate fallback would click whatever window is topmost and still
 // report clicked:true. Honest abort beats a silent wrong-window action.
+//
+// WAVE 9 (BUG-072) — a DEAD pid (process exited, or Windows recycled the pid
+// onto something with no window) used to abort on the very first focus_window
+// miss, which threw away all 3 of delegateWithRetry's attempts before they ever
+// ran. Real dead pids from the logs: 5168, 26428, 7448 ("Process 7448 has no
+// main window"); the model reused a stale pid from an earlier list_windows call
+// rather than one it just resolved. Two changes:
+//   1. One re-resolve attempt on the first miss — a window that hasn't settled
+//      yet (fresh launch, foreground-lock blip) is not the same as a corpse,
+//      and a single retry is what the original phase-3 retry discipline in
+//      delegateWithRetry already assumes should happen before giving up.
+//   2. If it STILL fails, the pid is treated as gone: lastLaunchedPid is
+//      cleared if it matches (so the next omitted-pid call doesn't retarget the
+//      same corpse), and the message names list_windows literally — that is
+//      the recovery tool, and the model must re-resolve, not retry a pid that
+//      is never coming back.
 async function foregroundThenRetry(pid, cmdObj, opts) {
   if (pid) {
-    const focus = await delegate({ cmd: 'focus_window', pid: pid });
-    if (!focus.ok) return focus;
+    let focus = await delegate({ cmd: 'focus_window', pid: pid });
+    if (!focus.ok) {
+      focus = await delegate({ cmd: 'focus_window', pid: pid });
+    }
+    if (!focus.ok) {
+      if (pid === lastLaunchedPid) lastLaunchedPid = null;
+      return fail('That window is gone (' + (focus.result || 'could not focus it') +
+        '). Call list_windows again to find the right target — retrying this pid will not help.');
+    }
   }
   return delegateWithRetry(cmdObj, opts);
 }
@@ -126,8 +151,52 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
 // and nothing enforced it.
 var SESSION_RESTORING_APPS = /^notepad(\.exe)?$/i;
 
-async function launch_app({ name, existing }) {
+// BUG-075 (Stage 5, "open YouTube on the Electron app"). launch_app("youtube")
+// was logged failing 3x on 2026-07-31 — correctly, since nothing named
+// YouTube is installed on Windows, but three wasted retries with no better
+// path offered. These names are web destinations, not executables; route
+// them through the SAME 'ui.open-web' signal open_web already emits
+// (dispatch-action.js -> server/index.js -> electron/main.js's media-window
+// bridge, added this stage), so they open in a real Electron window instead
+// of failing all 3 launch tiers.
+//
+// ponytail: intentionally tiny — only the names actually seen failing in the
+// transcript. Upgrade path: anything else still gets an explicit pointer to
+// open_web below instead of a silent PS-tier failure.
+var KNOWN_WEB_APPS = {
+  youtube: 'https://www.youtube.com',
+  gmail: 'https://mail.google.com',
+  maps: 'https://maps.google.com',
+};
+
+// BUG-075 (Stage 5). launch_app("explorer.exe \"D:\\...\"") was logged 3x on
+// 2026-07-31 — a shape that can never resolve, since launch_app takes an app
+// NAME and never parses arguments. open_folder (BUG-058) already exists for
+// exactly "open this folder path"; redirect instead of failing a fourth time.
+var EXPLORER_PATH_ARG = /^explorer(\.exe)?\s+"?([a-zA-Z]:\\[^"]*?)"?$/i;
+
+async function launch_app({ name, existing }, ctx) {
   if (!name) return fail('App name is required.');
+  var trimmed = String(name).trim();
+
+  var explorerMatch = EXPLORER_PATH_ARG.exec(trimmed);
+  if (explorerMatch) {
+    return open_folder({ path: explorerMatch[2] });
+  }
+
+  var webApp = KNOWN_WEB_APPS[trimmed.toLowerCase()];
+  if (webApp) {
+    var payload = { widgetType: 'web', embedUrl: webApp, title: trimmed };
+    if (ctx && ctx.bus && typeof ctx.bus.emit === 'function') {
+      ctx.bus.emit('ui.open-web', payload);
+    }
+    // Same shape/oracle-honesty as open_web (from-dashboard.js): opening a
+    // dashboard/Electron UI surface is not itself evidence-contract "world
+    // changing" state, so open_web doesn't wrap its result in evidence.js
+    // either — matched here for consistency, not an oversight.
+    return ok(payload);
+  }
+
   var res = await delegate({ cmd: 'launch_app', name });
 
   // WAVE 1. ps-automation.ps1 now distinguishes a real resolution
@@ -447,12 +516,40 @@ async function ui_click({ pid, elementPath }) {
   if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
   // Phase 3 hardening: focus the target window first, then retry on failure —
   // a flaky ui_click often lands once the window is foregrounded.
-  return foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
+  var res = await foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
+  if (!res.ok) return res;
+
+  // WAVE 9 (BUG-073) — ui_click had never earned its evidence: it returned
+  // whatever pc-child said about the CLICK CALL itself, which per evidence.js's
+  // header is not "the thing that was supposed to happen". The cheapest oracle
+  // actually available at this call site is one foregroundThenRetry already
+  // paid for: the target window was just confirmed foreground before the
+  // click. Re-checking it is STILL foreground right after is a single existing
+  // get_foreground_window round trip — no new UIA work — and it catches the
+  // real failure mode (the click dismissed/switched away from the target).
+  // ponytail: this does NOT prove the specific element reacted (that needs a
+  // per-element oracle — a state change, a new window — picked per element
+  // type); ceiling is "clicked in the right window", upgrade path is a
+  // per-element post-condition if a false-positive click surfaces live.
+  var fg = await delegate({ cmd: 'get_foreground_window' });
+  if (fg.ok && fg.result && fg.result.pid === targetPid) {
+    return evidence.verifiedOk(res, {
+      oracle: 'foreground-pid',
+      expected: String(targetPid),
+      observed: 'pid ' + fg.result.pid + ' ("' + String(fg.result.title || '') + '") is still foreground right after the click',
+    });
+  }
+  return evidence.unverified(res,
+    'clicked, but could not re-confirm the target window is still foreground afterward — it may have landed on the right element or may not have');
 }
 
 // Windows titles that mean "this is MYTHOS's own UI", i.e. the dashboard the
 // operator just clicked Approve in. Typing into itself is never the intent.
 var SELF_WINDOW_RE = /^(MYTHOS|Mythos)\b/;
+
+// WAVE 9 (BUG-074) — window titles that mean "a console host has the caret",
+// where read-back can never be trusted (see the ui_type comment below).
+var CONSOLE_HOST_TITLE_RE = /\b(cmd\.exe|powershell\.exe|pwsh\.exe|conhost\.exe|command prompt|windows powershell)\b/i;
 
 async function ui_type({ text, pid, elementPath }) {
   if (!text) return fail('Text is required.');
@@ -511,6 +608,23 @@ async function ui_type({ text, pid, elementPath }) {
   // in there; this converts that answer into the evidence contract.
   var rr = (res.result && typeof res.result === 'object') ? res.result : {};
   var typedText = String(text);
+
+  // WAVE 9 (BUG-074) — console hosts have no oracle here. Real incident: pid
+  // 9152 (cmd.exe) returned typed:true, mechanism:'sendinput-unicode', the
+  // correct typedIntoPid — and was graded a failure, because a console host's
+  // TextPattern hands back the WHOLE scrollback, not the line just typed, so
+  // read-back can never honestly confirm OR deny a console type. Checked this
+  // file and ps-automation.ps1 for an existing process-name detection to reuse
+  // — none exists yet, so this is new. ponytail: keyed on window TITLE, because
+  // pc-child does not surface a process-name field for ui_type today (unlike
+  // get_foreground_window's `process`); upgrade path is threading
+  // typedIntoProcess through Handle-UiType the same way if title matching
+  // proves too loose.
+  if (CONSOLE_HOST_TITLE_RE.test(String(rr.typedIntoTitle || ''))) {
+    return evidence.unverified(res,
+      'typed into what looks like a console host ("' + String(rr.typedIntoTitle || '') +
+      '") — its read-back reflects the whole scrollback, not just what was typed, so this cannot be honestly confirmed or denied');
+  }
 
   if (rr.readBack === 'confirmed') {
     // Records the only state in which a later Enter is safe in a messaging app.
@@ -593,7 +707,13 @@ async function media_status() {
 // Named keys, plus single letters and modifier combos ("ctrl+n", "ctrl+shift+t").
 // Letters exist only to make combos expressible — plain text goes through
 // ui_type's Unicode SendInput path, never through virtual keys.
-const NAMED_KEYS = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right', 'delete', 'home', 'end'];
+// BUG-077: F4 (as in alt+F4) and the rest of the function-key row were simply
+// absent, so "close Spotify" via alt+F4 came back "Invalid key: f4" — the
+// model then tried 'alt' and 'f4' as separate bare send_key calls, both
+// invalid for the same reason. One-line fix: the keys existed conceptually,
+// just weren't in the map.
+const NAMED_KEYS = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right', 'delete', 'home', 'end',
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12'];
 const KEY_MODIFIERS = ['ctrl', 'control', 'shift', 'alt', 'win'];
 
 function isValidKeyName(name) {
@@ -680,6 +800,114 @@ async function click_at({ x, y }) {
   // Phase 3 hardening: coordinate clicks are inherently racy (window may have
   // moved between screen_look and click). Retry bounds the flakiness.
   return delegateWithRetry({ cmd: 'click_at', x, y }, { attempts: 3 });
+}
+
+// ---- see_and_click: click a piece of text because you can SEE it ----
+//
+// 2026-08-02. ui_click needs an elementPath into a UIA tree. WhatsApp Desktop's tree
+// enumerates to ZERO children, so no path exists to pass and the model invented them
+// ("Element path index 2 out of range (parent has 0 children)", Episodic/2026-08-02).
+// OCR does not care about the a11y tree: a chat name in a search result is rendered
+// pixels, and Windows.Media.Ocr already reports where those pixels are.
+//
+// PROVIDER SEAM (plan Stage 3): everything below consumes `regions` —
+// [{text,x,y,width,height}] in screen-absolute pixels. readScreenRegions() is the only
+// thing that knows Windows.Media.Ocr produced them. A second engine (PaddleOCR, for
+// non-Latin scripts and small dark-theme text) drops in here without touching the
+// matcher, the effector, or their tests.
+// ponytail: one function boundary, not a provider-registry — upgrade to the chain
+// shape providers/tts.js uses only when there is a second engine to chain.
+async function readScreenRegions() {
+  const res = await delegate({ cmd: 'screen_read_text' });
+  if (!res.ok) return { ok: false, error: reasonOf(res) };
+  const result = res.result || {};
+  const regions = Array.isArray(result.regions) ? result.regions : [];
+  return { ok: true, regions, text: String(result.text || '') };
+}
+
+function reasonOf(res) {
+  const r = res && res.result;
+  if (r && typeof r === 'object' && r.error) return String(r.error);
+  return typeof r === 'string' ? r : 'screen OCR failed';
+}
+
+// Exported for tests: pure, no I/O. Progressively looser so an exact label always beats
+// a coincidental substring — "Mou" must not win over "Mousumi" when both are present.
+function matchRegions(regions, query) {
+  const want = String(query || '').trim().toLowerCase();
+  if (!want) return [];
+  const usable = (regions || []).filter((r) =>
+    r && typeof r.x === 'number' && typeof r.y === 'number' &&
+    r.width > 0 && r.height > 0 && String(r.text || '').trim());
+  const norm = (r) => String(r.text).trim().toLowerCase();
+
+  const exact = usable.filter((r) => norm(r) === want);
+  if (exact.length) return exact;
+  const startsWith = usable.filter((r) => norm(r).startsWith(want));
+  if (startsWith.length) return startsWith;
+  return usable.filter((r) => norm(r).includes(want));
+}
+
+function centreOf(r) {
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+}
+
+async function see_and_click({ text, occurrence, expect }) {
+  const want = String(text || '').trim();
+  if (!want) return fail('What text should I click? Give the label as it appears on screen.');
+
+  const before = await readScreenRegions();
+  if (!before.ok) return fail('I could not read the screen, so I will not guess where to click: ' + before.error);
+
+  const hits = matchRegions(before.regions, want);
+  if (!hits.length) {
+    // Say what WAS on screen. A bare "not found" sends the operator hunting for the
+    // wrong bug — the label may be present but spelled differently, or OCR may have
+    // returned nothing at all, and those need opposite responses.
+    const sample = before.regions.slice(0, 12).map((r) => r.text).join(' | ');
+    return fail('I cannot see "' + want + '" on screen. ' + (before.regions.length
+      ? 'What I can read: ' + sample + (before.regions.length > 12 ? ' …' : '')
+      : 'OCR returned no text regions at all — the screen may be blank, or this text may be an image or an icon rather than rendered text.'));
+  }
+
+  // Ambiguity is refused, not guessed — same rule as resolveRecipient() in
+  // from-whatsapp.js. Clicking the wrong one of two identical labels is not something
+  // the operator can undo by asking again.
+  const nth = Number(occurrence);
+  let target;
+  if (hits.length > 1) {
+    if (!Number.isFinite(nth) || nth < 1 || nth > hits.length) {
+      const where = hits.map((r, i) => (i + 1) + ') "' + r.text + '" at ' + centreOf(r).x + ',' + centreOf(r).y);
+      return fail('"' + want + '" matches ' + hits.length + ' things on screen: ' + where.join('; ') +
+        '. Say which one (occurrence: 1-' + hits.length + ') — I will not pick for you.');
+    }
+    target = hits[nth - 1];
+  } else {
+    target = hits[0];
+  }
+
+  const point = centreOf(target);
+  const clicked = await click_at(point);
+  if (!clicked.ok) return fail('Found "' + target.text + '" at ' + point.x + ',' + point.y +
+    ' but the click failed: ' + reasonOf(clicked));
+
+  // Evidence (evidence.js's 'ocr' oracle): a click landing is not the thing happening.
+  // Re-read the screen — if nothing changed, the click hit nothing that mattered.
+  const after = await readScreenRegions();
+  if (!after.ok) {
+    return evidence.unverified(
+      { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
+      'clicked "' + target.text + '" but the screen could not be re-read afterwards, so I cannot confirm anything happened');
+  }
+  if (expect && after.text.toLowerCase().includes(String(expect).trim().toLowerCase())) {
+    return ok({ clicked: target.text, x: point.x, y: point.y, evidence: 'ocr', confirmed: String(expect) });
+  }
+  if (after.text !== before.text) {
+    return ok({ clicked: target.text, x: point.x, y: point.y, evidence: 'ocr', note: 'the screen changed after the click' });
+  }
+  return evidence.unverified(
+    { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
+    'clicked "' + target.text + '" but the screen reads exactly the same afterwards, so I cannot tell that anything happened');
 }
 
 // ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
@@ -770,7 +998,7 @@ async function capture_screenshot() {
 const KNOWN_DESKTOP_APPS = ['slack', 'discord', 'teams'];
 
 const TOOLS = [
-  { name: 'launch_app', description: 'Launch an application by name (e.g. "notepad", "chrome", "code"). Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name or path', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app },
+  { name: 'launch_app', description: 'Launch a Windows application by name (e.g. "notepad", "chrome", "code"). Also accepts a small set of web destinations that are not real Windows apps ("youtube", "gmail", "maps") and opens them in MYTHOS\'s own Electron window — use this, not open_web, when the operator says "open X app" or "on the Electron/desktop app". For a specific YouTube video/search instead of the site itself, use open_web(type:"youtube") instead. Never pass a folder path or a command with arguments (e.g. explorer.exe "D:\\...") — use open_folder for that; this takes an app NAME only. Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name or path', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app },
   { name: 'list_windows', description: 'List all open windows with their PIDs, titles, process names, and visibility status.', params: {}, danger: false, fn: list_windows, needs_result: true },
   { name: 'focus_window', description: 'Bring a window to the foreground and restore it if minimized.', params: { pid: 'number - process ID of the window' }, danger: false, fn: focus_window },
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },
@@ -784,6 +1012,7 @@ const TOOLS = [
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
+  { name: 'see_and_click', description: 'Click a piece of text because you can SEE it on screen — OCRs the screen, finds the label, and clicks the middle of it. PREFER THIS over ui_click for chat apps, Electron and browser UIs (WhatsApp, Spotify, YouTube), where the UIA tree is often empty and ui_click has no valid element path to use. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it will list the matches and refuse rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked' }, danger: true, fn: see_and_click },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
   { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },
   { name: 'scroll_at', description: 'Scroll the mouse wheel at a screen coordinate. Moves to (x,y) first, then scrolls. Defaults: amount 3 ticks, direction down.', params: { x: 'number - absolute screen x', y: 'number - absolute screen y', amount: 'number (optional) - ticks to scroll, default 3', direction: 'string (optional) - up or down, default down' }, danger: false, fn: scroll_at },
@@ -814,8 +1043,11 @@ module.exports = {
   registerFromPc,
   TOOLS,
   KNOWN_DESKTOP_APPS,
+  KNOWN_WEB_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
-  screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, write_note,
+  screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
+  // pure, no I/O — exported so the matcher can be tested without a screen
+  _seeAndClickInternal: { matchRegions, centreOf },
   ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,

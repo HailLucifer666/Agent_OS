@@ -41,11 +41,70 @@ function createSemanticStore({ fs, config, bus, logger }) {
     return 'sem-' + crypto.randomUUID();
   }
 
+  // BUG-080 (Stage 6, item #18): every semantic.write() caller funnels
+  // through here — from-memory.js's remember() tool already quarantines
+  // identity claims (its own IDENTITY_CLAIM_RE), but memory/index.js's
+  // conversation-distillation loop (3b) writes straight to 'user-facts' at
+  // confidence 0.7 with NO such check. That is how "The user's name is Alex"
+  // (mined from MYTHOS's OWN typed Notepad probe text, "Hi Alex, this is
+  // Mythos") and "operator really enjoys playing jazz piano" (an inference
+  // right after a "soft jazz" query, not a stated fact) ended up as durable
+  // facts contradicting Identity/operator-profile.txt ("Address them with
+  // 'Sir'"). One guard here catches it regardless of which caller forgot it.
+  //
+  // Root-cause note: the specific Notepad-probe example above most likely
+  // entered via a DIFFERENT, already-fixed bug — Stage 2 of this same plan
+  // found MYTHOS's own TTS bleeding back into its own Live mic, which Gemini's
+  // STT then transcribed as the OPERATOR speaking. That means the userText
+  // itself was contaminated upstream of this function, not just mis-labeled
+  // here. Stage 2 closes that specific hole; this guard is defense-in-depth
+  // for the class of bug (self-authored/inferred text becoming a durable
+  // identity fact), not a re-fix of the same line.
+  const IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|the user'?s? name is\b|prefers? to be called\b|address (?:me|the operator|the user) as\b|will call me\b)/i;
+  const IDENTITY_UNCONFIRMED_CONFIDENCE = 0.2;
+
+  function isConfirmedOperatorUtterance(sources) {
+    return Array.isArray(sources) && sources.includes('voice-explicit') && !sources.includes('identity-unconfirmed');
+  }
+
+  function contradictsOperatorProfile(fact) {
+    try {
+      const profile = fs.readText('Identity/operator-profile.txt', '');
+      if (!profile.trim()) return false; // nothing on file to contradict
+      // Cheap check, deliberately not NLP: an identity-class claim that
+      // shares no words with the profile on file is treated as a possible
+      // contradiction rather than silently trusted.
+      const profileWords = new Set(profile.toLowerCase().match(/[a-z]{3,}/g) || []);
+      const factWords = (fact.toLowerCase().match(/[a-z]{3,}/g) || []).filter(function(w) {
+        return !['the', 'user', 'name', 'call', 'operator', 'address', 'prefers', 'will'].includes(w);
+      });
+      if (!factWords.length) return false;
+      return !factWords.some(function(w) { return profileWords.has(w); });
+    } catch (_) {
+      return false; // fs error — degrade honestly, don't block the write over it
+    }
+  }
+
   function write(topic, facts, opts) {
     opts = opts || {};
     const id = opts.id || generateId();
-    const confidence = opts.confidence || 0.5;
-    const sources = opts.sources || [];
+    let confidence = opts.confidence || 0.5;
+    let sources = opts.sources || [];
+    const identityClaim = Array.isArray(facts) && facts.some(function(f) { return IDENTITY_CLAIM_RE.test(String(f)); });
+    if (identityClaim) {
+      const unconfirmed = !isConfirmedOperatorUtterance(sources);
+      const contradiction = facts.some(function(f) { return IDENTITY_CLAIM_RE.test(String(f)) && contradictsOperatorProfile(String(f)); });
+      if (unconfirmed || contradiction) {
+        confidence = Math.min(confidence, IDENTITY_UNCONFIRMED_CONFIDENCE);
+        sources = sources.includes('identity-unconfirmed') ? sources : sources.concat('identity-unconfirmed');
+        if (bus && typeof bus.emit === 'function') {
+          bus.emit('health.anomaly', {
+            kind: 'semantic-identity-claim-quarantined',
+            topic: topic, reason: contradiction ? 'contradicts-operator-profile' : 'not-a-confirmed-operator-utterance',
+          });
+        }
+      }
+    }
     const relPath = 'Semantic/' + sanitizeFilename(topic) + '.md';
 
     // Append mode (opt-in via opts.append): read existing facts, dedup against

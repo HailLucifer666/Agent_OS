@@ -16,6 +16,11 @@
 
 import { utterance, stopRequest, sendMessage } from '../ws.js';
 import { getMicDeviceId, setMicDeviceId, buildAudioConstraints, micErrorMessage } from './mic-device.js';
+// Static import is cheap: silero-vad.js only DEFINES functions at module
+// scope — it fetches onnxruntime-web and the ONNX model lazily, inside
+// ensureLoaded(), which is only ever called when VAD_ENGINE==='silero'. A HUD
+// left on the 'rms' default never pays for either.
+import { resampleLinear, accumulateFrames, createSileroVad, FRAME_SAMPLES, MODEL_SAMPLE_RATE } from './silero-vad.js';
 
 const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
@@ -38,6 +43,13 @@ const ECHO_GUARD_MS = 3000;    // after playback ends, keep rejecting transcript
 // option can override per-instance, same convention as the four above.
 let BARGE_IN_RMS_MULT = 2.5;       // multiplied onto SPEECH_RMS for the barge-in floor
 let BARGE_IN_HOLD_TICKS_MULT = 2;  // multiplied onto SPEECH_HOLD_TICKS for the barge-in hold
+
+// VAD_ENGINE (config-gated, VAD_ENGINE=rms|silero, default rms — zero behavior
+// change unless the operator opts in): 'rms' is the threshold-based volume
+// detector above; 'silero' runs a trained speech/non-speech model
+// (silero-vad.js) instead. Overridable per-instance via createVoiceLoop's
+// `vad.engine` option, same convention as the four thresholds above (BUG-020).
+let VAD_ENGINE = 'rms';
 
 // voice-nav table — checked before falling through to the brain.
 // Leading-edge only (no $ anchor) so compound utterances like
@@ -180,6 +192,17 @@ export function pickSpeechVoice(voices) {
 export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline, vad }) {
   // BUG-020: optional per-instance VAD tuning overrides — partial overrides
   // only (unspecified fields keep the module-level defaults declared above).
+  if (vad && (vad.engine === 'rms' || vad.engine === 'silero')) VAD_ENGINE = vad.engine;
+  // Silero's "level" is a 0..1 speech PROBABILITY, not an RMS amplitude — the
+  // RMS defaults (0.035 etc, tuned against fans/AC/bikes) would either never
+  // fire (a probability rarely idles above 0.035) or misfire constantly if
+  // reused verbatim. Apply probability-scale defaults BEFORE the explicit
+  // numeric overrides below, which still win either way.
+  if (VAD_ENGINE === 'silero') {
+    SPEECH_RMS = 0.5;
+    MIN_PEAK_RMS = 0.6;
+    BARGE_IN_RMS_MULT = 1.6; // 0.5 * 1.6 = 0.8 — a sustained high-confidence barge-in floor
+  }
   if (vad) {
     if (typeof vad.speechRms === 'number') SPEECH_RMS = vad.speechRms;
     if (typeof vad.minPeakRms === 'number') MIN_PEAK_RMS = vad.minPeakRms;
@@ -256,6 +279,31 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   let prerollNode = null;     // AudioWorkletNode
   let prerollBuffer = null;   // Float32Array snapped at speech-confirm (or null)
   let prerollSampleRate = 0;  // sample rate of the pre-roll (for WAV encoding)
+
+  // Silero VAD (VAD_ENGINE='silero') — lazily imported so a HUD left on the
+  // 'rms' default never fetches onnxruntime or the model. See silero-vad.js:
+  // its ONNX frame is 512 samples @16kHz, but vadTick's 100ms analyser
+  // snapshot is 512 samples at the CONTEXT's real sample rate (commonly
+  // 48000) — resampleLinear() converts, accumulateFrames() carries the
+  // remainder across ticks since 100ms of resampled audio isn't an exact
+  // multiple of 512.
+  let sileroVad = null;         // createSileroVad() instance, once loaded
+  let sileroLoading = false;
+  let sileroBuffer = new Float32Array(0); // carry-over between ticks
+  let sileroProb = 0;           // last known speech probability — used as `level` for every tick until the next frame resolves (probeFrame is async; at most ~100ms stale)
+
+  function ensureSileroLoaded() {
+    if (sileroVad || sileroLoading) return;
+    sileroLoading = true;
+    const instance = createSileroVad();
+    instance.ensureLoaded().then((ok) => {
+      if (ok) sileroVad = instance;
+      // else: stays null — vadTick's `sileroVad &&` guard keeps using the RMS
+      // level for this tick, an honest degrade rather than a hang or throw.
+    }).catch(() => { /* sileroVad stays null — same honest degrade */ }).finally(() => {
+      sileroLoading = false;
+    });
+  }
 
   function setState(s) { if (onState) onState(s); }
   function caption(text, kind) { if (onCaption) onCaption(text, kind); }
@@ -801,7 +849,27 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     if (!analyser) return;
     const data = new Uint8Array(analyser.fftSize);
     analyser.getByteTimeDomainData(data);
-    const level = rms(data);
+    // RMS is always computed — it drives the visualizer regardless of engine,
+    // and is the fallback `level` until Silero has loaded (or if it fails to).
+    let level = rms(data);
+    if (VAD_ENGINE === 'silero') {
+      if (sileroVad && sileroVad.ready) {
+        const floats = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i++) floats[i] = (data[i] - 128) / 128;
+        const resampled = resampleLinear(floats, audioCtx.sampleRate, MODEL_SAMPLE_RATE);
+        const { frames, remainder } = accumulateFrames(sileroBuffer, resampled, FRAME_SAMPLES);
+        sileroBuffer = remainder;
+        for (const frame of frames) {
+          // Fire-and-forget: probeFrame is async and setInterval's vadTick is
+          // not, so the result lands on a LATER tick (at most ~100ms behind,
+          // acceptable for VAD). sileroProb keeps the most recent result.
+          sileroVad.probeFrame(Float32Array.from(frame)).then((p) => { if (p != null) sileroProb = p; });
+        }
+        level = sileroProb;
+      } else {
+        ensureSileroLoaded(); // idempotent; keeps using RMS `level` until ready
+      }
+    }
     if (recorder) peakRms = Math.max(peakRms, level);
     // Drive the visualizer with the live VAD level — the mic-indicator shows
     // dynamic waves proportional to the input level, flat when silent. Only
@@ -894,6 +962,13 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     analyser = null;
     prerollNode = null;
     prerollBuffer = null;
+    // Drop the carry-over buffer and recurrent state — a new listening
+    // session should not pick up mid-frame from a previous one. sileroVad
+    // itself (the loaded model session) is kept; reloading it every
+    // start/stop would refetch nothing (cached), but reset() is still cheap
+    // and correct to call every time.
+    sileroBuffer = new Float32Array(0);
+    if (sileroVad) sileroVad.reset();
     setState('idle');
     caption('', 'info');
   }

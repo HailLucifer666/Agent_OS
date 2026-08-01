@@ -115,7 +115,18 @@ function loadContacts() {
     // anomaly rather than silently reading as "no contacts", which would look
     // identical to a missing file and send the operator hunting for the wrong bug.
     const raw = vaultFs.readJSONStrict(CONTACTS_PATH, {});
-    return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+    // 2026-08-02: the file on disk was [["alex","+..."]] — an array of pairs — while
+    // this reader accepted only the documented object shape and threw everything else
+    // away as {}. The operator's saved contact was therefore invisible, and MYTHOS
+    // answered "I have no contacts saved" over a file that plainly had one in it.
+    // Accept both shapes: a reader that silently discards real data is the same
+    // failure class as an effector reporting success it did not earn.
+    if (Array.isArray(raw)) {
+      const pairs = raw.filter((e) => Array.isArray(e) && e.length >= 2 &&
+        typeof e[0] === 'string' && e[0].trim());
+      return Object.fromEntries(pairs.map((e) => [String(e[0]).trim(), String(e[1])]));
+    }
+    return (raw && typeof raw === 'object') ? raw : {};
   } catch (err) {
     if (logger) logger.warn('whatsapp.contacts-unreadable', { error: err.message });
     return {};
@@ -317,6 +328,53 @@ async function whatsapp_contacts() {
   return ok({ contacts: names, count: names.length });
 }
 
+// 2026-08-02: there was no way to add a contact except hand-editing
+// vault/Contacts/contacts.json, which is not a thing to ask of someone mid-
+// conversation — the operator hit this trying to message someone who simply
+// wasn't in the file. Writes the documented object shape, so this can never be
+// the thing that puts an array back on disk.
+async function whatsapp_contact_save({ name, number }) {
+  const label = String(name || '').trim();
+  if (!label) return fail('What name should I save them under?');
+  if (!vaultFs || typeof vaultFs.writeJSON !== 'function') {
+    return fail('The vault is not writable, so I cannot save contacts right now.');
+  }
+  const e164 = sanitizeNumber(number);
+  if (!e164) {
+    return fail('"' + String(number || '') + '" is not a phone number I can use. ' +
+      'Give it in full international form, like +15551234567.');
+  }
+
+  const contacts = loadContacts();
+  const existing = Object.keys(contacts).find((n) => n.toLowerCase() === label.toLowerCase());
+  const previous = existing ? contacts[existing] : null;
+  if (existing) delete contacts[existing];
+  contacts[label] = e164;
+
+  const written = vaultFs.writeJSON(CONTACTS_PATH, contacts);
+  if (written && written.ok === false) {
+    return fail('Could not save ' + label + ': ' + reasonText(written));
+  }
+
+  // Oracle: read the file back and confirm the name resolves through the same
+  // path whatsapp_send will use. Writing without re-reading is how the array-shape
+  // bug above stayed invisible.
+  const check = resolveRecipient(label);
+  if (check.error || check.number !== e164) {
+    return fail('I wrote ' + label + ' to the contacts file but could not read it back ' +
+      'as a usable contact (' + (check.error || 'resolved to something else') + '). Not saved reliably.');
+  }
+
+  return ok({
+    saved: label,
+    replaced: previous ? true : false,
+    evidence: 'read-back',
+    // Deliberately no number in the result — this is spoken aloud and written to
+    // the episodic log, same reasoning as whatsapp_contacts above.
+    note: (previous ? 'Updated ' : 'Saved ') + label + '. You can now say "send a WhatsApp to ' + label + '".',
+  });
+}
+
 const TOOLS = [
   {
     name: 'whatsapp_send',
@@ -336,6 +394,16 @@ const TOOLS = [
     danger: false,
     fn: whatsapp_contacts,
   },
+  {
+    name: 'whatsapp_contact_save',
+    description: 'Save or update a WhatsApp contact so it can be messaged by name later. Use for ' +
+      '"save Mousumi\'s number as +91...", "remember dad\'s WhatsApp is +1...". `number` must be full ' +
+      'international form (+15551234567). Reach for this when whatsapp_send reports it has no number ' +
+      'for someone, instead of telling the operator to edit a file.',
+    params: { name: 'string - the name to message them by', number: 'string - phone number in E.164 form, e.g. +15551234567' },
+    danger: true,
+    fn: whatsapp_contact_save,
+  },
 ];
 
 function registerFromWhatsapp(hub, ctx) {
@@ -352,6 +420,7 @@ module.exports = {
   TOOLS,
   whatsapp_send,
   whatsapp_contacts,
+  whatsapp_contact_save,
   // exported for tests
   _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH },
 };

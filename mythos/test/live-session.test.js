@@ -187,6 +187,149 @@ describe('live-session (Phase 1, V2 §6)', () => {
     session.close();
   });
 
+  test('BUG-059 — idle-timeout rotates the session (preserves resumeHandle, reopens) instead of killing it', async () => {
+    // Before the fix, armIdle()'s timeout called close('idle-timeout'), which
+    // unconditionally sets closedByUs=true — the exact flag the ws.on('close')
+    // reconnect branch checks to decide NOT to reconnect. So an idle timeout
+    // could never trigger a reopen: the session just went silently dead with
+    // no client notification. This test drives a real idle-timeout via a tiny
+    // configured LIVE_IDLE_TIMEOUT_MS and asserts a second socket is opened
+    // automatically, carrying the preserved sessionResumption handle, and the
+    // session lands back in 'open' — not stuck 'closed'.
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets, events } = fakeDeps({ config: { LIVE_IDLE_TIMEOUT_MS: 15 } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    // A real session picks up a resume handle almost immediately; give it one.
+    sockets[0].serverFrame({ sessionResumptionUpdate: { resumable: true, newHandle: 'resume-abc' } });
+
+    // Wait past the (tiny, test-only) idle timeout.
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.equal(sockets.length, 2, 'idle-timeout must open a fresh socket automatically, not just die');
+    // The reason string comes from the fake socket's own close event (matching
+    // the real ws.on('close') handler both idle-timeout and goAway now share —
+    // see close(reason, {final:false}) in live-session.js), not a bespoke label.
+    assert.ok(events.state.some((s) => s.state === 'reconnecting'),
+      'the rotation must be observable as a reconnecting state, not a silent death');
+
+    sockets[1].simulateOpen();
+    sockets[1].serverFrame({ setupComplete: {} });
+    await new Promise((r) => setImmediate(r));
+
+    assert.equal(session.getState(), 'open', 'session must be OPEN again after an idle rotation, not stuck closed');
+    assert.ok(
+      sockets[1].sent.some((f) => f.setup && f.setup.sessionResumption && f.setup.sessionResumption.handle === 'resume-abc'),
+      'the rotated connection must carry the preserved resumeHandle so context is not lost'
+    );
+    session.close();
+  });
+
+  test('BUG-059 — session-max rotates the session instead of killing it at the 10-minute mark', async () => {
+    // Same defect, different trigger: MAX_MS used to call close('session-max')
+    // unconditionally even though contextWindowCompression's slidingWindow
+    // already keeps the content window healthy — this forced kill was
+    // self-inflicted and, worse, unrecoverable for the same closedByUs reason.
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets } = fakeDeps({ config: { LIVE_SESSION_MAX_MS: 15 } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.equal(sockets.length, 2, 'session-max must open a fresh socket automatically, not just die');
+    sockets[1].simulateOpen();
+    sockets[1].serverFrame({ setupComplete: {} });
+    await new Promise((r) => setImmediate(r));
+
+    assert.equal(session.getState(), 'open', 'session must be OPEN again after a session-max rotation, not stuck closed');
+    session.close();
+  });
+
+  test('BUG-059 adversarial-review fix (A): idle rotation is bounded — an empty room stops rotating, a real word resets it', async () => {
+    // Without a ceiling, an unattended mic rotates a brand new Live session
+    // every IDLE_MS forever — real cost on BYO keys with per-day limits.
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const { deps, sockets, events } = fakeDeps({
+      config: { LIVE_IDLE_TIMEOUT_MS: 12 },
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    // Rotation 1 of 3 allowed: fresh socket opens each time, no exhaustion event yet.
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      sockets[sockets.length - 1].simulateOpen();
+      sockets[sockets.length - 1].serverFrame({ setupComplete: {} });
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.equal(sockets.length, 4, 'first 3 idle timeouts must still rotate (open, +3 rotations)');
+    assert.ok(!busEvents.some((e) => e.name === 'health.anomaly' && e.payload.kind === 'live-idle-exhausted'),
+      'must not exhaust before the ceiling is actually crossed');
+
+    // A real user word must reset the counter, not just delay it.
+    sockets[sockets.length - 1].serverFrame({ serverContent: { inputTranscription: { text: 'hello' } } });
+
+    // 3 more rotations should be allowed again after the reset.
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      sockets[sockets.length - 1].simulateOpen();
+      sockets[sockets.length - 1].serverFrame({ setupComplete: {} });
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.equal(sockets.length, 7, 'a real transcript must reset the ceiling, not just postpone exhaustion');
+
+    // Now exhaust it for real with no more speech.
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      const last = sockets[sockets.length - 1];
+      if (last.readyState !== last.OPEN) { last.simulateOpen(); last.serverFrame({ setupComplete: {} }); }
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.ok(busEvents.some((e) => e.name === 'health.anomaly' && e.payload.kind === 'live-idle-exhausted'),
+      'past the ceiling with zero speech, the session must settle CLOSED for real, not rotate forever');
+    assert.equal(session.getState(), 'closed');
+    session.close();
+  });
+
+  test('BUG-059 adversarial-review fix (B): a late error on an abandoned (rotated-away) socket does not stomp the new session', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets, events } = fakeDeps({ config: { LIVE_IDLE_TIMEOUT_MS: 12 } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    await new Promise((r) => setTimeout(r, 40)); // idle-timeout rotates
+    assert.equal(sockets.length, 2);
+    sockets[1].simulateOpen();
+    sockets[1].serverFrame({ setupComplete: {} });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(session.getState(), 'open');
+
+    // The ABANDONED socket (sockets[0]) fires a late 'error' — realistic for
+    // a real TCP/TLS socket torn down out from under it.
+    sockets[0].emit('error', new Error('late ECONNRESET from the abandoned socket'));
+
+    assert.equal(session.getState(), 'open', 'a stale error from the abandoned socket must not stomp the live one to closed');
+    assert.ok(!events.state.some((s) => s.state === 'closed' && /ECONNRESET/.test(s.reason || '')),
+      'the abandoned socket\'s error handler must have been detached, not just outlived');
+    session.close();
+  });
+
   test('usageMetadata records real token counts via spend.recordCall (AD-5 — no invented numbers)', async () => {
     process.env.GOOGLE_API_KEY = 'test-key';
     const { deps, sockets, events } = fakeDeps();

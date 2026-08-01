@@ -9,9 +9,9 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-07-31 (evening — the Trust Plan: BUG-051..BUG-058, the evidence
-contract and the nine waves built on it; see the last section, which also carries the
-live-verification runbook that is still OUTSTANDING)
+Last updated: 2026-08-02 — the 2026-07-31/08-01 voice-session fixes: 19 defects,
+7 stages, BUG-059(new)..BUG-081 (see the LAST section for the collision note on
+BUG-059/060/061's numbers and the live-verification runbook, still OUTSTANDING).
 Maintainer: update this file as issues are resolved. Strike through the status.
 
 ---
@@ -1869,4 +1869,499 @@ bounded to the opening ~8s of playback rather than the whole track, because
 suspending capture for a full song leaves MYTHOS deaf exactly when you would say
 "next" or "stop". Full-duration deafness is available by passing a larger hold. Pick
 one after hearing both.
+
+---
+
+## Session (2026-08-01/02) — the voice-session-19 fixes: 19 defects, 7 stages
+
+Branch `fix/voice-session-19` (off `47fe0f2`, NOT pushed — a second machine shares
+this repo through `main`, which is untouched). 8 commits: `f97f4e3`, `5c5a038`,
+`6cd14a4`, `623a5a5`, `d36f2d3`, `954514d`, `fea7d7f`, `a06a82b`, `7eea2c5`
+(9 total — one more than listed above; see the commit log on the branch for the
+exact SHAs and order). Built from a real logged voice session
+(`vault/Conversation/session.json`, `vault/Incidents/2026-07-31.jsonl`,
+`vault/Audit/2026-07-31.jsonl`) where MYTHOS went deaf repeatedly, played the wrong
+song twice while claiming otherwise, could not close Spotify, and could not open
+YouTube in the Electron app as asked. Full plan: the spec this session executed
+against (not tracked in this repo — see the session that dispatched this work).
+
+**⚠️ NUMBERING COLLISION — read this before grepping for a BUG number.** The
+source comments and commit messages for this session's Stage 1-7 work use
+`BUG-059` through `BUG-081`. Those numbers were ALREADY in use in this repo's
+source at the branch point (`47fe0f2`) for an entirely different, earlier batch of
+`pc-child`/WhatsApp fixes (commits around `21f8743`) that were never given their
+own BUGS.md prose entries — e.g. `ps-automation.ps1`'s own `BUG-060`/`BUG-061`
+comments are about foreground-vs-minimized windows and SendInput silent discards,
+NOT the two-voices/tail-clip defects this session's `BUG-060`/`BUG-061` source
+comments describe. This was not caught before the numbers were baked into commit
+messages and test names on this branch, and those are not being rewritten after
+the fact (no history rewrite on a shared branch). **To keep this file's own
+numbering collision-free, every entry below uses a FRESH number (BUG-082 onward)
+and cites the colliding in-source label in brackets so the code is still
+findable.** If BUGS.md ever gets a numbering pass, reconciling the `21f8743`
+batch's own undocumented `BUG-059..071` range against this file is the thing to
+do it alongside.
+
+**Test baseline.** Before this session: 2152 passing / 0 failing (confirmed at
+`47fe0f2`, matching this file's own header). After all 7 stages: **2222 tests,
+2221 pass, 0 fail, 1 skip** (the skip is the pre-existing, honest
+`sensors-file.test.js` skip documented elsewhere in this file — unrelated). Net
++69 tests, zero regressions, verified by a full recursive `cd mythos && node
+--test` after every commit, not just once at the end.
+
+### BUG-082 [source: BUG-059] — MYTHOS went deaf; idle-timeout and session-max killed the reconnect path
+
+**Complaint:** "why do you keep going offline? I have to click you every time."
+
+**Root cause**, `src/core/voice/live-session.js`: `armIdle()`'s 45s idle timer and
+a hardcoded 10-minute session-max timer both called `close(reason)`, which
+unconditionally set `closedByUs = true` — exactly the flag `ws.on('close')`'s
+reconnect branch checked to decide **not** to reconnect. An idle timeout was
+therefore indistinguishable from an intentional shutdown: the session just died,
+silently, with no client notification.
+
+**Fix.** `close(reason, {final})` — a non-final close (idle-timeout, session-max,
+goAway) leaves `closedByUs` false and does nothing else; the ONE existing
+reconnect branch in `ws.on('close')` (not a second parallel path) sees
+`!closedByUs` and reconnects on its own, carrying `resumeHandle` if present but no
+longer requiring it (a `goAway` can race ahead of the first
+`sessionResumptionUpdate` and must still reconnect). `LIVE_IDLE_TIMEOUT_MS`
+default raised 45000→120000ms (`schema.js`) to survive a ~30s TTS-suspend window
+without the deadline racing normal turn-taking. `handleFrame()` now rearms the
+idle clock on **every** server frame, not just specific branches, so a future
+protocol addition can't silently starve it.
+
+**Checked against Google's actual Live API docs before touching this** (session
+management guide, fetched 2026-08-01 — this repo's own prior comment claiming
+`contextWindowCompression` makes the session live "forever" was **not** trusted
+at face value, per this file's own house rule about plausible-but-wrong theories):
+`slidingWindow` compression does extend an audio session's *content* window
+indefinitely, but the underlying **connection** still has its own ~10-minute
+ceiling independent of that — session resumption exists specifically to
+reconnect across it. So the session-max timer firing is expected, load-bearing
+behavior, not a bug to delete; it must reconnect, never dead-end. Fixed
+accordingly rather than just removing the timer.
+
+**Two more defects found on adversarial re-review of the first pass (same file,
+folded into this entry, not a separate number):**
+- **Unbounded idle rotation was a cost leak.** An unattended mic would rotate a
+  brand-new Gemini Live session every `IDLE_MS` forever — real money on BYO keys
+  with per-day ceilings (this repo has a documented 10-request/day voice model).
+  Fixed with `idleRotationsWithoutSpeech`: 3 idle rotations with zero recognized
+  user speech in between is the ceiling; past it, the session does a genuinely
+  FINAL close (revived by a click or wake word, same as any closed session) and
+  emits `health.anomaly {kind:'live-idle-exhausted'}` so it's observable. Any real
+  transcript resets the counter. Session-max's own 10-min housekeeping rotations
+  are NOT counted against this ceiling (a busy, healthy conversation shouldn't be
+  punished for it).
+- **A stale socket's late `error` could stomp the replacement session.** `close()`
+  handed off to a new socket but left the OLD socket's `error` listener attached;
+  a late error from it (realistic for a real TCP/TLS teardown) called
+  `breakers.fail()` and forced state back to `'closed'` on the healthy new
+  session. Fixed by stripping the old socket's `error` listener (replacing with a
+  no-op — an `EventEmitter` throws on an unlistened `'error'`) while leaving
+  `close` attached, since that's what fires the reconnect.
+
+🔧 FIXED+UNIT-VERIFIED: `test/live-session.test.js`, 11 cases covering
+idle-timeout, session-max, goAway, the idle-rotation ceiling + transcript reset,
+and the stale-socket-error isolation — all verified red before each fix by
+reverting it locally. **NEEDS-LIVE-CHECK**: a real multi-minute silence-then-speak
+session against the real Gemini Live endpoint, and whether 3 rotations / 120s /
+250ms-class constants feel right against real TTS timing. See runbook item 1.
+
+### BUG-083 [source: BUG-060] — two voices speaking simultaneously
+
+**Complaint:** "two voices speaking simultaneously" (2 incidents).
+
+**Root cause.** `server/index.js`'s `proactiveSpeak()` (boot greeting, reminders,
+late-outcome reports) streamed edge-tts audio to the client with no check for an
+open Gemini Live session on that connection — so Gemini's own PCM voice and
+edge-tts played at once.
+
+**Fix.** `proactiveSpeak()` now looks up the connection's live session
+(`ws.getLiveSession()`, newly exposed); if open, it calls `liveSession.sendText('[SYSTEM] ...')`
+— the exact `[SYSTEM]` channel `reportLateOutcome()` already used
+(`live-tool-adapter.js`) — and emits **zero** audio chunks, so Gemini's own voice
+speaks it. If no Live session is open, the legacy edge-tts path is untouched. The
+dead `setCaptureSuspended` call tied to own-TTS playback was removed from
+`app.js` (the `suspendForMedia` media-echo path is untouched — that's BUG-092's
+territory).
+
+🔧 FIXED+UNIT-VERIFIED: `test/proactive-speak-live-routing.test.js` — asserts a
+real fake-socket Live session gets `sendText` and zero `speech-chunk` messages;
+the no-Live-session legacy path is asserted unchanged. **NEEDS-LIVE-CHECK**:
+whether the operator genuinely hears one voice during a real reminder/greeting
+while a live conversation is running. See runbook item 2.
+
+**Known remaining gap, NOT fixed in this pass, flagged rather than hidden:**
+`sendSpokenReply()` — the direct typed-compose-bar reply path, distinct from
+`proactiveSpeak()` — still emits edge-tts audio unconditionally even while a Live
+session is open. Typing into the chat box while Live is active can still leak
+audio into the Live mic. Out of this stage's mandate (proactive/background
+announcements only); needs its own pass.
+
+### BUG-084 [source: BUG-061] — the last word clipped on barge-in
+
+**Complaint:** speech "consistently cut off at the end, losing the last one or
+two words."
+
+**Root cause.** `pcm-player.js`'s `flush()` hard-stopped every queued audio source
+on any `live-interrupted` event, with no minimum-remaining-duration guard —
+compounded by BUG-083 above: Gemini's own VAD was firing `interrupted` on hearing
+MYTHOS's own leaked edge-tts audio.
+
+**Fix.** `flush()` now ignores an interrupt when the queued tail is under 250ms
+remaining, computed against the real Web Audio scheduled-start time; a genuine
+barge-in with more tail than that still stops immediately. `close()` (real
+teardown) still stops unconditionally via a separate `stopAll()` path.
+
+🔧 FIXED+UNIT-VERIFIED: `test/pcm-player.test.js` — 3 new cases for the threshold
+(ignored under it, honored over it, no-op when idle), 3 pre-existing tests updated
+to use long-duration chunks so they still test genuine-interrupt behavior.
+**NEEDS-LIVE-CHECK**: whether 250ms sounds right against real speech cadence and
+doesn't make barge-in feel unresponsive. See runbook item 2.
+
+### BUG-085 [source: BUG-065] — Spotify played the wrong song while reporting success
+
+**Complaint:** asked for "Russia on Ice" and "soft jazz", got "Of the New Day" and
+"Lady in the Blue Dress" — while MYTHOS reported success. BUGS.md's Wave 5 already
+fixed the *detection*; this is the flag being thrown away one frame up the stack.
+
+**Proof.** `vault/Audit/2026-07-31.jsonl` record `aud-9696f4641ba2`:
+`{"tool":"spotify_play","outcome":"ok"}` with **no** `unverified`, while the
+episodic result in the same second says `"verified":false,"note":"clicked a play
+control but the playing title did not match the query"`.
+
+**Root cause**, `from-spotify.js`: the cua-driver play path spread only
+`cuaResult.result` into a bare `ok()`, dropping the `unverified` flag
+`cuaResult` actually carried. The `click_at` and `keystroke_fallback` fallback
+paths were worse: bare `ok()` with **no oracle consulted at all**.
+
+**Fix.** The cua-driver path now checks for `unverified`/`reason` and returns
+`evidence.unverified()` instead of re-wrapping in `ok()`. `click_at` and
+`keystroke_fallback` now run the same now-playing-title comparison
+(`titleSatisfiesQuery()`, extracted once, not duplicated) the cua path already
+had; if they can't run it, they return `unverified` honestly. The cua path's
+confirmed-match branch was also upgraded from bare `ok()` to
+`evidence.verifiedOk(..., {oracle:'media-status', ...})` — same law, success
+side.
+
+🔧 FIXED+UNIT-VERIFIED: `test/bug-065-spotify-evidence-propagation.test.js`
+(propagation + both fallback paths, mocked pc-effectors/cua-driver, no live
+Spotify needed for the logic itself). **NEEDS-LIVE-CHECK**: "play Russia on Ice"
+against a real Spotify session — either it plays, or MYTHOS names what's actually
+playing. See runbook item 3.
+
+### BUG-086 [source: BUG-068] — an unverified outcome still reported `status:ok` on the fast path
+
+**Root cause**, `live-tool-adapter.js`: the AWAITED (fast) branch answered
+`ok: Boolean(outcome && outcome.ok)` with no check for `outcome.unverified` at
+all; only the slow/late path (`reportLateOutcome`) honored it. A real record
+(`aud`@14:33:38): `ui_type` returning "the focused control exposes neither
+ValuePattern nor TextPattern" — an honest unverified — was still reported to the
+model as `status:'ok'` whenever it happened to resolve before the awaited
+branch's timeout.
+
+**Fix.** Extracted `evaluateOutcome()`/`unverifiedNarration()` once; both the
+awaited branch and `reportLateOutcome()` now call the same helpers, so an
+unverified result reads as `status:'unverified'` with the real reason regardless
+of which branch happened to catch it.
+
+🔧 FIXED+UNIT-VERIFIED: `test/live-tool-adapter.test.js` (2 new cases) — fully
+verifiable without a mic or live Spotify session; this is pure verdict-building
+logic. No live check owed for this one specifically.
+
+### BUG-087 [source: BUG-063] — "spotify_play FAILED: spotify_play started"
+
+**Root cause.** A slow tool's in-progress START was committed with `ok:false`,
+which the narration layer rendered as the nonsensical (verbatim, `session.json`)
+"spotify_play FAILED: spotify_play started".
+
+**Fix.** New `src/core/voice/action-outcome-summary.js` (`summarizeActionsForResult`,
+extracted from `server/index.js`) special-cases `a.started` before reading
+`a.ok`, rendering `"spotify_play started (outcome pending)"` instead.
+
+🔧 FIXED+UNIT-VERIFIED: `test/bug-063-started-state.test.js` (6 cases, including
+the exact recorded narration string). Pure narration logic — no live check owed.
+
+### BUG-088 [source: BUG-069] — the immune healer claimed to heal things it never touched
+
+**Root cause**, `server/index.js`'s `health.healed` subscriber: it labeled an
+outcome `healed` whenever the event fired, including `outcome:'no-match'` /
+`'cooldown'` / `'error'` — 36 such pairs in the episodic logs per the operator's
+plan. Same defect class as BUG-085: an instrument reporting success it didn't
+achieve.
+
+**Fix.** `actuallyHealed = !('outcome' in p) || p.outcome === 'applied'` gates the
+label; `no-match`/`cooldown`/`error` now write `outcome:'unhandled'`.
+`probes.js`'s own `provider-recovered` event (no `outcome` field) still reads as
+healed, unchanged.
+
+🔧 FIXED+UNIT-VERIFIED: `test/bug-069-healer-no-match-label.test.js` (4 cases,
+real bus + real server + real WS client). No live check owed — this is a labeling
+fix over deterministic inputs.
+
+### BUG-089/090/091 [source: BUG-072/073/074] — `ui_click`/`ui_type` target the right window, or say they cannot
+
+**Complaint (operator, mid-plan):** "the ui_click is not working." Plus one
+incident: "ui_type repeatedly failing despite approvals and visible confirmation
+to agent... says it is 'bugging me out'."
+
+**Failure mode A — dead pid, no retry (BUG-089/BUG-072).** `foregroundThenRetry`
+(`from-pc.js`) short-circuited on the first `focus_window` failure, abandoning all
+3 attempts, and never invalidated `lastLaunchedPid` when that process died. Real
+dead pids from the logs: 5168, 26428, 7448 ("Process 7448 has no main window").
+**Fix:** a failed focus now retries once before giving up; on a still-dead pid,
+`lastLaunchedPid` is cleared and the failure names `list_windows` explicitly so
+the model re-resolves instead of retrying a corpse.
+
+**Failure mode B — stale a11y element path (folded into BUG-089).**
+`Resolve-UIAElement` (`ps-automation.ps1`) now retries once on an out-of-range
+path and, on a genuine miss, returns the current candidate labels instead of a
+bare index error.
+
+**Failure mode C — `ui_click` had no evidence oracle at all (BUG-090/BUG-073).**
+**Fix:** `ui_click` now checks `get_foreground_window` (the cheapest oracle
+available there) before returning `ok`, and returns `unverified` when it can't.
+`ponytail:` noted ceiling — this proves "clicked in the right window", not "the
+element reacted"; a per-element post-condition is the upgrade path if a
+false-positive click surfaces live.
+
+**Failure mode D — console-host false negative (BUG-091/BUG-074).** pid 9152
+(`cmd.exe`) returned `typed:true`, correct `typedIntoPid`, and was still graded
+FAIL because a console host's TextPattern echoes the whole scrollback, not the
+input line. **Fix:** a title-regex exemption (`cmd.exe|powershell.exe|pwsh.exe|conhost.exe`)
+now grades console hosts `unverified`, not failed.
+
+🔧 FIXED+UNIT-VERIFIED: `test/from-pc-window-target.test.js` (6 cases, mocked
+delegate) covers A/C/D. **NEEDS-LIVE-CHECK**: failure mode B specifically — there
+is no way to fake a real `System.Windows.Automation` tree headlessly; needs a
+real stale Electron/Chromium a11y tree. See runbook item 5. Run
+`node scripts/verify-notepad-typing.js` live as well.
+
+### BUG-092 [source: BUG-075] — YouTube belongs in the Electron app, not the dashboard widget
+
+**Complaint (verbatim):** "I did not ask you to play on YouTube widget. I
+specifically said, open YouTube on the Electron app." `launch_app("youtube")`
+then failed 3x — honestly, since nothing named YouTube is a Windows executable.
+Separately, a German video played that "could not be stopped with standard
+playback controls."
+
+**Verified before building anything (per the plan's own instruction to check the
+premise first):** `ui.open-web` was emitted server-side and picked up by exactly
+one subscriber — the dashboard's own browser JS, an overlay inside the SAME
+window, never a second `BrowserWindow`. `electron/main.js` had **zero**
+subscription to anything from the server child; the `'ipc'` fork slot existed but
+carried only lifecycle messages. Confirms the complaint exactly: "the Electron
+app" literally could not have opened, regardless of client branch.
+
+**Fix — the lazy path, per the operator's explicit instruction not to invent new
+plumbing:** the EXISTING `ui.open-web` event now also does
+`process.send({channel:'mythos:ui.open-web', payload})` over the existing fork IPC
+slot; `electron/main.js` listens and opens a second `BrowserWindow` (reusing the
+already-awaited ad-blocker and `preload.js`), tracked so a second call
+reuses/replaces it rather than stacking. `close_panel` gained a matching
+`mediaWindowClosed` count via the same request/ack shape `requestClosePanel`
+already used. `launch_app` routes a small (`ponytail:`) known-web-app map
+(youtube, gmail, maps — only what's evidenced in the transcript) to this path
+instead of hard-failing through all 3 launch tiers, and redirects
+`explorer.exe "D:\..."` to the existing `open_folder` effector (BUG-058) instead
+of retrying a launch that can't work. No new effector, tool, or TIER_TABLE entry.
+
+🔧 FIXED+UNIT-VERIFIED: `test/bug-075-electron-media-window.test.js` (21 cases,
+against an injected-`BrowserWindow` seam mirroring `live-session.js`'s
+`createSocket` pattern — `electron/main.js` itself can't be `require()`d under
+`node --test`), `test/bug-075-launch-app-routing.test.js` (6 cases).
+**NEEDS-LIVE-CHECK**: a real Electron `BrowserWindow` actually appearing and
+"close that" actually closing it — needs a live `npm start`. See runbook item 7.
+
+### BUG-093 [source: BUG-076] — `status` kept dead-ending on `unknown-effector` even after being approved
+
+**Root cause**, `effectors/hub.js`: Wave 6 already added a "did you mean
+read_status?" suggestion for the literal `status`, but nothing ever wired that
+suggestion to an actual retry — the operator approved it (`aud`@11:11:29) and the
+next call still said `status` and still got `unknown-effector`. A suggestion
+nobody can act on is the same defect as no suggestion.
+
+**Fix.** A one-entry `ALIASES` table (`{'status': 'read_status'}`) resolves
+before the unknown-effector path, so the name the model actually reaches for
+just works.
+
+🔧 FIXED+UNIT-VERIFIED: `test/open-folder-and-suggestions.test.js` — `status` now
+resolves (`ok:true`) instead of merely suggesting; the bare `unknown-effector`
+prefix contract still holds for a genuinely unmapped name. No live check owed —
+this is deterministic dispatch logic.
+
+### BUG-094 [source: BUG-077] — `send_key` had no function-key row, so alt+F4 ("close Spotify") was unexpressible
+
+**Evidence:** `Invalid key: "alt"`, `Invalid key: "f4"` — the model tried them as
+two separate calls, both rejected; `alt` was already a valid modifier, but `f4`
+was not a valid base key at all, so even the combo form could never have worked.
+
+**Fix.** Added `f1`-`f12` to `NAMED_KEYS` (`from-pc.js`) and `$VK_CODES`
+(`ps-automation.ps1`, `VK_F1=0x70`..`VK_F12=0x7B`, contiguous). The
+honest-failure-for-anything-unmapped contract is unchanged.
+
+🔧 FIXED+UNIT-VERIFIED: `test/bug-077-send-key-fn-keys.test.js` (4 cases,
+including the exact recorded case and all 12 function keys). **NEEDS-LIVE-CHECK**:
+a real `alt+f4` against a real Spotify window closing it. See runbook item 8.
+
+### BUG-095 [source: BUG-078] — `spotify_volume` moves system volume, not Spotify's — ALREADY FIXED before this session
+
+**Evidence cited in the plan:** 20x `{"direction":"up"}` in 50s then
+`{"level":100}` — the operator escalating because nothing per-app happened.
+
+**Checked against actual git history before building anything:** commit `c5abcde`
+(2026-07-29, predating this whole plan) already rewrote `spotify_volume`'s
+description to say "Adjust or set system volume (Spotify plays through the
+system output, same volume control)" — exactly the honesty fix the plan calls
+for. **This defect was not real at the time this session ran; it was already
+closed.** Per the operator's own ruling for this stage (do not build
+`ISimpleAudioVolume` per-app Core Audio interop for one incident; ship the
+honesty fix and name the real upgrade path), a regression test was added so a
+future change can't silently revert the honest description, and a `ponytail:`
+comment names per-app Core Audio volume as the explicit upgrade path if this
+still bites live.
+
+🔧 FIXED+UNIT-VERIFIED (already fixed pre-session; verified, not re-fixed):
+`test/bug-078-spotify-volume-honesty.test.js`. No live check owed for the
+description text itself; if per-app control is still wanted after hearing it
+live, that's a new, bigger piece of work — not a regression of this fix.
+
+### BUG-096 [source: BUG-080] — durable identity facts written from text nobody said
+
+**Evidence:** `vault/Semantic/user-facts.md` contained "The user's name is Alex"
+(mined from MYTHOS's OWN typed Notepad probe text, "Hi Alex, this is Mythos"),
+"the user will call me 'Eve'", and an inferred "operator really enjoys playing
+jazz piano" (written right after a "soft jazz" query, never a stated fact) — all
+at high confidence, all contradicting `Identity/operator-profile.txt` ("Address
+them with 'Sir'").
+
+**Root cause.** `from-memory.js`'s `remember()` tool already quarantined identity
+claims to low confidence; `memory/index.js`'s automatic conversation-distillation
+loop (3b) did not — it wrote straight to `user-facts` at confidence 0.7 with no
+check at all.
+
+**Fix — one guard at the shared chokepoint, per the operator's instruction,**
+inside `semantic.js`'s `write()` itself (every caller passes through it): an
+identity-class claim (name/nickname/address-as) is quarantined to confidence 0.2
+unless its `sources` explicitly mark a confirmed operator utterance, AND a cheap
+word-overlap check against `Identity/operator-profile.txt` catches contradictions
+even from a "confirmed" source.
+
+**Root-cause note, stated honestly rather than assumed:** the specific
+Notepad-probe example most likely entered via BUG-083 (own-TTS bleeding into the
+Live mic, transcribed by Gemini as the operator speaking) — the `userText` itself
+was contaminated upstream of `semantic.write()`, not just mislabeled inside it.
+BUG-083's fix closes that specific hole; this guard is defense-in-depth for the
+class of bug (self-authored/inferred text becoming a durable identity fact), not
+a duplicate fix of the same line.
+
+🔧 FIXED+UNIT-VERIFIED: `test/bug-080-semantic-identity-guard.test.js` (5 cases,
+using the exact recorded fixture strings above, plus a confirmed-non-contradicting
+case and a contradicting-a-confirmed-source case). No live check owed — this is a
+deterministic write-path guard testable with real vault fixtures.
+
+### BUG-097 [source: BUG-079] — no local time anywhere in the Live prompt
+
+**Evidence:** MYTHOS said "have a good afternoon" at ~01:50 local; the operator
+corrected "a.m. not p.m."
+
+**Fix.** `buildLiveSystemInstruction()` (`server/index.js`) now appends the
+current local date/time; `server/index.js` passes the FUNCTION itself (not its
+one-time result) as `live-session.js`'s `systemInstruction` dependency, and
+`buildSetup()` calls it fresh — piggybacking on the reconnect occasion BUG-082
+already created, rather than adding a new timer.
+
+🔧 FIXED+UNIT-VERIFIED: `test/server-live-wiring.test.js` — asserts the setup
+frame's `systemInstruction` carries a real current-year local time string on
+first connect AND after an idle-triggered reconnect (proving the refresh, not
+just the initial injection). No live check owed for the mechanism; the runbook's
+time-check (item 9) is about the SPOKEN behavior, which does need ears.
+
+### BUG-098 [source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack
+
+**Traced the "widgets restyle missing" claim first, per the plan's instruction —
+no styling defect was found, and none invented:** `tokens.css`'s three-layer
+import chain is intact, both widget-card renderers apply the same styled
+classes, the gzip/cache layer can't serve anything stale, and the Electron shell
+loads the same live HUD, not a stale copy.
+
+**The one real defect found.** `spawnWebWidget()` (`widget-host.js`) staggered
+every new card by 30px and appended it, with no dedup by `widgetType` — so two
+`open_web` calls for the same surface (or an `open_web` call landing on top of
+the registry's own `NOW PLAYING` widget) left two live panels stacked at once,
+matching the incidents of music playing through both the widget and Spotify
+simultaneously, and an unstoppable German video (BUG-092 is the other half of
+that fix).
+
+**Fix.** `spawnedByType` (widgetType → teardown) reuses/replaces the existing
+card for that surface. Deliberately exempt: `'dynamic'` (Item 11 generative-UI
+cards) are legitimately multi-instance and deduping them would be a regression.
+
+No new test: this codebase has zero DOM/jsdom precedent for any widget-kind
+module (`test/dynamic-widget-spec-validation.test.js`'s own header states this
+explicitly) — matching that existing convention rather than introducing new test
+infra for one fix.
+
+🔧 FIXED, **NEEDS-LIVE-CHECK explicitly, not claimed further**: the plan itself
+says "run the app, screenshot the HUD, and put it next to what the restyle was
+supposed to produce" before touching styling — that visual comparison was not
+done in this session (no way to run/screenshot the real Electron app headlessly
+here). See runbook item 10.
+
+### Live runbook — run these against a restarted MYTHOS, in order
+
+Nothing was running during this work; restart before any check. Unit-green is
+necessary, not sufficient — most of the following genuinely needs ears, a real
+Spotify session, or a real Electron window, and that is the correct, honest state
+for voice work, not a gap in the fix.
+
+1. **Deafness (BUG-082).** Open a Live session, stay silent 3+ minutes (past the
+   raised 120s idle timeout), then speak — it must answer with no click needed.
+   Then leave it silent past ~3 idle-timeout cycles (~6 min) with nobody talking —
+   confirm it goes to a real closed state (not endless reconnect spam) and that a
+   click or wake word revives it. Watch `vault/Audit`/logs for `live-idle-exhausted`
+   at that point, and zero `live-reconnect-failed` before it.
+2. **One voice, whole words (BUG-083/BUG-084).** Boot with Live on — the greeting
+   must be spoken once, in the Gemini voice, complete to the last word. Trigger a
+   reminder mid-conversation: one voice, not two. Also test typing into the
+   compose bar while Live is active — if a second voice/audio leak appears there,
+   that is the known, flagged, NOT-yet-fixed `sendSpokenReply()` gap (see
+   BUG-083's entry), not a new bug.
+3. **Spotify honesty (BUG-085).** "Play Russia on Ice" — either it plays, or
+   MYTHOS explicitly names the song that is actually playing. Grep
+   `vault/Audit` for `spotify_play` with `outcome:ok` and no `unverified` next to
+   a `verified:false` episodic result: must be zero.
+4. **ui_click/ui_type (BUG-089/090/091).** Run
+   `node scripts/verify-notepad-typing.js`. Then: fresh Notepad + "type Hi
+   there" — screenshot shows it, read-back is quoted. Then: kill Spotify, then
+   "click play" — MYTHOS must say the window is gone and call `list_windows`
+   again, never fabricate a click landing.
+5. **Stale a11y tree (BUG-089, failure mode B specifically).** Trigger a UI
+   interaction against a window whose accessibility tree has visibly changed
+   since an earlier turn (e.g. a WhatsApp/Electron window after a re-render) —
+   confirm `ui_click` re-queries and either succeeds or returns current candidate
+   labels, not a bare "index out of range".
+6. **YouTube in Electron (BUG-092).** "Open YouTube on the Electron app and play
+   Russia on Ice" — a real second OS window appears (not a dashboard panel), its
+   title is quoted back, and "close that" actually closes it.
+7. **Widget stacking (BUG-098).** Two `open_web` calls in a row for the same
+   surface — one panel, updated in place, not two stacked. While there,
+   screenshot the HUD and compare it against the intended widget restyle — this
+   is the one item this session could not check at all.
+8. **alt+F4 (BUG-094).** "Close Spotify" — the alt+F4 path must actually work now.
+9. **Local time (BUG-097).** Ask the time, ideally near a day boundary — correct
+   meridiem, matching the machine's actual local clock.
+10. **Volume honesty (BUG-095).** "Set volume to 20%" — confirm MYTHOS's own
+    language now matches reality (system volume, not "Spotify's volume"); decide
+    live whether the per-app upgrade is still wanted after hearing this.
+
+Finally: check `vault/Audit` + `vault/Episodic` for the session against the same
+bar the original plan set — zero `live-tool-outcome-late-for-turn`, zero
+`live-reconnect-failed`, zero `outcome:ok` on a result whose payload says
+`verified:false`, and no `healed:` line whose outcome is `no-match`. Tick each
+BUG-08x above to LIVE-VERIFIED only for what was actually observed, then commit
+and — this branch is not pushed — decide when `fix/voice-session-19` merges to
+`main`.
 

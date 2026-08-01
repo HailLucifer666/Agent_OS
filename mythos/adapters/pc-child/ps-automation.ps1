@@ -1300,8 +1300,46 @@ function Handle-ScreenReadText {
         $engine = $ocrEngineType::TryCreateFromUserProfileLanguages()
         if ($null -eq $engine) { return 'no OCR language pack installed' }
         $ocr = Await-WinRTOperation ($engine.RecognizeAsync($bitmap)) $ocrResultType
-        $lines = @($ocr.Lines | ForEach-Object { $_.Text })
-        return @{ text = ($lines -join "`n"); lineCount = $lines.Count }
+
+        # 2026-08-02: this used to be `$ocr.Lines | ForEach-Object { $_.Text }` — it read
+        # the screen and then threw away WHERE everything was. Every OcrWord carries a
+        # BoundingRect in the same screen-absolute pixel space that click_at consumes
+        # (CopyFromScreen above captures PrimaryScreen.Bounds, and this process is
+        # DPI-aware per the block at the top of this file), so the coordinates needed to
+        # click a piece of text were being computed by Windows and discarded here.
+        #
+        # Line-level boxes, unioned from the words: a click target is a label, not a
+        # word, and per-word boxes would make "Type a message" three targets.
+        # ADDITIVE ONLY — text/lineCount keep their exact previous shape because
+        # screen_read_text has existing callers.
+        $lines = @()
+        $regions = @()
+        foreach ($line in $ocr.Lines) {
+            $lines += $line.Text
+            $minX = $null; $minY = $null; $maxX = $null; $maxY = $null
+            foreach ($word in $line.Words) {
+                $r = $word.BoundingRect
+                if ($null -eq $r) { continue }
+                $x2 = $r.X + $r.Width
+                $y2 = $r.Y + $r.Height
+                if ($null -eq $minX -or $r.X -lt $minX) { $minX = $r.X }
+                if ($null -eq $minY -or $r.Y -lt $minY) { $minY = $r.Y }
+                if ($null -eq $maxX -or $x2  -gt $maxX) { $maxX = $x2 }
+                if ($null -eq $maxY -or $y2  -gt $maxY) { $maxY = $y2 }
+            }
+            # A line whose words carry no geometry is still real text — it belongs in
+            # `text` (appended above) but must NOT become an un-clickable region with a
+            # zero box, which a caller would happily click at 0,0.
+            if ($null -eq $minX) { continue }
+            $regions += @{
+                text   = $line.Text
+                x      = [int][Math]::Round($minX)
+                y      = [int][Math]::Round($minY)
+                width  = [int][Math]::Round($maxX - $minX)
+                height = [int][Math]::Round($maxY - $minY)
+            }
+        }
+        return @{ text = ($lines -join "`n"); lineCount = $lines.Count; regions = $regions }
     } catch {
         return ('OCR failed: ' + $_.Exception.Message)
     } finally {
@@ -2658,6 +2696,10 @@ $VK_CODES = @{
     delete = 0x2E
     home   = 0x24
     end    = 0x23
+    # BUG-077: function keys — needed to express alt+f4 ("close Spotify"). VK_F1
+    # is 0x70 and they're contiguous through VK_F12 (0x7B).
+    f1 = 0x70; f2 = 0x71; f3 = 0x72; f4 = 0x73; f5 = 0x74; f6 = 0x75
+    f7 = 0x76; f8 = 0x77; f9 = 0x78; f10 = 0x79; f11 = 0x7A; f12 = 0x7B
 }
 
 $VK_MODIFIERS = @{
@@ -2844,7 +2886,22 @@ function Handle-MediaStatus {
     }
 }
 
+# WAVE 9 (BUG-072) — Chromium/Electron builds its a11y tree LAZILY, on first UIA
+# query (the same gotcha Read-FocusedElementText already retries once for,
+# elsewhere in this file). A path resolved against an earlier turn's snapshot
+# can go stale before a freshly-opened window's tree has settled, surfacing as
+# "Element path index 0 out of range (parent has 0 children)" — a real example
+# against WhatsApp at 20:10:36. One retry after a short settle, reusing that
+# same precedent, before treating the path as genuinely gone.
 function Resolve-UIAElement($TargetPid, $elementPath) {
+    $result = Resolve-UIAElementOnce $TargetPid $elementPath
+    if (-not $result.error) { return $result }
+    if ($result.error -notmatch 'out of range') { return $result }
+    Start-Sleep -Milliseconds 250
+    return Resolve-UIAElementOnce $TargetPid $elementPath
+}
+
+function Resolve-UIAElementOnce($TargetPid, $elementPath) {
     try {
         $root = [System.Windows.Automation.AutomationElement]::RootElement
         $condition = New-Object System.Windows.Automation.PropertyCondition(
@@ -2862,7 +2919,16 @@ function Resolve-UIAElement($TargetPid, $elementPath) {
             if ($i -ge 0 -and $i -lt $children.Count) {
                 $current = $children[$i]
             } else {
-                return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)') }
+                # Report what the tree actually holds RIGHT NOW, so the model can
+                # re-address the element instead of getting a bare index error.
+                $labels = @()
+                foreach ($c in $children) {
+                    try {
+                        $labels += ([string]$c.Current.ControlType.LocalizedControlType + ':' + [string]$c.Current.Name)
+                    } catch { }
+                }
+                $labelText = if ($labels.Count -gt 0) { ' — current children: ' + ($labels -join ', ') } else { '' }
+                return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)' + $labelText) }
             }
         }
         return @{ element = $current }

@@ -127,6 +127,53 @@ describe('live-tool-adapter — handleLiveToolCalls', () => {
     assert.equal(responses[0].response.status, 'failed');
     assert.match(responses[0].response.error, /circuit-open/);
   });
+
+  // BUG-068 (Stage 3) — 2026-07-31 14:33:38: ui_type came back ok:true,
+  // unverified:true ("the focused control exposes neither ValuePattern nor
+  // TextPattern"), and it resolved fast enough to hit THIS branch (not the
+  // slow/late one), which used to compute `ok` from outcome.ok alone and
+  // reported status:'ok' to the model. Only reportLateOutcome honored
+  // unverified before this fix — this is the awaited branch getting the same
+  // treatment via the shared evaluateOutcome/unverifiedNarration helpers.
+  test('an awaited (fast) unverified outcome is never reported to the model as status:ok', async () => {
+    const { deps } = baseDeps({
+      dispatchAction: async () => ({
+        ok: true,
+        unverified: true,
+        reason: 'the focused control exposes neither ValuePattern nor TextPattern, so its text cannot be read back',
+        result: { typed: true, readBack: 'unavailable' },
+      }),
+    });
+    const adapter = createLiveToolAdapter(deps);
+    const responses = [];
+    await adapter.handleLiveToolCalls([{ id: 'call-7', name: 'ui_type', args: { text: 'Hi Alex' } }], { sendToolResponse: (r) => responses.push(...r) });
+
+    assert.notEqual(responses[0].response.status, 'ok', 'an unproven outcome must not be reported as a plain ok');
+    assert.equal(responses[0].response.status, 'unverified');
+    assert.match(responses[0].response.message, /ValuePattern/, 'the model must learn WHAT is unproven');
+    assert.doesNotMatch(responses[0].response.message, /^ui_type done/i);
+
+    const entry = adapter._internal.liveTurnActions.at(-1);
+    assert.equal(entry.ok, false, 'AD-4: the turn record must not count an unproven action as ok');
+    assert.equal(entry.unverified, true);
+  });
+
+  test('an awaited (fast) VERIFIED outcome is still reported as status:ok (no over-correction)', async () => {
+    const { deps } = baseDeps({
+      dispatchAction: async () => ({
+        ok: true,
+        unverified: false,
+        evidence: { oracle: 'read-back', observed: 'Hi Alex' },
+        result: { typed: true, readBack: 'confirmed' },
+      }),
+    });
+    const adapter = createLiveToolAdapter(deps);
+    const responses = [];
+    await adapter.handleLiveToolCalls([{ id: 'call-9', name: 'ui_type', args: { text: 'Hi Alex' } }], { sendToolResponse: (r) => responses.push(...r) });
+    assert.equal(responses[0].response.status, 'ok');
+    assert.equal(adapter._internal.liveTurnActions.at(-1).ok, true);
+    assert.equal(adapter._internal.liveTurnActions.at(-1).unverified, false);
+  });
 });
 
 describe('live-tool-adapter — resolveLiveConfirm', () => {

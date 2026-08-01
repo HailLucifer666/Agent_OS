@@ -166,18 +166,20 @@ describe('WAVE 6 — unknown tool names suggest the real ones', () => {
     return hub;
   }
 
-  it('THE RECORDED CASE: status suggests read_status', async () => {
+  it('BUG-076 THE RECORDED CASE: status now RESOLVES to read_status instead of suggesting it', async () => {
+    // 2026-08-01 ~11:11: the operator was shown "did you mean read_status?",
+    // approved it, and the retry still said 'status' and still dead-ended.
+    // A suggestion nobody can act on is the same defect as no suggestion.
     const hub = hubWith(['read_status', 'job_status', 'list_goals']);
     const res = await hub.invoke('status', {}, {});
-    assert.equal(res.ok, false);
-    assert.match(String(res.result), /read_status/, 'the model got a bare dead end here');
-    assert.ok(Array.isArray(res.suggestions) && res.suggestions.includes('read_status'));
+    assert.equal(res.ok, true, 'status is an alias for read_status, not a dead end');
   });
 
   it('the bare "unknown-effector" prefix survives for existing consumers', async () => {
-    // cortex/index.js and several tests match that literal string.
+    // cortex/index.js and several tests match that literal string. Use a name
+    // with no alias and no near match — 'status' itself now resolves (above).
     const hub = hubWith(['read_status']);
-    const res = await hub.invoke('status', {}, {});
+    const res = await hub.invoke('quantumflux', {}, {});
     assert.match(String(res.result), /^unknown-effector/);
   });
 

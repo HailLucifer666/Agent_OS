@@ -254,15 +254,13 @@ async function cuaPlayViaDriver(query) {
   // ("Artist - Track" while playing) is checked against the query; a mismatch
   // moves on to the next-best candidate. Max 3 attempts keeps voice latency
   // bounded (~15s worst case) while self-correcting the playlist-vs-track case.
-  const terms = cuaQueryTerms(query);
   // Strict-majority term match — anything laxer is fooled by the artist name
   // alone (live-confirmed twice: "Queen - Somebody To Love" passed for
   // "Bohemian Rhapsody Queen" at 1-of-3, and "The Weeknd - Cry For Me" passed
   // for "Starboy Weeknd" at 1-of-2, both because a same-named playlist started
   // a different song by the right artist). ceil(0.6n): 1→1, 2→2, 3→2, 4→3 —
   // the playing window title ("Artist - Track") carries both artist and track,
-  // so a correct play always clears this bar.
-  const requiredMatches = Math.max(1, Math.ceil(terms.length * 0.6));
+  // so a correct play always clears this bar. (titleSatisfiesQuery below.)
   let lastClicked = null;
   for (const target of candidates.slice(0, 4)) {
     const clickArgs = { pid: w.pid, window_id: w.window_id, element_index: target.element_index };
@@ -282,7 +280,6 @@ async function cuaPlayViaDriver(query) {
 
     await new Promise(r => setTimeout(r, 2500));
     const title = (await cuaSpotifyWindowTitle()) || '';
-    const matched = terms.filter(t => title.toLowerCase().includes(t)).length;
     // WAVE 5 — the majority bar above is still cleared by the ARTIST NAME ALONE
     // when the artist is more than one token, which is the whole failure. From the
     // recorded session of 2026-07-31 (vault/Episodic): query "The Kid LAROI Down"
@@ -295,9 +292,15 @@ async function cuaPlayViaDriver(query) {
     // So the TRACK half of the title has to earn its own match. Spotify's playing
     // title is "Artist - Track", so require at least one query term in the track
     // portion. A correct play always clears this ("The Kid LAROI - DOWN" contains
-    // "down"); a right-artist-wrong-song never does.
-    if (matched >= requiredMatches && trackPortionMatches(title, terms)) {
-      return ok({ clickedElement: target.label || null, verified: true, nowPlaying: title });
+    // "down"); a right-artist-wrong-song never does. (titleSatisfiesQuery below.)
+    if (titleSatisfiesQuery(title, query)) {
+      // Stage 3: this branch was a bare ok() with no evidence field, in
+      // violation of evidence.js's own contract — a genuinely-confirmed play
+      // (window-title oracle just matched) should say so explicitly.
+      return evidence.verifiedOk(
+        { result: { clickedElement: target.label || null, verified: true, nowPlaying: title } },
+        { oracle: 'media-status', observed: title, expected: query }
+      );
     }
   }
   if (!lastClicked) return fail('cua: every candidate click failed');
@@ -330,6 +333,47 @@ function trackPortionMatches(title, terms) {
   const track = sep === -1 ? lower : lower.slice(sep + 3);
   if (!track.trim()) return false;
   return terms.some(t => track.includes(t));
+}
+
+// Stage 3 (BUG-065): the "does this now-playing title satisfy the query" rule
+// (majority term match + WAVE 5's track-half requirement) used to live only
+// inline in cuaPlayViaDriver's click-verify loop. click_at and the keystroke
+// fallback below had NO oracle check at all — a bare ok() regardless of what
+// actually started playing. Extracted here so all three play paths share one
+// rule instead of the click_at/keystroke paths growing their own copy.
+function titleSatisfiesQuery(title, query) {
+  const terms = cuaQueryTerms(query);
+  const t = String(title || '');
+  if (!t.trim() || !terms.length) return false;
+  const requiredMatches = Math.max(1, Math.ceil(terms.length * 0.6));
+  const matched = terms.filter(term => t.toLowerCase().includes(term)).length;
+  return matched >= requiredMatches && trackPortionMatches(t, terms);
+}
+
+// Same now-playing oracle as cuaPlayViaDriver's click-verify loop, but driven
+// off pcEffectors.list_windows (getSpotifyWindow) instead of cua-driver's own
+// window enumeration — this runs on the click_at/keystroke_fallback tiers,
+// i.e. exactly when cua-driver is offline or already failed, so it cannot
+// depend on cua-driver being reachable. 2500ms mirrors the wait cua-driver's
+// own loop uses for Spotify's title to update after a click.
+async function verifyPlaybackAgainstQuery(query) {
+  await new Promise(r => setTimeout(r, 2500));
+  const win = await getSpotifyWindow();
+  const title = win.ok ? (win.result.title || '') : '';
+  return { title, matches: titleSatisfiesQuery(title, query) };
+}
+
+// Wraps a play result with the evidence contract (evidence.js): verifiedOk
+// with the window-title oracle when now-playing matches the query, otherwise
+// an honest unverified — never a bare ok() for a path that could check and
+// didn't, or that checked and got a mismatch.
+function playResultWithEvidence(extra, query, check) {
+  if (check.matches) {
+    return evidence.verifiedOk({ result: extra }, { oracle: 'window-title', observed: check.title, expected: query });
+  }
+  return evidence.unverified({ result: extra }, check.title
+    ? `clicked play, but Spotify is playing "${check.title}", which is not what was asked for`
+    : 'clicked a play control but could not read back what Spotify is playing');
 }
 
 async function searchAndPlay({ query, pid }) {
@@ -420,6 +464,14 @@ async function spotify_previous() {
 // target (see the 2026-07-29 audit). `level` (0-100) sets the exact system
 // master volume via set_volume (real Core Audio API, see ps-automation.ps1's
 // Get-AudioEndpointVolumeType) instead of guessing a step count.
+//
+// ponytail (BUG-078, Stage 6): this genuinely moves the SYSTEM master volume,
+// not a per-app Spotify volume — the tool's own description above says so
+// now (test/bug-078-spotify-volume-honesty.test.js). Real per-app control
+// would mean Core Audio ISimpleAudioVolume COM interop scoped to Spotify's
+// PID, which is a large new surface for one recorded incident. That is the
+// upgrade path if the honesty fix still isn't enough live — do not build it
+// speculatively.
 async function spotify_volume({ direction, level }) {
   if (!pcEffectors) return fail('PC effectors not initialized');
   if (level !== undefined && level !== null && level !== '') {
@@ -474,7 +526,17 @@ async function spotify_play({ query, trackId }) {
   if (cuaDriver.getStatus().state === 'ONLINE') {
     const cuaResult = await cuaPlayViaDriver(query);
     if (cuaResult.ok) {
-      return ok({ ...cuaResult.result, method: 'cua-driver', focusWarning });
+      const merged = { ...cuaResult.result, method: 'cua-driver', focusWarning };
+      // BUG-065: cuaPlayViaDriver's unmatched-click branch returns
+      // evidence.unverified() internally, but this caller used to spread only
+      // cuaResult.result and re-wrap it in a bare ok() — dropping the
+      // top-level unverified flag (and the reason) that dispatch-action.js
+      // reads to stop a click that landed on the wrong song from being
+      // reported as a confirmed success. Propagate, never re-wrap.
+      if (cuaResult.unverified) {
+        return evidence.unverified({ result: merged }, cuaResult.reason);
+      }
+      return ok(merged);
     }
     focusWarning = focusWarning
       ? `${focusWarning}; cua-driver path failed: ${cuaResult.result}`
@@ -499,7 +561,12 @@ async function spotify_play({ query, trackId }) {
         const clickResult = await clickAt(cx, cy);
         if (clickResult.ok) {
           const extra = (clickResult.result && typeof clickResult.result === 'object') ? clickResult.result : {};
-          return ok({ ...extra, method: 'click_at', x: cx, y: cy, focusWarning });
+          const merged = { ...extra, method: 'click_at', x: cx, y: cy, focusWarning };
+          // BUG-065: click_at had NO oracle at all — a bare ok() regardless of
+          // what actually started playing. Same now-playing check the
+          // cua-driver path uses, driven off pcEffectors instead of cua-driver.
+          const check = await verifyPlaybackAgainstQuery(query);
+          return playResultWithEvidence(merged, query, check);
         }
         // click_at failed — fall through to the keystroke fallback below,
         // carrying the failure reason instead of silently dropping it.
@@ -523,14 +590,20 @@ async function spotify_play({ query, trackId }) {
   // apps like Spotify require a genuine virtual key, not a WM_CHAR event.
   const keyResult = await pcEffectors.invoke('send_key', { key: 'enter' }, {});
   const warnings = [focusWarning, tabWarning].filter(Boolean);
+  // BUG-065: the keystroke fallback had NO oracle either — same fix as
+  // click_at above, reusing the same now-playing check.
   if (warnings.length === 0) {
     if (!keyResult.ok) return keyResult;
     const extra = (keyResult.result && typeof keyResult.result === 'object') ? keyResult.result : {};
-    return ok({ ...extra, method: 'keystroke_fallback' });
+    const merged = { ...extra, method: 'keystroke_fallback' };
+    const check = await verifyPlaybackAgainstQuery(query);
+    return playResultWithEvidence(merged, query, check);
   }
   if (!keyResult.ok) return fail(`${keyResult.result} (also: ${warnings.join('; ')})`);
   const extra = (keyResult.result && typeof keyResult.result === 'object') ? keyResult.result : {};
-  return ok({ ...extra, method: 'keystroke_fallback', focusWarning, tabWarning });
+  const merged = { ...extra, method: 'keystroke_fallback', focusWarning, tabWarning };
+  const check = await verifyPlaybackAgainstQuery(query);
+  return playResultWithEvidence(merged, query, check);
 }
 
 async function spotify_search({ query }) {
@@ -694,5 +767,5 @@ module.exports = {
   // WAVE 5 — exported for test/spotify-nowplaying-honesty.test.js. This predicate
   // IS the fix for the right-artist-wrong-song case, and verifying it needs no
   // live Spotify window, unlike the cua path around it.
-  _internal: { trackPortionMatches }
+  _internal: { trackPortionMatches, titleSatisfiesQuery }
 };

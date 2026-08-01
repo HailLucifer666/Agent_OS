@@ -14,7 +14,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
-const groqStt = require('../providers/groq-stt');
+const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
@@ -26,6 +26,7 @@ const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispat
 const { createLiveSession } = require('../src/core/voice/live-session');
 const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
 const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
+const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
 const { createLatencyTracker } = require('../src/core/voice/latency-tracker');
 const skillsLoader = require('../src/core/skills/loader');
 // createNewsFeed moved to routes/news.js (W9 god-file decomposition).
@@ -123,6 +124,15 @@ function createServer(deps) {
       if (digest) parts.push(digest);
     } catch (err) { logger.warn('live.capability-digest-failed', { error: err.message }); }
     try { parts.push(skillsLoader.catalogBlock()); } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    // BUG-079 (Stage 6, item #19): with no local time anywhere in the prompt,
+    // MYTHOS said "have a good afternoon" at ~01:50 local — the operator had
+    // to correct "a.m. not p.m." live-session.js's buildSetup() calls this
+    // function fresh on every open()/reconnect (idle/max rotation, goAway),
+    // so a long-running session's notion of "now" doesn't go stale either.
+    try {
+      const now = new Date();
+      parts.push('Current local date/time: ' + now.toString());
+    } catch (err) { logger.warn('live.time-compose-failed', { error: err.message }); }
     return parts.filter(Boolean).join('\n\n');
   }
 
@@ -573,23 +583,24 @@ function createServer(deps) {
     engagementManager, auditRest, sanitizeErrorForClient
   });
 
-  // Speech-to-text — Groq Whisper transcribes audio recorded client-side.
-  // Replaces the browser's own SpeechRecognition: Google's cloud speech backend
-  // and Chrome's on-device model download are both unreachable on this network
+  // Speech-to-text — VOICE_STT_CHAIN decides who transcribes (providers/stt.js;
+  // default 'groq', unchanged behavior for anyone who sets nothing). Replaces
+  // the browser's own SpeechRecognition: Google's cloud speech backend and
+  // Chrome's on-device model download are both unreachable on this network
   // ('network' error / stalled 'downloading' state, confirmed live); Groq's host
   // is the same one already proven reachable all session for chat completions.
   // express.raw() is scoped to this one route only — the global express.json()
   // above only matches 'application/json' and won't consume this body.
   app.post('/api/voice/transcribe', express.raw({ type: '*/*', limit: '15mb' }), expensiveLimit, async (req, res) => {
     try {
-      if (!groqStt.isAvailable()) return res.status(503).json({ error: 'Speech-to-text unavailable — GROQ_API_KEY missing.' });
       let text;
       try {
-        text = await groqStt.transcribe(req.body, req.headers['content-type']);
-      } catch (groqErr) {
-        // Groq failed — surface it honestly; the UI shows a caption and the
-        // operator knows to retry instead of hearing dead silence.
-        bus.emit('health.anomaly', { kind: 'stt-failed', error: String(groqErr && groqErr.message || groqErr) });
+        text = await sttChain.transcribe(req.body, req.headers['content-type'], config);
+      } catch (sttErr) {
+        // Every provider in the chain failed — surface it honestly; the UI
+        // shows a caption and the operator knows to retry instead of hearing
+        // dead silence.
+        bus.emit('health.anomaly', { kind: 'stt-failed', error: String(sttErr && sttErr.message || sttErr) });
         return res.status(503).json({ ok: false, error: 'stt-down', fallback: 'browser', message: 'Speech-to-text service is temporarily unavailable. Use browser speech recognition.' });
       }
       res.json({ ok: true, text });
@@ -708,8 +719,30 @@ function createServer(deps) {
   let lastActiveWs = null;
   async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
-    const alertB64 = (opts && opts.alertSound) ? alertToneBase64() : null;
     targetWs = targetWs || lastActiveWs;
+    // Stage 2 (BUG-060, "two voices speaking simultaneously" —
+    // vault/Incidents/2026-07-31.jsonl): if this connection has an open Gemini
+    // Live session, Live's own PCM playback (pcm-player.js) is already the
+    // entity's voice — emitting edge-tts speech-chunk audio on top of it is
+    // what produced the second, overlapping voice. Route the text through the
+    // SAME [SYSTEM] sendText channel reportLateOutcome() uses
+    // (src/core/voice/live-tool-adapter.js ~line 232) so Gemini itself speaks
+    // it, and skip edge-tts entirely for this connection. No Live session open
+    // (the pre-existing/legacy path) behaves exactly as before.
+    const liveSession = (targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
+    if (liveSession && liveSession.isOpen()) {
+      liveSession.sendText(`[SYSTEM] ${text}`);
+      try {
+        memory.episodic.write({
+          kind: 'proactive-speech', channel: 'proactive',
+          summary: text.slice(0, 100),
+          detail: { text: text, proactive: true, via: 'live' },
+          salience: 0.5,
+        });
+      } catch (_) {}
+      return;
+    }
+    const alertB64 = (opts && opts.alertSound) ? alertToneBase64() : null;
     // Optional single-client delivery: the boot greeting passes the connection
     // that triggered it, and every other caller now defaults to the last
     // active connection, so a second open dashboard tab doesn't ALSO play the
@@ -1136,24 +1169,10 @@ function createServer(deps) {
       return next;
     }
 
-    // Build a system-note summarizing action outcomes for the history and
-    // episodic record. Returns null when there are no actions (pure chat turns
-    // produce no note). Failed actions are flagged explicitly so future turns
-    // know the model's spoken claim was wrong — this is the anti-fabrication
-    // fix: without it, MYTHOS recalls "deleting now" as fact after a failed delete.
-    function summarizeActionsForResult(actions) {
-      if (!actions || !actions.length) return null;
-      var parts = [];
-      for (var i = 0; i < actions.length; i++) {
-        var a = actions[i];
-        if (!a || !a.tool) continue;
-        if (a.confirmPending) continue; // confirm-pending = deferred, not an outcome
-        var status = a.ok ? 'succeeded' : 'FAILED';
-        parts.push(a.tool + ' ' + status + (a.summary ? ': ' + a.summary : ''));
-      }
-      if (!parts.length) return null;
-      return 'Action outcomes: ' + parts.join('; ') + '.';
-    }
+    // Stage 3 (BUG-063): extracted to src/core/voice/action-outcome-summary.js
+    // so it's independently testable and the "started" in-progress marker
+    // (WAVE 3 slow tools) doesn't get conflated with a real failure — see
+    // that module's header for the exact defect this closed.
 
     function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
 
@@ -1167,6 +1186,11 @@ function createServer(deps) {
     // most connections never touch).
     let liveSession = null;
     let liveAdapter = null;
+    // Stage 2 (BUG-060): expose this connection's Live session to proactiveSpeak(),
+    // which lives outside this closure — a plain getter on the ws itself, re-read
+    // on every call so it always reflects the current (possibly reassigned, possibly
+    // still-null) liveSession variable above.
+    ws.getLiveSession = () => liveSession;
     // Task 12: latency instrumentation for the S2S path. Live has no discrete
     // "recording stopped" moment the way batch STT does (the model's own VAD
     // decides that internally) — the honest reference point available here is
@@ -1201,7 +1225,11 @@ function createServer(deps) {
         liveSession = createLiveSession({
           config, bus, logger, spend, breakers: effectors.breakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
-          systemInstruction: buildLiveSystemInstruction(),
+          // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
+          // buildSetup() calls it fresh on every open()/reconnect so the local
+          // time (and anything else composed here) never goes stale across a
+          // long-running or rotated session.
+          systemInstruction: buildLiveSystemInstruction,
           functionDeclarations: declarations,
           onToolCall: liveAdapter.handleLiveToolCalls,
           onAudioOut: (b64) => {
@@ -1855,7 +1883,48 @@ function createServer(deps) {
   // cards, etc.) so the dashboard opens a panel or floating widget.
   bus.subscribe('ui.open-web', (e) => {
     broadcastAll({ type: 'open-web', payload: e.payload });
+    // Stage 5 (BUG-075): "open YouTube on the Electron app" (operator,
+    // verbatim) needs a real second BrowserWindow, which only electron/main.js
+    // (a SEPARATE OS process — the fork() parent) can create. The broadcast
+    // above only ever reaches this process's own WS clients (the dashboard's
+    // browser JS), never the Electron main process. process.send() is the
+    // fork() IPC channel already set up for lifecycle when running under
+    // Electron (stdio slot 3, 'ipc') — reused here, not a new channel. Absent
+    // under a plain `node mythos/src/main.js` boot (no send()), which is fine:
+    // there is no Electron window to open in that mode anyway.
+    if (typeof process.send === 'function') {
+      try { process.send({ channel: 'mythos:ui.open-web', payload: e.payload }); }
+      catch { /* no parent listening (non-Electron boot) — nothing to relay to */ }
+    }
   });
+
+  // Stage 5 (BUG-075) — the Electron-side counterpart of requestClosePanel's
+  // request/ack shape (same 3s-timeout pattern), but over the fork IPC channel
+  // instead of the WS broadcast: process.send() the close request, resolve
+  // when electron/main.js acks back on the same channel name + '-ack'. Only
+  // one media window exists at a time, so a single pending slot (not a Map
+  // keyed by reqId, unlike requestClosePanel/requestCameraFrame) is enough.
+  let pendingCloseMediaWindow = null; // { resolve, timer }
+  if (typeof process.on === 'function') {
+    process.on('message', (msg) => {
+      if (msg && msg.channel === 'mythos:close-media-window-ack' && pendingCloseMediaWindow) {
+        clearTimeout(pendingCloseMediaWindow.timer);
+        const pending = pendingCloseMediaWindow;
+        pendingCloseMediaWindow = null;
+        pending.resolve(Boolean(msg.closed));
+      }
+    });
+  }
+  function requestCloseMediaWindow() {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') { resolve(false); return; } // not under Electron
+      if (pendingCloseMediaWindow) { clearTimeout(pendingCloseMediaWindow.timer); pendingCloseMediaWindow.resolve(false); }
+      const timer = setTimeout(() => { pendingCloseMediaWindow = null; resolve(false); }, 3000);
+      pendingCloseMediaWindow = { resolve, timer };
+      try { process.send({ channel: 'mythos:close-media-window' }); }
+      catch { pendingCloseMediaWindow = null; clearTimeout(timer); resolve(false); }
+    });
+  }
 
   // Widget commands — voice-driven HUD widget hide/show (manage_widget
   // effector, from-widgets.js). Payload is a pre-resolved {mode, targets}
@@ -1898,15 +1967,29 @@ function createServer(deps) {
   // card only ever accumulated "down" entries. Mirrors the anomaly
   // subscription exactly.
   bus.subscribe('health.healed', (e) => {
-    anomalyLog.push(Object.assign({ healed: true }, e.payload));
+    const p = e.payload || {};
+    // Stage 3 (BUG-069): healer.js's onDiagnosed emits 'health.healed' on
+    // EVERY diagnosis outcome, not just a real fix — 'no-match' (no playbook
+    // recognized the anomaly) and 'cooldown'/'error' all go out on the same
+    // event name, carrying an explicit `outcome` field that says so. This
+    // subscriber used to ignore that field entirely and label every one of
+    // them 'healed:<kind>' — 36 such no-match pairs were found in the
+    // episodic logs, each claiming a fix that never happened. probes.js's
+    // own 'provider-recovered' event (a genuine down->up transition) carries
+    // NO `outcome` field at all, so its absence still means "yes, this really
+    // recovered" — only an EXPLICIT outcome other than 'applied' means the
+    // healer took no corrective action.
+    const actuallyHealed = !('outcome' in p) || p.outcome === 'applied';
+    anomalyLog.push(Object.assign({ healed: actuallyHealed }, p));
     if (anomalyLog.length > 200) anomalyLog.shift();
     broadcastHealth(lastStatus);
     try {
+      const label = actuallyHealed ? 'healed' : 'unhandled';
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
-        summary: 'healed: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.target || ''),
-        detail: { kind: e.payload.kind, target: e.payload.target, playbookId: e.payload.playbookId, outcome: e.payload.outcome },
-        outcome: 'healed', salience: 0.6,
+        summary: label + ': ' + (p.kind || 'unknown') + ' — ' + (p.target || ''),
+        detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome },
+        outcome: label, salience: actuallyHealed ? 0.6 : 0.5,
       });
     } catch (_) {}
   });
@@ -2015,6 +2098,7 @@ function createServer(deps) {
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
+    requestCloseMediaWindow,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: { voiceLatencyTracker },
   };
