@@ -464,6 +464,14 @@ async function spotify_previous() {
 // target (see the 2026-07-29 audit). `level` (0-100) sets the exact system
 // master volume via set_volume (real Core Audio API, see ps-automation.ps1's
 // Get-AudioEndpointVolumeType) instead of guessing a step count.
+//
+// ponytail (BUG-078, Stage 6): this genuinely moves the SYSTEM master volume,
+// not a per-app Spotify volume — the tool's own description above says so
+// now (test/bug-078-spotify-volume-honesty.test.js). Real per-app control
+// would mean Core Audio ISimpleAudioVolume COM interop scoped to Spotify's
+// PID, which is a large new surface for one recorded incident. That is the
+// upgrade path if the honesty fix still isn't enough live — do not build it
+// speculatively.
 async function spotify_volume({ direction, level }) {
   if (!pcEffectors) return fail('PC effectors not initialized');
   if (level !== undefined && level !== null && level !== '') {

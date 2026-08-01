@@ -2658,6 +2658,10 @@ $VK_CODES = @{
     delete = 0x2E
     home   = 0x24
     end    = 0x23
+    # BUG-077: function keys — needed to express alt+f4 ("close Spotify"). VK_F1
+    # is 0x70 and they're contiguous through VK_F12 (0x7B).
+    f1 = 0x70; f2 = 0x71; f3 = 0x72; f4 = 0x73; f5 = 0x74; f6 = 0x75
+    f7 = 0x76; f8 = 0x77; f9 = 0x78; f10 = 0x79; f11 = 0x7A; f12 = 0x7B
 }
 
 $VK_MODIFIERS = @{

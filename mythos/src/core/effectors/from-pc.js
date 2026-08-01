@@ -707,7 +707,13 @@ async function media_status() {
 // Named keys, plus single letters and modifier combos ("ctrl+n", "ctrl+shift+t").
 // Letters exist only to make combos expressible — plain text goes through
 // ui_type's Unicode SendInput path, never through virtual keys.
-const NAMED_KEYS = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right', 'delete', 'home', 'end'];
+// BUG-077: F4 (as in alt+F4) and the rest of the function-key row were simply
+// absent, so "close Spotify" via alt+F4 came back "Invalid key: f4" — the
+// model then tried 'alt' and 'f4' as separate bare send_key calls, both
+// invalid for the same reason. One-line fix: the keys existed conceptually,
+// just weren't in the map.
+const NAMED_KEYS = ['enter', 'tab', 'escape', 'space', 'up', 'down', 'left', 'right', 'delete', 'home', 'end',
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12'];
 const KEY_MODIFIERS = ['ctrl', 'control', 'shift', 'alt', 'win'];
 
 function isValidKeyName(name) {

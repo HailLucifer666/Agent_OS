@@ -124,6 +124,15 @@ function createServer(deps) {
       if (digest) parts.push(digest);
     } catch (err) { logger.warn('live.capability-digest-failed', { error: err.message }); }
     try { parts.push(skillsLoader.catalogBlock()); } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    // BUG-079 (Stage 6, item #19): with no local time anywhere in the prompt,
+    // MYTHOS said "have a good afternoon" at ~01:50 local — the operator had
+    // to correct "a.m. not p.m." live-session.js's buildSetup() calls this
+    // function fresh on every open()/reconnect (idle/max rotation, goAway),
+    // so a long-running session's notion of "now" doesn't go stale either.
+    try {
+      const now = new Date();
+      parts.push('Current local date/time: ' + now.toString());
+    } catch (err) { logger.warn('live.time-compose-failed', { error: err.message }); }
     return parts.filter(Boolean).join('\n\n');
   }
 
@@ -1215,7 +1224,11 @@ function createServer(deps) {
         liveSession = createLiveSession({
           config, bus, logger, spend, breakers: effectors.breakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
-          systemInstruction: buildLiveSystemInstruction(),
+          // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
+          // buildSetup() calls it fresh on every open()/reconnect so the local
+          // time (and anything else composed here) never goes stale across a
+          // long-running or rotated session.
+          systemInstruction: buildLiveSystemInstruction,
           functionDeclarations: declarations,
           onToolCall: liveAdapter.handleLiveToolCalls,
           onAudioOut: (b64) => {

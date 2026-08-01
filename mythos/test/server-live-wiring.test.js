@@ -176,4 +176,51 @@ describe('server-live-wiring (Phase 5, V2 §10)', () => {
       await server.stop();
     }
   });
+
+  test('BUG-079: the Live systemInstruction carries local date/time, and refreshes it on reconnect', async () => {
+    // Real evidence: MYTHOS said "have a good afternoon" at ~01:50 local; the
+    // operator corrected "a.m. not p.m." — nothing in the prompt ever told it
+    // what time it actually was. buildLiveSystemInstruction() is now passed
+    // as a FUNCTION (not its one-time result) so live-session.js's buildSetup()
+    // re-renders it fresh on every open()/reconnect, not just at first connect.
+    const bus = createBus({ historySize: 50 });
+    const sockets = [];
+    const createLiveSocket = () => { const s = new FakeGeminiSocket(); sockets.push(s); return s; };
+    const prevKey = process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_API_KEY = 'test-key-for-time-injection';
+    const server = createServer(baseDeps(bus, {
+      config: { VOICE_S2S_ENABLED: true, LIVE_IDLE_TIMEOUT_MS: 15 },
+      createLiveSocket,
+    }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+      ws.send(JSON.stringify({ type: 'live-open' }));
+      await waitFor(() => sockets.length === 1);
+      sockets[0].simulateOpen();
+      sockets[0].serverFrame({ setupComplete: {} });
+      await waitFor(() => sockets[0].sent.some((f) => f.setup));
+
+      const firstText = sockets[0].sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
+      assert.match(firstText, /Current local date\/time:/, 'the setup prompt must name the current local time');
+      const firstYear = new Date().getFullYear();
+      assert.ok(firstText.includes(String(firstYear)), 'must be a real current date, not a placeholder');
+
+      // Idle-timeout rotates the session (BUG-059) — the reconnect must
+      // recompute the instruction, not replay the stale first-connect string.
+      await waitFor(() => sockets.length === 2, 2000);
+      sockets[1].simulateOpen();
+      sockets[1].serverFrame({ setupComplete: {} });
+      await waitFor(() => sockets[1].sent.some((f) => f.setup));
+      const secondText = sockets[1].sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
+      assert.match(secondText, /Current local date\/time:/, 'the rotated session must ALSO carry a local time, not lose it on reconnect');
+
+      ws.close();
+    } finally {
+      if (prevKey === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = prevKey;
+      await server.stop();
+    }
+  });
 });
