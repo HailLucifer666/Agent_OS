@@ -151,12 +151,15 @@ function onVoiceState(s) {
   compose.setVoiceState(s);
   orb.setVoiceState(s);
   hud.setVoiceState(s);
-  // 'speaking' means OUR OWN server-side TTS is coming out of the speakers
-  // (proactive speech, reminders, the boot greeting — the voice-loop chunk
-  // queue sets it; the S2S bridge never does). While that plays, stop feeding
-  // the Live microphone or Gemini transcribes MYTHOS as the operator and
-  // answers itself — see s2s-bridge.js's setCaptureSuspended.
-  if (s2s && typeof s2s.setCaptureSuspended === 'function') s2s.setCaptureSuspended(s === 'speaking');
+  // Stage 2 (BUG-060/BUG-061): the own-TTS mic-suspend that used to live here
+  // is gone. It existed because proactive speech (boot greeting, reminders,
+  // build announcements) played edge-tts audio out of the speakers while a
+  // Live session's mic capture was still running, and Gemini transcribed it
+  // back as the operator — server/index.js's proactiveSpeak() now checks for
+  // an open Live session and routes that text through the session's own
+  // sendText() instead of ever emitting a speech-chunk, so there is no more
+  // own-TTS audio for this bridge to hear while Live is active. See
+  // suspendForMedia below for the still-needed, unrelated media-echo guard.
 }
 
 // WAVE 5 — the same gate, for media WE started. An effector that begins playback

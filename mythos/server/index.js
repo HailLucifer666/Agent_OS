@@ -708,8 +708,30 @@ function createServer(deps) {
   let lastActiveWs = null;
   async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
-    const alertB64 = (opts && opts.alertSound) ? alertToneBase64() : null;
     targetWs = targetWs || lastActiveWs;
+    // Stage 2 (BUG-060, "two voices speaking simultaneously" —
+    // vault/Incidents/2026-07-31.jsonl): if this connection has an open Gemini
+    // Live session, Live's own PCM playback (pcm-player.js) is already the
+    // entity's voice — emitting edge-tts speech-chunk audio on top of it is
+    // what produced the second, overlapping voice. Route the text through the
+    // SAME [SYSTEM] sendText channel reportLateOutcome() uses
+    // (src/core/voice/live-tool-adapter.js ~line 232) so Gemini itself speaks
+    // it, and skip edge-tts entirely for this connection. No Live session open
+    // (the pre-existing/legacy path) behaves exactly as before.
+    const liveSession = (targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
+    if (liveSession && liveSession.isOpen()) {
+      liveSession.sendText(`[SYSTEM] ${text}`);
+      try {
+        memory.episodic.write({
+          kind: 'proactive-speech', channel: 'proactive',
+          summary: text.slice(0, 100),
+          detail: { text: text, proactive: true, via: 'live' },
+          salience: 0.5,
+        });
+      } catch (_) {}
+      return;
+    }
+    const alertB64 = (opts && opts.alertSound) ? alertToneBase64() : null;
     // Optional single-client delivery: the boot greeting passes the connection
     // that triggered it, and every other caller now defaults to the last
     // active connection, so a second open dashboard tab doesn't ALSO play the
@@ -1167,6 +1189,11 @@ function createServer(deps) {
     // most connections never touch).
     let liveSession = null;
     let liveAdapter = null;
+    // Stage 2 (BUG-060): expose this connection's Live session to proactiveSpeak(),
+    // which lives outside this closure — a plain getter on the ws itself, re-read
+    // on every call so it always reflects the current (possibly reassigned, possibly
+    // still-null) liveSession variable above.
+    ws.getLiveSession = () => liveSession;
     // Task 12: latency instrumentation for the S2S path. Live has no discrete
     // "recording stopped" moment the way batch STT does (the model's own VAD
     // decides that internally) — the honest reference point available here is

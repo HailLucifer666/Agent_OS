@@ -133,9 +133,25 @@ describe('S2S half-duplex gate: our own TTS never reaches the Live mic', () => {
     assert.match(src, /captureSuspended = false;\s*\/\/ fail open/);
   });
 
-  it('app.js suspends capture exactly while the voice loop is speaking', () => {
+  it('media playback still suspends capture (Stage 5\'s territory, unaffected here)', () => {
+    const src = fs.readFileSync(path.join(jsDir, 'voice', 's2s-bridge.js'), 'utf8');
+    assert.match(src, /function suspendForMedia\(/);
+    assert.match(src, /suspendForMedia,/, 'the media gate must stay on the public API');
+  });
+
+  // Stage 2 (BUG-060): the own-TTS suspend that used to live in app.js's
+  // onVoiceState ("setCaptureSuspended(s === 'speaking')") is gone. It was a
+  // symptom-level workaround for proactiveSpeak() emitting edge-tts audio
+  // while a Live session's mic was open; server/index.js's proactiveSpeak()
+  // now checks for an open Live session and routes text through the
+  // session's own sendText() instead, so there is no more own-TTS audio for
+  // this bridge to ever hear — the workaround is dead code, not a live gate.
+  it('app.js no longer suspends Live capture for the voice loop\'s own "speaking" state', () => {
     const src = fs.readFileSync(path.join(jsDir, 'app.js'), 'utf8');
-    assert.match(src, /setCaptureSuspended\(s === 'speaking'\)/,
-      "the gate must follow the voice loop's own speaking state, not a separate flag");
+    assert.doesNotMatch(
+      src, /setCaptureSuspended\(s === 'speaking'\)/,
+      "own-TTS speech-chunk audio no longer plays while Live is open (proactiveSpeak routes through sendText instead), " +
+      "so this mic-suspend workaround must be gone, not merely dormant"
+    );
   });
 });

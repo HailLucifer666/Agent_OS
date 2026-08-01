@@ -39,12 +39,32 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory } = {}) {
     src.onended = () => live.delete(src);
   }
 
-  function flush() {                    // barge-in / interrupted
+  // Stage 2 (BUG-061): "consistently cut off at the end, losing the last one
+  // or two words." A hard stop-everything flush() amputated the tail whenever
+  // an interrupt landed with almost nothing left queued — including the
+  // spurious 'live-interrupted' Gemini's own VAD fired on hearing our OWN
+  // leaked edge-tts audio bleed back through the mic (now fixed at the
+  // source in server/index.js's proactiveSpeak(), but this is a second,
+  // independent guard: any near-tail-end interrupt, spurious or not, should
+  // let a near-finished reply finish rather than chop its last word).
+  const TAIL_GUARD_SEC = 0.25;
+
+  function stopAll() {
     for (const s of live) { try { s.stop(); } catch {} }
     live.clear();
     nextAt = ctx ? ctx.currentTime : 0;
   }
 
+  function flush() {                    // barge-in / interrupted
+    if (ctx) {
+      const remaining = nextAt - ctx.currentTime;
+      if (remaining > 0 && remaining < TAIL_GUARD_SEC) return; // let the tail finish
+    }
+    stopAll();
+  }
+
   function isSpeaking() { return ctx ? nextAt > ctx.currentTime + 0.02 : false; }
-  return { enqueue, flush, isSpeaking, close: () => { flush(); if (ctx) ctx.close().catch(() => {}); ctx = null; } };
+  // close() is a real teardown (session ending), not a barge-in guess — it
+  // always stops everything immediately, bypassing flush()'s tail guard.
+  return { enqueue, flush, isSpeaking, close: () => { stopAll(); if (ctx) ctx.close().catch(() => {}); ctx = null; } };
 }

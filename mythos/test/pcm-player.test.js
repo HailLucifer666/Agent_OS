@@ -60,6 +60,14 @@ function twoSamplesBase64() {
   return Buffer.from([0x00, 0x00, 0xff, 0x7f]).toString('base64');
 }
 
+// n zero-valued int16 samples, for building a chunk of a specific duration
+// at 24kHz (Stage 2's flush() tail-guard tests need buffers long enough to
+// clear the 250ms threshold, unlike the ~83-microsecond twoSamplesBase64()
+// chunk the pre-existing tests above use).
+function samplesBase64(n) {
+  return Buffer.alloc(n * 2, 0).toString('base64');
+}
+
 describe('pcm-player (Phase 4, V2 §9)', () => {
   it('enqueue() schedules a source with a 40ms floor on the first chunk', async () => {
     const { createPcmPlayer } = await import(PCM_PLAYER_URL);
@@ -81,13 +89,15 @@ describe('pcm-player (Phase 4, V2 §9)', () => {
     assert.ok(Math.abs(ctx._sources[1].startedAt - firstEnd) < 1e-9, 'the second chunk must start exactly where the first ends');
   });
 
-  it('flush() stops every currently-scheduled source and clears the live set', async () => {
+  it('flush() stops every currently-scheduled source and clears the live set (tail well over the 250ms guard)', async () => {
     const { createPcmPlayer } = await import(PCM_PLAYER_URL);
     const ctx = fakeContext();
     const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
-    player.enqueue(twoSamplesBase64());
-    player.enqueue(twoSamplesBase64());
-    player.enqueue(twoSamplesBase64());
+    // 1 second each — comfortably clears Stage 2's 250ms tail guard so this
+    // exercises a genuine interrupt, not the "let it finish" path below.
+    player.enqueue(samplesBase64(24000));
+    player.enqueue(samplesBase64(24000));
+    player.enqueue(samplesBase64(24000));
     assert.equal(ctx._sources.filter((s) => !s.stopped).length, 3);
 
     player.flush();
@@ -101,8 +111,8 @@ describe('pcm-player (Phase 4, V2 §9)', () => {
     const { createPcmPlayer } = await import(PCM_PLAYER_URL);
     const ctx = fakeContext();
     const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
-    player.enqueue(twoSamplesBase64());
-    player.enqueue(twoSamplesBase64());
+    player.enqueue(samplesBase64(24000));
+    player.enqueue(samplesBase64(24000));
     player.flush();
     ctx.currentTime = 5.0; // time has moved on (barge-in mid-playback)
     player.enqueue(twoSamplesBase64());
@@ -115,10 +125,44 @@ describe('pcm-player (Phase 4, V2 §9)', () => {
     const ctx = fakeContext();
     const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
     assert.equal(player.isSpeaking(), false, 'no context created yet -> not speaking');
-    player.enqueue(twoSamplesBase64());
+    player.enqueue(samplesBase64(24000));
     assert.equal(player.isSpeaking(), true);
     player.flush();
     assert.equal(player.isSpeaking(), false, 'after flush, isSpeaking must be false');
+  });
+
+  // Stage 2 (BUG-061): "consistently cut off at the end, losing the last one
+  // or two words." flush() now leaves a near-finished tail alone instead of
+  // amputating it.
+  it('flush() ignores the interrupt when under 250ms of audio remains queued', async () => {
+    const { createPcmPlayer } = await import(PCM_PLAYER_URL);
+    const ctx = fakeContext();
+    const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
+    // 2400 samples at 24kHz = 100ms — well under the 250ms guard.
+    player.enqueue(samplesBase64(2400));
+    assert.equal(ctx._sources[0].stopped, false);
+
+    player.flush();
+
+    assert.equal(ctx._sources[0].stopped, false, 'a tail under 250ms must be left to finish, not stopped');
+    assert.equal(player.isSpeaking(), true, 'the queued tail must still be considered speaking after the ignored interrupt');
+  });
+
+  it('flush() still stops immediately once the remaining tail exceeds 250ms', async () => {
+    const { createPcmPlayer } = await import(PCM_PLAYER_URL);
+    const ctx = fakeContext();
+    const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
+    // 12000 samples at 24kHz = 500ms — over the 250ms guard.
+    player.enqueue(samplesBase64(12000));
+    player.flush();
+    assert.equal(ctx._sources[0].stopped, true, 'a long remaining tail is a genuine interrupt and must stop immediately');
+  });
+
+  it('flush() at exactly the moment nothing is queued is a harmless no-op', async () => {
+    const { createPcmPlayer } = await import(PCM_PLAYER_URL);
+    const ctx = fakeContext();
+    const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
+    assert.doesNotThrow(() => player.flush());
   });
 
   it('close() flushes all sources and closes the underlying context', async () => {
