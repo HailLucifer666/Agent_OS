@@ -187,6 +187,69 @@ describe('live-session (Phase 1, V2 §6)', () => {
     session.close();
   });
 
+  test('BUG-059 — idle-timeout rotates the session (preserves resumeHandle, reopens) instead of killing it', async () => {
+    // Before the fix, armIdle()'s timeout called close('idle-timeout'), which
+    // unconditionally sets closedByUs=true — the exact flag the ws.on('close')
+    // reconnect branch checks to decide NOT to reconnect. So an idle timeout
+    // could never trigger a reopen: the session just went silently dead with
+    // no client notification. This test drives a real idle-timeout via a tiny
+    // configured LIVE_IDLE_TIMEOUT_MS and asserts a second socket is opened
+    // automatically, carrying the preserved sessionResumption handle, and the
+    // session lands back in 'open' — not stuck 'closed'.
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets, events } = fakeDeps({ config: { LIVE_IDLE_TIMEOUT_MS: 15 } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    // A real session picks up a resume handle almost immediately; give it one.
+    sockets[0].serverFrame({ sessionResumptionUpdate: { resumable: true, newHandle: 'resume-abc' } });
+
+    // Wait past the (tiny, test-only) idle timeout.
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.equal(sockets.length, 2, 'idle-timeout must open a fresh socket automatically, not just die');
+    assert.ok(events.state.some((s) => s.state === 'reconnecting' && s.reason === 'idle-timeout'),
+      'the rotation must be observable as a reconnecting state, not a silent death');
+
+    sockets[1].simulateOpen();
+    sockets[1].serverFrame({ setupComplete: {} });
+    await new Promise((r) => setImmediate(r));
+
+    assert.equal(session.getState(), 'open', 'session must be OPEN again after an idle rotation, not stuck closed');
+    assert.ok(
+      sockets[1].sent.some((f) => f.setup && f.setup.sessionResumption && f.setup.sessionResumption.handle === 'resume-abc'),
+      'the rotated connection must carry the preserved resumeHandle so context is not lost'
+    );
+    session.close();
+  });
+
+  test('BUG-059 — session-max rotates the session instead of killing it at the 10-minute mark', async () => {
+    // Same defect, different trigger: MAX_MS used to call close('session-max')
+    // unconditionally even though contextWindowCompression's slidingWindow
+    // already keeps the content window healthy — this forced kill was
+    // self-inflicted and, worse, unrecoverable for the same closedByUs reason.
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets } = fakeDeps({ config: { LIVE_SESSION_MAX_MS: 15 } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.equal(sockets.length, 2, 'session-max must open a fresh socket automatically, not just die');
+    sockets[1].simulateOpen();
+    sockets[1].serverFrame({ setupComplete: {} });
+    await new Promise((r) => setImmediate(r));
+
+    assert.equal(session.getState(), 'open', 'session must be OPEN again after a session-max rotation, not stuck closed');
+    session.close();
+  });
+
   test('usageMetadata records real token counts via spend.recordCall (AD-5 — no invented numbers)', async () => {
     process.env.GOOGLE_API_KEY = 'test-key';
     const { deps, sockets, events } = fakeDeps();

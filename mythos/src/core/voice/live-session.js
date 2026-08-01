@@ -44,7 +44,7 @@ function createLiveSession(deps) {
 
   const MODEL = config.GEMINI_LIVE_MODEL || 'models/gemini-3.1-flash-live-preview';
   const VOICE = config.GEMINI_LIVE_VOICE || 'Aoede';
-  const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 45000;
+  const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 120000; // BUG-059: was 45000, see schema.js
   const MAX_MS = Number(config.LIVE_SESSION_MAX_MS) || 10 * 60 * 1000;
   const BREAKER = 'gemini-live';
 
@@ -66,7 +66,12 @@ function createLiveSession(deps) {
 
   function armIdle() {
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => close('idle-timeout'), IDLE_MS);
+    // BUG-059: idle timeout must ROTATE the session (preserve resumeHandle,
+    // reopen), never close() it — close() sets closedByUs=true, which is
+    // exactly the flag the ws.on('close') reconnect branch below checks to
+    // decide NOT to reconnect. An idle timeout used to be indistinguishable
+    // from an intentional shutdown and killed the session silently.
+    idleTimer = setTimeout(() => rotate('idle-timeout'), IDLE_MS);
     if (idleTimer.unref) idleTimer.unref();
   }
 
@@ -119,7 +124,11 @@ function createLiveSession(deps) {
           settled = true;
           setState('open');
           armIdle();
-          maxTimer = setTimeout(() => close('session-max'), MAX_MS);
+          // BUG-059: same reasoning as armIdle() above — contextWindowCompression's
+          // slidingWindow (buildSetup(), above) already keeps the session content
+          // window healthy past 10 minutes, so this is housekeeping, not a real
+          // failure. Rotate, don't close().
+          maxTimer = setTimeout(() => rotate('session-max'), MAX_MS);
           if (maxTimer.unref) maxTimer.unref();
           resolve(true);
         }
@@ -150,14 +159,46 @@ function createLiveSession(deps) {
     }
   }
 
+  // BUG-059: the idle-timeout/session-max lifecycle rotation. Unlike
+  // reconnect() (used for unexpected mid-session drops), this is a
+  // deliberate, healthy rotation — it must NOT trip the breaker (breakers.fail)
+  // the way an actual connection failure does. resumeHandle is left untouched
+  // so buildSetup() carries it into the new connection (sessionResumption),
+  // and closedByUs is never set, so this is not mistakable for an intentional
+  // shutdown anywhere else in this module.
+  async function rotate(reason) {
+    if (idleTimer) clearTimeout(idleTimer);
+    if (maxTimer) clearTimeout(maxTimer);
+    logger.info('live.rotate', { reason });
+    setState('reconnecting', reason);
+    const oldWs = ws;
+    ws = null;
+    if (oldWs) {
+      // Detach first: the old close handler's own reconnect branch would
+      // otherwise race this function's explicit open() call below.
+      try { oldWs.removeAllListeners('close'); } catch {}
+      try { oldWs.close(); } catch {}
+    }
+    const ok = await open();
+    if (!ok && bus && typeof bus.emit === 'function') {
+      bus.emit('health.anomaly', { kind: 'live-reconnect-failed', reason });
+    }
+  }
+
   function handleFrame(msg) {
+    // BUG-059: any server frame proves the connection is alive — reset the
+    // idle clock unconditionally here rather than only from a few specific
+    // branches below. Previously a long run of e.g. only usageMetadata
+    // frames (or a frame type a future protocol revision adds) could starve
+    // the timer even though the server was clearly still talking to us.
+    armIdle();
+
     // ---- serverContent: EVERY field, no else-if (see module header) ----
     const sc = msg.serverContent;
     if (sc) {
       if (sc.inputTranscription && sc.inputTranscription.text) {
         userText += sc.inputTranscription.text;
         if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
-        armIdle();
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
         assistantText += sc.outputTranscription.text;
@@ -181,13 +222,11 @@ function createLiveSession(deps) {
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript' });
         }
         if (onTurnComplete) onTurnComplete(turn);
-        armIdle();
       }
     }
 
     // ---- tool calls → delegated, never executed here (AD-1) ----
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
-      armIdle();
       Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText }))
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
     }

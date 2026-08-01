@@ -374,7 +374,13 @@ const SCHEMA = {
   // .env.example): auditioning by ear across all six needs a human with
   // speakers, which cannot happen in this environment.
   GEMINI_LIVE_VOICE:           { type: 'string', default: 'Aoede' },
-  LIVE_IDLE_TIMEOUT_MS:        { type: 'number', default: 45000, min: 1000 },
+  // BUG-059: was 45000. The browser bridge (s2s-bridge.js) suspends mic
+  // capture for up to 30s (MAX_SUSPEND_MS) while MYTHOS's own TTS or media
+  // playback is out of the speakers — sendAudio() stops being called for
+  // that whole window, so 45s left no margin before the idle timer fired
+  // mid-turn. Raised to comfortably clear a 30s suspend plus slack; still
+  // operator-overridable via env, not removed.
+  LIVE_IDLE_TIMEOUT_MS:        { type: 'number', default: 120000, min: 1000 },
   LIVE_SESSION_MAX_MS:         { type: 'number', default: 600000, min: 10000 },
   // Comma-separated tool-name allowlist; empty = live-tools.js's curated
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
