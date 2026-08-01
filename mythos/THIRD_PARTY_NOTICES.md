@@ -60,6 +60,29 @@ Licensed under the Apache License, Version 2.0
   use into `mythos/models/kokoro/` (gitignored, per-machine — same convention
   as `/mythos/models/piper/`), never committed to this repo.
 
+## Silero VAD (voice activity detection — ui/public/js/voice/silero-vad.js)
+
+- **Project:** https://github.com/snakers4/silero-vad
+- **License:** MIT (both the code and the model weights — no non-commercial
+  restriction, unlike openWakeWord's weights above).
+- `silero-vad.js` is a clean-room JavaScript port of the model's real-time
+  inference contract (frame size, recurrent state threading, sample-rate
+  input), driven directly through onnxruntime-web — the same loading pattern
+  `wakeword.js` already uses (`import('/vendor/onnxruntime/ort.min.mjs')`).
+  No new client dependency (`@ricky0123/vad-web`, which this project does NOT
+  vendor, is only a thin wrapper over the same model).
+- The `.onnx` file is fetched by `scripts/setup-silero.js` from a pinned
+  version of `@ricky0123/vad-web`'s published npm package (via jsDelivr's npm
+  CDN) into `mythos/ui/public/models/silero/` (gitignored, per-machine),
+  never committed. See that script's own comments for why the source is
+  pinned to that specific artifact rather than fetched from
+  snakers4/silero-vad's repo directly: a live check found the current
+  `src/silero_vad/data/silero_vad.onnx` on that repo's master branch carries
+  the right input/output tensor names but scores real speech near zero — a
+  different export of the same architecture. The version fetched here was
+  verified, live, against the model's own `tests/data/test.wav` fixture
+  (max probability 0.9998, 77% of frames scored >0.5).
+
 ## Local Whisper STT (providers/local-whisper-stt.js)
 
 - **Project:** https://github.com/openai/whisper (run via

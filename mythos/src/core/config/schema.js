@@ -93,6 +93,13 @@ const SCHEMA = {
   VAD_MIN_PEAK_RMS:         { type: 'number', default: 0.06,  min: 0, max: 1 },
   VAD_HOLD_TICKS:           { type: 'number', default: 3,     min: 1, max: 20 },
   VAD_SILENCE_MS:           { type: 'number', default: 1800,  min: 100, max: 10000 },
+  // Which speech-detector drives voice-loop.js. 'rms' (default) is the
+  // hand-tuned volume-threshold detector above. 'silero' runs a trained
+  // speech/non-speech ONNX model (ui/public/js/voice/silero-vad.js) client-side
+  // instead — fetched by scripts/setup-silero.js, gitignored, opt-in. When
+  // 'silero' is active, VAD_SPEECH_RMS/VAD_MIN_PEAK_RMS above are read as
+  // speech-probability thresholds (0..1), not RMS amplitude.
+  VAD_ENGINE:               { type: 'string', default: 'rms', enum: ['rms', 'silero'] },
 
   // Wake-word (hands-free "hey jarvis" — ui/public/js/voice/wakeword.js).
   // Opt-in: models are CC BY-NC-SA and fetched by scripts/setup-wakeword.js,

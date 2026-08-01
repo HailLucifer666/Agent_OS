@@ -25,6 +25,11 @@ function mountConfigRoutes(app, deps) {
       minPeakRms: config.VAD_MIN_PEAK_RMS,
       holdTicks: config.VAD_HOLD_TICKS,
       silenceMs: config.VAD_SILENCE_MS,
+      // VAD_ENGINE=rms|silero (default rms). voice-loop.js applies
+      // engine-appropriate threshold DEFAULTS before the four numeric
+      // overrides above, so an operator who only sets VAD_ENGINE=silero
+      // (without also retuning the thresholds) still gets sane behavior.
+      engine: config.VAD_ENGINE === 'silero' ? 'silero' : 'rms',
     });
   });
 

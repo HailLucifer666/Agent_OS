@@ -40,6 +40,10 @@ mythos/vault_test_audit_*/
 # never committed; see THIRD_PARTY_NOTICES.md)
 mythos/ui/public/models/wakeword/
 
+# Silero VAD ONNX model (MIT — fetched by scripts/setup-silero.js, never
+# committed; see THIRD_PARTY_NOTICES.md)
+mythos/ui/public/models/silero/
+
 # secrets
 .env
 *.env.local
