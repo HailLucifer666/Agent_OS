@@ -21,7 +21,7 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
   if (!agentActions || typeof agentActions.assembleKanbanPlan !== 'function') throw new Error('createOrchestrator requires agentActions');
   if (!kanban || typeof kanban.findCard !== 'function') throw new Error('createOrchestrator requires kanban');
   if (!bus) throw new Error('createOrchestrator requires bus');
-  if (!fs || typeof fs.readJSON !== 'function') throw new Error('createOrchestrator requires vault fs-store');
+  if (!fs || typeof fs.readJSONStrict !== 'function') throw new Error('createOrchestrator requires vault fs-store with readJSONStrict');
 
   var missions = new Map(); // id -> mission record
   var planJobs = new Map();  // planning jobId -> missionId
@@ -50,8 +50,19 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
 
   function init() {
     var recovered = 0;
+    // Strict read (2026-08-02 audit): missions.json is read-mutate-write — init()
+    // loads it, flips in-flight missions to failed, then persist() writes the map
+    // back. A corrupt file read leniently returns [], which persist() would write
+    // over the real mission history, truncating it behind a clean boot. A corrupt
+    // store must surface, not be mistaken for "no missions yet".
+    var saved;
     try {
-      var saved = fs.readJSON(FILE, []);
+      saved = fs.readJSONStrict(FILE, []);
+    } catch (err) {
+      bus.emit('health.anomaly', { kind: 'missions-read-failed', path: FILE, error: err.message });
+      throw err;
+    }
+    try {
       for (var i = 0; i < saved.length; i++) {
         var m = saved[i];
         if (m.status !== 'done' && m.status !== 'failed') {

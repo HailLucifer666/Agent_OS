@@ -288,7 +288,7 @@ async function main() {
       var riskClassifier = createRiskClassifier();
       var evidenceValidator = createEvidenceValidator();
       var pipelineEffector = createPipelineEffector({ fs: memory.fs, classifier: riskClassifier });
-      var kanbanEffector = createKanbanEffector({ fs: memory.fs });
+      var kanbanEffector = createKanbanEffector({ fs: memory.fs, bus: bus });
       // Integration 3: build verifier (needs brain)
       var verifier = require('./core/design/verify').createVerifier({ brain: brain });
       // Single build-content engine (Hermes-Agent). Passed to BOTH the build

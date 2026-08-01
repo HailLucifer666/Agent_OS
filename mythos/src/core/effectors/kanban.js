@@ -12,12 +12,24 @@
 var FILE = 'Kanban.json';
 var LANES = ['backlog', 'building', 'review', 'done'];
 
-function createKanbanEffector({ fs }) {
-  if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function') {
-    throw new Error('createKanbanEffector requires a vault fs-store with readJSON/writeJSON');
+function createKanbanEffector({ fs, bus }) {
+  if (!fs || typeof fs.readJSONStrict !== 'function' || typeof fs.writeJSON !== 'function') {
+    throw new Error('createKanbanEffector requires a vault fs-store with readJSONStrict/writeJSON');
   }
 
-  function load() { return fs.readJSON(FILE, { cards: [] }); }
+  // Strict read (2026-08-02 audit): Kanban.json is read-mutate-write — every CRUD
+  // op loads the board, mutates it, and saves it back. A corrupt file read leniently
+  // returns { cards: [] }, which the very next save() would write over the real board,
+  // truncating every card behind ok:true (same class as the 2026-07-31 reminders fix).
+  // load() now throws on corruption so the mutation refuses instead of wiping the store.
+  function load() {
+    try {
+      return fs.readJSONStrict(FILE, { cards: [] });
+    } catch (err) {
+      if (bus) bus.emit('health.anomaly', { kind: 'kanban-read-failed', path: FILE, error: err.message });
+      throw err;
+    }
+  }
   function save(board) { fs.writeJSON(FILE, board); }
   function listBoard() { return load(); }
 

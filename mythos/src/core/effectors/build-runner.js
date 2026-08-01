@@ -73,10 +73,15 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
   function loadPersisted() {
     var data;
     try {
-      data = vault.readJSON(JOBS_REL_PATH, { jobs: [] });
+      // Strict read (2026-08-02 audit): build-jobs.json is read-mutate-write —
+      // loadPersisted() reads it, flips running/queued jobs to failed, and persist()
+      // later writes the map back. A corrupt file read leniently returns { jobs: [] },
+      // which the next persist() would write over the real job history, truncating it
+      // behind ok:true. A corrupt store must surface, not be mistaken for "no jobs".
+      data = vault.readJSONStrict(JOBS_REL_PATH, { jobs: [] });
     } catch (err) {
       if (bus) bus.emit('health.anomaly', { kind: 'jobs-load-failed', error: err.message });
-      data = { jobs: [] };
+      throw err;
     }
     var list = data.jobs || [];
     for (var i = 0; i < list.length; i++) {

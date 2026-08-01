@@ -554,7 +554,7 @@ function createServer(deps) {
   require('./routes/kanban').mountKanbanRoutes(app, { kanbanEffector, agentActions, auditRest });
 
   // ---- pipeline + jobs (W9: extracted to routes/pipeline.js) ----
-  require('./routes/pipeline').mountPipelineRoutes(app, { pipelineEffector, buildRunner, auditRest });
+  require('./routes/pipeline').mountPipelineRoutes(app, { pipelineEffector, buildRunner, agentActions, auditRest });
 
   // ---- /api/memory + /api/audit/recent (W9: extracted to routes/memory.js) ----
   require('./routes/memory').mountMemoryRoutes(app, { memory });

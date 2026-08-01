@@ -342,11 +342,11 @@ export async function render(mount) {
     try {
       const res = await fetch(`/api/pipeline/${id}/shape`, { method: 'POST' });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `shape failed (${res.status})`);
+      state.shapedIds.add(id);
       applyBoard(data.board);
     } catch (err) {
       console.error('shape failed', err);
-      state.shapedIds.add(id);
-      renderBoard();
     }
   }
 

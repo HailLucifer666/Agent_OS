@@ -19,6 +19,7 @@ function harness({ planCards, failBuilds } = {}) {
   const memFiles = new Map();
   const fs = {
     readJSON: (p, fb) => (memFiles.has(p) ? JSON.parse(memFiles.get(p)) : fb),
+    readJSONStrict: (p, fb) => (memFiles.has(p) ? JSON.parse(memFiles.get(p)) : fb),
     writeJSON: (p, d) => memFiles.set(p, JSON.stringify(d)),
   };
   const brain = {
