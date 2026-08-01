@@ -1,33 +1,57 @@
-# Mythos external skills allowlist.
-# One skill name per line (matching the directory name in ~/.zcode/skills/).
-# '#' lines are comments. Edit freely — no code changes needed to add/remove.
+# Mythos skills allowlist.
+#
+# One skill name per line. '#' lines are comments. Edit freely — no code
+# changes needed to add or remove an entry.
+#
+# A leading '?' marks the entry OPTIONAL: MYTHOS uses it when the host CLI has
+# it installed, but it is deliberately NOT vendored into this repo (too large,
+# or it needs a database this repo does not ship). An optional entry that does
+# not resolve is the normal state of a fresh clone and is never warned about.
+# A plain entry that does not resolve IS reported — treat that as a bug.
+#
+# Resolution order is repo-vendored (mythos/skills/<name>/) first, then
+# $MYTHOS_SKILLS_DIR, ~/.claude/skills, the plugin packs, ~/.zcode/skills.
+#
 # These are surfaced to the model in every prompt as one-liners; the model
 # calls use_skill(<name>) to load full guidance on demand.
 
-# Design / UI
-ui-ux-pro-max
-frontend-patterns
-frontend-ui-engineering
-design-system
+# ---- Design / UI ----
 taste-frontend
+# ui-ux-pro-max is essence-only in this repo (SKILL-CORE.md drives build-lane
+# injection). Its full 45 KB SKILL.md plus CSV database stay a host install.
+?ui-ux-pro-max
+?frontend-patterns
+?frontend-ui-engineering
+?design-system
 
-# Anti-slop code discipline (vendored in mythos/skills/)
+# ---- Anti-slop code discipline (vendored) ----
 ponytail
 karpathy-guidelines
 
-# Communication
+# ---- Communication (vendored) ----
 caveman
 
-# Workflow / methodology
+# ---- Workflow / methodology (vendored from superpowers, MIT) ----
 using-superpowers
-spec-driven-development
-tdd-workflow
-
-# Research / planning
-deep-research
 brainstorming
-planning-and-task-breakdown
-
-# Quality
-code-review
+writing-plans
+executing-plans
+systematic-debugging
+test-driven-development
 verification-before-completion
+
+# ---- External capability packs (vendored guidance; the tools themselves are
+# optional installs that degrade to OFFLINE when absent) ----
+agent-reach
+browser-use
+desktop-commander
+strix-security
+okf-knowledge
+llm-app-patterns
+
+# ---- Host-only extras ----
+?deep-research
+?spec-driven-development
+?planning-and-task-breakdown
+?tdd-workflow
+?code-review

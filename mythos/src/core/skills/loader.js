@@ -10,8 +10,10 @@
 // catalog for prompt injection plus on-demand full-content loading.
 //
 // The allowlist (mythos/skills.allowlist) is human-edited: one skill name per
-// line, '#' comments allowed. This keeps the prompt lean (only curated skills)
-// rather than injecting all 167 available skills into every brain call.
+// line, '#' comments allowed, and a leading '?' marking an entry as OPTIONAL
+// (host-installed only, expected to be absent on a fresh clone). This keeps the
+// prompt lean (only curated skills) rather than injecting all 167 available
+// skills into every brain call.
 //
 // MULTI-ROOT RESOLUTION (2026-07-31 fix). This used to resolve exactly ONE
 // external root — `~/.zcode/skills` — and nothing else. On a machine driving
@@ -87,6 +89,24 @@ function pluginRoots(home) {
   return roots;
 }
 
+// Enumerate <home>/.claude/plugins/installed/*/skills. A pack the host CLI has
+// INSTALLED (as opposed to merely having its marketplace checked out) lands
+// here, and this layout was unsearched until 2026-08-02 — the same silent
+// failure mode as the three marketplace layouts above. Absent/unreadable -> [].
+function installedRoots(home) {
+  if (!home) return [];
+  var installed = path.join(home, '.claude', 'plugins', 'installed');
+  var packs;
+  try {
+    packs = fs.readdirSync(installed, { withFileTypes: true })
+      .filter(function(e) { return e.isDirectory(); })
+      .map(function(e) { return e.name; });
+  } catch (_) {
+    return [];
+  }
+  return packs.map(function(pack) { return path.join(installed, pack, 'skills'); });
+}
+
 // The ordered candidate roots, override first. Exported so an operator whose
 // skills silently fail to resolve can see exactly where Mythos looked instead
 // of guessing — the diagnostic that would have made this bug obvious.
@@ -96,6 +116,7 @@ function externalSkillRoots() {
   if (home) {
     roots.push(path.join(home, '.claude', 'skills'));
     roots = roots.concat(pluginRoots(home));
+    roots = roots.concat(installedRoots(home));
     roots.push(path.join(home, '.zcode', 'skills'));
   }
   // De-duplicate while preserving order.
@@ -107,23 +128,40 @@ function externalSkillRoots() {
   });
 }
 
-// Read + parse the allowlist into a de-duplicated list of skill names.
-function readAllowlist() {
+// Read + parse the allowlist into de-duplicated entries.
+//
+// A leading '?' marks the entry OPTIONAL: a skill MYTHOS uses when the host CLI
+// happens to have it installed, but which is deliberately not vendored (too
+// large, or it needs a database this repo does not ship). Optional entries that
+// fail to resolve are the NORMAL case on a fresh clone and must not be reported
+// as missing — otherwise the honest "these allowlisted skills are absent"
+// warning fires on every clean machine and stops being read, which defeats the
+// point of having it. A plain entry that fails to resolve is still a real
+// problem and is still reported.
+function readAllowlistEntries() {
+  var raw;
   try {
-    var raw = fs.readFileSync(ALLOWLIST_PATH, 'utf8');
+    raw = fs.readFileSync(ALLOWLIST_PATH, 'utf8');
   } catch (_) {
     return [];
   }
   var seen = {};
-  var names = [];
+  var entries = [];
   raw.split('\n').forEach(function(line) {
-    var name = line.trim();
-    if (!name || name.charAt(0) === '#') return;
-    if (seen[name]) return;
+    var text = line.trim();
+    if (!text || text.charAt(0) === '#') return;
+    var optional = text.charAt(0) === '?';
+    var name = optional ? text.slice(1).trim() : text;
+    if (!name || seen[name]) return;
     seen[name] = true;
-    names.push(name);
+    entries.push({ name: name, optional: optional });
   });
-  return names;
+  return entries;
+}
+
+// Names only — the shape every existing caller expects.
+function readAllowlist() {
+  return readAllowlistEntries().map(function(e) { return e.name; });
 }
 
 // Minimal YAML frontmatter parser: extract `name` and `description` from the
@@ -143,7 +181,39 @@ function parseFrontmatter(text) {
     || body.match(/^description:\s*'([\s\S]*?)'\s*$/m)
     || body.match(/^description:\s*(.+)$/m);
   if (descM) fm.description = descM[1].trim().replace(/\s+/g, ' ');
+  // YAML block scalars ('description: >' / '|' / '>-' / '|-'). The bare-to-EOL
+  // branch above captures only the indicator character, so caveman and ponytail
+  // both shipped a catalog description of literally ">" — the one line the model
+  // ever sees about a skill, replaced by punctuation. Gather the indented
+  // continuation lines instead. Upstream skills use this form freely, so
+  // handling it here is what keeps a verbatim vendored SKILL.md usable.
+  if (fm.description && /^[>|][-+]?$/.test(fm.description)) {
+    fm.description = blockScalar(body, 'description');
+  }
+  if (fm.name && /^[>|][-+]?$/.test(fm.name)) {
+    fm.name = blockScalar(body, 'name');
+  }
   return fm;
+}
+
+// Collect the indented continuation lines of a YAML block scalar, folded into a
+// single line. Stops at the first line that is neither blank nor indented —
+// i.e. the next top-level key.
+function blockScalar(body, key) {
+  var lines = body.split(/\r?\n/);
+  var start = -1;
+  for (var i = 0; i < lines.length; i++) {
+    if (new RegExp('^' + key + ':\\s*[>|][-+]?\\s*$').test(lines[i])) { start = i; break; }
+  }
+  if (start === -1) return '';
+  var collected = [];
+  for (var j = start + 1; j < lines.length; j++) {
+    var line = lines[j];
+    if (/^\s*$/.test(line)) { collected.push(''); continue; }
+    if (!/^\s/.test(line)) break;          // next top-level key
+    collected.push(line.trim());
+  }
+  return collected.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function exists(p) {
@@ -224,11 +294,19 @@ var cachedCatalog = null;
 // loadCatalog(opts.logger) below; main.js's boot sequence is the one that does).
 var lastMissing = [];
 
+// Optional ('?'-prefixed) entries that did not resolve. Absence here is
+// expected, so these are never warned about — but they are still recorded, so
+// an operator asking "why is ui-ux-pro-max not in the catalog on this machine"
+// gets an answer instead of silence.
+var lastMissingOptional = [];
+
 function loadCatalog(opts) {
   if (cachedCatalog) return cachedCatalog;
   var catalog = [];
   var missing = [];
-  readAllowlist().forEach(function(name) {
+  var missingOptional = [];
+  readAllowlistEntries().forEach(function(entry) {
+    var name = entry.name;
     var p = skillPath(name);
     try {
       var raw = fs.readFileSync(p, 'utf8');
@@ -239,11 +317,15 @@ function loadCatalog(opts) {
       });
     } catch (_) {
       // Skill missing or unreadable — skip. Not an error condition, but
-      // recorded so a caller with a logger can warn about the gap.
-      missing.push(name);
+      // recorded so a caller with a logger can warn about the gap. An entry
+      // marked optional ('?name') is expected to be absent on a fresh clone,
+      // so it is tracked separately and never warned about.
+      if (entry.optional) missingOptional.push(name);
+      else missing.push(name);
     }
   });
   lastMissing = missing;
+  lastMissingOptional = missingOptional;
   if (opts && opts.logger && missing.length) {
     opts.logger.warn('skills.loader.missing-packs', { missing: missing, resolved: catalog.length, allowlisted: catalog.length + missing.length });
   }
@@ -334,9 +416,13 @@ module.exports = {
   // first-class diagnostic: the 2026-07-31 bug was invisible precisely because
   // nothing could report the searched roots.
   externalSkillRoots: externalSkillRoots,
+  // Which allowlist entries failed to resolve on the last loadCatalog().
+  // required[] is a real gap; optional[] is the expected fresh-clone state.
+  lastMissing: function() { return { required: lastMissing.slice(), optional: lastMissingOptional.slice() }; },
   // Exports for testing
   _parseFrontmatter: parseFrontmatter,
   _readAllowlist: readAllowlist,
+  _readAllowlistEntries: readAllowlistEntries,
   _skillPath: skillPath,
   _skillDir: skillDir,
   _ALLOWLIST_PATH: ALLOWLIST_PATH,

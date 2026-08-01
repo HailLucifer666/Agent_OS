@@ -107,3 +107,43 @@ Licensed under the Apache License, Version 2.0
 
 All npm dependency licenses are repeated here only for the Phase 2 additions
 that motivated this entry; the canonical license list remains `package.json`.
+
+## Vendored agent skills (`mythos/skills/`)
+
+Skills are prose guidance, not executable code, but the ones copied verbatim
+from upstream are redistribution and are recorded here. Each vendored skill
+directory carries its upstream `LICENSE` alongside its `SKILL.md`.
+
+| Skill(s) | Upstream | License |
+|---|---|---|
+| `taste-frontend` | https://github.com/Leonxlnx/taste-skill | MIT |
+| `ponytail` | https://github.com/DietrichGebert/ponytail | MIT |
+| `karpathy-guidelines` | https://github.com/multica-ai/andrej-karpathy-skills | MIT (declared in the skill's own frontmatter; upstream ships no LICENSE file) |
+| `caveman` | https://github.com/JuliusBrussee/caveman | MIT |
+| `ui-ux-pro-max` (essence only) | https://github.com/nextlevelbuilder/ui-ux-pro-max-skill | MIT |
+| `agent-reach` | https://github.com/Panniantong/Agent-Reach | MIT |
+| `using-superpowers`, `brainstorming`, `writing-plans`, `executing-plans`, `systematic-debugging`, `test-driven-development`, `verification-before-completion` | https://github.com/obra/superpowers | MIT (© 2025 Jesse Vincent) |
+
+`browser-use`, `desktop-commander`, `strix-security`, `okf-knowledge` and
+`llm-app-patterns` are **written for this repo**, not copied from upstream —
+they describe how MYTHOS drives those tools. No upstream text or code is
+redistributed for them. Each `SKILL-CORE.md` is likewise an original
+condensation written here.
+
+## Optional external tools reached at runtime (not redistributed)
+
+None of these ship with MYTHOS. Each is installed by the operator on their own
+machine, and every integration degrades to OFFLINE when the tool is absent.
+Listed so the licences are on record before any release.
+
+| Tool | Upstream | License | How MYTHOS reaches it |
+|---|---|---|---|
+| Agent-Reach | https://github.com/Panniantong/Agent-Reach | MIT | `agent-reach` CLI, probed once and cached |
+| Desktop Commander | https://github.com/wonderwhy-er/DesktopCommanderMCP | MIT | MCP stdio server (`npx @wonderwhy-er/desktop-commander`) |
+| browser-use | https://github.com/browser-use/browser-use | MIT (the library; browser-use Cloud services have separate terms) | MCP stdio server (`uvx --from 'browser-use[cli]' browser-use --mcp`) |
+| Strix | https://github.com/usestrix/strix | Apache-2.0 | `strix` CLI (`pip install strix-agent`; the upstream `curl \| bash` installer is deliberately not used) |
+| Open Knowledge Format | https://github.com/GoogleCloudPlatform/knowledge-catalog | Verify upstream `LICENSE` before shipping an OKF importer/exporter as a product feature | Format only — MYTHOS reads and writes the file shape, linking no upstream code |
+| awesome-llm-apps | https://github.com/Shubhamsaboo/awesome-llm-apps | Apache-2.0 | Reference reading only; nothing installed or imported |
+
+These entries record what upstream states. They are not a legal conclusion —
+the licensing review before any paid release is a separate, tracked gate.
