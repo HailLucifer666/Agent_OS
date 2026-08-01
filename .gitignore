@@ -91,3 +91,9 @@ mythos/.tmp-doc-rag-test/
 # Piper TTS voice models — 60MB each, downloaded per-machine like the wake-word
 # models. Install with: node mythos/scripts/setup-piper.js --install
 /mythos/models/piper/
+
+# Kokoro TTS + local Whisper STT models — fetched from Hugging Face on first
+# use into these per-machine cache dirs (providers/kokoro-tts.js,
+# providers/local-whisper-stt.js), never committed. See THIRD_PARTY_NOTICES.md.
+/mythos/models/kokoro/
+/mythos/models/whisper/

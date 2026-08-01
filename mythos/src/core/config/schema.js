@@ -71,6 +71,12 @@ const SCHEMA = {
   PIPER_VOICE:              { type: 'string', default: 'en_US-hfc_female-medium' },
   PIPER_MODEL_DIR:          { type: 'string', default: '' },
 
+  // Kokoro-82M TTS (providers/kokoro-tts.js) — in-process onnxruntime, no
+  // child service. Weights fetch from Hugging Face on first use into a
+  // gitignored cache dir, never committed (see .env.example, THIRD_PARTY_NOTICES.md).
+  KOKORO_VOICE:             { type: 'string', default: 'af_heart' },
+  KOKORO_MODEL_DIR:         { type: 'string', default: '' },
+
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
   // thresholds; defaults match the previously-hardcoded constants exactly,
   // zero behavior change until overridden). Exposed to the HUD via
