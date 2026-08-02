@@ -103,7 +103,11 @@ function createHermesRunner({ config, vault }) {
     const dirAbs = vault.vaultPath(dirRel);
     vault.ensureDir(dirAbs);
 
-    const packKind = (manifest && manifest.kind === 'website') ? 'ui' : 'code';
+    // A website manifest is a UI build by definition; everything else is
+    // classified from the brief so multi-file Forge builds pick up the finer
+    // app/research/security packs instead of collapsing to the code default.
+    const brief = spec || (manifest && manifest.name) || '';
+    const packKind = (manifest && manifest.kind === 'website') ? 'ui' : buildPack.classifyDeliverable(brief);
     let skillBlock = '';
     try { skillBlock = buildPack.packBlockFor(packKind); } catch (_) { /* best-effort */ }
 
@@ -114,17 +118,20 @@ function createHermesRunner({ config, vault }) {
     // Hermes writes the whole project in a single run, so one system keeps it
     // coherent by construction. resolveSkillTool returns null whenever the
     // skill, its script, or Python is absent, so this can never block a build.
-    let designSystemBlock = '';
-    if (packKind === 'ui') {
-      try {
-        const brief = spec || (manifest && manifest.name) || '';
-        designSystemBlock = (await buildPack.resolveSkillTool(brief)) || '';
-      } catch (_) { /* best-effort, same contract as packBlockFor above */ }
-    }
+    //
+    // The same call now also covers the research route (agent-reach): a
+    // research-shaped build gets community findings injected here, or nothing
+    // at all when agent-reach isn't installed. resolveSkillToolFor takes the
+    // kind explicitly because packKind above is manifest-derived, not
+    // text-derived.
+    let toolBlock = '';
+    try {
+      toolBlock = (await buildPack.resolveSkillToolFor(packKind, brief)) || '';
+    } catch (_) { /* best-effort, same contract as packBlockFor above */ }
 
     const prompt = [
       skillBlock,
-      designSystemBlock,
+      toolBlock,
       feedback
         ? 'You previously built this project in the current directory. Apply this change: ' + feedback
         : 'Build the project described below in the CURRENT DIRECTORY.',

@@ -546,7 +546,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // executePipelineCard must stay sync for its callers.)
         if (designSystem) {
           try {
-            var dsBlock = await buildPack.resolveSkillTool(card.text);
+            var dsBlock = await buildPack.resolveDesignSystemTool(card.text);
             if (!dsBlock) {
               var ds = designSystemEngine.generateDesignSystem(card.text);
               dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
@@ -730,7 +730,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         if (designSystem) {
           try {
             var dsTopic = card.title + ' ' + (card.detail || '');
-            var dsBlock = await buildPack.resolveSkillTool(dsTopic);
+            var dsBlock = await buildPack.resolveDesignSystemTool(dsTopic);
             if (!dsBlock) {
               var ds = designSystemEngine.generateDesignSystem(dsTopic);
               dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);

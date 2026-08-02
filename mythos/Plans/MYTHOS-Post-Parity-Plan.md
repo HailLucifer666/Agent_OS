@@ -1040,3 +1040,71 @@ step-6.5/6.6 gate still owns that call):** only superpowers and Agent-Reach text
 is redistributed, both MIT. The four non-skill packs redistribute no upstream
 source — MYTHOS ships its own adapter code and its own authored skill docs, and
 fetches the tools at runtime. See `THIRD_PARTY_NOTICES.md`.
+
+### CAP-2 — Build routing by deliverable kind (landed 2026-08-02)
+
+The follow-on the operator asked for after CAP: vendoring thirteen skills made
+them *resolvable*, but the build router still knew only two deliverable kinds
+(`ui`, `code`), so only four of the ~19 skills could ever shape a build. This
+step re-routes builds by a finer classification.
+
+**The distinction the change is built on.** A skill reaches a build by exactly
+one of two levers, and they are not interchangeable:
+
+* **Essence skills** — guidance the build model *follows*, injected as text by
+  `packBlockFor()`. `taste-frontend`, `ui-ux-pro-max`, `ponytail`,
+  `karpathy-guidelines`, and the superpowers methodology skills.
+* **Tool-driver skills** — guidance on how to *run* an external tool
+  (`agent-reach`, `strix-security`, `browser-use`, `desktop-commander`,
+  `okf-knowledge`). Their value in a build is running the tool and injecting the
+  **result**, the way `ui-ux-pro-max/scripts/search.py` already works. Pasting
+  such a doc into a one-shot artifact prompt does nothing — the model cannot
+  execute a paragraph.
+
+**What landed.** `classifyDeliverable()` now returns `ui` → `research` →
+`security` → `app` → `code`, first match wins (visual briefs win outright; a
+"secure login screen" is a UI build that mentions auth). `PACKS` gained `app`
+(adds `systematic-debugging` + `verification-before-completion`), `research`,
+and `security` (adds `strix-security`). `ROUTES` gained a `research` entry that
+runs the `agent-reach` CLI and injects its findings. `packBlockFor()` gained a
+composed-block budget cap (`MAX_PACK_CHARS` 8000) that drops lowest-priority
+essences **and names what it dropped** rather than shrinking silently.
+`hermes-runner.js` now classifies non-website Forge builds from the brief
+instead of collapsing them to `code`, and runs the tool route for whatever kind
+it resolved.
+
+**`test-driven-development` is deliberately not in the `app` pack** — a
+red→green loop has no meaning in one-shot artifact generation, so injecting it
+would be discipline the model can only pantomime.
+
+**Strix stays a post-build offer, not a generation-time route.** It scans a
+target that already exists, so it cannot run while the artifact is being
+generated. Its essence primes the model; the scan itself remains the
+`security_scan` effector the brain invokes afterwards under its `authorized_by`
+gate. A note in `build-pack.js` records this so no later session wires it as a
+generation-time tool and wonders why it does nothing.
+
+**One deviation from the written plan, and why.** The plan said no change to
+`agent-actions.js`. Its two call sites pass *every* card through
+`resolveSkillTool()` as the design-system slot (their `designSystem` flag is a
+dependency-present check, not a UI check), and relied on it returning `null` for
+non-UI briefs. With a `research` route that is no longer true: a research-shaped
+card would have fetched `agent-reach` there **and** again in
+`socialResearchForBuild()` — paying twice and injecting twice. Both sites now
+call a named `resolveDesignSystemTool()`, which keeps that path byte-identical
+to its previous behaviour.
+
+**Verified.** `test/skills-build-pack.test.js` extended (12 pass): the finer
+kinds and their precedence, each new pack's contents, the three new essences
+loading, the budget cap truncating *with* a notice, and the research route
+degrading to `null` when `agent-reach` is absent. Full suite `2428 tests /
+2427 pass / 0 fail / 1 skip`; `sync-test-count.js --write` committed.
+**Live spot-check** (real `hermes-runner.runBuild`, stubbed only at the Hermes
+CLI boundary so no credits were spent): the app-shaped build's prompt carries
+`ponytail` + `karpathy-guidelines` + `systematic-debugging` +
+`verification-before-completion` (6,604 chars), the website build still carries
+`taste-frontend` and a real `search.py` design system (6,922 chars), and the
+security build carries `strix-security` (4,743 chars). The research block is
+absent on this machine because `agent-reach` is not installed — the intended
+degradation, and therefore **the one thing here that is not live-verified**: the
+`RESEARCH FINDINGS` injection has never run against a real `agent-reach`.
