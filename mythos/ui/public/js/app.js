@@ -525,6 +525,26 @@ subscribe(['navigate'], (msg) => {
   if (msg.route) overlays.openPanel(msg.route);
 });
 
+// OCR-result — Slice 2 (Electron shell): Ctrl+Alt+X pressed anywhere → server
+// ran screen_read_text → text arrives here. Caption the first line and copy
+// the full text to the clipboard (best-effort: clipboard write needs a focused
+// document, and the whole point of the hotkey is that the HUD is NOT focused —
+// a rejected promise just means the caption is the only surface this time).
+subscribe(['ocr-result'], (msg) => {
+  if (isGateClosed(pinLockScreen.lockState())) return;
+  const p = msg.payload || {};
+  if (!p.ok) {
+    mic.setCaption('OCR failed: ' + (p.error || 'unknown error'), 'error');
+    return;
+  }
+  const text = String(p.text || '');
+  const firstLine = text.split('\n').map((l) => l.trim()).filter(Boolean)[0] || '(no text found)';
+  mic.setCaption('📋 ' + firstLine, 'info');
+  if (text && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    Promise.resolve(navigator.clipboard.writeText(text)).catch(() => { /* unfocused doc — caption only */ });
+  }
+});
+
 // Close-panel — server-initiated request from the close_panel effector
 // (REMEDIATION P1-5: requestClosePanel() in server/index.js, mirroring
 // camera_look's cameraFrameProvider round-trip). Closes BOTH overlay panels

@@ -1948,6 +1948,33 @@ function createServer(deps) {
         const pending = pendingCloseMediaWindow;
         pendingCloseMediaWindow = null;
         pending.resolve(Boolean(msg.closed));
+        return;
+      }
+      // Slice 2 (Electron shell): Ctrl+Alt+X pressed in the Electron main
+      // process → OCR the screen via the pc-child adapter's screen_read_text
+      // effector, then broadcast the text back to the HUD. channel:'hotkey'
+      // so the audit trail attributes it to the keypress, not the cortex.
+      // Fire-and-forget: a globalShortcut callback can't await, and a failure
+      // must surface as an honest ocr-result, never crash the server.
+      if (msg && msg.channel === 'mythos:ocr-grab') {
+        (async () => {
+          try {
+            const r = await dispatchAction({ tool: 'screen_read_text', args: {} }, { tier: 0, channel: 'hotkey' });
+            const ok = Boolean(r && r.ok);
+            broadcastAll({
+              type: 'ocr-result',
+              payload: {
+                ok: ok,
+                text: ok ? String((r.result && r.result.text) || '') : '',
+                error: ok ? undefined : String((r && r.result && r.result.error) || (r && r.error) || 'OCR failed'),
+              },
+            });
+          } catch (err) {
+            try {
+              broadcastAll({ type: 'ocr-result', payload: { ok: false, text: '', error: String((err && err.message) || err || 'OCR failed') } });
+            } catch { /* no clients connected — nothing to report to */ }
+          }
+        })();
       }
     });
   }

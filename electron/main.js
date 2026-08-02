@@ -417,6 +417,7 @@ if (!gotLock) {
     mainWindow.on('closed', () => { mainWindow = null; });
 
     registerTalkHotkey();
+    registerOcrGrabHotkey();
   });
 
   // Clean shutdown: stop the child before quitting so we never orphan the server.
@@ -495,5 +496,58 @@ function registerTalkHotkey() {
     log('push-to-talk hotkey unavailable (already claimed by another app):', accel);
   }
   log('push-to-talk hotkey: every candidate was taken — set MYTHOS_HOTKEY_TALK to a free accelerator');
+  return null;
+}
+
+// ---- OCR-grab hotkey ----------------------------------------------------------
+// Ctrl+Alt+X: read the text on screen (Windows OCR via the pc-child adapter's
+// screen_read_text effector) from anywhere, without finding the MYTHOS window.
+// Same rationale as push-to-talk for NOT stealing focus: the point is grabbing
+// text from whatever app you're in; yanking focus to the HUD would defeat it.
+//
+// Unlike the talk hotkey (which the renderer handles), OCR runs in the server
+// process — the pc-child adapter lives there. So the callback goes over the
+// fork() IPC channel ('mythos:ocr-grab') to server/index.js, which dispatches
+// screen_read_text and broadcasts the result back to the HUD over WS. Absent
+// child (server still starting / crashed), the press is logged and dropped —
+// never throw out of a globalShortcut callback.
+const OCR_HOTKEY_FALLBACKS = ['Control+Alt+X', 'Control+Shift+X', 'Control+Alt+S'];
+
+function ocrHotkeyCandidates() {
+  const configured = String(process.env.MYTHOS_HOTKEY_OCR || '').trim();
+  if (configured.toLowerCase() === 'false' || configured.toLowerCase() === 'off') return [];
+  const list = configured ? [configured] : [];
+  for (const fb of OCR_HOTKEY_FALLBACKS) if (!list.includes(fb)) list.push(fb);
+  return list;
+}
+
+function registerOcrGrabHotkey() {
+  const candidates = ocrHotkeyCandidates();
+  if (!candidates.length) {
+    log('OCR-grab hotkey disabled (MYTHOS_HOTKEY_OCR=false)');
+    return null;
+  }
+  for (const accel of candidates) {
+    let registered = false;
+    try {
+      registered = globalShortcut.register(accel, () => {
+        if (!child) { log('OCR-grab hotkey pressed but server child is not running'); return; }
+        try {
+          child.send({ channel: 'mythos:ocr-grab' });
+        } catch (err) {
+          log('OCR-grab hotkey: send failed:', err && err.message);
+        }
+      });
+    } catch (err) {
+      log('OCR-grab hotkey: register threw for', accel, '-', err && err.message);
+      registered = false;
+    }
+    if (registered && globalShortcut.isRegistered(accel)) {
+      log('OCR-grab hotkey registered:', accel, '(press it to OCR the screen)');
+      return accel;
+    }
+    log('OCR-grab hotkey unavailable (already claimed by another app):', accel);
+  }
+  log('OCR-grab hotkey: every candidate was taken — set MYTHOS_HOTKEY_OCR to a free accelerator');
   return null;
 }
