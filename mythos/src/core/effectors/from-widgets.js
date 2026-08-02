@@ -38,7 +38,12 @@ const VALID_TONES = ['gold', 'dim', 'warn'];
 // surfaces /api/status's voiceLatency, which had no UI consumer at all) —
 // registry count 10 -> 11. test/manage-widget.test.js's "open all" asserts
 // this exact length.
-const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency'];
+// Changelog: the seven ported from design/mythos-living-core.html added —
+// registry count 11 -> 18. Those ship defaultHidden:true (widget-registry.js),
+// so voice is the PRIMARY way an operator reaches them, not a convenience:
+// "open system" is how the card appears at all.
+const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency',
+  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal'];
 const WIDGET_SYNONYMS = {
   'clock': 'clock', 'time': 'clock', 'local time': 'clock',
   'weather': 'weather',
@@ -51,6 +56,16 @@ const WIDGET_SYNONYMS = {
   'news': 'news', 'headlines': 'news',
   'media': 'media', 'now playing': 'media', 'music': 'media', 'player': 'media', 'spotify': 'media', 'music player': 'media',
   'voice-latency': 'voice-latency', 'voice latency': 'voice-latency', 'latency': 'voice-latency', 'voice lag': 'voice-latency',
+  // 'system stats'/'metrics' deliberately still resolve to the telemetry SET
+  // below, not to the new SYSTEM card — that mapping predates this widget and
+  // repointing an existing spoken phrase would be a silent behaviour change.
+  'system': 'system', 'cpu': 'system', 'host': 'system', 'system monitor': 'system',
+  'cores': 'cores', 'per core': 'cores', 'core load': 'cores', 'threads': 'cores',
+  'gpu': 'gpu', 'graphics': 'gpu', 'graphics card': 'gpu', 'video card': 'gpu',
+  'sensors': 'sensors', 'device': 'sensors', 'battery': 'sensors', 'hardware': 'sensors',
+  'voice': 'voice', 'voice status': 'voice', 'microphone': 'voice', 'speech': 'voice',
+  'memory': 'memory', 'memories': 'memory', 'knowledge': 'memory', 'what you know': 'memory',
+  'terminal': 'terminal', 'logs': 'terminal', 'log': 'terminal', 'console': 'terminal',
   'all': 'all', 'everything': 'all', 'all widgets': 'all',
   'telemetry': 'telemetry', 'stats': 'telemetry', 'system stats': 'telemetry', 'metrics': 'telemetry'
 };

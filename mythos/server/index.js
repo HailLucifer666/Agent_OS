@@ -555,6 +555,10 @@ function createServer(deps) {
   // `app` and pulls only what it needs from `deps`. See routes/*.js. ----
   require('./routes/goals').mountGoalsRoutes(app, { goalsEffector, auditRest });
   require('./routes/news').mountNewsRoutes(app);
+  // Host CPU/RAM/disk for the SYSTEM and CORES widgets. Nothing in the repo
+  // read os.cpus()/totalmem() before this — sensors/metric.js is provider
+  // health despite the name. No deps: it reads the OS directly.
+  require('./routes/system').mountSystemRoutes(app);
 
   // ---- P22 — Forge build projects + checkpoint approval gates (W9: extracted) ----
   require('./routes/forge').mountForgeRoutes(app, { forge });

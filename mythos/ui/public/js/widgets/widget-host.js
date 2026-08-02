@@ -111,7 +111,15 @@ export function mountWidgets(root, ctx) {
     if (sv && sv.height) card.style.height = sv.height + 'px';
     // Restore hidden state — voice "open <widget>" (or the ✕ hover button)
     // toggles it; nothing is ever unrecoverable.
-    if (sv && sv.hidden) card.classList.add('widget-hidden');
+    //
+    // `defaultHidden` covers widgets that exist for when you go looking
+    // (SYSTEM, CORES, GPU, SENSORS, TERMINAL, MEMORY, VOICE) rather than ones
+    // worth a permanent corner. Without it, adding those seven put 18 cards on
+    // screen at boot, overlapping each other and burying the orb. It is only a
+    // DEFAULT: a stored flag wins in both directions, so once the operator
+    // shows one it stays shown.
+    const hiddenDefault = sv && typeof sv.hidden === 'boolean' ? sv.hidden : Boolean(widget.defaultHidden);
+    if (hiddenDefault) card.classList.add('widget-hidden');
     root.appendChild(card);
     cards.set(widget.id, card);
 
