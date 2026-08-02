@@ -89,7 +89,7 @@ const CATALOG_RAW = [
   { name: 'spotify_previous', description: 'Go to previous track on Spotify.', params: {}, danger: false },
   { name: 'spotify_volume', description: 'Adjust or set system volume. Prefer level for an exact target ("set volume to 20%"); direction for relative nudges (up/down/mute).', params: { level: 'number (optional) - exact target 0-100', direction: 'string (optional) - up, down, or mute' }, danger: false },
   { name: 'spotify_status', description: 'Check whether Spotify is running AND whether something is actually playing right now (playing:true/false, derived from the window title). Use this before ever claiming a song "is playing."', params: {}, danger: false },
-  { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Use for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false },
+  { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right, delete, home, end, f1-f12, a letter, or a combo like ctrl+n). Use for apps that ignore Unicode input. Enter inside a chat app is routed through the verified send path, which confirms the message actually left the compose box.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right|delete|home|end|f1-f12, a letter, or a combo like ctrl+n', pid: 'number (optional) - target window PID; when given, the key is refused if the keyboard caret belongs to a different app' }, danger: false },
   { name: 'media_status', description: 'Get currently playing media info (title, artist, album, art) from Windows SMTC.', params: {}, danger: false },
 ];
 

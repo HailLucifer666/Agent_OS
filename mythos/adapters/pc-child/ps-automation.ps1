@@ -1734,6 +1734,23 @@ function Focus-EditableDescendant($Hwnd) {
     }
 }
 
+# The caret's owner, as UIA sees it. This is where a keystroke actually goes, and it
+# is NOT the same thing as the foreground window: on 2026-08-02 WhatsApp (pid 2132)
+# held the foreground while Brave (pid 7972) held the caret, so SendInput typed into
+# Brave's address bar while every foreground-based guard passed. Defined next to its
+# two callers (Handle-UiType, Handle-SendKey) rather than beside the other pid helpers
+# so the guard and the thing it measures stay readable together.
+#
+# Returns 0 when UIA cannot answer. 0 means UNKNOWN, never "no owner" — callers must
+# not treat it as a mismatch.
+function Get-CaretOwnerPid() {
+    try {
+        $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+        if ($fe) { return [int]$fe.Current.ProcessId }
+    } catch { }
+    return 0
+}
+
 function Handle-UiType($text, $TargetPid, $elementPath) {
     if (-not $text) { return 'Text is required.' }
     try {
@@ -1764,6 +1781,27 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             if (-not (Test-SameApp $fgPid $TargetPid)) {
                 return ('Type aborted: foreground window belongs to PID ' + $fgPid +
                     ', which is not part of target PID ' + $TargetPid + "'s application.")
+            }
+
+            # CARET-OWNER GUARD (2026-08-02). The check above is necessary and was never
+            # sufficient. Measured live: WhatsApp (pid 2132) held the FOREGROUND and
+            # passed this guard, while Brave (pid 7972) held the CARET — so SendInput,
+            # which follows the caret and not the window, typed "mom" into Brave's
+            # address bar, and the read-back then read Brave's address bar and called it
+            # confirmed. Foreground is where the window is; the caret is where the
+            # keystrokes go. Both have to belong to the target.
+            #
+            # A caret owner of 0 means UIA could not tell us — an honest unknown, and the
+            # Focus-EditableDescendant path below exists precisely to fix "nothing is
+            # focused", so that case must NOT abort here.
+            $caretPid = Get-CaretOwnerPid
+            if ($caretPid -and -not (Test-SameApp $caretPid $TargetPid)) {
+                $caretLabel = ''
+                try { $caretLabel = ' (' + (Get-Process -Id $caretPid -ErrorAction Stop).ProcessName + ')' } catch { }
+                return ('Type aborted: the keyboard caret belongs to PID ' + $caretPid + $caretLabel +
+                    ', which is not part of target PID ' + $TargetPid + "'s application. The " +
+                    'foreground window is the target but the caret is not, so the keystrokes would ' +
+                    'have gone into the wrong app. Nothing was typed.')
             }
         }
 
@@ -1918,7 +1956,28 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         # the Enter guard can tell "a child of the same app" from "a different app".
         try {
             $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
-            if ($fe) { $result.focusedPid = [int]$fe.Current.ProcessId }
+            if ($fe) {
+                $result.focusedPid = [int]$fe.Current.ProcessId
+                # 2026-08-02: focusedPid alone could not be turned into a sentence. The
+                # cross-check in from-pc.js has to tell the operator WHICH app the
+                # keystrokes went to ("they went to Brave, not WhatsApp"), and a bare
+                # number cannot do that. Best-effort — a name lookup must never break a
+                # type that otherwise worked.
+                try { $result.focusedProcess = [string](Get-Process -Id $result.focusedPid -ErrorAction Stop).ProcessName } catch { }
+                # Whether the caret STILL belongs to the target, evaluated here — after
+                # injection and immediately before the read-back. The pre-injection guard
+                # cannot cover this moment: the caret can drift mid-type, and
+                # Focus-EditableDescendant can legitimately move it. This is the flag
+                # from-pc.js needs in order to know whether the read-back it is about to
+                # receive describes the target's control or some other app's.
+                #
+                # Reported, not enforced, and only when a target was named. Test-SameApp
+                # is the one place that knows a WebView2 shell and its renderer child are
+                # the same application, so that knowledge is not duplicated in JS.
+                if ($TargetPid) {
+                    $result.caretSameApp = [bool](Test-SameApp $result.focusedPid $TargetPid)
+                }
+            }
         } catch { }
 
         # Read back. A brief settle first: SendInput is asynchronous, so the control
@@ -2752,9 +2811,39 @@ function Send-VkKeyUp($vk) {
     $script:LastVkSent = [NativeInput]::SendInput(1, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
 }
 
-function Handle-SendKey($key) {
+# Keys whose successful press MUST change the focused control's text, and are
+# therefore the only ones the read-back oracle can grade. Enter either submits
+# (composer empties) or inserts a newline; space/delete/letters edit in place.
+#
+# Everything else — tab, escape, home, end, the arrows, f1-f12 — moves the caret,
+# changes selection, or talks to the app, all WITHOUT touching the text. For those,
+# "the text did not change" is the expected outcome of a SUCCESSFUL press, so it is
+# not evidence of anything and must never trigger an escalation.
+#
+# Backspace is deliberately absent: it has no entry in $VK_CODES, and clearing a box
+# already has its own verified path (Clear-MessageBox, WM_KEYDOWN/WM_CHAR + read-back).
+$KEYS_WITH_TEXT_ORACLE = @('enter', 'space', 'delete')
+
+function Handle-SendKey($key, $TargetPid) {
     if (-not $key) { return 'Key name is required.' }
     $raw = ([string]$key).ToLower().Trim()
+
+    # CARET-OWNER GUARD (2026-08-02). Handle-UiType's guard checks the FOREGROUND
+    # window's pid, which is why the Brave incident sailed through it: foreground was
+    # the target, the caret was not. A keystroke follows the caret, so the caret is
+    # what has to be checked. Same-APP rather than same-pid, for the WebView2 reason
+    # documented at Handle-UiType (a shell pid and its renderer child both mean
+    # "this app").
+    if ($TargetPid) {
+        $caretPid = Get-CaretOwnerPid
+        if ($caretPid -and -not (Test-SameApp $caretPid $TargetPid)) {
+            $caretLabel = ''
+            try { $caretLabel = ' (' + (Get-Process -Id $caretPid -ErrorAction Stop).ProcessName + ')' } catch { }
+            return ("Key '$raw' aborted: the keyboard caret belongs to PID $caretPid" + $caretLabel +
+                ", which is not part of target PID $TargetPid's application. The keystroke " +
+                'would have gone to the wrong window, so nothing was sent.')
+        }
+    }
 
     if ($raw.Contains('+')) {
         $parts = @($raw.Split('+') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -2774,20 +2863,126 @@ function Handle-SendKey($key) {
         if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
             return "Send key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
         }
-        return @{ key = $raw; sent = $true; combo = $true }
+        # Combos deliberately get NO escalation ladder. WM_KEYDOWN carries a single
+        # virtual key and no modifier state, so posting the base key of "ctrl+n" would
+        # deliver a bare 'n' — a wrong action dressed up as a recovered one. A combo
+        # that SendInput cannot deliver is reported honestly instead.
+        return @{ key = $raw; sent = $true; combo = $true; mechanism = 'sendinput-vk' }
     }
 
     $vk = $VK_CODES[$raw]
     if (-not $vk) {
         return @("Unknown key: $key. Valid: $($VK_CODES.Keys -join ', ')")
     }
+
+    # MECHANISM LADDER (2026-08-02) — the send_key analogue of Handle-UiType's.
+    #
+    # MSIX-packaged apps (Win11 Notepad, WhatsApp Desktop) silently discard SendInput
+    # while reporting the events as injected: UIPI blocks it and, per Microsoft's own
+    # documentation, "neither GetLastError nor the return value will indicate the
+    # failure". So the old zero-events check could never fire for them, and send_key
+    # returned sent:$true while WhatsApp received nothing at all. That is why Enter had
+    # to be pressed by hand on 2026-08-02, and it is the same blackhole ui_type already
+    # escalates around ('sendinput-unicode' -> 'uia-setvalue' -> 'wm-char-post').
+    #
+    # ESCALATION IS GATED ON PROOF OF ABSENCE, exactly as in Handle-UiType. A key that
+    # DID land and is then re-sent through route 2 fires the action twice — for Enter in
+    # a chat app that means sending the message twice, which is worse than an honest
+    # "I could not confirm this". So a route only runs when the oracle positively shows
+    # the control unchanged, and when no oracle is available nothing escalates.
+    $beforeRead = $null
+    $hasOracle = $KEYS_WITH_TEXT_ORACLE -contains $raw
+    if ($hasOracle) { $beforeRead = Read-FocusedElementText }
+
+    $mechanism = 'sendinput-vk'
+    $mechanismsTried = @('sendinput-vk')
     $script:LastVkSent = $null
     Send-VkKey $vk
     # Same BUG-042-class honest failure as Handle-MediaKey/Handle-UiType.
     if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
         return "Send key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
     }
-    return @{ key = $raw; sent = $true }
+
+    $landed = $null   # $true / $false / $null = unknown
+    if ($hasOracle -and $null -ne $beforeRead) {
+        Start-Sleep -Milliseconds 150
+        $after = Read-FocusedElementText
+        if ($null -ne $after) { $landed = ([string]$after.text -ne [string]$beforeRead.text) }
+    }
+
+    if ($landed -eq $false) {
+        # Route 2 — WM_KEYDOWN/WM_KEYUP posted straight at the focused child control.
+        # This bypasses the input stack UIPI guards, and unlike WM_CHAR it carries a
+        # real virtual key, so editors that treat Enter/Delete as key events (React
+        # composers, Chromium) see what they expect. GetFocus is thread-local, so our
+        # queue must be attached to the foreground thread's first or it reports our own
+        # windowless focus and the message goes nowhere.
+        $mechanismsTried += 'wm-key-post'
+        try {
+            $fgH = [NativeInput]::GetForegroundWindow()
+            $fgP = 0
+            $fgThread = [NativeInput]::GetWindowThreadProcessId($fgH, [ref]$fgP)
+            $ourThread = [NativeInput]::GetCurrentThreadId()
+            $attached = [NativeInput]::AttachThreadInput($ourThread, $fgThread, $true)
+            $target = [IntPtr]::Zero
+            try { if ($attached) { $target = [NativeInput]::GetFocus() } }
+            finally { if ($attached) { [void][NativeInput]::AttachThreadInput($ourThread, $fgThread, $false) } }
+            if ($target -eq [IntPtr]::Zero) { $target = $fgH }
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_KEYDOWN, [IntPtr][int]$vk, [IntPtr]0)
+            [void][NativeInput]::PostMessage($target, [NativeInput]::WM_KEYUP, [IntPtr][int]$vk, [IntPtr]0)
+            Start-Sleep -Milliseconds 250
+            $after = Read-FocusedElementText
+            if ($null -ne $after -and [string]$after.text -ne [string]$beforeRead.text) {
+                $mechanism = 'wm-key-post'
+                $landed = $true
+            }
+        } catch { }
+    }
+
+    if ($landed -eq $false -and $raw -eq 'enter') {
+        # Route 3 — ask the app to do the thing Enter means, through UIA. Only Enter has
+        # a defensible UIA equivalent: invoke the default action of whatever holds the
+        # caret. There is no UIA analogue of "press Delete", so the other oracle keys
+        # stop at route 2 rather than invoking something arbitrary.
+        $mechanismsTried += 'uia-invoke-focused'
+        try {
+            $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+            $ip = $null
+            if ($fe) { $ip = $fe.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern] }
+            if ($ip) {
+                $ip.Invoke()
+                Start-Sleep -Milliseconds 300
+                $after = Read-FocusedElementText
+                if ($null -ne $after -and [string]$after.text -ne [string]$beforeRead.text) {
+                    $mechanism = 'uia-invoke-focused'
+                    $landed = $true
+                }
+            }
+        } catch { }
+    }
+
+    if ($landed -eq $false) {
+        # Every route ran and the oracle still shows the control untouched. This is the
+        # MSIX blackhole reported honestly instead of as sent:$true.
+        return ("Send key '$raw' failed: tried " + ($mechanismsTried -join ', ') +
+            ' and the focused control is unchanged, so the key did not reach the app.')
+    }
+
+    $result = @{ key = $raw; sent = $true; mechanism = $mechanism }
+    if ($mechanismsTried.Count -gt 1) { $result.mechanismsTried = $mechanismsTried }
+    # State the oracle's verdict rather than leaving the caller to infer it. A proven
+    # failure already returned above, so the only two states left are PROVEN LANDED and
+    # UNKNOWN — and they get different field names so no consumer can mistake the second
+    # for the first, or for a failure.
+    if ($landed -eq $true) {
+        $result.keyLanded = $true
+        $result.landedVia = 'focused-control-text-changed'
+    } else {
+        $result.keyLandedUnknown = $true
+        $result.keyLandedReason = 'this key has no text-visible effect to read back (or the focused control exposes no readable text), so whether it reached the app cannot be confirmed'
+    }
+    $result.caretOwnerPid = Get-CaretOwnerPid
+    return $result
 }
 
 function Handle-MediaStatus {
@@ -3166,7 +3361,10 @@ while ($true) {
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'send_key' {
-            $result = Handle-SendKey $cmd.key
+            # pid is optional and new (2026-08-02): it enables the caret-owner guard, so
+            # a keystroke aimed at one app can no longer land in another. Omitted pid
+            # keeps the old "send to whatever has focus" contract.
+            $result = Handle-SendKey $cmd.key $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'diagnose_type' {

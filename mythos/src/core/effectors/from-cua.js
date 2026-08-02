@@ -25,6 +25,30 @@ const cuaDriver = require('../../../adapters/cua-driver');
 function ok(result) { return { ok: true, result: result }; }
 function fail(result) { return { ok: false, result: result }; }
 
+// cua-driver failures observed live 2026-08-02: the driver returns MCP-shaped
+// errors ({ content:[{type:'text', text:'...'}], isError:true }), and passing
+// that object straight to fail() means the model literally reads back
+// "[object Object]" (confirmed twice in one operator session). Unwrap to the
+// driver's own text before it ever reaches fail().
+function cuaErrText(result, fallback) {
+  if (result === null || result === undefined) return fallback || 'unknown cua-driver error';
+  if (typeof result === 'string') return result;
+  if (Array.isArray(result.content)) {
+    var texts = result.content
+      .filter(function (c) { return c && c.type === 'text' && typeof c.text === 'string'; })
+      .map(function (c) { return c.text; });
+    if (texts.length) return texts.join(' ').slice(0, 300);
+  }
+  if (result.error) return String(result.error);
+  if (result.message) return String(result.message);
+  try {
+    var s = JSON.stringify(result);
+    return s ? s.slice(0, 300) : (fallback || 'unknown cua-driver error');
+  } catch (_) {
+    return fallback || 'unknown cua-driver error';
+  }
+}
+
 function offlineFail() {
   var st = cuaDriver.getStatus();
   return fail('cua-driver is ' + st.state + (st.hint ? ' — ' + st.hint : '') + '. Use ui_click/click_at from pc-child instead, or install cua-driver (see BUGS.md).');
@@ -39,7 +63,7 @@ function requireOnline() {
 async function cua_list_windows() {
   if (!requireOnline()) return offlineFail();
   var r = await cuaDriver.invoke('list_windows', {});
-  if (!r || !r.ok) return fail((r && r.result) || 'cua-driver list_windows failed');
+  if (!r || !r.ok) return fail(cuaErrText(r && r.result, 'cua-driver list_windows failed'));
   return ok(r.result);
 }
 
@@ -50,8 +74,32 @@ async function cua_bring_to_front(params) {
   if (!requireOnline()) return offlineFail();
   var p = params || {};
   var r = await cuaDriver.invoke('bring_to_front', { pid: p.pid, window_id: p.window_id });
-  if (!r || !r.ok) return fail((r && r.result) || 'cua-driver bring_to_front failed');
+  if (!r || !r.ok) return fail(cuaErrText(r && r.result, 'cua-driver bring_to_front failed'));
   return ok(r.result);
+}
+
+// DEFECT (observed live 2026-08-02): cua_get_window_state forwarded {pid,
+// window_id} straight to the driver, which answers "Missing required integer
+// field window_id" — but the brain only ever holds a pid (from launch_app /
+// list_windows), never a window_id, so the tool failed 100% of the time.
+// Resolve window_id from pid via the same cua_list_windows path this file
+// already exposes, rather than adding a new driver call shape.
+var SEE_AND_CLICK_HINT = ' If this keeps failing, use see_and_click — it finds a control by its on-screen text and clicks it, with no window_id or element path needed.';
+
+async function resolveWindowIdForPid(pid) {
+  var lw = await cua_list_windows();
+  if (!lw.ok) {
+    return { ok: false, errText: cuaErrText(lw.result, 'cua-driver list_windows failed') };
+  }
+  var sc = (lw.result && typeof lw.result === 'object' && lw.result.structuredContent) || {};
+  var windows = sc.windows || [];
+  var candidates = windows.filter(function (w) { return w && Number(w.pid) === Number(pid); });
+  if (!candidates.length) return { ok: true, window: null };
+  // list_windows only ever returns top-level windows (see file header), so
+  // there is no separate visible/top-level flag to prefer on — the tie-break
+  // that remains is a non-empty title, per the recorded incident.
+  var withTitle = candidates.filter(function (w) { return w.title; });
+  return { ok: true, window: withTitle[0] || candidates[0] };
 }
 
 // get_window_state returns the UIA accessibility tree as structured elements —
@@ -60,8 +108,24 @@ async function cua_bring_to_front(params) {
 async function cua_get_window_state(params) {
   if (!requireOnline()) return offlineFail();
   var p = params || {};
-  var r = await cuaDriver.invoke('get_window_state', { pid: p.pid, window_id: p.window_id });
-  if (!r || !r.ok) return fail((r && r.result) || 'cua-driver get_window_state failed');
+  var windowId = p.window_id;
+
+  if (!windowId && p.pid !== undefined && p.pid !== null) {
+    var resolved = await resolveWindowIdForPid(p.pid);
+    if (!resolved.ok) {
+      return fail('cua_get_window_state: could not resolve a window for pid ' + p.pid +
+        ' — ' + resolved.errText + '.' + SEE_AND_CLICK_HINT);
+    }
+    if (!resolved.window) {
+      return fail('cua_get_window_state: no cua window found for pid ' + p.pid + '.' + SEE_AND_CLICK_HINT);
+    }
+    windowId = resolved.window.window_id;
+  }
+
+  var r = await cuaDriver.invoke('get_window_state', { pid: p.pid, window_id: windowId });
+  if (!r || !r.ok) {
+    return fail(cuaErrText(r && r.result, 'cua-driver get_window_state failed') + SEE_AND_CLICK_HINT);
+  }
   return ok(r.result);
 }
 
@@ -81,7 +145,7 @@ async function cua_click(params) {
     // Retry in foreground delivery mode — Chromium sometimes drops background clicks.
     r = await cuaDriver.invoke('click', Object.assign({}, clickArgs, { delivery_mode: 'foreground' }));
   }
-  if (!r || !r.ok) return fail((r && r.result) || 'cua-driver click failed');
+  if (!r || !r.ok) return fail(cuaErrText(r && r.result, 'cua-driver click failed'));
   return ok(r.result);
 }
 

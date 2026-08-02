@@ -126,14 +126,21 @@ describe('whatsapp_send', () => {
     assert.equal(calls.length, 0, 'nothing may be opened or typed while the recipient is ambiguous');
   });
 
-  it('asks for the number when the contact is unknown, and names what it does know', async () => {
+  // 2026-08-02 — this used to assert the error named "Contacts/contacts.json" as the
+  // place to "add one". Over voice that is a dead end: MYTHOS was telling the operator
+  // to go and hand-edit a JSON file, while whatsapp_contact_save had already shipped for
+  // exactly this. So the assertion inverts — the failure must ask for the number and
+  // name the tool, and must NOT mention the file.
+  it('asks for the number when the contact is unknown, names what it does know, and offers to save it', async () => {
     const { wa, calls } = load();
     withContacts(wa, { mom: '+15559876543' });
     const res = await wa.whatsapp_send({ to: 'dad', text: 'hi' });
     assert.equal(res.ok, false);
-    assert.match(res.result, /do not have a number for "dad"/);
+    assert.match(res.result, /not in my contact list/i);
     assert.match(res.result, /mom/, 'the honest error should say which contacts exist');
-    assert.match(res.result, /Contacts\/contacts\.json/, 'and where to add one');
+    assert.match(res.result, /international form/i, 'and ask for the number in a form it can actually dial');
+    assert.match(res.result, /whatsapp_contact_save/, 'and offer the tool that remembers it for next time');
+    assert.doesNotMatch(res.result, /contacts\.json/i, 'never send the operator to a text editor');
     assert.equal(calls.length, 0);
   });
 

@@ -62,7 +62,9 @@ describe('loadContacts — the array-of-pairs file on disk (2026-08-02)', () => 
     wire([['alex', '+15551234567'], 'nonsense', [], ['', '+15550000000']]);
     assert.equal(resolveRecipient('alex').number, '+15551234567');
     // The bare string and the empty name must not become addressable contacts.
-    assert.ok(/do not have a number|no contacts/i.test(resolveRecipient('nonsense').error || ''));
+    // 2026-08-02: the wording changed — the failure now asks for the number and names
+    // whatsapp_contact_save instead of telling the operator to hand-edit a JSON file.
+    assert.ok(/not in my contact list/i.test(resolveRecipient('nonsense').error || ''));
   });
 });
 

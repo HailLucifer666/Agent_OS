@@ -517,7 +517,7 @@ async function ui_click({ pid, elementPath }) {
   // Phase 3 hardening: focus the target window first, then retry on failure —
   // a flaky ui_click often lands once the window is foregrounded.
   var res = await foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
-  if (!res.ok) return res;
+  if (!res.ok) return withSeeAndClickRecovery(res);
 
   // WAVE 9 (BUG-073) — ui_click had never earned its evidence: it returned
   // whatever pc-child said about the CLICK CALL itself, which per evidence.js's
@@ -541,6 +541,32 @@ async function ui_click({ pid, elementPath }) {
   }
   return evidence.unverified(res,
     'clicked, but could not re-confirm the target window is still foreground afterward — it may have landed on the right element or may not have');
+}
+
+// 2026-08-02 — see_and_click was declared, allowlisted, schema-valid, and called ZERO
+// times all session, while the model burned turn after turn inventing element paths
+// against WhatsApp's empty UIA tree. A tool the model never reaches for is the same as
+// a tool that does not exist.
+//
+// The fix is not another automatic fallback: a click tool must not silently change
+// strategy underneath the model, because "I clicked what you asked" and "I clicked
+// something that looked like it" are different claims. So the recovery is NAMED in the
+// failure message instead. Failure text is the one prompt the model reliably reads, and
+// it arrives at exactly the moment the alternative is relevant.
+//
+// Only appended to the tree-shaped failures. A denied foreground or a dead pid is not
+// something OCR can rescue, and padding every error with irrelevant advice is how
+// advice stops being read.
+var TREE_FAILURE_RE = /out of range|parent has \d+ children|no UIA window|elementPath|no usable named element/i;
+var SEE_AND_CLICK_RECOVERY = ' The UIA tree could not give you this element, and guessing another ' +
+  'elementPath will not fix that. Use see_and_click with the visible text of the thing you want — it ' +
+  'reads the text off the screen with OCR and clicks it, needing no element path and no working a11y tree.';
+
+function withSeeAndClickRecovery(res) {
+  var msg = reasonOf(res);
+  if (!msg || !TREE_FAILURE_RE.test(String(msg))) return res;
+  if (String(msg).indexOf('see_and_click') !== -1) return res;
+  return fail(String(msg) + SEE_AND_CLICK_RECOVERY);
 }
 
 // Windows titles that mean "this is MYTHOS's own UI", i.e. the dashboard the
@@ -589,6 +615,33 @@ async function ui_type({ text, pid, elementPath }) {
     if (targetPid && typeof landedPid === 'number' && landedPid !== targetPid) {
       return fail('Typed into the wrong window: the text went to "' + landedTitle +
         '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
+    }
+    // CARET-OWNER CROSS-CHECK (2026-08-02). The check above compares the FOREGROUND
+    // window's pid, and that is not where keystrokes go. Measured live:
+    //
+    //   {"typedIntoPid":2132,"focusedPid":7972,"readBack":"confirmed",
+    //    "typedIntoTitle":"WhatsApp","readBackText":"...Kimi-K3mom"}
+    //
+    // WhatsApp was the target AND the foreground, so landedPid === targetPid and this
+    // passed. Brave held the CARET, so SendInput typed "mom" into Brave's address bar —
+    // and the read-back oracle then read BRAVE's address bar, found the text there, and
+    // graded the type 'confirmed'. focusedPid was captured, stored by noteVerifiedType
+    // for bookkeeping, and never once compared. Every layer agreed on a lie.
+    //
+    // The verdict comes from PS (caretSameApp), not from comparing pids here: for a
+    // WebView2 app the shell owns the foreground window while its renderer child owns
+    // the caret (BUG-066), and both legitimately mean "this app". Only Test-SameApp
+    // knows that, so strict pid equality in JS would refuse every legitimate WhatsApp
+    // type. caretSameApp is absent when no target was named or when UIA declined to
+    // answer — an honest unknown, which must never become a failure.
+    var caretPid = res.result.focusedPid;
+    if (targetPid && res.result.caretSameApp === false && typeof caretPid === 'number' && caretPid > 0) {
+      var caretName = String(res.result.focusedProcess || '').trim();
+      return fail('Typed into the wrong window: the keyboard caret belonged to ' +
+        (caretName ? '"' + caretName + '" (pid ' + caretPid + ')' : 'pid ' + caretPid) +
+        ', not to the target "' + (landedTitle || 'pid ' + targetPid) + '" (pid ' + targetPid + '). ' +
+        'The keystrokes followed the caret, so they went into the wrong app — and any read-back ' +
+        'from that control describes the wrong window, so it proves nothing. Focus the target and try again.');
     }
     // No target to compare against: at least refuse to pretend that typing into
     // our own dashboard satisfied a request to type into an app.
@@ -720,9 +773,17 @@ function isValidKeyName(name) {
   return NAMED_KEYS.includes(name) || /^[a-z]$/.test(name);
 }
 
-async function send_key({ key }) {
+async function send_key({ key, pid }) {
   if (!key) return fail(`Key name is required (${NAMED_KEYS.join(', ')}, a single letter, or a combo like ctrl+n).`);
   const raw = String(key).toLowerCase().trim();
+  // pid is OPTIONAL and is NOT defaulted to lastLaunchedPid the way ui_type's is.
+  // With a pid, ps-automation.ps1 refuses to fire the key when the caret belongs to a
+  // different app. Defaulting it would break the common legitimate case — "press
+  // escape" aimed at whatever the operator is looking at now, which is frequently not
+  // the last app MYTHOS launched — by aborting on a pid the caller never asked for.
+  const targetPid = coercePid(pid);
+  const withPid = (cmd) => (targetPid ? Object.assign(cmd, { pid: targetPid }) : cmd);
+
   if (raw.includes('+')) {
     const parts = raw.split('+').map((p) => p.trim()).filter(Boolean);
     const base = parts[parts.length - 1];
@@ -732,7 +793,7 @@ async function send_key({ key }) {
     }
     const badMod = mods.find((m) => !KEY_MODIFIERS.includes(m));
     if (badMod) return fail(`Invalid modifier: "${badMod}". Valid: ${KEY_MODIFIERS.join(', ')}`);
-    return keyPressed(await delegate({ cmd: 'send_key', key: raw }), raw);
+    return keyPressed(await delegate(withPid({ cmd: 'send_key', key: raw })), raw);
   }
   if (!isValidKeyName(raw)) {
     return fail(`Invalid key: "${key}". Valid: ${NAMED_KEYS.join(', ')}, a single letter, or a combo like ctrl+n.`);
@@ -743,9 +804,32 @@ async function send_key({ key }) {
   // action is irreversible and lands in someone else's notifications.
   if (raw === 'enter') {
     var guard = await guardMessagingEnter();
-    if (guard) return guard;
+    if (guard.refusal) return guard.refusal;
+
+    // 2026-08-02 — Enter in a chat app goes through the VERIFIED ladder, not through a
+    // raw keystroke.
+    //
+    // WhatsApp Desktop is MSIX-packaged, and MSIX apps silently discard SendInput while
+    // reporting the events as injected. Handle-SendKey's only failure signal used to be
+    // "SendInput returned 0 events", which never happens here — so send_key('enter')
+    // returned {key:'enter',sent:true} while WhatsApp received nothing, and the operator
+    // had to press Enter by hand. The same session proves the mechanism was the problem
+    // and not the focus: ui_type survived on WhatsApp only because it has a ladder, and
+    // its mechanismsTried shows SendInput failing there too before uia-setvalue landed.
+    //
+    // submit_message is that ladder for Enter, and it already shipped
+    // (uia-invoke-send -> wm-char-return -> sendinput-enter, each gated on the composer
+    // actually emptying). It was simply unreachable from here. Routing to it is what
+    // turns "the keystroke was accepted" into "the message left the box".
+    //
+    // A ladder failure is returned as-is rather than falling through to a raw Enter:
+    // every route it tried is already a superset of what send_key could do, and one of
+    // them may have half-landed, so retrying risks sending twice.
+    if (guard.messaging) {
+      return submitMessage(guard.pid);
+    }
   }
-  return keyPressed(await delegate({ cmd: 'send_key', key: raw }), raw);
+  return keyPressed(await delegate(withPid({ cmd: 'send_key', key: raw })), raw);
 }
 
 // A keystroke has no oracle for what it DID. sent:true means "SendInput accepted
@@ -768,18 +852,18 @@ function keyPressed(res, raw) {
 // keyboard now is the only thing that matters for where Enter goes.
 async function guardMessagingEnter() {
   var fg = await delegate({ cmd: 'get_foreground_window' });
-  if (!fg || !fg.ok || !fg.result) return null; // no oracle, no basis to refuse
+  if (!fg || !fg.ok || !fg.result) return {}; // no oracle, no basis to refuse
 
   var title = String(fg.result.title || '');
   var proc = String(fg.result.process || '');
   var fgPid = fg.result.pid;
-  if (!MESSAGING_APPS.test(title) && !MESSAGING_APPS.test(proc)) return null;
+  if (!MESSAGING_APPS.test(title) && !MESSAGING_APPS.test(proc)) return {};
 
   var app = proc || title;
   if (!lastVerifiedType) {
-    return fail('Refusing to press Enter in ' + app + ': Enter sends the message there, and nothing ' +
+    return { refusal: fail('Refusing to press Enter in ' + app + ': Enter sends the message there, and nothing ' +
       'has been verifiably typed into it this session. Type the message first and I will read it back ' +
-      'to you before sending.');
+      'to you before sending.') };
   }
   // The verified type may have been recorded against the app's shell pid, its
   // renderer's pid, or both (see noteVerifiedType). Enter is safe if the window
@@ -788,11 +872,14 @@ async function guardMessagingEnter() {
     ? lastVerifiedType.pids
     : [lastVerifiedType.pid];
   if (typeof fgPid === 'number' && known.indexOf(fgPid) === -1) {
-    return fail('Refusing to press Enter in ' + app + ' (pid ' + fgPid + '): the last text I could actually ' +
+    return { refusal: fail('Refusing to press Enter in ' + app + ' (pid ' + fgPid + '): the last text I could actually ' +
       'verify went to a different window ("' + lastVerifiedType.title + '", pid ' + known.join('/') +
-      '). Sending from here would send whatever is already in that box.');
+      '). Sending from here would send whatever is already in that box.') };
   }
-  return null;
+  // Allowed, AND the foreground is a chat app — so the caller must use the verified
+  // submit ladder rather than a raw keystroke. The pid is handed back so that decision
+  // costs no second get_foreground_window round trip.
+  return { messaging: true, pid: fgPid, app: app };
 }
 
 async function click_at({ x, y }) {
@@ -1010,9 +1097,9 @@ const TOOLS = [
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
-  { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right). Uses real VK codes for apps that ignore Unicode input.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right' }, danger: false, fn: send_key },
+  { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right, delete, home, end, f1-f12, a single letter, or a combo like ctrl+n). Uses real VK codes for apps that ignore Unicode input, and escalates to posted key messages for packaged apps that silently swallow injected input. Enter inside a chat app is routed through the verified send path, which confirms the message actually left the compose box.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right|delete|home|end|f1-f12, a letter, or a combo like ctrl+n', pid: 'number (optional) - target window PID; when given, the key is refused if the keyboard caret belongs to a different app' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
-  { name: 'see_and_click', description: 'Click a piece of text because you can SEE it on screen — OCRs the screen, finds the label, and clicks the middle of it. PREFER THIS over ui_click for chat apps, Electron and browser UIs (WhatsApp, Spotify, YouTube), where the UIA tree is often empty and ui_click has no valid element path to use. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it will list the matches and refuse rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked' }, danger: true, fn: see_and_click },
+  { name: 'see_and_click', description: 'USE THIS FIRST to click anything in a chat app, Electron app or browser UI (WhatsApp, Spotify, YouTube, Discord), and ALWAYS after ui_click fails with an element-path or empty-tree error — those apps expose no usable UIA tree, so no elementPath exists to pass and guessing one cannot work. Needs no pid and no element path: it OCRs the screen, finds the label, and clicks the middle of it. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it lists the matches and refuses rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked' }, danger: true, fn: see_and_click },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
   { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },
   { name: 'scroll_at', description: 'Scroll the mouse wheel at a screen coordinate. Moves to (x,y) first, then scrolls. Defaults: amount 3 ticks, direction down.', params: { x: 'number - absolute screen x', y: 'number - absolute screen y', amount: 'number (optional) - ticks to scroll, default 3', direction: 'string (optional) - up or down, default down' }, danger: false, fn: scroll_at },

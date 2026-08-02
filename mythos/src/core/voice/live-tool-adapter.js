@@ -47,8 +47,15 @@ function createLiveToolAdapter(deps) {
   // error text/paths (e.g. run_command's stderr), and that must not reach the
   // model/episodic memory unsanitized just because it came back as {ok:false}
   // instead of a throw.
+  // effectorReason marks this as an effector's OWN honest fail() text rather than a
+  // thrown exception. Without the tag, sanitizeErrorForClient cannot tell the two apart
+  // and flattened both to "An internal error occurred." — which is how app_reply's
+  // perfectly good "whatsapp is not open, so there is no conversation to reply to"
+  // reached the model as a generic error on 2026-08-02. The tag is set HERE, at the one
+  // call site that actually knows the origin, so the sanitizer stays deny-by-default for
+  // everything else instead of inferring intent from a missing .stack.
   function sanitizeResultError(raw) {
-    return sanitize({ message: String(raw == null ? 'Failed.' : raw) });
+    return sanitize({ message: String(raw == null ? 'Failed.' : raw), effectorReason: true });
   }
 
   // Security-review fix: an orphaned confirm (human never responds; the WS

@@ -40,7 +40,9 @@ function withMockedPcChild(mock, fn) {
 
 // foreground: what get_foreground_window reports. typeReadBack: the verdict a
 // ui_type in this scenario comes back with.
-function pc(foreground, typeReadBack, sent) {
+// submits: every submit_message the effector routed to (2026-08-02 — Enter in a chat
+// app must go through the VERIFIED submit ladder, never a raw keystroke; see below).
+function pc(foreground, typeReadBack, sent, submits) {
   return {
     getStatus: () => ({ state: 'ONLINE' }),
     sendCommand: async (c) => {
@@ -54,6 +56,10 @@ function pc(foreground, typeReadBack, sent) {
         }, typeReadBack || {}) };
       }
       if (c.cmd === 'send_key') { if (sent) sent.push(c.key); return { ok: true, result: { sent: true, key: c.key } }; }
+      if (c.cmd === 'submit_message') {
+        if (submits) submits.push(c.pid);
+        return { ok: true, result: { submitted: true, mechanism: 'wm-char-return', clearedText: 'on my way' } };
+      }
       return { ok: true, result: {} };
     },
   };
@@ -73,18 +79,30 @@ describe('WAVE 2 — send_key Enter guard in messaging apps', () => {
     });
   });
 
-  it('Enter is allowed once a ui_type into that same window has been VERIFIED', async () => {
+  // 2026-08-02 — this test used to assert `sent === ['enter']`, i.e. that an allowed
+  // Enter reached the app as a RAW KEYSTROKE. That contract was the bug. WhatsApp
+  // Desktop is MSIX-packaged, and MSIX apps silently discard SendInput while reporting
+  // the events as injected, so the raw keystroke returned sent:true and WhatsApp
+  // received nothing — the operator had to press Enter by hand. The verified ladder
+  // (submit_message: uia-invoke-send -> wm-char-return -> sendinput-enter, each gated on
+  // the composer actually emptying) already existed and was simply unreachable from
+  // send_key. So the assertion inverts: an allowed Enter must NOT produce a keystroke,
+  // and must produce a submit_message instead.
+  it('Enter is allowed once a ui_type into that same window has been VERIFIED — and goes through the verified submit ladder, not a raw keystroke', async () => {
     const sent = [];
+    const submits = [];
     await withMockedPcChild(pc(SLACK, {
       readBack: 'confirmed', readBackVia: 'ValuePattern', readBackText: 'on my way',
-    }, sent), async (m) => {
+    }, sent, submits), async (m) => {
       const typed = await m.ui_type({ text: 'on my way', pid: SLACK.pid });
       assert.equal(typed.unverified, undefined === typed.unverified ? undefined : false);
       assert.ok(typed.evidence, 'precondition: the type must be verified for this test to mean anything');
 
       const res = await m.send_key({ key: 'enter' });
       assert.equal(res.ok, true, 'a verified message SHOULD be sendable — the guard is not a wall');
-      assert.deepEqual(sent, ['enter']);
+      assert.deepEqual(submits, [SLACK.pid], 'Enter in a chat app must route to submit_message, aimed at that window');
+      assert.deepEqual(sent, [], 'and must NOT also fire a raw Enter — that is the keystroke MSIX apps swallow, and a double-fire sends twice');
+      assert.ok(res.evidence, 'the ladder proves the composer emptied, so this send carries evidence');
     });
   });
 

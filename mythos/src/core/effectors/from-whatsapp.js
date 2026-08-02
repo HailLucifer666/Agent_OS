@@ -146,8 +146,10 @@ function resolveRecipient(to) {
   const names = Object.keys(contacts);
   if (!names.length) {
     return {
-      error: 'I have no contacts saved, so I cannot look up "' + wanted + '". Add them to ' +
-        'vault/' + CONTACTS_PATH + ' as {"' + wanted.toLowerCase() + '": "+15551234567"}, or give me the number directly.',
+      error: '"' + wanted + '" is not in my contact list — I have no contacts saved yet. ' +
+        'What is their phone number, in international form (e.g. +15551234567)? Tell me and ' +
+        'I can save it with whatsapp_contact_save so I can message them by name next time, ' +
+        'or just give me the number now to send this message.',
     };
   }
 
@@ -165,8 +167,11 @@ function resolveRecipient(to) {
   }
   if (!hit) {
     return {
-      error: 'I do not have a number for "' + wanted + '". Known contacts: ' + names.join(', ') +
-        '. Add them to vault/' + CONTACTS_PATH + ' and I will send it.',
+      error: '"' + wanted + '" is not in my contact list. Known contacts: ' + names.join(', ') +
+        '. What is their phone number, in international form (e.g. +15551234567)? Tell me and ' +
+        'I can save it with whatsapp_contact_save so I can message them by name next time, ' +
+        'or just give me the number now to send this message. Say whatsapp_contacts to hear ' +
+        'the list again.',
     };
   }
 
