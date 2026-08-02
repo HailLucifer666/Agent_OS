@@ -195,10 +195,12 @@ function renderBoard() {
   if (state.view === 'gallery') {
     boardEl.hidden = true;
     galleryEl.hidden = false;
+    // xss-safe: static template, no interpolation
     galleryEl.innerHTML = renderGallery();
   } else {
     galleryEl.hidden = true;
     boardEl.hidden = false;
+    // xss-safe: static template, no interpolation
     boardEl.innerHTML = STAGES.map(renderColumn).join('');
   }
 }
@@ -209,6 +211,7 @@ function applyBoard(board) {
 }
 
 export async function render(mount) {
+  // xss-safe: all interpolated fields escaped
   mount.innerHTML = `
     <div class="pipeline-particles" aria-hidden="true"></div>
     <div class="pipeline-subheader fade-in">

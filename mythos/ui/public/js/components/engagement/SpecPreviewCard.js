@@ -6,6 +6,27 @@ export function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// safeHref(url) -> sanitized href string, or null if the URL must not be linked.
+//
+// escapeHtml() above uses the textContent -> innerHTML trick, which escapes
+// & < > but leaves `"` intact. renderMarkdown() below then puts a captured link
+// URL inside href="...", so an LLM-authored spec containing
+// `[x](" onmouseover="alert(1))` used to close the attribute and inject a live
+// event handler (verified, not theorized). Two rules close it: the scheme must
+// be http/https, and any surviving quote is escaped. Pure and DOM-free so it is
+// unit-testable without a browser harness (see test/ui-escaping.test.js).
+//
+// Input contract: the caller has already run the text through escapeHtml(), so
+// & < > are encoded by the time they arrive here and only `"` is left to handle.
+// Re-escaping & here would double-encode every query string into &amp;amp;.
+export function safeHref(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  return trimmed.replace(/"/g, '&quot;');
+}
+
 // Minimal markdown renderer for spec preview
 export function renderMarkdown(md) {
   if (!md) return '';
@@ -25,8 +46,12 @@ export function renderMarkdown(md) {
   // Code inline
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  // Links — the URL goes through safeHref(), so a javascript:/data: scheme or a
+  // quote-based attribute break-out renders as plain text instead of a link.
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
+    const href = safeHref(url);
+    return href ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>` : label;
+  });
 
   // Unordered lists
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');

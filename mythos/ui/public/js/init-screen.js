@@ -24,6 +24,7 @@ export function mountInitScreen({ subscribe }) {
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const el = document.createElement('div');
   el.id = 'init-screen';
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="init-sweep"></div>
     <div class="init-center">

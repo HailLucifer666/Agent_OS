@@ -26,6 +26,19 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// safeHref — duplicated verbatim from components/engagement/SpecPreviewCard.js
+// (which owns the canonical copy and the tests). escapeHtml() above leaves `"`
+// intact, so without this an LLM-authored spec containing
+// `[x](" onmouseover="alert(1))` breaks out of renderMarkdown's href attribute.
+// Input is already escapeHtml()'d, so only the quote needs handling here.
+function safeHref(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  return trimmed.replace(/"/g, '&quot;');
+}
+
 function relativeTime(ts) {
   if (!ts) return '—';
   const now = Date.now();
@@ -91,13 +104,13 @@ function renderListItem(engagement) {
   const time = formatItemTime(engagement);
 
   return `
-    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${engagement.id}">
-      <div class="engag-status-dot status-${engagement.status}"></div>
+    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeHtml(engagement.id)}">
+      <div class="engag-status-dot status-${escapeHtml(engagement.status)}"></div>
       <div class="engag-list-item-main">
         <div class="engag-list-item-name">${escapeHtml(name)}</div>
-        <div class="engag-list-item-sub">${sub}</div>
+        <div class="engag-list-item-sub">${escapeHtml(sub)}</div>
       </div>
-      <div class="engag-list-item-time">${time}</div>
+      <div class="engag-list-item-time">${escapeHtml(time)}</div>
     </div>
   `;
 }
@@ -191,10 +204,10 @@ function renderDetailHeader(engagement) {
     <div class="engag-detail-header">
       <div class="engag-detail-header-name">${escapeHtml(name)}</div>
       <div class="engag-detail-header-status">
-        <span class="engag-status-dot status-${engagement.status}"></span>
-        <span>${statusLabel(engagement.status)}</span>
+        <span class="engag-status-dot status-${escapeHtml(engagement.status)}"></span>
+        <span>${escapeHtml(statusLabel(engagement.status))}</span>
       </div>
-      <div class="engag-detail-header-meta">${meta}</div>
+      <div class="engag-detail-header-meta">${escapeHtml(meta)}</div>
     </div>
   `;
 }
@@ -424,8 +437,11 @@ function renderMarkdown(md) {
   // Code inline
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  // Links — unsafe scheme or a quote-based break-out renders as plain text.
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
+    const href = safeHref(url);
+    return href ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>` : label;
+  });
 
   // Lists
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
@@ -525,20 +541,24 @@ function startPolling() {
 
 function renderListAndDetail() {
   const listEl = document.getElementById('engag-list');
+  // xss-safe: static template, no interpolation
   if (listEl) listEl.innerHTML = renderList();
 
   const detailEl = document.getElementById('engag-detail');
   const selected = state.engagements.find((e) => e.id === state.selectedId);
   if (detailEl) {
     if (!selected) {
+      // xss-safe: static template, no interpolation
       detailEl.innerHTML = '<div class="engag-list-empty" style="height: 100%; align-items: center; justify-content: center;">Select an engagement to view details.</div>';
     } else {
+      // xss-safe: all interpolated fields escaped
       detailEl.innerHTML = renderDetailHeader(selected) + renderTabs(selected);
     }
   }
 }
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="engag-subheader fade-in" style="padding: 12px 16px; border-bottom: 1px solid var(--border-soft); margin-bottom: 16px;">
       <div style="display: flex; align-items: center; justify-content: space-between;">

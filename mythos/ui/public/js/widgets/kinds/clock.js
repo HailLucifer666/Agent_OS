@@ -1,6 +1,7 @@
 // clock.js — local time widget. Pure local Date; one 1s interval, cleared on cleanup.
 
 export function mountClock(el) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="widget-value mono" data-role="time">--:--:--</div>
     <div class="widget-sub mono" data-role="date"></div>

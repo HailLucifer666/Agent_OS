@@ -2,15 +2,37 @@
 // First iframe in the dashboard. render(body, payload) receives the resolved
 // content payload from the open_web tool. Cleanup removes the iframe to stop
 // video/audio playback when the panel closes.
+//
+// Everything in `payload` is untrusted: it comes from the open_web tool, whose
+// titles/snippets/URLs originate in web search results and model output. The
+// escape helpers below are the same pair widgets/kinds/web-result.js uses (that
+// file renders the same payload shape into the floating widget); safeUrl() gates
+// the scheme so a javascript:/data: URL can never become a live src or href.
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, '&quot;');
+}
+// Returns the URL if it is http(s), else null — callers render inert text instead.
+function safeUrl(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null;
+}
 
 export async function render(body, payload) {
   if (!payload || !payload.widgetType) {
+    // xss-safe: static template, no interpolation
     body.innerHTML = '<div class="text-faint">No content to display.</div>';
     return;
   }
 
   if (payload.widgetType === 'youtube' || payload.widgetType === 'web') {
-    if (!payload.embedUrl) {
+    const embedUrl = safeUrl(payload.embedUrl);
+    if (!embedUrl) {
+      // xss-safe: static template, no interpolation
       body.innerHTML = '<div class="text-faint">No embeddable URL for this content.</div>';
       return;
     }
@@ -25,26 +47,33 @@ export async function render(body, payload) {
     // We attempt the iframe; if it doesn't fire a load event within 6s (XFO
     // block) or fire YouTube's onReady postMessage within 10s (bot block), we
     // show a fallback link to the real page.
-    var fallbackUrl = payload.embedUrl;
-    if (payload.widgetType === 'youtube' && payload.videoId) {
-      fallbackUrl = 'https://www.youtube.com/watch?v=' + payload.videoId;
+    // videoId lands in a youtube.com URL and an i.ytimg.com thumbnail src, so it
+    // is restricted to the character class YouTube actually uses rather than
+    // escaped — anything else is treated as absent.
+    const videoId = typeof payload.videoId === 'string' && /^[\w-]{1,32}$/.test(payload.videoId)
+      ? payload.videoId
+      : null;
+    var fallbackUrl = embedUrl;
+    if (payload.widgetType === 'youtube' && videoId) {
+      fallbackUrl = 'https://www.youtube.com/watch?v=' + videoId;
     }
+    // xss-safe: all interpolated fields escaped
     body.innerHTML = `
       <div class="web-iframe-wrap">
         <iframe
           class="web-iframe-fill"
-          src="${payload.embedUrl}"
+          src="${escapeAttr(embedUrl)}"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
           allowfullscreen
           referrerpolicy="strict-origin-when-cross-origin"
           loading="eager"></iframe>
       </div>
       <div class="web-fallback" style="display:none;padding:16px;text-align:center;">
-        ${payload.widgetType === 'youtube' && payload.videoId ? `
-          <img src="https://i.ytimg.com/vi/${payload.videoId}/hqdefault.jpg" style="max-width:100%;height:auto;border-radius:4px;margin-bottom:12px;" alt="video thumbnail" />
-          <div style="font-weight:500;margin-bottom:8px;color:#ccc;white-space:normal;">${payload.title || 'Video unavailable'}</div>
+        ${payload.widgetType === 'youtube' && videoId ? `
+          <img src="https://i.ytimg.com/vi/${videoId}/hqdefault.jpg" style="max-width:100%;height:auto;border-radius:4px;margin-bottom:12px;" alt="video thumbnail" />
+          <div style="font-weight:500;margin-bottom:8px;color:#ccc;white-space:normal;">${escapeHtml(payload.title || 'Video unavailable')}</div>
         ` : ''}
-        <a href="${fallbackUrl}" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#d4af37;color:#1a1a1a;border-radius:4px;text-decoration:none;font-weight:500;margin-top:8px;">Open in new tab →</a>
+        <a href="${escapeAttr(fallbackUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#d4af37;color:#1a1a1a;border-radius:4px;text-decoration:none;font-weight:500;margin-top:8px;">Open in new tab →</a>
       </div>
     `;
     const iframe = body.querySelector('.web-iframe-fill');
@@ -139,19 +168,28 @@ export async function render(body, payload) {
 
   // For non-iframe types (shouldn't reach here — those go to widgets), show cards.
   if (payload.cards && payload.cards.length) {
+    // xss-safe: static template, no interpolation
     body.innerHTML = '<div class="web-result-list"></div>';
     const list = body.querySelector('.web-result-list');
     payload.cards.forEach((c) => {
-      const row = document.createElement('a');
+      const href = safeUrl(c.url);
+      // A card with a non-http(s) URL still shows its text — as a <div>, never a
+      // clickable link, so a javascript: URL has nothing to fire from.
+      const row = document.createElement(href ? 'a' : 'div');
       row.className = 'web-result-row';
-      row.href = c.url;
-      row.target = '_blank';
-      row.rel = 'noopener';
-      row.innerHTML = `<div class="web-result-title">${c.title || c.url}</div><div class="web-result-snippet text-dim">${c.snippet || ''}</div>`;
+      if (href) {
+        row.href = href;
+        row.target = '_blank';
+        row.rel = 'noopener';
+      }
+      // xss-safe: all interpolated fields escaped
+      row.innerHTML = `<div class="web-result-title">${escapeHtml(c.title || c.url || '')}</div>` +
+        `<div class="web-result-snippet text-dim">${escapeHtml(c.snippet || '')}</div>`;
       list.appendChild(row);
     });
     return;
   }
 
+  // xss-safe: static template, no interpolation
   body.innerHTML = '<div class="text-faint">Unsupported content type.</div>';
 }

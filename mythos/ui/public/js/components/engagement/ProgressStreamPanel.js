@@ -141,9 +141,10 @@ export function updateProgressPanel(element, progressData) {
   // Update checks
   const checksContainer = element.querySelector('.engag-current-checks');
   if (checksContainer && progressData.verificationChecks) {
+    // xss-safe: all interpolated fields escaped
     checksContainer.innerHTML = progressData.verificationChecks.map(check => `
-      <div class="engag-check-item status-${check.status}">
-        <span class="engag-check-icon-${check.status}" aria-hidden="true">
+      <div class="engag-check-item status-${escapeHtml(check.status)}">
+        <span class="engag-check-icon-${escapeHtml(check.status)}" aria-hidden="true">
           ${check.status === 'passed' ? '✓' : check.status === 'failed' ? '✗' : ''}
         </span>
         <span>${escapeHtml(check.label)}</span>
@@ -157,6 +158,7 @@ export function updateProgressPanel(element, progressData) {
     if (completedContainer) {
       const row = document.createElement('div');
       row.className = 'engag-progress-stage-row completed';
+      // xss-safe: all interpolated fields escaped
       row.innerHTML = `
         <span>✓</span>
         <span>Stage: ${escapeHtml(progressData.completedStage.stageName)}</span>

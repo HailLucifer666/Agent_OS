@@ -16,6 +16,13 @@ import { emitRefresh } from '../stats-bus.js';
 // harness) are silently skipped.
 const INERT_WHILE_OPEN_IDS = ['widget-root', 'hud-canvas', 'core-orb'];
 
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, '&quot;');
+}
+
 function setBackgroundInert(isInert) {
   for (const id of INERT_WHILE_OPEN_IDS) {
     const el = document.getElementById(id);
@@ -68,15 +75,21 @@ export function createOverlayManager(root) {
     const panel = getPanel(panelId);
     if (!panel) return;
 
+    // panel.title is static, but payload.title comes from the open_web tool
+    // (web/model-derived) and lands in both an aria-label attribute and element
+    // text — so it needs the attribute-safe escape, not just the text one.
     const displayTitle = (payload && payload.title) ? payload.title : panel.title;
+    const safeTitleText = escapeHtml(displayTitle);
+    const safeTitleAttr = escapeAttr(displayTitle);
     const el = document.createElement('div');
     el.className = 'hud-panel-wrap';
     el.style.zIndex = String(++zTop);
+    // xss-safe: all interpolated fields escaped
     el.innerHTML = `
       <div class="hud-panel-backdrop"></div>
-      <div class="hud-panel glass" role="dialog" aria-label="${displayTitle}">
+      <div class="hud-panel glass" role="dialog" aria-label="${safeTitleAttr}">
         <div class="hud-panel-header">
-          <span class="hud-panel-title mono">${displayTitle}</span>
+          <span class="hud-panel-title mono">${safeTitleText}</span>
           <button class="hud-panel-close" aria-label="Close">&times;</button>
         </div>
         <div class="hud-panel-body"><div class="text-faint mono">Loading&hellip;</div></div>
@@ -94,6 +107,7 @@ export function createOverlayManager(root) {
     try {
       const mod = await panel.loader();
       const body = el.querySelector('.hud-panel-body');
+      // xss-safe: static template, no interpolation
       body.innerHTML = '';
       // Pass payload to render() for panels that need it (e.g. web-panel gets
       // the embed URL/cards). Existing views ignore the second arg — backward compatible.
@@ -101,7 +115,10 @@ export function createOverlayManager(root) {
       if (typeof result === 'function') entry.cleanup = result;
     } catch (err) {
       const body = el.querySelector('.hud-panel-body');
-      body.innerHTML = `<div class="text-faint">Failed to load this surface: ${err.message}</div>`;
+      const msg = document.createElement('div');
+      msg.className = 'text-faint';
+      msg.textContent = `Failed to load this surface: ${err && err.message ? err.message : err}`;
+      body.replaceChildren(msg);
     }
     // Focus-on-open (containment-lite, not a full trap — panels stay
     // non-modal by design). Only steps in if the rendered body didn't already

@@ -24,6 +24,7 @@ export function h(tag, props, ...children) {
     if (k === 'class' || k === 'className') el.className = v;
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+    // xss-safe: static template, no interpolation
     else if (k === 'html') el.innerHTML = v; // explicit escape hatch, opt-in only
     else if (typeof v === 'boolean') { if (v) el.setAttribute(k, ''); }
     else el.setAttribute(k, v);

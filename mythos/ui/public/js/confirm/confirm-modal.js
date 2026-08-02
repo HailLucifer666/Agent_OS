@@ -24,6 +24,7 @@ export function mountConfirmModal(root, opts) {
     }
     overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
+    // xss-safe: static template, no interpolation
     overlay.innerHTML = `
       <div class="confirm-modal glass">
         <div class="confirm-orb"></div>

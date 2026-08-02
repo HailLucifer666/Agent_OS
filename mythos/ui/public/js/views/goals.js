@@ -80,11 +80,15 @@ function filteredGoals() {
 
 function renderGoalsUI() {
   const tiles = document.getElementById('goals-tiles');
+  // xss-safe: labels are literals and every interpolated stat is coerced to a
+  // number first, so a malformed /api/goals payload can't break out of the
+  // style attribute.
+  const pct = Number(state.stats.progress) || 0;
   tiles.innerHTML = [
-    statTile('TOTAL', state.stats.total),
-    statTile('ACTIVE', state.stats.active),
-    statTile('COMPLETED', state.stats.completed),
-    statTile('PROGRESS', `${state.stats.progress}%`, `<div class="goals-progress-track"><div class="goals-progress-fill" style="width:${state.stats.progress}%"></div></div>`),
+    statTile('TOTAL', Number(state.stats.total) || 0),
+    statTile('ACTIVE', Number(state.stats.active) || 0),
+    statTile('COMPLETED', Number(state.stats.completed) || 0),
+    statTile('PROGRESS', `${pct}%`, `<div class="goals-progress-track"><div class="goals-progress-fill" style="width:${pct}%"></div></div>`),
   ].join('');
 
   const chips = document.getElementById('goals-chips');
@@ -112,6 +116,7 @@ function applyData(data) {
 }
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="goals-tiles" id="goals-tiles"></div>
     <div class="goals-add-panel fade-in">
@@ -149,7 +154,9 @@ export async function render(mount) {
     } catch (err) {
       console.error('goals load failed', err);
       const list = document.getElementById('goals-list');
-      if (list) list.innerHTML = `<div class="goals-empty">Could not load goals: ${err.message}. Close and reopen this panel to retry.</div>`;
+      // h() makes the message a text node — err.message is never markup here.
+      if (list) list.replaceChildren(h('div', { class: 'goals-empty' },
+        `Could not load goals: ${err && err.message ? err.message : err}. Close and reopen this panel to retry.`));
     }
   }
 

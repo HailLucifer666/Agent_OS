@@ -62,6 +62,7 @@ async function ipLocate() {
 }
 
 export function mountWeather(el) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="widget-value mono" data-role="temp">--</div>
     <div class="widget-sub mono" data-role="desc">locating…</div>

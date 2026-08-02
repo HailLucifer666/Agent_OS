@@ -6,6 +6,7 @@ import { subscribe } from '/js/ws.js';
 const MAX_MESSAGES = 200;
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="conversation-log" id="conv-log" style="overflow-y:auto;max-height:70vh;padding:8px;">
       <div class="text-faint" id="conv-empty">No conversation yet — start speaking to see the transcript.</div>

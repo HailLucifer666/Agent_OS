@@ -25,6 +25,7 @@ const TITLES = {
 const CAPTION_FADE_MS = { heard: 6000, reply: 14000, error: 10000, info: 6000 };
 
 export function createMicIndicator(el) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="mic-caption mono" data-role="caption" hidden></div>
     <div class="mic-ring">

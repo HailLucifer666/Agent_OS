@@ -18,6 +18,13 @@ const PROVIDER_ACCENTS = {
 
 const ALL_PROVIDERS = ['groq', 'mistral', 'cerebras', 'nim', 'openrouter', 'zcode', 'ollama'];
 
+// Provider names arrive from server telemetry rather than this file's constant
+// list (an unrecognized provider falls through to the cyan default), so they are
+// escaped before reaching innerHTML like every other server-supplied string.
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function fmt(n) {
   if (n == null) return '0';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -35,6 +42,7 @@ function providerColor(name) {
 }
 
 export function mountTokens(el, ctx) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="tokens-grid">
       <div class="tokens-col">
@@ -108,7 +116,7 @@ export function mountTokens(el, ctx) {
       html += '<div class="tokens-prov-row">' +
         '<span class="tokens-prov-name">' +
           '<span class="tokens-prov-dot" style="background:' + color + '; box-shadow: 0 0 4px ' + color + ';"></span>' +
-          name +
+          escapeHtml(name) +
         '</span>' +
         '<span class="tokens-prov-tokens mono">' + fmt(data.tokens) + ' tok</span>' +
       '</div>';
@@ -116,6 +124,7 @@ export function mountTokens(el, ctx) {
     if (!providers.length) {
       html = '<div class="tokens-idle-row" style="color:var(--text-faint);">no calls yet</div>';
     }
+    // xss-safe: content assembled from escaped parts above
     providersEl.innerHTML = html;
   }
 
@@ -135,11 +144,13 @@ export function mountTokens(el, ctx) {
     if (!idleList.length) {
       html = '<div class="tokens-idle-row" style="opacity:0.6;">all active</div>';
     }
+    // xss-safe: content assembled from escaped parts above
     idleEl.innerHTML = html;
   }
 
   function renderQuota(quotas) {
     if (!quotas || !quotas.length) {
+      // xss-safe: static template, no interpolation
       quotaEl.innerHTML = '<div class="tokens-idle-row" style="color:var(--text-faint);">no quota data</div>';
       return;
     }
@@ -149,7 +160,7 @@ export function mountTokens(el, ctx) {
       if (!q) continue;
       var color = providerColor(q.provider);
       var pct = q.remainingPercent;
-      var barWidth = pct != null ? pct : (q.unlimited ? 100 : 0);
+      var barWidth = Number(pct != null ? pct : (q.unlimited ? 100 : 0)) || 0;
       // Bar color: green if >50%, yellow if >20%, red below
       var barColor = pct == null ? color
         : (pct > 50 ? 'var(--status-ok)' : pct > 20 ? 'var(--status-degraded)' : 'var(--status-warn)');
@@ -159,13 +170,14 @@ export function mountTokens(el, ctx) {
         : q.unit === 'unknown' ? '?'
         : '—';
       html += '<div class="tokens-quota-row">' +
-        '<span class="tokens-quota-name" style="color:' + color + ';">' + q.provider + '</span>' +
+        '<span class="tokens-quota-name" style="color:' + color + ';">' + escapeHtml(q.provider) + '</span>' +
         '<span class="tokens-quota-bar">' +
           '<span class="tokens-quota-fill" style="width:' + barWidth + '%; background:' + barColor + ';"></span>' +
         '</span>' +
-        '<span class="tokens-quota-pct mono">' + label + '</span>' +
+        '<span class="tokens-quota-pct mono">' + escapeHtml(label) + '</span>' +
       '</div>';
     }
+    // xss-safe: content assembled from escaped parts above
     quotaEl.innerHTML = html;
   }
 
