@@ -82,6 +82,7 @@ P0 ☐ · P0-parallel ☐ `PARALLEL-SAFE` · P1 ☐ · P2 ☐ · P3 ☐ · P4 �
 | Date | Work | Commit | Live-verified |
 |---|---|---|---|
 | 2026-07-31 | Authored this file. Read the parity roadmap (RESUME HERE, merged order, step-6.5 section, Progress log), the V2 spine's §0–§2 including AD-1…AD-10, root `CLAUDE.md`, and the real seams: `src/main.js` registration/boot-step/capability-manifest wiring, `src/core/leash/tiers.js`, `src/core/leash/confirm.js`, `src/core/effectors/{from-calendar,from-gmail,from-android,from-computer,from-mission,orchestrator,adapter}.js`, `adapters/android-child/index.js`, `adapters/google/index.js`, `src/core/agents/personas.js`, `src/core/engagements/index.js`, `src/core/voice/{live-tools,latency-tracker}.js`, `ui/public/js/voice/wakeword.js`, `server/index.js`'s WS message switch, `src/core/config/schema.js`, `.env.example`, `test/effectors-hub.test.js`. No source file changed. | (this commit) | n/a (docs) — and deliberately so: this is a plan, there is nothing to live-verify yet |
+| 2026-08-02 | **Capability-pack integration** (appendix CAP below, independent of P0–P11). Twelve operator-named upstream packs made reachable on a fresh clone: 13 skills vendored + loader block-scalar/plugin-root/optional-entry fixes; an MCP stdio client (`adapters/mcp-client/`) + `from-mcp.js`; OKF (`memory/okf.js` + `from-okf.js`); Strix (`from-strix.js`). | `c626b4e`, `2ec3278`, (this commit) | Unit-green (2352 pass). MCP client tested against a real stub server over real pipes. NOT yet live: a real Desktop Commander / browser-use / Strix run against the installed tool — that is the outstanding live-verify, see CAP. |
 
 ---
 
@@ -993,3 +994,49 @@ produces fake failures.
     "verified against a mock" written in those words in the Live-verified column;
     and the parity build's `{opened:true, sent:false}` precedent for
     `phone_whatsapp_send` treated as the standard, not the exception.
+
+---
+
+## Appendix CAP — Capability-pack integration (landed 2026-08-02)
+
+This appendix records work that is **orthogonal to P0–P11** and does not touch
+the sequence above. The operator asked to give MYTHOS twelve named upstream
+capability packs. It lives here rather than in a fourth plan document (root
+`CLAUDE.md` forbids one), but it is deliberately NOT a P-phase — it neither
+blocks nor is blocked by the social/business/multi-device sequence, and ticking
+it never affected any `Pn ☐`.
+
+**What the twelve became.** Five were already vendored (caveman, ponytail,
+taste-frontend, karpathy-guidelines, ui-ux-pro-max). The rest:
+
+| Pack | How it was integrated |
+|---|---|
+| superpowers | 7 core skills vendored (`using-superpowers`, `brainstorming`, `writing-plans`, `executing-plans`, `systematic-debugging`, `test-driven-development`, `verification-before-completion`), each with a hand-written `SKILL-CORE.md` essence. MIT, LICENSE copied. |
+| Agent-Reach | skill + references vendored; the CLI was already wired in `agent-actions.js`. |
+| DesktopCommanderMCP | reached through the new MCP client as an `MCP_SERVERS` entry; boundary skill says which jobs stay on MYTHOS's own tools. |
+| browser-use | MCP server entry; the built-in playwright adapter stays the deterministic default. |
+| Strix | `from-strix.js` — `security_scan`, T3, hard `authorized_by` gate, degrades to an install hint. |
+| OKF | `memory/okf.js` + `from-okf.js` — `okf_export`/`okf_list`/`okf_import` over `vault/Knowledge/`. |
+| awesome-llm-apps | reference skill only (`llm-app-patterns`); no runtime dependency. |
+
+**The load-bearing new piece** is the MCP **client** (`adapters/mcp-client/`,
+`from-mcp.js`) — MYTHOS could expose itself as an MCP server (`mcp/server.js`)
+but could not consume one. Tools are namespaced `mcp__<server>__<tool>` (a
+collision would silently re-tier a real tool, since `TIER_TABLE` keeps the last
+duplicate); every call is T3 because an MCP server is not sandboxed by MYTHOS;
+results are `unverified` because the server's report is not independent evidence.
+
+**Outstanding live-verify (the honest gap).** Everything above is unit-green,
+and the MCP client is tested against a real stub server over real pipes — but no
+step here has been run against a *real installed* Desktop Commander, browser-use
+or Strix. Per this file's own honesty rules, that is the remaining work before
+any of the three runtime integrations may be called "verified": boot the real
+app, configure one `MCP_SERVERS` entry, confirm `mcp_list_tools` returns the
+server's real tool list and one `mcp_call_tool` round-trips; for Strix, one
+authorized run against a target the operator owns.
+
+**Licensing note (records what upstream states, not a legal conclusion — the
+step-6.5/6.6 gate still owns that call):** only superpowers and Agent-Reach text
+is redistributed, both MIT. The four non-skill packs redistribute no upstream
+source — MYTHOS ships its own adapter code and its own authored skill docs, and
+fetches the tools at runtime. See `THIRD_PARTY_NOTICES.md`.

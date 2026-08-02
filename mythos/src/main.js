@@ -61,6 +61,8 @@ const { registerFromHermes } = require('./core/effectors/from-hermes');
 const { registerFromRunner } = require('./core/effectors/from-runner');
 const { registerFromInstaller } = require('./core/effectors/from-installer');
 const { registerFromMcp } = require('./core/effectors/from-mcp');
+const { registerFromOkf } = require('./core/effectors/from-okf');
+const { registerFromStrix } = require('./core/effectors/from-strix');
 const { registerFromProject } = require('./core/effectors/from-project');
 const { registerFromMission } = require('./core/effectors/from-mission');
 const { registerFromSystem } = require('./core/effectors/from-system');
@@ -433,6 +435,13 @@ async function main() {
       mcpWiring.autostart().catch(function(err) {
         logger.warn('mcp.autostart-failed', { error: err && err.message });
       });
+      // Open Knowledge Format import/export over vault/Knowledge. Pure data —
+      // no dependency, no external process, nothing to degrade.
+      registerFromOkf(hub, { vault: memory.fs });
+      // Strix security scanning — optional (pip install strix-agent + Docker),
+      // degrades to an install hint when absent. Refuses without a per-call
+      // operator authorization; the config keys are the operator's own LLM.
+      registerFromStrix(hub, { config: config, logger: logger });
       calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
       registerFromWidgets(hub, { bus: bus });
       // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.

@@ -405,6 +405,17 @@ const SCHEMA = {
   MCP_TOOL_ALLOWLIST:          { type: 'string', default: '' },
   MCP_TIMEOUT_MS:              { type: 'number', default: 30000, min: 1000 },
 
+  // Strix security scanning (effectors/from-strix.js, `security_scan` tool).
+  // Optional: absent Strix/Docker → the tool reports OFFLINE with an install
+  // hint, never blocks boot. STRIX_LLM + LLM_API_KEY are the operator's OWN LLM
+  // credentials — Strix bills against them, not MYTHOS's brain keys. The tool
+  // still refuses without a per-call `authorized_by`; these keys only decide
+  // whether an authorized run can execute.
+  STRIX_LLM:                   { type: 'string', default: '' },
+  LLM_API_KEY:                 { type: 'string', default: '' },
+  LLM_API_BASE:                { type: 'string', default: '' },
+  STRIX_TIMEOUT_MS:            { type: 'number', default: 1800000, min: 10000 },
+
   // Native speech-to-speech (Gemini Live, V2 §6-§10, merged-order step 4).
   // Default true — Gemini Live (real-time duplex audio via s2s-bridge.js) is
   // now the primary voice path. voice-agent.js's batch STT path remains the

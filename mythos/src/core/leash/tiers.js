@@ -214,6 +214,18 @@ const TIER_TABLE = {
   'mcp_list_servers':      0,
   'mcp_list_tools':        0,
   'mcp_call_tool':         3,
+  // Open Knowledge Format (effectors/from-okf.js). Reading a bundle is inert.
+  // Writing one creates files, so it sits with generate_spreadsheet/
+  // generate_deck at T2 rather than T0 — sandboxed under vault/Knowledge, but
+  // still a real write the operator should see.
+  'okf_list':              0,
+  'okf_import':            0,
+  'okf_export':            2,
+  // Strix security scanning (effectors/from-strix.js). Runs a real autonomous
+  // pentest against a target. T3 (confirm-once-per-goal), and the effector adds
+  // a hard authorization gate on top: no `authorized_by`, no run. Never below
+  // T3 — same class as run_command/install_from_github.
+  'security_scan':         3,
   'delete_artifact':       3,  // permanently deletes an artifact file + card (danger:true) — same
                                // unmapped-fail-safe bug class as open_artifact/BUG-008, mapped explicitly
                                // here so it resolves to T3 from the table, not tierOf()'s fail-safe
