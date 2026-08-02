@@ -7,6 +7,7 @@ function escapeHtml(s) {
 }
 
 export function mountMedia(el) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div data-role="media-art" class="widget-art"></div>
     <div class="widget-value" data-role="media-title">—</div>
@@ -55,6 +56,7 @@ export function mountMedia(el) {
       if (disposed) return;
       if (!data.ok || !data.media) {
         // Not playing or SMTC unavailable
+        // xss-safe: static template, no interpolation
         artEl.innerHTML = '';
         titleEl.textContent = '—';
         artistEl.textContent = 'no media playing';
@@ -71,10 +73,12 @@ export function mountMedia(el) {
         const key = `${m.title || ''}|${m.artist || ''}`;
         if (artEl.dataset.trackKey !== key) {
           artEl.dataset.trackKey = key;
+          // xss-safe: static template, no interpolation
           artEl.innerHTML = `<img src="/api/media/art?ts=${Date.now()}" alt="" class="widget-art-img">`;
         }
       } else {
         artEl.dataset.trackKey = '';
+        // xss-safe: static template, no interpolation
         artEl.innerHTML = '';
       }
       // Track info
@@ -99,6 +103,7 @@ export function mountMedia(el) {
       }
     } catch {
       if (disposed) return;
+      // xss-safe: static template, no interpolation
       artEl.innerHTML = '';
       titleEl.textContent = '—';
       artistEl.textContent = 'no media playing';

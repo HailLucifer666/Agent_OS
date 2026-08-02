@@ -2,6 +2,7 @@
 // broadcasts (never a client-side interval guessing the server's).
 
 export function mountTickRate(el, ctx) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="widget-value mono" data-role="rate">—</div>
     <div class="widget-sub mono" data-role="tick">awaiting first tick</div>

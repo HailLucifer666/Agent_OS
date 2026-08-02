@@ -39,6 +39,7 @@ function proposalRow(p) {
 }
 
 function renderUI(mount) {
+  // xss-safe: all interpolated fields escaped
   mount.innerHTML = `
     <div class="hud-section">
       <div class="hud-section-header">

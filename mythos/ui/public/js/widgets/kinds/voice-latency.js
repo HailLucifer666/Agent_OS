@@ -20,6 +20,7 @@ import { formatVoiceLatency } from '../../voice/latency-format.js';
 const POLL_MS = 30000;
 
 export function mountVoiceLatency(el, ctx) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="widget-value mono" data-role="p50">no samples yet</div>
     <div class="widget-sub mono" data-role="detail">voice turns not yet measured</div>

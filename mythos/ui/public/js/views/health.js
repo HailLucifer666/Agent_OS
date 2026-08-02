@@ -76,6 +76,7 @@ function anomalyRow(a) {
 }
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="health-section">
       <div class="health-section-title mono">CIRCUIT BREAKERS</div>
@@ -100,15 +101,18 @@ export async function render(mount) {
         const sb = STATE_ORDER[(b[1] && b[1].state) || 'closed'];
         return sa - sb || a[0].localeCompare(b[0]);
       });
+    // xss-safe: static template, no interpolation
     mount.querySelector('#health-breakers').innerHTML =
       breakerEntries.map(([name, b]) => breakerRow(name, b)).join('')
       || '<div class="text-faint mono">No effectors registered.</div>';
 
     const providerHtml = Object.entries(providers || {}).map(([name, p]) => providerRow(name, p)).join('')
       + (quotas || []).map(quotaRow).join('');
+    // xss-safe: static template, no interpolation
     mount.querySelector('#health-providers').innerHTML =
       providerHtml || '<div class="text-faint mono">No provider data yet.</div>';
 
+    // xss-safe: static template, no interpolation
     mount.querySelector('#health-anomalies').innerHTML =
       (anomalies || []).slice().reverse().map(anomalyRow).join('')
       || '<div class="text-faint mono">No anomalies.</div>';

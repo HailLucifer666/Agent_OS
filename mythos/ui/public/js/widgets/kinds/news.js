@@ -8,6 +8,7 @@ function escapeHtml(s) {
 }
 
 export function mountNews(el) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="news-list" data-role="list"><span class="widget-sub mono">loading&hellip;</span></div>
     <div class="widget-sub mono news-foot" data-role="foot"></div>
@@ -26,6 +27,7 @@ export function mountNews(el) {
       if (!data.ok || !Array.isArray(data.items) || !data.items.length) {
         throw new Error(data.error || 'no items');
       }
+      // xss-safe: all interpolated fields escaped
       listEl.innerHTML = data.items.slice(0, 8).map((it) => `
         <a class="news-item" href="${escapeHtml(it.link)}" target="_blank" rel="noopener noreferrer">
           <span class="news-item-title">${escapeHtml(it.title)}</span>
@@ -35,6 +37,7 @@ export function mountNews(el) {
       footEl.textContent = `Google News${data.stale ? ' (stale)' : ''} · ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
     } catch {
       if (disposed) return;
+      // xss-safe: static template, no interpolation
       listEl.innerHTML = '<span class="widget-sub mono">news offline</span>';
       footEl.textContent = '';
     }

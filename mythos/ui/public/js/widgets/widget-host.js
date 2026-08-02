@@ -10,8 +10,20 @@
 import { WIDGETS } from './widget-registry.js';
 import { mountWebResult } from './kinds/web-result.js';
 import { mountDynamicWidget } from './kinds/dynamic.js';
+import { h } from '../dom.js';
 
 const STORE_KEY = 'mythos.widgets.v1';
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Mount failures render through h() rather than innerHTML: err.message can carry
+// arbitrary text (including a URL or response body from a widget's own fetch),
+// and a text node needs no escaping at all.
+function failureNode(err) {
+  return h('span', { class: 'widget-sub mono' }, `failed: ${err && err.message ? err.message : err}`);
+}
 
 function loadPositions() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
@@ -96,9 +108,12 @@ export function mountWidgets(root, ctx) {
     const card = document.createElement('div');
     card.className = 'widget-card glass';
     card.dataset.widgetId = widget.id;
+    // xss-safe: the only interpolation is widget.title, which comes from the
+    // hardcoded WIDGETS registry in this repo — never from the server or model.
+    // Spawned (payload-driven) titles take the escaped path further down.
     card.innerHTML = `
       <div class="widget-title mono">
-        <span>${widget.title}</span>
+        <span>${escapeHtml(widget.title)}</span>
         <button class="web-widget-close widget-hide" aria-label="Hide">&times;</button>
       </div>
       <div class="widget-body"></div>
@@ -147,7 +162,7 @@ export function mountWidgets(root, ctx) {
     try {
       cleanup = widget.mount(card.querySelector('.widget-body'), ctx);
     } catch (err) {
-      card.querySelector('.widget-body').innerHTML = `<span class="widget-sub mono">failed: ${err.message}</span>`;
+      card.querySelector('.widget-body').replaceChildren(failureNode(err));
     }
     cleanups.push(() => {
       if (typeof cleanup === 'function') { try { cleanup(); } catch { /* ignore */ } }
@@ -231,9 +246,13 @@ export function mountWidgets(root, ctx) {
     const card = document.createElement('div');
     card.className = 'widget-card glass web-widget-card';
     card.dataset.widgetType = payload.widgetType;
+    // payload.title/query come from the open_web tool — web search results and
+    // model output — so the title is escaped here even though the rest of this
+    // template is static.
+    // xss-safe: all interpolated fields escaped
     card.innerHTML = `
       <div class="widget-title mono">
-        <span>${payload.title || payload.query || 'Web Result'}</span>
+        <span>${escapeHtml(payload.title || payload.query || 'Web Result')}</span>
         <button class="web-widget-close" aria-label="Close">&times;</button>
       </div>
       <div class="widget-body web-result-body"></div>
@@ -272,7 +291,7 @@ export function mountWidgets(root, ctx) {
         mountWebResult(card.querySelector('.web-result-body'), payload);
       }
     } catch (err) {
-      card.querySelector('.web-result-body').innerHTML = `<span class="widget-sub mono">failed: ${err.message}</span>`;
+      card.querySelector('.web-result-body').replaceChildren(failureNode(err));
     }
     spawnedCleanups.push(teardown);
     if (dedupeKey) spawnedByType.set(dedupeKey, teardown);

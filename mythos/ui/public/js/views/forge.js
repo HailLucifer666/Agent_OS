@@ -14,6 +14,7 @@ function escapeHtml(s) {
 const FILE_ICON = { done: '&#10003;', failed: '&#10007;', generating: '&#9881;', pending: '&#8230;' };
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `<div class="forge-list" id="forge-list"><div class="text-faint">Loading…</div></div>`;
   const projects = new Map(); // id -> project public view
   const pending = new Map();  // projectId -> { id, title, kind }
@@ -69,6 +70,7 @@ export async function render(mount) {
     const el = mount.querySelector('#forge-list');
     if (!el) return;
     const list = Array.from(projects.values()).reverse();
+    // xss-safe: content assembled from escaped parts above
     el.innerHTML = list.length
       ? list.map(projectCard).join('')
       : '<div class="text-faint">No builds yet. Ask MYTHOS to build you something.</div>';

@@ -360,6 +360,7 @@ function laneColumn(lane) {
 }
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="kanban-header fade-in">
       <div class="kanban-header-left">

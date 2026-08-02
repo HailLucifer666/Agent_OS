@@ -2,14 +2,22 @@
 // Spec Full Code, adapted to the P9 panel mount contract. WS-only (anti-drift #6).
 import { subscribe } from '/js/ws.js';
 
+// Audit rows carry model-driven values: `tool` is whatever the brain asked to
+// call, `decision` the leash verdict for it. Neither is operator-typed.
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `<div class="audit-list" id="audit-list"></div>`;
   const rows = [];
 
   function renderList() {
+    // xss-safe: all interpolated fields escaped
     mount.querySelector('#audit-list').innerHTML = rows
       .slice(-200).reverse()
-      .map((r) => `<div class="audit-row"><span class="mono">T${r.tier}</span> <span class="mono">${r.decision}</span> ${r.tool}</div>`)
+      .map((r) => `<div class="audit-row"><span class="mono">T${escapeHtml(r.tier)}</span> <span class="mono">${escapeHtml(r.decision)}</span> ${escapeHtml(r.tool)}</div>`)
       .join('') || '<div class="text-faint">No decisions yet.</div>';
   }
 

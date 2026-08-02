@@ -117,6 +117,7 @@ export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previ
       video.style.height = '100%';
       video.style.objectFit = 'cover';
       video.style.transform = 'scaleX(-1)';
+      // xss-safe: static template, no interpolation
       previewEl.innerHTML = '';
       previewEl.appendChild(video);
     }
@@ -130,6 +131,7 @@ export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previ
   function releaseStream() {
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (video) { video.srcObject = null; video = null; }
+    // xss-safe: static template, no interpolation
     if (previewEl) previewEl.innerHTML = '';
   }
 

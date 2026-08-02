@@ -59,6 +59,7 @@ function buildOverlay() {
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'pin-title');
+  // xss-safe: static template, no interpolation
   overlay.innerHTML = `
     <form class="pin-modal glass" novalidate>
       <div class="pin-orb"></div>

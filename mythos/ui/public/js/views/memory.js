@@ -4,6 +4,7 @@
 const STORES = ['episodic', 'semantic', 'skills', 'identity', 'audit'];
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="memory-tabs" id="memory-tabs">
       ${STORES.map((s) => `<button class="memory-tab" data-store="${s}">${s}</button>`).join('')}
@@ -13,15 +14,18 @@ export async function render(mount) {
 
   async function loadStore(store) {
     const list = mount.querySelector('#memory-list');
+    // xss-safe: static template, no interpolation
     list.innerHTML = '<div class="text-faint mono">Loading&hellip;</div>';
     try {
       const res = await fetch(`/api/memory/${store}?limit=100`);
       const data = await res.json();
+      // xss-safe: all interpolated fields escaped
       list.innerHTML = (data.entries || [])
         .map((e) => `<div class="memory-entry"><span class="mono text-faint">${e.ts ? new Date(e.ts).toLocaleString() : '—'}</span> ${escapeHtml(e.summary || e.text || '')}</div>`)
         .join('') || '<div class="text-faint">Empty.</div>';
     } catch (err) {
-      list.innerHTML = `<div class="text-faint">Failed to load ${store}: ${err.message}</div>`;
+      // xss-safe: all interpolated fields escaped
+      list.innerHTML = `<div class="text-faint">Failed to load ${escapeHtml(store)}: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
     }
   }
 

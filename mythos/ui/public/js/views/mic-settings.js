@@ -64,6 +64,7 @@ export async function render(mount, payload) {
     const current = getMicDeviceId();
     const labeled = inputs.some((d) => d.label);
     haveLabels = labeled;
+    // xss-safe: static template, no interpolation
     select.innerHTML = '';
     if (!inputs.length) {
       select.add(new Option('No microphones found', ''));

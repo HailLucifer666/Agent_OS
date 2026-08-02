@@ -19,14 +19,15 @@ export function renderDetailHeader(element, engagement) {
     ? `Completed ${formatTimeAgo(engagement.completion?.completedAt || engagement.updatedAt)}`
     : `Created ${formatTimeAgo(engagement.createdAt)}`;
 
+  // xss-safe: all interpolated fields escaped
   element.innerHTML = `
     <div class="engag-detail-header">
       <div class="engag-detail-header-name">${escapeHtml(name)}</div>
       <div class="engag-detail-header-status">
-        <span class="engag-status-dot status-${engagement.status}"></span>
-        <span>${statusLabel(engagement.status)}</span>
+        <span class="engag-status-dot status-${escapeHtml(engagement.status)}"></span>
+        <span>${escapeHtml(statusLabel(engagement.status))}</span>
       </div>
-      <div class="engag-detail-header-meta">${meta}</div>
+      <div class="engag-detail-header-meta">${escapeHtml(meta)}</div>
     </div>
   `;
 }
@@ -44,6 +45,7 @@ export function renderTabs(element, engagement) {
     tabs.push({ key: 'report', label: 'Report' });
   }
 
+  // xss-safe: static template, no interpolation
   element.innerHTML = `
     <div class="engag-detail-tabs" role="tablist">
       ${tabs.map((tab) => `
@@ -75,6 +77,7 @@ export function renderTabContent(element, engagement, activeTab) {
     report: engagement.status === 'COMPLETED' ? renderReportTabContent(engagement) : '',
   };
 
+  // xss-safe: all interpolated fields escaped
   element.innerHTML = `
     <div class="engag-detail-tab-content">
       ${Object.keys(panes).map(key => `

@@ -16,6 +16,7 @@ let listState = {
 export function renderFilterChips(element, counts) {
   const { active = 0, recent = 0, completed = 0 } = counts;
 
+  // xss-safe: static template, no interpolation
   element.innerHTML = `
     <div class="engag-filter-chips" role="tablist" aria-label="Filter engagements">
       <button class="engag-filter-chip${listState.filter === 'active' ? ' active' : ''}" data-filter="active" role="tab" aria-selected="${listState.filter === 'active'}">Active · ${active}</button>
@@ -33,6 +34,7 @@ export function renderList(element, engagements, selectedId) {
   const filtered = filterEngagements(engagements, listState.filter);
 
   if (filtered.length === 0) {
+    // xss-safe: static template, no interpolation
     element.innerHTML = renderEmptyState();
     return;
   }
@@ -70,13 +72,13 @@ function renderListItem(engagement, selected) {
   const time = formatItemTime(engagement);
 
   return `
-    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${engagement.id}">
-      <div class="engag-status-dot status-${engagement.status}"></div>
+    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeHtml(engagement.id)}">
+      <div class="engag-status-dot status-${escapeHtml(engagement.status)}"></div>
       <div class="engag-list-item-main">
         <div class="engag-list-item-name">${escapeHtml(name)}</div>
-        <div class="engag-list-item-sub">${sub}</div>
+        <div class="engag-list-item-sub">${escapeHtml(sub)}</div>
       </div>
-      <div class="engag-list-item-time">${time}</div>
+      <div class="engag-list-item-time">${escapeHtml(time)}</div>
     </div>
   `;
 }

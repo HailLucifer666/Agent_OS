@@ -3,6 +3,7 @@
 // mutations. Never on an interval.
 
 export function mountWip(el, ctx) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `<div class="widget-lanes mono" data-role="lanes">loading…</div>`;
   const lanesEl = el.querySelector('[data-role="lanes"]');
   let disposed = false;
@@ -15,6 +16,7 @@ export function mountWip(el, ctx) {
       const byLane = {};
       (board.cards || []).forEach((c) => { byLane[c.lane] = (byLane[c.lane] || 0) + 1; });
       const lanes = ['backlog', 'building', 'review', 'done'];
+      // xss-safe: static template, no interpolation (local lane names + counts)
       lanesEl.innerHTML = lanes
         .map((l) => `<div class="widget-lane-row"><span class="text-faint">${l}</span><span>${byLane[l] || 0}</span></div>`)
         .join('');

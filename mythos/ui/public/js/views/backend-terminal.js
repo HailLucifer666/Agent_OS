@@ -8,6 +8,7 @@ import { subscribe } from '/js/ws.js';
 var MAX_LINES = 300;
 
 export async function render(mount) {
+  // xss-safe: static template, no interpolation
   mount.innerHTML = `
     <div class="terminal-wrap">
       <div class="terminal-pane">
@@ -105,6 +106,7 @@ export async function render(mount) {
   function renderLogs() {
     logCountEl.textContent = logCount;
     if (!logs.length) {
+      // xss-safe: static template, no interpolation
       logScroll.innerHTML = '<div class="terminal-empty">Awaiting backend logs…</div>';
       return;
     }
@@ -119,12 +121,14 @@ export async function render(mount) {
         '<span class="' + msgClass + '">' + escapeHtml(shortMsg(l.msg, 100)) + '</span>' +
       '</div>';
     }
+    // xss-safe: content assembled from escaped parts above
     logScroll.innerHTML = html;
   }
 
   function renderApi() {
     apiCountEl.textContent = apiCount;
     if (!apiCalls.length) {
+      // xss-safe: static template, no interpolation
       apiScroll.innerHTML = '<div class="terminal-empty">Awaiting API activity…</div>';
       return;
     }
@@ -148,6 +152,7 @@ export async function render(mount) {
       }
       html += '</div>';
     }
+    // xss-safe: content assembled from escaped parts above
     apiScroll.innerHTML = html;
   }
 

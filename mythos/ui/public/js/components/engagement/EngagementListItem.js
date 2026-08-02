@@ -12,13 +12,13 @@ export function renderEngagementListItem(engagement, selected = false) {
   const time = formatItemTime(engagement);
 
   return `
-    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${engagement.id}" role="button" tabindex="0">
-      <div class="engag-status-dot status-${engagement.status}" aria-label="${statusLabel(engagement.status)}"></div>
+    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeHtml(engagement.id)}" role="button" tabindex="0">
+      <div class="engag-status-dot status-${escapeHtml(engagement.status)}" aria-label="${escapeHtml(statusLabel(engagement.status))}"></div>
       <div class="engag-list-item-main">
         <div class="engag-list-item-name">${escapeHtml(name)}</div>
-        <div class="engag-list-item-sub">${sub}</div>
+        <div class="engag-list-item-sub">${escapeHtml(sub)}</div>
       </div>
-      <div class="engag-list-item-time" aria-label="Created ${formatTimeAgo(engagement.createdAt)}">${time}</div>
+      <div class="engag-list-item-time" aria-label="Created ${escapeHtml(formatTimeAgo(engagement.createdAt))}">${escapeHtml(time)}</div>
     </div>
   `;
 }

@@ -4,6 +4,7 @@
 const BUCKETS = 20;
 
 export function mountSpend(el, ctx) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `
     <div class="widget-value mono" data-role="count">0</div>
     <div class="widget-sub mono" data-role="last">no brain calls yet</div>

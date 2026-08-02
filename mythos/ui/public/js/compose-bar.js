@@ -21,6 +21,7 @@ const HINTS = [
 export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings }) {
   const root = document.getElementById('compose-bar');
 
+  // xss-safe: static template, no interpolation
   root.innerHTML = `
     <div id="compose-caption"></div>
     <div class="compose-hints" id="compose-hints"></div>
@@ -148,6 +149,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // (one of exactly two aria-live regions in the HUD) — no new call sites.
   const statusLiveEl = document.getElementById('hud-status-live');
   function setCaption(text, kind) {
+    // xss-safe: static template, no interpolation
     if (!text) { captionEl.innerHTML = ''; return; }
     let captionDiv = captionEl.querySelector('.mic-caption');
     if (!captionDiv) {

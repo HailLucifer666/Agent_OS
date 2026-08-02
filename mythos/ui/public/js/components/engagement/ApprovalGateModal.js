@@ -157,6 +157,7 @@ export function mountApprovalModal(mount, engagement, onApprove, onReject, onCan
 
 function renderState(mount, engagement, state, callbacks) {
   if (releaseTrap) { releaseTrap(); releaseTrap = null; }
+  // xss-safe: static template, no interpolation
   mount.innerHTML = renderApprovalModal(engagement, state);
   wireHandlers(mount, engagement, state, callbacks);
   const cancelBtn = mount.querySelector('.engag-modal-btn-cancel');

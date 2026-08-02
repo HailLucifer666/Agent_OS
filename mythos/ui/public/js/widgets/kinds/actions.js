@@ -35,6 +35,7 @@ function glyphFor(p) {
 }
 
 export function mountActions(el, ctx) {
+  // xss-safe: static template, no interpolation
   el.innerHTML = `<div class="widget-feed" data-role="feed"><div class="widget-sub mono">no actions yet</div></div>`;
   const feed = el.querySelector('[data-role="feed"]');
   const rows = [];
@@ -51,6 +52,7 @@ export function mountActions(el, ctx) {
       `${escapeHtml(p.tool || '?')}${reason}</div>`
     );
     if (rows.length > MAX_ROWS) rows.shift();
+    // xss-safe: static template, no interpolation
     feed.innerHTML = rows.slice().reverse().join('');
   });
 

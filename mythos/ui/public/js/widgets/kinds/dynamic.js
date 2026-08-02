@@ -12,6 +12,7 @@
 // (the host tears down the DOM element on close).
 
 export function mountDynamicWidget(el, payload) {
+  // xss-safe: static template, no interpolation
   if (!payload) { el.innerHTML = '<span class="widget-sub text-faint">No content</span>'; return; }
 
   var layout = String(payload.layout || '').trim().toLowerCase();
@@ -27,11 +28,13 @@ export function mountDynamicWidget(el, payload) {
   else if (layout === 'table') html = renderTable(items);
   else if (layout === 'text') html = renderText(items);
   else {
+    // xss-safe: all interpolated fields escaped
     el.innerHTML = '<span class="widget-sub text-faint">Unknown layout: ' + escapeHtml(payload.layout || 'unknown') + '</span>';
     return;
   }
 
   html += renderFooter(payload.footer);
+  // xss-safe: content assembled from escaped parts above
   el.innerHTML = html;
 }
 
