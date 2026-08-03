@@ -10,8 +10,15 @@
 // failure/offline it falls back to the canned 3-stage set (forge discipline:
 // honest-inert, never a fake brain result). Each stage sets BOTH `kind` (new,
 // preferred) and `type` (legacy alias) so existing readers keep working.
+//
+// Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+// buildViaBrain() below — the brain.think({lane:'build'}) call was a third,
+// independent generator alongside build-runner.js and executor.js's build
+// stage, same reasoning as build-engine.js's header comment. A caller-supplied
+// opts.buildEngine wins over the constructor-level default (mirrors opts.brain
+// below); brain.think stays the fallback when no engine is wired.
 
-function createPlanBuilder({ config }) {
+function createPlanBuilder({ config, buildEngine }) {
   if (!config) throw new Error('config required');
 
   var maxStages = config.ENGAGEMENT_MAX_STAGES || 10;
@@ -31,13 +38,15 @@ function createPlanBuilder({ config }) {
       throw new Error('Spec with markdown required');
     }
     opts = opts || {};
+    var generator = (opts.buildEngine && typeof opts.buildEngine.generate === 'function') ? opts.buildEngine :
+      (buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null);
 
-    if (opts.brain && typeof opts.brain.think === 'function') {
-      return buildViaBrain(spec, opts).then(function (stages) {
+    if (generator || (opts.brain && typeof opts.brain.think === 'function')) {
+      return buildViaBrain(spec, opts, generator).then(function (stages) {
         if (stages && stages.length) {
           return finalizePlan(stages);
         }
-        // brain returned nothing usable — honest fallback
+        // generator/brain returned nothing usable — honest fallback
         return finalizePlan(generateStages(spec));
       });
     }
@@ -53,9 +62,11 @@ function createPlanBuilder({ config }) {
     };
   }
 
-  // Brain-driven plan. try/catch + offline-check mirror forge.js's think()
-  // helper: a null/offline result is non-fatal and falls back to canned stages.
-  async function buildViaBrain(spec, opts) {
+  // Brain/buildEngine-driven plan. try/catch + offline-check mirror forge.js's
+  // think() helper: a null/offline result is non-fatal and falls back to
+  // canned stages. When `generator` (buildEngine) is present it wins — brain
+  // is only used when no engine is wired (see the Phase B comment above).
+  async function buildViaBrain(spec, opts, generator) {
     var toolList = (opts.toolCatalogNames && opts.toolCatalogNames.length)
       ? opts.toolCatalogNames.join(', ')
       : '(none)';
@@ -70,12 +81,14 @@ function createPlanBuilder({ config }) {
 
     var result = null;
     try {
-      result = await opts.brain.think({
-        lane: 'build',
-        schemaHint: STAGE_SCHEMA_HINT,
-        messages: [{ role: 'user', content: prompt }],
-        source: 'engagement:plan'
-      });
+      result = generator
+        ? await generator.generate({ prompt: prompt, source: 'engagement:plan' })
+        : await opts.brain.think({
+            lane: 'build',
+            schemaHint: STAGE_SCHEMA_HINT,
+            messages: [{ role: 'user', content: prompt }],
+            source: 'engagement:plan'
+          });
     } catch (_) {
       return null;
     }

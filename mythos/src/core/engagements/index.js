@@ -346,9 +346,12 @@ function createEngagementManager({ bus, config, memory, goals, leash, effectors,
   // stays synchronous (calls the canned paths); the brain-driven methods
   // are available for cortex / gateway / future orchestrator consumption.
   var stateMachine = require('./state-machine').createStateMachine({ config: config });
-  var interview = require('./interview').createInterview({ config: config, brain: brain });
-  var specBuilder = require('./spec-builder').createSpecBuilder({ config: config, brain: brain });
-  var planBuilder = require('./plan-builder').createPlanBuilder({ config: config, brain: brain });
+  // Phase B: thread buildEngine alongside brain so the three sub-builders'
+  // brain-driven methods (generateQuestionsBrain, buildBrain, plan's
+  // buildViaBrain) prefer the single build engine, same as the executor.
+  var interview = require('./interview').createInterview({ config: config, brain: brain, buildEngine: buildEngine });
+  var specBuilder = require('./spec-builder').createSpecBuilder({ config: config, brain: brain, buildEngine: buildEngine });
+  var planBuilder = require('./plan-builder').createPlanBuilder({ config: config, brain: brain, buildEngine: buildEngine });
   var recommendations = require('./recommendations').createRecommendations({ config: config });
   var progress = require('./progress').createProgress({ bus: bus, config: config });
 

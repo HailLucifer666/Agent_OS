@@ -3,12 +3,18 @@
 // Interview orchestration
 // ENGAGEMENT-SPEC section 1.1 interview interface
 
-function createInterview({ config, brain }) {
+function createInterview({ config, brain, buildEngine }) {
   if (!config) throw new Error('config required');
 
   var maxQuestions = (config.ENGAGEMENT_INTERVIEW_MAX_Q || 5);
   // V6 (Phase 4): brain is optional. When absent or offline, every method
   // falls back to the canned DEFAULT_QUESTIONS template (honest-inert).
+  // Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+  // generateQuestionsBrain() below, same single-engine reasoning as
+  // executor.js's build stage. Unlike brain.think (schemaHint pre-parses the
+  // reply into result.parsed), buildEngine.generate() only returns raw
+  // result.content, so the generator path parses the JSON object itself
+  // (extractJsonObject below, mirroring plan-builder.js's array extractor).
 
   // Default questions for engagement intake
   var DEFAULT_QUESTIONS = [
@@ -63,29 +69,39 @@ function createInterview({ config, brain }) {
   // fail, brain returns garbage), returns the canned DEFAULT_QUESTIONS so the
   // engagement can still proceed. The brain is an enhancement, never a gate.
   async function generateQuestionsBrain(intent) {
-    if (!brain || typeof brain.think !== 'function') return generateQuestions(intent);
+    var generator = buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null;
+    if (!generator && (!brain || typeof brain.think !== 'function')) return generateQuestions(intent);
     var intentText = (intent && typeof intent === 'string') ? intent :
                      (intent && intent.text) || '';
     if (!intentText.trim()) return generateQuestions(intent);
+    var prompt =
+      'You are scoping a software engagement. The operator said: "' + intentText + '".\n' +
+      'Generate ' + maxQuestions + ' targeted interview questions that will clarify the ' +
+      'deliverable, scope, and constraints SPECIFIC to this intent. Don\'t ask generic ' +
+      'questions — tailor them to what you already know about the domain.\n' +
+      'Respond as JSON: {"questions": [{"id":"q-kebab-name","prompt":"the question",' +
+      '"type":"text|choice","options":["a","b"]}, ...]}\n' +
+      'type:choice must include options. Max ' + maxQuestions + ' questions.';
     try {
-      var result = await brain.think({
-        lane: 'simple',
-        messages: [{ role: 'user', content:
-          'You are scoping a software engagement. The operator said: "' + intentText + '".\n' +
-          'Generate ' + maxQuestions + ' targeted interview questions that will clarify the ' +
-          'deliverable, scope, and constraints SPECIFIC to this intent. Don\'t ask generic ' +
-          'questions — tailor them to what you already know about the domain.\n' +
-          'Respond as JSON: {"questions": [{"id":"q-kebab-name","prompt":"the question",' +
-          '"type":"text|choice","options":["a","b"]}, ...]}\n' +
-          'type:choice must include options. Max ' + maxQuestions + ' questions.'
-        }],
-        schemaHint: '{ questions: Array<{id:string,prompt:string,type:string,options?:string[]}> }',
-        source: 'engagement:interview'
-      });
-      if (!result || result.offline || result.aborted || !result.parsed) {
-        return generateQuestions(intent);
+      var parsed;
+      if (generator) {
+        var result = await generator.generate({ prompt: prompt, source: 'engagement:interview' });
+        if (!result || result.offline || result.aborted || !result.content) return generateQuestions(intent);
+        parsed = extractJsonObject(result.content);
+      } else {
+        var brainResult = await brain.think({
+          lane: 'simple',
+          messages: [{ role: 'user', content: prompt }],
+          schemaHint: '{ questions: Array<{id:string,prompt:string,type:string,options?:string[]}> }',
+          source: 'engagement:interview'
+        });
+        if (!brainResult || brainResult.offline || brainResult.aborted || !brainResult.parsed) {
+          return generateQuestions(intent);
+        }
+        parsed = brainResult.parsed;
       }
-      var qs = Array.isArray(result.parsed.questions) ? result.parsed.questions : [];
+      if (!parsed) return generateQuestions(intent);
+      var qs = Array.isArray(parsed.questions) ? parsed.questions : [];
       // Validate + cap. Each question needs id + prompt; type defaults to text.
       var validated = qs.filter(function (q) {
         return q && q.id && String(q.prompt || '').trim();
@@ -102,6 +118,35 @@ function createInterview({ config, brain }) {
     } catch (_) {
       return generateQuestions(intent);
     }
+  }
+
+  // Pull a JSON object out of the generator's (possibly prose-wrapped) reply.
+  // Mirrors plan-builder.js's extractJsonArray, but balances '{'/'}' instead
+  // of '['/']' since buildEngine.generate() has no schemaHint pre-parsing.
+  function extractJsonObject(content) {
+    if (!content) return null;
+    if (typeof content === 'object') return content;
+    if (typeof content !== 'string') return null;
+    var direct = tryParseJson(content);
+    if (direct && typeof direct === 'object') return direct;
+    var start = content.indexOf('{');
+    if (start === -1) return null;
+    var depth = 0;
+    for (var i = start; i < content.length; i += 1) {
+      if (content[i] === '{') depth += 1;
+      else if (content[i] === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          var parsed = tryParseJson(content.slice(start, i + 1));
+          return (parsed && typeof parsed === 'object') ? parsed : null;
+        }
+      }
+    }
+    return null;
+  }
+
+  function tryParseJson(s) {
+    try { return JSON.parse(s); } catch (_) { return null; }
   }
 
   // Start interview - returns questions array

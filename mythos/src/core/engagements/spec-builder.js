@@ -3,10 +3,16 @@
 // Spec generation from interview answers
 // ENGAGEMENT-SPEC section 1.1 spec-builder interface
 
-function createSpecBuilder({ config, brain }) {
+function createSpecBuilder({ config, brain, buildEngine }) {
   if (!config) throw new Error('config required');
   // V6 (Phase 4): brain is optional. When absent or offline, build() falls
   // back to the deterministic markdown template (honest-inert).
+  // Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+  // buildBrain() below — brain.think was a second, independent generator with
+  // no queue/verifier/review behind it, same reasoning as executor.js's build
+  // stage. buildEngine.generate() returns a brain.think-compatible shape
+  // ({content, offline, aborted}), so buildBrain()'s existing offline/content
+  // checks work unchanged against either source.
 
   // Build spec from interview answers
   function build(interview) {
@@ -50,31 +56,30 @@ function createSpecBuilder({ config, brain }) {
   // downstream recommendation UI and shouldn't drift).
   async function buildBrain(interview) {
     var fallback = await build(interview);
-    if (!brain || typeof brain.think !== 'function') return fallback;
+    var generator = buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null;
+    if (!generator && (!brain || typeof brain.think !== 'function')) return fallback;
     if (!interview || !interview.questions) return fallback;
     var answerLines = interview.questions
       .filter(function (q) { return q.answer; })
       .map(function (q) { return '- ' + q.prompt + ': ' + q.answer; });
     if (answerLines.length === 0) return fallback;
+    var prompt =
+      'You are writing a project specification from interview answers.\n' +
+      'Answers:\n' + answerLines.join('\n') + '\n\n' +
+      'Write a clear, structured markdown spec (## sections, bullet lists). Cover:\n' +
+      '- Deliverable (what we are building)\n' +
+      '- Scope (what is in and out)\n' +
+      '- Key technical decisions + rationale\n' +
+      '- Edge cases / failure modes the build should handle\n' +
+      '- Acceptance criteria (how we know it is done)\n' +
+      'Do NOT invent answers that contradict the interview. Keep it under 600 words.';
     try {
-      var result = await brain.think({
-        lane: 'build',
-        messages: [{ role: 'user', content:
-          'You are writing a project specification from interview answers.\n' +
-          'Answers:\n' + answerLines.join('\n') + '\n\n' +
-          'Write a clear, structured markdown spec (## sections, bullet lists). Cover:\n' +
-          '- Deliverable (what we are building)\n' +
-          '- Scope (what is in and out)\n' +
-          '- Key technical decisions + rationale\n' +
-          '- Edge cases / failure modes the build should handle\n' +
-          '- Acceptance criteria (how we know it is done)\n' +
-          'Do NOT invent answers that contradict the interview. Keep it under 600 words.'
-        }],
-        source: 'engagement:spec'
-      });
+      var result = generator
+        ? await generator.generate({ prompt: prompt, source: 'engagement:spec' })
+        : await brain.think({ lane: 'build', messages: [{ role: 'user', content: prompt }], source: 'engagement:spec' });
       if (!result || result.offline || result.aborted || !result.content) return fallback;
       var enrichedMarkdown = String(result.content).trim();
-      if (enrichedMarkdown.length < 50) return fallback;   // brain returned garbage
+      if (enrichedMarkdown.length < 50) return fallback;   // generator returned garbage
       return Object.assign({}, fallback, { markdown: enrichedMarkdown });
     } catch (_) {
       return fallback;

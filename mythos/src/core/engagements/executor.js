@@ -323,12 +323,22 @@ function createEngagementExecutor(deps) {
     return { ok: true, verified: v.ok, skipped: v.skipped, artifacts: artifacts };
   }
 
-  // Research stage: brain.think, no file output. Verification = research claims.
+  // Research stage: no file output, verification = research claims. Content
+  // generation now goes through buildEngine (Hermes-Agent) when wired — same
+  // single-engine discipline as runBuildStage above, applied here so research
+  // stages don't stay the last brain.think-only generator in the executor.
+  // brain.think remains the fallback when buildEngine is absent (tests that
+  // wire brain only keep working; production always has buildEngine wired).
   async function runResearchStage(record, stage) {
-    if (brain) {
+    var generator = buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null;
+    if (generator || brain) {
       var prompt = (stage.prompt || stage.name || 'research') +
         '\n\nProduce research findings as concise prose.';
-      await think(prompt, null, 'research:' + stage.id, record.id);
+      if (generator) {
+        await generator.generate({ prompt: prompt, source: 'engagement:' + record.id + ':research:' + stage.id });
+      } else {
+        await think(prompt, null, 'research:' + stage.id, record.id);
+      }
     }
     var v = await verifyStage(record, stage);
     return { ok: true, verified: v.ok, skipped: v.skipped, artifacts: [] };
