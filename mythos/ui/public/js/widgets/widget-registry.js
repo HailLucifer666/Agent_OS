@@ -14,7 +14,7 @@ import { mountNews } from './kinds/news.js';
 import { mountMedia } from './kinds/media.js';
 import { mountVoiceLatency } from './kinds/voice-latency.js';
 // Ported from design/mythos-living-core.html — only the widgets MYTHOS can
-// genuinely feed. Its other 13 panels read a hardcoded SIM object that
+// genuinely feed. Its other panels read a hardcoded SIM object that
 // random-walks itself to fake liveness; porting those would contradict the
 // honest-inert contract in README. Vision/Maps/Files/Email/Calendar/Tasks have
 // no backend at all, and Reasoning duplicated tokens.js/spend.js (its other two
@@ -48,8 +48,8 @@ export const WIDGETS = [
   // --- Ported from design/mythos-living-core.html ---
   // defaultHidden: these are look-it-up instruments, not permanent-corner
   // tiles. Eleven cards already compete for the two side gutters; adding seven
-  // more visible-by-default buried the orb. Shown via the ✕/voice "open X"
-  // path like any other widget, and the choice persists from then on.
+  // more visible-by-default buried the orb. Reached via voice ("open system")
+  // or the hover control like any other widget, and the choice then persists.
   { id: 'system',   title: 'SYSTEM',   defaultPos: { left: 24, top: 384 },     mount: mountSystem,       defaultHidden: true },
   { id: 'cores',    title: 'CORES',    defaultPos: { left: 24, top: 488 },     mount: mountCores,        defaultHidden: true },
   { id: 'gpu',      title: 'GPU',      defaultPos: { left: 200, top: 24 },     mount: mountGpu,          defaultHidden: true },

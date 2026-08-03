@@ -14,11 +14,12 @@
 // The widget modules are browser ESM under ui/public/, imported via file URL
 // the same way test/voice-latency-format.test.js reaches latency-format.js.
 // Only their pure exports are exercised; mount() needs a DOM and is covered by
-// the live verification in the plan instead.
+// live verification instead.
 
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { cpuDeltaPercent, average } = require('../server/routes/system');
 
@@ -45,12 +46,11 @@ describe('system route — cpuDeltaPercent', () => {
     assert.deepEqual(cpuDeltaPercent(sample(0, 0), sample(25, 75)), [75]);
   });
 
-  it('is a DELTA, not a cumulative read — the same absolute numbers at a later, busier moment give a different answer', () => {
-    // This is the bug the delta exists to prevent: a single os.cpus() read
-    // gives average-since-boot, which barely moves on a long-running process
-    // and looks entirely convincing.
-    const first = cpuDeltaPercent(sample(1000, 1000), sample(1100, 1900));
-    assert.deepEqual(first, [90]);
+  it('measures only the window between the two samples, not since boot', () => {
+    // The bug this exists to prevent: a single os.cpus() read gives
+    // average-since-boot, which barely moves on a long-running process and
+    // looks entirely convincing. Same absolute counters, busy recent window.
+    assert.deepEqual(cpuDeltaPercent(sample(1000, 1000), sample(1100, 1900)), [90]);
   });
 
   it('returns null for a core with no elapsed time rather than 0%', () => {
@@ -150,6 +150,7 @@ describe('terminal — log line normalisation', () => {
   it('survives a malformed payload', () => {
     assert.equal(terminal.normalizeLogLine(null, 0).msg, '');
     assert.equal(terminal.normalizeLogLine({ msg: null }, 0).msg, '');
+    assert.equal(terminal.normalizeLogLine({ ts: 'not-a-date', msg: 'x' }, 0).time, '');
   });
 });
 
@@ -221,10 +222,10 @@ describe('memory widget — ranking', () => {
 describe('memory route — the degenerate empty-query score stays hidden', () => {
   // Regression guard for a trap that already caught this port once. The route
   // browses with recall(''), and an empty query is NOT zero terms:
-  // ''.split(/\s+/) === ['']. semantic.js:162-165 therefore computes
-  // matched=1 / terms.length=1 for every entry, i.e. a constant 1.0. Exposing
-  // it would let a widget draw a full "recall strength" bar on every row and
-  // present a constant as a measurement.
+  // ''.split(/\s+/) === ['']. semantic.js therefore computes matched=1 over
+  // terms.length=1 for every entry, i.e. a constant 1.0. Exposing it would let
+  // a widget draw a full "recall strength" bar on every row and present a
+  // constant as a measurement.
   it('an empty query splits to [""], not [], which is why every entry scores 1', () => {
     const terms = ''.split(/\s+/);
     assert.deepEqual(terms, ['']);
@@ -233,10 +234,8 @@ describe('memory route — the degenerate empty-query score stays hidden', () =>
   });
 
   it('the route does not forward score to the client', () => {
-    const src = require('fs').readFileSync(
-      path.join(__dirname, '..', 'server', 'routes', 'memory.js'), 'utf8',
-    );
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'memory.js'), 'utf8');
     assert.doesNotMatch(src, /^\s*score:/m,
-      'routes/memory.js must not emit a score field — see the comment there');
+      'routes/memory.js must not emit a score field — it is a constant on the browse path');
   });
 });

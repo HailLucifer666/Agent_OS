@@ -1,5 +1,5 @@
-// cores.js — per-core CPU load, one bar per core, from the shared
-// /api/system poller.
+// cores.js — per-core CPU load, one bar per core, from the shared /api/system
+// poller.
 //
 // Shares system-source.js with the SYSTEM widget deliberately: /api/system is
 // stateful (each request consumes the CPU delta window), so two independent
@@ -7,8 +7,8 @@
 //
 // A core whose delta could not be computed renders as unavailable rather than
 // 0% — on the first request of a server process there is no previous sample to
-// diff against, and a row of empty bars would look exactly like a genuinely
-// idle machine.
+// diff against, and a row of empty bars looks exactly like a genuinely idle
+// machine.
 
 import { h, keyedList, cleanupBag } from '../../dom.js';
 import { fetchSystem } from './system-source.js';
@@ -20,18 +20,21 @@ export function mountCores(el, ctx) {
   const list = h('div', { class: 'widget-lanes' });
   el.replaceChildren(headline, list);
 
-  function paint(data) {
-    const cpu = (data && data.cpu) || null;
-    const perCore = (cpu && Array.isArray(cpu.perCore)) ? cpu.perCore : [];
+  function clear() {
+    keyedList(list, [], (x) => x, () => h('div'));
+  }
 
+  function paint(data) {
     if (!data) {
       headline.textContent = 'host metrics unreachable';
-      keyedList(list, [], (x) => x, () => h('div'));
+      clear();
       return;
     }
+    const cpu = data.cpu || {};
+    const perCore = Array.isArray(cpu.perCore) ? cpu.perCore : [];
     if (!perCore.length) {
       headline.textContent = 'awaiting first sample';
-      keyedList(list, [], (x) => x, () => h('div'));
+      clear();
       return;
     }
 
@@ -40,10 +43,9 @@ export function mountCores(el, ctx) {
       : `${perCore.length} threads`;
     headline.title = cpu.model || '';
 
-    const items = perCore.map((percent, i) => ({ i, percent }));
     keyedList(
       list,
-      items,
+      perCore.map((percent, i) => ({ i, percent })),
       (item) => item.i,
       (item) => {
         const fill = h('i');

@@ -284,3 +284,32 @@
   border-radius: 2px;
   transition: width 1s linear;
 }
+
+/* Meter bar — SYSTEM (cpu/mem/disk) and CORES (per-core load). Ported from
+   design/mythos-living-core.html's .bar primitive, retokenised onto
+   --accent / --status-warn.
+
+   The bar is display:none'd by its widget whenever the underlying value is
+   unavailable. That is load-bearing, not cosmetic: a zero-width bar is
+   visually identical to a real 0% reading, so hiding it is the only way to
+   distinguish "idle" from "we could not measure this". */
+.widget-bar-row { margin-bottom: 6px; }
+
+.widget-bar {
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.widget-bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width var(--dur-fast) var(--ease);
+}
+
+.widget-bar > i.warn { background: var(--status-warn); }

@@ -3,11 +3,11 @@
 //
 // THIS IS A CORRECTNESS REQUIREMENT, NOT AN OPTIMISATION. /api/system reports
 // CPU as the delta since the previous request (server/routes/system.js keeps
-// the last os.cpus() sample in module scope, because a single cumulative read
-// gives average-since-boot). That makes the endpoint STATEFUL: every request
-// consumes the accumulated window and resets it.
+// the last os.cpus() sample, because a single cumulative read gives
+// average-since-boot). That makes the endpoint STATEFUL: every request consumes
+// the accumulated window and resets it.
 //
-// If SYSTEM and CORES each polled on their own 2s timer, their requests would
+// If SYSTEM and CORES each polled on their own timer, their requests would
 // interleave and each would see roughly half the other's window — two widgets
 // showing different CPU numbers for the same machine at the same instant, both
 // jittery, neither wrong in a way that looks like a bug. One poller, one
@@ -43,7 +43,7 @@ function createSystemSource() {
   return {
     subscribe(fn) {
       listeners.add(fn);
-      // Hand a late subscriber the most recent reading immediately so the
+      // Hand a late subscriber the most recent reading immediately, so the
       // second widget to mount is not blank until the next tick.
       if (last !== null) { try { fn(last); } catch { /* ignore */ } }
       if (!timer) {

@@ -1,31 +1,29 @@
 // gpu.js — the GPU the browser is actually rendering on, via the
 // WEBGL_debug_renderer_info extension.
 //
-// SCOPE, deliberately narrow: this reports the renderer and vendor STRINGS and
-// nothing else. design/mythos-living-core.html's "GPU" panel also showed a
-// utilization percentage and a draw-call count — both invented (its draw-call
-// figure is a formula over the open-widget count). No browser API exposes GPU
-// utilization, and MYTHOS has no server-side GPU source either, so those two
-// rows are dropped rather than faked.
+// SCOPE, deliberately narrow: renderer and vendor STRINGS, nothing else.
+// design/mythos-living-core.html's "GPU" panel also showed a utilization
+// percentage and a draw-call count — both invented (its draw-call figure is a
+// formula over the open-widget count). No browser API exposes GPU utilization
+// and MYTHOS has no server-side GPU source, so those rows are dropped.
 //
-// The extension is privacy-gated: Firefox hides it behind a pref, and Chromium
-// can withhold it under a permissions policy. Absent -> "unavailable". We do
-// not fall back to the unmasked-off VENDOR/RENDERER strings ("WebKit
-// WebGL" / "ANGLE"), because those name the abstraction layer rather than the
-// hardware and would read as a real answer while telling you nothing.
+// The extension is privacy-gated: Firefox hides it behind a pref, Chromium can
+// withhold it under a permissions policy. Absent -> "unavailable". We do NOT
+// fall back to the masked VENDOR/RENDERER strings ("WebKit WebGL" / "ANGLE"),
+// because those name the abstraction layer rather than the hardware and would
+// read as a real answer while telling you nothing.
 //
-// The context created here is a throwaway used for exactly one query and then
-// released via WEBGL_lose_context — the HUD's own canvases (hud-canvas.js,
-// core-orb.js) are both 2D, so there is no existing WebGL context to borrow,
-// and holding a second live one for the lifetime of the widget would cost a
-// real GPU allocation for no reason.
+// The context created here is a throwaway used for one query then released via
+// WEBGL_lose_context — the HUD's own canvases (hud-canvas.js, core-orb.js) are
+// both 2D, so there is no existing WebGL context to borrow, and holding a live
+// one for the widget's lifetime would cost a real GPU allocation for nothing.
 
 import { h } from '../../dom.js';
 
 const UNAVAILABLE = 'unavailable';
 
-// Pure: given a gl context (or null) return {renderer, vendor}. Exported so the
-// no-context and no-extension branches are node-testable with a stub.
+// Pure: given a gl context (or null) return {renderer, vendor, reason}.
+// Exported so the no-context and no-extension branches are node-testable.
 export function readRenderer(gl) {
   if (!gl || typeof gl.getExtension !== 'function') {
     return { renderer: UNAVAILABLE, vendor: UNAVAILABLE, reason: 'no webgl context' };
@@ -44,10 +42,9 @@ export function readRenderer(gl) {
 }
 
 function probe() {
-  let canvas = null;
   let gl = null;
   try {
-    canvas = document.createElement('canvas');
+    const canvas = document.createElement('canvas');
     gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
     return readRenderer(gl);
   } catch {

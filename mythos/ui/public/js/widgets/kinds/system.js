@@ -1,14 +1,14 @@
-// system.js — host CPU / RAM / disk, from GET /api/system.
+// system.js — host CPU / RAM / disk, from GET /api/system via the shared poller.
 //
 // Ported from design/mythos-living-core.html's "System" panel MINUS its
 // temperature, power-draw and network-throughput rows: Node exposes none of
 // those, so the mockup's figures for them were invented. See
 // server/routes/system.js for the full reasoning.
 //
-// Every value here can be legitimately null (first request of a process has no
-// CPU delta yet; fs.statfs is missing before Node 18.15). null renders as
-// "unavailable", never as 0% — a 0% CPU bar is indistinguishable from a real
-// idle reading, which is exactly the kind of confident lie the honest-inert
+// Every value here can legitimately be null (the first request of a process
+// has no CPU delta yet; fs.statfs is missing before Node 18.15). null renders
+// as "unavailable", never as 0% — a 0% CPU bar is indistinguishable from a
+// real idle reading, which is exactly the confident lie the honest-inert
 // contract exists to prevent.
 
 import { h, cleanupBag } from '../../dom.js';
@@ -35,8 +35,8 @@ export function formatUptime(sec) {
   return `${min}m`;
 }
 
-// Builds a labelled bar row. `percent` null => the bar is omitted entirely and
-// the value reads "unavailable"; an empty bar would read as 0.
+// A labelled meter row. When `percent` is null the bar is HIDDEN and the value
+// reads "unavailable" — an empty bar would read as 0.
 function barRow(label) {
   const fill = h('i');
   const bar = h('div', { class: 'widget-bar' }, fill);

@@ -6,26 +6,30 @@
 // WHY THIS IS NEW: src/core/sensors/metric.js is named as if it did this, but
 // it polls AI-provider health and quota — nothing in the repo had ever read
 // os.cpus()/totalmem()/freemem(). /api/status is provider state plus voice
-// latency. So there was no host-metrics source at all before this route.
+// latency. There was no host-metrics source at all before this route.
 //
-// WHAT IS DELIBERATELY ABSENT: temperature, power draw, and network throughput.
-// design/mythos-living-core.html's System panel showed all three; Node has no
-// builtin for any of them and MYTHOS ships no native addon, so they are omitted
-// rather than estimated. A widget that cannot get a number says "unavailable"
-// (README's honest-inert contract) — it never renders a plausible one.
+// WHAT IS DELIBERATELY ABSENT: temperature, power draw, and network
+// throughput. design/mythos-living-core.html's System panel showed all three;
+// Node has no builtin for any of them and MYTHOS ships no native addon, so
+// they are omitted rather than estimated. A widget that cannot get a number
+// says "unavailable" (README's honest-inert contract), never a plausible one.
 //
 // CPU PERCENT IS A DELTA, NOT A SNAPSHOT. os.cpus()[].times are cumulative
-// microsecond counters since boot. Deriving a percentage from a single read
-// gives average-since-boot, which on a long-running process is a nearly-frozen
+// counters since boot. Deriving a percentage from a single read gives
+// average-since-boot, which on a long-running process is a nearly-frozen
 // number that looks completely convincing and is wrong. The previous sample is
-// therefore kept in module scope and each request reports the change since the
-// last one.
+// kept in closure scope and each request reports the change since the last one.
+//
+// THAT MAKES THIS ENDPOINT STATEFUL: each request consumes the accumulated
+// window. Two independent pollers would each see roughly half the other's
+// window. ui/public/js/widgets/kinds/system-source.js exists to guarantee a
+// single shared poller — see the comment there before adding a third consumer.
 
 const os = require('os');
 const fs = require('fs');
 
 // Pure: two os.cpus()-shaped arrays in, per-core busy percentages out.
-// Exported for node:test — this is the part that is easy to get subtly wrong.
+// Exported for node:test — easy to get subtly wrong, impossible to eyeball.
 function cpuDeltaPercent(prev, next) {
   if (!Array.isArray(prev) || !Array.isArray(next) || prev.length !== next.length) return null;
   const out = [];
@@ -44,7 +48,7 @@ function cpuDeltaPercent(prev, next) {
 }
 
 function average(values) {
-  const real = values.filter((v) => Number.isFinite(v));
+  const real = (values || []).filter((v) => Number.isFinite(v));
   if (!real.length) return null;
   return Math.round(real.reduce((sum, v) => sum + v, 0) / real.length);
 }
@@ -80,8 +84,7 @@ function mountSystemRoutes(app, deps) {
       res.json({
         cpu: {
           // null on the very first request of a process — there is no previous
-          // sample to diff against yet, and inventing one would defeat the
-          // whole point of sampling.
+          // sample to diff against, and inventing one defeats the sampling.
           loadPercent: perCore ? average(perCore) : null,
           perCore: perCore || [],
           model: (nextCpus[0] && nextCpus[0].model) || null,

@@ -1,6 +1,6 @@
 // sensors.js — what the BROWSER can honestly tell us about the machine the HUD
 // is running on. Every row here is a real `navigator.*` reading; there is no
-// server involvement at all (confirmed: no /api route exposes any of this).
+// server involvement at all (no /api route exposes any of this).
 //
 // The honesty rule matters more here than anywhere else in the widget set,
 // because these APIs are the ones browsers most aggressively gate. deviceMemory
@@ -9,16 +9,15 @@
 // this renders the word "unavailable" — never a 0, never a dash, never a
 // plausible-looking default. A fabricated 8 GB is worse than an admitted gap.
 //
-// Ported from design/mythos-living-core.html's "Sensors" panel, which is one of
-// only three widgets in that mockup reading real data rather than its SIM
-// object. The mockup's own comment makes the same point about honest gaps.
+// Ported from design/mythos-living-core.html's "Sensors" panel, one of only
+// three widgets in that mockup reading real data rather than its SIM object.
 
 import { h, keyedList, cleanupBag } from '../../dom.js';
 
 const UNAVAILABLE = 'unavailable';
 
-// Pure: takes a navigator-shaped object, returns display rows. Exported so the
-// absent-API branches are node-testable without a browser (test/widget-sensors.test.js).
+// Pure: takes navigator/window-shaped objects, returns display rows. Exported
+// so the absent-API branches are node-testable without a browser.
 export function readSensors(nav, win) {
   const n = nav || {};
   const w = win || {};
@@ -31,7 +30,7 @@ export function readSensors(nav, win) {
   });
 
   // deviceMemory is a coarse power-of-two GB bucket, not a precise figure —
-  // label it as approximate so nobody reads it as the real installed total.
+  // label it approximate so nobody reads it as the real installed total.
   rows.push({
     key: 'memory',
     label: 'device memory',
@@ -61,15 +60,15 @@ export function readSensors(nav, win) {
       : UNAVAILABLE,
   });
 
-  // Battery arrives asynchronously (getBattery() returns a promise), so it is
-  // appended by the caller once resolved rather than read here.
+  // Battery arrives asynchronously (getBattery() returns a promise), so the
+  // caller appends it once resolved rather than reading it here.
   return rows;
 }
 
 export function formatBattery(battery) {
   if (!battery) return UNAVAILABLE;
-  const pct = Number.isFinite(battery.level) ? `${Math.round(battery.level * 100)}%` : UNAVAILABLE;
-  if (pct === UNAVAILABLE) return UNAVAILABLE;
+  if (!Number.isFinite(battery.level)) return UNAVAILABLE;
+  const pct = `${Math.round(battery.level * 100)}%`;
   return battery.charging ? `${pct} · charging` : pct;
 }
 
@@ -101,9 +100,9 @@ export function mountSensors(el, ctx) {
 
   paint();
 
-  // Viewport and pixel ratio genuinely change at runtime (window resize, moving
-  // the window between displays of different scaling), so repaint on resize
-  // rather than pretending the boot-time reading stays true.
+  // Viewport and pixel ratio genuinely change at runtime (resize, moving the
+  // window between displays with different scaling), so repaint rather than
+  // pretending the boot-time reading stays true.
   const onResize = () => paint();
   window.addEventListener('resize', onResize);
   bag.add(() => window.removeEventListener('resize', onResize));
@@ -128,9 +127,8 @@ export function mountSensors(el, ctx) {
       });
     }).catch(() => {
       if (disposed) return;
-      // Promise rejection means the API exists but was refused (permissions
-      // policy). That is a different fact from "the API is missing", but both
-      // land the operator in the same place: we do not know. Say so.
+      // Rejection means the API exists but was refused (permissions policy).
+      // Different fact from "missing", same honest conclusion: we don't know.
       batteryRow = { key: 'battery', label: 'battery', value: UNAVAILABLE };
       paint();
     });

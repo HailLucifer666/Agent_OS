@@ -1,5 +1,5 @@
-// memory-widget.js — a glanceable list of what the entity actually knows:
-// the most recent semantic topics, with a live count.
+// memory-widget.js — a glanceable list of what the entity actually knows: the
+// most recent semantic topics, with a live count.
 //
 // Named memory-widget.js, not memory.js, to stay unambiguous against
 // src/core/memory/ and ui/public/js/views/memory.js (the full overlay panel).
@@ -7,15 +7,14 @@
 //
 // WHY THERE IS NO RECALL-STRENGTH BAR, though the mockup had one:
 // design/mythos-living-core.html's Memory panel showed a strength meter per
-// entry. Porting it looked easy — recall() genuinely computes a score, and
-// server/routes/memory.js was discarding it. But the route browses with
-// recall(''), and an empty query makes that score degenerate: ''.split(/\s+/)
-// is [''], not [], so semantic.js:162-165 gets terms=[''], every
-// lower.includes('') is true, matched=1, and score is 1/1 for EVERY entry.
-// A bar drawn from that is 100% full on every row, always, while looking
-// exactly like a real measurement. Worse than showing nothing. So the route
-// keeps discarding the score (with a comment saying why), and this widget
-// shows facts it can stand behind: topic, snippet, count.
+// entry, and porting it looked easy — recall() genuinely computes a score, and
+// server/routes/memory.js discards it. But the route browses with recall(''),
+// and an empty query makes that score DEGENERATE: ''.split(/\s+/) is [''], not
+// [], so semantic.js gets terms=[''], every lower.includes('') is true,
+// matched=1, and score is 1/1 for EVERY entry. A bar drawn from that is 100%
+// full on every row, always, while looking exactly like a real measurement.
+// Worse than showing nothing. So the route keeps discarding the score, and
+// this widget shows only facts it can stand behind.
 
 import { h, keyedList, cleanupBag } from '../../dom.js';
 
@@ -23,9 +22,9 @@ const LIMIT = 8;
 const POLL_MS = 30000;
 
 // Pure. Exported for node:test.
-// Newest first — `ts` is the sidecar's updated stamp. Entries with no
-// timestamp sort last rather than being dropped; they are real memories, we
-// just cannot place them in time.
+// Newest first — `ts` is the sidecar's updated stamp. Entries with no timestamp
+// sort last rather than being dropped; they are real memories, we just cannot
+// place them in time.
 export function rankMemories(entries, limit) {
   return (Array.isArray(entries) ? entries : [])
     .filter((e) => e && e.summary)
@@ -48,16 +47,20 @@ export function mountMemoryWidget(el, ctx) {
   let disposed = false;
   bag.add(() => { disposed = true; });
 
+  function clear() {
+    keyedList(list, [], (x) => x, () => h('div'));
+  }
+
   function paint(entries, unreadable) {
     if (unreadable) {
       headline.textContent = 'memory unreachable';
-      keyedList(list, [], (x) => x, () => h('div'));
+      clear();
       return;
     }
     const ranked = rankMemories(entries, LIMIT);
     if (!ranked.length) {
       headline.textContent = 'no semantic memories yet';
-      keyedList(list, [], (x) => x, () => h('div'));
+      clear();
       return;
     }
     headline.textContent = `${entries.length} topic${entries.length === 1 ? '' : 's'}`;
