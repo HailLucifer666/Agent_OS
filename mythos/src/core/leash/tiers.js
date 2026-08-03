@@ -45,6 +45,7 @@ const TIER_TABLE = {
   'self_capabilities':     0,  // read-only — reports the boot-generated capabilities manifest
   'document_list':         0,  // read-only — lists ingested documents (doc-level metadata), §7.5
   'document_search':       0,  // read-only — semantic search over ingested document chunks, §7.5, writes nothing
+  'document_answer':       0,  // read-only — answers a question grounded in ingested document chunks + cites them, §7.5, writes nothing
   'search_code':           0,  // read-only — semantic search over indexed code chunks, §7.11, writes nothing
   'phone_list_devices':    0,  // Task 10 (step 6, Android bridge) — read-only, `adb devices -l` via the adapter's own live status
 

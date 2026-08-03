@@ -138,6 +138,111 @@ describe('hermes-runner — runBuild + onProgress', () => {
   });
 });
 
+describe('hermes-runner — runWidgetBuild (Phase C3, validated WIDGET SPEC build target)', () => {
+  let dir, vault, runner;
+  beforeEach(() => {
+    dir = tempVaultDir();
+    vault = createFsStore(() => dir, { emit() {} });
+    runner = createHermesRunner({ config: {}, vault });
+  });
+  afterEach(() => cleanupVaultDir(dir));
+
+  it('happy path: valid dynamic spec → ok:true, sandboxed to a scratch dir (no project write-root)', async () => {
+    let seenOpts;
+    const restore = mockRunTask(async (prompt, opts) => {
+      seenOpts = opts;
+      return JSON.stringify({ kind: 'dynamic', title: 'Deploy Status', layout: 'stat', items: [{ label: 'Uptime', value: '99.9%', tone: 'gold' }] });
+    });
+    try {
+      const res = await runner.runWidgetBuild('a stat widget showing uptime');
+      assert.equal(res.ok, true);
+      assert.deepEqual(res.spec, { kind: 'dynamic', title: 'Deploy Status', layout: 'stat', items: [{ label: 'Uptime', value: '99.9%', tone: 'gold' }] });
+      assert.equal(seenOpts.requireCli, true);
+      assert.match(seenOpts.cwd, /_widget-scratch/);
+      assert.match(seenOpts.env.HERMES_WRITE_SAFE_ROOT, /_widget-scratch/);
+    } finally { restore(); }
+  });
+
+  it('happy path: a known static kind with no extra props → ok:true', async () => {
+    const restore = mockRunTask(async () => JSON.stringify({ kind: 'weather' }));
+    try {
+      const res = await runner.runWidgetBuild('show me the weather widget');
+      assert.equal(res.ok, true);
+      assert.deepEqual(res.spec, { kind: 'weather' });
+    } finally { restore(); }
+  });
+
+  it('rejects an unknown widget kind — never rendered, reason widget-invalid', async () => {
+    const restore = mockRunTask(async () => JSON.stringify({ kind: 'iframe-embed', src: 'https://evil.example' }));
+    try {
+      const res = await runner.runWidgetBuild('embed a page');
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'widget-invalid');
+      assert.match(res.error, /unknown widget kind/);
+    } finally { restore(); }
+  });
+
+  it('rejects props smuggled onto a static kind', async () => {
+    const restore = mockRunTask(async () => JSON.stringify({ kind: 'clock', onclick: 'alert(1)' }));
+    try {
+      const res = await runner.runWidgetBuild('a clock widget');
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'widget-invalid');
+    } finally { restore(); }
+  });
+
+  it('rejects a dynamic spec with a bad layout enum', async () => {
+    const restore = mockRunTask(async () => JSON.stringify({ kind: 'dynamic', title: 'X', layout: 'carousel', items: [] }));
+    try {
+      const res = await runner.runWidgetBuild('spec');
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'widget-invalid');
+      assert.match(res.error, /layout must be one of/);
+    } finally { restore(); }
+  });
+
+  it('reply with no JSON at all → ok:false reason widget-unparseable', async () => {
+    const restore = mockRunTask(async () => 'Sure! Here is a widget description in prose.');
+    try {
+      const res = await runner.runWidgetBuild('spec');
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'widget-unparseable');
+    } finally { restore(); }
+  });
+
+  it('hermes.runTask throws → ok:false reason widget-build-failed', async () => {
+    const restore = mockRunTask(async () => { throw new Error('hermes-agent OFFLINE: not installed'); });
+    try {
+      const res = await runner.runWidgetBuild('spec');
+      assert.equal(res.ok, false);
+      assert.equal(res.reason, 'widget-build-failed');
+      assert.match(res.error, /OFFLINE/);
+    } finally { restore(); }
+  });
+
+  it('adversarial: malicious strings in title/items/footer pass shape validation as inert data, never as markup', async () => {
+    const restore = mockRunTask(async () => JSON.stringify({
+      kind: 'dynamic',
+      title: '<script>alert(1)</script>',
+      layout: 'text',
+      items: [{ label: '"><img src=x onerror=alert(1)>', value: 'javascript:alert(1)' }],
+      footer: '"><svg onload=alert(1)>',
+    }));
+    try {
+      const res = await runner.runWidgetBuild('spec');
+      assert.equal(res.ok, true);
+      // The spec is accepted as DATA — validation only vets shape, not content.
+      // Nothing here is markup: it's plain strings inside a JS object. The HUD
+      // renderer (kinds/dynamic.js) is the only place these strings ever touch
+      // a DOM tree, and it escapes every one of them (escapeHtml) before
+      // interpolating into innerHTML — see that file's own header comment.
+      assert.equal(res.spec.title, '<script>alert(1)</script>');
+      assert.equal(typeof res.spec.title, 'string');
+      assert.ok(res.spec.items[0].label.indexOf('<img') !== -1);
+    } finally { restore(); }
+  });
+});
+
 describe('hermes-runner — classify() blocker taxonomy (exit 0 is not success)', () => {
   let dir, vault, runner;
   beforeEach(() => {

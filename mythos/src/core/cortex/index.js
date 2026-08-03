@@ -4,6 +4,7 @@
 
 const ooda = require('./ooda');
 const { dispatchAction } = require('../effectors/dispatch-action');
+const { createDiffGate } = require('./diff-gate');
 
 // Confirm-popup text — plain "key: value" pairs instead of a raw JSON dump
 // (which rendered braces/quotes verbatim to the user). Same fix as voice-agent.js.
@@ -25,6 +26,8 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   let running = false;
   let generation = 0;
   const lastTickAt = { value: 0 };
+  // mull() below speaks only when its thought actually changed — see diff-gate.js.
+  const diffGate = createDiffGate();
 
   const MAX_DRAIN_PER_TICK = (config && config.MAX_DRAIN_PER_TICK) || 50;
   // [Phase 9] ACTION_TIMEOUT_MS is now a real schema key (config/schema.js,
@@ -409,7 +412,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
             salience: 0.4,
             channel: 'cognition'
           });
-          bus.emit('cortex.thought', { text: thoughtText, priority: result.parsed.priority });
+          // Diff-gate: 'high' priority is what makes the server say this aloud
+          // unprompted (see the PRIORITY RULES prompt below) — without this
+          // check the same stalled-goal nudge would repeat every mull cadence
+          // (default ~5min) for as long as nothing changed. The episodic write
+          // above still records every pass honestly; only the spoken emit is gated.
+          if (diffGate.hasChanged('mull-thought', thoughtText)) {
+            bus.emit('cortex.thought', { text: thoughtText, priority: result.parsed.priority });
+          }
         }
       }
 

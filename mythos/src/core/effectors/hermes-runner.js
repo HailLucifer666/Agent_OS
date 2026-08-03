@@ -24,6 +24,7 @@ const hermes = require('../../../adapters/hermes-agent');
 const prompts = require('./forge-prompts');       // Invariant 7 — reuse extractJsonObject/sanitizeManifestFiles
 const validate = require('./forge-validate');
 const buildPack = require('../skills/build-pack');
+const widgetSpec = require('./widget-spec');       // Phase C3 — validated WIDGET SPEC build target
 
 const PLAN_SCHEMA_HINT =
   '{"name":"short project name","kind":"app"|"website",' +
@@ -92,6 +93,60 @@ function createHermesRunner({ config, vault }) {
         techNotes: typeof obj.techNotes === 'string' ? obj.techNotes.slice(0, 600) : '',
       },
     };
+  }
+
+  // ---- widget-spec mode (Phase C3 — generative UI) --------------------------
+  // A THIRD build target, alongside plan/build: for a "build me a widget"
+  // request Hermes must reply with a validated WIDGET SPEC (see widget-spec.js)
+  // instead of free HTML or a file tree. No files are written — same
+  // throwaway-scratch-dir belt-and-braces as runPlan, since nothing here is
+  // supposed to touch disk. Server-side validation is the real gate: a spec
+  // naming an unknown kind or carrying props that fail validation is REJECTED
+  // here and never reaches the bus/renderer, mirroring spawn_widget's own
+  // "nothing above this line reaches the bus" contract in from-widgets.js.
+  async function runWidgetBuild(spec) {
+    const scratchRel = path.join('builds', '_widget-scratch');
+    vault.ensureDir(vault.vaultPath(scratchRel));
+    const scratchAbs = vault.vaultPath(scratchRel);
+
+    const prompt = [
+      'You are generating a dashboard widget for MYTHOS\'s HUD.',
+      'Do NOT create, write, or modify any files. Do NOT produce HTML, CSS, or markup of any kind.',
+      'Your entire reply is DATA that a fixed renderer turns into a widget — never markup.',
+      widgetSpec.WIDGET_SPEC_SCHEMA_HINT,
+      '',
+      'WIDGET REQUEST: ' + String(spec || ''),
+    ].join('\n');
+
+    let reply;
+    try {
+      reply = await hermes.runTask(prompt, {
+        requireCli: true,
+        cwd: scratchAbs,
+        timeoutMs: planTimeoutMs(),
+        maxPromptChars: 24000,
+        env: { HERMES_WRITE_SAFE_ROOT: scratchAbs, HERMES_YOLO_MODE: '1' },
+      });
+    } catch (err) {
+      return { ok: false, reason: 'widget-build-failed', error: String((err && err.message) || err) };
+    }
+
+    // Invariant 7: the same extractor Forge already uses for brain manifests
+    // and runPlan's file plan — one JSON-extraction path for the whole module.
+    const obj = prompts.extractJsonObject(reply);
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      return {
+        ok: false, reason: 'widget-unparseable',
+        error: 'Hermes did not return a JSON widget spec',
+        reply: String(reply || '').slice(0, 1000),
+      };
+    }
+
+    const validated = widgetSpec.validateWidgetSpec(obj);
+    if (!validated.ok) {
+      return { ok: false, reason: 'widget-invalid', error: validated.reason, reply: String(reply || '').slice(0, 1000) };
+    }
+    return { ok: true, spec: validated.spec };
   }
 
   // ---- auto mode -----------------------------------------------------------
@@ -210,7 +265,7 @@ function createHermesRunner({ config, vault }) {
     return { ok: true, files: after, added, reply };
   }
 
-  return { runPlan, runBuild, _classify: classify };
+  return { runPlan, runBuild, runWidgetBuild, _classify: classify };
 }
 
 module.exports = { createHermesRunner, PLAN_SCHEMA_HINT };

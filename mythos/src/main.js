@@ -451,7 +451,10 @@ async function main() {
       registerFromImageGen(hub, { vault: memory.fs });
       // §7.5 doc RAG + §7.11 code search — both read/write the SAME
       // memory.documents store + memory.documentsIndex vector partition.
-      registerFromDocuments(hub, { documents: memory.documents, documentsIndex: memory.documentsIndex });
+      // brain is passed so document_answer (§7.5 RAG citations) can compose a
+      // synthesized answer; it degrades to an extractive one when brain is
+      // offline or absent (see from-documents.js's composeAnswer).
+      registerFromDocuments(hub, { documents: memory.documents, documentsIndex: memory.documentsIndex, brain: brain });
       registerFromCodeSearch(hub, { documents: memory.documents, documentsIndex: memory.documentsIndex });
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval

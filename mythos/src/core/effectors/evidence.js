@@ -48,6 +48,12 @@ var ORACLES = [
   // TITLE match — that is what targeted the operator's IDE for a launch of
   // "notepad" on 2026-07-31 (ps-automation.ps1, Resolve-WindowedProcessByName).
   'process-window',
+  // §7.5 RAG citations (from-documents.js document_answer): a cited chunk ref
+  // resolves to a real Documents/chunks/<ref>.json file on disk. Independent
+  // of the retrieval call's own say-so — a stale/forged vector-index entry
+  // would not resolve, so this is a real enumeration of what actually exists,
+  // same spirit as process-window above.
+  'chunk-file',
 ];
 
 function isPlainObject(v) {

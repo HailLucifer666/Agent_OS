@@ -1,5 +1,7 @@
 'use strict';
 
+const { createDiffGate } = require('../cortex/diff-gate');
+
 // planner/daily.js — daily planning + accountability (Phase 3, Jarvis upgrade).
 // Morning brief / stall check-ins / evening review, layered on the existing
 // Goals system (goals.arbitrate/list are REUSED here, never reimplemented).
@@ -49,6 +51,9 @@ function createDailyPlanner({ bus, config, memory, goals, brain, identity, logge
   var generation = 0;
   var timer = null;
   var running = false;
+  // runCheckin() below nags only when the stalled-goal set actually changed —
+  // see diff-gate.js.
+  var diffGate = createDiffGate();
 
   // ---- day-file persistence ----
 
@@ -169,6 +174,18 @@ function createDailyPlanner({ bus, config, memory, goals, brain, identity, logge
       day.lastCheckinAt = ts;
       saveDay(day);
       return null; // all goals progressing — skip silently, no emit
+    }
+
+    // Diff-gate: the SAME stalled goals reported last time carry no new
+    // information — without this, the operator gets an identical nag every
+    // checkinEveryMs (default 3h) for as long as a goal sits untouched. The
+    // scheduling cadence itself (tick()'s checkinEveryMs spacing) is untouched;
+    // this only gates whether THIS particular fire has anything new to say.
+    var stalledTitles = stalled.map(function (g) { return g.title; }).sort();
+    if (!diffGate.hasChanged('checkin-stalled', stalledTitles)) {
+      day.lastCheckinAt = ts;
+      saveDay(day);
+      return null;
     }
 
     var names = stalled.map(function (g) { return g.title; }).join(', ');
