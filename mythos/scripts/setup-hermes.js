@@ -222,6 +222,42 @@ function reportProviderSlots() {
       seen.set(s.apiKey, s.slot);
     }
   });
+
+  // A slot pointing at a DIFFERENT endpoint than config.yaml cannot be reached
+  // at all. Hermes takes model.base_url from its own config.yaml and ignores
+  // the OPENAI_BASE_URL the adapter forwards — proven 2026-08-03 by forwarding
+  // an unroutable base_url (http://127.0.0.1:9/v1) and still getting a correct
+  // reply. There is no generic HERMES_INFERENCE_BASE_URL to override it with;
+  // only HERMES_INFERENCE_MODEL and HERMES_INFERENCE_PROVIDER exist.
+  //
+  // So rotation can change the KEY and the MODEL, never the ENDPOINT. A
+  // cross-provider slot silently sends its key to config.yaml's provider and
+  // comes back 401 — which reads as "bad key" and sends you to rotate a
+  // credential that was never wrong. Say so here rather than printing a slot
+  // table that looks functional.
+  let configBase = '';
+  try {
+    const cfgPath = path.join(HERMES_HOME, 'config.yaml');
+    if (fs.existsSync(cfgPath)) {
+      const m = /^\s*base_url:\s*(\S+)/m.exec(fs.readFileSync(cfgPath, 'utf8'));
+      if (m) configBase = m[1].replace(/\/+$/, '');
+    }
+  } catch (_) { /* diagnostic only — never block --check */ }
+  if (configBase) {
+    const unreachable = slots.filter((s) => {
+      const b = s.baseUrl ? String(s.baseUrl).replace(/\/+$/, '') : '';
+      return b && b !== configBase;
+    });
+    if (unreachable.length) {
+      console.log('  WARNING: ' + unreachable.length + ' slot(s) point at an endpoint config.yaml does not use.');
+      unreachable.forEach((s) => console.log('    slot ' + s.slot + ' -> ' + s.baseUrl + '  (UNREACHABLE)'));
+      console.log('    config.yaml pins base_url: ' + configBase + ', and Hermes ignores the');
+      console.log('    forwarded OPENAI_BASE_URL. These slots will send their key to the');
+      console.log('    endpoint above and fail 401 — the key is not the problem.');
+      console.log('    Cross-provider failover needs config.yaml itself changed per attempt,');
+      console.log('    which the env-only design deliberately does not do.');
+    }
+  }
 }
 
 async function install() {
