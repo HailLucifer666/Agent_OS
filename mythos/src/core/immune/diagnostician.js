@@ -17,7 +17,13 @@ const SEVERITY = {
   'event-storm':        'major',
   'tick-overrun':       'minor',
   'memory-growth':      'minor',
-  'quota-low':          'minor'
+  'quota-low':          'minor',
+  // reflection.js:215 emits this when reflectOnActions spots a repeated
+  // failure pattern. Without an entry it defaulted to 'minor' and — worse —
+  // the healer had no playbook for it (the half-built learning loop), so the
+  // signal died in the no-match path. Now both the severity and the healer's
+  // recurring-failure-record playbook handle it.
+  'recurring-failure':  'major'
 };
 
 function severityOf(kind) {

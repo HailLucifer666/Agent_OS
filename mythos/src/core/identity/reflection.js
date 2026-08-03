@@ -204,16 +204,27 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
       }
 
       var failuresEmitted = 0;
+      var lessonsWritten = 0;
       var failures = Array.isArray(result.parsed.failures) ? result.parsed.failures.slice(0, 5) : [];
       failures.forEach(function (f) {
         var line = String(f || '').trim();
         if (line.length < 5 || line.length > 200) return;
         // Route to the diagnostician via the existing health.anomaly channel.
-        // The diagnostician already subscribes (immune/diagnostician.js:58) and
-        // will treat 'recurring-failure' as a new anomaly kind to investigate.
+        // The diagnostician subscribes (immune/diagnostician.js) and the healer's
+        // 'recurring-failure-record' playbook turns it into a durable Lesson.
         if (bus && typeof bus.emit === 'function') {
           bus.emit('health.anomaly', { kind: 'recurring-failure', detail: line });
           failuresEmitted++;
+        }
+        // Also write the lesson directly, so headless autonomous runs (which
+        // never go through the voice turn path that drives noteTurn) still feed
+        // the Lessons store even if the bus/healer path is unreachable. Dedup
+        // by the failure line so repeat fires increment count.
+        if (memory && memory.lessons && typeof memory.lessons.recordFailure === 'function') {
+          try {
+            var res = memory.lessons.recordFailure({ tool: '', goalTitle: line.slice(0, 60) }, line, { source: 'reflection' });
+            if (res && res.ref) lessonsWritten++;
+          } catch (_) { /* lesson write is best-effort */ }
         }
       });
 
@@ -236,10 +247,10 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         }
       }
 
-      if (failuresEmitted || skillsWritten) {
-        log.info('reflection.actions', { failures: failuresEmitted, skills: skillsWritten });
+      if (failuresEmitted || skillsWritten || lessonsWritten) {
+        log.info('reflection.actions', { failures: failuresEmitted, skills: skillsWritten, lessons: lessonsWritten });
       }
-      return { failuresEmitted: failuresEmitted, skillsWritten: skillsWritten };
+      return { failuresEmitted: failuresEmitted, skillsWritten: skillsWritten, lessonsWritten: lessonsWritten };
     } finally {
       runningActions = false;
     }

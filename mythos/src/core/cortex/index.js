@@ -330,6 +330,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   function reflect(working, memory, bus) {
     // Lightweight self-check — emit heartbeat with tick count
     if (bus) bus.emit('reflect', { tick: working.tick, activeGoalId: working.activeGoalId });
+    // Learning loop (Layer 4): on the reflect cadence, also consolidate the
+    // Lessons store (prune stale, dedup near-duplicates). Best-effort + cheap
+    // — a failure here must never break the tick. This is the durable half of
+    // what was previously a no-op stub; the failure signal that feeds lessons
+    // comes from reflection.js, the healer playbook, and distillFailureIntoLesson.
+    if (memory && memory.lessons && typeof memory.lessons.consolidate === 'function') {
+      try { memory.lessons.consolidate(); } catch (_) { /* advisory */ }
+    }
   }
 
   // Background reasoning during idle ticks — the entity "mulls". Gathers recent

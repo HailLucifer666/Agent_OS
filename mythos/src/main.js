@@ -165,6 +165,7 @@ async function main() {
   let checkpoints = null;          // P22 checkpoint approval registry
   let forge = null;                // P22 Forge multi-file build pipeline
   let checkpointSweepTimer = null;
+  let actionReflectTimer = null;   // Layer 4: autonomous reflectOnActions cadence (headless learning)
   let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
   let windowSensor = null;         // V8 (Phase 4) — opt-in active-window perception
   let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
@@ -571,6 +572,23 @@ async function main() {
       // graceful shutdown. Best-effort: constructor deps all exist by now.
       reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger, bus: bus });
 
+      // Learning loop (Layer 4): reflectOnActions was previously bound to the
+      // VOICE turn path (noteTurn, called from server/index.js:1515). A purely
+      // autonomous/headless session — no operator turns — never triggered it,
+      // so failures during unattended goal pursuit were never distilled into
+      // lessons. This timer fires the same pass on a wall-clock cadence so
+      // headless runs learn too. Reuses REFLECTION_ACTION_EVERY_TURNS as the
+      // cadence in MINUTES (default 30 → every 30min), mirroring the spirit of
+      // the turn-based cadence. unref'd so it never keeps the process alive.
+      var actionReflectMinutes = Math.max(5, Number((config && config.REFLECTION_ACTION_EVERY_TURNS) || 30));
+      actionReflectTimer = setInterval(function () {
+        if (!reflection || typeof reflection.reflectOnActions !== 'function') return;
+        reflection.reflectOnActions('autonomous').catch(function (err) {
+          logger.warn('reflection.autonomous.failed', { error: err && err.message });
+        });
+      }, actionReflectMinutes * 60 * 1000);
+      if (actionReflectTimer.unref) actionReflectTimer.unref();
+
       // B2 (pre-context brain upgrade): live capability digest, read fresh on
       // every voice turn. Synchronous, in-memory reads only — no new awaits,
       // no new probes, same getStatus() calls the capabilities-manifest step
@@ -917,6 +935,7 @@ async function main() {
   // (registered below via lifecycle.registerShutdownStep, run after server-close).
   function stopRunningLoops() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
+    if (actionReflectTimer) clearInterval(actionReflectTimer);
     pcChild.shutdownPcChild();
     cuaDriver.shutdownCuaDriver();
     androidChild.shutdownAndroidChild();

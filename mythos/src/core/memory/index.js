@@ -12,6 +12,7 @@ const { createWorkingMemory } = require('./working');
 const { createAuditWriter } = require('./audit-writer');
 const { createCheckpointStore } = require('./checkpoints');
 const { createDocumentsStore } = require('./documents');
+const { createLessonsStore } = require('./lessons');
 const { createVectorIndex, rrfMerge } = require('./vector-index');
 const embeddings = require('../../../providers/embeddings');
 
@@ -27,6 +28,11 @@ function createMemory({ config, bus, logger, brain }) {
   const checkpoints = createCheckpointStore({ fs, config, bus, logger });
   const working = createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints });
   const documents = createDocumentsStore({ fs });
+  // Lessons — durable failure memory. The missing half of the learning loop:
+  // reflectOnActions/distillFailureIntoLesson/log_incident write here; the goal
+  // planner reads here BEFORE its brain call so a known-bad approach is grounded
+  // against instead of re-tried. See lessons.js for the full rationale.
+  const lessons = createLessonsStore({ fs, config, bus, logger });
 
   // ---- semantic recall layer (vector indexes over episodic + semantic + documents) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
@@ -176,10 +182,11 @@ function createMemory({ config, bus, logger, brain }) {
     working,
     documents,                          // §7.5/§7.11 chunk store — shared by both
     documentsIndex: vecIndexes.documents, // the ONE shared vector-index partition
+    lessons,                            // durable failure memory (learning loop)
 
     async init() {
       // Ensure all store directories exist
-      const dirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints', 'Documents'];
+      const dirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints', 'Documents', 'Lessons'];
       for (let i = 0; i < dirs.length; i++) {
         fs.ensureDir(fs.vaultPath(dirs[i]));
       }
@@ -191,6 +198,7 @@ function createMemory({ config, bus, logger, brain }) {
       await audit.init();
       await checkpoints.init();
       await working.init();
+      await lessons.init();
       fs.ensureDir(fs.vaultPath('Index'));
       vecIndexes.episodic.init();
       vecIndexes.semantic.init();

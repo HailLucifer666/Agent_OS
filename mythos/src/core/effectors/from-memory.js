@@ -60,6 +60,13 @@ function buildTools(ctx){
       var d=new Date().toISOString().slice(0,10);
       fs.ensureDir('Incidents');
       fs.appendLine('Incidents/'+d+'.jsonl',{id:'inc-'+Date.now()+'-'+Math.floor(Math.random()*1e6),ts:Date.now(),text:text,severity:severity,source:'voice'});
+      // Learning loop (Layer 3): incidents were write-only — nothing ever read
+      // Incidents/ back. Also feed the lesson into the Lessons store so the goal
+      // planner can ground against it next time. Best-effort: a failed lesson
+      // write must NOT fail the incident log, so the operator's report still lands.
+      if (memory && memory.lessons && typeof memory.lessons.recordFailure === 'function') {
+        try { memory.lessons.recordFailure({ tool: '', goalTitle: text.slice(0, 60) }, text, { source: 'incident' }); } catch (_) {}
+      }
       return ok({logged:text.slice(0,200),date:d});
     }catch(err){return fail('log_incident failed: '+(err.message||err));}
   }

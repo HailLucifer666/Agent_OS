@@ -330,11 +330,13 @@ describe('immune/healer — matchClause/matches DSL', function() {
     assert.deepEqual(resolved, { literal: 'x', dynamic: 12345 });
   });
 
-  it('all eight SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
-    // REMEDIATION P2-10: 6 -> 8 — search-provider-degrade and
-    // build-engine-reprobe added (2026-07-29 audit item 11).
+  it('all nine SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
+    // REMEDIATION P2-10: 6 -> 8 (2026-07-29 audit item 11).
+    // Learning loop: 8 -> 9 — recurring-failure-record added to close the
+    // dead-channel gap (reflection.js emitted 'recurring-failure' but no
+    // playbook handled it). See healer.js SEED_PLAYBOOKS comment.
     var { SEED_PLAYBOOKS } = require('../src/core/immune/healer');
-    assert.equal(SEED_PLAYBOOKS.length, 8);
+    assert.equal(SEED_PLAYBOOKS.length, 9);
     SEED_PLAYBOOKS.forEach(function(p) {
       assert.ok(p.id, 'playbook missing id');
       assert.ok(p.when && p.when.kind, 'playbook ' + p.id + ' missing when.kind');
@@ -390,6 +392,37 @@ describe('immune/healer — cooldown + actions', function() {
     assert.equal(healed.length, 1);
     assert.equal(healed[0].payload.playbookId, null);
     assert.equal(healed[0].payload.outcome, 'no-match');
+    healer.stop();
+  });
+
+  it('recurring-failure playbook (record-lesson) closes the dead-channel loop — writes a Lesson', async function() {
+    // Before Layer 2, reflection.js:215 emitted 'recurring-failure' but no
+    // playbook handled it → it died in no-match. Now the recurring-failure-record
+    // playbook + the record-lesson action turn it into a durable Lesson.
+    var bus = fakeBus();
+    var recordCalls = [];
+    var memory = Object.assign(fakeMemory(), {
+      lessons: {
+        recordFailure: function(trigger, lesson, opts) {
+          recordCalls.push({ trigger: trigger, lesson: lesson, opts: opts });
+          return { ref: 'lsn-x', count: recordCalls.length, isNew: recordCalls.length === 1 };
+        }
+      }
+    });
+    var { createHealer } = require('../src/core/immune/healer');
+    var healer = createHealer({ bus: bus, config: fakeConfig(), memory: memory, getCortex: function() { return null; }, getGoals: function() { return null; } });
+    healer.start();
+
+    bus.emit('health.diagnosed', { kind: 'recurring-failure', target: null, evidence: { detail: 'shell_run with cmd:build keeps timing out' } });
+    await sleep(10);
+
+    var healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
+    assert.equal(healed.length, 1);
+    assert.equal(healed[0].payload.playbookId, 'recurring-failure-record', 'the recurring-failure playbook must now match');
+    assert.equal(healed[0].payload.outcome, 'applied', 'the record-lesson action must succeed, not no-match');
+    assert.equal(recordCalls.length, 1, 'recordFailure must be called once');
+    assert.match(recordCalls[0].lesson, /shell_run.*build.*timing out/, 'the lesson must carry the failure detail from evidence');
+    assert.equal(recordCalls[0].opts.source, 'reflection');
     healer.stop();
   });
 

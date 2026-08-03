@@ -211,6 +211,55 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     } catch (_) { return null; }
   }
 
+  // The symmetric counterpart to distillIntoSkill: when a goal's steps fail,
+  // distill WHY into a durable Lesson the planner can ground against next time
+  // (Layer 3 reads these via memory.lessons.recall). Mirrors distillIntoSkill's
+  // shape exactly — same episodic window, same 'simple' lane, same fire-and-
+  // forget contract (caller doesn't await). Only the prompt + the write target
+  // differ (lessons instead of skills; "what to avoid" instead of "what worked").
+  // Only called from markPlanStepDone when a step has failed AND we have ≥2
+  // failure episodics to learn from — no point distilling a single transient flake.
+  async function distillFailureIntoLesson(goal) {
+    if (!brain || !memory || !memory.lessons || !memory.episodic) return null;
+    var actions = [];
+    try {
+      actions = memory.episodic.recall(goal.title, { kind: 'action', limit: 20 }) || [];
+    } catch (_) { return null; }
+    // Keep only failures — success steps are irrelevant to a lesson about what's broken.
+    var fails = actions.filter(function(a) {
+      var r = a && (a.record || a);
+      return r && r.outcome === 'fail';
+    });
+    if (!fails || fails.length < 2) return null;
+
+    var trace = fails.slice(0, 12).map(function(a, i) {
+      var rec = a.record || a;
+      return (i + 1) + '. FAIL ' + (rec.summary || rec.tool || 'unknown') +
+        (rec.detail ? ' — ' + String(rec.detail).slice(0, 160) : '');
+    }).join('\n');
+
+    var result = await brain.think({
+      lane: 'simple',
+      messages: [{ role: 'user', content:
+        'A goal has been failing repeatedly. Distill ONE actionable lesson about what to do differently.\n' +
+        'Goal: ' + goal.title + '\n' +
+        'Failure trace:\n' + trace + '\n\n' +
+        'Respond as JSON: {"lesson": "<one line: the failure mode and the fix>", ' +
+        '"avoid": "<one line: which tool/approach to avoid>"}\n' +
+        'Be concrete and specific. Do not blame the model; name the actual tool/arg/environment cause.'
+      }],
+      schemaHint: '{ lesson: string, avoid: string }',
+      source: 'goal-fail-distill:' + goal.id
+    });
+    if (!result || result.offline || result.aborted || !result.parsed) return null;
+    var p = result.parsed;
+    var text = String(p.lesson || p.avoid || '').trim();
+    if (!text) return null;
+    try {
+      return memory.lessons.recordFailure({ tool: p.avoid || '', goalTitle: goal.title }, text, { source: 'goal-failure' });
+    } catch (_) { return null; }
+  }
+
 
   function list(filter) {
     filter = filter || {};
@@ -380,6 +429,63 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
 
     // 4. Brain call
     if (ctx && ctx.brain) {
+      // Learning loop (Layer 3): before spending a brain call, consult the
+      // Lessons store + the recallCache the cortex already built (and which
+      // this function previously discarded — see cortex/index.js:246-249) for
+      // prior failures on this goal/approach. If the same (tool+argsHash+
+      // goalTitle) failure has crossed GOAL_FAIL_PAUSE_THRESHOLD, pause the
+      // goal with reason:'repeated-failure' instead of re-planning forever
+      // (symmetric to the budget-exhausted pause above). Otherwise inject a
+      // grounded "this failed before" block so the brain chooses differently.
+      var failBlock = '';
+      try {
+        var failThreshold = Number((config && config.GOAL_FAIL_PAUSE_THRESHOLD) || 3);
+        var lessonHits = [];
+        if (ctx.memory && ctx.memory.lessons && typeof ctx.memory.lessons.recall === 'function') {
+          lessonHits = ctx.memory.lessons.recall(goal.title, {
+            limit: Number((config && config.LESSON_RECALL_LIMIT) || 5),
+            trigger: { goalTitle: goal.title }
+          }) || [];
+        }
+        // Also fold in outcome:'fail' entries from the recall cache the cortex
+        // built for this tick. recallCache is currently computed-and-discarded
+        // by this function; this is the read that closes that gap.
+        var cacheFails = [];
+        if (ctx.recallCache && Array.isArray(ctx.recallCache)) {
+          cacheFails = ctx.recallCache.filter(function(h) {
+            var r = h && (h.record || h);
+            return r && r.outcome === 'fail';
+          });
+        }
+        // Hard pause: a single lesson record whose count crossed the threshold.
+        var hardPause = null;
+        for (var li = 0; li < lessonHits.length; li++) {
+          if ((lessonHits[li].count || 1) >= failThreshold) { hardPause = lessonHits[li]; break; }
+        }
+        if (hardPause) {
+          goal.status = 'paused';
+          goal.reason = 'repeated-failure';
+          saveGoal(goal.id);
+          if (bus) bus.emit('health.anomaly', {
+            kind: 'recurring-failure', target: goal.id,
+            detail: 'goal paused after ' + hardPause.count + ' repeated failures: ' + (hardPause.snippet || '').slice(0, 160)
+          });
+          return null;
+        }
+        if (lessonHits.length || cacheFails.length) {
+          var lines = [];
+          for (var lj = 0; lj < lessonHits.length && lines.length < 4; lj++) {
+            lines.push('  - [x' + (lessonHits[lj].count || 1) + '] ' + (lessonHits[lj].snippet || '').slice(0, 180));
+          }
+          for (var cj = 0; cj < cacheFails.length && lines.length < 6; cj++) {
+            var fr = cacheFails[cj].record || cacheFails[cj];
+            lines.push('  - past FAIL: ' + String(fr.summary || fr.tool || 'unknown').slice(0, 180));
+          }
+          failBlock = '\n\n⚠️ PRIOR FAILURES on this goal — do NOT repeat these approaches unchanged:\n' + lines.join('\n') +
+            '\nChoose a different tool, adjust args, or abandon the approach. Repeating a known-failing approach will pause this goal.';
+        }
+      } catch (_) { /* grounding is advisory — never block planning on it */ }
+
       var lane = goal.drive === 'user-service' ? 'build' : 'simple';
       // RC#1: build the available-tool list from the effector registry so the
       // planner can only choose real tools. Without this, the LLM hallucinated
@@ -438,7 +544,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         var result = await ctx.brain.think({
           lane: lane,
           messages: [{ role: 'user', content:
-            toolList + skillsHint + '\n\nPlan next action for goal: ' + goal.title +
+            toolList + skillsHint + failBlock + '\n\nPlan next action for goal: ' + goal.title +
             '\n\nGROUNDING: If this goal involves current events, real-time data, news, dates, or anything that could be stale, use web_search or web_fetch FIRST to get real data before planning actions.' +
             // V3 (Phase 4): allow the brain to OPTIONALLY return a multi-step
             // plan. If it returns steps, we persist them to goal.plan and they
@@ -518,10 +624,27 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     }
     if (idx === -1) return;
     goal.plan[idx].status = success ? 'done' : 'failed';
+    // Track per-goal failure count so plan()'s repeated-failure pause (Layer 3)
+    // and distillFailureIntoLesson (Layer 4) have a signal to key on.
+    if (!success) {
+      goal.failCount = (goal.failCount || 0) + 1;
+    }
     // Clear the queue when all steps have resolved so plan() re-plans fresh.
     var allDone = goal.plan.every(function (s) { return s.status === 'done' || s.status === 'failed'; });
     if (allDone) goal.plan = [];
     saveGoal(goal.id);
+    // Learning loop (Layer 4): when a step fails AND the goal has accumulated
+    // repeated failures, asynchronously distill a lesson. Fire-and-forget so the
+    // dispatch path isn't blocked — same contract as complete()→distillIntoSkill.
+    // The threshold mirrors REFLECTION_ACTION_MIN's intent: don't distill a
+    // single transient flake, wait for a real pattern.
+    if (!success && brain && memory && memory.lessons && goal.failCount >= 2) {
+      distillFailureIntoLesson(goal).catch(function (err) {
+        if (bus) bus.emit('health.anomaly', {
+          kind: 'goal-fail-distill-failed', target: goal.id, error: err && err.message
+        });
+      });
+    }
   }
 
   // --- Budget ---

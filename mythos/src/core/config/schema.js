@@ -180,6 +180,14 @@ const SCHEMA = {
   // floor below which the pass skips (not enough data to learn from).
   REFLECTION_ACTION_EVERY_TURNS: { type: 'number', default: 30, min: 1, max: 500 },
   REFLECTION_ACTION_MIN:     { type: 'number', default: 5, min: 1, max: 100 },
+  // Learning-loop keys (Lessons store). LESSON_RECALL_LIMIT caps how many prior
+  // failures the goal planner injects into its brain prompt. GOAL_FAIL_PAUSE_THRESHOLD
+  // is how many identical (tool+argsHash+goalTitle) failures land before the goal
+  // auto-pauses with reason:'repeated-failure' instead of re-planning forever —
+  // the symmetric counterpart to the existing budget-exhausted pause.
+  LESSON_RECALL_LIMIT:       { type: 'number', default: 5, min: 1, max: 20 },
+  GOAL_FAIL_PAUSE_THRESHOLD: { type: 'number', default: 3, min: 2, max: 20 },
+  LESSON_RETENTION_DAYS:     { type: 'number', default: 90, min: 1, max: 3650 },
 
   // Leash (Phase 5)
   LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },

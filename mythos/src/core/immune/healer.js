@@ -65,6 +65,21 @@ const SEED_PLAYBOOKS = [
     when: { kind: 'build-engine-failed' },
     then: [{ do: 'reprobe-build-engine' }],
     cooldownMs: 60000
+  },
+  // Learning loop closure: reflection.js:215 emits 'recurring-failure' when
+  // reflectOnActions spots a repeated failure mode in the action trace. Before
+  // this playbook existed, the signal fell through to no-match and died — the
+  // agent detected its own repeated mistakes and forgot them. record-lesson
+  // makes the failure durable in the Lessons store, where the goal planner
+  // (goals/index.js Layer 3) reads it before its next brain call. The cooldown
+  // is deliberately short (30s) so a burst of the same failure still records
+  // promptly; recordFailure() dedups by trigger so repeated fires increment
+  // count rather than spawning duplicate files.
+  {
+    id: 'recurring-failure-record',
+    when: { kind: 'recurring-failure' },
+    then: [{ do: 'record-lesson', args: { lesson: '$evidence.detail', source: 'reflection' } }],
+    cooldownMs: 30000
   }
 ];
 
@@ -254,6 +269,29 @@ function buildActions({ getCortex, getGoals, memory }) {
       const online = await hermesAgent.probe(true);
       const status = hermesAgent.getStatus();
       return { ok: true, result: { online: online, state: status.state, hint: status.hint, cliProbeDiagnostic: status.cliProbeDiagnostic } };
+    },
+
+    // Learning loop: write a recurring-failure lesson so the planner can avoid
+    // it next time. The recurring-failure anomaly (reflection.js:215) carries a
+    // one-line `detail` describing the failure mode; recordFailure() dedups by
+    // trigger so repeated fires of the same mode increment count, not files.
+    // best-effort — never fails the heal if the store is unavailable.
+    'record-lesson': async function(diagnosis, args) {
+      if (!memory || !memory.lessons || typeof memory.lessons.recordFailure !== 'function') {
+        return { ok: false, reason: 'missing-dependency:lessons' };
+      }
+      var lesson = args && args.lesson;
+      if (!lesson) return { ok: false, reason: 'missing-arg:lesson' };
+      // The recurring-failure anomaly has no structured trigger (just a prose
+      // detail), so we key on the detail itself — recordFailure still dedups
+      // by trigger identity across repeated fires.
+      var trigger = { tool: '', argsHash: '0', goalTitle: String(lesson).slice(0, 60) };
+      try {
+        var res = memory.lessons.recordFailure(trigger, lesson, { source: args.source || 'reflection' });
+        return { ok: true, result: { ref: res.ref, count: res.count, isNew: res.isNew } };
+      } catch (err) {
+        return { ok: false, reason: 'record-lesson-failed', detail: err.message };
+      }
     }
   };
 }
