@@ -43,6 +43,13 @@ var WIDGET_SPEC_SCHEMA_HINT =
   'Reply with ONE JSON object and NOTHING else — no prose, no markdown fence, no HTML.\n' +
   'Either surface an existing dashboard widget:\n' +
   '  {"kind":"one of ' + KNOWN_STATIC_KINDS.join('|') + '"}\n' +
+  // Without this line models reliably decorate a static kind with title/layout
+  // (measured 0/3 valid replies for "show CPU core load as a compact stat
+  // widget" — every one came back as {"kind":"cores","title":...,"layout":...}).
+  // validateWidgetSpec rejects extra keys on purpose rather than ignoring them,
+  // so the prompt has to be explicit or the build fails every time.
+  '  IMPORTANT: in this form "kind" must be the ONLY key. Do NOT add title,\n' +
+  '  layout, items or footer — these widgets render themselves from live data.\n' +
   'or spawn a new data widget:\n' +
   '  {"kind":"dynamic","title":"<=60 chars","layout":"stat"|"list"|"table"|"text",' +
   '"items":[{"label":"...","value":"...","tone":"gold"|"dim"|"warn"}],"footer":"optional string"}\n' +
