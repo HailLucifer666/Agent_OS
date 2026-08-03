@@ -58,6 +58,45 @@ function cliProbeTimeoutMs() { return Number(process.env.HERMES_CLI_PROBE_TIMEOU
 // "not installed/running" hint.
 var lastCliProbeDiagnostic = null;
 
+// Which provider slot last produced a usable reply (null until one has).
+var activeSlot = null;
+
+// Hermes reports provider failures on STDOUT with EXIT CODE 0 — observed live
+// on 2026-07-29: a misconfigured provider produced the reply
+//   "HTTP 401: Missing Authentication header"
+// and, with a stale model slug,
+//   "API call failed after 3 retries: HTTP 404: This model is unavailable..."
+// Both look like a perfectly successful run. This regex is Hermes's own literal
+// error prefixes ANCHORED to the start of the reply — not a general-purpose
+// "does this look like an error" heuristic. The anchor is load-bearing: an
+// artifact that discusses HTTP 401 handling mid-paragraph is a valid artifact.
+//
+// This lived in effectors/build-engine.js until 2026-08-03. It moved here
+// because provider rotation must classify the same shape, and two copies of a
+// safety regex is one copy too many — build-engine.js now imports it.
+var HERMES_ERROR_REPLY_RE = /^\s*(?:API call failed after \d+ retries:|HTTP \d{3}:)/;
+
+// Rotation observers. The adapter layer deliberately has no bus (no adapter in
+// this repo emits health.anomaly directly), so it exposes the event and the
+// bus-owning layer — createBuildEngine — forwards it. A silent rotation is
+// exactly the drift build-engine.js exists to prevent.
+var rotationListeners = [];
+function onProviderRotated(fn) {
+  if (typeof fn !== 'function') return function () {};
+  rotationListeners.push(fn);
+  return function off() {
+    var i = rotationListeners.indexOf(fn);
+    if (i >= 0) rotationListeners.splice(i, 1);
+  };
+}
+function emitRotation(from, to, reason, detail) {
+  var evt = { from: from.slot, to: to.slot, reason: reason, detail: detail, fromProvider: describeSlot(from), toProvider: describeSlot(to) };
+  logger.warn('hermes.provider-rotated', evt);
+  for (var i = 0; i < rotationListeners.length; i++) {
+    try { rotationListeners[i](evt); } catch (_) { /* an observer must never break a build */ }
+  }
+}
+
 // Transport selection. shell:true was previously used unconditionally on win32
 // to survive a HERMES_CLI path containing a space — but that cure was worse
 // than the disease: with shell enabled, spawn() concatenates command AND args
@@ -108,10 +147,73 @@ var PROVIDER_KEY_PRIORITY = [
   { key: 'GOOGLE_API_KEY', base: null },
 ];
 
+// PROVIDER SLOTS (2026-08-03). Above, exactly one provider pair is forwarded —
+// so a single 401/429/timeout killed the whole build with no second chance.
+// Slots add ordered failover. The convention is purely additive and an absent
+// slot is skipped, so a single-key install resolves to exactly one slot and
+// behaves precisely as it did before:
+//   HERMES_PROVIDER_KEY   / _BASE_URL   + HERMES_INFERENCE_MODEL   -> slot 1
+//   HERMES_PROVIDER_KEY_2 / _BASE_URL_2 / HERMES_PROVIDER_MODEL_2  -> slot 2
+//   ... up to slot 4.
+// Slot 1 deliberately keeps the PROVIDER_KEY_PRIORITY resolution path above as
+// its env source (that is the existing, tested behaviour and several installs
+// depend on the NVIDIA/OpenRouter fall-through). Slots 2+ are explicit only.
+//
+// Rotation is ENV-ONLY. Hermes's HERMES_INFERENCE_MODEL overrides the model at
+// process level, above config.yaml, and PASSTHROUGH_PREFIX_RE already forwards
+// HERMES_*. So an attempt is fully described by the OpenAI-compatible trio
+// (OPENAI_API_KEY, OPENAI_BASE_URL, HERMES_INFERENCE_MODEL) in the child env.
+// Hermes's config.yaml is NEVER written — there is no MYTHOS-managed state on
+// disk and therefore nothing to restore if a run dies mid-rotation.
+var MAX_PROVIDER_SLOTS = 4;
+
+// Resolve the ordered slot table from the environment. Keys are carried in the
+// descriptor because the child env is built from it; nothing here is logged.
+function providerSlots() {
+  var slots = [];
+  var primaryKey = null;
+  for (var p = 0; p < PROVIDER_KEY_PRIORITY.length; p++) {
+    if (process.env[PROVIDER_KEY_PRIORITY[p].key]) { primaryKey = PROVIDER_KEY_PRIORITY[p]; break; }
+  }
+  if (primaryKey) {
+    slots.push({
+      slot: 1,
+      fromPriority: true,
+      apiKey: process.env[primaryKey.key],
+      baseUrl: (primaryKey.base && process.env[primaryKey.base]) || '',
+      model: process.env.HERMES_INFERENCE_MODEL || '',
+    });
+  }
+  for (var n = 2; n <= MAX_PROVIDER_SLOTS; n++) {
+    var key = process.env['HERMES_PROVIDER_KEY_' + n];
+    if (!key) continue;              // absent slots are skipped, not holes
+    slots.push({
+      slot: n,
+      fromPriority: false,
+      apiKey: key,
+      baseUrl: process.env['HERMES_PROVIDER_BASE_URL_' + n] || '',
+      model: process.env['HERMES_PROVIDER_MODEL_' + n] || '',
+    });
+  }
+  return slots;
+}
+
+// Redacted view of a slot — safe for logs, anomalies and setup-hermes --check.
+// The key value NEVER appears; only its presence and the endpoint it points at.
+function describeSlot(slot) {
+  if (!slot) return null;
+  return { slot: slot.slot, baseUrl: slot.baseUrl || '(unset)', model: slot.model || '(config.yaml default)' };
+}
+
 // Build a minimal env object for a Hermes child process: allowlisted system
 // vars + HERMES_*/TERMINAL_*/API_SERVER_* passthrough + exactly one provider
 // key pair. `extra` (caller overrides) is merged in last so it always wins.
-function scrubbedEnv(extra) {
+//
+// `slot` (optional) selects WHICH provider. Omitted, or slot 1, reproduces the
+// original PROVIDER_KEY_PRIORITY behaviour exactly. Any other slot overrides the
+// OpenAI-compatible trio directly; the HERMES_PROVIDER_*_n plumbing vars are
+// stripped so slot credentials never reach the child under their MYTHOS names.
+function scrubbedEnv(extra, slot) {
   var env = {};
   for (var i = 0; i < SYSTEM_ENV_KEYS.length; i++) {
     var k = SYSTEM_ENV_KEYS[i];
@@ -119,6 +221,22 @@ function scrubbedEnv(extra) {
   }
   for (var key in process.env) {
     if (PASSTHROUGH_PREFIX_RE.test(key)) env[key] = process.env[key];
+  }
+  // The slot table itself is MYTHOS-side plumbing. It matches HERMES_* above,
+  // so it must be removed again — a Hermes child has no use for the other
+  // slots' keys and forwarding them would undo the one-provider invariant.
+  for (var n = 2; n <= MAX_PROVIDER_SLOTS; n++) {
+    delete env['HERMES_PROVIDER_KEY_' + n];
+    delete env['HERMES_PROVIDER_BASE_URL_' + n];
+    delete env['HERMES_PROVIDER_MODEL_' + n];
+  }
+  if (slot && !slot.fromPriority) {
+    env.OPENAI_API_KEY = slot.apiKey;
+    if (slot.baseUrl) env.OPENAI_BASE_URL = slot.baseUrl;
+    if (slot.model) env.HERMES_INFERENCE_MODEL = slot.model;
+    else delete env.HERMES_INFERENCE_MODEL; // never inherit slot 1's model
+    if (/integrate\.api\.nvidia\.com/.test(slot.baseUrl || '')) env.NVIDIA_API_KEY = slot.apiKey;
+    return Object.assign(env, extra || {});
   }
   for (var p = 0; p < PROVIDER_KEY_PRIORITY.length; p++) {
     var entry = PROVIDER_KEY_PRIORITY[p];
@@ -310,6 +428,62 @@ function runViaCli(prompt, opts) {
   });
 }
 
+// Run the CLI once per configured provider slot, in order, until one produces a
+// usable reply. Rotation happens ONLY on provider-class failure:
+//   - runViaCli rejected (spawn error, non-zero exit, or timeout), or
+//   - it resolved (exit 0) with a reply matching HERMES_ERROR_REPLY_RE.
+// It NEVER happens on a bad prompt: an empty prompt is rejected by runTask
+// before we get here, and any reply that is not error-SHAPED is a success —
+// burning four provider budgets on a prompt the model answered correctly would
+// be strictly worse than the single-slot behaviour this replaces.
+//
+// 429 is the failure that actually matters. Every free provider rate-limits
+// long before it fails auth, and none of them expose rate-limit headers, so
+// exhaustion surfaces only as a mid-build 429 on stdout. It is provider-class.
+//
+// On total exhaustion the LAST error propagates unchanged, so build-engine.js's
+// guarded brain fallback still sees a normal failure. Rotation makes that
+// fallback rarer; it does not replace it.
+function runViaCliWithRotation(prompt, opts) {
+  var slots = providerSlots();
+  // No slot table at all (no provider env configured): preserve the historical
+  // single-attempt path rather than inventing a slot — the child still gets
+  // whatever config.yaml holds, which is how an unconfigured install behaves.
+  if (!slots.length) slots = [{ slot: 1, fromPriority: true }];
+
+  var i = 0;
+  var lastErr = null;
+
+  function attempt() {
+    var slot = slots[i];
+    return runViaCli(prompt, {
+      cwd: opts.cwd,
+      env: scrubbedEnv(opts.env, slot),
+      timeoutMs: opts.timeoutMs,
+    }).then(function (reply) {
+      if (HERMES_ERROR_REPLY_RE.test(String(reply || ''))) {
+        return next('provider-error-reply', String(reply).trim().slice(0, 300));
+      }
+      activeSlot = slot.slot;
+      return reply;
+    }, function (err) {
+      var msg = String((err && err.message) || err);
+      var reason = /timed out/i.test(msg) ? 'timeout' : (/^spawn |ENOENT|EACCES/.test(msg) ? 'spawn-error' : 'exit-nonzero');
+      return next(reason, msg);
+    });
+  }
+
+  function next(reason, detail) {
+    lastErr = new Error('hermes slot ' + slots[i].slot + ' failed (' + reason + '): ' + detail);
+    if (i + 1 >= slots.length) throw lastErr;
+    emitRotation(slots[i], slots[i + 1], reason, detail);
+    i += 1;
+    return attempt();
+  }
+
+  return Promise.resolve().then(attempt);
+}
+
 // Run one coding/agent task through hermes. Probes first; throws with the
 // install hint when unavailable (callers surface it honestly).
 //
@@ -337,7 +511,7 @@ async function runTask(prompt, opts) {
 
   try {
     if (useCli) {
-      return await runViaCli(text, { cwd: opts.cwd, env: scrubbedEnv(opts.env), timeoutMs: timeoutMs });
+      return await runViaCliWithRotation(text, { cwd: opts.cwd, env: opts.env, timeoutMs: timeoutMs });
     }
     return await runViaHttp(text, AbortSignal.timeout(timeoutMs));
   } catch (err) {
@@ -348,11 +522,18 @@ async function runTask(prompt, opts) {
 }
 
 function getStatus() {
-  return { state: state, mode: mode, hint: hint, cliProbeDiagnostic: lastCliProbeDiagnostic };
+  return {
+    state: state, mode: mode, hint: hint, cliProbeDiagnostic: lastCliProbeDiagnostic,
+    activeSlot: activeSlot,
+    slots: providerSlots().map(describeSlot),
+  };
 }
 
 module.exports = {
   probe: probe, runTask: runTask, getStatus: getStatus, scrubbedEnv: scrubbedEnv,
+  providerSlots: providerSlots, describeSlot: describeSlot,
+  onProviderRotated: onProviderRotated,
+  HERMES_ERROR_REPLY_RE: HERMES_ERROR_REPLY_RE,
   // Exported for unit tests:
   needsShell: needsShell, spawnShape: spawnShape,
 };

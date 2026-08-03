@@ -117,7 +117,111 @@ function check() {
       console.log('    Fix in ' + cfg + ':  provider: openai-api');
     }
   }
+  reportProviderSlots();
+  reportKeyShadowing();
   return (hasOneshot && hasYolo) ? 0 : 1;
+}
+
+// ROOT-CAUSED LIVE 2026-08-03, against Hermes v0.19.0's own source.
+//
+// Provider rotation forwards OPENAI_API_KEY / OPENAI_BASE_URL per attempt. That
+// silently does NOTHING if <HERMES_HOME>/.env defines those keys, because
+// Hermes prefers its own .env over the inherited process env:
+//   hermes_cli/env_loader.py:321  loads <HERMES_HOME>/.env with override=True
+//   hermes_cli/auth.py:597-604    resolves api_key_env_vars through
+//                                 get_env_value_prefer_dotenv(), which returns
+//                                 the .env value and only falls back to
+//                                 os.environ when .env has none.
+// Upstream did that deliberately ("so a deliberate key rotation in the user's
+// .env isn't shadowed by a stale shell export") — it is not a bug, and there is
+// no env-var escape hatch.
+//
+// The symptom is the worst kind: builds SUCCEED. A deliberately invalid key
+// forwarded by MYTHOS produced a correct artifact on this machine, because
+// Hermes never read it. Rotation would then "work" in tests and rotate into the
+// same credential forever in production.
+//
+// MYTHOS does not edit this file. It is the operator's third-party install
+// state and holds live credentials — the same reason config.yaml is never
+// written. Detect and instruct; the operator decides.
+//
+// HERMES_INFERENCE_MODEL is NOT affected: Hermes's .env does not define it, so
+// the forwarded value applies. Model-based rotation is live-verified working.
+function reportKeyShadowing() {
+  const hermesEnv = path.join(HERMES_HOME, '.env');
+  if (!fs.existsSync(hermesEnv)) return;
+  let src;
+  try { src = fs.readFileSync(hermesEnv, 'utf8'); } catch (_) { return; }
+
+  // Names only — this file holds live credentials and is never echoed.
+  const shadowed = ['OPENAI_API_KEY', 'OPENAI_BASE_URL']
+    .filter((k) => new RegExp('^\\s*' + k + '\\s*=\\s*\\S', 'm').test(src));
+  if (!shadowed.length) return;
+
+  console.log('  WARNING: provider rotation is DISABLED by Hermes\'s own .env.');
+  console.log('    ' + hermesEnv);
+  console.log('    defines ' + shadowed.join(' and ') + ', and Hermes prefers its own .env');
+  console.log('    over the environment MYTHOS forwards (hermes_cli/auth.py,');
+  console.log('    get_env_value_prefer_dotenv). Every slot therefore authenticates with');
+  console.log('    the SAME credential no matter which slot the adapter selected, so a');
+  console.log('    401/429 rotation cannot escape the failing provider.');
+  console.log('    FIX: remove those lines from that .env and keep the keys in mythos/.env');
+  console.log('    (HERMES_PROVIDER_KEY / HERMES_PROVIDER_BASE_URL) instead. Model');
+  console.log('    rotation via HERMES_INFERENCE_MODEL is unaffected and works today.');
+}
+
+// Provider failover (2026-08-03). The adapter forwards ONE provider pair per
+// attempt and rotates through the configured slots on a provider-class failure,
+// so "which slots do I actually have?" is now a real question a fresh clone
+// needs answered before a build, not after one dies on a 429.
+//
+// KEYS ARE NEVER PRINTED — only the endpoint and model each slot resolves to.
+// The slot table is read from the adapter rather than re-derived here: one
+// definition of the convention, no chance of this report and the runtime
+// disagreeing about what is configured.
+function reportProviderSlots() {
+  // --check is run standalone, before MYTHOS boots, so nothing has loaded .env.
+  try {
+    const envFile = path.join(__dirname, '..', '.env');
+    if (fs.existsSync(envFile) && typeof process.loadEnvFile === 'function') process.loadEnvFile(envFile);
+  } catch (_) { /* best-effort: an unreadable .env just means fewer slots reported */ }
+
+  let slots;
+  try {
+    const hermesAdapter = require('../adapters/hermes-agent');
+    slots = hermesAdapter.providerSlots();
+  } catch (err) {
+    console.log('  provider slots: (could not read — ' + ((err && err.message) || err) + ')');
+    return;
+  }
+
+  if (!slots.length) {
+    console.log('  provider slots: NONE CONFIGURED — every build will fail with an auth error.');
+    console.log('    Set HERMES_PROVIDER_KEY / HERMES_PROVIDER_BASE_URL / HERMES_INFERENCE_MODEL in mythos/.env');
+    return;
+  }
+
+  console.log('  provider slots: ' + slots.length + ' (tried in order; rotation on 401/429/timeout/non-zero exit)');
+  slots.forEach((s) => {
+    const d = require('../adapters/hermes-agent').describeSlot(s);
+    console.log('    slot ' + d.slot + '  ' + d.baseUrl + '  ' + d.model);
+  });
+
+  // A duplicated key value is the failure mode that looks like it works. Two
+  // slots sharing one key share ONE rate bucket, so rotating from slot 1 to
+  // slot 2 on a 429 rotates straight into the same exhausted quota — the
+  // failover reports as configured and buys nothing.
+  const seen = new Map();
+  slots.forEach((s) => {
+    if (!s.apiKey) return;
+    if (seen.has(s.apiKey)) {
+      console.log('  WARNING: slot ' + seen.get(s.apiKey) + ' and slot ' + s.slot + ' share the SAME key value.');
+      console.log('    One key is one rate bucket — rotating between them cannot escape a 429.');
+      console.log('    Issue a separate key per slot, or drop the duplicate slot.');
+    } else {
+      seen.set(s.apiKey, s.slot);
+    }
+  });
 }
 
 async function install() {

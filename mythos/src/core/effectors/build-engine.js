@@ -45,17 +45,17 @@ var OUTPUT_CONTRACT = [
   '- Do not wrap the whole reply in a markdown code fence unless the artifact itself is fenced.',
 ].join('\n');
 
-// Hermes reports provider failures on STDOUT with EXIT CODE 0 — observed
-// live on 2026-07-29: a misconfigured provider produced the reply
-//   "HTTP 401: Missing Authentication header"
-// and, with a stale model slug,
-//   "API call failed after 3 retries: HTTP 404: This model is unavailable..."
-// Both looked like a perfectly successful run to the adapter. Without this
-// guard that text becomes the artifact — the exact "reported success it didn't
-// earn" failure this whole module exists to stop. These patterns are Hermes's
-// own literal error prefixes, anchored to the start of the reply, not a
-// general-purpose "does this look like an error" heuristic.
-var HERMES_ERROR_REPLY_RE = /^\s*(?:API call failed after \d+ retries:|HTTP \d{3}:)/;
+// Hermes reports provider failures on STDOUT with EXIT CODE 0 — a misconfigured
+// provider replies "HTTP 401: Missing Authentication header" and looks like a
+// perfectly successful run. Without this guard that text becomes the artifact:
+// the exact "reported success it didn't earn" failure this module exists to
+// stop.
+//
+// The pattern MOVED to adapters/hermes-agent on 2026-08-03 and is imported here
+// rather than redefined. Provider rotation in the adapter has to classify the
+// identical shape, and two independently-maintained copies of a safety regex is
+// how one of them quietly stops matching. One definition, two consumers.
+var HERMES_ERROR_REPLY_RE = require('../../../adapters/hermes-agent').HERMES_ERROR_REPLY_RE;
 
 // Timeout headroom for a text build. No caller has ever passed timeoutMs, so
 // every build here silently ran under the hermes adapter's generic 3-minute
@@ -76,6 +76,23 @@ function createBuildEngine(deps) {
   var brain = deps && deps.brain; // optional — for the guarded offline fallback
   if (!hermes || typeof hermes.runTask !== 'function') {
     throw new Error('createBuildEngine requires the hermes-agent adapter');
+  }
+
+  // Provider rotation happens inside the adapter, which has no bus (no adapter
+  // in this repo emits health.anomaly directly). Forward it here, where the bus
+  // lives, so a mid-build provider swap is VISIBLE. A build that silently
+  // finished on a different model than the operator configured is exactly the
+  // drift this module was created to stop — rotation is a recovery, not a
+  // non-event.
+  if (bus && typeof hermes.onProviderRotated === 'function') {
+    hermes.onProviderRotated(function (evt) {
+      bus.emit('health.anomaly', {
+        kind: 'hermes-provider-rotated',
+        engine: 'hermes',
+        from: evt.from, to: evt.to, reason: evt.reason,
+        fromProvider: evt.fromProvider, toProvider: evt.toProvider,
+      });
+    });
   }
 
   // Hermes's CLI needs a working directory. These calls are text-only — nothing
@@ -167,4 +184,8 @@ function createBuildEngine(deps) {
   return { generate: generate, OUTPUT_CONTRACT: OUTPUT_CONTRACT };
 }
 
-module.exports = { createBuildEngine: createBuildEngine, OUTPUT_CONTRACT: OUTPUT_CONTRACT };
+module.exports = {
+  createBuildEngine: createBuildEngine,
+  OUTPUT_CONTRACT: OUTPUT_CONTRACT,
+  HERMES_ERROR_REPLY_RE: HERMES_ERROR_REPLY_RE,
+};
