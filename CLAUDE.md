@@ -203,12 +203,17 @@ don't discard it.
 - No fix is "done" until live-verified against the running system (or the
   relevant oracle: `media_status` for playback, window title for Spotify).
   Plausible theories have been wrong 3+ times in this repo's history.
-- Baseline (reproduced 2026-07-30 at commit `34659d8`, full `cd mythos &&
-  node --test`): **1735 tests, 1734 pass, 0 fail, 1 skip, 0 todo.** The 1 skip
+- Baseline (reproduced 2026-08-03 at commit `5ee5306`, full `cd mythos &&
+  node --test`): **2488 tests, 2487 pass, 0 fail, 1 skip, 0 todo.** The 1 skip
   is `test/sensors-file.test.js` honestly skipping via `t.skip()` — an
   environment-specific `fs.watch` crash on this Node/Windows build, not a real
   failure. There are currently no known deterministic failures — anything
   failing is a regression.
+  - **This number goes stale fast — do not hand-edit it.** The "1735" that sat
+    here until 2026-08-03 was itself the second stale baseline in this file
+    (see the "1197" note below). `scripts/sync-test-count.js` emits the real
+    figures on every commit; trust its output over anything written in prose,
+    here or in a plan document.
   - **The old "1197" baseline in this file was stale for days.** Until
     `42c2b48` (2026-07-30) all three gates — `sync-test-count.js`, the
     pre-commit hook and CI — globbed `test/*.test.js` **non-recursively**, so
