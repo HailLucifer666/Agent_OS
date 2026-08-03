@@ -36,7 +36,7 @@ var VALID_TONES = ['gold', 'dim', 'warn'];
 var KNOWN_STATIC_KINDS = [
   'clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate',
   'breakers', 'news', 'media', 'voice-latency',
-  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal',
+  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal', 'aether',
 ];
 
 var WIDGET_SPEC_SCHEMA_HINT =

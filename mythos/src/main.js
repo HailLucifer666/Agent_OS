@@ -26,6 +26,7 @@ const { createCalendarUpcomingSensor } = require('./core/sensors/calendar-upcomi
 const { createGmailSensor } = require('./core/sensors/gmail-sensor');
 const { createScreenSensor } = require('./core/sensors/screen-sensor');
 const { createWindowSensor } = require('./core/sensors/window-sensor');
+const { createAetherSensor } = require('./core/sensors/aether');
 const { createDailyPlanner } = require('./core/planner/daily');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
@@ -168,6 +169,7 @@ async function main() {
   let actionReflectTimer = null;   // Layer 4: autonomous reflectOnActions cadence (headless learning)
   let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
   let windowSensor = null;         // V8 (Phase 4) — opt-in active-window perception
+  let aetherSensor = null;         // Aether-BLE proximity-focus sensor (pull model)
   let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
   let mcpWiring = null;            // from-mcp.js's registerFromMcp() return (holds autostart/shutdown)
   let dailyPlanner = null;         // Phase 3 Jarvis upgrade — daily planning + accountability
@@ -867,6 +869,17 @@ async function main() {
         logger.info('sensors.window.started', { pollMs: config.WINDOW_AWARENESS_POLL_MS });
       }
 
+      // Aether-BLE proximity-focus sensor — pulls the aggregator's election
+      // broadcast (ws://127.0.0.1:8766) and emits perception.aether on
+      // owner-change / RSSI drift. Opt-in; silent retry + zero impact when
+      // Aether is absent. The existing perception.* relay forwards it to the
+      // HUD "NEAREST DEVICE" widget automatically.
+      if (config.AETHER_ENABLED) {
+        aetherSensor = createAetherSensor({ bus: bus, config: config, logger: logger });
+        aetherSensor.start();
+        logger.info('sensors.aether.started', { url: config.AETHER_WS_URL });
+      }
+
       // [Phase 7 — NEW] file/job sensors start immediately; ws sensor's start() is a
       // no-op until Phase 9 owns real connections, but it's still started so
       // isRunning()/stop() behave consistently through shutdown.
@@ -951,6 +964,7 @@ async function main() {
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
     if (screenSensor) screenSensor.stop();
+    if (aetherSensor) aetherSensor.stop();   // closes WS client + clears reconnect timer
     if (dailyPlanner) dailyPlanner.stop();
     if (fileSensor) fileSensor.stop();
     if (wsSensor) wsSensor.stop();

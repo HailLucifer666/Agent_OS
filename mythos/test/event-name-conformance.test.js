@@ -41,6 +41,7 @@ const ALLOWED_EVENTS = new Set([
   'perception.screen',     // Phase 2 Jarvis upgrade — ambient screen awareness sensor
   'perception.calendar',   // V8 (Phase 4): upcoming-event perception (calendar-upcoming-sensor)
   'perception.window',     // V8 (Phase 4): opt-in active-window perception (window-sensor)
+  'perception.aether',     // Aether-BLE proximity-focus sensor (owner-change / RSSI drift)
 
   // action.*
   'action.completed',

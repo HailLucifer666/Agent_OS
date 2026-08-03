@@ -51,12 +51,13 @@ describe('manage_widget', () => {
     // tile joined ui/public/js/widgets/widget-registry.js (surfacing
     // /api/status's previously-unread voiceLatency); 11 -> 18 when the seven
     // widgets ported from design/mythos-living-core.html landed (SYSTEM,
-    // CORES, GPU, SENSORS, VOICE, MEMORY, TERMINAL). Keep in step with
-    // BOOT_WIDGET_IDS in src/core/effectors/from-widgets.js.
+    // CORES, GPU, SENSORS, VOICE, MEMORY, TERMINAL); 18 -> 19 when the
+    // Aether-BLE NEAREST DEVICE tile landed (opt-in, defaultHidden). Keep in
+    // step with BOOT_WIDGET_IDS in src/core/effectors/from-widgets.js.
     //
     // "open all" covering the new seven is load-bearing, not incidental: they
     // ship defaultHidden, so voice is how they get on screen at all.
-    assert.equal(cmd.targets.length, 18);
+    assert.equal(cmd.targets.length, 19);
   });
 
   it('solo keeps only the named widget', () => {

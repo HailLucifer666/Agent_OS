@@ -26,6 +26,7 @@ import { mountTerminal } from './kinds/terminal.js';
 import { mountSystem } from './kinds/system.js';
 import { mountCores } from './kinds/cores.js';
 import { mountMemoryWidget } from './kinds/memory-widget.js';
+import { mountAether } from './kinds/aether.js';
 
 // defaultPos: {left|right, top|bottom} offsets in px — corners stay clear of the
 // central orb and the radial module ring.
@@ -57,6 +58,10 @@ export const WIDGETS = [
   { id: 'voice',    title: 'VOICE',    defaultPos: { left: 200, bottom: 24 },  mount: mountVoice,        defaultHidden: true },
   { id: 'memory',   title: 'MEMORY',   defaultPos: { right: 200, top: 24 },    mount: mountMemoryWidget, defaultHidden: true },
   { id: 'terminal', title: 'TERMINAL', defaultPos: { right: 200, bottom: 24 }, mount: mountTerminal,     defaultHidden: true },
+  // Aether-BLE nearest-device chip — opt-in; only meaningful when AETHER_ENABLED
+  // and a live aggregator. Hidden by default so a no-Aether setup keeps the
+  // gutter uncluttered; toggle via the widget hover control (choice persists).
+  { id: 'aether',   title: 'NEAREST DEVICE', defaultPos: { right: 24, top: 320 }, mount: mountAether, defaultHidden: true },
 ];
 
 export function widgetIds() {

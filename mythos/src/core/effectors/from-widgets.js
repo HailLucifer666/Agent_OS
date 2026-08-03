@@ -43,7 +43,7 @@ const VALID_TONES = ['gold', 'dim', 'warn'];
 // so voice is the PRIMARY way an operator reaches them, not a convenience:
 // "open system" is how the card appears at all.
 const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency',
-  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal'];
+  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal', 'aether'];
 const WIDGET_SYNONYMS = {
   'clock': 'clock', 'time': 'clock', 'local time': 'clock',
   'weather': 'weather',

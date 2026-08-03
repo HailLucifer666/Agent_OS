@@ -138,6 +138,14 @@ const SCHEMA = {
   WINDOW_AWARENESS_POLL_MS:  { type: 'number', default: 30000, min: 5000, max: 600000 },
   WINDOW_AWARENESS_SALIENCE: { type: 'number', default: 0.3, min: 0, max: 1 },
 
+  // Aether-BLE proximity-focus sensor (src/core/sensors/aether.js). Pulls the
+  // Aether aggregator's `election` broadcast (nearest device = owner) over WS
+  // and emits perception.aether on owner-change / meaningful RSSI drift. OFF
+  // by default — opt-in (no effect when Aether isn't running). AETHER_WS_URL
+  // points at the aggregator (default :8766), NOT the raw scanner bridge :8765.
+  AETHER_ENABLED:            { type: 'bool',   default: false },
+  AETHER_WS_URL:             { type: 'string', default: 'ws://127.0.0.1:8766' },
+
   // Daily planning + accountability (hands-free morning brief / stall
   // check-ins / evening review — src/core/planner/daily.js). On by default
   // (unlike wake-word/screen-awareness, this touches no camera/mic/screen
