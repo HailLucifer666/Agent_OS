@@ -49,7 +49,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const net = require('net');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { log, bootMythos, killTree, sendUtterance, captureEvents, MYTHOS_DIR } = require('./verify-lib');
 
 function randomPortInRange(min, max) {
@@ -78,7 +78,7 @@ async function pickFreePort() {
 function getListenerPid(port) {
   if (process.platform !== 'win32') return null;
   try {
-    const out = execSync('netstat -ano -p TCP', { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    const out = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
     const lines = out.split(/\r?\n/);
     for (const line of lines) {
       const parts = line.trim().split(/\s+/);

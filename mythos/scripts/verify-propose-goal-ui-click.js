@@ -46,7 +46,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const net = require('net');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { log, bootMythos, killTree } = require('./verify-lib');
 
 function randomPortInRange(min, max) {
@@ -77,7 +77,7 @@ async function pickFreePort() {
 function getListenerPid(port) {
   if (process.platform !== 'win32') return null;
   try {
-    const out = execSync('netstat -ano -p TCP', { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+    const out = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
     for (const line of out.split(/\r?\n/)) {
       const parts = line.trim().split(/\s+/);
       if (parts.length < 5) continue;

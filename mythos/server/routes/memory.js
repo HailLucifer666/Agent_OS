@@ -37,6 +37,14 @@ function mountMemoryRoutes(app, deps) {
           ts: (r.record && (r.record.ts || (r.record.sidecar && r.record.sidecar.updated))) || null,
           summary: (r.record && r.record.topic ? r.record.topic + ': ' : '') + (r.snippet || ''),
           kind: store,
+          // NOT exposing r.score here, deliberately — it is degenerate on THIS
+          // call path. recall('') passes an empty query, and
+          // ''.split(/\s+/) is [''] (length 1, not 0), so semantic.js:162-165
+          // computes terms=[''], lower.includes('') === true, matched=1,
+          // score = 1/1 for EVERY entry. Forwarding that would let a HUD widget
+          // draw a 100%-full "recall strength" bar on every row and present it
+          // as a measurement. The score is meaningful for a real query; on the
+          // browse call it is a constant wearing a number's clothes.
         }));
       }
       res.json({ store, entries });

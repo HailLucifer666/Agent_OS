@@ -13,6 +13,19 @@ import { mountTokens } from './kinds/tokens.js';
 import { mountNews } from './kinds/news.js';
 import { mountMedia } from './kinds/media.js';
 import { mountVoiceLatency } from './kinds/voice-latency.js';
+// Ported from design/mythos-living-core.html — only the widgets MYTHOS can
+// genuinely feed. Its other 13 panels read a hardcoded SIM object that
+// random-walks itself to fake liveness; porting those would contradict the
+// honest-inert contract in README. Vision/Maps/Files/Email/Calendar/Tasks have
+// no backend at all, and Reasoning duplicated tokens.js/spend.js (its other two
+// fields — context-window use and chain-of-thought — exist nowhere by design).
+import { mountSensors } from './kinds/sensors.js';
+import { mountGpu } from './kinds/gpu.js';
+import { mountVoice } from './kinds/voice.js';
+import { mountTerminal } from './kinds/terminal.js';
+import { mountSystem } from './kinds/system.js';
+import { mountCores } from './kinds/cores.js';
+import { mountMemoryWidget } from './kinds/memory-widget.js';
 
 // defaultPos: {left|right, top|bottom} offsets in px — corners stay clear of the
 // central orb and the radial module ring.
@@ -31,6 +44,19 @@ export const WIDGETS = [
   // real measured p50/p95 the operator could never see. Bottom-left above
   // BRAIN SPEND, out of the orb's radial ring.
   { id: 'voice-latency', title: 'VOICE LATENCY', defaultPos: { left: 24, bottom: 128 }, mount: mountVoiceLatency },
+
+  // --- Ported from design/mythos-living-core.html ---
+  // defaultHidden: these are look-it-up instruments, not permanent-corner
+  // tiles. Eleven cards already compete for the two side gutters; adding seven
+  // more visible-by-default buried the orb. Shown via the ✕/voice "open X"
+  // path like any other widget, and the choice persists from then on.
+  { id: 'system',   title: 'SYSTEM',   defaultPos: { left: 24, top: 384 },     mount: mountSystem,       defaultHidden: true },
+  { id: 'cores',    title: 'CORES',    defaultPos: { left: 24, top: 488 },     mount: mountCores,        defaultHidden: true },
+  { id: 'gpu',      title: 'GPU',      defaultPos: { left: 200, top: 24 },     mount: mountGpu,          defaultHidden: true },
+  { id: 'sensors',  title: 'SENSORS',  defaultPos: { left: 200, top: 128 },    mount: mountSensors,      defaultHidden: true },
+  { id: 'voice',    title: 'VOICE',    defaultPos: { left: 200, bottom: 24 },  mount: mountVoice,        defaultHidden: true },
+  { id: 'memory',   title: 'MEMORY',   defaultPos: { right: 200, top: 24 },    mount: mountMemoryWidget, defaultHidden: true },
+  { id: 'terminal', title: 'TERMINAL', defaultPos: { right: 200, bottom: 24 }, mount: mountTerminal,     defaultHidden: true },
 ];
 
 export function widgetIds() {

@@ -135,13 +135,17 @@ describe('P23: Credential Scanner', () => {
   });
 
   it('detects GitHub token', () => {
-    var result = scan({ key: 'ghp_1234567890abcdefghijklmnopqrstuvwxyz' });
+    // Use string concat so secret scanners don't flag the test file
+    var fakeToken = 'ghp' + '_1234567890abcdefghijklmnopqrstuvwxyz';
+    var result = scan({ key: fakeToken });
     assert.ok(result.found);
     assert.equal(result.matches[0].name, 'github-token');
   });
 
   it('detects Slack token', () => {
-    var result = scan({ webhook: 'xoxb-1234567890-abcdef' });
+    // Use string concat so secret scanners don't flag the test file
+    var fakeToken = 'xoxb' + '-1234567890-abcdef';
+    var result = scan({ webhook: fakeToken });
     assert.ok(result.found);
     assert.equal(result.matches[0].name, 'slack-token');
   });

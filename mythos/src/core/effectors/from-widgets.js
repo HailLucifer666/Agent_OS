@@ -38,7 +38,12 @@ const VALID_TONES = ['gold', 'dim', 'warn'];
 // surfaces /api/status's voiceLatency, which had no UI consumer at all) —
 // registry count 10 -> 11. test/manage-widget.test.js's "open all" asserts
 // this exact length.
-const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency'];
+// Changelog: the seven ported from design/mythos-living-core.html added —
+// registry count 11 -> 18. These ship defaultHidden:true (see
+// widget-registry.js), so voice is the PRIMARY way an operator reaches them,
+// not a convenience: "open system" is how the card appears at all.
+const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency',
+  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal'];
 const WIDGET_SYNONYMS = {
   'clock': 'clock', 'time': 'clock', 'local time': 'clock',
   'weather': 'weather',

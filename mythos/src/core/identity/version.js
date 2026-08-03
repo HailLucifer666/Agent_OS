@@ -14,7 +14,7 @@
 
 var fs = require('fs');
 var path = require('path');
-var { execSync } = require('child_process');
+var { execFileSync } = require('child_process');
 
 var PKG_PATH = path.join(__dirname, '..', '..', '..', 'package.json');
 
@@ -28,10 +28,12 @@ function readPackageVersion() {
 }
 
 // Run a git command, return trimmed stdout or null on any failure.
-// stdio piped so failures never leak to the console.
+// Args are passed as an array through execFileSync (no shell), so nothing here
+// can ever be interpreted as shell syntax. stderr is dropped via stdio, which
+// is why no redirection is needed in the arg list.
 function git(args) {
   try {
-    return String(execSync('git ' + args, {
+    return String(execFileSync('git', args, {
       cwd: path.dirname(PKG_PATH),
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 4000,
@@ -44,14 +46,14 @@ function git(args) {
 
 function captureGitRef() {
   // Prefer annotated tags; fall back to any tag; fall back to short hash.
-  var described = git('describe --tags --always --dirty 2>nul');
+  var described = git(['describe', '--tags', '--always', '--dirty']);
   if (described) return described;
-  var hash = git('rev-parse --short HEAD');
+  var hash = git(['rev-parse', '--short', 'HEAD']);
   return hash || 'unknown';
 }
 
 function captureRecentChanges(maxCommits) {
-  var log = git('log --oneline -' + (maxCommits || 15));
+  var log = git(['log', '--oneline', '-' + (Number(maxCommits) || 15)]);
   if (!log) return [];
   return log.split('\n').filter(Boolean);
 }
