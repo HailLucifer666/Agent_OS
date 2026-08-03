@@ -26,6 +26,7 @@ const { createBuildEngine } = require(path.join(ROOT, 'src/core/effectors/build-
 const { createInterview } = require(path.join(ROOT, 'src/core/engagements/interview.js'));
 const { createSpecBuilder } = require(path.join(ROOT, 'src/core/engagements/spec-builder.js'));
 const { createPlanBuilder } = require(path.join(ROOT, 'src/core/engagements/plan-builder.js'));
+const { createEngagementExecutor } = require(path.join(ROOT, 'src/core/engagements/executor.js'));
 
 // Minimal bus: records anomalies so a silent provider rotation or a
 // brain-fallback still shows up in the report instead of passing unnoticed.
@@ -100,6 +101,51 @@ async function verifyPlan(spec) {
   return plan;
 }
 
+// Fourth site: executor.js's research stage. runResearchStage DISCARDS the
+// generated text (executor.js:338 awaits generate() without assigning it, and
+// the brain branch at :340 does the same), so there is no output to inspect.
+// The observable fact is therefore WHICH engine was asked. This wraps the REAL
+// build engine to record the call — the generation still goes over the wire to
+// Hermes; only the invocation is observed.
+async function verifyResearchStage() {
+  const calls = [];
+  const observed = {
+    generate: async (opts) => { calls.push(opts); return buildEngine.generate(opts); },
+  };
+
+  const engagementRecord = {
+    id: 'verify-phase-b',
+    status: 'EXECUTING',
+    plan: { currentStageIndex: 0, stages: [] },
+    stageResults: [],
+  };
+  const stage = {
+    id: 'research-1',
+    kind: 'research',
+    name: 'Kestrel backoff research',
+    prompt: 'Summarise how an exponential backoff with a ceiling behaves after repeated failures.',
+    verification: { type: 'research', claims: [] },
+  };
+
+  const executor = createEngagementExecutor({
+    bus,
+    config: {},
+    dispatchAction: async () => ({ ok: true }),
+    effectors: { get: () => null },
+    store: { transition: () => {}, findById: () => engagementRecord },
+    engagementStore: { read: () => engagementRecord, write: () => {}, list: () => [] },
+    brain: null,
+    buildEngine: observed,
+  });
+
+  const res = await executor.runStage(engagementRecord, stage);
+  const routed = calls.length === 1 && /:research:/.test(String(calls[0].source || ''));
+  record(
+    'executor research stage', routed,
+    routed ? `routed to build engine, source='${calls[0].source}', stage ok=${res && res.ok}`
+           : `build engine called ${calls.length} time(s) — research did not route to Hermes`);
+}
+
 (async () => {
   console.log('Phase B live verification — real Hermes adapter, no brain wired.\n');
 
@@ -113,6 +159,7 @@ async function verifyPlan(spec) {
   const questions = await verifyInterview();
   const spec = await verifySpec(questions);
   await verifyPlan(spec);
+  await verifyResearchStage();
 
   console.log('\nanomalies emitted: ' + (anomalies.length || 'none'));
   for (const a of anomalies) console.log('  - ' + a.kind + (a.error ? ': ' + a.error : ''));
