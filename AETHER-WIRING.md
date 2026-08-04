@@ -44,6 +44,28 @@ The spec's invented `aether.focus` message (`device_id`, `distance_m`, `user_id`
 `user_id` is effectively single-user ("AetherUser1"). Locked schema lives in
 `aether-bridge/messages.py` in the Aether-BLE repo.
 
+> **⚠ STALE — re-verify before Phase 2 relies on this (checked 2026-08-04).**
+> The "RSSI only, no `distance_m`" claim was true when written but the Aether-BLE
+> repo has moved on. Its local `main` is at **Phase 10** (`a206f20` layout
+> persistence + 5-surface spatial dashboard, on top of `488035c` "Phase 9 fusion
+> engine + real chirp: matched-filter ToF, 2-D Kalman, room adjacency"), and
+> `aether-bridge/aggregator.py` now imports `rssi_to_distance_m` from `layout`
+> and threads `distance_m` / `tof_us` through its geometry and fusion paths. In
+> other words **the "ranging tier" that §"Real data only" below says to wait for
+> appears to be wired.** What is NOT yet established is whether `distance_m`
+> reaches the *broadcast payload MYTHOS consumes*, or stays internal to fusion —
+> that is the one thing to check before treating ranging as available here, and
+> it was deliberately not concluded from a grep.
+>
+> Also note `aether-bridge/bridge.py` has **uncommitted local changes** in that
+> repo, so its on-disk behaviour may not match its own last commit. Reconcile
+> that before building against it.
+>
+> Phase numbering is a genuine trap here: this document's "Phase 1-5" are
+> MYTHOS-side *wiring* phases, entirely separate from the Aether-BLE repo's own
+> Phase 8/9/10 development commits. They are not the same axis and neither
+> implies the other's progress.
+
 ---
 
 ## Architecture
@@ -133,6 +155,36 @@ Needs a live check against `aggregator.py`'s `_handle_say` + `piper_tts.py`. If
 it only plays locally, Phase 2 also needs the aggregator to forward audio to the
 owner scanner — a small Python-side addition (the one place this plan would touch
 Aether code).
+
+> **ANSWERED 2026-08-04, and the answer changes Phase 2's shape.** The
+> aggregator's `_handle_say` synthesises with Piper and embeds `audio_base64` in
+> the conversation broadcast assigned to `owner` — so audio *is* published, not
+> merely played locally. But **only `aether-dashboard` consumes it.** A search of
+> the Aether-BLE repo for `AudioTrack`/`MediaPlayer` matches **no Kotlin or Java
+> file at all** — `audio_base64` appears only in Python
+> (`aggregator.py`, `conversation.py`, and their tests). So today "speak on the
+> nearest device" actually means **"the open dashboard tab plays it"**, and
+> `aether-android` cannot play audio at all.
+>
+> Therefore the prerequisite is **playback on the Android node**, not a transport
+> change — which is why the operator's decision was to fix node playback FIRST
+> and defer the transport choice. That deferred choice is between reusing `say`
+> (Piper's voice, zero Python changes) and adding a `sayAudio` inbound type
+> (MYTHOS's voice, touches `aggregator.py` + `messages.py`). Note `say` would
+> make Piper a **fourth** TTS engine alongside edge-tts, Gemini Live and browser
+> `speechSynthesis` — and this repo already has a documented rule that a voice or
+> chunking change must be applied to all engines at once.
+>
+> **Constraint that holds either way: MYTHOS must send `say`/`sayAudio`, never
+> `ask`.** `ask` routes to Aether's local Ollama and bypasses MYTHOS's brain
+> entirely. Inbound accepts only `wake | say | ask | placeDevice |
+> setCalibration | setTuning` — no message type carries audio *into* the
+> aggregator.
+>
+> **Scope note:** building that playback means writing to the Aether-BLE repo,
+> which is OUTSIDE this project directory. Per the project-isolation rule that is
+> not something to do without the operator explicitly authorising work in that
+> repo.
 
 ---
 
