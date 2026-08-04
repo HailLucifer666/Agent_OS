@@ -92,6 +92,13 @@ mythos/.tmp-doc-rag-test/
 # secrets scratch file — never commit (live API keys)
 /env.download
 
+# electron-builder installer output + its project-local download cache.
+# ELECTRON_BUILDER_CACHE must be set to this cache dir when running `npm run
+# dist` — electron-builder otherwise defaults to %LOCALAPPDATA%\electron-builder,
+# which violates the project-isolation rule (nothing outside the repo).
+/dist/
+/.electron-builder-cache/
+
 # Piper TTS voice models — 60MB each, downloaded per-machine like the wake-word
 # models. Install with: node mythos/scripts/setup-piper.js --install
 /mythos/models/piper/

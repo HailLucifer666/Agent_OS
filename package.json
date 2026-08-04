@@ -14,5 +14,32 @@
   "devDependencies": {
     "electron": "^32.0.0",
     "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.mythos.assistant",
+    "productName": "MYTHOS",
+    "directories": {
+      "output": "dist"
+    },
+    "asar": false,
+    "includeSubNodeModules": true,
+    "files": [
+      "package.json",
+      "electron/**/*",
+      "mythos/**/*",
+      "!mythos/vault{,/**/*}",
+      "!mythos/.venv{,/**/*}",
+      "!mythos/.env",
+      "!mythos/services/edge-tts-server.py",
+      "!mythos/ui/public/models{,/**/*}",
+      "!mythos/models{,/**/*}",
+      "!**/.cache{,/**/*}",
+      "!mythos/test{,/**/*}",
+      "!mythos/test-fixtures{,/**/*}",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": "nsis"
+    }
   }
 }
