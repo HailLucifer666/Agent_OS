@@ -1817,6 +1817,11 @@ function createServer(deps) {
       // ---- S2S Live voice (V2 §10, Phase 5) ----
       else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
       else if (msg.type === 'live-audio') { if (liveSession) liveSession.sendAudio(msg.data); }
+      // Slice 3 screen share. Same guard shape as live-audio: a frame arriving
+      // before live-open (or after a close) is a silent no-op, never a throw —
+      // the HUD's capture loop and the session lifecycle are independent timers
+      // and will always race at the edges.
+      else if (msg.type === 'live-video') { if (liveSession) liveSession.sendVideoFrame(msg.data); }
       else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') { if (liveSession) liveSession.sendText(String(msg.text || '')); }
     });

@@ -60,8 +60,19 @@ function mountConfigRoutes(app, deps) {
   // talks to Google. A false here is the honest default (schema.js defaults
   // VOICE_S2S_ENABLED to false), and matches what liveOpen() in
   // server/index.js would answer anyway ({state:'closed', reason:'disabled'}).
+  // screenShare (Electron Slice 3): same reasoning one level down — the HUD's
+  // capture module cannot know whether the operator opted into streaming their
+  // desktop, and must default to not doing it. fps/quality ride along because
+  // the capture loop lives in the browser; they are cost dials, not secrets.
   app.get('/api/config/s2s', (req, res) => {
-    res.json({ enabled: Boolean(config.VOICE_S2S_ENABLED) });
+    res.json({
+      enabled: Boolean(config.VOICE_S2S_ENABLED),
+      screenShare: {
+        enabled: Boolean(config.LIVE_SCREEN_SHARE_ENABLED),
+        fps: config.LIVE_SCREEN_FPS,
+        quality: config.LIVE_SCREEN_JPEG_QUALITY,
+      },
+    });
   });
 
   // ---- /api/stats — NEW (P9 HUD density source): one snapshot of how much the

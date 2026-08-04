@@ -43,12 +43,16 @@ const FRAME_MS = 100;
 const TARGET_RATE = 16000;
 const PLAYBACK_RATE = 24000;
 
-export function createS2SBridge({ onState, onCaption } = {}) {
+// screenShare (Slice 3) is an OPTION, not an import-time dependency: the module
+// is loaded lazily inside start() only when the operator opted in, so a default
+// install never pulls the capture code into the HUD's critical path.
+export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
   let active = false;
   let stream = null;
   let audioCtx = null;
   let captureNode = null;
   let player = null;
+  let screenCapture = null;   // Slice 3 screen share, null unless opted in
 
   // Bound listener refs, so stop() can precisely unsubscribe the exact
   // functions start() registered (offBroadcast matches by reference).
@@ -197,12 +201,45 @@ export function createS2SBridge({ onState, onCaption } = {}) {
 
     player = createPcmPlayer({ sampleRate: PLAYBACK_RATE });
     active = true;
+
+    // Slice 3: screen share rides the session lifecycle. Started here so frames
+    // only ever flow into an open session, and torn down in stop() so capture
+    // can never outlive it. A failure to start is non-fatal by design — voice is
+    // the product, screen share is an enhancement, and a denied capture must not
+    // take the conversation down with it.
+    await startScreenShare();
+
     return true;
+  }
+
+  // Lazily imported so a default (opt-out) install never fetches this module.
+  async function startScreenShare() {
+    if (!screenShare || !screenShare.enabled || screenCapture) return;
+    try {
+      const { createScreenShare } = await import('./screen-share.js');
+      // No onState hook: the mic indicator reflects the VOICE session, and
+      // letting a capture state write to it would misreport listening state.
+      screenCapture = createScreenShare();
+      const ok = await screenCapture.start({ fps: screenShare.fps, quality: screenShare.quality });
+      if (!ok) screenCapture = null;
+    } catch (err) {
+      console.warn('[s2s] screen share unavailable:', err);
+      screenCapture = null;
+    }
+  }
+
+  function stopScreenShare() {
+    if (!screenCapture) return;
+    try { screenCapture.stop(); } catch { /* already torn down */ }
+    screenCapture = null;
   }
 
   async function stop() {
     if (!active && !stream && !audioCtx) return;
     active = false;
+    // Before anything else: a capture loop that outlives the session both keeps
+    // the OS screen-share indicator lit and pushes frames into a closed socket.
+    stopScreenShare();
     sendMessage({ type: 'live-close' });
     if (onAudioOutMsg) { offBroadcast('live-audio-out', onAudioOutMsg); onAudioOutMsg = null; }
     if (onInterruptedMsg) { offBroadcast('live-interrupted', onInterruptedMsg); onInterruptedMsg = null; }
@@ -218,6 +255,8 @@ export function createS2SBridge({ onState, onCaption } = {}) {
   return {
     start,
     stop,
+    stopScreenShare,
+    isScreenSharing: () => Boolean(screenCapture && screenCapture.isActive()),
     setCaptureSuspended,
     suspendForMedia,
     isActive: () => active,

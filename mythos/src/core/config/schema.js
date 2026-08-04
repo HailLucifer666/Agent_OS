@@ -455,6 +455,26 @@ const SCHEMA = {
   // Comma-separated tool-name allowlist; empty = live-tools.js's curated
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
   LIVE_TOOL_ALLOWLIST:         { type: 'string', default: '' },
+
+  // Live screen share (Electron Slice 3, spine §13's desktopCapturer). Streams
+  // desktop JPEG frames into the open Live session as realtimeInput.video, so
+  // "what am I looking at?" is answered from the actual screen instead of the
+  // polling screen-sensor's periodic vision call.
+  //
+  // OFF by default and deliberately so — this sends pictures of the operator's
+  // desktop to Google continuously, which is a materially different privacy
+  // posture from sending audio, and nobody should get it by upgrading. The HUD
+  // learns the flag from /api/config/s2s (the same path that made s2s-bridge.js
+  // reachable at all).
+  //
+  // FPS is the cost dial, not a quality dial: every frame is a billed image
+  // input. 0.5 (one frame per two seconds) is enough for "watch my screen"
+  // because the model keeps prior frames in context; 1-2 is noticeably more
+  // responsive and proportionally more expensive. Capped at 4 — past that the
+  // token spend climbs far faster than the usefulness.
+  LIVE_SCREEN_SHARE_ENABLED:   { type: 'bool',   default: false },
+  LIVE_SCREEN_FPS:             { type: 'number', default: 0.5, min: 0.1, max: 4 },
+  LIVE_SCREEN_JPEG_QUALITY:    { type: 'number', default: 0.6, min: 0.1, max: 1 },
 };
 
 module.exports = { SCHEMA };

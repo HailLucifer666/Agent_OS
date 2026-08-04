@@ -282,6 +282,23 @@ function createLiveSession(deps) {
     return sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64Pcm16k } } });
   }
 
+  // Screen-share video input (Electron Slice 3, spine §13). One JPEG frame per
+  // call on the same realtimeInput channel as audio, so §3's "exactly one
+  // top-level key" contract holds.
+  //
+  // Deliberately does NOT call armIdle(), unlike sendAudio(). The idle timer is
+  // what closes a session nobody is talking to, and that is the only thing
+  // stopping an unattended machine from holding a Live session open on the
+  // operator's own Gemini quota. A screen-share frame is not evidence that a
+  // human is present — a desktop streams frames just as happily to an empty
+  // room. So video keeps the session USABLE but never keeps it ALIVE: speech
+  // extends the session, wallpaper does not.
+  function sendVideoFrame(base64Jpeg) {
+    if (state !== 'open') return false;
+    if (typeof base64Jpeg !== 'string' || !base64Jpeg) return false;
+    return sendRaw({ realtimeInput: { video: { mimeType: 'image/jpeg', data: base64Jpeg } } });
+  }
+
   // Text injection on the realtimeInput channel (NOT clientContent — that breaks VAD
   // mid-conversation per Google's guidance). Used for the post-confirm follow-up.
   function sendText(text) {
@@ -326,7 +343,7 @@ function createLiveSession(deps) {
     setState('closed', reason || 'closed');
   }
 
-  return { open, close, sendAudio, sendText, sendToolResponse,
+  return { open, close, sendAudio, sendVideoFrame, sendText, sendToolResponse,
            getState: () => state, isOpen: () => state === 'open' };
 }
 

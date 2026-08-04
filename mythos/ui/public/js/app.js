@@ -73,9 +73,16 @@ fetch('/api/config/wakeword')
 // the client had no way to learn the flag at all, so voice/s2s-bridge.js —
 // complete and protocol-correct — had no consumer.
 let _s2sEnabled = false;
+// Slice 3: screen share rides the same fetch. Null unless the server explicitly
+// reports it enabled — the fail-closed default matters more here than for the
+// other flags, since the failure mode is streaming the desktop unasked.
+let _screenShareCfg = null;
 fetch('/api/config/s2s')
   .then((r) => (r.ok ? r.json() : null))
-  .then((cfg) => { if (cfg && cfg.enabled) _s2sEnabled = true; })
+  .then((cfg) => {
+    if (cfg && cfg.enabled) _s2sEnabled = true;
+    if (cfg && cfg.screenShare && cfg.screenShare.enabled) _screenShareCfg = cfg.screenShare;
+  })
   .catch(() => {});
 
 // overlays
@@ -217,6 +224,10 @@ function ensureS2S() {
         s2s = createS2SBridge({
           onState: onVoiceState,
           onCaption: (text, kind) => compose.setCaption(text, kind),
+          // Slice 3 screen share. Stays undefined (= off) unless /api/config/s2s
+          // reported it enabled, so a failed or missing fetch cannot start
+          // streaming the operator's desktop.
+          screenShare: _screenShareCfg,
         });
         return s2s;
       })

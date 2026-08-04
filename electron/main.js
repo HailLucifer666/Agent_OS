@@ -318,9 +318,54 @@ if (!gotLock) {
     });
     // Pre-seed the permission so getUserMedia doesn't even have to ask:
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
-      const allowed = ['media', 'audioCapture', 'microphone'];
+      const allowed = ['media', 'audioCapture', 'microphone', 'display-capture'];
       return allowed.includes(permission);
     });
+
+    // --- Screen share for Live video (Slice 3, spine §13's desktopCapturer) ---
+    // Electron denies navigator.mediaDevices.getDisplayMedia() outright unless a
+    // main-process handler answers the request — the same silent-denial shape as
+    // the mic gap fixed in Slice 1, and it looks identical to "screen share is
+    // broken" from the renderer.
+    //
+    // WHY THIS DESIGN, and it is load-bearing for AD-8: granting the request here
+    // means the renderer calls getDisplayMedia() natively and the frames never
+    // pass through a bridge. Nothing is added to electron/preload.js, so the
+    // contextBridge surface stays EXACTLY { getKeyNames, setKey, hasKey } and
+    // anti-drift-no-key-to-client.test.js keeps its meaning. A preload-mediated
+    // capture channel would have worked too and would have widened that surface
+    // for no gain.
+    //
+    // No source picker: MYTHOS is a voice assistant answering "what's on my
+    // screen", so the primary display is the only sensible answer and a modal
+    // picker on every session would defeat the point. The renderer still cannot
+    // start capture unopted — LIVE_SCREEN_SHARE_ENABLED gates it server-side.
+    if (typeof session.defaultSession.setDisplayMediaRequestHandler === 'function') {
+      session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+        const { desktopCapturer } = require('electron');
+        desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+          if (!sources || sources.length === 0) {
+            // Deny EXPLICITLY. An un-invoked callback leaves the renderer's
+            // getDisplayMedia() promise pending forever, which presents as a
+            // hung feature with no error anywhere — worse than a clean refusal.
+            log('display-media: no screen sources available — denying');
+            callback({});
+            return;
+          }
+          log('display-media: granting screen source', JSON.stringify(sources[0].name || ''));
+          // Video only. Loopback audio would capture MYTHOS's own TTS and feed
+          // it back as operator speech — the exact self-answering failure
+          // s2s-bridge.js's capture-suspend logic exists to prevent.
+          callback({ video: sources[0] });
+        }).catch((err) => {
+          log('display-media: getSources failed —', err.message);
+          callback({});
+        });
+      }, { useSystemPicker: false });
+    } else {
+      log('display-media: setDisplayMediaRequestHandler unavailable on this Electron build '
+        + '— screen share will be denied by the runtime (voice + HUD unaffected)');
+    }
 
     // --- Network-level ad/tracker blocking for in-app web embeds -----------------
     // The YouTube/web `<iframe>` (ui/public/js/views/web-panel.js) loads

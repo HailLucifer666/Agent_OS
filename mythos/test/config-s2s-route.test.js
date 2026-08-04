@@ -65,12 +65,26 @@ async function withServer(configOverrides, fn) {
   try { await fn(port); } finally { await server.stop(); }
 }
 
+// 2026-08-04, Electron Slice 3: the first three tests below asserted
+// `deepEqual(res.body, {enabled})` — the whole body, exactly. Slice 3 adds a
+// `screenShare` block (LIVE_SCREEN_SHARE_ENABLED plus its fps/quality cost
+// dials) because the HUD's capture module has no other way to learn whether the
+// operator opted into streaming their desktop — the identical gap that left
+// s2s-bridge.js unreachable until this route existed.
+//
+// These assertions were REWRITTEN rather than deleted, and deliberately not
+// loosened to a bare truthiness check. This file guards two things, both kept
+// below: (1) `enabled` is always a real boolean, never undefined/null, so a
+// client can trust it; (2) nothing but flags crosses this boundary — no key, no
+// model id, no endpoint. The exact-key-set assertion in the leak test is
+// therefore still exact, just against the new two-key shape, so a future field
+// added here still has to come and justify itself in this file.
 describe('GET /api/config/s2s (the flag surface the S2S bridge needs)', () => {
   test('reports enabled:false when VOICE_S2S_ENABLED is off — the schema default', async () => {
     await withServer({ VOICE_S2S_ENABLED: false }, async (port) => {
       const res = await httpGet(port, '/api/config/s2s');
       assert.equal(res.status, 200);
-      assert.deepEqual(res.body, { enabled: false });
+      assert.equal(res.body.enabled, false);
     });
   });
 
@@ -78,23 +92,40 @@ describe('GET /api/config/s2s (the flag surface the S2S bridge needs)', () => {
     await withServer({ VOICE_S2S_ENABLED: true }, async (port) => {
       const res = await httpGet(port, '/api/config/s2s');
       assert.equal(res.status, 200);
-      assert.deepEqual(res.body, { enabled: true });
+      assert.equal(res.body.enabled, true);
     });
   });
 
   test('an absent VOICE_S2S_ENABLED is reported as false, never as undefined/null', async () => {
     await withServer({}, async (port) => {
       const res = await httpGet(port, '/api/config/s2s');
-      assert.deepEqual(res.body, { enabled: false });
+      assert.equal(res.body.enabled, false);
     });
   });
 
-  test('leaks nothing but the boolean — no API key, model id or endpoint', async () => {
+  test('leaks nothing but flags — no API key, model id or endpoint', async () => {
     await withServer({ VOICE_S2S_ENABLED: true, GEMINI_API_KEY: 'sk-should-never-appear', LIVE_MODEL: 'secret-model' }, async (port) => {
       const res = await httpGet(port, '/api/config/s2s');
-      assert.deepEqual(Object.keys(res.body), ['enabled']);
+      assert.deepEqual(Object.keys(res.body), ['enabled', 'screenShare']);
       assert.equal(JSON.stringify(res.body).includes('sk-should-never-appear'), false);
       assert.equal(JSON.stringify(res.body).includes('secret-model'), false);
+    });
+  });
+
+  test('screen share is reported false unless explicitly enabled — it streams the desktop', async () => {
+    // Fail-closed matters more here than for the other flags in this file: the
+    // failure mode is not a missing feature, it is sending pictures of the
+    // operator's screen to Google without them asking.
+    await withServer({ VOICE_S2S_ENABLED: true }, async (port) => {
+      const res = await httpGet(port, '/api/config/s2s');
+      assert.equal(res.body.screenShare.enabled, false,
+        'absent LIVE_SCREEN_SHARE_ENABLED must report false, never undefined');
+    });
+    await withServer({ VOICE_S2S_ENABLED: true, LIVE_SCREEN_SHARE_ENABLED: true, LIVE_SCREEN_FPS: 1, LIVE_SCREEN_JPEG_QUALITY: 0.5 }, async (port) => {
+      const res = await httpGet(port, '/api/config/s2s');
+      assert.equal(res.body.screenShare.enabled, true);
+      assert.equal(res.body.screenShare.fps, 1);
+      assert.equal(res.body.screenShare.quality, 0.5);
     });
   });
 
