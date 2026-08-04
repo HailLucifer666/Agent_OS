@@ -85,6 +85,16 @@ function createAetherSensor(ctx) {
   var myRanging = {};
   var myPosition = null;
 
+  // Conversation FSM awareness (Phase 4 listen slice): the aggregator's
+  // `conversation` broadcast rides this same socket. We cache the live FSM
+  // phase + speaking scanner, plus the one-shot `conversationEvent` (present
+  // in one broadcast, then absent — mirroring wakeOutcome's one-shot
+  // semantics). Never emits on its own; the next election perception carries
+  // them in detail so the cortex knows a handoff is mid-flight.
+  var convPhase = 'IDLE';
+  var convSpeakingScanner = null;
+  var pendingConvEvent = null; // one-shot {phase, from, to} — carried once
+
   // Pull the owner scanner entry (with its smoothedRssi) out of the election
   // payload. Aggregator sends scanners as a list; owner may be null.
   function findOwnerScanner(election) {
@@ -141,6 +151,11 @@ function createAetherSensor(ctx) {
     var distanceM = ownerRanging ? ownerRanging.distanceM : null;
     var lh = election && election.lastHandoff;
     var handoff = !!(lh && typeof lh === 'object' && lh.to === owner && lh.from);
+    // Conversation FSM phase, and the one-shot handoff event if one arrived
+    // since the last perception (Phase 4 listen slice).
+    var phase = convPhase || 'IDLE';
+    var handoffPhase = pendingConvEvent;
+    pendingConvEvent = null; // one-shot: carried exactly once
     var summaryBits = ['Nearest: ' + (owner || 'none')];
     if (distanceM != null) summaryBits.push(distanceM.toFixed(2) + ' m');
     summaryBits.push(rssiLabel);
@@ -157,6 +172,9 @@ function createAetherSensor(ctx) {
         position: myPosition ? { x: myPosition.x, y: myPosition.y, uncertaintyRadiusM: myPosition.uncertaintyRadiusM } : null,
         handoff: handoff,
         fromDevice: handoff ? lh.from : null,
+        phase: phase,
+        speakingScanner: convSpeakingScanner,
+        handoffPhase: handoffPhase,
         scanners: (election && election.scanners) ? election.scanners.slice() : [],
         connected: true
       }
@@ -181,14 +199,29 @@ function createAetherSensor(ctx) {
       if (typeof msg.x === 'number' && typeof msg.y === 'number') {
         myPosition = { x: msg.x, y: msg.y, uncertaintyRadiusM: msg.uncertaintyRadiusM };
       }
+    } else if (msg.type === 'conversation') {
+      // Phase 4 listen slice — cache the FSM state; never emits on its own.
+      if (typeof msg.phase === 'string') convPhase = msg.phase;
+      convSpeakingScanner = (msg.speakingScanner == null) ? null : String(msg.speakingScanner);
+      if (msg.conversationEvent && typeof msg.conversationEvent === 'object') {
+        var ev = msg.conversationEvent;
+        pendingConvEvent = {
+          phase: (ev.phase == null) ? null : String(ev.phase),
+          from: (ev.fromScanner == null) ? null : String(ev.fromScanner),
+          to: (ev.toScanner == null) ? null : String(ev.toScanner)
+        };
+      }
     }
   }
 
-  // Real-data-only hygiene: a socket drop must never leave stale distances
-  // behind for the next reconnect to reuse.
+  // Real-data-only hygiene: a socket drop (or stop) must never leave stale
+  // enrichment or FSM state behind for the next reconnect to reuse.
   function clearEnrichment() {
     myRanging = {};
     myPosition = null;
+    convPhase = 'IDLE';
+    convSpeakingScanner = null;
+    pendingConvEvent = null;
   }
 
   function emitOffline() {
@@ -209,6 +242,9 @@ function createAetherSensor(ctx) {
         position: null,
         handoff: false,
         fromDevice: null,
+        phase: 'IDLE',
+        speakingScanner: null,
+        handoffPhase: null,
         scanners: [],
         connected: false
       }
@@ -254,9 +290,10 @@ function createAetherSensor(ctx) {
       var msg;
       try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
       if (!msg || typeof msg !== 'object') return;
-      // Ranging/position broadcasts enrich the next election perception
-      // without emitting (they fire far more often than the gate allows).
-      if (msg.type === 'ranging' || msg.type === 'position') {
+      // Ranging/position/conversation broadcasts enrich the next election
+      // perception without emitting (they fire far more often than the gate
+      // allows, and the conversation FSM must not emit on its own either).
+      if (msg.type === 'ranging' || msg.type === 'position' || msg.type === 'conversation') {
         ingest(msg);
         return;
       }

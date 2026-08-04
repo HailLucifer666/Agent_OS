@@ -111,7 +111,7 @@ Aether handles all device routing.
 | **1.5** | Ranging enrichment — real ToF distance rides the perception once the ranging tier is wired | ✅ **DONE** | `08f9a28` |
 | 2 | Voice output routing — Agent_OS speaks through the nearest device | 🔧 **CODED — needs live verify** | `08f9a28` |
 | 3 | Voice input routing — nearest device's mic reaches Agent_OS | 📐 **DESIGNED — blocked on Aether-side audio transport** | — |
-| 4 | Conversation handoff — mid-sentence migration between devices | ⬚ | — |
+| 4 | Conversation handoff — mid-sentence migration between devices | 🔧 **PARTIAL — listen+awareness coded; speak-gating + e2e need Phase 2 live + Phase 3** | `1c94303` |
 | 5 | Multi-device mesh — multiple rooms, multiple users | ⬚ | — |
 
 ---
@@ -304,20 +304,67 @@ end-to-end test needs both).
 
 ---
 
-## Phase 4 — Conversation Handoff
+## Phase 4 — Conversation Handoff 📐 DESIGNED — needs Phase 2 live + Phase 3
 
 **Goal:** mid-conversation migration between devices — the "Google problem."
 
-**What's already on the wire:** the aggregator's `conversation` broadcast carries
-the full 4-phase FSM (`IDLE | PREPARE | TRANSFER | CONFIRM | RELEASE`) plus
-`lastHandoff.{from,to}`. The sensor can listen to it now (free); Phase 4 acts on it.
+**Verified wire facts (read from source, 2026-08-05) — the FSM is ALREADY live:**
 
-**Plan:**
-1. On `TRANSFER` phase: Agent_OS pauses voice output (don't cut mid-sentence),
-   stores conversation state (last utterance, position in stream, pending response).
-2. On `RELEASE` (new device confirmed): resume output on the new device, continuing
-   from the stored position if mid-sentence.
-3. New `cortex/aether-handler.js` (or extend the sensor) to handle the FSM events.
+1. The `conversation` broadcast rides the **exact socket** the Phase 1 sensor
+   already consumes (`aggregator.py` broadcasts it immediately after each
+   election tick — it is NOT a new channel).
+2. Locked schema (`messages.py:build_conversation_message`):
+   `{type:'conversation', transcript:[{id,scanner,role,text,ts}],
+   utterance:{text,audioBase64,durationMs,offsetMs,isSynthetic}|null,
+   speakingScanner, phase, phaseFrom, phaseTo,
+   conversationEvent:{phase,fromScanner,toScanner,atTick}|null}`.
+3. FSM (`conversation.py`, pure logic — deterministic, tick-driven):
+   `IDLE -> PREPARE -> TRANSFER -> CONFIRM -> RELEASE -> IDLE`, ~200 ms per
+   non-IDLE phase (`PHASE_DURATIONS_MS`) = an ~800 ms migration window.
+   A handoff only begins when an utterance is active AND `speaking_scanner`
+   is the scanner losing ownership; a handoff with no active utterance is a
+   no-op. `conversationEvent` is one-shot (cleared after one broadcast,
+   mirroring `wakeOutcome`).
+4. **The load-bearing constraint for Agent_OS:** `start_utterance` — what a
+   fresh inbound `say` calls — REPLACES the in-flight utterance and forces
+   `phase` back to IDLE. The source says it outright: *"starting a new
+   utterance cancels any in-flight handoff, which is the right call because
+   a fresh say mid-handoff would otherwise race the FSM."* So a reply sent
+   during the ~800 ms window KILLS the device-to-device sentence move.
+5. Playback pause/seek/resume across the migration is **dashboard-side**
+   (TRANSFER → pause + record offset, CONFIRM → seek, RELEASE → resume) —
+   not Agent_OS's job to reimplement. Agent_OS owns only awareness + not
+   racing the FSM.
+
+**Therefore Phase 4 is Agent_OS-side ONLY (no Python changes):**
+
+1. **Listen ✅ CODED (2026-08-05):** the sensor parses `conversation`
+   broadcasts on the existing socket and caches the current `phase` +
+   `speakingScanner` + the one-shot `conversationEvent` (cleared after being
+   carried once, matching its one-shot semantics). Enrichment-only, same
+   discipline as ranging — never emits on its own; cache clears on socket
+   drop/stop.
+2. **Awareness ✅ CODED:** the next election perception carries `phase` and,
+   when a one-shot event arrived, `handoffPhase:{phase,from,to}` in `detail`
+   — so the cortex can know "a handoff is mid-flight (moving to phone…)"
+   instead of seeing stale silence. Covered by 4 tests incl. a real-WS
+   round-trip with drop-clear (27/27 sensor tests).
+3. **Speak-gating (the real fix — REMAINING):** while `phase != IDLE`,
+   `speak()` should defer the outgoing `say` (short queue, ~1 s — the FSM
+   window is ~800 ms) and drain it once IDLE. This is what actually keeps
+   the "sentence moves devices" experience intact: without it, a reply
+   landing mid-migration cancels the handoff (the aggregator's
+   `start_utterance` replaces the in-flight utterance and forces IDLE).
+   Fail-open: if the queue outlives the window or the socket drops, the text
+   falls through to local TTS (never dropped, never fabricated). Deferred to
+   the full phase because it changes `speak()`'s contract and only matters
+   once Phase 2's routed audio is live-proven.
+
+**Gated on (per the phase gate — one phase at a time):** the end-to-end
+migration test wants Phase 2 live-proven (device audio actually playing) and
+Phase 3 built (a user utterance arriving mid-migration). The sensor-side
+listen + awareness slice landed early (same pattern as Phase 1.5) as
+`1c94303`; speak-gating + the end-to-end test are sequenced after 2+3.
 
 ---
 

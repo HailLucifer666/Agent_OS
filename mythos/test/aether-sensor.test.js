@@ -400,6 +400,141 @@ describe('aether-sensor (Phase 1)', function () {
     }
   });
 
+  // ---- Phase 4: conversation FSM listen slice (awareness only) ----
+
+  it('carries the conversation FSM phase in the next election perception', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    // Same-socket `conversation` broadcast (messages.py locked schema):
+    // mid-handoff the phase is TRANSFER and speaking is still the old owner.
+    sensor._internal.ingest({
+      type: 'conversation',
+      transcript: [],
+      utterance: { text: '...', audioBase64: null, durationMs: 2400, offsetMs: 1200, isSynthetic: false },
+      speakingScanner: 'PC',
+      phase: 'TRANSFER',
+      phaseFrom: 'PC',
+      phaseTo: 'Phone',
+      conversationEvent: null
+    });
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    assert.ok(p, 'first acquisition must emit');
+    assert.equal(p.detail.phase, 'TRANSFER', 'the live FSM phase must ride the perception');
+    assert.equal(p.detail.speakingScanner, 'PC');
+  });
+
+  it('conversation broadcast alone must NOT emit (enrichment-only, like ranging)', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    // Ingest a handoff event with no election: nothing may be emitted.
+    assert.doesNotThrow(function () {
+      sensor._internal.ingest({
+        type: 'conversation',
+        transcript: [],
+        utterance: null,
+        speakingScanner: 'PC',
+        phase: 'PREPARE',
+        phaseFrom: 'PC',
+        phaseTo: 'Phone',
+        conversationEvent: { phase: 'PREPARE', fromScanner: 'PC', toScanner: 'Phone', atTick: 4830 }
+      });
+    });
+    // decide() with no owner still must not emit a perception.
+    assert.equal(sensor._internal.decide(election(null, []), 1000), null);
+  });
+
+  it('the one-shot conversationEvent is carried exactly once, then cleared', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000); // acquire PC
+    // Handoff begins: one-shot conversationEvent marks the transition.
+    sensor._internal.ingest({
+      type: 'conversation',
+      transcript: [],
+      utterance: { text: '...', audioBase64: null, durationMs: 2400, offsetMs: 0, isSynthetic: false },
+      speakingScanner: 'PC',
+      phase: 'PREPARE',
+      phaseFrom: 'PC',
+      phaseTo: 'Phone',
+      conversationEvent: { phase: 'PREPARE', fromScanner: 'PC', toScanner: 'Phone', atTick: 4830 }
+    });
+    var p1 = sensor._internal.decide(election('Phone', [scanner('Phone', -42)], { from: 'PC', to: 'Phone', atTick: 4830 }), 2000);
+    assert.ok(p1, 'owner transition must emit');
+    assert.deepEqual(p1.detail.handoffPhase, { phase: 'PREPARE', from: 'PC', to: 'Phone' });
+    assert.equal(p1.detail.phase, 'PREPARE');
+
+    // Next perception (owner stable, force a drift re-emit): the one-shot
+    // event must NOT be carried again.
+    var p2 = sensor._internal.decide(election('Phone', [scanner('Phone', -30)]), 3000);
+    assert.ok(p2, 'drift past throttle must emit');
+    assert.equal(p2.detail.handoffPhase, null, 'one-shot event is consumed by the first perception');
+  });
+
+  it('one-shot event survives a deduped election (consumed only on a real emit)', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    var e = election('PC', [scanner('PC', -59)]);
+    assert.ok(sensor._internal.decide(e, 1000), 'first acquisition must emit');
+    // Handoff begins while the owner is still stable: the event arrives, but
+    // the very next election is identical -> deduped (decide returns null).
+    sensor._internal.ingest({
+      type: 'conversation',
+      transcript: [],
+      utterance: { text: '...', audioBase64: null, durationMs: 2400, offsetMs: 0, isSynthetic: false },
+      speakingScanner: 'PC',
+      phase: 'PREPARE',
+      phaseFrom: 'PC',
+      phaseTo: 'Phone',
+      conversationEvent: { phase: 'PREPARE', fromScanner: 'PC', toScanner: 'Phone', atTick: 4830 }
+    });
+    assert.equal(sensor._internal.decide(e, 1100), null, 'identical broadcast is deduped');
+    // The event must NOT have been eaten by the deduped broadcast — the next
+    // real emit (a >=3 dBm drift past the 1 Hz throttle) still carries it.
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -50)]), 2100);
+    assert.ok(p, 'drift past throttle must emit');
+    assert.deepEqual(p.detail.handoffPhase, { phase: 'PREPARE', from: 'PC', to: 'Phone' },
+      'one-shot event must survive a deduped broadcast and ride the next real emit');
+    assert.equal(p.detail.phase, 'PREPARE');
+  });
+
+  it('socket drop resets the conversation FSM cache (no stale phase after reconnect)', async function () {
+    var bus = fakeBus();
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: bus,
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      client.send(JSON.stringify({
+        type: 'conversation',
+        transcript: [],
+        utterance: null,
+        speakingScanner: 'PC',
+        phase: 'TRANSFER',
+        phaseFrom: 'PC',
+        phaseTo: 'Phone',
+        conversationEvent: { phase: 'TRANSFER', fromScanner: 'PC', toScanner: 'Phone', atTick: 4831 }
+      }));
+      client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
+      assert.ok(await waitFor(function () { return bus._events.length === 1; }, 1000), 'perception must emit');
+      assert.equal(bus._events[0].payload.detail.phase, 'TRANSFER');
+      assert.deepEqual(bus._events[0].payload.detail.handoffPhase, { phase: 'TRANSFER', from: 'PC', to: 'Phone' });
+
+      // Kill the socket: drop must clear the FSM cache.
+      client.close();
+      assert.ok(await waitFor(function () { return bus._events.length === 2; }, 1000), 'offline must emit');
+      assert.equal(bus._events[1].payload.detail.phase, 'IDLE', 'offline has no FSM phase');
+      assert.equal(bus._events[1].payload.detail.handoffPhase, null);
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
   it('speak() sends {type:say, text} over the live socket to the aggregator (Phase 2)', async function () {
     var agg = await fakeAggregator();
     var sensor = createAetherSensor({
