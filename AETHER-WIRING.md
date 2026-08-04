@@ -100,8 +100,8 @@ Aether handles all device routing.
 | Phase | Goal | Status | Commit |
 |-------|------|--------|--------|
 | **1** | Focus awareness — Agent_OS perceives the nearest device; HUD shows it live | ✅ **DONE** | `711722d` |
-| 2 | Voice output routing — Agent_OS speaks through the nearest device | ⬚ Next | — |
-| 3 | Voice input routing — nearest device's mic reaches Agent_OS | ⬚ | — |
+| 2 | Voice output routing — Agent_OS speaks through the nearest device | 🔧 **CODED — needs live verify** | (uncommitted) |
+| 3 | Voice input routing — nearest device's mic reaches Agent_OS | 📐 **DESIGNED — blocked on Aether-side audio transport** | — |
 | 4 | Conversation handoff — mid-sentence migration between devices | ⬚ | — |
 | 5 | Multi-device mesh — multiple rooms, multiple users | ⬚ | — |
 
@@ -128,7 +128,7 @@ default false). QA-reviewed. 2525/2525 tests pass.
 
 ---
 
-## Phase 2 — Voice Output Routing (NEXT)
+## Phase 2 — Voice Output Routing 🔧 CODED — needs live verify (uncommitted)
 
 **Goal:** Agent_OS speaks through whichever device the user is nearest to.
 
@@ -138,23 +138,41 @@ default false). QA-reviewed. 2525/2525 tests pass.
 sensor's existing WS connection is bidirectional. Agent_OS sends `say` down it;
 the aggregator plays TTS on the owner device via its existing 4-phase FSM.
 
-**Plan:**
-1. Extend `aether.js` (or a sibling `aether-output.js`) to expose a `speak(text)`
-   that sends `{type:'say', text}` over the open WS to the aggregator.
-2. Hook the speech path: where the cortex/server currently calls
-   `proactiveSpeak()` → local Edge-TTS → browser chunk, add a branch: when
-   `AETHER_ENABLED && AETHER_AUDIO_ROUTE`, send `say` to the aggregator instead
-   of (or alongside) the local speaker.
-3. Add `AETHER_AUDIO_ROUTE` (bool, default false) to the config schema.
-4. Test: ask Agent_OS a question → walk to PC → answer plays on PC; walk to
-   phone → next answer plays on phone.
+**Shipped (Agent_OS side — all code is here; only the live walk test is pending):**
+1. `sensors/aether.js` exposes `speak(text)` → sends `{type:'say', text}` over
+   the open WS; returns `false` (no throw) when the socket is down so callers
+   fail open to local TTS. Covered by a real-socket test.
+2. `server/index.js` hooks BOTH speech paths through one `speakViaAether()`
+   branch gated on `AETHER_ENABLED && AETHER_AUDIO_ROUTE`:
+   - `proactiveSpeak()` (announcer / immune / boot greeting / reminders): the
+     text goes to the aggregator; the client still gets `proactive-speech` +
+     a caption-only `done` (`chunked:true`, zero chunks) so the HUD shows what
+     was said without the local machine speaking it.
+   - `sendSpokenReply()` (interactive utterance replies — the "ask a question"
+     path): same treatment, caption-only `done`. Both branches guard against an
+     open Gemini Live session on the connection (BUG-060 class: Live's PCM
+     playback is already the entity's voice — never ALSO route to Aether).
+   - Both fall back to the local Edge-TTS chain automatically when the
+     aggregator socket is down (fail-open). Both branches are covered by tests:
+     proactive via `action.speak-requested` over a real WS; interactive via a
+     real `utterance` turn through a stub-brain voice agent (the
+     `tts-down-sentence-chunks` harness).
+3. `AETHER_AUDIO_ROUTE` (bool, default false) added to the config schema +
+   `.env.example`; `main.js` passes the sensor's `speak` sink into the server.
+4. **Still pending — the live walk test:** ask Agent_OS a question → walk to PC
+   → answer plays on PC; walk to phone → next answer plays on phone. Needs the
+   real Aether system (start AetherMesh + MYTHOS with `AETHER_ENABLED=true`,
+   `AETHER_AUDIO_ROUTE=true`). Do NOT tick this phase DONE until that passes.
 
-**Open question for Phase 2:** does the aggregator's `say` path produce audio
-that reaches the *owner device's* speaker, or just the aggregator's own TTS?
-Needs a live check against `aggregator.py`'s `_handle_say` + `piper_tts.py`. If
-it only plays locally, Phase 2 also needs the aggregator to forward audio to the
-owner scanner — a small Python-side addition (the one place this plan would touch
-Aether code).
+**Open question — RESOLVED by reading the source (2026-08-05):** `aggregator.py`
+`_handle_say` does NOT play audio on the aggregator host: it generates the TTS
+utterance (Piper, or a synthetic no-audio fallback), assigns it to the CURRENT
+OWNER scanner, and broadcasts it in the `conversation` stream — i.e. `say` IS
+the owner-routing mechanism, and "which device plays it" is decided by Aether's
+client-side FSM, not by this repo. The remaining unknown is purely Aether-side:
+whether each scanner's client actually plays the owner-assigned utterance
+(likely, given the narration/conversation FSM, but that is Aether's code to
+verify live). No Python-side change is expected from this phase.
 
 > **ANSWERED 2026-08-04, and the answer changes Phase 2's shape.** The
 > aggregator's `_handle_say` synthesises with Piper and embeds `audio_base64` in
@@ -188,20 +206,85 @@ Aether code).
 
 ---
 
-## Phase 3 — Voice Input Routing
+## Phase 3 — Voice Input Routing 📐 DESIGNED — blocked on Aether-side audio transport
 
 **Goal:** the nearest device's mic captures voice and streams it to Agent_OS.
 
-**Plan:**
-1. The aggregator already has a `wake` inbound message and a wake-listener
-   (`wake_listener.py`). On wake, Agent_OS opens a listening session.
-2. Mic capture: either the aggregator forwards PCM chunks to Agent_OS (new
-   inbound message type), or Agent_OS pulls from a per-device mic stream.
-3. Feed chunks into the existing STT pipeline (`providers/groq-stt.js` or
-   `local-whisper-stt.js`) → transcript → cortex OBSERVE phase.
+**Verified reality (read from source, 2026-08-05) — the wire does NOT exist yet:**
 
-**Deferred detail:** wake-word integration, chunk encoding (PCM16 base64), and
-the `is_final` semantics all need design once Phase 2's audio path is proven.
+1. `aggregator.py` says it outright: *"Real audio capture is NOT implemented
+   here"* — its inbound types are only `wake` / `say` / `ask` / `placeDevice` /
+   `setCalibration` / `setTuning`. Nothing streams mic audio to it.
+2. The ONLY mic-capture code in the Aether repo is `wake_listener.py` — a
+   per-scanner local process: sounddevice captures 16kHz mono int16 frames →
+   openWakeWord scores them → on threshold crossing it sends `{type:'wake'}`
+   (debounced 1.5s). Its audio callback feeds ONLY the wake scorer; it does
+   not capture or stream the utterance after wake.
+3. `chirp_audio.py` is pure DSP for ToF ranging (18-21 kHz chirps) — not voice.
+4. `wyoming_satellite.py` (Phase 8) is the Home Assistant satellite seam
+   (wake + TTS for HA's Assist pipeline) — it does not stream device mic audio
+   to Agent_OS either.
+5. Wake acceptance ALREADY reaches Agent_OS for free: `election.wakeOutcome`
+   (one-shot — `_pending_wake_outcome` is cleared after the next broadcast) is
+   a camelCase `{requestedAtTick, ts, owner, results:[{id, outcome:
+   'ACCEPTED'|'SUPPRESSED'}]}` riding inside the `election` broadcast the
+   Phase 1 sensor already consumes. The ACCEPTED scanner is the one whose wake
+   won (owner match).
+
+**Therefore Phase 3 requires exactly ONE Aether-side addition (the plan's
+single Python touch), in the OTHER repo:** extend `wake_listener.py` (or a
+sibling `voice_stream.py`) so that after its own wake is ACCEPTED it records a
+fixed window of the SAME 16kHz mono int16 frames it already captures (e.g. up
+to 8s, silence-truncated) and streams them to the aggregator as a new inbound
+message type:
+
+```json
+{ "type": "audio_chunk", "scannerId": "PC", "data": "<base64 PCM16 LE 16kHz mono>", "final": false }
+{ "type": "audio_chunk", "scannerId": "PC", "data": "<...>", "final": true }
+```
+
+**Deferred details — RESOLVED by the source:**
+
+- **Wake-word integration:** already solved on the Aether side —
+  `wake_listener.py` IS the wake-word listener (openWakeWord, `hey_jarvis`).
+  Agent_OS needs no wake-word of its own; it reacts to an ACCEPTED entry in
+  `election.wakeOutcome.results` (the scanner whose `outcome` is 'ACCEPTED').
+- **Chunk encoding:** 16kHz mono PCM16 LE base64 — exactly what
+  `wake_listener.py` already produces; the 44-byte WAV header is trivially
+  reconstructed Agent_OS-side.
+- **`is_final`:** `final:true` on the last chunk ends the clip; Agent_OS
+  accumulates until `final` (a dropped socket mid-clip discards the partial
+  buffer — never transcribes a truncated clip).
+
+**Relay vs pull (per the "pull model preferred" constraint):** the aggregator
+should UNICAST audio chunks only to subscribing clients. Agent_OS sends
+`{type:'subscribe', topic:'audio', scannerId:'PC'}`; the aggregator streams that
+scanner's chunks to that one client. Never broadcast raw mic audio to every
+dashboard client.
+
+**Agent_OS side (Phase 3 code — only after the Aether side exists):**
+
+1. `sensors/aether.js`: on `election.wakeOutcome` with an ACCEPTED result →
+   open a listening session (reset accumulator, send `subscribe audio`). On
+   `audio_chunk` messages on the existing socket: accumulate `data`; on
+   `final` → wrap the PCM16 in a WAV header and call
+   `providers/stt.js`'s chain (`sttChain.transcribe(wav, 'audio/wav', config)`
+   — groq first, local-whisper fallback; both accept WAV).
+2. Transcript → `bus.emit('perception.voice', {kind:'voice', channel:'voice',
+   summary, salience:0.8, text})` — the existing human-initiated utterance
+   event the cortex already consumes (mirrors the ws-sensor's utterance
+   handling, `src/core/sensors/ws.js`).
+3. Honest failure: blank or low-confidence transcript (the groq provider's
+   existing `isLowConfidence` filter) → log and emit nothing; aggregator
+   socket down → no session, no fabricated transcript.
+
+**Why this phase is DESIGN, not code:** the wire does not exist, and per repo
+rules Agent_OS code must not be written against a protocol the aggregator does
+not implement (real data only). The Aether-side addition needs an operator
+decision: extend `wake_listener.py` vs a new module, and confirm the
+subscribe/unicast mechanism. The full mic→STT→cortex loop also wants Phase 2's
+device-audio story live-proven first (the two designs are independent, but the
+end-to-end test needs both).
 
 ---
 

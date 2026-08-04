@@ -7,11 +7,16 @@
 // every 400ms, but the cortex perception queue drains 1×/sec (cap 50), so we
 // must emit ONLY on owner transition, first acquisition, or a meaningful RSSI
 // drift (≥3 dBm, throttled 1 Hz). These cases exercise the gate directly via
-// the injectFocus/decide test hooks — no live socket needed for gate logic.
+// the decide() test hook — no live socket needed for gate logic. The real
+// socket path (connect → broadcast → perception.aether; disconnect → offline)
+// is covered end-to-end against a local WebSocketServer.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const { WebSocketServer } = require('ws');
 const { createAetherSensor } = require('../src/core/sensors/aether');
+
+const SILENT = { info: function () {}, warn: function () {}, error: function () {} };
 
 function fakeBus() {
   var events = [];
@@ -35,13 +40,38 @@ function scanner(id, rssi) {
   return { id: id, rssi: rssi, smoothedRssi: rssi, lastSeenMs: 100, present: true };
 }
 
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+// Poll until `cond()` is truthy or the timeout elapses; returns success bool.
+async function waitFor(cond, ms) {
+  var deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (cond()) return true;
+    await sleep(10);
+  }
+  return cond();
+}
+
+// A throwaway aggregator on an ephemeral port. Listening is async: address()
+// is null until the 'listening' event, so await it before reading the port.
+async function fakeAggregator() {
+  var wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise(function (resolve) { wss.once('listening', resolve); });
+  return { wss: wss, port: wss.address().port };
+}
+
+async function closeAggregator(wss) {
+  await new Promise(function (resolve) {
+    try { wss.close(resolve); } catch (_) { resolve(); }
+  });
+}
+
 describe('aether-sensor (Phase 1)', function () {
 
   it('emits perception.aether on first acquisition with correct shape', function () {
-    var bus = fakeBus();
-    var sensor = createAetherSensor({ bus: bus, config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    var p = sensor._internal.injectFocus(election('PC', [scanner('PC', -59)]));
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
     assert.ok(p, 'first acquisition must produce a perception');
     assert.equal(p.kind, 'aether');
     assert.equal(p.channel, 'aether');
@@ -51,102 +81,106 @@ describe('aether-sensor (Phase 1)', function () {
     assert.equal(p.detail.connected, true);
     assert.ok(p.summary.indexOf('PC') !== -1);
     assert.ok(p.summary.indexOf('-59') !== -1);
-    sensor.stop();
   });
 
   it('dedup: repeated same-owner broadcasts do NOT re-emit', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
     var e = election('PC', [scanner('PC', -59)]);
-    var p1 = sensor._internal.injectFocus(e);
-    var p2 = sensor._internal.injectFocus(e);
-    var p3 = sensor._internal.injectFocus(e);
-    assert.ok(p1, 'first must emit');
-    assert.equal(p2, null, 'second identical broadcast must be a no-op');
-    assert.equal(p3, null, 'third identical broadcast must be a no-op');
-    sensor.stop();
+    assert.ok(sensor._internal.decide(e, 1000), 'first must emit');
+    assert.equal(sensor._internal.decide(e, 1100), null, 'second identical broadcast must be a no-op');
+    assert.equal(sensor._internal.decide(e, 1200), null, 'third identical broadcast must be a no-op');
   });
 
   it('owner transition emits with handoff flag derived from lastHandoff', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    // Acquire PC first.
-    sensor._internal.injectFocus(election('PC', [scanner('PC', -59)]));
+    sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000); // acquire PC
     // Walk to Phone — aggregator records the handoff.
-    var p = sensor._internal.injectFocus(election('Phone', [scanner('Phone', -42)], { from: 'PC', to: 'Phone', atTick: 2 }));
+    var p = sensor._internal.decide(election('Phone', [scanner('Phone', -42)], { from: 'PC', to: 'Phone', atTick: 2 }), 2000);
     assert.ok(p, 'owner change must emit');
     assert.equal(p.detail.owner, 'Phone');
     assert.equal(p.detail.handoff, true);
     assert.equal(p.detail.fromDevice, 'PC');
-    sensor.stop();
   });
 
   it('owner change without a recorded lastHandoff emits handoff:false', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    sensor._internal.injectFocus(election('PC', [scanner('PC', -59)]));
+    sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
     // No lastHandoff payload — still a transition, but not a recorded handoff.
-    var p = sensor._internal.injectFocus(election('Phone', [scanner('Phone', -42)]));
+    var p = sensor._internal.decide(election('Phone', [scanner('Phone', -42)]), 2000);
     assert.ok(p);
     assert.equal(p.detail.owner, 'Phone');
     assert.equal(p.detail.handoff, false);
-    sensor.stop();
   });
 
   it('owner stable + <3 dBm drift does NOT re-emit (noise floor)', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    sensor._internal.injectFocus(election('PC', [scanner('PC', -59)]));
-    var p = sensor._internal.injectFocus(election('PC', [scanner('PC', -61)])); // 2 dBm drift
+    sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -61)]), 2000); // 2 dBm drift
     assert.equal(p, null, 'sub-threshold jitter must not re-emit');
-    sensor.stop();
   });
 
   it('owner stable + >=3 dBm drift re-emits (throttled 1 Hz)', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
-    sensor._internal._reset();
-    // Drive decide() with controlled timestamps to exercise the throttle.
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
     sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000); // first emit
     var p1 = sensor._internal.decide(election('PC', [scanner('PC', -50)]), 1100); // 9 dBm drift, 100ms later
     assert.equal(p1, null, 'drift within 1 Hz throttle window must not emit');
-    var p2 = sensor._internal.decide(election('PC', [scanner('PC', -50)]), 2100); // 1100ms later — past throttle
+    var p2 = sensor._internal.decide(election('PC', [scanner('PC', -50)]), 2100); // past throttle
     assert.ok(p2, 'drift past throttle window must emit');
     assert.equal(p2.detail.rssi, -50);
-    sensor.stop();
+  });
+
+  it('re-emits when rssi flips known<->unknown while the owner is stable', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    // First acquisition: owner present but the scanner row is missing -> rssi unknown.
+    var p1 = sensor._internal.decide(election('PC', []), 1000);
+    assert.ok(p1);
+    assert.equal(p1.detail.rssi, null);
+    assert.ok(p1.summary.indexOf('rssi unknown') !== -1);
+    // Same owner, scanner row now present -> the HUD must learn the real value
+    // (the old gate never re-emitted here, leaving a stale "rssi unknown").
+    var p2 = sensor._internal.decide(election('PC', [scanner('PC', -55)]), 2000);
+    assert.ok(p2, 'unknown -> known rssi must re-emit');
+    assert.equal(p2.detail.rssi, -55);
+    // And the reverse: the row disappears again.
+    var p3 = sensor._internal.decide(election('PC', []), 3000);
+    assert.ok(p3, 'known -> unknown rssi must re-emit');
+    assert.equal(p3.detail.rssi, null);
   });
 
   it('swallows malformed election payloads (fail-honest-inert)', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    assert.equal(sensor._internal.injectFocus(null), null);
-    assert.equal(sensor._internal.injectFocus({}), null);
-    assert.equal(sensor._internal.injectFocus({ type: 'reading' }), null); // wrong type
-    assert.equal(sensor._internal.injectFocus({ type: 'election', owner: null, scanners: [] }), null); // null owner, never acquired
-    sensor.stop();
+    assert.equal(sensor._internal.decide(null, 1), null);
+    assert.equal(sensor._internal.decide({}, 1), null);
+    assert.equal(sensor._internal.decide({ type: 'reading' }, 1), null); // wrong type
+    assert.equal(sensor._internal.decide({ type: 'election', owner: null, scanners: [] }, 1), null); // null owner, never acquired
   });
 
   it('falls back to raw rssi when smoothedRssi is absent', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    var p = sensor._internal.injectFocus(election('PC', [{ id: 'PC', rssi: -55, lastSeenMs: 1, present: true }]));
+    var p = sensor._internal.decide(election('PC', [{ id: 'PC', rssi: -55, lastSeenMs: 1, present: true }]), 1000);
     assert.ok(p);
     assert.equal(p.detail.rssi, -55);
-    sensor.stop();
   });
 
   it('null owner after acquisition is a loss transition (emits)', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor._internal._reset();
-    sensor._internal.injectFocus(election('PC', [scanner('PC', -59)]));
-    var p = sensor._internal.injectFocus(election(null, []));
+    sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    var p = sensor._internal.decide(election(null, []), 2000);
     assert.ok(p, 'loss of owner must emit');
     assert.equal(p.detail.owner, null);
-    sensor.stop();
   });
 
   it('isRunning() reflects start/stop state', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     assert.equal(sensor.isRunning(), false);
     sensor.start();
     assert.equal(sensor.isRunning(), true);
@@ -155,7 +189,7 @@ describe('aether-sensor (Phase 1)', function () {
   });
 
   it('start/stop are idempotent', function () {
-    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: { info: function () {} } });
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
     sensor.start();
     sensor.start(); // second start is a no-op
     assert.equal(sensor.isRunning(), true);
@@ -172,15 +206,113 @@ describe('aether-sensor (Phase 1)', function () {
     var sensor = createAetherSensor({
       bus: fakeBus(),
       config: { AETHER_WS_URL: 'ws://127.0.0.1:9' }, // unused port
-      logger: { info: function () {}, warn: function () {}, error: function () {} }
+      logger: SILENT
     });
     assert.doesNotThrow(function () { sensor.start(); });
     assert.equal(sensor.isRunning(), true);
-    // Drain the connection-failure microtask before tearing down so the
-    // deferred 'error'/'close' events fire while the no-op listener is attached.
-    await new Promise(function (resolve) { setTimeout(resolve, 80); });
+    await sleep(80); // drain the connection-failure microtask
     assert.doesNotThrow(function () { sensor.stop(); });
     assert.equal(sensor.isRunning(), false);
+  });
+
+  it('round-trips an election broadcast over a real WS into perception.aether', async function () {
+    var bus = fakeBus();
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: bus,
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+
+      client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
+      assert.ok(await waitFor(function () { return bus._events.length === 1; }, 1000), 'broadcast must emit a perception');
+      var ev = bus._events[0];
+      assert.equal(ev.name, 'perception.aether');
+      assert.equal(ev.payload.detail.owner, 'PC');
+      assert.equal(ev.payload.detail.rssi, -59);
+      assert.equal(ev.payload.salience, 0.5);
+
+      // Duplicate broadcast -> still one perception (dedup works on the wire).
+      client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
+      await sleep(80);
+      assert.equal(bus._events.length, 1, 'duplicate broadcast must not re-emit');
+
+      // Non-election message type -> ignored.
+      client.send(JSON.stringify({ type: 'reading', owner: 'PC', rssi: -30 }));
+      await sleep(30);
+      assert.equal(bus._events.length, 1, 'non-election messages must be ignored');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('emits a fail-honest offline perception when the aggregator drops the socket', async function () {
+    var bus = fakeBus();
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: bus,
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
+      assert.ok(await waitFor(function () { return bus._events.length === 1; }, 1000), 'broadcast must emit a perception');
+
+      // Kill the connection from the aggregator side.
+      client.close();
+      assert.ok(await waitFor(function () { return bus._events.length === 2; }, 1000), 'drop must emit the offline perception');
+      var off = bus._events[1];
+      assert.equal(off.name, 'perception.aether');
+      assert.equal(off.payload.detail.connected, false);
+      assert.equal(off.payload.detail.owner, null);
+      assert.equal(off.payload.salience, 0.5, 'offline must clear the HUD chip (relay gate is salience >= 0.3)');
+      assert.ok(off.payload.summary.indexOf('offline') !== -1);
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('speak() sends {type:say, text} over the live socket to the aggregator (Phase 2)', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      var received = new Promise(function (resolve) {
+        client.on('message', function (raw) { resolve(JSON.parse(raw.toString())); });
+      });
+      assert.equal(sensor.speak('hello from agent os'), true, 'speak must report the send went out');
+      var msg = await received;
+      assert.equal(msg.type, 'say');
+      assert.equal(msg.text, 'hello from agent os');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('speak() returns false (never throws) when the socket is down or the text is empty', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    assert.equal(sensor.speak('anyone there?'), false, 'never-connected sensor cannot speak');
+    assert.equal(sensor.speak('   '), false, 'blank text must be rejected');
+    assert.equal(sensor.speak(null), false);
+    assert.doesNotThrow(function () { sensor.speak('x'); });
+    sensor.stop();
+    assert.equal(sensor.speak('after stop'), false);
   });
 
 });

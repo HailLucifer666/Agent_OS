@@ -439,3 +439,143 @@ test('real bus health.healed event relays to a real WS client health broadcast, 
   ws.close();
   await server.stop();
 });
+
+// ---- Aether Phase 2: nearest-device voice routing (AETHER-WIRING.md) ----
+// proactiveSpeak is triggered via the existing bus wire ('action.speak-
+// requested' -> proactiveSpeak) so the routing branch is exercised through the
+// real server + real WS client without needing a voice agent or brain.
+
+function waitForMessages(received, predicate, ms) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + ms;
+    const timer = setInterval(() => {
+      if (received.some(predicate) || Date.now() > deadline) { clearInterval(timer); resolve(); }
+    }, 10);
+  });
+}
+
+test('proactive speech routes to the Aether aggregator (caption-only done) when AETHER_AUDIO_ROUTE is on', async () => {
+  const bus = createBus({ historySize: 50 });
+  const spoke = [];
+  const server = createServer(baseDeps(bus, {
+    config: {
+      MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST',
+      MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000,
+      AETHER_ENABLED: true, AETHER_AUDIO_ROUTE: true,
+    },
+    aetherSpeak: (t) => { spoke.push(t); return true; },
+  }));
+
+  await server.ready;
+  const addr = server.httpServer.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await new Promise((resolve) => ws.on('open', resolve));
+
+  const received = [];
+  ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+
+  // The bus wraps the second arg as e.payload, so the payload is {text} — the
+  // shape the server's action.speak-requested subscription reads (e.payload.text).
+  bus.emit('action.speak-requested', { text: 'hello aether device' });
+  await waitForMessages(received, (m) => m.type === 'done', 2000);
+
+  assert.deepEqual(spoke, ['hello aether device'], 'the text must reach the aggregator as a say');
+  assert.ok(received.some((m) => m.type === 'proactive-speech'), 'HUD must still get the announcement');
+  const done = received.find((m) => m.type === 'done');
+  assert.ok(done, 'the turn must resolve with a done');
+  assert.equal(done.chunked, true, 'chunked:true + zero chunks = silent caption-only finish (voice-loop.js deliverReply)');
+  assert.equal(received.some((m) => m.type === 'speech-chunk'), false, 'no local audio chunks when routed');
+
+  ws.close();
+  await server.stop();
+});
+
+test('proactive speech falls back to the local TTS path when the Aether socket is down', async () => {
+  const bus = createBus({ historySize: 50 });
+  const server = createServer(baseDeps(bus, {
+    config: {
+      MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST',
+      MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000,
+      AETHER_ENABLED: true, AETHER_AUDIO_ROUTE: true,
+    },
+    aetherSpeak: () => false, // aggregator socket down -> fail open
+  }));
+
+  await server.ready;
+  const addr = server.httpServer.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await new Promise((resolve) => ws.on('open', resolve));
+
+  const received = [];
+  ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+
+  bus.emit('action.speak-requested', { text: 'local fallback hello' });
+  await waitForMessages(received, (m) => m.type === 'done', 2000);
+
+  assert.ok(received.some((m) => m.type === 'proactive-speech'), 'announcement must still broadcast locally');
+  assert.ok(received.some((m) => m.type === 'speech-chunk'), 'the local TTS path must run (chunks, null audio in the test env)');
+  const done = received.find((m) => m.type === 'done');
+  assert.ok(done, 'the local path must still finish the turn');
+
+  ws.close();
+  await server.stop();
+});
+
+// The interactive branch (sendSpokenReply) needs a real utterance turn through
+// the voice agent — same stub-brain harness as test/tts-down-sentence-chunks.
+test('an interactive utterance reply routes to the Aether aggregator (caption-only done, no local chunks)', async () => {
+  const bus = createBus({ historySize: 50 });
+  const spoke = [];
+  const REPLY = 'Routing this reply to the nearest device now.';
+  const server = createServer(baseDeps(bus, {
+    config: {
+      MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST',
+      MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000,
+      AETHER_ENABLED: true, AETHER_AUDIO_ROUTE: true,
+    },
+    memory: {
+      working: { tick: 0, activeGoalId: null },
+      fs: fakeFs(),
+      episodic: { write: async () => ({ ref: 'ep-1' }), recall: () => [] },
+      semantic: { recall: () => [] },
+      recallHybrid: async () => [],
+    },
+    brain: {
+      think: async () => ({
+        content: JSON.stringify({ say: REPLY, actions: [], needs_result: false }),
+        parsed: { say: REPLY, actions: [], needs_result: false },
+        offline: false,
+      }),
+    },
+    leash: {
+      check: () => ({ allow: true, tier: 0, requireConfirm: false }),
+      confirm: { create: () => 'cf-1', accept: () => null, reject: () => true },
+    },
+    aetherSpeak: (t) => { spoke.push(t); return true; },
+  }));
+
+  await server.ready;
+  const addr = server.httpServer.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await new Promise((resolve) => ws.on('open', resolve));
+
+  const chunks = [];
+  const donePromise = new Promise((resolve) => {
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'speech-chunk') chunks.push(msg);
+      if (msg.type === 'done') resolve(msg);
+    });
+  });
+
+  ws.send(JSON.stringify({ type: 'utterance', reqId: 'r1', text: 'say something' }));
+  const done = await donePromise;
+
+  assert.equal(spoke.length, 1, 'the spoken reply must reach the aggregator as exactly one say');
+  assert.ok(spoke[0].includes('nearest device'), `reply text must be the spoken answer, got: ${spoke[0]}`);
+  assert.equal(done.chunked, true, 'caption-only done keeps the turn silent locally');
+  assert.equal(chunks.length, 0, 'no local audio chunks when the reply is routed');
+
+  ws.close();
+  await server.stop();
+});

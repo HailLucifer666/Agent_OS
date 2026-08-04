@@ -632,6 +632,11 @@ async function main() {
         conversationGateway: conversationGateway,
         getCapabilityDigest: getCapabilityDigest,
         identity: identity, // S2S (Phase 5) — buildLiveSystemInstruction()'s persona compose
+        // Phase 2 (Aether): nearest-device audio sink — the aether sensor's
+        // speak(), read at call time because the sensor starts in a later boot
+        // step than the server. Resolves false (route off) when Aether is not
+        // enabled or its socket is down, so the server fails open to local TTS.
+        aetherSpeak: (text) => (aetherSensor && typeof aetherSensor.speak === 'function' ? aetherSensor.speak(text) : false),
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.

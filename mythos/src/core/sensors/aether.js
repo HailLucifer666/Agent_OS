@@ -6,22 +6,33 @@
 // ws://127.0.0.1:8766) and consumes its locked `election` broadcast — the
 // nearest device is `election.owner`. On a focus change (or a meaningful RSSI
 // drift while the owner stays stable) it emits `perception.aether`, which the
-// existing `perception.*` relay in server/index.js forwards to the HUD when
-// salience >= MYTHOS_IDLE_SALIENCE. The HUD "NEAREST DEVICE" widget paints it.
+// existing `perception.*` relay in server/index.js forwards to the HUD (the
+// "NEAREST DEVICE" widget) when salience >= MYTHOS_IDLE_SALIENCE.
 //
 // Pull model: Agent_OS is just another dashboard client of the aggregator. The
 // aggregator already accepts inbound `say`/`ask` on this same socket, so Phase
 // 2 voice routing will reuse this connection — no second channel needed.
 //
+// Phase 2 (voice output): the SAME socket is bidirectional — speak(text) sends
+// {type:'say'} and the aggregator routes the TTS utterance to the current
+// owner, so Agent_OS never needs a second channel to talk through the nearest
+// device (see AETHER-WIRING.md Phase 2).
+//
 // Dedup gate (the whole point): the aggregator broadcasts every 400ms. The
 // cortex perception queue drains once per tick (cap MAX_DRAIN_PER_TICK=50).
 // Emitting per broadcast would flood it (~2.5 events/sec in, 1/sec drain) and
-// crowd out every other sensor. So we emit ONLY on:
-//   (a) owner transition (null->X, X->Y, X->null), or first acquisition; or
+// crowd out every other sensor. So `decide()` emits ONLY on:
+//   (a) owner transition (null->X, X->Y, X->null) or first acquisition; or
 //   (b) owner stable but the owner's smoothedRssi moved >= DRIFT_DB since the
-//       last emit — throttled to max 1 Hz so a noisy radio can't spam.
-// Stable 400ms broadcasts are silent no-ops; the HUD distance still updates
-// live via (b) as the user actually moves.
+//       last emit — or flipped between known/unknown — throttled to 1 Hz.
+// Stable 400ms broadcasts are silent no-ops; the HUD still updates live via
+// (b) as the user actually moves.
+//
+// A socket drop after a real connection emits one fail-honest "Aether offline"
+// perception at the SAME salience as everything else, so the HUD relay (gate:
+// salience >= MYTHOS_IDLE_SALIENCE) clears the stale chip — a down Aether must
+// never keep painting "Nearest: PC" as if nothing happened. A drop before any
+// device was ever acquired emits nothing: the HUD already reads "no device".
 //
 // Mirrors window-sensor.js's generation-token + fail-honest-inert contract.
 // Field is `salience` (NOT `salienceHint` — cortex/ooda.js reads .salience).
@@ -33,10 +44,9 @@ var WebSocket = require('ws');
 var DEFAULT_WS_URL = 'ws://127.0.0.1:8766';
 var RECONNECT_MIN_MS = 200;
 var RECONNECT_MAX_MS = 5000;
-var DRIFT_DB = 3;          // owner-stable re-emit threshold on smoothedRssi
+var DRIFT_DB = 3;             // owner-stable re-emit threshold on smoothedRssi
 var DRIFT_THROTTLE_MS = 1000; // cap owner-stable emits to 1 Hz
-var DISCONNECT_SALIENCE = 0.2; // below MYTHOS_IDLE_SALIENCE → reaches HUD via detail only when relayed by kind
-var DEFAULT_SALIENCE = 0.5;
+var SALIENCE = 0.5;           // one salience for every aether perception
 
 function createAetherSensor(ctx) {
   var bus = ctx.bus;
@@ -49,12 +59,12 @@ function createAetherSensor(ctx) {
   var reconnectDelay = RECONNECT_MIN_MS;
   var connected = false;
 
-  // Dedup gate state — what we last emitted, so we can decide whether the
-  // incoming election is "different enough" to be worth a perception.
-  var lastEmittedOwner = null;     // owner at last emit (null = never acquired / lost)
+  // Dedup-gate state — what we last emitted, so an incoming election can be
+  // judged "different enough" to be worth a perception.
+  var lastEmittedOwner = null; // owner at last emit (null = never acquired / lost)
   var lastEmittedRssi = null;
   var lastEmitTs = 0;
-  var hadFirstEmit = false;        // suppresses the null->null initial transition
+  var hadFirstEmit = false;    // suppresses the pre-acquisition null->null case
 
   // Pull the owner scanner entry (with its smoothedRssi) out of the election
   // payload. Aggregator sends scanners as a list; owner may be null.
@@ -69,35 +79,33 @@ function createAetherSensor(ctx) {
     return null;
   }
 
-  // Core gate decision. Returns the perception payload to emit, or null to skip.
-  // Pure — no side effects except reading/clearing throttle state via the
-  // passed-in `now` (so injectFocus can drive it deterministically in tests).
+  // The dedup gate. Stateful: reads AND updates the last-emit state above, so
+  // two calls with the same election yield one perception then null. Returns
+  // the perception payload to emit, or null to skip. `now` is passed in so
+  // tests can drive the 1 Hz throttle deterministically.
   function decide(election, now) {
     var owner = (election && election.owner) || null;
     var ownerScanner = findOwnerScanner(election);
-    var rssi = ownerScanner ? ownerScanner.smoothedRssi : null;
-    if (rssi == null && ownerScanner && ownerScanner.rssi != null) rssi = ownerScanner.rssi;
-    var handoff = false;
-    var fromDevice = null;
-    var lh = election && election.lastHandoff;
-    if (lh && typeof lh === 'object' && lh.to === owner && lh.from) {
-      handoff = true;
-      fromDevice = lh.from;
+    var rssi = null;
+    if (ownerScanner) {
+      if (ownerScanner.smoothedRssi != null) rssi = ownerScanner.smoothedRssi;
+      else if (ownerScanner.rssi != null) rssi = ownerScanner.rssi;
     }
 
     var shouldEmit = false;
     if (!hadFirstEmit) {
-      // First acquisition (owner present) or first loss after acquisition.
-      if (owner !== null) shouldEmit = true;
+      shouldEmit = owner !== null; // first acquisition (pre-acquisition loss: skip)
     } else if (owner !== lastEmittedOwner) {
-      // Owner transition — the primary signal.
-      shouldEmit = true;
-    } else if (rssi != null && lastEmittedRssi != null &&
-               Math.abs(rssi - lastEmittedRssi) >= DRIFT_DB) {
-      // Owner stable but radio moved meaningfully — throttle to 1 Hz.
-      if (now - lastEmitTs >= DRIFT_THROTTLE_MS) shouldEmit = true;
+      shouldEmit = true;           // owner transition — the primary signal
+    } else {
+      // Owner stable — re-emit only on a meaningful radio change: >=DRIFT_DB
+      // drift, or a known<->unknown flip on rssi (the HUD must not keep a
+      // stale "rssi unknown" forever). Throttled to 1 Hz so a noisy radio
+      // can't spam.
+      var rssiChanged = rssi !== lastEmittedRssi &&
+        ((rssi == null || lastEmittedRssi == null) || Math.abs(rssi - lastEmittedRssi) >= DRIFT_DB);
+      if (rssiChanged && now - lastEmitTs >= DRIFT_THROTTLE_MS) shouldEmit = true;
     }
-
     if (!shouldEmit) return null;
 
     hadFirstEmit = true;
@@ -105,51 +113,39 @@ function createAetherSensor(ctx) {
     lastEmittedRssi = rssi;
     lastEmitTs = now;
 
-    var ownerLabel = owner || 'none';
-    // 'rssi unknown' (not 'offline') when the socket is live but the owner row
+    // 'rssi unknown' (not 'offline') while the socket is live but the owner row
     // is missing from the scanners list — avoids contradicting connected:true.
     var rssiLabel = (rssi != null) ? (rssi + ' dBm') : 'rssi unknown';
+    var lh = election && election.lastHandoff;
+    var handoff = !!(lh && typeof lh === 'object' && lh.to === owner && lh.from);
     return {
       ts: now,
       kind: 'aether',
       channel: 'aether',
-      summary: ('Nearest: ' + ownerLabel + ' \u00b7 ' + rssiLabel).slice(0, 200),
-      salience: DEFAULT_SALIENCE,
+      summary: ('Nearest: ' + (owner || 'none') + ' \u00b7 ' + rssiLabel).slice(0, 200),
+      salience: SALIENCE,
       detail: {
         owner: owner,
         rssi: rssi,
         handoff: handoff,
-        fromDevice: fromDevice,
+        fromDevice: handoff ? lh.from : null,
         scanners: (election && election.scanners) ? election.scanners.slice() : [],
         connected: true
       }
     };
   }
 
-  function emitPerception(payload) {
-    if (!payload) return;
-    try {
-      bus.emit('perception.aether', payload);
-    } catch (_) {
-      // A bus emit must never crash the sensor loop.
-    }
-  }
-
-  // Test hook + push-path entry point. Lets tests and a future Python push
-  // client drive the gate without a live aggregator connection.
-  function injectFocus(election) {
-    return decide(election, Date.now());
-  }
-
   function emitOffline() {
-    if (!hadFirstEmit && !connected) return; // never acquired → don't noise "offline"
+    // Never acquired a device yet -> the HUD already reads "no device"; an
+    // offline blip adds nothing and would be noise on every failed boot.
+    if (!hadFirstEmit) return;
     var now = Date.now();
-    emitPerception({
+    bus.emit('perception.aether', {
       ts: now,
       kind: 'aether',
       channel: 'aether',
       summary: 'Nearest: none \u00b7 Aether offline',
-      salience: DISCONNECT_SALIENCE,
+      salience: SALIENCE,
       detail: {
         owner: null,
         rssi: null,
@@ -197,20 +193,14 @@ function createAetherSensor(ctx) {
 
     socket.on('message', function (raw) {
       if (generation !== myGen) return;
-      handleElectionLocked(raw, myGen);
+      var election;
+      try { election = JSON.parse(raw.toString()); } catch (_) { return; }
+      if (!election || election.type !== 'election') return;
+      var payload = decide(election, Date.now());
+      if (payload) bus.emit('perception.aether', payload);
     });
 
     socket.on('close', function () { onSocketDead(myGen); });
-  }
-
-  // Bound separately so handleElection can be unit-tested without rebinding.
-  function handleElectionLocked(raw, myGen) {
-    if (generation !== myGen) return;
-    var election;
-    try { election = JSON.parse(raw.toString()); } catch (_) { return; }
-    if (!election || election.type !== 'election') return;
-    var payload = decide(election, Date.now());
-    if (payload) emitPerception(payload);
   }
 
   function onSocketDead(myGen) {
@@ -260,30 +250,39 @@ function createAetherSensor(ctx) {
     connected = false;
   }
 
+  // Phase 2 — nearest-device voice output. Sends {type:'say', text} down the
+  // open socket to the aggregator, which generates TTS and assigns the
+  // utterance to the CURRENT owner (aggregator.py _handle_say) — this is the
+  // whole Aether routing mechanism. Returns true only when the message was
+  // actually put on the wire; false when there is no live connection, so the
+  // caller can fail open to local TTS. Never throws.
+  function speak(text) {
+    var msgText = (text == null) ? '' : String(text).trim();
+    if (!msgText) return false;
+    if (!running || !connected || !ws || ws.readyState !== 1) return false;
+    try {
+      ws.send(JSON.stringify({ type: 'say', text: msgText }));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function isRunning() { return running; }
 
   return {
     start: start,
     stop: stop,
+    speak: speak,
     isRunning: isRunning,
     _internal: {
-      injectFocus: injectFocus,
-      decide: decide,
+      decide: decide,            // test hook: drive the dedup gate directly
       findOwnerScanner: findOwnerScanner,
-      _reset: function () {        // test hook: clear gate state between cases
+      _reset: function () {      // test hook: clear gate state between cases
         lastEmittedOwner = null;
         lastEmittedRssi = null;
         lastEmitTs = 0;
         hadFirstEmit = false;
-      },
-      _state: function () {
-        return {
-          connected: connected,
-          lastEmittedOwner: lastEmittedOwner,
-          lastEmittedRssi: lastEmittedRssi,
-          lastEmitTs: lastEmitTs,
-          hadFirstEmit: hadFirstEmit
-        };
       }
     }
   };

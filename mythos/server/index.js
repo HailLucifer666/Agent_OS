@@ -100,6 +100,18 @@ function createServer(deps) {
   // createSocket option, which no-ops to the real 'ws' library when absent.
   const createLiveSocket = deps.createLiveSocket;
 
+  // Phase 2 (AETHER-WIRING.md): nearest-device voice routing. aetherSpeak is
+  // the aether sensor's speak() sink, wired in main.js only when the sensor
+  // exists; speakViaAether() sends the text to the aggregator as {type:'say'}
+  // and reports whether it actually went on the wire, so callers can fail
+  // open to the local TTS chain when the aggregator socket is down.
+  const aetherSpeak = (typeof deps.aetherSpeak === 'function') ? deps.aetherSpeak : null;
+  const aetherAudioRoute = !!(config.AETHER_ENABLED && config.AETHER_AUDIO_ROUTE && aetherSpeak);
+  function speakViaAether(text) {
+    if (!aetherAudioRoute || !text) return false;
+    try { return !!aetherSpeak(String(text)); } catch (_) { return false; }
+  }
+
   // Task 12 (latency instrumentation, V2 Decision 1): a capped ring buffer of
   // real mic-stop -> first-audio-frame deltas, shared across both the batch
   // and S2S voice paths, surfaced honestly via /api/status (AD-5 — an
@@ -846,6 +858,17 @@ function createServer(deps) {
       : broadcastAll;
     const reqId = 'proactive-' + Date.now() + '-' + (++proactiveSeq);
     const speak = sanitizeSpoken(text);
+    // Phase 2 (AETHER-WIRING): when enabled, the announcement goes to the
+    // Aether aggregator (nearest-device TTS) instead of the local chain. The
+    // client still gets its 'proactive-speech' + caption-only 'done' pair
+    // (chunked:true, zero chunks — voice-loop.js deliverReply finishes the
+    // turn silently) so the HUD shows what was said without the local machine
+    // speaking it. Aggregator down -> speakViaAether() false -> local TTS.
+    if (speakViaAether(speak)) {
+      sendOut({ type: 'proactive-speech', reqId, text, speak });
+      sendOut({ type: 'done', reqId, say: text, speak, chunked: true, proactive: true });
+      return;
+    }
     sendOut({ type: 'proactive-speech', reqId, text, speak });
     let ttsUp = false;
     try {
@@ -1384,6 +1407,18 @@ function createServer(deps) {
     // and handleVisionQuery — one reply-emission path, one protocol.
     async function sendSpokenReply(reqId, say, meta, micStoppedAt) {
       const speak = sanitizeSpoken(say);
+      // Phase 2 (AETHER-WIRING): route the reply to the nearest device instead
+      // of the local TTS chain. The client still gets its caption-only 'done'
+      // (chunked:true, zero chunks — voice-loop.js finishes the turn silently)
+      // so the HUD shows the reply without the local machine speaking it.
+      // BUG-060 guard (mirrors proactiveSpeak): with a Gemini Live session open
+      // on this connection, Live's PCM playback is already the entity's voice —
+      // never ALSO route the batch reply to the Aether device (two voices).
+      const liveSession = (typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
+      if (!(liveSession && liveSession.isOpen()) && speakViaAether(speak)) {
+        try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
+        return;
+      }
       const ttsUp = await tts.isAvailable();
       // ALWAYS split, even with TTS down. This used to be `ttsUp ? split : []`,
       // which contradicted the comment directly above and truncated the entity's

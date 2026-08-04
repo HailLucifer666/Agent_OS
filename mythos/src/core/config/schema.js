@@ -161,6 +161,10 @@ const SCHEMA = {
   // points at the aggregator (default :8766), NOT the raw scanner bridge :8765.
   AETHER_ENABLED:            { type: 'bool',   default: false },
   AETHER_WS_URL:             { type: 'string', default: 'ws://127.0.0.1:8766' },
+  // Phase 2 — route voice output to the nearest Aether device (aggregator
+  // `say`) instead of the local TTS chain. Requires AETHER_ENABLED + a live
+  // aggregator; falls back to local TTS when the socket is down.
+  AETHER_AUDIO_ROUTE:        { type: 'bool',   default: false },
 
   // Daily planning + accountability (hands-free morning brief / stall
   // check-ins / evening review — src/core/planner/daily.js). On by default
