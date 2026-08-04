@@ -6,7 +6,7 @@
 
 NOVA (Agent_OS) is a request→respond agent dashboard. User approved evolving it 100x into **MYTHOS** (name provisional — "HAIL GALACTUS Mythos" not confirmed; keep configurable): a continuous autonomous entity — OODA cognitive loop, persistent layered memory, self-healing immune system, governed autonomy tiers — reusing NOVA's proven providers/tools/frontend as subsystems in a greenfield `mythos/` runtime.
 
-**CRITICAL BASELINE FINDING:** The authoritative codebase is **GitHub `HailLucifer666/Agent_OS` @ main (`a0433b5`, pushed 2026-07-08 20:24 UTC, "feat: nova jarvis assistant (phases A-E) + bug fixes")**. The local folder `D:\Agen OS\Agent_OS-main\Agent_OS-main` is a STALE non-git zip copy (pre-Jarvis). Execution step 0 must refresh the working copy from GitHub before anything else.
+**CRITICAL BASELINE FINDING:** The authoritative codebase is **GitHub `HailLucifer666/Agent_OS` @ main (`a0433b5`, pushed 2026-07-08 20:24 UTC, "feat: nova jarvis assistant (phases A-E) + bug fixes")**. The local repo-root folder is a STALE non-git zip copy (pre-Jarvis). Execution step 0 must refresh the working copy from GitHub before anything else.
 
 Deliverables (locked by user):
 1. `MYTHOS-ARCHITECTURE.md` at repo root — complete 16-section handoff spec with code snippets.
@@ -61,13 +61,13 @@ Verified safe: local folder has NO `.env`, NO `vault/`, NO `node_modules` — ze
 
 On plan approval, FIRST action:
 ```powershell
-robocopy "$env:TEMP\agentos-latest" "D:\Agen OS\Agent_OS-main\Agent_OS-main" /MIR /XD .git
+robocopy "$env:TEMP\agentos-latest" "$REPO_ROOT" /MIR /XD .git
 # then copy .git separately (robocopy /MIR with .git included is fine too — simpler:)
-robocopy "$env:TEMP\agentos-latest" "D:\Agen OS\Agent_OS-main\Agent_OS-main" /MIR
+robocopy "$env:TEMP\agentos-latest" "$REPO_ROOT" /MIR
 ```
-(Resolve exact staging path at execution — Git Bash `/tmp` maps to the active temp dir; re-clone directly into place if mapping ambiguous: `git clone https://github.com/HailLucifer666/Agent_OS.git` then mirror.)
+(Resolve exact staging path at execution — Git Bash `/tmp` maps to the active temp dir; re-clone directly into place if mapping ambiguous: `git clone https://github.com/HailLucifer666/Agent_OS.git` then mirror. `$REPO_ROOT` is wherever this repo is checked out locally — not a fixed path.)
 
-Result: local becomes a REAL git clone at `a0433b5` — future updates via `git pull` instead of stale zips. Verify: `git -C "D:\Agen OS\Agent_OS-main\Agent_OS-main" log --oneline -1` → `a0433b5`, and `node --test` inside `app/` green (needs `npm install` first — local, per user's project-isolation rule).
+Result: local becomes a REAL git clone at `a0433b5` — future updates via `git pull` instead of stale zips. Verify: `git -C "$REPO_ROOT" log --oneline -1` → `a0433b5`, and `node --test` inside `app/` green (needs `npm install` first — local, per user's project-isolation rule).
 
 ## DESIGN — Integration, Migration & Phasing (from design agent 2, ACCEPTED)
 

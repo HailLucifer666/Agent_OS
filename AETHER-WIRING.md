@@ -42,7 +42,7 @@ The spec's invented `aether.focus` message (`device_id`, `distance_m`, `user_id`
 
 `owner` IS the nearest device. There is **no `distance_m`** (RSSI only) and
 `user_id` is effectively single-user ("AetherUser1"). Locked schema lives in
-`F:\Aether BLE\aether-bridge\messages.py`.
+`aether-bridge/messages.py` in the Aether-BLE repo.
 
 ---
 
@@ -101,7 +101,7 @@ default false). QA-reviewed. 2525/2525 tests pass.
 **Verify live:**
 ```
 # in mythos/.env:  AETHER_ENABLED=true
-"F:\Aether BLE\AetherMesh.bat"   # simulated walk, owner flips ~15s
+"<path-to-Aether-BLE-repo>\AetherMesh.bat"   # simulated walk, owner flips ~15s
 ```
 
 ---
@@ -199,5 +199,5 @@ threads per user. Largest scope; deliberately last.
 
 ## Repo locations
 
-- **Agent_OS:** `F:\Agent-OS\Agent_OS-main\Agent_OS-main` (this repo, `main`/`feat/aether-focus-sensor`)
-- **Aether-BLE:** `F:\Aether BLE` (separate repo, `HailLucifer666/Aether-BLE`, `main`)
+- **Agent_OS:** this repo (`main`/`feat/aether-focus-sensor`)
+- **Aether-BLE:** sibling repo, `HailLucifer666/Aether-BLE`, `main` (wherever you cloned it locally)

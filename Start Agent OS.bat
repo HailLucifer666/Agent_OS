@@ -6,7 +6,7 @@ cd /d "%~dp0mythos"
 
 REM Capture the mythos dir ONCE as an env var. delayed-expansion !MYTHOS_DIR!
 REM survives wt.exe's ;-delimited reparse (the bare "%~dp0mythos" form gets
-REM unquoted by wt.exe when the path contains a space, e.g. "D:\Agen OS\..."
+REM unquoted by wt.exe when the path contains a space, e.g. "C:\Program Files\..."
 REM which is exactly why the window was opening + closing silently).
 set "MYTHOS_DIR=%~dp0mythos"
 
@@ -161,7 +161,7 @@ REM     separate and just reports status, then pauses at end-of-file so nothing
 REM     ever slams shut silently.
 REM   - The ;-delimited split-pane subcommand form IS used (escaped as ^; so cmd
 REM     passes a literal ; through to wt.exe). Each pane's -d takes !MYTHOS_DIR!
-REM     via delayed expansion so the spaced repo path ("D:\Agen OS\...") survives
+REM     via delayed expansion so a spaced repo path (e.g. "C:\Program Files\...") survives
 REM     wt.exe's reparse. Each pane ends with `& pause` so a crash stays visible.
 REM Open the dashboard AFTER the server has had time to boot (~7s to MYTHOS
 REM ALIVE). Opening immediately gave a dead "can't reach this page" tab every

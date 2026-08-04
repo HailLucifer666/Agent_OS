@@ -72,7 +72,7 @@ Consequences: `mythos/src/core/engagements/executor.js`, `effectors/from-docs.js
 ## 3. Repository layout (what matters)
 
 ```
-f:\Agent-OS\Agent_OS-main\Agent_OS-main\
+<repo-root>\
 ├── mythos\                      ← THE APP (everything below is inside mythos\ unless noted)
 │   ├── src\
 │   │   ├── main.js              ← boot: ~24 lifecycle steps, the wiring diagram made code (719 lines)
@@ -172,7 +172,7 @@ Child processes: `pc-child` (persistent PowerShell daemon, JSON-RPC over stdio),
 
 ## 5. Boot sequence — the wiring, step by step
 
-Source of truth: [mythos/src/main.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/main.js) (719 lines). Boot is a `lifecycle.setSteps([...])` array; each step declares `fail: 'fast'` (abort boot) or `fail: 'degraded'` (log + continue). After all steps: `logger.info('MYTHOS ALIVE')` and a never-resolving promise holds the event loop open.
+Source of truth: [mythos/src/main.js](mythos/src/main.js) (719 lines). Boot is a `lifecycle.setSteps([...])` array; each step declares `fail: 'fast'` (abort boot) or `fail: 'degraded'` (log + continue). After all steps: `logger.info('MYTHOS ALIVE')` and a never-resolving promise holds the event loop open.
 
 ### 5.1 The step list (verified order)
 
@@ -268,7 +268,7 @@ audit-flush (writes {tool:'lifecycle', decision:'shutdown'}) → exit 0
 
 ## 6. The event bus
 
-[mythos/src/core/bus/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/bus/index.js) (128 lines). Synchronous pub/sub with dot-channels (`health.anomaly` → channel `health`), glob subs (`'perception.*'`, `'*'`), 500-event ring history, middleware chain, and three guards:
+[mythos/src/core/bus/index.js](mythos/src/core/bus/index.js) (128 lines). Synchronous pub/sub with dot-channels (`health.anomaly` → channel `health`), glob subs (`'perception.*'`, `'*'`), 500-event ring history, middleware chain, and three guards:
 
 ```js
 // Causal depth guard — event-triggered events can only nest 32 deep
@@ -293,7 +293,7 @@ try { handler(e); } catch (err) { safeEmit('health.anomaly', { kind: 'handler-er
 
 ### 7.1 `brain.think` — the one thinking interface
 
-[mythos/src/core/brain/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/brain/index.js) (141 lines). Lanes: `voice | build | simple | text | vision | embed`.
+[mythos/src/core/brain/index.js](mythos/src/core/brain/index.js) (141 lines). Lanes: `voice | build | simple | text | vision | embed`.
 
 ```js
 async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona }) {
@@ -332,7 +332,7 @@ async think({ lane, messages, schemaHint, budget, signal, source, onToken, perso
 
 ### 7.2 The chain walk — free-tier failover
 
-[mythos/src/core/brain/chain.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/brain/chain.js) (163 lines). 8 provider lanes: `zcode, nim, nim2, groq, mistral, cerebras, openrouter, ollama`. `registry.chainFor(lane)` returns the ranked preference list (5-min TTL refresh); a `nim` entry fans out to both NIM keys (key rotation).
+[mythos/src/core/brain/chain.js](mythos/src/core/brain/chain.js) (163 lines). 8 provider lanes: `zcode, nim, nim2, groq, mistral, cerebras, openrouter, ollama`. `registry.chainFor(lane)` returns the ranked preference list (5-min TTL refresh); a `nim` entry fans out to both NIM keys (key rotation).
 
 ```js
 for (const { lane, model } of attempts) {
@@ -364,7 +364,7 @@ err.chainExhausted = true;   // generic message — never leaks lane/model to cl
 throw err;
 ```
 
-Providers live in [mythos/providers/](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/providers) — all OpenAI-compatible SSE via `openai-compat.js`, plus ollama (native shape; vision messages translated via `toOllamaVisionMessages`), `embeddings.js` (memory vectors), `groq-stt.js` (Whisper STT), `edge-tts.js` (local neural TTS client). `claude-cli.js` is **dead** (no production callers).
+Providers live in [mythos/providers/](mythos/providers) — all OpenAI-compatible SSE via `openai-compat.js`, plus ollama (native shape; vision messages translated via `toOllamaVisionMessages`), `embeddings.js` (memory vectors), `groq-stt.js` (Whisper STT), `edge-tts.js` (local neural TTS client). `claude-cli.js` is **dead** (no production callers).
 
 ### 7.3 Cost model
 
@@ -374,7 +374,7 @@ Spend is estimated (`spend.estimate`) and recorded per call with `source` attrib
 
 ## 8. Memory system
 
-Facade: [mythos/src/core/memory/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/memory/index.js) (255 lines). All plain files under `MYTHOS_VAULT_ROOT` via `fs-store` (path-traversal-guarded).
+Facade: [mythos/src/core/memory/index.js](mythos/src/core/memory/index.js) (255 lines). All plain files under `MYTHOS_VAULT_ROOT` via `fs-store` (path-traversal-guarded).
 
 | Store | Files | Purpose |
 |---|---|---|
@@ -439,7 +439,7 @@ async consolidate(opts) {
 
 ## 9. The Leash — tiered autonomy gate
 
-[mythos/src/core/leash/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/leash/index.js) (217 lines) + [tiers.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/leash/tiers.js) (canonical table). Constructor **throws** if bus/config/identity(+`checkBoundary`+`getMaxAutonomousTier`)/auditWriter/goals/effectors are missing — never no-ops at call time.
+[mythos/src/core/leash/index.js](mythos/src/core/leash/index.js) (217 lines) + [tiers.js](mythos/src/core/leash/tiers.js) (canonical table). Constructor **throws** if bus/config/identity(+`checkBoundary`+`getMaxAutonomousTier`)/auditWriter/goals/effectors are missing — never no-ops at call time.
 
 ### 9.1 `check()` — the exact decision order (verified)
 
@@ -519,7 +519,7 @@ Re-tiering note (deliberate, documented in-file): spotify_*, build_project, pipe
 
 ### 10.1 The hub
 
-[mythos/src/core/effectors/hub.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/effectors/hub.js) (128 lines):
+[mythos/src/core/effectors/hub.js](mythos/src/core/effectors/hub.js) (128 lines):
 
 ```js
 function createEffectorHub({ bus, config }) {
@@ -554,7 +554,7 @@ function createEffectorHub({ bus, config }) {
 
 ### 10.2 Tool → effector adapter
 
-[mythos/src/core/effectors/adapter.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/effectors/adapter.js) (52 lines, full file — every tool family wraps NOVA-style tools through this):
+[mythos/src/core/effectors/adapter.js](mythos/src/core/effectors/adapter.js) (52 lines, full file — every tool family wraps NOVA-style tools through this):
 
 ```js
 function effectorFromTool(tool) {
@@ -586,7 +586,7 @@ Tool result convention everywhere: `{ ok: boolean, result: string|object }` (NOV
 
 ### 10.3 `dispatchAction` — the canonical dispatch sequence (INVARIANT #1)
 
-[mythos/src/core/effectors/dispatch-action.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/effectors/dispatch-action.js) (78 lines, full file). Used by the server's voice + confirm-accept paths:
+[mythos/src/core/effectors/dispatch-action.js](mythos/src/core/effectors/dispatch-action.js) (78 lines, full file). Used by the server's voice + confirm-accept paths:
 
 ```js
 async function dispatchAction(decision, ctx) {
@@ -650,7 +650,7 @@ async function dispatchAction(decision, ctx) {
 
 ## 11. The Cortex — the 1-second OODA loop
 
-[mythos/src/core/cortex/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/cortex/index.js) (353 lines) + [ooda.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/cortex/ooda.js) (59 lines). Construction is fail-closed: throws without `leash.check` and `effectors.invoke`. Timer is `setInterval(config.MYTHOS_TICK_MS || 1000)`, **unref'd**, with reentrancy guard + generation token.
+[mythos/src/core/cortex/index.js](mythos/src/core/cortex/index.js) (353 lines) + [ooda.js](mythos/src/core/cortex/ooda.js) (59 lines). Construction is fail-closed: throws without `leash.check` and `effectors.invoke`. Timer is `setInterval(config.MYTHOS_TICK_MS || 1000)`, **unref'd**, with reentrancy guard + generation token.
 
 ### 11.1 The tick (verified flow)
 
@@ -755,7 +755,7 @@ async function act(decision, ctx) {
 
 ## 12. Goals — arbiter + planner
 
-[mythos/src/core/goals/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/goals/index.js) (414 lines). Goals are JSON files in `vault/Goals/<id>.json` (normalized on load — B1). Drives: `user-service 1.0 / maintenance 0.55 / curiosity 0.25`.
+[mythos/src/core/goals/index.js](mythos/src/core/goals/index.js) (414 lines). Goals are JSON files in `vault/Goals/<id>.json` (normalized on load — B1). Drives: `user-service 1.0 / maintenance 0.55 / curiosity 0.25`.
 
 ### 12.1 The arbiter (verified formula)
 
@@ -811,7 +811,7 @@ async function plan(goal, ctx) {
 
 ## 13. The voice path
 
-Files: [mythos/src/core/voice/voice-agent.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/voice/voice-agent.js), [mythos/server/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/server/index.js), `ui/public/js/voice/*`, [mythos/providers/groq-stt.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/providers/groq-stt.js), [mythos/services/edge-tts-server.py](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/services/edge-tts-server.py).
+Files: [mythos/src/core/voice/voice-agent.js](mythos/src/core/voice/voice-agent.js), [mythos/server/index.js](mythos/server/index.js), `ui/public/js/voice/*`, [mythos/providers/groq-stt.js](mythos/providers/groq-stt.js), [mythos/services/edge-tts-server.py](mythos/services/edge-tts-server.py).
 
 Pipeline:
 
@@ -856,7 +856,7 @@ All sensors emit `perception.*` (or proactive-speech events) onto the bus; the s
 
 ## 15. The immune system
 
-Files in [mythos/src/core/immune/](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/immune). Constructed in boot step 5 (fail-fast), **before** cortex/goals exist — healer and watchdog receive `getCortex()`/`getGoals()` thunks (the pattern the conversation-gateway fix in §25 Phase 2 copies).
+Files in [mythos/src/core/immune/](mythos/src/core/immune). Constructed in boot step 5 (fail-fast), **before** cortex/goals exist — healer and watchdog receive `getCortex()`/`getGoals()` thunks (the pattern the conversation-gateway fix in §25 Phase 2 copies).
 
 | Component | Role |
 |---|---|
@@ -875,7 +875,7 @@ Files in [mythos/src/core/immune/](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-ma
 
 ## 16. The server
 
-[mythos/server/index.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/server/index.js) — **1582 lines, ~9 concerns in one file** (the "god-file"). Express 4 + `ws` 8. `createServer(deps)` receives: bus, config, logger, memory, goalsEffector, kanbanEffector, pipelineEffector, effectors, leash, goals, probes, brain, buildRunner, agentActions, checkpoints, forge, reflection, engagementStore, engagementManager, conversationGateway.
+[mythos/server/index.js](mythos/server/index.js) — **1582 lines, ~9 concerns in one file** (the "god-file"). Express 4 + `ws` 8. `createServer(deps)` receives: bus, config, logger, memory, goalsEffector, kanbanEffector, pipelineEffector, effectors, leash, goals, probes, brain, buildRunner, agentActions, checkpoints, forge, reflection, engagementStore, engagementManager, conversationGateway.
 
 - **REST**: `/health` (the only health route — render.yaml's `/api/health` healthCheckPath is wrong), `/api/goals/*`, `/api/kanban/*`, `/api/pipeline/*`, `/api/engagements/*`, `/api/memory/*`, `/api/media` + `/api/media/control`, `/api/forge/*`, `/api/checkpoints/*`, `/api/config/vad`, `/api/builds/*`, `/api/mission/*`, …
 - **WS v2**: bus relay to dashboard (tick, `action.*`, `audit.decision`, `confirm-request`, `mission.update`→`mission`, health broadcasts), voice turns, vision/camera streaming, confirm + checkpoint replies, proactive speech push. `verifyClient` does an origin check against `ALLOWED_ORIGINS` (env list — the Render hostname is not in it).
@@ -900,7 +900,7 @@ Files in [mythos/src/core/immune/](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-ma
 
 ## 18. The engagement layer (and what's missing on main)
 
-Files: [mythos/src/core/engagements/](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/engagements). 12-state machine: `DRAFT → INTERVIEWING → SPEC_READY → PLAN_READY → AWAITING_APPROVAL → EXECUTING → VERIFYING → COMPLETED` (+ `BLOCKED`, `FAILED`, `CANCELLED`, `PAUSED`). Config: `ENGAGEMENT_TTL_MS` (7d), `ENGAGEMENT_MAX_REPAIRS` (3), `ENGAGEMENT_INTERVIEW_MAX_Q` (5), `ENGAGEMENT_MAX_STAGES` (10).
+Files: [mythos/src/core/engagements/](mythos/src/core/engagements). 12-state machine: `DRAFT → INTERVIEWING → SPEC_READY → PLAN_READY → AWAITING_APPROVAL → EXECUTING → VERIFYING → COMPLETED` (+ `BLOCKED`, `FAILED`, `CANCELLED`, `PAUSED`). Config: `ENGAGEMENT_TTL_MS` (7d), `ENGAGEMENT_MAX_REPAIRS` (3), `ENGAGEMENT_INTERVIEW_MAX_Q` (5), `ENGAGEMENT_MAX_STAGES` (10).
 
 **Main's reality (verified):**
 - `interview.js`: 5 hardcoded questions. `spec-builder.js` / `plan-builder.js`: string templates (3 canned stages).
@@ -991,7 +991,7 @@ vault/
 
 ## 22. The config system
 
-[mythos/src/core/config/schema.js](file:///f:/Agent-OS/Agent_OS-main/Agent_OS-main/mythos/src/core/config/schema.js) — every key has `{type, default, min?, max?, enum?, bool?}`; `loadConfig()` coerces + validates and **exits 1** on errors. Highlights (all verified): `MYTHOS_PORT 4478`, `MYTHOS_BIND 127.0.0.1`, `MYTHOS_TICK_MS 1000`, `AUTONOMOUS_MAX_TIER 2`, `GOAL_TOKEN_BUDGET 20000`, `GOAL_ACTION_BUDGET 25`, `MAX_ACTIVE_GOALS 5`, `REFLECT_EVERY 60`, `CONSOLIDATE_EVERY 300`, `EPISODIC_RETENTION_DAYS 30`, `CHAIN_COOLDOWN_MS 60000`, `ACTION_TIMEOUT_MS 30000`, `STALL_MS 5000`, `WATCHDOG_MS 2000`, `BREAKER_* 3/30000/15000`, `CHECKPOINT_EVERY_TICKS 50`, `SHUTDOWN_MS 10000`, `BUS_HISTORY_SIZE 500`, `BUS_STORM_MAX 400`, `MYTHOS_MULL_EVERY_TICKS 300`, `VOICE_MAX_SAY_CHARS 800`, `LEASH_CONFIRM_TTL_MS 30000`, `MYTHOS_BUILD_CONCURRENCY 3`, `BROWSER_CDP_URL http://127.0.0.1:9222`, `ENGAGEMENT_*`, `FORGE_MAX_FILES 12 / FORGE_FILE_RETRY 2 / FORGE_CONCURRENCY 2`, `CHECKPOINT_TTL_MS 1800000 / CHECKPOINT_SWEEP_MS 60000`, VAD_* (0.035/0.06/3/1800), `WAKEWORD_*` (off), `SCREEN_AWARENESS_*` (off), `PLANNER_*` (on), `GMAIL_TRIAGE_*` (on, 5min), `MCP_SERVER_ENABLED` (off), provider API keys, Google OAuth keys.
+[mythos/src/core/config/schema.js](mythos/src/core/config/schema.js) — every key has `{type, default, min?, max?, enum?, bool?}`; `loadConfig()` coerces + validates and **exits 1** on errors. Highlights (all verified): `MYTHOS_PORT 4478`, `MYTHOS_BIND 127.0.0.1`, `MYTHOS_TICK_MS 1000`, `AUTONOMOUS_MAX_TIER 2`, `GOAL_TOKEN_BUDGET 20000`, `GOAL_ACTION_BUDGET 25`, `MAX_ACTIVE_GOALS 5`, `REFLECT_EVERY 60`, `CONSOLIDATE_EVERY 300`, `EPISODIC_RETENTION_DAYS 30`, `CHAIN_COOLDOWN_MS 60000`, `ACTION_TIMEOUT_MS 30000`, `STALL_MS 5000`, `WATCHDOG_MS 2000`, `BREAKER_* 3/30000/15000`, `CHECKPOINT_EVERY_TICKS 50`, `SHUTDOWN_MS 10000`, `BUS_HISTORY_SIZE 500`, `BUS_STORM_MAX 400`, `MYTHOS_MULL_EVERY_TICKS 300`, `VOICE_MAX_SAY_CHARS 800`, `LEASH_CONFIRM_TTL_MS 30000`, `MYTHOS_BUILD_CONCURRENCY 3`, `BROWSER_CDP_URL http://127.0.0.1:9222`, `ENGAGEMENT_*`, `FORGE_MAX_FILES 12 / FORGE_FILE_RETRY 2 / FORGE_CONCURRENCY 2`, `CHECKPOINT_TTL_MS 1800000 / CHECKPOINT_SWEEP_MS 60000`, VAD_* (0.035/0.06/3/1800), `WAKEWORD_*` (off), `SCREEN_AWARENESS_*` (off), `PLANNER_*` (on), `GMAIL_TRIAGE_*` (on, 5min), `MCP_SERVER_ENABLED` (off), provider API keys, Google OAuth keys.
 
 **Drift (W8):** ~30 env keys bypass the schema entirely (read via `process.env` in code): `CHAIN_ATTEMPT_TIMEOUT_MS`, `VOICE_OLLAMA_KEEP_ALIVE` (verified in chain.js), `HERMES_*`, `EDGE_TTS_*`, provider URL/MODEL passthroughs, `BOOT_GREETING`, `REFLECTION_EVERY_TURNS`, `IMMUNE_EXPLAIN`, `ALLOWED_ORIGINS`, … And ~22 schema keys are undocumented in `.env.example` (MCP_SERVER_ENABLED, FORGE_*, GMAIL_TRIAGE_*, VAD_*, CHECKPOINT_*, …). Consolidation = move bypass keys into schema, document the rest.
 
@@ -1099,7 +1099,7 @@ daily-note.js (zero imports) · assistant/{intent-router, response-planner, styl
 
 ## 27. Quickstart — your first hour
 
-1. `cd f:\Agent-OS\Agent_OS-main\Agent_OS-main` → `git log --oneline -5` (expect `685dbaa` on main), `git status` (expect clean).
+1. `cd` into the repo root → `git log --oneline -5` (expect `685dbaa` on main), `git status` (expect clean).
 2. `cd mythos && node --test` — establish the green baseline before touching anything.
 3. Read in this order: `src/main.js` (wiring), `src/core/effectors/dispatch-action.js` (the action invariant), `src/core/leash/tiers.js` + `leash/index.js` (the gate), `src/core/cortex/index.js` (the loop), `src/core/goals/index.js` (arbitration/planning), `src/core/brain/chain.js` (failover).
 4. Boot it: `node src/main.js` → expect `MYTHOS ALIVE`; open `http://127.0.0.1:4478`. Verify honest degradation: with no API keys configured, brain calls return `offline:true` and the UI says so.

@@ -813,7 +813,7 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 
 **Symptom:** `open_folder({ path: '/vault/builds' })` returned `"/vault/builds" is outside the allowed folders.`, but `open_folder({ path: 'vault/builds' })` (same path, no leading slash) worked fine.
 
-**Root cause (verified, file:line):** `from-computer.js:73` — `path.resolve('/vault/builds')` on win32 resolves from the drive root (`F:\vault\builds`), which is outside the allowed sandbox roots (the project directory). The cortex AI, trained on Linux paths, routinely prepends `/` to relative paths.
+**Root cause (verified, file:line):** `from-computer.js:73` — `path.resolve('/vault/builds')` on win32 resolves from whichever drive the process is running on (e.g. `<drive-letter>:\vault\builds`), which is outside the allowed sandbox roots (the project directory). The cortex AI, trained on Linux paths, routinely prepends `/` to relative paths.
 
 **Fix applied:** Strip leading `/` from raw paths before resolution in `resolveSandboxed()`: `var cleaned = String(raw).replace(/^\/+/, '');`. This makes `/vault/builds` resolve the same as `vault/builds` — relative to the cwd/project root, inside the sandbox.
 
