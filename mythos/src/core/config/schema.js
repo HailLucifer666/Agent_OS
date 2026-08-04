@@ -16,6 +16,22 @@ const SCHEMA = {
   // server/index.js refuses to start when MYTHOS_BIND is non-loopback and
   // this is unset — see mythos/.env.example for the full story.
   MYTHOS_AUTH_TOKEN:        { type: 'string', default: '' },
+  // Track B1 — real server-side enforcement of the §7.3 PIN lock screen.
+  // Until this, the PIN screen was a client-side visual/pointer deterrent
+  // ONLY: tokenOk() (server/index.js) passes every request when
+  // MYTHOS_AUTH_TOKEN is unset, so `curl 127.0.0.1/api/...` bypassed the
+  // lock screen entirely on the default loopback install. OFF by default so
+  // an existing loopback-without-token install (headless/Docker/Render, and
+  // every pre-existing test) is completely unaffected — enforcement only
+  // activates once this is true AND a PIN has actually been configured via
+  // POST /api/pin/set (fresh installs with the flag on but no PIN set yet
+  // stay open, honestly, rather than locking the operator out of their own
+  // server). See .env.example for the full story and its caveats.
+  PIN_SESSION_ENFORCE:      { type: 'bool', default: false },
+  // How long a PIN-unlocked session stays valid with no further activity
+  // (sliding — src/core/security/pin-session.js extends it on every
+  // authenticated request), ms.
+  PIN_SESSION_TTL_MS:       { type: 'number', default: 1800000, min: 60000, max: 86400000 },
   MYTHOS_VAULT_ROOT:        { type: 'string', default: './vault' },
   MYTHOS_TICK_MS:           { type: 'number', default: 1000, min: 100, max: 60000 },
   MYTHOS_IDLE_SALIENCE:     { type: 'number', default: 0.3, min: 0, max: 1 },

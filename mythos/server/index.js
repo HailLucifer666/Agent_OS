@@ -33,6 +33,7 @@ const skillsLoader = require('../src/core/skills/loader');
 const pcChild = require('../adapters/pc-child');
 const version = require('../src/core/identity/version');
 const { isProviderDown } = require('../src/core/immune/probes');
+const { createPinSessionStore } = require('../src/core/security/pin-session');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -246,11 +247,40 @@ function createServer(deps) {
     );
   }
 
+  // Track B1 — the PIN-unlock session store. Always constructed (cheap: one
+  // closure, no I/O) so tokenOk() below has a stable thing to ask; whether it
+  // can ever actually gate a request depends on pinSessionRequired() below,
+  // which stays false (see it) unless the operator has both opted in via
+  // PIN_SESSION_ENFORCE AND configured a real PIN.
+  const pinSession = createPinSessionStore({ ttlMs: config.PIN_SESSION_TTL_MS });
+
+  // True only once there is something real to enforce: the operator opted
+  // in AND a PIN actually exists. Guards against two failure modes: (1) the
+  // flag flipped on with no PIN yet would otherwise lock the operator out of
+  // their own fresh install with no way to unlock; (2) a deployment with no
+  // pinLock wired at all (tests, or a build that never constructs one) must
+  // not change behavior just because the flag happens to be set.
+  function pinSessionRequired() {
+    return !!config.PIN_SESSION_ENFORCE && !!pinLock && typeof pinLock.isConfigured === 'function' && pinLock.isConfigured();
+  }
+
   // Timing-safe compare — the one place in this file where timing matters.
   // No token configured => loopback-only mode, every request passes (total
   // back-compat: the default config exercises none of the branches below).
+  //
+  // Track B1 extends this rather than adding a fourth parallel auth
+  // mechanism: a valid PIN-session token (issued by POST /api/pin/verify,
+  // see routes/pin.js) travels through the EXACT SAME extractToken() chain
+  // as the bearer token below (Authorization header -> ?token= -> the
+  // mythos_token cookie) and is accepted here as an alternative credential.
+  // It does not weaken the bearer-token path: a caller who already holds the
+  // real MYTHOS_AUTH_TOKEN is unaffected either way (that secret gates the
+  // network surface; the PIN gates local physical presence — see
+  // pin-lock.js's header for why these stay two independent layers rather
+  // than one subsuming the other).
   function tokenOk(presented) {
-    if (!AUTH_TOKEN) return true;
+    if (pinSession.isValid(presented)) return true;
+    if (!AUTH_TOKEN) return !pinSessionRequired();
     const a = Buffer.from(String(presented || ''));
     const b = Buffer.from(AUTH_TOKEN);
     return a.length === b.length && crypto.timingSafeEqual(a, b);
@@ -394,7 +424,26 @@ function createServer(deps) {
   // generated content). The UI shell static mount below is deliberately left
   // OPEN and unauthenticated: a remote browser must be able to load the app
   // before it can enter a token, and no secret lives in those assets (AD-8).
-  app.use('/api', requireToken);
+  //
+  // Track B1 exemption: /api/pin/status and /api/pin/verify must stay
+  // reachable with NO session, or PIN_SESSION_ENFORCE creates a lockout with
+  // no way in — the lock screen can't even check whether a PIN is configured,
+  // and the operator can't submit the PIN that would unlock everything else.
+  // This is the standard "login endpoint stays public" shape, deliberately
+  // narrow: /api/pin/set (changing an existing PIN) is NOT exempted, so once
+  // a PIN is configured, changing it requires an already-unlocked session on
+  // top of pin-lock.js's own currentPin proof. Both routes still pass
+  // through globalLimit above (rate-limited) and pinLock's own 5-attempt/60s
+  // lockout (src/core/security/pin-lock.js) unchanged.
+  // NOTE: req.path inside an app.use('/api', ...) handler is already
+  // relative to that mount point (e.g. '/pin/verify', not '/api/pin/verify')
+  // — matched against the full path here would silently never hit and this
+  // exemption would do nothing.
+  const PIN_UNLOCK_EXEMPT_PATHS = new Set(['/pin/status', '/pin/verify']);
+  app.use('/api', (req, res, next) => {
+    if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
+    return requireToken(req, res, next);
+  });
   app.use('/vault/builds', requireToken);
 
   // ---- static asset delivery: compression + caching -----------------------
@@ -606,8 +655,11 @@ function createServer(deps) {
   require('./routes/memory').mountMemoryRoutes(app, { memory });
 
   // ---- /api/pin — §7.3 local PIN lock (separate from Task 6's token gate
-  // both of these routes already sit behind) ----
-  require('./routes/pin').mountPinRoutes(app, { pinLock });
+  // both of these routes already sit behind). pinSession (Track B1) lets a
+  // successful /api/pin/verify issue the real session tokenOk() above
+  // checks, so the PIN screen becomes actual access control instead of a
+  // visual deterrent. ----
+  require('./routes/pin').mountPinRoutes(app, { pinLock, pinSession });
 
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/

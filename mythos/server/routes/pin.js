@@ -10,9 +10,20 @@
 // minimal deps object): 404s rather than throwing, matching the existing
 // convention other extracted route files already use (routes/forge.js,
 // routes/checkpoints.js) for an unwired optional dependency.
+//
+// Track B1: a successful /api/pin/verify now issues a real server-side
+// session (src/core/security/pin-session.js) and hands it back as the
+// mythos_token cookie — the SAME cookie name server/index.js's
+// extractToken()/tokenOk() already check, so this is the PIN screen
+// becoming actual access control rather than a new parallel mechanism.
+// pinSession is optional here too (mirrors pinLock): if it's ever absent,
+// verify still works exactly as before, just without issuing a session.
+
+const PIN_SESSION_COOKIE = 'mythos_token';
 
 function mountPinRoutes(app, deps) {
   const pinLock = deps && deps.pinLock;
+  const pinSession = deps && deps.pinSession;
 
   function requirePinLock(res) {
     if (!pinLock) {
@@ -44,13 +55,29 @@ function mountPinRoutes(app, deps) {
     res.json({ ok: true });
   });
 
-  // ---- POST /api/pin/verify { pin } — the actual local unlock check ----
+  // ---- POST /api/pin/verify { pin } — the actual local unlock check.
+  // On success, mint a real server-side session (Track B1) and hand it back
+  // as the mythos_token cookie so tokenOk() (server/index.js) has something
+  // to check on every later /api/* request and WS upgrade — this is what
+  // makes the correct PIN actually mean something server-side instead of
+  // only painting an overlay away. A wrong PIN never reaches this and never
+  // gets a cookie. ----
   app.post('/api/pin/verify', (req, res) => {
     if (!requirePinLock(res)) return;
     const pin = req.body && req.body.pin;
     const result = pinLock.verifyPin(pin);
     if (!result.ok) {
       return res.status(result.lockedOut ? 429 : 401).json({ error: result.error });
+    }
+    if (pinSession && typeof pinSession.issue === 'function') {
+      const token = pinSession.issue();
+      res.cookie(PIN_SESSION_COOKIE, token, {
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: req.secure,
+        maxAge: pinSession.ttlMs,
+        path: '/',
+      });
     }
     res.json({ ok: true });
   });
