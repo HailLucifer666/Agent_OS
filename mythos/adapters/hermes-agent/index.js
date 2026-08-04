@@ -21,6 +21,9 @@
 // offer); HTTP remains the fallback for the plain one-shot chat use case.
 
 var { spawn } = require('child_process');
+var fs = require('fs');
+var path = require('path');
+var os = require('os');
 var { treeKill } = require('../command-runner');
 var { createLogger } = require('../../src/core/logger');
 var logger = createLogger(process.env.LOG_LEVEL || 'info');
@@ -428,6 +431,131 @@ function runViaCli(prompt, opts) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// PER-ATTEMPT HERMES_HOME (Track D, 2026-08-04) — makes cross-provider
+// failover real instead of env-only.
+//
+// WHY. Hermes takes model.base_url/provider/default from ITS OWN
+// <HERMES_HOME>/config.yaml and ignores the OPENAI_BASE_URL this adapter
+// forwards — proven 2026-08-03 by forwarding an unroutable base_url and
+// still getting a correct reply (see .env.example's PROVIDER FAILOVER
+// section). So env-only rotation could change the KEY and the MODEL but
+// never the PROVIDER: a slot 2-4 attempt sent its (possibly valid) key to
+// config.yaml's endpoint and came back 401. This section gives EACH ATTEMPT
+// its own HERMES_HOME with its own config.yaml pointed at that attempt's
+// provider, so slot 2/3/4 can finally authenticate against their OWN
+// endpoint instead of the one config.yaml happens to name.
+//
+// CONCURRENCY IS THE HAZARD. A shared, in-place-edited config.yaml plus two
+// concurrent builds is a race — build A could spawn its hermes child while
+// build B is mid-rewrite of the same file, or the two writes could interleave
+// entirely. A per-attempt directory (unique pid+time+random suffix, created
+// fresh per attempt, thrown away right after) has no shared mutable state:
+// two attempts in flight at once, whether from the same build's rotation or
+// two different concurrent builds, never see each other's config.yaml. That
+// is the whole safety argument — there is no lock to prove because there is
+// nothing shared to lock.
+//
+// BONUS FIX (deliberate, not incidental). The attempt home never gets an
+// `.env` written into it, so <HERMES_HOME>/.env's override=True shadowing
+// (env_loader.py:321 — see setup-hermes.js's reportKeyShadowing) cannot touch
+// these attempts even if the operator's real Hermes Agent/.env later
+// re-enables OPENAI_API_KEY/OPENAI_BASE_URL. This code never opens that file.
+function realHermesHome() {
+  return process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
+}
+
+function attemptHomesRoot() {
+  // Stay inside the real HERMES_HOME (already gitignored via /Hermes Agent/
+  // in this repo) when one is configured — project-local, same convention as
+  // every other installer here. Fall back to the OS temp dir only when no
+  // HERMES_HOME is configured at all (nothing project-local to anchor to).
+  return process.env.HERMES_HOME
+    ? path.join(process.env.HERMES_HOME, '.attempt-homes')
+    : path.join(os.tmpdir(), 'mythos-hermes-attempts');
+}
+
+// Read {provider, baseUrl, model} out of the REAL config.yaml — same regexes
+// setup-hermes.js already uses for --check, so there is one convention for
+// "how do we read this file" rather than a second, YAML-parser-backed one.
+// Read-only; never opened for writing.
+function readRealModelConfig() {
+  var out = { provider: '', baseUrl: '', model: '' };
+  try {
+    var src = fs.readFileSync(path.join(realHermesHome(), 'config.yaml'), 'utf8');
+    var p = /^\s*provider:\s*(\S+)/m.exec(src);
+    var b = /^\s*base_url:\s*(\S+)/m.exec(src);
+    var m = /^\s*default:\s*(\S+)/m.exec(src);
+    if (p) out.provider = p[1];
+    if (b) out.baseUrl = b[1];
+    if (m) out.model = m[1];
+  } catch (_) { /* no real config to read from — attempt config keeps blanks */ }
+  return out;
+}
+
+// config.yaml's own values are unquoted bare scalars (see the real file) —
+// match that shape rather than introducing YAML string-escaping rules.
+function yamlScalar(s) { return String(s || '').replace(/[\r\n]/g, ''); }
+
+// Build a throwaway HERMES_HOME for exactly one attempt, with a config.yaml
+// pointed at `slot`'s provider. Returns the absolute path, or null if the
+// scratch directory couldn't be created — the caller then spawns against the
+// real HERMES_HOME unchanged, i.e. pre-Track-D behaviour, rather than failing
+// a build over a filesystem hiccup.
+function makeAttemptHome(slot) {
+  var dir = path.join(
+    attemptHomesRoot(),
+    'a-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
+  );
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    logger.warn('hermes-agent.attempt-home-failed', { error: (err && err.message) || String(err) });
+    return null;
+  }
+
+  var real = readRealModelConfig();
+  // Slot 1 (fromPriority) keeps whatever provider the real config.yaml
+  // already names — its credential may not even be the generic OpenAI-
+  // compatible shape (NVIDIA_API_KEY, OPENROUTER_API_KEY, ... never get
+  // rekeyed by scrubbedEnv, see PROVIDER_KEY_PRIORITY above). Slots 2-4 are
+  // ALWAYS forwarded as the generic OPENAI_API_KEY/OPENAI_BASE_URL pair, so
+  // their config.yaml must always say provider: openai-api to read them.
+  var provider = slot.fromPriority ? (real.provider || 'openai-api') : 'openai-api';
+  var baseUrl = slot.baseUrl || real.baseUrl;
+  var model = slot.model || real.model;
+
+  var lines = ['model:'];
+  if (model) lines.push('  default: ' + yamlScalar(model));
+  lines.push('  provider: ' + yamlScalar(provider));
+  if (baseUrl) lines.push('  base_url: ' + yamlScalar(baseUrl));
+  lines.push('');
+
+  try {
+    fs.writeFileSync(path.join(dir, 'config.yaml'), lines.join('\n'), 'utf8');
+  } catch (err) {
+    logger.warn('hermes-agent.attempt-home-failed', { error: (err && err.message) || String(err) });
+    cleanupAttemptHome(dir);
+    return null;
+  }
+
+  // Best-effort persona parity — Hermes auto-seeds a generic SOUL.md when
+  // absent (hermes_cli config._ensure_default_soul_md), so a copy failure
+  // here just means that one attempt gets the stock default instead of the
+  // operator's own persona. Never worth failing a build over.
+  try {
+    var soul = path.join(realHermesHome(), 'SOUL.md');
+    if (fs.existsSync(soul)) fs.copyFileSync(soul, path.join(dir, 'SOUL.md'));
+  } catch (_) { /* best-effort */ }
+
+  return dir;
+}
+
+function cleanupAttemptHome(dir) {
+  if (!dir) return;
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+}
+
 // Run the CLI once per configured provider slot, in order, until one produces a
 // usable reply. Rotation happens ONLY on provider-class failure:
 //   - runViaCli rejected (spawn error, non-zero exit, or timeout), or
@@ -456,17 +584,22 @@ function runViaCliWithRotation(prompt, opts) {
 
   function attempt() {
     var slot = slots[i];
+    var attemptHome = makeAttemptHome(slot);
+    var env = scrubbedEnv(opts.env, slot);
+    if (attemptHome) env.HERMES_HOME = attemptHome;
     return runViaCli(prompt, {
       cwd: opts.cwd,
-      env: scrubbedEnv(opts.env, slot),
+      env: env,
       timeoutMs: opts.timeoutMs,
     }).then(function (reply) {
+      cleanupAttemptHome(attemptHome);
       if (HERMES_ERROR_REPLY_RE.test(String(reply || ''))) {
         return next('provider-error-reply', String(reply).trim().slice(0, 300));
       }
       activeSlot = slot.slot;
       return reply;
     }, function (err) {
+      cleanupAttemptHome(attemptHome);
       var msg = String((err && err.message) || err);
       var reason = /timed out/i.test(msg) ? 'timeout' : (/^spawn |ENOENT|EACCES/.test(msg) ? 'spawn-error' : 'exit-nonzero');
       return next(reason, msg);
@@ -536,4 +669,6 @@ module.exports = {
   HERMES_ERROR_REPLY_RE: HERMES_ERROR_REPLY_RE,
   // Exported for unit tests:
   needsShell: needsShell, spawnShape: spawnShape,
+  makeAttemptHome: makeAttemptHome, cleanupAttemptHome: cleanupAttemptHome,
+  readRealModelConfig: readRealModelConfig,
 };

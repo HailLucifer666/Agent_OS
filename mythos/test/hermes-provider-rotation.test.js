@@ -24,6 +24,8 @@
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const HERMES_PATH = require.resolve('../adapters/hermes-agent');
 const CHILD_PROCESS_PATH = require.resolve('child_process');
@@ -81,6 +83,16 @@ function installFakeSpawn() {
     // reaches ONLINE/cli and the rotation path is actually reachable.
     if (args && args[0] === '--version') return fakeChild({ stdout: 'hermes 2026.7.20\n', code: 0 });
     const plan = script[env.OPENAI_API_KEY] || script['*'] || { stdout: 'DEFAULT-OK', code: 0 };
+    // Snapshot the per-attempt config.yaml WHILE the attempt home still
+    // exists (it's cleaned up the instant this attempt's promise settles).
+    let configYaml = null;
+    let hadDotEnv = false;
+    if (env.HERMES_HOME) {
+      try { configYaml = fs.readFileSync(path.join(env.HERMES_HOME, 'config.yaml'), 'utf8'); } catch (_) { /* n/a */ }
+      hadDotEnv = fs.existsSync(path.join(env.HERMES_HOME, '.env'));
+    }
+    spawns[spawns.length - 1].configYaml = configYaml;
+    spawns[spawns.length - 1].hadDotEnv = hadDotEnv;
     return fakeChild(plan);
   };
   delete require.cache[HERMES_PATH];
@@ -170,6 +182,43 @@ describe('hermes-agent — provider slot rotation', () => {
     assert.equal(rotations[0].to, 2);
     assert.match(rotations[0].reason, /provider-error-reply/);
     assert.equal(hermes.getStatus().activeSlot, 2);
+  });
+
+  // ---- Track D: per-attempt HERMES_HOME (real cross-provider failover) ---
+
+  it('each attempt gets its OWN HERMES_HOME, pointed at that slot\'s endpoint/model', async () => {
+    wireTwoSlots();
+    script['slot1-key'] = { stdout: 'HTTP 401: Missing Authentication header', code: 0 };
+    script['slot2-key'] = { stdout: 'THE ARTIFACT', code: 0 };
+
+    await hermes.runTask('build a thing', { requireCli: true });
+    const taskSpawns = spawns.filter((s) => s.args[0] === '-z');
+    assert.equal(taskSpawns.length, 2);
+
+    // Different attempts must never share a HERMES_HOME — that is the whole
+    // concurrency-safety argument (no shared mutable config.yaml to race on).
+    assert.ok(taskSpawns[0].env.HERMES_HOME, 'slot 1 attempt must get a HERMES_HOME override');
+    assert.ok(taskSpawns[1].env.HERMES_HOME, 'slot 2 attempt must get a HERMES_HOME override');
+    assert.notEqual(taskSpawns[0].env.HERMES_HOME, taskSpawns[1].env.HERMES_HOME);
+
+    // Slot 2's config.yaml must name ITS OWN endpoint/model — this is the
+    // mechanism that makes a cross-provider slot reachable at all, since
+    // Hermes reads model.base_url from config.yaml, not OPENAI_BASE_URL.
+    assert.match(taskSpawns[1].configYaml || '', /provider:\s*openai-api/);
+    assert.match(taskSpawns[1].configYaml || '', /base_url:\s*https:\/\/model\.inferx\.net\/endpoints\/v1/);
+    assert.match(taskSpawns[1].configYaml || '', /default:\s*Qwen3-Coder-Next-FP8/);
+
+    // Thrown away right after — nothing MYTHOS-managed persists on disk.
+    assert.equal(fs.existsSync(taskSpawns[0].env.HERMES_HOME), false);
+    assert.equal(fs.existsSync(taskSpawns[1].env.HERMES_HOME), false);
+  });
+
+  it('a per-attempt HERMES_HOME never carries an .env — the override=True shadow cannot reach it', async () => {
+    wireTwoSlots();
+    script['*'] = { stdout: 'THE ARTIFACT', code: 0 };
+    await hermes.runTask('x', { requireCli: true });
+    const taskSpawns = spawns.filter((s) => s.args[0] === '-z');
+    assert.equal(taskSpawns[0].hadDotEnv, false, 'the attempt home must not carry a .env at spawn time');
   });
 
   it('rotates on a 429 — the dominant real failure, since free tiers rate-limit before they fail auth', async () => {

@@ -158,16 +158,18 @@ function reportKeyShadowing() {
     .filter((k) => new RegExp('^\\s*' + k + '\\s*=\\s*\\S', 'm').test(src));
   if (!shadowed.length) return;
 
-  console.log('  WARNING: provider rotation is DISABLED by Hermes\'s own .env.');
-  console.log('    ' + hermesEnv);
-  console.log('    defines ' + shadowed.join(' and ') + ', and Hermes prefers its own .env');
-  console.log('    over the environment MYTHOS forwards (hermes_cli/auth.py,');
-  console.log('    get_env_value_prefer_dotenv). Every slot therefore authenticates with');
-  console.log('    the SAME credential no matter which slot the adapter selected, so a');
-  console.log('    401/429 rotation cannot escape the failing provider.');
-  console.log('    FIX: remove those lines from that .env and keep the keys in mythos/.env');
-  console.log('    (HERMES_PROVIDER_KEY / HERMES_PROVIDER_BASE_URL) instead. Model');
-  console.log('    rotation via HERMES_INFERENCE_MODEL is unaffected and works today.');
+  // Track D (2026-08-04): every MYTHOS-driven build now runs inside a
+  // throwaway per-attempt HERMES_HOME that never carries a copy of this
+  // file, so this shadowing can no longer touch a build — the warning below
+  // is scoped to standalone `hermes` CLI use (running it directly, outside
+  // MYTHOS) where the real HERMES_HOME above is still what gets read.
+  console.log('  NOTE: ' + hermesEnv + ' still defines ' + shadowed.join(' and ') + '.');
+  console.log('    This no longer affects MYTHOS builds — every build attempt now runs in');
+  console.log('    its own throwaway HERMES_HOME (adapters/hermes-agent per-attempt config,');
+  console.log('    Track D 2026-08-04) that never copies this file, so the override=True');
+  console.log('    shadow (env_loader.py, get_env_value_prefer_dotenv) cannot reach it.');
+  console.log('    It STILL applies if you run `hermes` standalone (outside MYTHOS) against');
+  console.log('    the real HERMES_HOME above — that keeps reading this file as before.');
 }
 
 // Provider failover (2026-08-03). The adapter forwards ONE provider pair per
@@ -223,18 +225,22 @@ function reportProviderSlots() {
     }
   });
 
-  // A slot pointing at a DIFFERENT endpoint than config.yaml cannot be reached
-  // at all. Hermes takes model.base_url from its own config.yaml and ignores
-  // the OPENAI_BASE_URL the adapter forwards — proven 2026-08-03 by forwarding
-  // an unroutable base_url (http://127.0.0.1:9/v1) and still getting a correct
-  // reply. There is no generic HERMES_INFERENCE_BASE_URL to override it with;
-  // only HERMES_INFERENCE_MODEL and HERMES_INFERENCE_PROVIDER exist.
+  // FIXED 2026-08-04 (Track D). Hermes takes model.base_url from its own
+  // config.yaml and ignores the OPENAI_BASE_URL the adapter forwards — proven
+  // 2026-08-03 by forwarding an unroutable base_url and still getting a
+  // correct reply. Until Track D landed, that made a cross-provider slot
+  // genuinely UNREACHABLE: rotation could change the KEY and the MODEL, never
+  // the ENDPOINT, so a differing base_url here was a real dead end and this
+  // function said so.
   //
-  // So rotation can change the KEY and the MODEL, never the ENDPOINT. A
-  // cross-provider slot silently sends its key to config.yaml's provider and
-  // comes back 401 — which reads as "bad key" and sends you to rotate a
-  // credential that was never wrong. Say so here rather than printing a slot
-  // table that looks functional.
+  // adapters/hermes-agent's runViaCliWithRotation now gives EACH ATTEMPT its
+  // own throwaway HERMES_HOME with a config.yaml written for that attempt's
+  // slot (provider/base_url/model), so a slot whose base_url differs from
+  // the REAL config.yaml below is no longer unreachable — it authenticates
+  // against its own endpoint instead of the shared one. The only thing left
+  // to flag is a slot with no endpoint configured at all (relies entirely on
+  // config.yaml's default, which is fine for slot 1 but a silent no-op for
+  // slots 2-4).
   let configBase = '';
   try {
     const cfgPath = path.join(HERMES_HOME, 'config.yaml');
@@ -244,18 +250,23 @@ function reportProviderSlots() {
     }
   } catch (_) { /* diagnostic only — never block --check */ }
   if (configBase) {
-    const unreachable = slots.filter((s) => {
+    const crossProvider = slots.filter((s) => {
       const b = s.baseUrl ? String(s.baseUrl).replace(/\/+$/, '') : '';
       return b && b !== configBase;
     });
-    if (unreachable.length) {
-      console.log('  WARNING: ' + unreachable.length + ' slot(s) point at an endpoint config.yaml does not use.');
-      unreachable.forEach((s) => console.log('    slot ' + s.slot + ' -> ' + s.baseUrl + '  (UNREACHABLE)'));
-      console.log('    config.yaml pins base_url: ' + configBase + ', and Hermes ignores the');
-      console.log('    forwarded OPENAI_BASE_URL. These slots will send their key to the');
-      console.log('    endpoint above and fail 401 — the key is not the problem.');
-      console.log('    Cross-provider failover needs config.yaml itself changed per attempt,');
-      console.log('    which the env-only design deliberately does not do.');
+    if (crossProvider.length) {
+      console.log('  ' + crossProvider.length + ' slot(s) point at a different endpoint than config.yaml below —');
+      console.log('    reachable via a per-attempt HERMES_HOME (Track D, 2026-08-04):');
+      crossProvider.forEach((s) => console.log('    slot ' + s.slot + ' -> ' + s.baseUrl));
+      console.log('    Each attempt now gets its own throwaway HERMES_HOME/config.yaml naming');
+      console.log('    that slot\'s own endpoint, so it authenticates against ITS provider,');
+      console.log('    not the one pinned below. config.yaml itself: base_url: ' + configBase);
+    }
+    const noEndpoint = slots.filter((s) => s.slot !== 1 && !s.baseUrl);
+    if (noEndpoint.length) {
+      console.log('  WARNING: slot(s) ' + noEndpoint.map((s) => s.slot).join(', ') + ' set no base_url of their own.');
+      console.log('    They will fall back to config.yaml\'s endpoint (' + configBase + '), which usually');
+      console.log('    means the slot shares a rate bucket with slot 1 instead of escaping it.');
     }
   }
 }
