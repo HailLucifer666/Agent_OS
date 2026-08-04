@@ -181,22 +181,21 @@ If you see uncommitted changes to ROADMAP.md or new `verify-*.js` scripts in
 `mythos/scripts/` on the originating machine, that's this in-progress work —
 don't discard it.
 
-## Hard-won platform gotchas (do not re-learn these)
+## Directory-scoped rules (spine §13)
 
-- **PowerShell 5.1 + pipes**: stdout defaults to the OEM codepage, which
-  best-fits curly quotes (U+201C/D) into ASCII `"`, corrupting JSON in
-  transit. `ps-automation.ps1` sets UTF-8 console encoding AND escapes
-  non-ASCII as `\uXXXX` in `Write-Response`. Keep both.
-- **`$pid`, `$PID` are reserved** in PowerShell — never use as a parameter or
-  variable name.
-- **WinRT COM objects** (`System.__ComObject`) cannot be reflected —
-  `.GetType().GetInterfaces()` returns empty. Pass expected result types
-  explicitly (see `Await-WinRTOperation`).
-- **Chromium/Electron apps (Spotify)**: accessibility tree builds lazily on
-  first UIA query; background/posted clicks are silently dropped (cua-driver
-  reports `verified:false`) — escalate to `delivery_mode:'foreground'`.
-- **pc-child protocol**: every command carries an `id`, echoed in the
-  response; node drops mismatched ids as stale. Do not remove.
+Some hard-won operational knowledge now lives next to the code it describes
+instead of here — read the relevant one before editing in these areas:
+
+- `mythos/adapters/CLAUDE.md` — PowerShell/WinRT/pc-child gotchas (OEM
+  codepage JSON corruption, `$pid` being reserved, WinRT reflection,
+  Chromium/Electron click delivery, the command-id-echo protocol, MSIX
+  SendInput blocking, caret-vs-foreground-window, foreground-lock).
+- `mythos/ui/CLAUDE.md` — HUD rules (no build step, audio worklets, canvas).
+- `mythos/src/core/CLAUDE.md` — bus/leash/dispatch invariants.
+
+This root file keeps only what's genuinely global: open-source portability,
+concurrent-session safety, the ACTIVE BUILD pointer, the licensing gate, and
+testing discipline (below).
 
 ## Testing discipline
 
@@ -224,12 +223,23 @@ don't discard it.
   - The default reporter is **spec, not TAP**: grepping `^# tests` / `^# fail`
     silently matches nothing and looks like a clean run. The real summary lines
     are `ℹ tests` / `ℹ pass` / `ℹ fail`.
-  - `wakeword.test.js` has shown a Windows `EPERM` directory-rename race under
-    full-suite load. **It does NOT reliably self-resolve** (an earlier revision
-    of this file claimed it does): it can strand the ONNX models in a
-    gitignored `wakeword.test-backup/`, which silently kills wake word and is
-    invisible to git. If you hit it, restore the models directory before
-    trusting anything else.
+  - `wakeword.test.js`'s Windows `EPERM` directory-rename race is **FIXED as of
+    2026-08-04, at the root rather than worked around.** Historical shape, kept
+    because the failure mode generalises: the test used to arrange
+    "models present" vs "models absent" by `renameSync`-ing the operator's real
+    `ui/public/models/wakeword/` aside and back, because the
+    `/api/config/wakeword` route `statSync`ed a hardcoded path with no seam.
+    Under full-suite load that rename lost an EPERM race and stranded the real
+    `.onnx` weights in a gitignored `wakeword.test-backup/` — wake word silently
+    dead, and **invisible to git because both directories are ignored.** It did
+    NOT self-resolve (an even earlier revision of this file claimed it did,
+    which is how it survived as a known issue instead of being fixed).
+    `routes/config.js` now takes an injectable `wakewordModelsDir`, so the test
+    points at a temp directory and cannot touch real models at all; a guard test
+    pins that production still resolves the real path, so the seam cannot
+    silently break the feature it was added to protect. **The general lesson
+    stands: a test that mutates real, gitignored user data to fake a state can
+    destroy that data invisibly. Inject the path instead.**
   - A suite that exits 127 with no summary, or whose failures wander between
     files run to run, is Windows fork/commit-limit exhaustion from orphaned
     `node.exe` processes — not a regression. Count them

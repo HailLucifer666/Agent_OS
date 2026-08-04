@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Root package.json — the Electron shell.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # mythos/package.json — the app itself. Two separate package.json files
+  # in this repo, so two separate entries are required — Dependabot does not
+  # walk into subdirectories on its own.
+  - package-ecosystem: "npm"
+    directory: "/mythos"
+    schedule:
+      interval: "weekly"
