@@ -262,6 +262,21 @@ testing discipline (below).
     Source-shape assertions on `main.js` are the only automated guard available
     (see `test/electron-cursor-overlay.test.js`) — **a slice is not verified
     until the app actually starts.**
+  - **The full suite cannot run clean while a MYTHOS instance is running, and it
+    looks exactly like a regression.** Two tests bind the REAL default ports
+    rather than ephemeral ones: `test/boot.test.js` spawns `src/main.js` (port
+    **4478**) and `test/proactive-speak-live-routing.test.js`'s legacy path needs
+    the edge-tts server (port **5050**) — the same two ports the desktop launcher
+    frees on start. With the app open they fail as `EADDRINUSE ... 127.0.0.1:4478`
+    and "the legacy (no Live session) path must still complete a proactive turn",
+    which reads like broken code and is not. Run the suite (and any commit, since
+    the pre-commit hook runs it too) with overrides instead of killing the
+    operator's session:
+    `MYTHOS_PORT=4999 EDGE_TTS_PORT=5099 EDGE_TTS_URL=http://127.0.0.1:5099`.
+    Note `MYTHOS_PORT=0` is NOT valid — the schema enforces min 1024, so it fails
+    as a config error rather than picking an ephemeral port. Distinct from the
+    fork-exhaustion entry below: here the failures are the SAME two files every
+    time, not wandering.
   - A suite that exits 127 with no summary, or whose failures wander between
     files run to run, is Windows fork/commit-limit exhaustion from orphaned
     `node.exe` processes — not a regression. Count them

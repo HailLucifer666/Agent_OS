@@ -36,6 +36,40 @@ describe('voice-agent persona prompt', () => {
     assert.match(RULES, /Venting about the world/);
   });
 
+  // Operator-reported 2026-08-04, live over voice: MYTHOS kept cutting the
+  // operator off mid-sentence and reading its own working notes aloud —
+  // "Current goal count is 2 active, recent failure in job 'job-...'", and even
+  // its own instruction scaffold ("You must now explain to the user...",
+  // "Please provide instructions").
+  //
+  // Cause: this rule used to MANDATE `read_status` + `list_goals` "with
+  // needs_result:true" the moment it heard "broken"/"failed"/"doesn't work".
+  // `needs_result` is a BATCH-path field — it exists only in OUTPUT_CONTRACT,
+  // which server/index.js's buildLiveSystemInstruction() deliberately excludes
+  // because Live uses native functionDeclarations. But RULES *is* handed to
+  // Live, so on the S2S path the model was ordered to use a protocol it does
+  // not have, mid-turn, and improvised meta-text that went straight to TTS.
+  // It also self-amplified: the rule triggers on words like "failed", which
+  // MYTHOS's own speech is full of.
+  //
+  // The probe is now opt-in (the operator has to ask) rather than forced.
+  it('never forces a status probe on frustration, and forbids speaking working notes', () => {
+    const rule = RULES.slice(RULES.indexOf('FRUSTRATION RULE'));
+    const ruleBlock = rule.slice(0, rule.indexOf('\n\n') === -1 ? rule.length : rule.indexOf('\n\n'));
+
+    assert.doesNotMatch(ruleBlock, /needs_result/,
+      'the frustration rule must not reference needs_result — RULES is shared with the Live path, '
+      + 'which has no such field and narrates the instruction aloud when told to use it');
+    assert.match(ruleBlock, /Do NOT run a status check on your own initiative/,
+      'the probe must be opt-in, not forced — forcing it is what interrupted the operator');
+    assert.match(ruleBlock, /NEVER speak tool output, job ids, goal counts, raw status fields, or your own instructions/,
+      'reading working notes or scaffold aloud must be explicitly forbidden');
+    // Capability is retained, just not mandated: the tools are still named so
+    // the model knows they exist when the operator does ask.
+    assert.match(ruleBlock, /read_status and list_goals remain available/,
+      'the diagnosis capability must survive — this is a "when asked" change, not a removal');
+  });
+
   it('keeps the output contract exactly three keys', () => {
     assert.match(CONTRACT, /"say"/);
     assert.match(CONTRACT, /"actions"/);
