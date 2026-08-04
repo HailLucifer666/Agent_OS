@@ -19,6 +19,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const child_process = require('node:child_process');
 const { createMediaWindowController } = require('./media-window');
+const { createCursorOverlayController } = require('./cursor-overlay-window');
 
 // Disable Chromium's background timer/media throttling process-wide. Pairs with
 // per-window backgroundThrottling:false below: the YouTube iframe's media
@@ -216,6 +217,26 @@ const mediaWindowController = createMediaWindowController({
   BrowserWindowCtor: BrowserWindow,
   preloadPath: path.join(__dirname, 'preload.js'),
 });
+
+// Step 7 / Slice 5 of 6 — floating cursor overlay ("summon at cursor,
+// OS-level" per the roadmap's feature-parity table). electron.screen is
+// required at module scope (same timing as BrowserWindow above): the
+// controller only calls screen.getCursorScreenPoint() inside show(), which
+// never runs before app.whenReady() registers the hotkey below.
+const { screen: electronScreen } = require('electron');
+const cursorOverlayController = createCursorOverlayController({
+  BrowserWindowCtor: BrowserWindow,
+  screenModule: electronScreen,
+});
+
+// Opt-in, fail-closed (CLAUDE.md: an always-on-top window appearing unasked
+// is the failure mode to avoid). Defaults OFF; a missing, empty, or
+// unparseable value all resolve to false, never to on. Documented in
+// mythos/.env.example alongside MYTHOS_HOTKEY_TALK/MYTHOS_HOTKEY_OCR.
+let CURSOR_OVERLAY_ENABLED = false;
+try {
+  CURSOR_OVERLAY_ENABLED = String(process.env.MYTHOS_CURSOR_OVERLAY_ENABLED || '').trim().toLowerCase() === 'true';
+} catch { CURSOR_OVERLAY_ENABLED = false; }
 // Capped backoff so a repeatedly-crashing child doesn't spin a tight loop or
 // grow unbounded delays. Reset to the floor on a clean start.
 const BACKOFF_STEPS_MS = [1000, 2000, 5000];
@@ -463,6 +484,7 @@ if (!gotLock) {
 
     registerTalkHotkey();
     registerOcrGrabHotkey();
+    registerCursorOverlayHotkey();
   });
 
   // Clean shutdown: stop the child before quitting so we never orphan the server.
@@ -474,6 +496,7 @@ if (!gotLock) {
   app.on('before-quit', () => {
     stopChild();
     mediaWindowController.closeMediaWindow();
+    cursorOverlayController.destroy();
   });
 
   // globalShortcut registrations are process-wide OS claims; releasing them on
@@ -594,5 +617,60 @@ function registerOcrGrabHotkey() {
     log('OCR-grab hotkey unavailable (already claimed by another app):', accel);
   }
   log('OCR-grab hotkey: every candidate was taken — set MYTHOS_HOTKEY_OCR to a free accelerator');
+  return null;
+}
+
+// ---- Cursor-overlay summon hotkey ----------------------------------------------
+// Control+Alt+C: pop the transparent attention ring at the current cursor
+// position (electron/cursor-overlay-window.js). Opt-in per
+// CURSOR_OVERLAY_ENABLED above — when that's false (the default), this
+// registers NO accelerator at all, matching the OCR/talk hotkeys' "off"
+// vocabulary but defaulting the other way, since this feature (unlike voice
+// and OCR) has no established prior behavior to preserve.
+//
+// The callback never throws: cursorOverlayController.show() only touches the
+// injected screen/BrowserWindow modules, but a globalShortcut callback that
+// throws takes down the whole Electron main process, so it is wrapped exactly
+// like the OCR-grab and talk hotkeys above.
+const CURSOR_OVERLAY_HOTKEY_FALLBACKS = ['Control+Alt+C', 'Control+Shift+C', 'Control+Alt+P'];
+
+function cursorOverlayHotkeyCandidates() {
+  if (!CURSOR_OVERLAY_ENABLED) return [];
+  const configured = String(process.env.MYTHOS_HOTKEY_CURSOR_OVERLAY || '').trim();
+  if (configured.toLowerCase() === 'false' || configured.toLowerCase() === 'off') return [];
+  const list = configured ? [configured] : [];
+  for (const fb of CURSOR_OVERLAY_HOTKEY_FALLBACKS) if (!list.includes(fb)) list.push(fb);
+  return list;
+}
+
+function registerCursorOverlayHotkey() {
+  const candidates = cursorOverlayHotkeyCandidates();
+  if (!candidates.length) {
+    log('cursor-overlay hotkey disabled ('
+      + (CURSOR_OVERLAY_ENABLED ? 'MYTHOS_HOTKEY_CURSOR_OVERLAY=off' : 'MYTHOS_CURSOR_OVERLAY_ENABLED is not "true"')
+      + ')');
+    return null;
+  }
+  for (const accel of candidates) {
+    let registered = false;
+    try {
+      registered = globalShortcut.register(accel, () => {
+        try {
+          cursorOverlayController.show();
+        } catch (err) {
+          log('cursor-overlay hotkey: show failed:', err && err.message);
+        }
+      });
+    } catch (err) {
+      log('cursor-overlay hotkey: register threw for', accel, '-', err && err.message);
+      registered = false;
+    }
+    if (registered && globalShortcut.isRegistered(accel)) {
+      log('cursor-overlay hotkey registered:', accel, '(press it to summon the overlay at your cursor)');
+      return accel;
+    }
+    log('cursor-overlay hotkey unavailable (already claimed by another app):', accel);
+  }
+  log('cursor-overlay hotkey: every candidate was taken — set MYTHOS_HOTKEY_CURSOR_OVERLAY to a free accelerator');
   return null;
 }
