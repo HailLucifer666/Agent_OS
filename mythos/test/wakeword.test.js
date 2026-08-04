@@ -10,36 +10,51 @@ const assert = require('node:assert/strict');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { createBus } = require('../src/core/bus');
 const { createServer } = require('../server');
 
-// The /api/config/wakeword route (server/index.js) statSyncs a hardcoded real
-// path (ui/public/models/wakeword/) rather than an injectable one, so "models
-// present" vs "models absent" is exercised here by actually moving that real
-// directory aside / restoring it — not by mocking. This also means the test
-// is honest about a developer machine that has already run
-// scripts/setup-wakeword.js (this repo's own CI/dev box may have real models
-// downloaded from an earlier live-verification pass): each test case
-// arranges the exact directory state it asserts on and restores whatever was
-// there before, so it passes identically whether or not models are present.
-const WAKEWORD_DIR = path.join(__dirname, '..', 'ui', 'public', 'models', 'wakeword');
-const WAKEWORD_DIR_BACKUP = WAKEWORD_DIR + '.test-backup';
+// This test used to arrange "models present" vs "models absent" by renameSync-ing
+// the operator's REAL ui/public/models/wakeword directory aside and renaming it
+// back in a finally block, because the /api/config/wakeword route statSynced a
+// hardcoded path with no seam.
+//
+// That was destructive and it fired. On Windows the rename loses an EPERM race
+// under full-suite load, and when it does the real .onnx weights are left
+// stranded in `wakeword.test-backup/` while `wakeword/` no longer exists. Wake
+// word is then silently dead, and git shows nothing at all because BOTH
+// directories are gitignored (the models are CC BY-NC-SA and fetched
+// per-machine by scripts/setup-wakeword.js). It does NOT self-heal — an earlier
+// revision of CLAUDE.md claimed it did, which is how it survived as a known
+// issue instead of being fixed.
+//
+// routes/config.js now takes an injectable `wakewordModelsDir`, so each case
+// points the route at a fresh temp directory. Real models are never touched,
+// and a crash mid-test can strand nothing that matters. The last test below
+// pins the production default so the seam cannot silently stop resolving the
+// real path.
 const REQUIRED_MODEL_FILES = ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx'];
+
+// Set by withWakewordDir(), injected via baseDeps(). Never the real path.
+let activeWakewordDir = null;
 
 function withWakewordDir(desiredState, fn) {
   // desiredState: 'empty' | 'present'
   return async () => {
-    const existed = fs.existsSync(WAKEWORD_DIR);
-    if (existed) fs.renameSync(WAKEWORD_DIR, WAKEWORD_DIR_BACKUP);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-wakeword-'));
+    activeWakewordDir = path.join(root, 'wakeword');
     try {
       if (desiredState === 'present') {
-        fs.mkdirSync(WAKEWORD_DIR, { recursive: true });
-        for (const name of REQUIRED_MODEL_FILES) fs.writeFileSync(path.join(WAKEWORD_DIR, name), Buffer.from('placeholder-not-a-real-model'));
+        fs.mkdirSync(activeWakewordDir, { recursive: true });
+        for (const name of REQUIRED_MODEL_FILES) fs.writeFileSync(path.join(activeWakewordDir, name), Buffer.from('placeholder-not-a-real-model'));
       }
+      // 'empty' deliberately leaves the directory absent: the route derives
+      // modelsPresent from a per-file statSync, so absent and empty are the
+      // same observable state and this exercises the real code path.
       await fn();
     } finally {
-      if (fs.existsSync(WAKEWORD_DIR)) fs.rmSync(WAKEWORD_DIR, { recursive: true, force: true });
-      if (existed) fs.renameSync(WAKEWORD_DIR_BACKUP, WAKEWORD_DIR);
+      activeWakewordDir = null;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   };
 }
@@ -71,6 +86,10 @@ function baseDeps(bus, configOverrides) {
       reviewKanbanCard: () => ({ job: { id: 'j1', status: 'queued' } }),
     },
     buildRunner: { getJob: () => null, onJobUpdate: () => () => {} },
+    // The temp-dir seam (see the header comment). Null outside a
+    // withWakewordDir() wrapper, which is exactly what production passes, so
+    // the route falls back to the real path.
+    wakewordModelsDir: activeWakewordDir,
   };
 }
 
@@ -111,6 +130,45 @@ test('GET /api/config/wakeword reflects enabled + custom threshold, and modelsPr
 
   await server.stop();
 }));
+
+// The seam above is only safe if production still resolves the REAL models
+// directory when nothing is injected — otherwise this refactor would trade a
+// destructive test for a silently broken feature, and modelsPresent would read
+// false forever while the operator's models sat right where they belong.
+//
+// Asserted two ways, because neither alone is sufficient. Behaviourally,
+// omitting the dep must give the same answer as passing the real path
+// explicitly (environment-independent: both read the same directory, so they
+// agree whether or not models happen to be installed on this machine). And by
+// source shape, because the behavioural half would pass vacuously if the
+// fallback resolved to some OTHER nonexistent path on a machine with no models
+// — both would be false and agree for the wrong reason.
+test('with no wakewordModelsDir injected, the route resolves the real models path', async () => {
+  const realDir = path.join(__dirname, '..', 'ui', 'public', 'models', 'wakeword');
+
+  const bus = createBus({ historySize: 50 });
+  assert.equal(activeWakewordDir, null, 'this test must run outside a withWakewordDir wrapper');
+  const serverDefault = createServer(baseDeps(bus));
+  await serverDefault.ready;
+  const viaDefault = await httpGet(serverDefault.httpServer.address().port, '/api/config/wakeword');
+  await serverDefault.stop();
+
+  const bus2 = createBus({ historySize: 50 });
+  const depsExplicit = Object.assign(baseDeps(bus2), { wakewordModelsDir: realDir });
+  const serverExplicit = createServer(depsExplicit);
+  await serverExplicit.ready;
+  const viaExplicit = await httpGet(serverExplicit.httpServer.address().port, '/api/config/wakeword');
+  await serverExplicit.stop();
+
+  assert.equal(viaDefault.body.modelsPresent, viaExplicit.body.modelsPresent,
+    'the default fallback must read the same directory as the real path');
+
+  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'config.js'), 'utf8');
+  assert.match(source, /deps\.wakewordModelsDir\s*\n?\s*\|\|/,
+    'routes/config.js must fall back when the dep is absent, not require it');
+  assert.match(source, /'ui',\s*'public',\s*'models',\s*'wakeword'/,
+    'the fallback must resolve the real ui/public/models/wakeword path');
+});
 
 describe('scripts/setup-wakeword.js resolveAssetUrls (pure, no network)', () => {
   const { resolveAssetUrls, REQUIRED_ASSETS } = require('../scripts/setup-wakeword');

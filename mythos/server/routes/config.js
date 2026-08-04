@@ -38,8 +38,23 @@ function mountConfigRoutes(app, deps) {
   // scripts/setup-wakeword.js and reloading the HUD picks it up without a
   // server restart. Models are CC BY-NC-SA and gitignored — see
   // scripts/setup-wakeword.js and THIRD_PARTY_NOTICES.md.
+  //
+  // `deps.wakewordModelsDir` is an injectable-path seam, and it exists for a
+  // specific, destructive reason. This path used to be hardcoded here, so the
+  // only way test/wakeword.test.js could exercise "models absent" was to
+  // renameSync the operator's REAL models directory aside and rename it back
+  // afterwards. On Windows that rename loses an EPERM race under full-suite
+  // load, and when it does the real .onnx files are left stranded in a
+  // gitignored `wakeword.test-backup/` while `wakeword/` no longer exists —
+  // wake word is silently dead and git shows nothing, because BOTH directories
+  // are ignored. It does not self-heal. With this seam the test points at a
+  // temp directory instead and cannot touch real models at all.
+  // Production passes nothing and gets the real path.
+  const wakewordModelsDir = deps.wakewordModelsDir
+    || path.join(__dirname, '..', '..', 'ui', 'public', 'models', 'wakeword');
+
   app.get('/api/config/wakeword', (req, res) => {
-    const dir = path.join(__dirname, '..', '..', 'ui', 'public', 'models', 'wakeword');
+    const dir = wakewordModelsDir;
     const files = ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx'];
     const modelsPresent = files.every((f) => {
       try { return fs.statSync(path.join(dir, f)).size > 0; } catch { return false; }

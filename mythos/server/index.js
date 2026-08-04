@@ -617,7 +617,12 @@ function createServer(deps) {
 
   // ---- /api/config (vad + wakeword) + /api/stats (W9: extracted to routes/config.js) ----
   require('./routes/config').mountConfigRoutes(app, {
-    config, memory, goalsEffector, kanbanEffector, pipelineEffector
+    config, memory, goalsEffector, kanbanEffector, pipelineEffector,
+    // Undefined in production — routes/config.js then resolves the real
+    // ui/public/models/wakeword path. Only test/wakeword.test.js sets it, so
+    // that test no longer has to move the operator's real models aside; see
+    // the comment at the resolution site for the EPERM data-loss it prevents.
+    wakewordModelsDir: deps.wakewordModelsDir,
   });
 
   // ---- /api/media — Windows SMTC now-playing (W9: extracted to routes/media.js) ----
