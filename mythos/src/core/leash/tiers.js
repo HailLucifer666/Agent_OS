@@ -277,6 +277,15 @@ const TIER_TABLE = {
   // allowedRoots() always includes the project root itself. Re-tiered here
   // to match write_file/phone_file_push exactly.
   'phone_file_pull':       3,
+  // Task B5 (fire-action field) — approving is the single human-confirm
+  // moment that grants the reminder's own outward-facing action tool
+  // (goals.grantTier, tool-scoped array only — never tier-wide) so it can
+  // fire later unattended. T3 means leash.check() always requires a confirm
+  // for THIS call (it never carries a prior grant naming itself), matching
+  // "approve-a-plan-once, not approve-each": one confirm here, zero at fire
+  // time. Never lower this tier — that would let a reminder's action grant
+  // itself with no human in the loop.
+  'reminder_approve_action': 3,
 
   // T4 — ALWAYS CONFIRM (never cached, human must approve every time)
   'kill_session':          4,

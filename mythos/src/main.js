@@ -445,7 +445,7 @@ async function main() {
       // degrades to an install hint when absent. Refuses without a per-call
       // operator authorization; the config keys are the operator's own LLM.
       registerFromStrix(hub, { config: config, logger: logger });
-      calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus });
+      calendarWiring = registerFromCalendar(hub, { fs: memory.fs, bus: bus, goals: goals });
       registerFromWidgets(hub, { bus: bus });
       // Phase 2: document generation (xlsx/pptx/pdf), sandboxed to vault/builds/docs.
       registerFromDocs(hub, { vault: memory.fs });
@@ -807,7 +807,13 @@ async function main() {
       // Calendar reminder sensor — polls fireDueReminders() every 30s so due
       // reminders emit 'reminder.due' on the bus for proactive speech.
       if (calendarWiring && calendarWiring.calendar) {
-        var reminderSensor = createReminderSensor({ calendar: calendarWiring.calendar, bus: bus });
+        var reminderSensor = createReminderSensor({
+          calendar: calendarWiring.calendar, bus: bus,
+          // Track B5 — fire-time dispatch of a reminder's action goes through
+          // the SAME leash.check() -> dispatchAction() path as every other
+          // action (AD-1/AD-2), never a raw effectors.invoke().
+          leash: leash, goals: goals, effectors: effectors, memory: memory, config: config
+        });
         reminderSensor.start();
         logger.info('sensors.reminder.started', {});
 

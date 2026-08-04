@@ -17,10 +17,16 @@
 var FILE = 'Calendar/reminders.json';
 var READ_FAILED = 'Could not read the reminder store (it may be locked by another process) — refusing to overwrite it. Try again in a moment.';
 
-function createCalendarEffector({ fs, bus }) {
+function createCalendarEffector({ fs, bus, goals }) {
   if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function') {
     throw new Error('createCalendarEffector requires a vault fs-store with readJSON/writeJSON');
   }
+  // Track B5 — goals is a SOFT dependency (main.js passes it; the
+  // tier-table-conformance test's mirrored boot does not). Reminders whose
+  // action is < T3 never need it. Reminders whose action IS T3+ cannot be
+  // approved without it — addReminder() reports that honestly instead of
+  // throwing, matching this file's existing degrade-honestly style.
+  var tiers = require('../leash/tiers');
 
   // load() returns the reminder array, or NULL meaning "could not read" —
   // which is NOT the same as [] meaning "confirmed empty".
@@ -62,6 +68,44 @@ function createCalendarEffector({ fs, bus }) {
     var when = parseWhen(opts.when || opts.due || '');
     if (!when) return { ok: false, error: 'Could not parse that time. Try ISO date, "in 20 minutes", "tomorrow 9am", or "HH:MM".' };
 
+    // Track B5 — fire-action field. `action` is optional: {tool, args} to run
+    // when the reminder fires (e.g. phone_whatsapp_send/whatsapp_send at 9am).
+    // Validated here, not trusted structurally later.
+    var action = null;
+    var goalId = null;
+    var actionApproved = true;
+    if (opts && opts.action && typeof opts.action === 'object') {
+      var actionTool = opts.action.tool;
+      if (typeof actionTool !== 'string' || !actionTool.trim()) {
+        return { ok: false, error: 'action.tool required (string) when action is given' };
+      }
+      action = { tool: actionTool.trim(), args: (opts.action.args && typeof opts.action.args === 'object') ? opts.action.args : {} };
+
+      // T3+ outward-facing/destructive actions need a standing, tool-scoped
+      // grant before fire time can dispatch them unattended — see
+      // reminder_approve_action below. Anchored on a real goal record (the
+      // SAME array-of-tool-names mechanism leash-grant-scope.test.js proves
+      // safe for build plans) rather than inventing a parallel grant shape.
+      if (tiers.tierOf(action.tool) >= 3) {
+        actionApproved = false;
+        if (goals && typeof goals.create === 'function') {
+          // status:'proposed' (not 'active') — this goal exists ONLY as a
+          // grant anchor for goals.grantTier()/leash.check()'s goalId lookup.
+          // getActiveGoals() (goals/index.js) filters on status:'active' for
+          // the autonomous arbiter/planner, so 'proposed' keeps this inert:
+          // cortex never tries to "work on" a reminder's grant record.
+          var actionGoal = goals.create({
+            title: 'Reminder action: ' + action.tool,
+            drive: 'user-service',
+            status: 'proposed'
+          });
+          goalId = actionGoal.id;
+        } else if (bus) {
+          bus.emit('health.anomaly', { kind: 'reminder-action-no-goals', evidence: { tool: action.tool } });
+        }
+      }
+    }
+
     var reminders = load();
     if (reminders === null) return { ok: false, error: READ_FAILED };
     var record = {
@@ -74,11 +118,67 @@ function createCalendarEffector({ fs, bus }) {
       // set; server/index.js's reminder.due handler plays a bundled alert
       // tone before speaking when it's true. Plain reminder_add calls never
       // set it (defaults false), so existing reminder behavior is unchanged.
-      alertSound: Boolean(opts.alertSound)
+      alertSound: Boolean(opts.alertSound),
+      // Track B5 — null for plain reminders (default, unchanged behavior).
+      action: action,
+      goalId: goalId,
+      actionApproved: actionApproved
     };
     reminders.push(record);
     save(reminders);
-    return { ok: true, result: { reminder: record } };
+    var result = { reminder: record };
+    if (action && !actionApproved) {
+      result.needsApproval = true;
+      result.approvalNote = goalId
+        ? 'This reminder\'s action (' + action.tool + ') needs one-time approval — use reminder_approve_action before it can fire.'
+        : 'This reminder\'s action (' + action.tool + ') cannot be approved: no goal system available.';
+    }
+    return { ok: true, result: result };
+  }
+
+  // Track B5 — the ONE confirm the operator sees for a scheduled outward
+  // action. reminder_approve_action is T3 in TIER_TABLE, so leash.check()
+  // always requires a human confirm for THIS call (it never carries a prior
+  // grant for itself). Once confirmed, this grants the reminder's own action
+  // tool — and ONLY that tool — for the reminder's companion goal, so fire
+  // time never re-prompts. Mirrors checkpoints.js's plan-approval grant, but
+  // the tool list is the one the human actually approved here, not a
+  // hardcoded build-tool allowlist.
+  function approveReminderAction(opts) {
+    var query = (opts && opts.query) || '';
+    if (!query.trim()) return { ok: false, error: 'query required to approve' };
+
+    var reminders = load();
+    if (reminders === null) return { ok: false, error: READ_FAILED };
+    var ql = query.toLowerCase();
+    var rec = null;
+    for (var i = reminders.length - 1; i >= 0; i--) {
+      if (reminders[i].id === query || reminders[i].text.toLowerCase().indexOf(ql) !== -1) { rec = reminders[i]; break; }
+    }
+    if (!rec) return { ok: false, error: 'No reminder matching "' + query + '"' };
+    if (!rec.action) return { ok: false, error: 'That reminder has no action to approve' };
+    if (rec.actionApproved) {
+      return { ok: true, result: { reminder: rec }, evidence: { alreadyApproved: true } };
+    }
+    if (!rec.goalId) {
+      return { ok: false, error: 'That reminder has no linked goal — it could not be granted when created (goals system was unavailable)' };
+    }
+    if (!goals || typeof goals.grantTier !== 'function') {
+      return { ok: false, error: 'Goals system unavailable — cannot grant this action' };
+    }
+
+    goals.grantTier(rec.goalId, 3, [rec.action.tool]);
+    rec.actionApproved = true;
+    save(reminders);
+    // Oracle-backed evidence: the grant array actually written on the goal
+    // record, not a bare claim.
+    var goal = typeof goals.get === 'function' ? goals.get(rec.goalId) : null;
+    var granted = (goal && goal.grants && Array.isArray(goal.grants['3'])) ? goal.grants['3'] : null;
+    return {
+      ok: true,
+      result: { reminder: rec },
+      evidence: { goalId: rec.goalId, grantedTool: rec.action.tool, grants: granted }
+    };
   }
 
   function listReminders() {
@@ -194,6 +294,7 @@ function createCalendarEffector({ fs, bus }) {
     addReminder: addReminder,
     listReminders: listReminders,
     cancelReminder: cancelReminder,
+    approveReminderAction: approveReminderAction,
     fireDueReminders: fireDueReminders,
     parseWhen: parseWhen
   };
@@ -230,9 +331,10 @@ async function calendarUpcoming(args, ctx) {
 function buildCalendarTools(ctx) {
   var cal = createCalendarEffector(ctx);
   return [
-    { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Returns the reminder ID.', params: { text: 'string', when: 'string' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
+    { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
     { name: 'reminder_list', description: 'List upcoming reminders. Shows all pending reminders with their scheduled times and text.', params: {}, danger: false, fn: async function(args) { return cal.listReminders(args); }, needs_result: true },
     { name: 'reminder_cancel', description: 'Cancel a pending reminder by its ID or text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
+    { name: 'reminder_approve_action', description: 'Approve, once, the outward-facing action attached to a reminder (e.g. a scheduled WhatsApp send) so it can fire later without asking again. Match by reminder ID or text.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.approveReminderAction(args); } },
     { name: 'timer_add', description: 'Set a timer that rings an audible alert when it goes off (in addition to speaking). Use for "set a timer for N minutes" style requests, not date-based reminders.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) { return cal.addReminder({ text: (args && args.label) || 'Timer', when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true }); } },
     { name: 'timer_cancel', description: 'Cancel a pending timer by its label/text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'calendar_upcoming', description: 'List upcoming events from the connected Google Calendar (read-only). Requires GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN to be configured — degrades honestly with a clear setup message otherwise.', params: { max: 'number (optional) - max events to return, default 10' }, danger: false, fn: async function(args) { return calendarUpcoming(args, ctx); }, needs_result: true },

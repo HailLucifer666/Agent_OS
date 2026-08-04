@@ -21,7 +21,7 @@ const DEFAULT_ALLOWLIST = [
   'start_project','build_project','project_status','job_status','open_artifact',
   'get_time','get_weather','web_search','web_fetch',
   'remember','log_incident','recall_memory',
-  'reminder_add','reminder_list','reminder_cancel',
+  'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   'spotify_play','spotify_play_pause','spotify_next','spotify_volume','spotify_status',
   'media_status','launch_app','focus_window','list_windows','close_window',
