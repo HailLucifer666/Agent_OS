@@ -281,6 +281,125 @@ describe('aether-sensor (Phase 1)', function () {
     }
   });
 
+  // ---- Phase 1.5: ranging/position enrichment (real ToF distance) ----
+
+  it('enriches the perception with the owner\'s real ToF distance from the ranging broadcast', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    // Same-socket `ranging` broadcast (aggregator messages.py schema): chirp
+    // carries per-scanner ToF measurements — REAL data, never estimated.
+    sensor._internal.ingest({
+      type: 'ranging',
+      contest: null,
+      chirp: {
+        measurements: [{ scannerId: 'PC', tofUs: 2000.0, distanceM: 0.686 }],
+        winnerId: 'PC', sameRoom: true, resolvedTick: 5
+      },
+      fusionReason: 'chirp-confirmed',
+      rangingEvent: null
+    });
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    assert.ok(p, 'first acquisition must emit');
+    assert.equal(p.detail.distanceM, 0.686, 'owner distance must come from the ranging cache');
+    assert.ok(p.summary.indexOf('0.69 m') !== -1, 'summary must show the real distance');
+  });
+
+  it('no ranging broadcast yet -> rssi-only perception, distanceM null', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    assert.ok(p);
+    assert.equal(p.detail.distanceM, null);
+    assert.equal(p.detail.position, null);
+    assert.ok(p.summary.indexOf(' m') === -1, 'no distance -> no metres in the summary');
+  });
+
+  it('ranging for a non-owner scanner does not leak into the summary', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    sensor._internal.ingest({
+      type: 'ranging',
+      chirp: { measurements: [{ scannerId: 'Phone', tofUs: 1000.0, distanceM: 0.35 }] }
+    });
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    assert.ok(p);
+    assert.equal(p.detail.distanceM, null, 'distance is per-owner; Phone\'s must not apply to PC');
+  });
+
+  it('enriches with the fused 2-D position when the position broadcast is live', function () {
+    var sensor = createAetherSensor({ bus: fakeBus(), config: {}, logger: SILENT });
+    sensor._internal._reset();
+    sensor._internal.ingest({ type: 'position', userId: 'SIM-A', x: 1.23, y: 4.56, uncertaintyRadiusM: 0.8 });
+    var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), 1000);
+    assert.ok(p);
+    assert.deepEqual(p.detail.position, { x: 1.23, y: 4.56, uncertaintyRadiusM: 0.8 });
+  });
+
+  it('socket drop clears the ranging cache (no stale distance after reconnect)', async function () {
+    var bus = fakeBus();
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: bus,
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      client.send(JSON.stringify({
+        type: 'ranging',
+        chirp: { measurements: [{ scannerId: 'PC', tofUs: 2000.0, distanceM: 0.686 }] }
+      }));
+      client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
+      assert.ok(await waitFor(function () { return bus._events.length === 1; }, 1000), 'perception must emit');
+      assert.equal(bus._events[0].payload.detail.distanceM, 0.686);
+
+      // Kill the socket; the drop must clear the enrichment caches.
+      client.close();
+      assert.ok(await waitFor(function () { return bus._events.length === 2; }, 1000), 'offline must emit');
+      assert.equal(bus._events[1].payload.detail.distanceM, null, 'offline has no distance');
+      // Reacquisition after reconnect: it IS a transition (emits), but the
+      // cleared cache means the old distance must not resurrect.
+      var p = sensor._internal.decide(election('PC', [scanner('PC', -59)]), Date.now());
+      assert.ok(p, 'reacquisition after offline must emit (it is a transition)');
+      assert.equal(p.detail.distanceM, null, 'stale pre-drop distance must not survive the drop');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('round-trips a real ranging broadcast over WS without emitting on its own', async function () {
+    var bus = fakeBus();
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: bus,
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      // Ranging alone (no election) must be silent — enrichment never emits.
+      client.send(JSON.stringify({
+        type: 'ranging',
+        chirp: { measurements: [{ scannerId: 'PC', tofUs: 2000.0, distanceM: 0.686 }] }
+      }));
+      await sleep(60);
+      assert.equal(bus._events.length, 0, 'ranging broadcast alone must not emit a perception');
+      // Then the election perception carries the cached distance.
+      client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
+      assert.ok(await waitFor(function () { return bus._events.length === 1; }, 1000));
+      assert.equal(bus._events[0].payload.detail.distanceM, 0.686);
+      assert.ok(bus._events[0].payload.summary.indexOf('0.69 m') !== -1);
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
   it('speak() sends {type:say, text} over the live socket to the aggregator (Phase 2)', async function () {
     var agg = await fakeAggregator();
     var sensor = createAetherSensor({

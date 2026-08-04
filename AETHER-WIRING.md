@@ -44,18 +44,26 @@ The spec's invented `aether.focus` message (`device_id`, `distance_m`, `user_id`
 `user_id` is effectively single-user ("AetherUser1"). Locked schema lives in
 `aether-bridge/messages.py` in the Aether-BLE repo.
 
-> **⚠ STALE — re-verify before Phase 2 relies on this (checked 2026-08-04).**
-> The "RSSI only, no `distance_m`" claim was true when written but the Aether-BLE
-> repo has moved on. Its local `main` is at **Phase 10** (`a206f20` layout
-> persistence + 5-surface spatial dashboard, on top of `488035c` "Phase 9 fusion
-> engine + real chirp: matched-filter ToF, 2-D Kalman, room adjacency"), and
-> `aether-bridge/aggregator.py` now imports `rssi_to_distance_m` from `layout`
-> and threads `distance_m` / `tof_us` through its geometry and fusion paths. In
-> other words **the "ranging tier" that §"Real data only" below says to wait for
-> appears to be wired.** What is NOT yet established is whether `distance_m`
-> reaches the *broadcast payload MYTHOS consumes*, or stays internal to fusion —
-> that is the one thing to check before treating ranging as available here, and
-> it was deliberately not concluded from a grep.
+> **✅ RESOLVED 2026-08-05 (read from source, not concluded from a grep).** The
+> question "does `distance_m` reach the broadcast payload MYTHOS consumes" has a
+> precise answer: **NO — the locked `election` payload never carries it.**
+> `messages.py:build_election_message` takes only `owner/tick/scanners/
+> last_handoff/wake_outcome`, and `aggregator.py:_current_scanner_entries`
+> emits `id/rssi/smoothedRssi/lastSeenMs/present` per scanner — RSSI only.
+> `distance_m` stays internal to fusion/geometry.
+>
+> **BUT real distance IS on the same socket, as separate broadcasts:**
+> `ranging` (per-scanner `distanceM`/`tofUs` from chirp measurements,
+> suppressed entirely while tier 2 is idle) and `position` (fused 2-D
+> `x/y/uncertaintyRadiusM` per user, omitted until a fusion track exists).
+> Both ride the exact WS the sensor already consumes, additive schemas, no
+> Python changes needed. **Phase 1.5 (shipped 2026-08-05, `08f9a28`) consumes
+> them:** the sensor ingests `ranging`/`position` (never emitting on their
+> own), and the next election perception carries the owner's real `distanceM`
+> + fused `position` in `detail`, plus `distanceM` in the summary/HUD chip.
+> Caches clear on socket drop (real data only — never show a distance you
+> didn't just hear). The "carry rssi until a ranging tier is wired" gate is
+> therefore satisfied: the tier is wired and the sensor now carries it.
 >
 > Also note `aether-bridge/bridge.py` has **uncommitted local changes** in that
 > repo, so its on-disk behaviour may not match its own last commit. Reconcile
@@ -100,7 +108,8 @@ Aether handles all device routing.
 | Phase | Goal | Status | Commit |
 |-------|------|--------|--------|
 | **1** | Focus awareness — Agent_OS perceives the nearest device; HUD shows it live | ✅ **DONE** | `711722d` |
-| 2 | Voice output routing — Agent_OS speaks through the nearest device | 🔧 **CODED — needs live verify** | (uncommitted) |
+| **1.5** | Ranging enrichment — real ToF distance rides the perception once the ranging tier is wired | ✅ **DONE** | `08f9a28` |
+| 2 | Voice output routing — Agent_OS speaks through the nearest device | 🔧 **CODED — needs live verify** | `08f9a28` |
 | 3 | Voice input routing — nearest device's mic reaches Agent_OS | 📐 **DESIGNED — blocked on Aether-side audio transport** | — |
 | 4 | Conversation handoff — mid-sentence migration between devices | ⬚ | — |
 | 5 | Multi-device mesh — multiple rooms, multiple users | ⬚ | — |
@@ -118,7 +127,14 @@ perception queue drains 1×/sec (cap 50). The sensor emits ONLY on (a) owner
 transition (null→X, X→Y, X→null), (b) first acquisition, or (c) owner-stable RSSI
 drift ≥3 dBm throttled to 1 Hz. Without this, one sensor would flood the cortex
 queue. Reconnect w/ exp backoff; fail-honest-inert; opt-in (`AETHER_ENABLED`,
-default false). QA-reviewed. 2525/2525 tests pass.
+default false). QA-reviewed.
+
+**Phase 1.5 — Ranging enrichment ✅ DONE (`08f9a28`):** the sensor now also
+consumes the same-socket `ranging` (real ToF `distanceM`) and `position` (fused
+2-D) broadcasts — see the resolved ⚠ note in §0. Enrichment-only: never emits on
+its own, only enriches the next election perception (owner's `distanceM` in
+summary + `detail`, fused `position` in `detail`); caches clear on socket drop.
+No fabricated data: `distanceM` is shown exactly as broadcast.
 
 **Verify live:**
 ```
@@ -128,7 +144,7 @@ default false). QA-reviewed. 2525/2525 tests pass.
 
 ---
 
-## Phase 2 — Voice Output Routing 🔧 CODED — needs live verify (uncommitted)
+## Phase 2 — Voice Output Routing 🔧 CODED — needs live verify (`08f9a28`)
 
 **Goal:** Agent_OS speaks through whichever device the user is nearest to.
 

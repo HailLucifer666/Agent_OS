@@ -28,6 +28,15 @@
 // Stable 400ms broadcasts are silent no-ops; the HUD still updates live via
 // (b) as the user actually moves.
 //
+// Ranging enrichment (Phase 1.5): the aggregator ALSO broadcasts `ranging`
+// (per-scanner ToF `distanceM` — real data, the tier the original plan said
+// to carry rssi until it was wired) and `position` (fused 2-D x/y) on the
+// same socket. Those never emit on their own (gate stays election-driven);
+// they only enrich the next election perception with the owner's real
+// distance. The caches are cleared on a socket drop so a reconnect never
+// reuses pre-disconnect distances (real data only — never show a distance
+// you didn't just hear).
+//
 // A socket drop after a real connection emits one fail-honest "Aether offline"
 // perception at the SAME salience as everything else, so the HUD relay (gate:
 // salience >= MYTHOS_IDLE_SALIENCE) clears the stale chip — a down Aether must
@@ -48,6 +57,10 @@ var DRIFT_DB = 3;             // owner-stable re-emit threshold on smoothedRssi
 var DRIFT_THROTTLE_MS = 1000; // cap owner-stable emits to 1 Hz
 var SALIENCE = 0.5;           // one salience for every aether perception
 
+// The aggregator only broadcasts ranging while a chirp/contest is live, so
+// entries in the per-instance ranging cache are real ToF measurements, never
+// estimates.
+
 function createAetherSensor(ctx) {
   var bus = ctx.bus;
   var config = ctx.config || {};
@@ -65,6 +78,12 @@ function createAetherSensor(ctx) {
   var lastEmittedRssi = null;
   var lastEmitTs = 0;
   var hadFirstEmit = false;    // suppresses the pre-acquisition null->null case
+
+  // Enrichment data from the same socket — per-instance caches, seeded via
+  // ingest() (exposed as _internal.ingest for tests). Cleared on socket drop
+  // so a reconnect never reuses pre-disconnect distances.
+  var myRanging = {};
+  var myPosition = null;
 
   // Pull the owner scanner entry (with its smoothedRssi) out of the election
   // payload. Aggregator sends scanners as a list; owner may be null.
@@ -116,23 +135,60 @@ function createAetherSensor(ctx) {
     // 'rssi unknown' (not 'offline') while the socket is live but the owner row
     // is missing from the scanners list — avoids contradicting connected:true.
     var rssiLabel = (rssi != null) ? (rssi + ' dBm') : 'rssi unknown';
+    // Real ToF distance for the owner, when the ranging tier has broadcast one
+    // (Phase 1.5). Shown as-is — never estimated from rssi.
+    var ownerRanging = owner ? myRanging[owner] : null;
+    var distanceM = ownerRanging ? ownerRanging.distanceM : null;
     var lh = election && election.lastHandoff;
     var handoff = !!(lh && typeof lh === 'object' && lh.to === owner && lh.from);
+    var summaryBits = ['Nearest: ' + (owner || 'none')];
+    if (distanceM != null) summaryBits.push(distanceM.toFixed(2) + ' m');
+    summaryBits.push(rssiLabel);
     return {
       ts: now,
       kind: 'aether',
       channel: 'aether',
-      summary: ('Nearest: ' + (owner || 'none') + ' \u00b7 ' + rssiLabel).slice(0, 200),
+      summary: summaryBits.join(' \u00b7 ').slice(0, 200),
       salience: SALIENCE,
       detail: {
         owner: owner,
         rssi: rssi,
+        distanceM: distanceM,
+        position: myPosition ? { x: myPosition.x, y: myPosition.y, uncertaintyRadiusM: myPosition.uncertaintyRadiusM } : null,
         handoff: handoff,
         fromDevice: handoff ? lh.from : null,
         scanners: (election && election.scanners) ? election.scanners.slice() : [],
         connected: true
       }
     };
+  }
+
+  // Ingest a same-socket non-election broadcast (ranging / position). These
+  // enrich the next election perception; they never emit on their own.
+  function ingest(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'ranging') {
+      var chirp = msg.chirp;
+      if (chirp && Array.isArray(chirp.measurements)) {
+        for (var i = 0; i < chirp.measurements.length; i++) {
+          var m = chirp.measurements[i];
+          if (m && m.scannerId && typeof m.distanceM === 'number') {
+            myRanging[m.scannerId] = { distanceM: m.distanceM, tofUs: m.tofUs };
+          }
+        }
+      }
+    } else if (msg.type === 'position') {
+      if (typeof msg.x === 'number' && typeof msg.y === 'number') {
+        myPosition = { x: msg.x, y: msg.y, uncertaintyRadiusM: msg.uncertaintyRadiusM };
+      }
+    }
+  }
+
+  // Real-data-only hygiene: a socket drop must never leave stale distances
+  // behind for the next reconnect to reuse.
+  function clearEnrichment() {
+    myRanging = {};
+    myPosition = null;
   }
 
   function emitOffline() {
@@ -149,6 +205,8 @@ function createAetherSensor(ctx) {
       detail: {
         owner: null,
         rssi: null,
+        distanceM: null,
+        position: null,
         handoff: false,
         fromDevice: null,
         scanners: [],
@@ -193,10 +251,17 @@ function createAetherSensor(ctx) {
 
     socket.on('message', function (raw) {
       if (generation !== myGen) return;
-      var election;
-      try { election = JSON.parse(raw.toString()); } catch (_) { return; }
-      if (!election || election.type !== 'election') return;
-      var payload = decide(election, Date.now());
+      var msg;
+      try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
+      if (!msg || typeof msg !== 'object') return;
+      // Ranging/position broadcasts enrich the next election perception
+      // without emitting (they fire far more often than the gate allows).
+      if (msg.type === 'ranging' || msg.type === 'position') {
+        ingest(msg);
+        return;
+      }
+      if (msg.type !== 'election') return;
+      var payload = decide(msg, Date.now());
       if (payload) bus.emit('perception.aether', payload);
     });
 
@@ -207,6 +272,7 @@ function createAetherSensor(ctx) {
     if (generation !== myGen) return;
     var wasConnected = connected;
     connected = false;
+    clearEnrichment();
     if (ws) { try { ws.removeAllListeners(); ws = null; } catch (_) {} }
     if (wasConnected) emitOffline();
     scheduleReconnect(myGen);
@@ -238,6 +304,10 @@ function createAetherSensor(ctx) {
     running = false;
     generation++;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    // Same real-data-only hygiene as a socket drop: a stop->start cycle must
+    // not let the first post-restart election perception resurrect pre-stop
+    // distances.
+    clearEnrichment();
     if (ws) {
       // Do NOT removeAllListeners() here: a CONNECTING socket that's about to
       // fail (ECONNREFUSED) fires 'error' on the next tick, and stripping
@@ -278,11 +348,13 @@ function createAetherSensor(ctx) {
     _internal: {
       decide: decide,            // test hook: drive the dedup gate directly
       findOwnerScanner: findOwnerScanner,
-      _reset: function () {      // test hook: clear gate state between cases
+      ingest: ingest,            // test hook: seed ranging/position enrichment
+      _reset: function () {      // test hook: clear gate + enrichment state
         lastEmittedOwner = null;
         lastEmittedRssi = null;
         lastEmitTs = 0;
         hadFirstEmit = false;
+        clearEnrichment();
       }
     }
   };
