@@ -240,6 +240,28 @@ testing discipline (below).
     silently break the feature it was added to protect. **The general lesson
     stands: a test that mutates real, gitignored user data to fake a state can
     destroy that data invisibly. Inject the path instead.**
+  - **A green suite cannot tell you the Electron app boots. Proven 2026-08-04.**
+    Slice 5 (cursor overlay) shipped with 16 passing tests, a walked installer
+    artifact and 2598 green tests — and the shell would not start at all:
+    `Error: The 'screen' module can't be used before the app 'ready' event`.
+    Two rules came out of it, both cheap and both now test-pinned:
+    - **Electron APIs gated on `app.ready` (notably `screen`, `powerMonitor`,
+      `session`) must not be *property-accessed* before `whenReady` — and a
+      defensive `typeof x.method !== 'function'` check counts as access.** Those
+      exports are lazy getters that throw. In this case the guard *was* the
+      crash. `electron/main.js` requires such APIs lazily at their use site
+      (`session`, `desktopCapturer`, and now `screen`); follow that, never a
+      module-scope destructure.
+    - **An opt-in flag protects nothing that runs before the flag is read.** The
+      overlay was gated behind `MYTHOS_CURSOR_OVERLAY_ENABLED` (default off), but
+      the controller was constructed unconditionally *above* where the flag was
+      parsed — so the app died for everyone, including with the feature disabled.
+      Construct optional subsystems inside the `if (FLAG)`, not before it.
+    Why no test caught it: unit tests inject a fake `screen`, so they are blind
+    to load order, and one of them actively *required* the eager property read.
+    Source-shape assertions on `main.js` are the only automated guard available
+    (see `test/electron-cursor-overlay.test.js`) — **a slice is not verified
+    until the app actually starts.**
   - A suite that exits 127 with no summary, or whose failures wander between
     files run to run, is Windows fork/commit-limit exhaustion from orphaned
     `node.exe` processes — not a regression. Count them

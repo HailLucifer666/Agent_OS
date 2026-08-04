@@ -219,15 +219,24 @@ const mediaWindowController = createMediaWindowController({
 });
 
 // Step 7 / Slice 5 of 6 — floating cursor overlay ("summon at cursor,
-// OS-level" per the roadmap's feature-parity table). electron.screen is
-// required at module scope (same timing as BrowserWindow above): the
-// controller only calls screen.getCursorScreenPoint() inside show(), which
-// never runs before app.whenReady() registers the hotkey below.
-const { screen: electronScreen } = require('electron');
-const cursorOverlayController = createCursorOverlayController({
-  BrowserWindowCtor: BrowserWindow,
-  screenModule: electronScreen,
-});
+// OS-level" per the roadmap's feature-parity table).
+//
+// Constructed inside app.whenReady() (see the whenReady block below), NOT here.
+// The first version of this slice destructured `screen` at module scope and
+// constructed the controller here, which took the whole shell down on the first
+// real boot: "The 'screen' module can't be used before the app 'ready' event".
+// `screen` is a lazy getter that throws until ready, and the controller's own
+// defensive `typeof screenModule.getCursorScreenPoint` check read that property
+// at construction — so the guard was the crash. Worse, CURSOR_OVERLAY_ENABLED is
+// read BELOW this point, so the app died even with the feature off (the default):
+// an opt-in gate cannot protect anything that runs before it.
+//
+// `screen` is therefore required lazily at the construction site, matching this
+// file's existing precedent for ready-gated APIs (`session` and
+// `desktopCapturer` are both required inside their handlers, not up here).
+// BrowserWindow above is fine at module scope — it is a class reference, and
+// nothing touches it until a window is actually made.
+let cursorOverlayController = null;
 
 // Opt-in, fail-closed (CLAUDE.md: an always-on-top window appearing unasked
 // is the failure mode to avoid). Defaults OFF; a missing, empty, or
@@ -484,6 +493,27 @@ if (!gotLock) {
 
     registerTalkHotkey();
     registerOcrGrabHotkey();
+
+    // Slice 5: build the overlay controller HERE, not at module scope — see the
+    // comment at its `let` declaration for the boot crash that caused. Two
+    // properties this ordering buys: `screen` is only reached after app.ready
+    // (it throws before), and when the feature is off the controller is never
+    // constructed at all, so "opt-in" means nothing is built rather than
+    // something is built and left unused.
+    if (CURSOR_OVERLAY_ENABLED) {
+      try {
+        const { screen: electronScreen } = require('electron');
+        cursorOverlayController = createCursorOverlayController({
+          BrowserWindowCtor: BrowserWindow,
+          screenModule: electronScreen,
+        });
+      } catch (err) {
+        // Never fatal. An optional attention indicator must not be able to stop
+        // the app from starting — that is exactly the failure being fixed here.
+        cursorOverlayController = null;
+        log('cursor-overlay: controller unavailable:', err && err.message);
+      }
+    }
     registerCursorOverlayHotkey();
   });
 
@@ -496,7 +526,8 @@ if (!gotLock) {
   app.on('before-quit', () => {
     stopChild();
     mediaWindowController.closeMediaWindow();
-    cursorOverlayController.destroy();
+    // null when the overlay is disabled (the default) or failed to construct.
+    if (cursorOverlayController) cursorOverlayController.destroy();
   });
 
   // globalShortcut registrations are process-wide OS claims; releasing them on
@@ -656,7 +687,11 @@ function registerCursorOverlayHotkey() {
     try {
       registered = globalShortcut.register(accel, () => {
         try {
-          cursorOverlayController.show();
+          // Cannot legitimately be null here — this accelerator is only
+          // registered when CURSOR_OVERLAY_ENABLED, which is also the condition
+          // that builds the controller — but a globalShortcut callback that
+          // throws takes down the whole main process, so it stays guarded.
+          if (cursorOverlayController) cursorOverlayController.show();
         } catch (err) {
           log('cursor-overlay hotkey: show failed:', err && err.message);
         }

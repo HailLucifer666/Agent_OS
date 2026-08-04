@@ -98,8 +98,54 @@ function fakeController(overrides) {
 test('Slice 5 / controller: requires a BrowserWindowCtor and a screenModule', () => {
   assert.throws(() => createCursorOverlayController({ screenModule: { getCursorScreenPoint: () => ({}) } }),
     /BrowserWindowCtor/);
+  // A MISSING screenModule is still a construction-time error — that check is
+  // safe because it never reads a property off the object (see the test below
+  // for why that distinction is the whole ballgame).
   assert.throws(() => createCursorOverlayController({ BrowserWindowCtor: function () {} }),
     /screenModule/);
+});
+
+// REGRESSION — this is the bug that took MYTHOS's whole Electron shell down on
+// the first real boot (commit 3050889, found by the operator in Track C):
+//
+//   Error: The 'screen' module can't be used before the app 'ready' event
+//       at createCursorOverlayController (electron/cursor-overlay-window.js:63)
+//       at Object.<anonymous> (electron/main.js:227)
+//
+// Electron's `screen` export is a LAZY GETTER that throws until app.ready, so
+// merely *reading a property off it* is "using" it. The original constructor
+// validated with `typeof screenModule.getCursorScreenPoint !== 'function'`, and
+// that read fired the getter — meaning the defensive guard itself was the crash.
+// The old version of the test above actively REQUIRED that eager read, so 16
+// passing tests could not have caught this; one of them mandated it.
+//
+// The contract is therefore stricter than "don't call it early": construction
+// must touch NO property of an injected Electron module. A throwing getter is
+// the faithful way to express that in a unit test, with no Electron involved.
+test('Slice 5 / controller: construction touches NO property of screenModule (app-ready lazy getter)', () => {
+  let reads = 0;
+  const preReadyScreen = {};
+  Object.defineProperty(preReadyScreen, 'getCursorScreenPoint', {
+    configurable: true,
+    get() {
+      reads += 1;
+      throw new Error("The 'screen' module can't be used before the app 'ready' event");
+    },
+  });
+
+  let controller;
+  assert.doesNotThrow(
+    () => { controller = createCursorOverlayController({ BrowserWindowCtor: function () {}, screenModule: preReadyScreen }); },
+    'constructing the controller must not read any property of screenModule — that is what crashed the shell',
+  );
+  assert.equal(reads, 0, 'no property of screenModule may be read at construction time');
+
+  // And when the property IS finally touched (at show(), after app.ready in
+  // production), a throw must be surfaced as a failed show rather than an
+  // uncaught exception — a globalShortcut callback that throws takes down the
+  // entire main process.
+  assert.throws(() => controller.show(), /app 'ready' event|screenModule/);
+  assert.ok(reads > 0, 'show() is where the property access belongs');
 });
 
 test('Slice 5 / controller: no window is created until show() is called', () => {
@@ -205,11 +251,50 @@ test('Slice 5 / electron: the hotkey callback never throws, and show() runs behi
 });
 
 test('Slice 5 / electron: registered alongside the other hotkeys, and torn down on quit', () => {
-  assert.match(MAIN, /registerTalkHotkey\(\);\s*\n\s*registerOcrGrabHotkey\(\);\s*\n\s*registerCursorOverlayHotkey\(\);/,
-    'must be registered in app.whenReady() alongside the existing hotkeys');
+  // Deliberately NOT an adjacent-lines regex any more. The controller is now
+  // built between registerOcrGrabHotkey() and registerCursorOverlayHotkey()
+  // (see the boot-ordering test below), so requiring the three calls to be
+  // consecutive would forbid the fix. What actually matters is that all three
+  // run inside whenReady, before the block ends.
+  const readyStart = MAIN.indexOf('app.whenReady()');
+  assert.ok(readyStart > -1, 'app.whenReady() must exist');
+  const readyBlock = MAIN.slice(readyStart, MAIN.indexOf("app.on('window-all-closed'", readyStart));
+  for (const fn of ['registerTalkHotkey()', 'registerOcrGrabHotkey()', 'registerCursorOverlayHotkey()']) {
+    assert.ok(readyBlock.includes(fn), `${fn} must be called inside app.whenReady()`);
+  }
   const quitBlock = MAIN.slice(MAIN.indexOf("app.on('before-quit'"));
-  assert.match(quitBlock.slice(0, 300), /cursorOverlayController\.destroy\(\)/,
-    'the overlay window must be released on quit, not left dangling');
+  assert.match(quitBlock.slice(0, 400), /cursorOverlayController\) cursorOverlayController\.destroy\(\)/,
+    'the overlay must be released on quit, and guarded — it is null when disabled');
+});
+
+// BOOT-ORDERING REGRESSION GUARD (the crash that took the shell down, commit
+// 3050889). No unit test can observe Electron main-process module-load order —
+// the controller's own tests inject a fake screenModule and so are blind to it —
+// so this is asserted on the source text, the same way Slices 2 and 3 pin their
+// Electron halves. Cheap, and it is the only automated thing standing between a
+// future edit and another unbootable app.
+test('Slice 5 / electron: `screen` is never reached at module scope, and the controller is built inside whenReady', () => {
+  const readyStart = MAIN.indexOf('app.whenReady()');
+  const moduleScope = MAIN.slice(0, readyStart);
+
+  // The exact shape that crashed: destructuring `screen` off require('electron')
+  // at module scope. `screen` is a lazy getter that throws until app.ready.
+  assert.doesNotMatch(moduleScope, /const\s*\{[^}]*\bscreen\b[^}]*\}\s*=\s*require\('electron'\)/,
+    "`screen` must not be destructured from require('electron') at module scope — it throws before app.ready");
+
+  // And the controller must not be CONSTRUCTED at module scope either, because
+  // construction is what reached into screen in the first place.
+  assert.doesNotMatch(moduleScope, /createCursorOverlayController\(/,
+    'the controller must not be constructed at module scope — build it inside app.whenReady()');
+
+  const readyBlock = MAIN.slice(readyStart);
+  assert.match(readyBlock, /createCursorOverlayController\(/,
+    'the controller must be constructed inside app.whenReady()');
+  // Gated on the opt-in flag, so a disabled feature builds nothing at all. The
+  // original bug constructed unconditionally and the flag was read afterwards,
+  // which is why the app died even with the overlay off (the default).
+  assert.match(readyBlock, /if \(CURSOR_OVERLAY_ENABLED\)[\s\S]{0,400}?createCursorOverlayController\(/,
+    'construction must be gated on CURSOR_OVERLAY_ENABLED, not merely followed by a flag check');
 });
 
 // ---------------------------------------------------------------------------

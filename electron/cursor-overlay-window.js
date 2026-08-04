@@ -60,7 +60,20 @@ function createCursorOverlayController({ BrowserWindowCtor, screenModule, autoHi
   if (typeof BrowserWindowCtor !== 'function') {
     throw new Error('createCursorOverlayController requires a BrowserWindowCtor');
   }
-  if (!screenModule || typeof screenModule.getCursorScreenPoint !== 'function') {
+  // Presence only — deliberately NOT `typeof screenModule.getCursorScreenPoint`.
+  //
+  // Electron's `screen` export is a lazy getter that THROWS until app.ready, so
+  // reading any property off it counts as "using" it. This guard used to do that
+  // type-check here, and it took the entire Electron shell down on the first real
+  // boot: "The 'screen' module can't be used before the app 'ready' event", raised
+  // from this line via main.js's module-scope construction. The defensive check
+  // was itself the crash.
+  //
+  // Contract, enforced by a throwing-getter test in
+  // test/electron-cursor-overlay.test.js: constructing this controller touches NO
+  // property of any injected Electron module. Shape validation happens at first
+  // use, below, where the call is about to happen anyway.
+  if (!screenModule) {
     throw new Error('createCursorOverlayController requires a screenModule with getCursorScreenPoint()');
   }
   let win = null;
@@ -104,6 +117,13 @@ function createCursorOverlayController({ BrowserWindowCtor, screenModule, autoHi
   // auto-hides after autoHideMs. Repeated calls (rapid re-presses) just
   // reposition + reset the hide timer rather than stacking windows.
   function show() {
+    // Deferred shape check — see the construction guard above for why this
+    // cannot live in the constructor. By the time show() runs, app.ready has
+    // fired (main.js registers the summon hotkey inside whenReady), so touching
+    // the property is safe here and nowhere earlier.
+    if (typeof screenModule.getCursorScreenPoint !== 'function') {
+      throw new Error('cursor overlay: screenModule has no getCursorScreenPoint()');
+    }
     const point = screenModule.getCursorScreenPoint();
     const bounds = overlayBoundsForCursor(point);
     if (!bounds) return false;
