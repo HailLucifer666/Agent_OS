@@ -9,9 +9,11 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-05 — the 2026-08-05 voice-session incident triage:
-BUG-099..BUG-105, 6 fixed (unit-verified, live gate pending) + BUG-104 registered
-as a §7.6 feature. See the LAST section. The prior entry: 2026-08-02 — the
+Last updated: 2026-08-05 (afternoon) — the 2026-08-05 afternoon incident batch:
+BUG-106..BUG-116, 10 fixed + BUG-114 diagnosed-and-fixed (unit-verified, live
+gate pending for all). See the LAST section. The prior entry: 2026-08-05
+(morning) — BUG-099..BUG-105, 6 fixed (unit-verified, live gate pending) +
+BUG-104 registered as a §7.6 feature. The entry before that: 2026-08-02 — the
 2026-07-31/08-01 voice-session fixes, 19 defects, 7 stages,
 BUG-059(new)..BUG-081 (its own section carries the collision note on
 BUG-059/060/061's numbers and a live-verification runbook, still OUTSTANDING).
@@ -2552,4 +2554,219 @@ narration was not a lookup error but an underspecified prompt inviting a guess.
    `vault/Episodic/<today>.jsonl` narrated with the wrong tool name, and no
    `outcome:ok` in `vault/Audit/<today>.jsonl` on a payload that says otherwise.
    (BUG-105, AD-4/AD-5)
+
+## Session (2026-08-05, afternoon) — same-day follow-up batch: 11 defects, 8 records
+
+Sources: `mythos/vault/Incidents/2026-08-05.jsonl` (8 records, later than the
+morning triage above), `mythos/vault/Episodic/2026-08-05.jsonl` (entries
+108–203), `mythos/vault/Audit/2026-08-05.jsonl` (89 lines, 4 honest fails, 0
+unverified). Two morning fixes were already live-confirmed in this same audit
+(`cua_list_windows` ran 9 times with zero approval prompts, BUG-102; the
+wrong-browser guard fired honestly, BUG-099's honesty half) — BUG-106 is the
+hole in BUG-099's capability half.
+
+- **BUG-110 (`get_directions` exists but voice cannot reach it):** FIXED.
+  Registered and tiered T0 (read-only) but absent from `live-tools.js`'s
+  `DEFAULT_ALLOWLIST` — voice said "Direct Google Maps directions aren't
+  possible" and then did exactly that via `browser_navigate` 26 seconds later.
+  Added `get_directions` (and `cua_bring_to_front`, `focus_window`'s cua twin,
+  also drifted off the list) to the allowlist, plus a new
+  `VOICE_ALLOWLIST_EXEMPT` list and gate test closing the CLASS: every T0/T1
+  effector must now be in one list or the other, each entry commented.
+  **Files:** `mythos/src/core/voice/live-tools.js`,
+  `mythos/test/bug-110-t0-t1-allowlist-reachability.test.js`.
+
+- **BUG-109 (`cua_get_window_state` rejects a string `window_id`):** FIXED.
+  The model passed `window_id:"854628"` (numeric string); the truthy-string
+  check skipped the pid-resolution fallback and forwarded the string to a
+  driver demanding an integer. Added `coerceWindowId()`: a clean numeric
+  string becomes a real number; an opaque non-numeric id (`'w-1234'`) passes
+  through unchanged, so the pre-existing pid-resolution regression test stays
+  green. Applied to `cua_get_window_state`, `cua_click`, `cua_bring_to_front`.
+  **Files:** `mythos/src/core/effectors/from-cua.js`,
+  `mythos/test/bug-109-cua-window-id-type-coercion.test.js`.
+
+- **BUG-106 (`attachedBrowser` goes stale, driving Chrome under Brave's name):**
+  FIXED. Brave was launched and attached; the operator closed it; the adapter
+  dropped OFFLINE; the next `browser_navigate`'s lazy `ensureOnline()` silently
+  connected/launched Chrome while `attachedBrowser` still said `'brave'` —
+  `checkBrowserTarget()` compared against the stale value and passed.
+  `checkBrowserTarget()` now reads `browserAgent.getStatus().state` and clears
+  `attachedBrowser` whenever not ONLINE; the lazy fallback only sets an
+  identity when it actually launched a browser itself, never for a bare CDP
+  connect it didn't start.
+  **Files:** `mythos/src/core/effectors/from-browser.js`,
+  `mythos/test/bug-106-attached-browser-stale.test.js`.
+
+- **BUG-107 (the wrong-browser refusal was a dead end):** FIXED. Added
+  `browser_switch(browser)`: disconnects, closes only a browser MYTHOS itself
+  launched (never one it merely attached to — that could be the operator's own
+  window), and routes through `browser_launch_debug` itself (no second launch
+  path). Added to `DEFAULT_ALLOWLIST` and `TIER_TABLE` (T2, matching
+  `browser_launch_debug`) — the registered-tool-count gate in
+  `effectors-hub.test.js` moved 91→92 to match the genuinely new tool.
+  **Files:** `mythos/src/core/effectors/from-browser.js`,
+  `mythos/src/core/voice/live-tools.js`, `mythos/src/core/leash/tiers.js`,
+  `mythos/test/bug-107-browser-switch-remedy.test.js`,
+  `mythos/test/effectors-hub.test.js`.
+
+- **BUG-115 (the ad blocker cannot work — throwaway debug profile, no
+  extensions):** FIXED. Verified read-only during planning: neither debug
+  profile has ever had a `Default/Extensions` directory. `browser_launch_debug`
+  now reads `BROWSER_EXTENSIONS` (semicolon-separated unpacked directories),
+  validates each exists and has a `manifest.json` before spawning anything
+  (fails loudly by name otherwise), and passes `--load-extension` +
+  `--disable-extensions-except`. The result reports which profile and which
+  extension dirs actually loaded — never claims one is active in a profile
+  that has none.
+  **Files:** `mythos/src/core/effectors/from-browser.js`, `mythos/.env.example`,
+  `mythos/test/bug-115-browser-extensions.test.js`.
+
+- **BUG-108 (`see_and_click` OCRs the whole screen, including MYTHOS's own
+  window):** FIXED (BUG-037 protocol followed — all six load-bearing pieces
+  verified present before and after). `Handle-ScreenReadText` took no
+  arguments and always captured the full desktop, so a click meant for a
+  YouTube page instead read back MYTHOS's own window. `screen_read_text`/
+  `see_and_click` now take an optional `pid` that scopes the OCR capture to
+  that window's rectangle (via the existing `Resolve-TargetWindow`/
+  `Handle-ListWindows`, no new resolver); with no target, behavior is
+  unchanged. The subtle part: OCR boxes come back relative to the captured
+  bitmap, with the capture rectangle's own top-left reported as `origin`;
+  `from-pc.js`'s `toAbsoluteRegions()` is the single place `origin` is added
+  back on, so a window-scoped click still lands at real screen-absolute
+  coordinates — pinned with a dedicated test asserting the window-relative
+  coordinates are explicitly NOT what gets clicked.
+  **Files:** `mythos/adapters/pc-child/ps-automation.ps1`,
+  `mythos/src/core/effectors/from-pc.js`,
+  `mythos/test/bug-108-screen-read-text-window-scope.test.js`.
+
+- **BUG-116 (MYTHOS narrated a click as successful in the same second it
+  failed — largest blast radius):** FIXED. 17:13:04 "The click went through,
+  and the screen did change afterwards" — `see_and_click` FAILED at that
+  moment per the audit; 49 seconds later it said the opposite. On the Live
+  (Gemini S2S) path there is no batch turn boundary to correct at — the model
+  speaks its own audio as results arrive, so the functionResponse text is the
+  only channel that teaches it what happened, both for the sentence being
+  spoken now and for the rest of the retained session. The `started`/
+  `unverified` response branches already carried an explicit
+  "do not claim this worked" instruction; the failure branches — the ones
+  with the strongest reason to — carried a bare error string and nothing
+  else. Added one shared `NO_SUCCESS_CLAIM` sentence to every failure-shaped
+  response (`status:'failed'`, both `status:'error'` branches,
+  `reportLateOutcome`'s failure verdict, `resolveLiveConfirm`'s
+  approved-but-failed verdict). No new correction channel — reuses
+  `evaluateOutcome`'s existing status vocabulary and the `[SYSTEM]` `sendText`
+  channel `reportLateOutcome()` already used. `voice-agent.js` (the non-Live
+  batch path) needed no change: its corrective pass already re-derives
+  `finalSay` on any failure/unverified action, and its deterministic honesty
+  guard already overrides the model's own text when a turn's actions all
+  failed — both pre-existing and already test-pinned.
+  **Files:** `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/test/bug-116-live-failed-tool-no-success-claim.test.js`.
+
+- **BUG-114 (`open_web(youtube)` still ships error 153 — diagnosed first):**
+  FIXED. `from-dashboard.js`'s oEmbed embeddability pre-check (the BUG-006
+  fix) was already correct and already ran unconditionally — no bypass, no
+  change needed there. `web-panel.js`'s `onError` postMessage listener was
+  also correctly wired. The actual gap: oEmbed's 200 only proves a video is
+  embeddable in general, not that YouTube's per-request domain restriction
+  allows MYTHOS's own origin — that failure is enforced when the
+  `/embed/<id>` document is served, before the IFrame Player API ever
+  initializes, so a domain-restricted video never posts `onReady` OR
+  `onError` — it silently stalls. The stall timeout fell back to the weak
+  "Open in new tab" link instead of the guaranteed auto-open every other
+  failure path already uses. Added `shouldAutoOpenOnStall(widgetType)`
+  (true only for `'youtube'`); the stall timeout now calls
+  `showFallback(shouldAutoOpenOnStall(...))` instead of a hardcoded `false`.
+  No second embeddability mechanism added.
+  **Files:** `mythos/ui/public/js/views/web-panel.js`,
+  `mythos/test/bug-114-youtube-embed-stall-fallback.test.js`.
+
+- **BUG-112 (four greetings in three minutes, one saying "Good morning" at
+  5:08 PM):** FIXED. `server/index.js`'s `deliverBootGreeting` correctly
+  computes an hour-based salutation, but its brain-composed prompt never
+  passed that salutation to the model or forbade inventing a different one —
+  same no-fabrication gap as BUG-105's fix to `immune/explainer.js`, now
+  applied here too. `planner/daily.js`'s `CANNED_MORNING` was a module-load-
+  time constant hardcoded to "Good morning" regardless of actual time —
+  replaced with `salutationFor(ts)`/`cannedMorning(ts)`, and its own
+  brain-composed brief prompt gets the same salutation-plus-no-invention
+  treatment. `conversation/announcer.js`'s `isRecent`/`markAnnounced` dedup
+  existed but was private; exposed so other proactive-speech sources share
+  one dedup namespace. The actual bypass: `server/index.js`'s
+  `bus.subscribe('plan.morning-brief', ...)` handler called `proactiveSpeak`
+  with zero dedup check of any kind — it now checks/marks the same
+  `'greeting:session'` key `deliverBootGreeting` uses.
+  **Files:** `mythos/server/index.js`, `mythos/src/core/planner/daily.js`,
+  `mythos/src/core/conversation/announcer.js`,
+  `mythos/test/bug-112-greeting-time-honesty.test.js`,
+  `mythos/test/bug-112-single-greeting-owner.test.js`.
+
+- **BUG-111 (Gmail was read 14 times; `remember` cannot stop it):** FIXED.
+  A stored preference can't change a background timer's behavior — it's code,
+  not something the sensor reads. Added `GMAIL_TRIAGE_MODE` to
+  `config/schema.js`: `'boot-once'` (new default) runs the sensor's poll
+  exactly once at startup then never arms a recurring timer; `'poll'` is the
+  pre-2026-08-05 always-on behavior; `'off'` disables the sensor entirely.
+  `gmail_unread` (the tool) is unaffected in every mode. Added a poll counter
+  exposed via `getPollCount()`, surfaced in `/api/status` via a
+  `setGmailPollCountGetter()` setter on `createServer`'s return value (same
+  pattern already used for `requestCameraFrame`/`requestClosePanel`).
+  **Files:** `mythos/src/core/config/schema.js`,
+  `mythos/src/core/sensors/gmail-sensor.js`, `mythos/src/main.js`,
+  `mythos/server/index.js`, `mythos/.env.example`,
+  `mythos/test/bug-111-gmail-triage-mode.test.js`.
+
+- **BUG-113 (spoken commitments are dropped):** FIXED. MYTHOS said "I'll check
+  the ad thing" / "let me look into that", the turn ended, and nothing was
+  recorded — asked later "where are we on X", it had to admit nothing had been
+  done. `from-calendar.js` gains `detectCommitment(text)` (an explicit, narrow,
+  commented first-person-future pattern list — deliberately not a general
+  offer/hedge/conditional classifier, since a false entry teaches distrust of
+  the ledger, which is worse than missing one), `logCommitmentIfPresent(text,
+  {goals})` (logs one inert `status:'proposed'` ledger entry, same anchor
+  pattern as the existing reminder-action grant, invisible to
+  `getActiveGoals()`'s autonomous-arbiter filter), and `listOpenCommitments(goals)`.
+  Wired into both turn-completion paths (`server/index.js`'s batch path,
+  `live-tool-adapter.js`'s `onLiveTurnComplete` for Live) and into
+  `read_status` (`from-dashboard.js`, via `goals` newly threaded through
+  `registerFromDashboard`'s ctx in `main.js`) so "where are we on X" is
+  answerable from state.
+  **Files:** `mythos/src/core/effectors/from-calendar.js`,
+  `mythos/src/core/effectors/from-dashboard.js`, `mythos/src/main.js`,
+  `mythos/server/index.js`, `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/test/bug-113-commitment-ledger.test.js`.
+
+**Incidental fix found mid-batch, not in the original 11:** `main.js`'s
+`serverHandle` was `var`-declared inside the `'server'` boot step's own
+function literal. Each named boot step (`'server'`, `'sensors'`, …) is its
+own function, so the `var` never actually reached the later `'sensors'` step
+— BUG-111's `setGmailPollCountGetter()` wiring needed it there, and a full
+suite run caught the resulting boot-fatal (`boot.test.js`:
+`"serverHandle is not defined"`) before it was committed. Fixed by hoisting
+the declaration to the shared outer scope (matching the existing
+`metricSensor`/`aetherSensor` pattern) and reassigning it in place.
+
+### Live gate for this session's fixes (none are LIVE-VERIFIED yet)
+
+1. "Open Brave, play Starboy on YouTube" → plays in Brave or names the real
+   browser; then close Brave mid-session and ask again → must refuse or
+   re-derive, never drive Chrome as Brave. (BUG-106)
+2. "Use Chrome instead" while attached to Brave → switches or says why not;
+   not a dead end. (BUG-107)
+3. "Click the first video" with YouTube focused → any failure's OCR sample
+   names YouTube content, never `MYTHOS | File Edit View`. (BUG-108)
+4. "Show directions from Kolkata to Bangalore" → answered by `get_directions`,
+   no "not possible" preamble. (BUG-110)
+5. Watch `vault/Audit/<today>.jsonl` for a full session → exactly one
+   `gmail_unread` at boot plus only requested ones, not 14. (BUG-111)
+6. Point `BROWSER_EXTENSIONS` at the unpacked ad blocker → ads blocked and the
+   launch names the loaded extension; then point it at a missing directory →
+   launch fails loudly. (BUG-115)
+7. Open the app → one greeting, correct time of day. (BUG-112)
+8. "Check X and tell me later" → visible in `read_status`, and "where are we
+   on X" answers from it. (BUG-113)
+9. Force a tool failure → MYTHOS never says an action succeeded in a turn
+   whose audit line says fail; grep `vault/Audit/<today>.jsonl` for any
+   `outcome:ok` whose payload disagrees. (BUG-116, AD-4/AD-5)
 
