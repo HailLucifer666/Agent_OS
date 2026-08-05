@@ -56,6 +56,14 @@ const DEFAULT_ALLOWLIST = [
   // browser_tabs is what the 2026-08-05 session needed and did not have when the
   // operator asked to clean up a stray YouTube tab.
   'browser_launch_debug','browser_get_title','browser_tabs',
+  // BUG-107: the wrong-browser refusal above ("attached to Brave, not Chrome")
+  // was a correct-but-dead-end message with no remedy the model could act on.
+  // browser_switch IS that remedy (disconnect + close the MYTHOS-launched
+  // browser + launch the requested one); withholding it here would leave
+  // checkBrowserTarget's own advice ("call browser_switch") unfollowable —
+  // the same "a hint naming an unreachable tool is not a remedy" gap BUG-099
+  // fixed for browser_launch_debug.
+  'browser_switch',
   'set_persona_level','ask_agent',
 ];
 

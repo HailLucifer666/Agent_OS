@@ -19,10 +19,11 @@
 // browser_navigate here would run requireOnline(), which may LAUNCH a real
 // browser on the test machine.
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const browserAgent = require('../adapters/browser-agent');
 const browserMod = require('../src/core/effectors/from-browser');
 
 const {
@@ -80,6 +81,19 @@ describe('browser executable resolution', () => {
 });
 
 describe('checkBrowserTarget — never silently drive the wrong browser', () => {
+  // BUG-106: checkBrowserTarget() now also reads browserAgent.getStatus() and
+  // clears attachedBrowser whenever the adapter is not ONLINE (a stale
+  // attachedBrowser must not outlive the real connection). These tests are
+  // about the NAMING logic specifically, so they mock the adapter ONLINE —
+  // the connectivity-clearing behavior itself is covered separately in
+  // test/bug-106-attached-browser-stale.test.js.
+  let originalGetStatus;
+  beforeEach(() => {
+    originalGetStatus = browserAgent.getStatus;
+    browserAgent.getStatus = () => ({ state: 'ONLINE', mode: 'launched' });
+  });
+  afterEach(() => { browserAgent.getStatus = originalGetStatus; });
+
   test('no browser requested → no objection (existing behavior unchanged)', () => {
     __setAttachedBrowserForTest('chrome');
     assert.equal(checkBrowserTarget(undefined), null);

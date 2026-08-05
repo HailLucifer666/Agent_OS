@@ -46,6 +46,20 @@ async function requireOnline() {
       });
     } catch { /* fall through to OFFLINE report below */ }
     status = browserAgent.getStatus();
+    // BUG-106 fix (b)/(c): source browser identity from the live connection's
+    // OWN mode, not just a value this module remembers from a previous call.
+    // ensureOnline() either CONNECTED to an endpoint already running
+    // (mode:'cdp' — we did not start it, so its identity is unconfirmed and
+    // stays null/unknown, same as the "cannot confirm" refusal below already
+    // handles) or LAUNCHED one itself (mode:'launched', via launchLocal's
+    // chrome-first/edge-fallback — the same default path browser_launch_debug
+    // uses for an unnamed request, so it earns the same 'chrome' label). Only
+    // touch attachedBrowser when THIS call actually changed connectivity (we
+    // are inside the `state !== 'ONLINE'` branch) — an adapter that was
+    // already ONLINE has its identity left exactly as it was.
+    if (status.state === 'ONLINE') {
+      attachedBrowser = status.mode === 'launched' ? 'chrome' : null;
+    }
   }
   if (status.state !== 'ONLINE') {
     return fail(`Browser automation is ${status.state}. ${status.hint || 'Run setup-chrome-debug.ps1 first.'}`);
@@ -467,7 +481,20 @@ function supportedBrowserList() { return BROWSER_SEARCH_ORDER.join(', '); }
 // attached browser would NOT be what the caller asked for. This is the whole
 // BUG-099 honesty guarantee: silently navigating Chrome for a "in Brave"
 // request, then describing it as Brave, is a fabricated success.
+//
+// BUG-106: attachedBrowser is a module-level flag that only reflects the LAST
+// successful launch/connect — it says nothing about whether that browser is
+// still the one behind the CDP endpoint right now. The operator can close it
+// at any time; the adapter then drops to OFFLINE, and a later reconnect (the
+// lazy bring-up in requireOnline(), or the background auto-connect poller) may
+// attach to a DIFFERENT browser without ever telling this module. Clearing
+// attachedBrowser here, before either check below, whenever the adapter is not
+// ONLINE makes that stale window structurally impossible: whatever was
+// attached before is gone, so nothing here can vouch for it anymore.
 function checkBrowserTarget(requested) {
+  const status = browserAgent.getStatus();
+  if (status.state !== 'ONLINE') attachedBrowser = null;
+
   if (requested === undefined || requested === null || requested === '') return null;
   const want = normalizeBrowserName(requested);
   if (!want) {
@@ -479,10 +506,88 @@ function checkBrowserTarget(requested) {
   }
   if (attachedBrowser !== want) {
     return fail(`Browser control is attached to ${attachedBrowser}, not ${want}. `
-      + `Close ${attachedBrowser}'s debug window and call browser_launch_debug with browser:"${want}" — `
+      + `Call browser_switch with browser:"${want}" to close ${attachedBrowser} and switch (it calls browser_launch_debug for you) — `
       + `I will not navigate ${attachedBrowser} and call it ${want}.`);
   }
   return null;
+}
+
+// BUG-115: MYTHOS drives the debug browser through a dedicated --user-data-dir
+// (chrome-debug-profile / <name>-debug-profile) that has never had any
+// extensions installed into it — the operator's ad blocker lives only in
+// their REAL browser profile, so every debug-driven page is unfiltered.
+// BROWSER_EXTENSIONS (env, semicolon-separated list of unpacked extension
+// directory paths, documented in mythos/.env.example) lets the operator load
+// their own extensions into the debug profile. Read directly via process.env,
+// same BYO convention as BROWSER_EXECUTABLE above — no schema.js entry.
+function parseBrowserExtensionsEnv() {
+  const raw = process.env.BROWSER_EXTENSIONS;
+  if (!raw || !raw.trim()) return [];
+  return raw.split(';').map((p) => p.trim()).filter(Boolean);
+}
+
+// An unpacked extension directory has a manifest.json at its root — the one
+// structural signal that distinguishes a real unpacked extension folder from
+// any other directory (a .crx is a single packed file, not a directory, so it
+// fails this check honestly instead of being silently "loaded").
+function isUnpackedExtensionDir(dir) {
+  try {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return false;
+    return fs.existsSync(path.join(dir, 'manifest.json'));
+  } catch { return false; }
+}
+
+// Validates every configured extension path BEFORE anything is spawned.
+// Returns { ok:true, dirs } (dirs is [] when BROWSER_EXTENSIONS is unset/empty
+// — unchanged default behavior) or { ok:false, error }. A missing or invalid
+// path must fail LOUDLY here, not silently proceed with a blocker that never
+// actually loaded — that silent-absence shape is exactly today's bug.
+function resolveBrowserExtensions() {
+  const configured = parseBrowserExtensionsEnv();
+  if (!configured.length) return { ok: true, dirs: [] };
+  for (const dir of configured) {
+    if (!fs.existsSync(dir)) {
+      return { ok: false, error: `BROWSER_EXTENSIONS path does not exist: ${dir}` };
+    }
+    if (!isUnpackedExtensionDir(dir)) {
+      return { ok: false, error: `BROWSER_EXTENSIONS path is not an unpacked extension directory (no manifest.json found): ${dir}` };
+    }
+  }
+  return { ok: true, dirs: configured };
+}
+
+// Chromium ignores --load-extension alone in current builds — it also needs
+// --disable-extensions-except naming the same list, or the extension silently
+// never loads (found live-verifying BUG-115: neither debug profile directory
+// has ever had a Default/Extensions folder). Both flags take a single
+// comma-separated path list when there is more than one extension.
+function buildBrowserLaunchArgs(profileDir, extensionDirs) {
+  const args = [
+    '--remote-debugging-port=9222',
+    `--user-data-dir=${profileDir}`,
+  ];
+  if (extensionDirs && extensionDirs.length) {
+    const joined = extensionDirs.join(',');
+    args.push(`--load-extension=${joined}`);
+    args.push(`--disable-extensions-except=${joined}`);
+  }
+  return args;
+}
+
+// Evidence-contract seam (repo rule: an effector result must carry an
+// oracle-backed field, never a bare ok:true with no evidence). extensionsLoaded
+// is exactly the dirs resolveBrowserExtensions() verified present on disk and
+// passed to Chromium — [] when none were configured, never a guess and never
+// "active" for a profile that loaded none.
+function buildLaunchResult(browserName, status, profileDir, extensionDirs) {
+  return {
+    launched: true,
+    browser: browserName,
+    mode: status.mode,
+    pageCount: status.pageCount,
+    profileDir,
+    extensionsLoaded: extensionDirs,
+  };
 }
 
 // On-demand debug-browser launcher (Phase 6a, user-approved). Boot never
@@ -536,12 +641,15 @@ async function browser_launch_debug(args) {
     : path.join(process.env.LOCALAPPDATA, 'MYTHOS', 'chrome-debug-profile');
   try { fs.mkdirSync(profileDir, { recursive: true }); } catch (err) { return fail(`Could not create debug profile directory: ${err.message}`); }
 
+  // BUG-115: validate BEFORE spawning anything — a bad/missing path must fail
+  // loudly here, not launch a browser that quietly has no extensions.
+  const extensionsResult = resolveBrowserExtensions();
+  if (!extensionsResult.ok) return fail(extensionsResult.error);
+  const extensionDirs = extensionsResult.dirs;
+
   const cdpUrl = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
   try {
-    const child = spawn(exe, [
-      '--remote-debugging-port=9222',
-      `--user-data-dir=${profileDir}`,
-    ], { detached: true, stdio: 'ignore' });
+    const child = spawn(exe, buildBrowserLaunchArgs(profileDir, extensionDirs), { detached: true, stdio: 'ignore' });
     child.unref();
     // BUG-029 (Phase 3 hardening): this detached spawn is the orphan risk.
     // Record the PID the same way launchLocal() does, so Start Agent OS.bat's
@@ -566,7 +674,45 @@ async function browser_launch_debug(args) {
   // trustworthy source — over CDP, Brave reports a plain `Chrome/<version>`
   // product string, so a version probe cannot tell them apart.
   attachedBrowser = want || 'chrome';
-  return ok({ launched: true, browser: attachedBrowser, mode: status.mode, pageCount: status.pageCount });
+  return ok(buildLaunchResult(attachedBrowser, status, profileDir, extensionDirs));
+}
+
+// BUG-107: the wrong-browser refusal above ("attached to Brave, not Chrome")
+// used to be a dead end — correct and honest, then nothing. This is the
+// remedy: disconnect the current browser, launch the requested one, and
+// re-attach — in one call instead of "close Brave yourself, then ask again."
+async function browser_switch(args) {
+  const requested = args && args.browser;
+  if (requested === undefined || requested === null || requested === '') {
+    return fail('browser is required — name which browser to switch to (chrome, brave, or edge).');
+  }
+  const want = normalizeBrowserName(requested);
+  if (!want) return fail(`"${requested}" is not a browser I can drive. Supported: ${supportedBrowserList()}.`);
+
+  const status = browserAgent.getStatus();
+  if (status.state === 'ONLINE') {
+    if (attachedBrowser === want) {
+      return ok({ switched: false, alreadyOnline: true, browser: want });
+    }
+    if (!attachedBrowser) {
+      // BUG-106 made attachedBrowser non-null EXACTLY when MYTHOS itself
+      // launched the current browser. null here means we only ever CDP-
+      // attached to something already running — closing that could kill the
+      // operator's own browser window. Refuse honestly instead of silently
+      // no-op'ing through browser_launch_debug's alreadyOnline branch, which
+      // would otherwise report success without actually switching anything.
+      return fail(`Browser control is attached to a browser MYTHOS did not launch, so I cannot confirm its identity or safely close it. `
+        + `Close it yourself, then call browser_launch_debug with browser:"${want}".`);
+    }
+    // Only ever close a browser MYTHOS itself launched — reuses the same
+    // disconnect() every other shutdown path uses, no second close mechanism.
+    await browserAgent.disconnect();
+  }
+
+  attachedBrowser = null;
+  // Route through the SAME launch logic browser_launch_debug already uses —
+  // no second launch code path to keep in sync with it.
+  return browser_launch_debug({ browser: want });
 }
 
 // ---- Tool catalog ----
@@ -585,6 +731,7 @@ const TOOLS = [
   { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{selector, value}]. Each field is filled (replacing existing content); a bad selector reports that field failure without aborting the rest.', params: { fields: 'array - [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },
+  { name: 'browser_switch', description: 'Switch the debug browser to a different one (chrome, brave, or edge) when browser control is already attached to a different browser than the one requested. Disconnects the current MYTHOS-launched browser, launches the requested one, and re-attaches — the remedy for a "browser control is attached to X, not Y" refusal.', params: { browser: 'string - chrome, brave or edge to switch to' }, danger: false, fn: browser_switch },
 ];
 
 function registerFromBrowser(hub, ctx) {
@@ -601,10 +748,13 @@ module.exports = {
   TOOLS,
   browser_navigate, browser_click, browser_type, browser_screenshot, browser_get_title,
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
-  browser_launch_debug,
+  browser_launch_debug, browser_switch,
   browser_wait_for, browser_fill_form,
   // BUG-099 seams: pure helpers so the browser-target guarantee is testable
   // without requireOnline() launching a real browser on the test machine.
   findBrowserExecutable, browserCandidatePaths, normalizeBrowserName, checkBrowserTarget,
   __setAttachedBrowserForTest,
+  // BUG-115 seams: pure helpers so the extension-loading guarantee is testable
+  // without browser_launch_debug spawning a real browser on the test machine.
+  parseBrowserExtensionsEnv, resolveBrowserExtensions, buildBrowserLaunchArgs, buildLaunchResult,
 };
