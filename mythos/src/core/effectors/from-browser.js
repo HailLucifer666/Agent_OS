@@ -6,6 +6,7 @@
 
 const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
+const evidenceModule = require('./evidence');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -99,6 +100,272 @@ async function waitReady(page, selector) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot-and-refs (2026-08-06). The browser-interaction bug run — BUG-107,
+// 119, 120, 121, 122 and predecessors — kept circling ONE root cause: the model
+// drives the browser through GUESSED CSS selectors, and every fix so far
+// (timeouts, ladders, retries) treats a symptom of that guess. Three external
+// tools were evaluated and none is adoptable here (agent-browser is an external
+// Rust daemon vs the portability rule and the BUG-029 orphan class; lightpanda
+// has no Windows build, no rendering, and is AGPL-3.0 against the licensing
+// gate; ego-lite is macOS-only). Their shared DESIGN is adoptable: snapshot the
+// page as a semantic tree with deterministic refs, act on refs, verify.
+//
+// That needs no new dependency. playwright-core 1.61.1 (already in
+// package.json) ships it as public API — verified in this repo's own installed
+// copy, not assumed:
+//   * page.ariaSnapshot({ mode: 'ai' }) yields a YAML a11y tree whose
+//     interactable nodes carry [ref=eN] markers, AND inlines <iframe> subtrees
+//     (types.d.ts: "Includes element references [ref=e2] ... Includes snapshots
+//     of <iframe>s inside the target").
+//   * page.locator('aria-ref=f1e3') resolves cross-frame by itself —
+//     coreBundle's _jumpToAriaRefFrameIfNeeded() parses the f<seq>e<n> form and
+//     switches to the owning frame. So iframe support (the single highest-value
+//     item for job-application forms, which live in Greenhouse/Workday/Lever
+//     embeds) is native rather than something we hand-roll over page.frames().
+//
+// Refs are only meaningful against the snapshot that minted them. The
+// generation counter below is what turns "this ref is stale" into an explicit,
+// agent-shaped error instead of a silent miss or — worse — a hit on whatever
+// element inherited that ref after a re-render.
+const SNAPSHOT_MAX_NODES = 200;
+const SNAPSHOT_MAX_CHARS = 8000;
+
+let snapshotGeneration = 0;
+let snapshotRefs = new Set();
+let snapshotPageUrl = null;
+
+// Every ref Playwright emits, in the two shapes it uses: `e12` for the main
+// frame, `f3e12` for a node inside the 3rd frame.
+const REF_MARKER = /\[ref=([a-zA-Z0-9]+)\]/g;
+
+function extractRefs(yaml) {
+  const found = [];
+  let m;
+  REF_MARKER.lastIndex = 0;
+  while ((m = REF_MARKER.exec(yaml)) !== null) found.push(m[1]);
+  return found;
+}
+
+// Size discipline: this text goes back to Gemini Live inside a toolResponse, so
+// an un-capped snapshot of a heavy page (YouTube's home is thousands of nodes)
+// would blow the turn. When the tree does not fit, keep the lines that carry a
+// ref — under mode:'ai' those ARE the interactable elements, i.e. exactly what
+// a ref-based action can target — and say how many nodes were dropped. Silent
+// truncation would read as "that's the whole page", which is the class of lie
+// the evidence contract exists to prevent.
+function capSnapshot(yaml) {
+  const lines = yaml.split('\n');
+  if (lines.length <= SNAPSHOT_MAX_NODES && yaml.length <= SNAPSHOT_MAX_CHARS) {
+    return { text: yaml, truncated: false, omittedNodes: 0, keptNodes: lines.length };
+  }
+  const interactive = lines.filter((l) => l.includes('[ref='));
+  const kept = interactive.slice(0, SNAPSHOT_MAX_NODES);
+  let text = kept.join('\n');
+  let charCapped = false;
+  if (text.length > SNAPSHOT_MAX_CHARS) {
+    text = text.slice(0, SNAPSHOT_MAX_CHARS);
+    // Never hand back a half-written final line: a truncated `[ref=` marker is
+    // a ref the model can read and cannot use.
+    const lastNewline = text.lastIndexOf('\n');
+    if (lastNewline > 0) text = text.slice(0, lastNewline);
+    charCapped = true;
+  }
+  return {
+    text,
+    truncated: true,
+    charCapped,
+    omittedNodes: lines.length - text.split('\n').length,
+    keptNodes: text.split('\n').length,
+  };
+}
+
+async function browser_snapshot({ screenshot } = {}) {
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    if (typeof page.ariaSnapshot !== 'function') {
+      // Honest degrade rather than a silent fall back to selector-guessing:
+      // this repo pins playwright-core, so an absent API means the pin moved.
+      return fail(
+        'This browser build cannot produce an accessibility snapshot (page.ariaSnapshot is ' +
+        'unavailable — playwright-core may have been downgraded). Use CSS selectors for now.'
+      );
+    }
+    const raw = await page.ariaSnapshot({ mode: 'ai' });
+    const capped = capSnapshot(String(raw || ''));
+    const refs = extractRefs(capped.text);
+
+    // Mint a new generation BEFORE returning: any ref handed out below belongs
+    // to this generation and no earlier one.
+    snapshotGeneration += 1;
+    snapshotRefs = new Set(refs);
+    snapshotPageUrl = page.url();
+
+    const result = {
+      snapshot: capped.text,
+      generation: snapshotGeneration,
+      refCount: refs.length,
+      nodes: capped.keptNodes,
+      truncated: capped.truncated,
+      url: snapshotPageUrl,
+      title: await page.title(),
+    };
+    if (capped.truncated) {
+      result.omittedNodes = capped.omittedNodes;
+      result.truncationNote =
+        `This page is larger than one snapshot can carry. Showing the ${capped.keptNodes} ` +
+        `interactable elements (the ones a ref can act on); ${capped.omittedNodes} other nodes ` +
+        'were omitted. Scroll or narrow the page and snapshot again if what you need is missing.';
+    }
+    // ego-lite's combined capture: the picture and the semantic tree in one
+    // result, so a model that wants both does not pay two round trips.
+    if (screenshot) {
+      const buf = await page.screenshot({ fullPage: false });
+      result.screenshotBase64 = buf.toString('base64');
+      result.screenshotKB = Math.round(buf.length / 1024);
+    }
+    return ok(result);
+  }).catch(err => fail(err.message));
+}
+
+// Shared by every ref-capable action below. Returns null when the ref is usable,
+// or an agent-shaped failure that tells the model its NEXT MOVE — the
+// agent-browser lesson: an error the model cannot act on is a dead end, and this
+// repo has already paid for that twice (BUG-107's wrong-browser refusal, twice
+// over). Never guesses: a ref we cannot vouch for is refused, not approximated.
+function checkRef(ref) {
+  if (snapshotGeneration === 0) {
+    return fail(
+      `ref "${ref}" cannot be used because no snapshot has been taken in this session. ` +
+      'Call browser_snapshot first, then act on a ref from its output.'
+    );
+  }
+  if (!snapshotRefs.has(ref)) {
+    return fail(
+      `ref "${ref}" is not in the latest snapshot (generation ${snapshotGeneration}) — it is ` +
+      'either from an older snapshot or was never in one. Call browser_snapshot again and use a ' +
+      'ref from the fresh output.'
+    );
+  }
+  return null;
+}
+
+function refLocator(page, ref) {
+  // 'aria-ref=f3e12' resolves inside frame 3 on its own (Playwright's
+  // _jumpToAriaRefFrameIfNeeded) — do NOT hand-walk page.frames() here.
+  return page.locator('aria-ref=' + ref);
+}
+
+// Invalidate outstanding refs whenever we know the page moved underneath them.
+// A navigation re-renders everything, so every ref from the previous page is
+// meaningless — better to force one extra snapshot than to let a ref resolve
+// against a page the model has never seen.
+function invalidateSnapshotRefs(reason) {
+  if (snapshotRefs.size === 0) return;
+  snapshotRefs = new Set();
+  snapshotPageUrl = null;
+  return reason;
+}
+
+// Phase 3 — the verify half of act-then-verify. After a ref action, read the
+// page back and report what it says, as an oracle-backed `evidence` field
+// rather than a bare ok:true. A full re-snapshot stays the model's explicit
+// choice (call browser_snapshot again); charging every click for a second tree
+// would make the common case expensive to prove the uncommon one.
+//
+// Every probe is individually guarded: a page object that cannot answer one
+// question must not cost us the answers to the others, and an evidence capsule
+// that throws would turn a successful click into a reported failure.
+async function captureStateCapsule(page, ref) {
+  const capsule = {};
+  try { capsule.url = page.url(); } catch (_) {}
+  try { capsule.title = await page.title(); } catch (_) {}
+  if (ref) {
+    // Did the thing we clicked survive the click? Both answers are informative:
+    // a dismissed dialog SHOULD be gone, a toggled button should still be there.
+    try { capsule.refStillPresent = (await refLocator(page, ref).count()) > 0; } catch (_) {}
+  }
+  if (typeof page.evaluate === 'function') {
+    try {
+      const dom = await page.evaluate(() => {
+        const active = document.activeElement;
+        const video = document.querySelector('video');
+        return {
+          focused: active ? {
+            tag: active.tagName ? active.tagName.toLowerCase() : null,
+            role: active.getAttribute ? active.getAttribute('role') : null,
+            name: (active.getAttribute && (active.getAttribute('aria-label') || active.getAttribute('name'))) ||
+              (active.textContent || '').trim().slice(0, 60) || null,
+          } : null,
+          // The video oracle the plan calls for: "is it actually playing" is a
+          // property of the media element, not of the click that started it.
+          // Only reported when the page HAS a video, so a normal page's capsule
+          // stays small.
+          video: video ? { playing: !video.paused, currentTime: video.currentTime, duration: video.duration } : null,
+        };
+      });
+      if (dom && dom.focused) capsule.focused = dom.focused;
+      if (dom && dom.video) capsule.video = dom.video;
+    } catch (_) { /* a page that refuses evaluate still gives us url/title */ }
+  }
+  return capsule;
+}
+
+function describeCapsule(capsule) {
+  const bits = [];
+  if (capsule.url) bits.push('url ' + capsule.url);
+  if (capsule.title) bits.push('title "' + capsule.title + '"');
+  if (capsule.focused && capsule.focused.tag) {
+    bits.push('focus on <' + capsule.focused.tag + '>' + (capsule.focused.name ? ' "' + capsule.focused.name + '"' : ''));
+  }
+  if (capsule.video) bits.push('video ' + (capsule.video.playing ? 'PLAYING' : 'paused'));
+  if (capsule.refStillPresent === false) bits.push('the clicked element is no longer on the page');
+  return bits.join('; ');
+}
+
+async function withStateCapsule(page, payload, ref) {
+  const capsule = await captureStateCapsule(page, ref);
+  const observed = describeCapsule(capsule);
+  const result = Object.assign({}, payload, { url: capsule.url, state: capsule });
+  if (!observed) {
+    // No oracle answered. Say so rather than dressing the call's own return up
+    // as proof — verifiedOk would (correctly) throw on an empty observation.
+    return evidenceModule.unverified({ result },
+      'the action was dispatched but the page reported nothing back, so I cannot confirm it changed anything');
+  }
+  return evidenceModule.verifiedOk({ result }, { oracle: 'page-state', observed });
+}
+
+// agent-browser's lesson, and this repo's own (BUG-107, whose dead-end refusal
+// survived a fix because only one of two sites named a remedy): a failure the
+// model cannot act on is a dead end. Every ref-action failure says what to do.
+function refFailure(ref, verb, err) {
+  const detail = (err && err.message) || String(err || 'unknown error');
+  if (/aria-ref|resolve|not found|strict mode/i.test(detail)) {
+    return `Could not ${verb} ref "${ref}": it no longer resolves on this page (${detail}). ` +
+      'The page has probably re-rendered — call browser_snapshot again and use a fresh ref.';
+  }
+  if (/timeout|intercept|not visible|stable/i.test(detail)) {
+    return `Could not ${verb} ref "${ref}": the element is on the page but not actionable (${detail}). ` +
+      'Something may be covering it — call browser_dismiss_overlays, or snapshot again to see what is on top.';
+  }
+  return `Could not ${verb} ref "${ref}": ${detail}`;
+}
+
+// Test-only seam: the ref state is module-level (one browser, one operator), and
+// tests need a known starting point without driving a real page.
+function __resetSnapshotStateForTest() {
+  snapshotGeneration = 0;
+  snapshotRefs = new Set();
+  snapshotPageUrl = null;
+}
+function __setSnapshotStateForTest(refs, generation) {
+  snapshotRefs = new Set(refs || []);
+  snapshotGeneration = generation === undefined ? 1 : generation;
+}
+
 async function browser_navigate({ url, newTab, browser }) {
   if (!url) return fail('URL is required.');
   // BUG-099: when the operator names a browser, drive THAT one or refuse. The
@@ -138,6 +405,10 @@ async function browser_navigate({ url, newTab, browser }) {
     // node. Fast/static pages ignore it (networkidle already true → instant).
     await page.goto(target, { waitUntil: 'commit' });
     try { await page.waitForLoadState('networkidle', { timeout: 3000 }); } catch (_) {}
+    // Every ref from the previous page is meaningless now. Drop them so a
+    // leftover ref fails with "snapshot again" instead of resolving against a
+    // page the model has never actually seen.
+    invalidateSnapshotRefs('navigated');
     const title = await page.title();
     // `browser` is what MYTHOS can actually vouch for — 'unknown' when it
     // attached to a debug endpoint it did not start. Never say Brave on a guess.
@@ -164,8 +435,26 @@ async function browser_navigate({ url, newTab, browser }) {
 //   3. neither -> fail naming the selector and the rungs tried.
 // No coordinate fallback in this pass — clicking blind screen coordinates in a
 // browser has no oracle at all.
-async function browser_click({ selector }) {
-  if (!selector) return fail('CSS selector is required.');
+async function browser_click({ selector, ref }) {
+  // The ref path is the primary mechanism now: it names an element the model
+  // actually SAW in a snapshot, so there is nothing to guess and the ladder
+  // below never has to run. The selector path is unchanged and stays as the
+  // fallback for pages nobody snapshotted.
+  if (ref) {
+    const refProblem = checkRef(ref);
+    if (refProblem) return refProblem;
+    const guard = await requireOnline();
+    if (guard) return guard;
+    return browserAgent.withPage(async (page) => {
+      // Native Playwright click on the resolved locator — the actionability
+      // check (visible, stable, receives events, not covered) IS the oracle, so
+      // this path never needs the unverified downgrade the JS-click rung takes.
+      await refLocator(page, ref).click();
+      return ok(await withStateCapsule(page, { clicked: ref, via: 'ref-click' }, ref));
+    }).catch(err => fail(refFailure(ref, 'click', err)));
+  }
+
+  if (!selector) return fail('Either ref (from browser_snapshot, preferred) or a CSS selector is required.');
   const guard = await requireOnline();
   if (guard) return guard;
 
@@ -212,9 +501,24 @@ async function browser_click({ selector }) {
   }).catch(err => fail(err.message));
 }
 
-async function browser_type({ selector, text, clearFirst }) {
-  if (!selector) return fail('CSS selector is required.');
+async function browser_type({ selector, text, clearFirst, ref }) {
   if (!text) return fail('Text is required.');
+  if (ref) {
+    const refProblem = checkRef(ref);
+    if (refProblem) return refProblem;
+    const onlineGuard = await requireOnline();
+    if (onlineGuard) return onlineGuard;
+    return browserAgent.withPage(async (page) => {
+      const locator = refLocator(page, ref);
+      // fill() replaces, type() appends — the same distinction the selector
+      // path makes, kept identical so moving to refs changes targeting only.
+      if (clearFirst) await locator.fill(String(text));
+      else await locator.type(String(text));
+      return ok(await withStateCapsule(page, { typed: String(text).length, into: ref, via: 'ref-type' }, ref));
+    }).catch(err => fail(refFailure(ref, 'type into', err)));
+  }
+
+  if (!selector) return fail('Either ref (from browser_snapshot, preferred) or a CSS selector is required.');
   const guard = await requireOnline();
   if (guard) return guard;
 
@@ -252,7 +556,7 @@ async function browser_wait_for({ selector, timeoutMs }) {
 
 async function browser_fill_form({ fields }) {
   if (!fields || !Array.isArray(fields) || !fields.length) {
-    return fail('fields array is required: [{selector, value}].');
+    return fail('fields array is required: [{ref, value}] (preferred) or [{selector, value}].');
   }
   const guard = await requireOnline();
   if (guard) return guard;
@@ -264,8 +568,30 @@ async function browser_fill_form({ fields }) {
     const results = [];
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
+      // A ref field takes the ref path; the per-field contract is unchanged, so
+      // one stale ref costs its own field and not the whole form. Mixing refs
+      // and selectors across fields is allowed on purpose — a snapshot may not
+      // have reached every control on a long multi-step form.
+      if (f && f.ref) {
+        if (f.value === undefined || f.value === null) {
+          results.push({ index: i, ref: f.ref, ok: false, error: 'missing value' });
+          continue;
+        }
+        const refProblem = checkRef(f.ref);
+        if (refProblem) {
+          results.push({ index: i, ref: f.ref, ok: false, error: String(refProblem.result) });
+          continue;
+        }
+        try {
+          await refLocator(page, f.ref).fill(String(f.value));
+          results.push({ index: i, ref: f.ref, ok: true });
+        } catch (err) {
+          results.push({ index: i, ref: f.ref, ok: false, error: refFailure(f.ref, 'fill', err) });
+        }
+        continue;
+      }
       if (!f || !f.selector || f.value === undefined || f.value === null) {
-        results.push({ index: i, selector: f && f.selector, ok: false, error: 'missing selector or value' });
+        results.push({ index: i, selector: f && f.selector, ok: false, error: 'missing ref/selector or value' });
         continue;
       }
       try {
@@ -774,8 +1100,9 @@ async function browser_switch(args) {
 
 const TOOLS = [
   { name: 'browser_navigate', description: 'Navigate the browser to a URL. Set newTab:true to open it in a new tab instead of reusing the current one. If the user named a specific browser (Chrome, Brave, Edge), pass it as `browser` — the call then FAILS rather than driving a different one, and the response says which browser was actually used.', params: { url: 'string - the URL to navigate to', newTab: 'boolean (optional) - open in a new tab instead of the current one', browser: 'string (optional) - chrome, brave or edge; only when the user asked for a specific browser' }, danger: false, fn: browser_navigate, needs_result: true },
-  { name: 'browser_click', description: 'Click an element on the page using a CSS selector.', params: { selector: 'string - CSS selector of the element to click' }, danger: false, fn: browser_click },
-  { name: 'browser_type', description: 'Type text into an input field. Set clearFirst to true to clear the field first.', params: { selector: 'string - CSS selector of the input field', text: 'string - text to type', clearFirst: 'boolean (optional) - clear field before typing' }, danger: false, fn: browser_type },
+  { name: 'browser_snapshot', description: 'Read the page as an accessibility tree in which every interactable element carries a stable ref like [ref=e12]. THIS IS THE FIRST STEP for any browser interaction: take a snapshot, find the element you want in the tree, then pass its ref to browser_click / browser_type / browser_fill_form instead of guessing a CSS selector. Elements inside iframes (most job-application forms) are included automatically. Refs expire when the page changes — if one is rejected as stale, snapshot again.', params: { screenshot: 'boolean (optional) - also return a base64 PNG of the page alongside the tree' }, danger: false, fn: browser_snapshot, needs_result: true },
+  { name: 'browser_click', description: 'Click an element on the page. Prefer ref (from browser_snapshot) — it targets the exact element with no guessing. Use selector only when no snapshot ref is available.', params: { ref: 'string (optional) - element ref from browser_snapshot, e.g. e12', selector: 'string (optional) - CSS selector, the fallback when no ref is available' }, danger: false, fn: browser_click },
+  { name: 'browser_type', description: 'Type text into an input field. Prefer ref (from browser_snapshot) over a CSS selector. Set clearFirst to true to replace the existing content.', params: { ref: 'string (optional) - element ref from browser_snapshot, e.g. e12', selector: 'string (optional) - CSS selector, the fallback when no ref is available', text: 'string - text to type', clearFirst: 'boolean (optional) - clear field before typing' }, danger: false, fn: browser_type },
   { name: 'browser_screenshot', description: 'Take a screenshot of the current page. Returns base64 PNG.', params: {}, danger: false, fn: browser_screenshot, needs_result: true },
   { name: 'browser_get_title', description: 'Get the title and URL of the current page.', params: {}, danger: false, fn: browser_get_title, needs_result: true },
   { name: 'browser_get_text', description: 'Get the text content of the page or a specific element (CSS selector). Truncated at 4000 chars.', params: { selector: 'string (optional) - CSS selector, defaults to body' }, danger: false, fn: browser_get_text, needs_result: true },
@@ -783,7 +1110,7 @@ const TOOLS = [
   { name: 'browser_tabs', description: 'Manage browser tabs. Actions: list (default), new, switch (needs index), close (needs index). switch/close accept either index (indexes shift after any tab closes — re-list first if unsure) or match (substring of the target tab\'s title or URL; safer than a cached index). Every switch/close response includes a fresh tabs list.', params: { action: 'string (optional) - list, new, switch, close', index: 'number (optional) - tab index for switch/close', match: 'string (optional) - substring of the target tab\'s title or URL, an alternative to index for switch/close' }, danger: false, fn: browser_tabs, needs_result: true },
   { name: 'browser_go_back', description: 'Navigate back to the previous page in history.', params: {}, danger: false, fn: browser_go_back },
   { name: 'browser_wait_for', description: 'Wait for an element matching a CSS selector to appear on the page. Fails honestly if it does not appear within the timeout. Use before reading or interacting with a dynamically-loaded element.', params: { selector: 'string - CSS selector to wait for', timeoutMs: 'number (optional) - max wait in ms, default 10000, capped at 30000' }, danger: false, fn: browser_wait_for, needs_result: true },
-  { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{selector, value}]. Each field is filled (replacing existing content); a bad selector reports that field failure without aborting the rest.', params: { fields: 'array - [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
+  { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{ref, value}] using refs from browser_snapshot (preferred), or [{selector, value}]. The two may be mixed. Each field is filled (replacing existing content); a bad ref or selector reports that field failure without aborting the rest.', params: { fields: 'array - [{ref: string, value: string}] or [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },
   { name: 'browser_switch', description: 'Switch the debug browser to a different one (chrome, brave, or edge) when browser control is already attached to a different browser than the one requested. Disconnects the current MYTHOS-launched browser, launches the requested one, and re-attaches — the remedy for a "browser control is attached to X, not Y" refusal.', params: { browser: 'string - chrome, brave or edge to switch to' }, danger: false, fn: browser_switch },
@@ -805,6 +1132,11 @@ module.exports = {
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
   browser_launch_debug, browser_switch,
   browser_wait_for, browser_fill_form,
+  // Snapshot-and-refs seams. capSnapshot/extractRefs are pure, so the size cap
+  // and ref parsing are testable without a page at all.
+  browser_snapshot, capSnapshot, extractRefs,
+  SNAPSHOT_MAX_NODES, SNAPSHOT_MAX_CHARS,
+  __resetSnapshotStateForTest, __setSnapshotStateForTest,
   // BUG-099 seams: pure helpers so the browser-target guarantee is testable
   // without requireOnline() launching a real browser on the test machine.
   findBrowserExecutable, browserCandidatePaths, normalizeBrowserName, checkBrowserTarget,

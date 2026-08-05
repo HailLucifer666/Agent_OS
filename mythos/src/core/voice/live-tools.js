@@ -49,6 +49,14 @@ const DEFAULT_ALLOWLIST = [
   'whatsapp_send','whatsapp_contacts','whatsapp_contact_save','app_reply',
   'screen_look','screen_read_text','capture_screenshot',
   'browser_navigate','browser_click','browser_type','browser_get_text',
+  // Snapshot-and-refs (2026-08-06). browser_snapshot is the READ half of every
+  // browser interaction: the model takes a snapshot, sees the page as an
+  // accessibility tree with element refs, and acts on a ref instead of guessing
+  // a CSS selector. This repo has already learned that omitting a read tool
+  // next to its act tools makes the model invent the act tool's inputs — which
+  // is precisely the guessed-selector failure mode the whole snapshot design
+  // exists to end. It ships allowlisted in the same commit as the tool.
+  'browser_snapshot',
   // BUG-099: browser_navigate can now refuse a wrong-browser request and tell
   // the model to "call browser_launch_debug with browser:brave" — an instruction
   // it could not follow, because the launcher was not reachable from this path.

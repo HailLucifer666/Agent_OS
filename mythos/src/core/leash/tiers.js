@@ -70,6 +70,11 @@ const TIER_TABLE = {
   'browser_scroll':        1,
   'browser_go_back':       1,
   'browser_wait_for':      1,  // Phase 4 — read-only wait for an element to appear
+  'browser_snapshot':      1,  // Snapshot-and-refs — reads the page as an a11y tree with element
+                               // refs. Read-only, same class as browser_get_text/browser_screenshot;
+                               // it changes nothing, it is what the model reads BEFORE deciding what
+                               // to change. Gating it would leave the act tools with nothing to aim
+                               // at, which is how a model ends up inventing selectors.
   'focus_window':          1,
   'cua_bring_to_front':    1,  // BUG-102 — the cua-driver twin of focus_window
   'pipeline_advance':      1,  // approve only — dangerWhen handles reject

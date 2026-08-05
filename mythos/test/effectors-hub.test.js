@@ -126,7 +126,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 92 registered count', () => {
+describe('gate: 93 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -182,8 +182,11 @@ describe('gate: 92 registered count', () => {
     // (not called here). whatsapp_* likewise: registerFromWhatsapp is not called
     // here, so whatsapp_contact_save (2026-08-02) does not move this number.
     // + browser_switch (from-browser, BUG-107 2026-08-05 — the remedy for a
-    // wrong-browser refusal: disconnect + relaunch the requested browser) = 92.
-    assert.equal(hub.count(), 92);
+    // wrong-browser refusal: disconnect + relaunch the requested browser) = 92,
+    // + browser_snapshot (from-browser, snapshot-and-refs 2026-08-06 — reads the
+    // page as an accessibility tree with per-element refs so the model acts on an
+    // element it actually saw instead of a guessed CSS selector) = 93.
+    assert.equal(hub.count(), 93);
   });
 });
 

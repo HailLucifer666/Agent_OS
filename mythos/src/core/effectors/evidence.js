@@ -54,6 +54,14 @@ var ORACLES = [
   // would not resolve, so this is a real enumeration of what actually exists,
   // same spirit as process-window above.
   'chunk-file',
+  // Browser snapshot-and-refs (2026-08-06): the page itself, re-read AFTER the
+  // action — URL, title, which element now has focus, whether the acted-on ref
+  // still exists, and for a media element whether it is actually playing.
+  // Independent of the click's own return value in the way that matters: a
+  // Playwright click resolving proves the click was DELIVERED, this proves the
+  // page changed. Deliberately cheap (no full re-snapshot) so it can ride every
+  // ref action without making each click cost a second tree.
+  'page-state',
 ];
 
 function isPlainObject(v) {

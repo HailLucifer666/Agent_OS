@@ -80,7 +80,17 @@ describe('voice-agent persona prompt', () => {
   it('RULES stays inside its per-turn size ceiling', () => {
     // Ceiling, not a target: it exists so future prompt edits have to be
     // deliberate about cost. Raise it consciously, never reflexively.
-    assert.ok(RULES.length < 18000, 'RULES grew to ' + RULES.length + ' chars — trim before raising this ceiling');
+    //
+    // Raised 18000 -> 19000 on 2026-08-06, deliberately, for the BROWSER
+    // INTERACTION RULE. The prompt sat at ~17,970 — effectively full — and that
+    // paragraph is what teaches the model to call browser_snapshot and act on
+    // refs instead of guessing CSS selectors. Guessed selectors are the single
+    // root cause behind BUG-107/119/120/121/122; a mechanism the model is never
+    // told to use is a mechanism that does not run, so the ~770 chars buy the
+    // whole snapshot-and-refs feature. Cost is bounded: on the Live path RULES
+    // is composed ONCE per session (server/index.js's buildLiveSystemInstruction),
+    // not per turn. Trim before raising this again.
+    assert.ok(RULES.length < 19000, 'RULES grew to ' + RULES.length + ' chars — trim before raising this ceiling');
   });
 });
 
