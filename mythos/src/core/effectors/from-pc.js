@@ -478,14 +478,66 @@ function tokenSet(s) {
   return out;
 }
 
+// BUG-108 — optional window scoping for the whole OCR path.
+//
+// Handle-ScreenReadText used to capture the entire desktop, always. Asked to
+// click something on a YouTube results page, MYTHOS OCR'd MYTHOS itself
+// ("MYTHOS | File Edit View | Window | Help | Voice: …") and matched inside its
+// own window. Passing a pid now scopes the capture to that window's rectangle;
+// passing nothing keeps the full-desktop read exactly as it was, because that
+// one has callers (screen_look's OCR grounding, from-app-reply.js, the Electron
+// OCR hotkey).
+//
+// COORDINATE CONTRACT — the part that is easy to get silently wrong.
+// Windows.Media.Ocr reports word boxes relative to the BITMAP it was handed, so
+// a window-scoped capture comes back with WINDOW-relative boxes while click_at
+// consumes screen-absolute ones. The PowerShell side therefore leaves the boxes
+// relative to the capture and reports that rectangle's top-left as `origin`
+// ((0,0) for a full-desktop capture, which is why that path is unchanged);
+// toAbsoluteRegions() below is the ONE place origin is added back on. Everything
+// downstream — matchRegions, centreOf, click_at, the coordinates quoted back to
+// the operator — therefore stays in the single screen-absolute space it has
+// always assumed. Offset it twice, or not at all, and a window-scoped click
+// lands somewhere else on screen while the OCR text match still looks perfect.
+function screenReadCmd(target) {
+  const cmdObj = { cmd: 'screen_read_text' };
+  // Same coercion every other pid in this file gets: the planning LLM sometimes
+  // emits a placeholder string, which must count as "no target" rather than
+  // reaching PowerShell's Get-Process -Id as garbage.
+  const targetPid = coercePid(target && target.pid);
+  if (targetPid) cmdObj.pid = targetPid;
+  return cmdObj;
+}
+
+function toAbsoluteRegions(result) {
+  const regions = (result && Array.isArray(result.regions)) ? result.regions : null;
+  if (!regions) return null;
+  const origin = (result && result.origin) || null;
+  const ox = origin && typeof origin.x === 'number' ? origin.x : 0;
+  const oy = origin && typeof origin.y === 'number' ? origin.y : 0;
+  // A full-desktop capture (and any older adapter that reports no origin at all)
+  // is already absolute — return the same array so the result shape is untouched.
+  if (!ox && !oy) return regions;
+  return regions.map(function (r) {
+    return Object.assign({}, r, { x: r.x + ox, y: r.y + oy });
+  });
+}
+
 // §7.1 (step 5, desktop gaps) — real screen OCR via Windows.Media.Ocr
 // (ps-automation.ps1's Handle-ScreenReadText, through the existing
 // Await-WinRTOperation helper). No caption/vision-model round trip like
 // screen_look — this returns literal recognized text. Honest degrade: no
 // OCR language pack installed -> ok:false with the real reason, never an
 // empty string presented as "no text on screen".
-async function screen_read_text() {
-  return delegate({ cmd: 'screen_read_text' });
+async function screen_read_text(args) {
+  const res = await delegate(screenReadCmd(args));
+  if (!res.ok) return res;
+  const result = res.result || {};
+  const regions = toAbsoluteRegions(result);
+  // Nothing to translate (text-only reply) or nothing moved (full desktop):
+  // hand back the reply untouched rather than reshaping it.
+  if (!regions || regions === result.regions) return res;
+  return ok(Object.assign({}, result, { regions: regions }));
 }
 
 // §7.7 (step 5, desktop gaps) — wallpaper engine (SystemParametersInfo/
@@ -925,12 +977,16 @@ async function click_at({ x, y }) {
 // matcher, the effector, or their tests.
 // ponytail: one function boundary, not a provider-registry — upgrade to the chain
 // shape providers/tts.js uses only when there is a second engine to chain.
-async function readScreenRegions() {
-  const res = await delegate({ cmd: 'screen_read_text' });
+//
+// BUG-108: `target` is optional ({pid}) and scopes the OCR to one window. The
+// screen-absolute guarantee above still holds either way — toAbsoluteRegions()
+// translates a window-relative capture back into desktop space here, so callers
+// never need to know which kind of capture produced their coordinates.
+async function readScreenRegions(target) {
+  const res = await delegate(screenReadCmd(target));
   if (!res.ok) return { ok: false, error: reasonOf(res) };
   const result = res.result || {};
-  const regions = Array.isArray(result.regions) ? result.regions : [];
-  return { ok: true, regions, text: String(result.text || '') };
+  return { ok: true, regions: toAbsoluteRegions(result) || [], text: String(result.text || '') };
 }
 
 function reasonOf(res) {
@@ -960,11 +1016,20 @@ function centreOf(r) {
   return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
 }
 
-async function see_and_click({ text, occurrence, expect }) {
+async function see_and_click({ text, occurrence, expect, pid }) {
   const want = String(text || '').trim();
   if (!want) return fail('What text should I click? Give the label as it appears on screen.');
 
-  const before = await readScreenRegions();
+  // BUG-108: same optional window target as screen_read_text, threaded into both
+  // reads. Unscoped, the matcher is shown every window on screen at once — which
+  // is how a click meant for a YouTube page was matched inside MYTHOS's own HUD.
+  // Named `scope`, NOT `target`: `target` below is the matched REGION, and reusing
+  // the name both shadows it (a same-scope const/let redeclaration is a hard
+  // SyntaxError that stops the whole module loading) and — if it parsed — would
+  // hand a region to the second read, quietly widening it back to the full desktop.
+  const scope = { pid: pid };
+
+  const before = await readScreenRegions(scope);
   if (!before.ok) return fail('I could not read the screen, so I will not guess where to click: ' + before.error);
 
   const hits = matchRegions(before.regions, want);
@@ -1001,7 +1066,9 @@ async function see_and_click({ text, occurrence, expect }) {
 
   // Evidence (evidence.js's 'ocr' oracle): a click landing is not the thing happening.
   // Re-read the screen — if nothing changed, the click hit nothing that mattered.
-  const after = await readScreenRegions();
+  // Same scope as the first read, or "did anything change?" would be comparing two
+  // different rectangles.
+  const after = await readScreenRegions(scope);
   if (!after.ok) {
     return evidence.unverified(
       { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
@@ -1120,7 +1187,7 @@ const TOOLS = [
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right, delete, home, end, f1-f12, a single letter, or a combo like ctrl+n). Uses real VK codes for apps that ignore Unicode input, and escalates to posted key messages for packaged apps that silently swallow injected input. Enter inside a chat app is routed through the verified send path, which confirms the message actually left the compose box.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right|delete|home|end|f1-f12, a letter, or a combo like ctrl+n', pid: 'number (optional) - target window PID; when given, the key is refused if the keyboard caret belongs to a different app' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
-  { name: 'see_and_click', description: 'USE THIS FIRST to click anything in a chat app, Electron app or browser UI (WhatsApp, Spotify, YouTube, Discord), and ALWAYS after ui_click fails with an element-path or empty-tree error — those apps expose no usable UIA tree, so no elementPath exists to pass and guessing one cannot work. Needs no pid and no element path: it OCRs the screen, finds the label, and clicks the middle of it. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it lists the matches and refuses rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked' }, danger: true, fn: see_and_click },
+  { name: 'see_and_click', description: 'USE THIS FIRST to click anything in a chat app, Electron app or browser UI (WhatsApp, Spotify, YouTube, Discord), and ALWAYS after ui_click fails with an element-path or empty-tree error — those apps expose no usable UIA tree, so no elementPath exists to pass and guessing one cannot work. Needs no pid and no element path: it OCRs the screen, finds the label, and clicks the middle of it. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it lists the matches and refuses rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those. Pass pid (from list_windows or get_foreground_window) whenever you know which window the label is in — that scopes the OCR to that window, so a label MYTHOS\'s own HUD or another app happens to show cannot be matched by mistake.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked', pid: 'number (optional) - look for the label only inside this window (from list_windows / get_foreground_window) instead of the whole desktop' }, danger: true, fn: see_and_click },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
   { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },
   { name: 'scroll_at', description: 'Scroll the mouse wheel at a screen coordinate. Moves to (x,y) first, then scrolls. Defaults: amount 3 ticks, direction down.', params: { x: 'number - absolute screen x', y: 'number - absolute screen y', amount: 'number (optional) - ticks to scroll, default 3', direction: 'string (optional) - up or down, default down' }, danger: false, fn: scroll_at },
@@ -1130,7 +1197,7 @@ const TOOLS = [
   { name: 'ambient_awareness', description: "Turn ambient screen awareness on or off, or report its status. Use for 'watch my screen', 'stop watching my screen', 'are you watching?'.", params: { action: 'string - on|off|status' }, danger: false, fn: ambient_awareness, needs_result: true },
   { name: 'show_desktop', description: "Minimize all windows and show the desktop. Use for 'show desktop', 'minimize everything', 'go to desktop'.", params: {}, danger: false, fn: show_desktop },
   { name: 'media_status', description: 'Get currently playing media info (title, artist, album, position/duration, art) from Windows SMTC.', params: {}, danger: false, fn: media_status, needs_result: true },
-  { name: 'screen_read_text', description: 'Read the literal text visible on the primary screen via real OCR (Windows.Media.Ocr) — use this to lift an error message, code snippet, or any on-screen text verbatim, not to describe an image (use screen_look for that).', params: {}, danger: false, fn: screen_read_text, needs_result: true },
+  { name: 'screen_read_text', description: 'Read the literal text visible on screen via real OCR (Windows.Media.Ocr) — use this to lift an error message, code snippet, or any on-screen text verbatim, not to describe an image (use screen_look for that). Pass pid to read ONE window instead of the whole desktop; without it the read includes every visible window, MYTHOS\'s own included. Get a pid from list_windows or get_foreground_window.', params: { pid: 'number (optional) - read only this window (from list_windows / get_foreground_window) instead of the whole desktop' }, danger: false, fn: screen_read_text, needs_result: true },
   { name: 'set_wallpaper', description: 'Set the Windows desktop wallpaper to an image file inside the allowed sandbox.', params: { path: 'string - path to an image file' }, danger: false, fn: set_wallpaper },
 ];
 

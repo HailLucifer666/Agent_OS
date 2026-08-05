@@ -17,6 +17,8 @@
 #   { "cmd": "ping" }
 #   { "cmd": "send_key", "key": "enter" }
 #   { "cmd": "click_at", "x": 500, "y": 300 }
+#   { "cmd": "screen_read_text" }                 # whole desktop
+#   { "cmd": "screen_read_text", "pid": 12345 }   # only that window (BUG-108)
 #   { "cmd": "show_desktop" }
 #
 # Response shape:
@@ -1320,12 +1322,98 @@ function Handle-ScreenLook($query) {
 # exact reflection chain against a bitmap with known drawn text ("MYTHOS OCR
 # TEST 12345") round-tripped that exact string back through the real OCR
 # engine on this machine.
-function Handle-ScreenReadText {
+# BUG-108 — the rectangle a window-scoped OCR capture should cover.
+#
+# Deliberately a COMPOSITION of the two window resolvers this file already has,
+# not a new one: Resolve-TargetWindow (pid -> a process with a real
+# MainWindowHandle) and Get-RectBounds over the UIA BoundingRectangle, which is
+# the exact normalizer Handle-ListWindows reports window rects with. So the
+# rectangle captured here is the same rectangle list_windows already showed the
+# model, and the two can never disagree.
+#
+# NOTE the parameter is $TargetPid, never $pid — $pid is a read-only PowerShell
+# automatic variable and a parameter of that name throws at binding time.
+function Get-TargetWindowRect($TargetPid) {
+    $w = Resolve-TargetWindow $TargetPid
+    if (-not $w.ok) { return @{ ok = $false; error = $w.error } }
+    # A minimized window parks at -32000,-32000 with none of its content on
+    # screen. OCRing that rectangle would read whatever is actually there and
+    # report it as this window's content — the same trap BUG-060 hit in
+    # focus_window. Refuse instead.
+    if ([NativeInput]::IsIconic($w.hwnd)) {
+        return @{ ok = $false; error = ('PID ' + $TargetPid + ' is minimized, so none of its content is on screen to read. ' +
+            'Restore it first (snap_window with position restore), then read it.') }
+    }
+    $bounds = $null
     try {
-        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-        $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+        $el = [System.Windows.Automation.AutomationElement]::FromHandle($w.hwnd)
+        $bounds = Get-RectBounds $el.Current.BoundingRectangle
+    } catch {
+        $bounds = $null
+    }
+    if ($null -eq $bounds -or $bounds.width -le 0 -or $bounds.height -le 0) {
+        # UIA can refuse a handle it does not like. GetWindowRect is already
+        # declared in NativeInput above for exactly this kind of second opinion.
+        $native = New-Object 'NativeInput+RECT'
+        if ([NativeInput]::GetWindowRect($w.hwnd, [ref]$native)) {
+            $bounds = @{
+                x = $native.Left
+                y = $native.Top
+                width = ($native.Right - $native.Left)
+                height = ($native.Bottom - $native.Top)
+            }
+        }
+    }
+    if ($null -eq $bounds -or $bounds.width -le 0 -or $bounds.height -le 0) {
+        return @{ ok = $false; error = ('Could not measure the window rectangle for PID ' + $TargetPid +
+            ', so there is nothing safe to capture.') }
+    }
+    # Clip to the desktop: a window can be dragged partly (or entirely) off-screen,
+    # and only the on-screen part can be captured — or clicked afterwards.
+    $want = New-Object System.Drawing.Rectangle([int]$bounds.x, [int]$bounds.y, [int]$bounds.width, [int]$bounds.height)
+    $clipped = [System.Drawing.Rectangle]::Intersect($want, [System.Windows.Forms.SystemInformation]::VirtualScreen)
+    if ($clipped.Width -le 0 -or $clipped.Height -le 0) {
+        return @{ ok = $false; error = ('The window for PID ' + $TargetPid + ' is entirely off-screen, so there is nothing to read.') }
+    }
+    return @{ ok = $true; x = $clipped.X; y = $clipped.Y; width = $clipped.Width; height = $clipped.Height }
+}
+
+function Handle-ScreenReadText($TargetPid) {
+    # BUG-108: with no $TargetPid this captures the primary screen exactly as it
+    # always did (existing callers: screen_look's OCR grounding, from-app-reply,
+    # the Electron OCR hotkey). With one, it captures ONLY that window — the
+    # incident was an OCR of MYTHOS's own HUD standing in for a YouTube page,
+    # because there was no way to ask for one window.
+    #
+    # Windows.Media.Ocr reports word boxes relative to the BITMAP it was handed,
+    # so a window capture yields WINDOW-relative coordinates. Rather than return
+    # coordinates that silently mean different things depending on the arguments,
+    # every reply carries `origin` — the top-left of the rectangle that was
+    # captured, (0,0) for the full-desktop case — and from-pc.js's
+    # toAbsoluteRegions() is the single place it is added back on before anything
+    # is clicked.
+    #
+    # KNOWN LIMIT, stated rather than hidden: this narrows the SCREEN AREA the
+    # window occupies, it does not render the window itself (no PrintWindow —
+    # which returns black for the DirectComposition/Chromium windows this is most
+    # needed for). A target sitting behind another window therefore reads
+    # whatever is on top of it. Scoping is what stops a match in an unrelated
+    # window; focus_window first is what makes the target the thing being read.
+    if ($TargetPid) {
+        $wr = Get-TargetWindowRect $TargetPid
+        if (-not $wr.ok) { return $wr.error }
+        $capX = [int]$wr.x; $capY = [int]$wr.y; $capW = [int]$wr.width; $capH = [int]$wr.height
+        $scope = 'window'
+    } else {
+        $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $capX = [int]$screenBounds.X; $capY = [int]$screenBounds.Y
+        $capW = [int]$screenBounds.Width; $capH = [int]$screenBounds.Height
+        $scope = 'screen'
+    }
+    try {
+        $bmp = New-Object System.Drawing.Bitmap($capW, $capH)
         $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-        $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $gfx.CopyFromScreen($capX, $capY, 0, 0, (New-Object System.Drawing.Size($capW, $capH)))
         $tmp = Join-Path $env:TEMP ('mythos-ocr-' + [guid]::NewGuid().ToString('N') + '.png')
         $bmp.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
         $gfx.Dispose(); $bmp.Dispose()
@@ -1352,10 +1440,13 @@ function Handle-ScreenReadText {
 
         # 2026-08-02: this used to be `$ocr.Lines | ForEach-Object { $_.Text }` — it read
         # the screen and then threw away WHERE everything was. Every OcrWord carries a
-        # BoundingRect in the same screen-absolute pixel space that click_at consumes
-        # (CopyFromScreen above captures PrimaryScreen.Bounds, and this process is
+        # BoundingRect in the pixel space of the captured bitmap (this process is
         # DPI-aware per the block at the top of this file), so the coordinates needed to
         # click a piece of text were being computed by Windows and discarded here.
+        # Since BUG-108 that space is "relative to `origin`" rather than always
+        # screen-absolute — identical for a full-desktop capture, offset by the window's
+        # top-left for a scoped one. Do NOT add the offset here as well; from-pc.js owns
+        # that translation and doing it twice sends every click to the wrong place.
         #
         # Line-level boxes, unioned from the words: a click target is a label, not a
         # word, and per-word boxes would make "Type a message" three targets.
@@ -1388,7 +1479,16 @@ function Handle-ScreenReadText {
                 height = [int][Math]::Round($maxY - $minY)
             }
         }
-        return @{ text = ($lines -join "`n"); lineCount = $lines.Count; regions = $regions }
+        return @{
+            text = ($lines -join "`n")
+            lineCount = $lines.Count
+            regions = $regions
+            # The rectangle these regions are relative to. (0,0) for a full-desktop
+            # capture, so that reply is byte-identical to the pre-BUG-108 shape apart
+            # from these two additive fields.
+            origin = @{ x = $capX; y = $capY }
+            scope = $scope
+        }
     } catch {
         return ('OCR failed: ' + $_.Exception.Message)
     } finally {
@@ -3457,7 +3557,8 @@ while ($true) {
             $result = Handle-WriteNote $cmd.text $cmd.title
         }
         'screen_read_text' {
-            $result = Handle-ScreenReadText
+            # BUG-108: pid is optional — absent means the whole desktop, as before.
+            $result = Handle-ScreenReadText $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'get_clipboard' {
