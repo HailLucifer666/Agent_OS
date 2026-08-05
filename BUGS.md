@@ -9,7 +9,17 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-05 (afternoon) — the 2026-08-05 afternoon incident batch:
+Last updated: 2026-08-06 — Session B follow-up: BUG-117..BUG-126 (8 fixed
+unit-level, 3 instrumented-not-root-caused) plus the BUG-112 residual, all in
+the LAST section with their own live gate. **This pass also reconciled the whole
+registry:** the mid-July Priority Queue had gone stale — fifteen items were
+still listed as open work while their own entries recorded them fixed — so every
+queue item now either carries a strike-through citing the entry that resolves it
+or is explicitly marked STILL OPEN, followed by a single table of what genuinely
+remains (BUG-020, 021, 024, 027, 029, 037, 039 and BUG-046, the oldest untouched
+defect here). Nothing was closed on the strength of a commit alone.
+
+Previous entry: 2026-08-05 (afternoon) — the 2026-08-05 afternoon incident batch:
 BUG-106..BUG-116, 10 fixed + BUG-114 diagnosed-and-fixed (unit-verified, live
 gate pending for all). See the LAST section. The prior entry: 2026-08-05
 (morning) — BUG-099..BUG-105, 6 fixed (unit-verified, live gate pending) +
@@ -206,6 +216,12 @@ Live-verified: MYTHOS relaunched with the fix; `/health` 200 on fresh boot. (Vis
 
 ### BUG-006 (historical entry, pre-2026-07-22 investigation, kept for context)
 **Status (as of 2026-07-15):** 🔧 CODED — fallback UI enhanced + config escape hatch added
+
+> Reconciliation pointer (2026-08-06): this 🔧 CODED line is a **historical
+> snapshot, not the current status** — the live entry above it is ✅ ROOT-CAUSED
+> + FIXED 2026-07-22 (re-confirmed 2026-07-24). The stall-fallback half was
+> revisited again on 2026-08-05 as BUG-114; read that entry before touching
+> `web-panel.js`'s fallback path.
 
 **What happened:**
 1. YouTube was working with `youtube-nocookie.com/embed/...?autoplay=1`
@@ -1034,36 +1050,45 @@ All 8 incidents below were flagged by the operator during live MYTHOS sessions o
 
 ## Priority Queue (what to fix next, in order)
 
-1. **BUG-036** — SMTC `media_status` fails (WinRT COM interop — media widget blank, now-playing broken)
-2. **BUG-002** — Compose bar reply not wired (blocks ALL text chat)
-3. **BUG-029** — Orphaned browser-automation process survives full shutdown, keeps playing audio (needs live repro before fixing — see D-07)
-4. **BUG-026** — Spotify play still silent after focus fix (BUG-001 follow-on, needs a real UI-targeting fix, not another key-guess; BUG-031 null-crash now fixed)
-5. **BUG-027** — Voice pipeline transcribes its own TTS as user speech (hallucinated tool calls — do alongside BUG-020)
+> **RECONCILED 2026-08-06.** This queue was written mid-July and then only
+> partly maintained: entries were struck through when the fix happened in the
+> same sitting, but not when the fix landed in a later session further down this
+> file. Fifteen items below were therefore still listed as open work while their
+> own entries above recorded them as fixed. Every strike-through added in this
+> pass cites the entry that resolves it — **no item was closed on the strength of
+> a commit alone**, only on what this file already records. Items left open are
+> listed as such deliberately; the still-open set is summarised after the queue.
+
+1. ~~**BUG-036** — SMTC `media_status` fails (WinRT COM interop — media widget blank, now-playing broken)~~ — ⚠️ SUPERSEDED, see its own entry above: BUG-004's fix covers it.
+2. ~~**BUG-002** — Compose bar reply not wired (blocks ALL text chat)~~ — ✅ VERIFIED 2026-07-17 (live browser check, see its entry above and the 2026-07-17 closure list below).
+3. **BUG-029** — Orphaned browser-automation process survives full shutdown, keeps playing audio (needs live repro before fixing — see D-07). **STILL OPEN** — pidfile mitigation only, see item 31.
+4. ~~**BUG-026** — Spotify play still silent after focus fix~~ — ✅ FIXED & LIVE-VERIFIED (5th attempt, 2026-07-17, commit `756966e`); music actually plays, user confirmed. See its entry above.
+5. **BUG-027** — Voice pipeline transcribes its own TTS as user speech (hallucinated tool calls — do alongside BUG-020). **STILL OPEN** — 🔧 CODED, needs a live conversation pass.
 6. ~~**BUG-034** — Brain hallucinates `open_panel`~~ — fixed 2026-07-16 (descriptions + un-anchored regex + tool-suggest fallback)
 7. ~~**BUG-033** — `open_folder` rejects `/vault/...` paths~~ — fixed 2026-07-16 (leading-slash strip)
 8. ~~**BUG-032** — `capture_screenshot` buffer type error~~ — fixed 2026-07-16 (base64 key fix)
 9. ~~**BUG-031** — `spotify_play` null crash~~ — fixed 2026-07-16 (PS null-result guard + JS null guards)
 10. ~~**BUG-035** — Weather API transient failure~~ — verified working 2026-07-16 (no code change needed)
-11. **BUG-001** — Spotify play doesn't play (most-reported bug, 6 failures; URI fix applied, needs verification; superseded by BUG-026 for the remaining playback failure)
-12. **BUG-004** — Media widget blank (3 sub-issues; WinRT init fix applied, needs verification)
-13. **BUG-007** — Fabrication of success (trust-destroying)
-14. **BUG-016** — Pipeline ships failed-review builds
-15. **BUG-008** — `open_artifact` voice channel broken
+11. ~~**BUG-001** — Spotify play doesn't play (most-reported bug, 6 failures)~~ — ✅ CLOSED via BUG-026's 5th-attempt fix (2026-07-17), playback live-verified. See its entry above.
+12. ~~**BUG-004** — Media widget blank (3 sub-issues)~~ — ✅ FIXED & LIVE-VERIFIED 2026-07-17, full chain proven in the running HUD including album art. See its entry above.
+13. ~~**BUG-007** — Fabrication of success (trust-destroying)~~ — ✅ VERIFIED, regression test added; see its entry above. **The CLASS is not closed:** it recurred on the Live/S2S path as BUG-116 (2026-08-05), which has its own entry and its own live gate.
+14. ~~**BUG-016** — Pipeline ships failed-review builds~~ — ✅ FIXED 2026-07-16, see its entry above.
+15. ~~**BUG-008** — `open_artifact` voice channel broken~~ — ✅ VERIFIED, root cause was a missing tier-table entry (`open_artifact` → T2). See its entry above.
 16. ~~**BUG-028**~~ — `navigate` has no "news" route — ✅ LIVE-VERIFIED 2026-07-27 (see entry above)
-17. **BUG-013** — Cortex flapping/stall loops (healer can't fix)
-18. **BUG-010** — `ask_agent` not wired
-19. **BUG-011** — Browser automation offline
-20. **BUG-014** — Memory pollution (remember auto-saves noise)
+17. ~~**BUG-013** — Cortex flapping/stall loops (healer can't fix)~~ — ✅ FIXED 2026-07-16, see its entry above.
+18. ~~**BUG-010** — `ask_agent` not wired~~ — ✅ VERIFIED, see its entry above.
+19. ~~**BUG-011** — Browser automation offline~~ — ✅ LIVE-VERIFIED 2026-07-27 (lazy auto-connect + on-demand launch); duplicated at item 34, which is where it was originally noted.
+20. ~~**BUG-014** — Memory pollution (remember auto-saves noise)~~ — ✅ LIVE-VERIFIED 2026-07-24 via `scripts/verify-memory-guard.js`. See its entry above.
 21. ~~**BUG-024** — Calendar/Gmail integration incomplete~~ — code-level verified 2026-07-16 (require-path + adapter-cache bugs fixed, calendar sensor confirmed wired); remaining piece is user-side OAuth setup, not code
 22. ~~**BUG-023** — Weather widget fails with city+state location~~ — fixed 2026-07-16
 23. ~~**BUG-025** — Pipeline spec lost between capture and execute~~ — fixed 2026-07-16
 24. ~~**BUG-009** — No screenshot tool for evidence~~ — capture_screenshot built (BUG-032 crash fixed)
 25. ~~**BUG-018** — Can't read own source tree~~ — fixed 2026-07-16
-26. **BUG-015** — Identity boundaries malformed (healer can't fix)
-27. ~~**BUG-019** — Audit panel empty~~ — code correct end-to-end, better error logging added 2026-07-16
-28. **BUG-020** — Voice noise sensitivity
-29. **BUG-021** — Canned empathy instead of diagnosis
-30. **BUG-022** — identity.learn() never writes
+26. ~~**BUG-015** — Identity boundaries malformed (healer can't fix)~~ — ✅ VERIFIED, see its entry above.
+27. ~~**BUG-019** — Audit panel empty~~ — code correct end-to-end, better error logging added 2026-07-16; ✅ VERIFIED live 2026-07-17 (`GET /api/audit/recent` returns real entries).
+28. **BUG-020** — Voice noise sensitivity. **STILL OPEN** — 🔧 CODED, mic tuning needs a live pass.
+29. **BUG-021** — Canned empathy instead of diagnosis. **STILL OPEN** — 🔧 CODED, prompt rule added, needs a live conversation pass.
+30. ~~**BUG-022** — identity.learn() never writes~~ — ✅ FIXED 2026-07-16, see its entry above.
 
 (BUG-005 removed from queue — verified already fixed, see entry above.)
 
@@ -1077,6 +1102,39 @@ Still open, in priority order:
 33. **BUG-037** — mitigated via repo CLAUDE.md rules; unenforceable by git, keep the discipline.
 34. ~~**BUG-011**~~ — browser automation lazy auto-connect + on-demand launch both ✅ LIVE-VERIFIED 2026-07-27 (see entry above).
 35. **BUG-024** — Gmail/Calendar: needs user's Google OAuth setup (code-level done).
+
+### Still genuinely open, as of the 2026-08-06 reconciliation
+
+Everything in the queue above that is NOT struck through, restated once so it
+does not have to be re-derived from a partly-struck list. Each was checked
+against its own entry in this file; none is closed by a later section.
+
+| ID | State | What is actually left |
+|---|---|---|
+| BUG-020 | 🔧 CODED | Mic noise tuning — needs a live pass by the operator. |
+| BUG-021 | 🔧 CODED | Canned-empathy prompt rule — needs a live conversation pass. |
+| BUG-024 | ⚠️ CODE-LEVEL VERIFIED | Code done; the remaining piece is the operator's own Google OAuth setup, not code. Watch `docs/google-oauth-setup.md`, and see the two Windows defects in `scripts/google-auth.js` recorded outside this file. |
+| BUG-027 | 🔧 CODED | TTS-echo gate — no automated harness exists; needs a live pass. |
+| BUG-029 | 🔧 CODED, **mitigation only** | Pidfile kills orphans on the NEXT launch. Proper D-07 graceful shutdown, and a live repro, both still open. |
+| BUG-037 | ⚠️ MITIGATED | Concurrent-session clobbering is prevented by repo `CLAUDE.md` discipline, which git cannot enforce. Not closable by code. |
+| BUG-039 | 🔧 CODED | Wake word — needs a live mic session (`docs/live-verification-runbook.md` §C1). Note the NC-licensed weights are a separate release blocker, not a bug. |
+| BUG-046 | 🔍 DIAGNOSED, **never code-fixed** | The voice agent fabricates "PC automation is offline" without calling the tool — a fabricated FAILURE, the mirror of BUG-007. Proven with zero audit entries for three attempts while pc-child was online. Deferred to a guided operator session because a blind prompt edit risks tone regressions elsewhere. Still the oldest untouched defect in this file. |
+| BUG-082..BUG-098 | FIXED + UNIT-VERIFIED | All carry NEEDS-LIVE-CHECK as a class; see that session's own runbook. |
+| BUG-099..BUG-116 | FIXED (unit) | Live gates pending, listed at the end of each of the two 2026-08-05 sections. |
+| BUG-117..BUG-126 | 🔧 CODED / instrumented | Live gate at the end of the 2026-08-06 section. BUG-118, BUG-122 and BUG-124 are explicitly NOT root-caused. |
+
+**Not a BUG-NNN but still open, recorded here so it is not lost:** `focus_window`
+is reproducibly denied by Windows' foreground-lock in headless/no-app-focused
+conditions even with the `AttachThreadInput` workaround. Unconfirmed whether it
+reproduces in normal voice-driven use where an app already has focus — see the
+root `CLAUDE.md` and `mythos/adapters/CLAUDE.md` notes.
+
+**Numbering note (verified 2026-08-06 by a full scan of this file):** 120
+distinct IDs appear across BUG-001..BUG-126. The six that never appear —
+BUG-062, 064, 066, 067, 070, 071 — are not missing entries: that range is the
+in-source label space from `ps-automation.ps1`, renumbered here as
+BUG-082..BUG-098 to avoid the collision documented in the 2026-08-01/02 section,
+and only the labels actually cited by a renumbered entry appear at all.
 
 ---
 
@@ -2780,4 +2838,251 @@ the declaration to the shared outer scope (matching the existing
 9. Force a tool failure → MYTHOS never says an action succeeded in a turn
    whose audit line says fail; grep `vault/Audit/<today>.jsonl` for any
    `outcome:ok` whose payload disagrees. (BUG-116, AD-4/AD-5)
+
+---
+
+## Session (2026-08-06) — Session B follow-up: BUG-117..BUG-126, 8 fixed + 3 instrumented
+
+Source: the 2026-08-05 23:27–23:53 voice session (Session B), which surfaced ten
+new defects — two of them regressions introduced by that same day's BUG-116 fix
+— plus a residual on BUG-112. Every entry below is unit-verified with a
+red→green test; **none is LIVE-VERIFIED yet**, so the live gate at the end of
+this section governs. Suite at the end of the batch: 2835 tests, 2834 pass,
+0 fail, 1 skip.
+
+Two entries are honest about NOT being root-caused (BUG-118, BUG-122) and one
+about being instrumentation only (BUG-124). Those landed evidence-gathering, not
+repairs, and are labelled so rather than being written up as fixes.
+
+- **BUG-117 (MYTHOS blamed the operator for messages it sent itself):**
+  🔧 CODED, root cause CONFIRMED IN CODE, behaviour pending live verification.
+  Commit `848f285`. The frozen Gemini Live wire protocol (V2 spine §3) has **no
+  system role after setup** — every mid-session injection leaves through
+  `liveSession.sendText()` as `realtimeInput:{text}`, which Gemini attributes to
+  the USER. There are three such injection sites (`reportLateOutcome` and
+  `resolveLiveConfirm` in `live-tool-adapter.js`, and `proactiveSpeak`'s Live
+  route in `server/index.js`), and all three prefixed a bare `[SYSTEM]` that the
+  model had never been told the meaning of. Reusing a `functionResponse` is not
+  available: both tool-outcome sites fire *after* the original `toolResponse`
+  for that call has gone. So the fix is framing, in two halves that must agree —
+  `SYSTEM_NOTICE_PREFIX` (self-describing on the wire) and
+  `LIVE_SYSTEM_NOTICE_INSTRUCTION` (carried in the setup frame so the model
+  knows what the prefix means before it ever sees one). Both are exported from
+  `live-tool-adapter.js` so they cannot drift apart, and a test asserts the
+  instruction quotes the exact prefix.
+  **Files:** `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/server/index.js`,
+  `mythos/test/bug-117-system-notice-attribution.test.js`,
+  `mythos/test/server-live-wiring.test.js`.
+
+- **BUG-118 (private reasoning spoken as the reply):** 🔧 CODED, **NOT
+  ROOT-CAUSED** — a defensive filter plus instrumentation, and the entry says so
+  because the alternative is a fix that looks conclusive and is not. Commit
+  `fd91bdc`. `live-session.js` forwarded every `modelTurn` part's text to
+  `onTranscript` unfiltered; parts flagged `thought: true` are now skipped. That
+  is safe and free if the flag never appears — which is exactly why it cannot be
+  the evidence. Because `responseModalities` is `['AUDIO']`, the assistant
+  transcript also comes from `outputTranscription`, so reasoning inside the
+  spoken audio would be untouched by any text filter. Each completed turn
+  therefore logs `live.turn-parts` with `textParts`/`thoughtParts`. **A leak
+  observed with `thoughtParts:0` rules this path out** and escalates to a
+  `thinkingConfig`/`thinkingBudget` question in `buildSetup()` — a separate
+  follow-up, not to be pre-empted. No `"Reasoning:"` prefix stripping: that is
+  symptom-matching and would eat legitimate replies.
+  **Files:** `mythos/src/core/voice/live-session.js`,
+  `mythos/test/live-session-transcripts.test.js`.
+
+- **BUG-119 (a T3 approval never held; the model re-prompted forever):** FIXED
+  (unit), **SAFETY-RELEVANT, operator-approved 2026-08-06.** Commit `99e4a11`.
+  Two defects, and the larger one was not in the report. **The load-bearing
+  one:** `leash/index.js`'s `accept()` wrapper read `acceptedAction.tool`, but
+  every production caller stores an *envelope* — `cortex/index.js`,
+  `voice-agent.js`, `live-tool-adapter.js` and `engagements/executor.js` all
+  call `confirm.create(summary, {decision, goalId, tier}, connectionId)`. `.tool`
+  was `undefined` on all four, so **no session grant was ever recorded on any
+  surface** and BUG-012's feature has been inert in production since it shipped.
+  The pre-existing tests passed a bare `{tool, args}`, a shape nothing in the app
+  produces — they proved the branch worked without proving the feature did.
+  `accept()` now normalizes the envelope exactly as `handleConfirmReply` already
+  does. **The second, and the one the operator saw:** `browser_click`,
+  `browser_type` and `browser_fill_form` were absent from `SESSION_GRANTABLE`.
+  Added on the operator's explicit approval; the reasoning is recorded in
+  `leash/index.js`, `tiers.js` and `src/core/CLAUDE.md` — first use still raises
+  a confirm, the grant is keyed `connectionId + ':' + tool` with a 15-minute TTL,
+  and an approval loop trains an operator to accept without reading, which costs
+  more safety than the grant does. `browser_evaluate` stays out and remains T4,
+  structurally ineligible (`accept()` only records a grant when
+  `TIER_TABLE[tool] === 3`). The null-`connectionId` behaviour is **not a bug** —
+  it is fail-closed containment of the autonomous loop, and now has a regression
+  test saying so.
+  **Files:** `mythos/src/core/leash/index.js`, `mythos/src/core/leash/tiers.js`,
+  `mythos/src/core/CLAUDE.md`, `mythos/test/leash-grant-scope.test.js`.
+
+- **BUG-120 (one spoken request relaunched the browser twice):** FIXED (unit).
+  Commit `0897f4c`. `browser_switch` was awaited inside the Live turn despite
+  disconnecting the attached browser, closing it, launching another with a debug
+  port and re-attaching; the turn ended long before that returned, so Gemini
+  re-issued the same call. `SLOW_TOOLS` membership is about DURATION by that
+  list's own rule, and by that rule it always belonged. That alone would only
+  remove the observed trigger, so `handleLiveToolCalls` also suppresses a repeat
+  of a `call.id` it has already accepted, answering the repeat with
+  `status:'duplicate-suppressed'` and dispatching nothing. Dedup is on the id
+  only, TTL-bounded at 30s — two genuine clicks on the same button carry
+  different ids, so an args hash would eat legitimate repeated work.
+  **Files:** `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/test/bug-120-live-duplicate-tool-call.test.js`.
+
+- **BUG-121 (`browser_click` cannot hit lazy-hydrated elements):** FIXED (unit).
+  Commit `eb56f56`. The body was one bounded visible-wait then a plain
+  `page.click`, so an element in the DOM that never satisfies Playwright's
+  actionability checks had no path at all — YouTube's `ytd-*` custom elements
+  hydrate late and a thumbnail can be attached and clickable-by-script while
+  still reported not-visible. Now a ladder with the rung named in the result:
+  visible wait → `scrollIntoViewIfNeeded` (bounded, best-effort, never costs the
+  click) → native click; failing that, attached wait → `el.click()` in page
+  context; failing both, a clean failure naming the selector and the rungs
+  tried. **The script rung is not reported as a clean win:** it bypasses
+  hit-testing, so it can succeed against an element no real user could reach —
+  a weaker oracle, so it returns `unverified:true` with a spoken reason per the
+  evidence contract. No coordinate fallback this pass: clicking blind
+  coordinates in a browser has no oracle at all.
+  **Files:** `mythos/src/core/effectors/from-browser.js`,
+  `mythos/test/bug-121-browser-click-fallback.test.js`,
+  `mythos/test/phase4-browser-control.test.js`.
+
+- **BUG-122 (window close unreliable, two Brave PIDs):** **NOT ROOT-CAUSED —
+  INSTRUMENTED.** Commit `0b4a0cc`. `Handle-CloseWindow` already has BUG-103's
+  windowed-sibling fallback, so the plausible remaining causes are (a)
+  `Handle-ListWindows` reporting duplicate rows for one window, which would make
+  the model pick a phantom pid, or (b) two genuinely different windows, which
+  makes close_window's target choice the bug. **Those need opposite fixes and
+  nothing on disk distinguished them**, because neither reply carried a window
+  handle. Every `list_windows` row now reports `NativeWindowHandle` (read inside
+  the existing guarded property block, so a window closing mid-enumeration still
+  skips only itself), and `close_window` names the handle, the process and how
+  the target was resolved in both its success object and its failure string.
+  **No dedup was applied** — deduping by handle on an unconfirmed hypothesis
+  would silently hide a real second window; a test pins that none was added.
+  Repro to run: Brave with two tabs → `list_windows` → compare the two rows'
+  `hwnd`.
+  **Files:** `mythos/adapters/pc-child/ps-automation.ps1`,
+  `mythos/test/bug-122-window-close-instrumentation.test.js`.
+
+- **BUG-123 (anomaly narration invents causes — AD-5):** FIXED (unit). Commit
+  `f36b438`. `conversation/announcer.js` narrated health anomalies and diagnoses
+  by handing a free-text prompt to `brain.think()`. An anomaly payload is thin —
+  often just a `kind` — and a model asked to turn that into one natural sentence
+  fills the gap with a plausible cause the payload never contained, so the
+  operator hears an invented explanation for a real fault in their own machine.
+  The brain call is removed for this event class rather than reworded: only
+  fields actually present are interpolated, and an absent cause is stated out
+  loud ("I do not yet know the cause") instead of left as a silence the listener
+  fills in. Plainer wording is the trade. `onJobPerception`/`onGoalUpdate` keep
+  `generate()` — a finished build has no cause to invent.
+  **Files:** `mythos/src/core/conversation/announcer.js`,
+  `mythos/test/bug-123-anomaly-honest-phrasing.test.js`.
+
+- **BUG-124 (transcript misalignment / empty replies):** **NOT ROOT-CAUSED —
+  INSTRUMENTED.** Commit `516bc7c`. `live-session.js`'s accumulation follows the
+  module invariant (every `serverContent` field handled with independent ifs, no
+  else-if), so nothing on this side reorders fragments — which points upstream at
+  frame ordering. That is a hypothesis, and **no pairing change belongs in the
+  code until a raw-frame log from a repro session says which side reordered
+  what.** What was genuinely missing is a join key: a `live-turn-no-transcript`
+  anomaly and an episodic conversation record could not be tied to the same turn
+  (two records a few hundred ms apart cannot be ordered by eye), so every
+  misalignment report was unfalsifiable. A monotonic per-session `turnId` now
+  rides the turn, the anomalies this module raises, the per-turn part-count line,
+  and the episodic write (the `Date.now()` form stays as the fallback). The
+  `live-turn-no-transcript` anomaly itself is the existing detector working, not
+  a defect. Pairing behaviour is unchanged and a test pins that it is.
+  **Files:** `mythos/src/core/voice/live-session.js`,
+  `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/test/bug-124-live-turn-id.test.js`.
+
+- **BUG-125 (audit rows with `tool: undefined, outcome: no-match`):** FIXED
+  (unit). Commit `a14be5a`. Not the leash, as first assumed during design:
+  `immune/healer.js` writes playbook decisions into the same `Audit/*.jsonl`
+  stream the leash writes tool rows into, and a healer row has no tool by
+  nature. Omitting the field made readers render `tool: undefined`,
+  indistinguishable from a dispatch whose tool name went missing — which is how
+  the operator read it. The accompanying `outcome:'no-match'` is likewise the
+  healer honestly recording that no playbook covered a diagnosis, not a failure.
+  The row now sets `tool: null` explicitly; readers untouched.
+  **Files:** `mythos/src/core/immune/healer.js`,
+  `mythos/test/bug-125-healer-audit-tool-field.test.js`.
+
+- **BUG-126 (`screen_read_text` dead-ends on a stale PID):** FIXED (unit),
+  BUG-037 protocol followed — pulled first, and `Await-WinRTOperation`, the
+  `$TargetPid` parameters, the DPI block and the command-id echo all verified
+  present before editing (a source-integrity test now pins them). Commit
+  `c0f2979`. A PID that no longer exists returned `Cannot find PID 1234` and left
+  the model nowhere to go, because the tool's only parameter is that pid.
+  `Resolve-TargetWindow` now marks the process-not-found branch `stale`, and
+  `Handle-ScreenReadText` widens **only** that branch to the full-desktop capture
+  it already had, with a note naming the dead PID and stating plainly that the
+  result is a whole-screen read; `from-pc.js` turns that note into
+  `unverified:true` with the note as the spoken reason. Minimized,
+  no-main-window and entirely-off-screen stay hard refusals — those windows
+  exist, so widening would answer a different question and OCR the wrong content
+  doing it. The node side still never issues a wider read of its own (BUG-108's
+  invariant). **Deferred follow-up:** name-based re-resolution needs a schema
+  change to `screen_read_text`, which this pass deliberately did not make.
+  **Files:** `mythos/adapters/pc-child/ps-automation.ps1`,
+  `mythos/src/core/effectors/from-pc.js`,
+  `mythos/test/bug-126-screen-read-text-stale-pid.test.js`.
+
+### Residual updates to earlier entries
+
+- **BUG-112 residual (the email summary bypassed the greeting gate):** FIXED
+  (unit). Commit `78f6590`. The BUG-112 entry above records the
+  `plan.morning-brief` bypass as the gap — it was not the only one.
+  `gmail.unread-batch` was still calling `proactiveSpeak()` with no dedup of any
+  kind, and the boot greeting already reads unread mail into its own opening
+  line, so the sensor's batch landing seconds later produced a second "you have
+  N new emails". Same shared `'greeting:session'` key, same check-speak-mark
+  order. **Deliberately NOT applied** to `reminder.due`, `plan.checkin` or
+  `cortex.thought`: those are a different class and gating them would make
+  MYTHOS miss real speech — a test pins `reminder.due` surviving the window.
+  **Files:** `mythos/server/index.js`,
+  `mythos/test/bug-112-single-greeting-owner.test.js`.
+
+- **BUG-116 residual:** the BUG-116 fix taught the model to stop claiming
+  success over a failed tool, and in doing so introduced **two regressions
+  recorded above as their own IDs** — BUG-117 (the `[SYSTEM]` channel it leaned
+  on is user-role on the wire) and BUG-118 (unfiltered `modelTurn` text). The
+  original BUG-116 entry stands; this note exists so the two are not read as
+  unrelated new defects.
+
+### Live gate for this session's fixes (none are LIVE-VERIFIED yet)
+
+Everything above stays 🔧 CODED until the matching line here passes with the
+operator running MYTHOS with voice.
+
+1. Trigger a slow-tool late outcome and a confirm accept → the transcript must
+   never attribute either to the operator ("you said…"). (BUG-117)
+2. Run one voice session and grep the log for `live.turn-parts` → does
+   `thoughtParts` ever exceed 0? If a reasoning leak is heard while it reads 0,
+   the text filter is ruled out and the escalation is `thinkingConfig`.
+   (BUG-118)
+3. Approve one `browser_click`, then ask for several more in the same
+   connection → no second prompt inside 15 minutes; a second tab must still be
+   asked. (BUG-119)
+4. "Switch to Brave" → exactly one relaunch, and the audit shows one
+   `browser_switch` dispatch. (BUG-120)
+5. "Click the first video" on a YouTube results page → the thumbnail is
+   clicked; if it came through the script rung, MYTHOS says it could not
+   confirm the page reacted. (BUG-121)
+6. Brave with two tabs open → `list_windows`, compare the rows' `hwnd`. Two
+   rows sharing one handle means dedupe here; two handles means fix
+   close_window's target choice. (BUG-122)
+7. Force a health anomaly with no `reason` → the spoken line names the
+   condition and says the cause is not yet known, and invents nothing.
+   (BUG-123)
+8. Any `live-turn-no-transcript` anomaly → find the episodic record with the
+   matching `live-turn-N` and compare the pair. (BUG-124)
+9. `screen_read_text` against a PID that has since exited → a whole-screen read
+   that says so, naming the dead PID. (BUG-126)
+10. Open the app with unread mail waiting → exactly one utterance, not a
+    greeting followed by an email summary. (BUG-112 residual)
 
