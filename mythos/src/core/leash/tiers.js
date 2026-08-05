@@ -142,6 +142,14 @@ const TIER_TABLE = {
   // gmail_send, delete_goal, close_window, hermes_task, ui_click, ui_type,
   // click_at, browser_click, browser_type, kill_session, browser_evaluate) are
   // deliberately untouched.
+  //
+  // BUG-119 (2026-08-06): browser_click, browser_type and browser_fill_form
+  // keep their T3 tier here — they were added to leash/index.js's
+  // SESSION_GRANTABLE instead, on the operator's explicit approval. That is a
+  // narrower change: the first use in a connection still raises a confirm, and
+  // an accept then holds for SESSION_GRANT_TTL_MS on that connection and that
+  // tool alone. Re-tiering them to T2 would have auto-allowed them everywhere,
+  // including the autonomous loop, and was not what was approved.
   'spotify_play':          2,
   'spotify_search':        2,
   // RE-TIERED BACK TO T3 (2026-07-29). The T3->T2 reasoning above no longer

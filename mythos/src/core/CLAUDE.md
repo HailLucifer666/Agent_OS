@@ -49,11 +49,18 @@ file adds the invariants specific to this layer.
   `true` grant is deliberately not honoured (it re-prompts and reports
   `goal-grant-legacy-unscoped` instead of silently trusting an
   un-auditable old grant). Session grants for repetitive local UI tools
-  (`ui_click`, `ui_type`, `click_at`, `send_key`, `focus_window`) are keyed
-  by `connectionId + ':' + tool`, not by tool alone — do not widen
-  `SESSION_GRANTABLE` to outward-facing or destructive T3 tools
-  (`gmail_send`, `delete_goal`, build/pipeline execution, etc.) without a
-  safety review.
+  (`ui_click`, `ui_type`, `click_at`, `send_key`, `focus_window`, and — since
+  2026-08-06, on the operator's explicit approval — `browser_click`,
+  `browser_type`, `browser_fill_form`) are keyed by `connectionId + ':' +
+  tool`, not by tool alone — do not widen `SESSION_GRANTABLE` to
+  outward-facing or destructive T3 tools (`gmail_send`, `delete_goal`,
+  build/pipeline execution, etc.) without a safety review. The browser
+  widening (BUG-119) was that review's outcome, not a bypass of it: an
+  approval loop that re-prompts for every click trains the operator to accept
+  without reading, which costs more safety than the grant does.
+  `browser_evaluate` is deliberately excluded and is T4 — always confirm,
+  never cached; the `accept()` wrapper only records a grant when
+  `TIER_TABLE[tool] === 3`, so T4 is structurally ineligible.
 - Credential-pattern scanning runs before any T3/T4 effector, and the
   scanner's own output is always redacted in the audit reason — never the
   full secret.

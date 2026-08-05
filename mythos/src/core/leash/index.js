@@ -56,9 +56,25 @@ function createLeash(deps) {
   // spotify_play/spotify_search were re-tiered T3 -> T2 (confirmation-policy
   // pass) and now auto-allow before this branch is ever reached — pruned here
   // since they can no longer match a T3 grant check.
+  //
+  // BUG-119 (2026-08-06, operator-approved widening — safety-relevant change,
+  // recorded here and in the commit message): the browser tools were missing,
+  // so every browser_click on the voice path re-prompted. The model, seeing its
+  // approved action not take effect as a standing permission, asked again and
+  // again, and an approval loop trains an operator to accept without reading —
+  // which is worse for safety than the grant itself. browser_click,
+  // browser_type and browser_fill_form are the same class as the local UI tools
+  // already here: repetitive, scoped to a browser MYTHOS drives, no outward
+  // send. Each is granted independently (the key is connectionId + ':' + tool),
+  // so approving a click never grants a type.
+  //
+  // browser_evaluate stays out and is confirm-every-time: it is T4, and T4 is
+  // structurally ineligible here anyway (the accept() wrapper below requires
+  // TIER_TABLE[tool] === 3). Arbitrary JS in the page is not the same class.
   var SESSION_GRANTABLE = {
     ui_click: 1, ui_type: 1,
-    click_at: 1, send_key: 1, focus_window: 1
+    click_at: 1, send_key: 1, focus_window: 1,
+    browser_click: 1, browser_type: 1, browser_fill_form: 1
   };
   // Keyed by connectionId + ':' + tool (BUG-012 follow-up, security HIGH):
   // was keyed by bare tool name, so an accept on one WS connection granted
@@ -225,9 +241,24 @@ function createLeash(deps) {
   var confirmApi = Object.assign({}, confirmRegistry, {
     accept: function(confirmId, connectionId) {
       var acceptedAction = confirmRegistry.accept(confirmId, connectionId);
-      if (acceptedAction && acceptedAction.tool && connectionId &&
-          SESSION_GRANTABLE[acceptedAction.tool] && TIER_TABLE[acceptedAction.tool] === 3) {
-        sessionGrants.set(connectionId + ':' + acceptedAction.tool, Date.now() + SESSION_GRANT_TTL_MS);
+      // BUG-119 root cause (2026-08-06). This read `acceptedAction.tool`
+      // directly, but every production caller stores an ENVELOPE — cortex,
+      // voice-agent, the Live adapter and the engagement executor all call
+      // confirm.create(summary, {decision, goalId, tier}, connectionId), so
+      // `.tool` was undefined and NO session grant was ever recorded on any
+      // surface. The BUG-012 feature has been inert in production since it
+      // shipped; only the tests, which pass a bare {tool, args}, ever exercised
+      // it. That — not the missing browser tools — is why an approval never
+      // held and the model kept re-prompting.
+      //
+      // Normalized here the same way server/index.js's handleConfirmReply
+      // normalizes it before dispatch: unwrap .decision when present, accept a
+      // bare {tool, args} unchanged. One shape rule, both call sites.
+      var granted = acceptedAction && acceptedAction.decision ? acceptedAction.decision : acceptedAction;
+      var grantedTool = granted && granted.tool;
+      if (grantedTool && connectionId &&
+          SESSION_GRANTABLE[grantedTool] && TIER_TABLE[grantedTool] === 3) {
+        sessionGrants.set(connectionId + ':' + grantedTool, Date.now() + SESSION_GRANT_TTL_MS);
       }
       return acceptedAction;
     }

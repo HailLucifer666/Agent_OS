@@ -216,6 +216,122 @@ describe('leash T3 grants are tool-scoped, not tier-wide', function() {
   });
 });
 
+// BUG-119 — one approval, then the same question again, forever.
+//
+// Two defects, both in leash/index.js's session-grant path.
+//
+// The load-bearing one: the accept() wrapper read `acceptedAction.tool`, but
+// every production caller stores an ENVELOPE — cortex/index.js,
+// voice-agent.js, live-tool-adapter.js and engagements/executor.js all call
+// confirm.create(summary, {decision, goalId, tier}, connectionId). `.tool` was
+// undefined on all four, so no session grant was ever recorded on any surface
+// and the BUG-012 feature was inert in production from the day it shipped. The
+// pre-existing tests in leash.test.js passed a bare {tool, args}, a shape
+// nothing in the app produces, so they proved the branch worked without
+// proving the FEATURE did.
+//
+// The second, and the one the operator saw: the browser tools were missing
+// from SESSION_GRANTABLE, so even with the envelope fixed a browser_click
+// approval could not have held. Widened on the operator's explicit approval
+// (2026-08-06) — an approval loop trains someone to accept without reading,
+// which costs more safety than the grant does. browser_evaluate stays out.
+describe('BUG-119 — a T3 approval on the voice path actually holds for the session', function() {
+  function makeLeash() {
+    const { createLeash } = require('../src/core/leash');
+    return createLeash({
+      bus: realBus(), config: fakeConfig(), identity: noopIdentity(),
+      auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
+      effectors: noopEffectors()
+    });
+  }
+
+  // The exact envelope shape live-tool-adapter.js and voice-agent.js store.
+  function acceptEnvelope(leash, tool, connectionId) {
+    const confirmId = leash.confirm.create(
+      'Voice: ' + tool,
+      { decision: { tool: tool, args: {} }, goalId: null, tier: 3 },
+      connectionId
+    );
+    return leash.confirm.accept(confirmId, connectionId);
+  }
+
+  it('the ENVELOPE shape every real caller uses records the grant (bare {tool,args} was a test-only fiction)', function() {
+    const leash = makeLeash();
+    const first = leash.check({ tool: 'ui_click', args: {} }, { connectionId: 'conn-A' });
+    assert.equal(first.requireConfirm, true, 'the first use must still ask');
+
+    assert.ok(acceptEnvelope(leash, 'ui_click', 'conn-A'), 'fixture: the accept must resolve');
+
+    const second = leash.check({ tool: 'ui_click', args: {} }, { connectionId: 'conn-A' });
+    assert.equal(second.allow, true, 'an accepted envelope must grant the session, not just a bare decision');
+    assert.equal(second.reason, 'session-granted');
+  });
+
+  it('browser_click, browser_type and browser_fill_form are session-grantable, each independently', function() {
+    const tools = ['browser_click', 'browser_type', 'browser_fill_form'];
+    const { TIER_TABLE } = require('../src/core/leash/tiers');
+
+    for (const tool of tools) {
+      assert.equal(TIER_TABLE[tool], 3, tool + ' must be T3 — the grant path only records T3 tools');
+      const leash = makeLeash();
+      assert.equal(leash.check({ tool: tool, args: {} }, { connectionId: 'c' }).requireConfirm, true,
+        tool + ': the first use still asks — this widens repeat use, not first use');
+
+      acceptEnvelope(leash, tool, 'c');
+      const after = leash.check({ tool: tool, args: {} }, { connectionId: 'c' });
+      assert.equal(after.reason, 'session-granted', tool + ' must hold after one approval');
+
+      // Per-tool key: approving one browser tool must not grant its siblings.
+      for (const sibling of tools.filter((t) => t !== tool)) {
+        assert.equal(leash.check({ tool: sibling, args: {} }, { connectionId: 'c' }).requireConfirm, true,
+          'approving ' + tool + ' must not grant ' + sibling);
+      }
+    }
+  });
+
+  it('a browser grant on connection A never satisfies connection B', function() {
+    const leash = makeLeash();
+    acceptEnvelope(leash, 'browser_click', 'conn-A');
+
+    assert.equal(leash.check({ tool: 'browser_click', args: {} }, { connectionId: 'conn-B' }).requireConfirm, true,
+      'a second tab must not inherit the first tab\'s approval');
+  });
+
+  it('a check with NO connectionId is never session-granted — fail-closed containment, not a bug', function() {
+    // The autonomous/cortex path passes no connectionId. That it can never
+    // match a grant is the containment working; pinned so a future "fix" of
+    // this apparent oversight has to argue with a test first.
+    const leash = makeLeash();
+    acceptEnvelope(leash, 'browser_click', 'conn-A');
+
+    const autonomous = leash.check({ tool: 'browser_click', args: {} }, { goalId: null });
+    assert.equal(autonomous.allow, false);
+    assert.equal(autonomous.reason, 'tier-3-requires-confirm',
+      'the autonomous loop must never inherit a human\'s session approval');
+  });
+
+  it('browser_evaluate still confirms every time — arbitrary page JS is not the same class', function() {
+    const { TIER_TABLE } = require('../src/core/leash/tiers');
+    assert.equal(TIER_TABLE['browser_evaluate'], 4, 'browser_evaluate must stay T4');
+
+    const leash = makeLeash();
+    acceptEnvelope(leash, 'browser_evaluate', 'conn-A');
+
+    const next = leash.check({ tool: 'browser_evaluate', args: {} }, { connectionId: 'conn-A' });
+    assert.equal(next.requireConfirm, true, 'T4 is structurally ineligible for a session grant');
+    assert.equal(next.reason, 'tier-4-always-confirm');
+  });
+
+  it('outward-facing T3 tools are still confirm-every-time after the widening', function() {
+    const leash = makeLeash();
+    for (const tool of ['gmail_send', 'delete_goal', 'run_command', 'hermes_task']) {
+      acceptEnvelope(leash, tool, 'conn-A');
+      const next = leash.check({ tool: tool, args: {} }, { connectionId: 'conn-A' });
+      assert.equal(next.requireConfirm, true, tool + ' must keep asking');
+    }
+  });
+});
+
 describe('checkpoints plan-approval grants only the build tools it disclosed', function() {
   it('approving a plan-approval checkpoint grants a bounded tool list, not all of T3', async function() {
     const { createCheckpointRegistry } = require('../src/core/leash/checkpoints');
