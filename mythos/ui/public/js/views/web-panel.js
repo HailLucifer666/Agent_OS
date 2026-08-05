@@ -22,6 +22,23 @@ function safeUrl(url) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : null;
 }
 
+// BUG-114: whether a stalled embed (no onReady/onError within the 8s timeout
+// window) should auto-open the guaranteed-playback fallback tab, vs. just
+// showing the manual "Open in new tab" link. A referrer/domain-restricted
+// YouTube embed (the failure shape behind player error 153 — oEmbed's
+// pre-check only proves GENERAL embeddability, not that THIS origin is on the
+// video's allowed list) fails silently: the interactive IFrame Player API
+// script never initializes, so it never posts onReady OR onError, and the
+// explicit onError handler below never gets anything to react to. For
+// widgetType 'youtube' specifically, a working embed reaches onReady well
+// within 8s — so timing out with nothing is exactly as conclusive as an
+// explicit onError and deserves the same guaranteed remedy. 'web' embeds have
+// no such guarantee (an XFO-blocked page has no separate confirmed-working
+// URL), so they keep the existing manual-link-only behavior.
+export function shouldAutoOpenOnStall(widgetType) {
+  return widgetType === 'youtube';
+}
+
 export async function render(body, payload) {
   if (!payload || !payload.widgetType) {
     // xss-safe: static template, no interpolation
@@ -103,7 +120,7 @@ export async function render(body, payload) {
       if (openTab) { try { window.open(fallbackUrl, '_blank', 'noopener'); } catch (_) {} }
     };
 
-    const failTimer = setTimeout(() => { if (!ok) showFallback(false); }, 8000);
+    const failTimer = setTimeout(() => { if (!ok) showFallback(shouldAutoOpenOnStall(payload.widgetType)); }, 8000);
     iframe.addEventListener('load', () => {
       // 'load' fires even for XFO blocks in some browsers, so for web URLs we
       // clear the timer (assume success); for YouTube we keep waiting for the
