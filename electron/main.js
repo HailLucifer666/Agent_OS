@@ -28,6 +28,16 @@ const { createCursorOverlayController } = require('./cursor-overlay-window');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
+// Wake word ("hey jarvis") needs an AudioContext + getUserMedia with no click.
+// Chrome's gesture policy forbids that, which is why ui/public/js/app.js only
+// arms its detector on the first pointerdown — correct in a browser tab, but in
+// the desktop shell it made hands-free activation require a hand: an untouched
+// window had no detector running at all. The shell is a trusted first-party
+// surface serving its own loopback HUD, so it opts out; app.js arms the wake word
+// (and only the wake word) at load when window.mythos is present.
+// Must run before app.whenReady(), like the two switches above.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 // ---- EPIPE guard --------------------------------------------------------------
 // When Electron runs double-clicked (no terminal), process.stdout/stderr point
 // at pipes nobody reads. Writing to a broken pipe throws EPIPE, and an uncaught

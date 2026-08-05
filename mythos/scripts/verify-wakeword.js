@@ -62,6 +62,7 @@ const RUN_MS = 17000; // > one WAV loop (~9-10s) so the sliding classifier windo
 
 const WAKEWORD_JS = path.join(MYTHOS_DIR, 'ui', 'public', 'js', 'voice', 'wakeword.js');
 const WAKEWORD_WORKLET_JS = path.join(MYTHOS_DIR, 'ui', 'public', 'js', 'voice', 'wakeword-worklet.js');
+const MIC_DEVICE_JS = path.join(MYTHOS_DIR, 'ui', 'public', 'js', 'voice', 'mic-device.js');
 const MODELS_DIR = path.join(MYTHOS_DIR, 'ui', 'public', 'models', 'wakeword');
 const ORT_DIST_DIR = path.join(MYTHOS_DIR, 'node_modules', 'onnxruntime-web', 'dist');
 const REQUIRED_MODELS = ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx'];
@@ -108,7 +109,14 @@ function synthesizeWav(text, repeats, outPath) {
 // produced — the only way to tell a genuine model non-match apart from a
 // broken harness. ---
 function buildInstrumentedWakewordJs() {
-  const original = fs.readFileSync(WAKEWORD_JS, 'utf8');
+  // Normalize to LF before patching. The multi-line search patterns below are
+  // written with bare '\n', but wakeword.js became CRLF on 2026-07-31 (211522f,
+  // the mic diagnostic panel) — so the two-line energy patch stopped matching and
+  // this harness has been unable to run since, failing with "source no longer
+  // matches expected pattern" as if wakeword.js had been rewritten. Only the
+  // instrumented copy served to the throwaway Chromium tab is normalized; the real
+  // file on disk is never touched.
+  const original = fs.readFileSync(WAKEWORD_JS, 'utf8').replace(/\r\n/g, '\n');
   let patched = original.replace(
     'if (score >= THRESHOLD && now - lastWakeAt >= REFRACTORY_MS) {',
     "if (!window.__wwScores) window.__wwScores = []; window.__wwScores.push(score);\n        if (score >= THRESHOLD && now - lastWakeAt >= REFRACTORY_MS) {"
@@ -140,6 +148,12 @@ function startStaticServer(harnessHtmlPath, instrumentedWakewordJs) {
       if (url.pathname === '/harness.html') filePath = harnessHtmlPath;
       else if (url.pathname === '/js/voice/wakeword.js') inlineBody = instrumentedWakewordJs;
       else if (url.pathname === '/js/voice/wakeword-worklet.js') filePath = WAKEWORD_WORKLET_JS;
+      // wakeword.js imports ./mic-device.js (added 2026-07-31, 211522f — the mic
+      // diagnostic panel). Without this route the module 404s, the harness page's
+      // module script never executes at all, and the failure surfaces as
+      // ready=undefined with 0 frames — indistinguishable from a dead ONNX
+      // pipeline. A leaf module, so the import chain ends here.
+      else if (url.pathname === '/js/voice/mic-device.js') filePath = MIC_DEVICE_JS;
       else if (url.pathname.startsWith('/models/wakeword/')) {
         const name = path.basename(url.pathname);
         if (REQUIRED_MODELS.includes(name)) filePath = path.join(MODELS_DIR, name);

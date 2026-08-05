@@ -26,6 +26,12 @@ const TIER_TABLE = {
   'read_file':             0,
   'clipboard_read':        0,  // Task 3 (step 5) — read-only
   'list_windows':          0,
+  // BUG-102: the cua-driver tools had NO entries at all, so tierOf()'s unknown-
+  // tool fail-safe put a pure window listing on T3 and voice had to ask for
+  // approval mid-troubleshooting. Reads are 0 here; the two acting cua tools sit
+  // with their pc-child equivalents further down (focus_window / click_at).
+  'cua_list_windows':      0,
+  'cua_get_window_state':  0,
   'ui_elements':           0,
   'screen_read_text':      0,  // §7.1 (step 5) — real OCR via Windows.Media.Ocr, read-only
   'browser_get_title':     0,
@@ -65,6 +71,7 @@ const TIER_TABLE = {
   'browser_go_back':       1,
   'browser_wait_for':      1,  // Phase 4 — read-only wait for an element to appear
   'focus_window':          1,
+  'cua_bring_to_front':    1,  // BUG-102 — the cua-driver twin of focus_window
   'pipeline_advance':      1,  // approve only — dangerWhen handles reject
   'gmail_unread':          1,
   'gmail_read':            1,
@@ -192,6 +199,7 @@ const TIER_TABLE = {
   'ui_click':              3,  // ELEVATED — autonomous typing unpredictable
   'ui_type':               3,  // ELEVATED — same reasoning
   'click_at':              3,  // ELEVATED — autonomous clicking unpredictable
+  'cua_click':             3,  // BUG-102 — same blast radius as click_at above
   // Same blast radius as click_at: it ends in a real mouse click at a real
   // coordinate. Reading the screen first makes it better AIMED, not safer.
   'see_and_click':         3,

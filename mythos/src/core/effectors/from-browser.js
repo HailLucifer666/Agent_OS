@@ -85,8 +85,14 @@ async function waitReady(page, selector) {
   }
 }
 
-async function browser_navigate({ url, newTab }) {
+async function browser_navigate({ url, newTab, browser }) {
   if (!url) return fail('URL is required.');
+  // BUG-099: when the operator names a browser, drive THAT one or refuse. The
+  // 2026-08-05 session asked for Brave four times and got Chrome every time,
+  // narrated as success. Checked before requireOnline() so a mismatch never
+  // launches or connects anything.
+  const targetObjection = checkBrowserTarget(browser);
+  if (targetObjection) return targetObjection;
   // REMEDIATION P1-7: a /vault/... path (or a mistaken file:///vault/... URL)
   // is not a real filesystem path on any machine — resolve it through the
   // same vault-url.js mapping open_artifact uses instead of forwarding it
@@ -119,7 +125,9 @@ async function browser_navigate({ url, newTab }) {
     await page.goto(target, { waitUntil: 'commit' });
     try { await page.waitForLoadState('networkidle', { timeout: 3000 }); } catch (_) {}
     const title = await page.title();
-    return ok({ url: page.url(), title, newTab: !!newTab });
+    // `browser` is what MYTHOS can actually vouch for — 'unknown' when it
+    // attached to a debug endpoint it did not start. Never say Brave on a guess.
+    return ok({ url: page.url(), title, newTab: !!newTab, browser: attachedBrowser || 'unknown' });
   }).catch(err => fail(err.message));
 }
 
@@ -387,15 +395,94 @@ async function browser_evaluate({ script, expression, javascript, query }) {
 // on where the debug browser lives. Chrome first, then Edge; portability rule
 // (repo CLAUDE.md) — the profile dir is derived from process.env.LOCALAPPDATA,
 // never a hardcoded path.
-function findBrowserExecutable() {
-  const candidates = [
-    process.env['ProgramFiles'] && path.join(process.env['ProgramFiles'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    process.env['ProgramFiles'] && path.join(process.env['ProgramFiles'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  ].filter(Boolean);
+// BUG-099: Brave joined the list. The operator asked four times for YouTube in
+// Brave; Brave opened (launch_app) but every browser_navigate drove Chrome,
+// because this resolver knew only Chrome and Edge and the CDP endpoint is a
+// single fixed port. Brave is Chromium, so it speaks the same CDP — nothing
+// else in the browser stack needed to change.
+const BROWSER_SUBPATHS = {
+  chrome: ['Google', 'Chrome', 'Application', 'chrome.exe'],
+  brave: ['BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'],
+  edge: ['Microsoft', 'Edge', 'Application', 'msedge.exe'],
+};
+// Chrome first — unchanged default, so nothing that relied on the old order moves.
+const BROWSER_SEARCH_ORDER = ['chrome', 'brave', 'edge'];
+const BROWSER_ALIASES = {
+  chrome: 'chrome', 'google chrome': 'chrome', 'google-chrome': 'chrome',
+  brave: 'brave', 'brave browser': 'brave', 'brave-browser': 'brave',
+  edge: 'edge', msedge: 'edge', 'microsoft edge': 'edge',
+};
+
+function normalizeBrowserName(name) {
+  if (typeof name !== 'string') return null;
+  const key = name.trim().toLowerCase();
+  if (!key) return null;
+  return BROWSER_ALIASES[key] || null;
+}
+
+// Every candidate derives from an environment root — repo portability rule, no
+// hardcoded absolute paths in tracked files.
+function browserCandidatePaths(name) {
+  const wanted = name === undefined || name === null || name === ''
+    ? BROWSER_SEARCH_ORDER
+    : [normalizeBrowserName(name)].filter(Boolean);
+  const roots = [process.env['ProgramFiles'], process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA];
+  const out = [];
+  for (const browserName of wanted) {
+    const sub = BROWSER_SUBPATHS[browserName];
+    if (!sub) continue;
+    for (const root of roots) {
+      if (root) out.push(path.join(root, ...sub));
+    }
+  }
+  return out;
+}
+
+function findBrowserExecutable(name) {
+  // BROWSER_EXECUTABLE lets an operator point at any Chromium build (a portable
+  // install, a non-standard drive) without touching code — same BYO posture as
+  // the API keys. Only honored when no specific browser was requested, since a
+  // named request must resolve to THAT browser or fail.
+  const override = process.env.BROWSER_EXECUTABLE;
+  if (override && !name) {
+    try { if (fs.existsSync(override)) return override; } catch { /* fall through */ }
+  }
+  const candidates = browserCandidatePaths(name);
   return candidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || null;
+}
+
+// Which browser MYTHOS itself put behind the CDP endpoint. null means "attached
+// to something we did not launch" — an externally-started debug browser, which
+// Brave and Chrome are indistinguishable in over CDP (Brave reports a plain
+// `Chrome/<version>` product string on purpose). Unknown is reported as
+// unknown; it is never assumed to be a match.
+let attachedBrowser = null;
+
+// Test seam only — production code sets this exclusively via a real launch.
+function __setAttachedBrowserForTest(name) { attachedBrowser = name; }
+
+function supportedBrowserList() { return BROWSER_SEARCH_ORDER.join(', '); }
+
+// Returns null when the request is satisfiable, or a fail() when driving the
+// attached browser would NOT be what the caller asked for. This is the whole
+// BUG-099 honesty guarantee: silently navigating Chrome for a "in Brave"
+// request, then describing it as Brave, is a fabricated success.
+function checkBrowserTarget(requested) {
+  if (requested === undefined || requested === null || requested === '') return null;
+  const want = normalizeBrowserName(requested);
+  if (!want) {
+    return fail(`"${requested}" is not a browser I can drive. Supported: ${supportedBrowserList()}.`);
+  }
+  if (!attachedBrowser) {
+    return fail(`I cannot confirm which browser is attached to the debug port, so I will not claim to be driving ${want}. `
+      + `Call browser_launch_debug with browser:"${want}" to start one I can vouch for.`);
+  }
+  if (attachedBrowser !== want) {
+    return fail(`Browser control is attached to ${attachedBrowser}, not ${want}. `
+      + `Close ${attachedBrowser}'s debug window and call browser_launch_debug with browser:"${want}" — `
+      + `I will not navigate ${attachedBrowser} and call it ${want}.`);
+  }
+  return null;
 }
 
 // On-demand debug-browser launcher (Phase 6a, user-approved). Boot never
@@ -403,9 +490,25 @@ function findBrowserExecutable() {
 // browser at boot steals the mic/audio device on Windows) — this is the tool
 // that turns that CDP-connect-only standby into an actually-online browser
 // when the user asks for one, without touching the boot-time prohibition.
-async function browser_launch_debug() {
+async function browser_launch_debug(args) {
+  // BUG-099: an explicit browser name. Unsupported names fail before anything
+  // is spawned — the model must not get a launched Chrome for a "brave" ask.
+  const requested = args && args.browser;
+  let want = null;
+  if (requested !== undefined && requested !== null && requested !== '') {
+    want = normalizeBrowserName(requested);
+    if (!want) return fail(`"${requested}" is not a browser I can drive. Supported: ${supportedBrowserList()}.`);
+  }
+
   const status0 = browserAgent.getStatus();
-  if (status0.state === 'ONLINE') return ok({ alreadyOnline: true });
+  if (status0.state === 'ONLINE') {
+    // One CDP port, one browser. If a different one already owns it, say so
+    // instead of "launched" — the debug port cannot be shared.
+    if (want && attachedBrowser && attachedBrowser !== want) {
+      return fail(`${attachedBrowser} already owns the debug port. Close it first, then launch ${want}.`);
+    }
+    return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
+  }
   if (status0.state === 'CONNECTING') {
     // FIX-1: a connect is already in flight (poller tick or a concurrent
     // caller) — join it via ensureOnline()/connect()'s connectingPromise guard
@@ -419,10 +522,18 @@ async function browser_launch_debug() {
     return fail('A browser connection attempt is already in progress and did not complete — try again in a moment.');
   }
 
-  const exe = findBrowserExecutable();
-  if (!exe) return fail('No Chrome or Edge installation found. Install Google Chrome or Microsoft Edge.');
+  const exe = findBrowserExecutable(want);
+  if (!exe) {
+    return want
+      ? fail(`No ${want} installation found. Install it, or set BROWSER_EXECUTABLE to its path.`)
+      : fail(`No supported browser found (${supportedBrowserList()}). Install one, or set BROWSER_EXECUTABLE to its path.`);
+  }
 
-  const profileDir = path.join(process.env.LOCALAPPDATA, 'MYTHOS', 'chrome-debug-profile');
+  // A named browser gets its own profile dir so switching browsers does not
+  // hand Brave a profile Chrome wrote. Unnamed keeps the historical path.
+  const profileDir = want && want !== 'chrome'
+    ? path.join(process.env.LOCALAPPDATA, 'MYTHOS', want + '-debug-profile')
+    : path.join(process.env.LOCALAPPDATA, 'MYTHOS', 'chrome-debug-profile');
   try { fs.mkdirSync(profileDir, { recursive: true }); } catch (err) { return fail(`Could not create debug profile directory: ${err.message}`); }
 
   const cdpUrl = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
@@ -451,13 +562,17 @@ async function browser_launch_debug() {
   const connected = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
   if (!connected) return fail('Browser launched but CDP connect did not come online — it may still be starting; try again in a moment.');
   const status = browserAgent.getStatus();
-  return ok({ launched: true, mode: status.mode, pageCount: status.pageCount });
+  // BUG-099: record WHICH browser is behind the endpoint. This is the only
+  // trustworthy source — over CDP, Brave reports a plain `Chrome/<version>`
+  // product string, so a version probe cannot tell them apart.
+  attachedBrowser = want || 'chrome';
+  return ok({ launched: true, browser: attachedBrowser, mode: status.mode, pageCount: status.pageCount });
 }
 
 // ---- Tool catalog ----
 
 const TOOLS = [
-  { name: 'browser_navigate', description: 'Navigate the browser to a URL. Set newTab:true to open it in a new tab instead of reusing the current one.', params: { url: 'string - the URL to navigate to', newTab: 'boolean (optional) - open in a new tab instead of the current one' }, danger: false, fn: browser_navigate, needs_result: true },
+  { name: 'browser_navigate', description: 'Navigate the browser to a URL. Set newTab:true to open it in a new tab instead of reusing the current one. If the user named a specific browser (Chrome, Brave, Edge), pass it as `browser` — the call then FAILS rather than driving a different one, and the response says which browser was actually used.', params: { url: 'string - the URL to navigate to', newTab: 'boolean (optional) - open in a new tab instead of the current one', browser: 'string (optional) - chrome, brave or edge; only when the user asked for a specific browser' }, danger: false, fn: browser_navigate, needs_result: true },
   { name: 'browser_click', description: 'Click an element on the page using a CSS selector.', params: { selector: 'string - CSS selector of the element to click' }, danger: false, fn: browser_click },
   { name: 'browser_type', description: 'Type text into an input field. Set clearFirst to true to clear the field first.', params: { selector: 'string - CSS selector of the input field', text: 'string - text to type', clearFirst: 'boolean (optional) - clear field before typing' }, danger: false, fn: browser_type },
   { name: 'browser_screenshot', description: 'Take a screenshot of the current page. Returns base64 PNG.', params: {}, danger: false, fn: browser_screenshot, needs_result: true },
@@ -469,7 +584,7 @@ const TOOLS = [
   { name: 'browser_wait_for', description: 'Wait for an element matching a CSS selector to appear on the page. Fails honestly if it does not appear within the timeout. Use before reading or interacting with a dynamically-loaded element.', params: { selector: 'string - CSS selector to wait for', timeoutMs: 'number (optional) - max wait in ms, default 10000, capped at 30000' }, danger: false, fn: browser_wait_for, needs_result: true },
   { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{selector, value}]. Each field is filled (replacing existing content); a bad selector reports that field failure without aborting the rest.', params: { fields: 'array - [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
-  { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE.', params: {}, danger: false, fn: browser_launch_debug },
+  { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },
 ];
 
 function registerFromBrowser(hub, ctx) {
@@ -488,4 +603,8 @@ module.exports = {
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
   browser_launch_debug,
   browser_wait_for, browser_fill_form,
+  // BUG-099 seams: pure helpers so the browser-target guarantee is testable
+  // without requireOnline() launching a real browser on the test machine.
+  findBrowserExecutable, browserCandidatePaths, normalizeBrowserName, checkBrowserTarget,
+  __setAttachedBrowserForTest,
 };

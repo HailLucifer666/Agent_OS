@@ -74,7 +74,13 @@ function createCalendarEffector({ fs, bus, goals }) {
     var action = null;
     var goalId = null;
     var actionApproved = true;
-    if (opts && opts.action && typeof opts.action === 'object') {
+    // BUG-100: an action object with NO keys means "no action" — the Live model
+    // fills the optional `action` slot with `{}` (or `[]`) rather than omitting
+    // it, and treating that as a malformed action rejected plain reminders
+    // outright. A non-empty action object missing `tool` is still an error.
+    var hasAction = Boolean(opts && opts.action && typeof opts.action === 'object'
+      && Object.keys(opts.action).length > 0);
+    if (hasAction) {
       var actionTool = opts.action.tool;
       if (typeof actionTool !== 'string' || !actionTool.trim()) {
         return { ok: false, error: 'action.tool required (string) when action is given' };
@@ -236,7 +242,11 @@ function createCalendarEffector({ fs, bus, goals }) {
     var d = new Date(now);
 
     // ISO datetime: 2026-07-12T15:30:00 or 2026-07-12 15:30
-    var iso = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{1,2})/);
+    // BUG-100: `str` was lowercased two lines up, so an uppercase-only `[T ]`
+    // separator class never matched a real ISO string — every ISO `when` the
+    // voice model produced fell through to `return null` and the operator heard
+    // a bare "Failed". Match the lowercased form (and a bare space).
+    var iso = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[t ](\d{1,2}):(\d{1,2})/);
     if (iso) {
       d.setFullYear(+iso[1], +iso[2] - 1, +iso[3]);
       d.setHours(+iso[4], +iso[5], 0, 0);
@@ -331,7 +341,7 @@ async function calendarUpcoming(args, ctx) {
 function buildCalendarTools(ctx) {
   var cal = createCalendarEffector(ctx);
   return [
-    { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
+    { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires. OMIT this entirely for a plain reminder; do not pass an empty object' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
     { name: 'reminder_list', description: 'List upcoming reminders. Shows all pending reminders with their scheduled times and text.', params: {}, danger: false, fn: async function(args) { return cal.listReminders(args); }, needs_result: true },
     { name: 'reminder_cancel', description: 'Cancel a pending reminder by its ID or text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'reminder_approve_action', description: 'Approve, once, the outward-facing action attached to a reminder (e.g. a scheduled WhatsApp send) so it can fire later without asking again. Match by reminder ID or text.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.approveReminderAction(args); } },

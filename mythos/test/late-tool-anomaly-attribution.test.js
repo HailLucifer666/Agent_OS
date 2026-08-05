@@ -1,0 +1,98 @@
+'use strict';
+
+// test/late-tool-anomaly-attribution.test.js — BUG-105. On 2026-08-05 a
+// `live-tool-outcome-late-for-turn` anomaly for `list_windows` was spoken to the
+// operator as "It appears the MUSIC PLAYBACK TOOL is running late to turn due to
+// an internal communication delay." Nothing looked it up wrong: the anomaly
+// carried the tool under a `tool` key, but every immune consumer keys on
+// `target`, so immune/explainer.js prompted the brain with `Target: (none)` and
+// the model invented a plausible component to finish the sentence.
+//
+// Two halves, both pinned here: the emitter names the tool in the field the
+// pipeline actually reads, and the explainer is forbidden from naming a
+// component that was not given to it.
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
+const { createExplainer } = require('../src/core/immune/explainer');
+const { fakeBus } = require('./helpers');
+
+describe('the late-outcome anomaly names its tool', () => {
+  test('health.anomaly carries the tool as `target`, the field the immune chain reads', async () => {
+    const busEvents = [];
+    let resolveDispatch;
+    const adapter = createLiveToolAdapter({
+      leash: {
+        check: () => ({ allow: true, requireConfirm: false, tier: 0, reason: 'within-autonomous-max' }),
+        confirm: { create: () => 'confirm-1' },
+      },
+      dispatchAction: () => new Promise((r) => { resolveDispatch = r; }),
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+      logger: { warn() {}, info() {} },
+      connectionId: 'conn-1',
+      memory: { working: {}, episodic: { write: async () => {} } },
+      historyAppend: () => {},
+      reflection: { noteTurn() {} },
+      summarizeActionsForResult: () => null,
+      getLiveSession: () => null,
+    });
+
+    const inFlight = adapter.handleLiveToolCalls(
+      [{ id: 'call-1', name: 'list_windows', args: {} }],
+      { sendToolResponse: () => {} },
+    );
+    // The turn ends before the tool answers — the misattribution window.
+    adapter.onLiveTurnComplete({ userText: 'close chrome', assistantText: 'on it' });
+    resolveDispatch({ ok: true, result: {} });
+    await inFlight;
+
+    const anomaly = busEvents.find((e) => e.name === 'health.anomaly'
+      && e.payload.kind === 'live-tool-outcome-late-for-turn');
+    assert.ok(anomaly, 'the late-for-turn anomaly must still be raised');
+    assert.equal(anomaly.payload.tool, 'list_windows');
+    assert.equal(anomaly.payload.target, 'list_windows',
+      'immune/explainer.js and the episodic summary both read `target`, not `tool`');
+  });
+});
+
+describe('the explainer never invents a component', () => {
+  function capturedPrompt(payload) {
+    const prompts = [];
+    const bus = fakeBus();
+    const explainer = createExplainer({
+      bus,
+      memory: { episodic: { recall: () => [] } },
+      config: {},
+      brain: {
+        async think(req) {
+          prompts.push(req.messages[0].content);
+          return { offline: true };
+        },
+      },
+    });
+    return { explainer, prompts, payload };
+  }
+
+  test('the prompt states the real tool when the anomaly names one', async () => {
+    const { explainer, prompts } = capturedPrompt();
+    await explainer._onHealed({ payload: {
+      kind: 'live-tool-outcome-late-for-turn', target: 'list_windows',
+      outcome: 'no-match', detail: {},
+    } });
+
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /list_windows/);
+  });
+
+  test('the prompt forbids naming a component that was not supplied', async () => {
+    const { explainer, prompts } = capturedPrompt();
+    await explainer._onHealed({ payload: {
+      kind: 'some-anomaly', target: '', outcome: 'no-match', detail: {},
+    } });
+
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /do not name|never name/i,
+      'with no target the model must be told not to guess a component');
+  });
+});

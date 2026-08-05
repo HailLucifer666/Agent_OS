@@ -46,6 +46,13 @@ const DEFAULT_ALLOWLIST = [
   'whatsapp_send','whatsapp_contacts','whatsapp_contact_save','app_reply',
   'screen_look','screen_read_text','capture_screenshot',
   'browser_navigate','browser_click','browser_type','browser_get_text',
+  // BUG-099: browser_navigate can now refuse a wrong-browser request and tell
+  // the model to "call browser_launch_debug with browser:brave" — an instruction
+  // it could not follow, because the launcher was not reachable from this path.
+  // browser_get_title is its read oracle (which page is actually here), and
+  // browser_tabs is what the 2026-08-05 session needed and did not have when the
+  // operator asked to clean up a stray YouTube tab.
+  'browser_launch_debug','browser_get_title','browser_tabs',
   'set_persona_level','ask_agent',
 ];
 

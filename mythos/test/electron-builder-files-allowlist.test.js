@@ -48,6 +48,40 @@ function isIncluded(filterFn, absPath) {
   return filterFn(absPath, stat);
 }
 
+// One fixture below is NOT merely gitignored-but-present — it is fetched on
+// first use INTO node_modules (kokoro-js downloads its weights the first time
+// TTS runs), so a checkout that has never spoken has no such file and the
+// existsSync guard fails as though the packaging config were broken. That is a
+// false failure: it says nothing about build.files, and it blocks every commit
+// via the pre-commit hook.
+//
+// So materialize a stand-in when, and only when, the real file is absent. The
+// matcher is path + stat based, so a 1-byte file at the same absolute path
+// exercises the identical glob semantics; the assertion still runs against
+// electron-builder's own FileMatcher, not a synthetic reimplementation. Nothing
+// that already exists is created, written or removed, and only the directories
+// this helper made are cleaned up — deliberately NOT generalised to the
+// wakeword/silero fixtures, whose directories other tests and the
+// /api/config/wakeword route stat for presence (see CLAUDE.md's wakeword
+// rename-race entry: faking real model state is how weights get destroyed).
+function withStandInIfAbsent(absPath, fn) {
+  if (fs.existsSync(absPath)) return fn();
+  const createdDirs = [];
+  let dir = path.dirname(absPath);
+  while (!fs.existsSync(dir)) {
+    createdDirs.unshift(dir);
+    dir = path.dirname(dir);
+  }
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  fs.writeFileSync(absPath, '\0');
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(absPath, { force: true });
+    for (const made of createdDirs.reverse()) fs.rmSync(made, { recursive: true, force: true });
+  }
+}
+
 test('build.files excludes the edge-tts server script (LGPLv3 BYO boundary)', () => {
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
@@ -135,9 +169,10 @@ test('build.files excludes Hugging Face .cache model copies pulled in via node_m
     REPO_ROOT, 'mythos', 'node_modules', 'kokoro-js', 'node_modules', '@huggingface',
     'transformers', '.cache', 'onnx-community', 'Kokoro-82M-v1.0-ONNX', 'onnx', 'model_quantized.onnx',
   );
-  assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);
-  assert.equal(isIncluded(filterFn, target), false,
-    'a cached Kokoro model copy under node_modules/**/.cache must not be packaged');
+  withStandInIfAbsent(target, () => {
+    assert.equal(isIncluded(filterFn, target), false,
+      'a cached Kokoro model copy under node_modules/**/.cache must not be packaged');
+  });
 });
 
 test('build.files excludes the operator\'s real vault data', () => {

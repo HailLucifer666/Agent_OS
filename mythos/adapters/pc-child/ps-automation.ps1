@@ -914,20 +914,69 @@ function Handle-FocusWindow($TargetPid) {
 }
 
 function Handle-CloseWindow($TargetPid) {
+    # BUG-103 (2026-08-05 incident): this handler failed both ways on browsers.
+    #   1. Chrome: the pid held upstream was a non-windowed child (or the process
+    #      had already exited), so Get-Process/CloseMainWindow could not act and
+    #      the operator heard "the process couldn't be found".
+    #   2. Brave: WaitForExit(3000) is the WRONG ORACLE for a multi-window,
+    #      multi-process browser — closing one window never exits the process, so
+    #      a successful close looked like a timeout.
+    #   3. Worse, the timeout branch returned a HASHTABLE (`closed=$false`), and
+    #      the dispatcher reads any hashtable as ok:true — a window that was still
+    #      open was audited as a successful close. Returning a STRING is how this
+    #      file reports an honest failure (see Handle-FocusWindow's FIX 2).
+    # The oracle is now the window handle itself, and a pid with no main window is
+    # re-resolved to the windowed process of the same executable.
     if (-not $TargetPid) { return 'PID is required.' }
     try {
         $proc = Get-Process -Id $TargetPid -ErrorAction Stop
-        $proc.CloseMainWindow() | Out-Null
-        # Wait briefly for graceful close
-        $closed = $proc.WaitForExit(3000)
-        if ($closed) {
-            return @{ pid = $TargetPid; closed = $true; graceful = $true }
-        } else {
-            return @{ pid = $TargetPid; closed = $false; note = 'Window did not close gracefully in 3s' }
-        }
     } catch {
         return ('Cannot close PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
+
+    $resolvedPid = $TargetPid
+    $resolvedBy = 'pid'
+    if ($proc.MainWindowHandle -eq [IntPtr]::Zero) {
+        # A non-windowed process of a multi-process app (browser renderer/utility,
+        # or a launcher stub). Same class as launch_app's MSIX fix: resolve the
+        # process that actually OWNS a window before acting.
+        $windowed = Resolve-WindowedProcessByName $proc.ProcessName 1500
+        if ($null -eq $windowed -or -not $windowed.pid) {
+            return ('PID ' + $TargetPid + ' (' + $proc.ProcessName + ') has no window to close, and no windowed ' +
+                    $proc.ProcessName + ' process was found. Nothing was closed.')
+        }
+        try {
+            $proc = Get-Process -Id $windowed.pid -ErrorAction Stop
+        } catch {
+            return ('Could not open the windowed ' + $proc.ProcessName + ' process (PID ' + $windowed.pid + '): ' + $_.Exception.Message)
+        }
+        $resolvedPid = $windowed.pid
+        $resolvedBy = 'windowed-sibling'
+    }
+
+    $proc.CloseMainWindow() | Out-Null
+
+    # Oracle: the main window is gone (or the whole process exited). Poll rather
+    # than WaitForExit — a browser with other windows open stays alive on purpose.
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $proc.Refresh()
+            if ($proc.HasExited -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {
+                return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true; resolvedBy = $resolvedBy }
+            }
+        } catch {
+            # Refresh throws once the process is gone — that IS the close.
+            return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true; resolvedBy = $resolvedBy }
+        }
+        Start-Sleep -Milliseconds 150
+    }
+
+    # Honest failure as a STRING so the dispatcher reports ok:false. Never a
+    # force-kill: closing a browser out from under unsaved state is the
+    # operator's call, not this handler's.
+    return ('Window for PID ' + $resolvedPid + ' did not close within 3s and is still open. Nothing was closed. ' +
+            'It may be showing a confirmation prompt — check the screen, or ask me to force it.')
 }
 
 # ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----

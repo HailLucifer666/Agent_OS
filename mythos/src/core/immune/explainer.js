@@ -52,6 +52,12 @@ function createExplainer({ bus, brain, memory, config, logger }) {
           'Target: ' + (target || '(none)'),
           'Detail: ' + JSON.stringify(payload.detail || {}).slice(0, 400),
           recentLines.length ? 'Recent related activity:\n' + recentLines.join('\n') : '',
+          // BUG-105: with no target supplied the model filled the gap with a
+          // plausible component ("the music playback tool" for a list_windows
+          // anomaly). Naming a subsystem that is not in this prompt is a
+          // fabrication, same class as AD-5's synthesized metrics.
+          'Do not name any tool, provider or subsystem that is not stated above.'
+            + (target ? '' : ' No component was identified, so say "a tool" or "something internal" rather than guessing which one.'),
           '',
           'Respond with ONE JSON object, nothing else:',
           '{"explanation": "one or two short spoken sentences: what is failing and the likely cause, plain language",',

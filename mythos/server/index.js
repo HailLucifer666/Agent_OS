@@ -2115,7 +2115,10 @@ function createServer(deps) {
     try {
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
-        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.error || e.payload.target || ''),
+        // BUG-105: `tool` is read too — a late-outcome anomaly used to persist
+        // as "anomaly: live-tool-outcome-late-for-turn — " with the one fact
+        // worth having (which tool) missing from the record entirely.
+        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.error || e.payload.target || e.payload.tool || ''),
         detail: { kind: e.payload.kind, scope: e.payload.scope, error: e.payload.error, target: e.payload.target },
         outcome: 'anomaly', salience: 0.8,
       });

@@ -43,7 +43,23 @@ function effectorFromTool(tool) {
         var result = await tool.fn(params, ctx);
         // Normalize: every tool.fn already returns { ok, result } via NOVA's ok()/fail()
         // helpers, but guard against a tool that forgot and returned a bare value.
-        if (result && typeof result === 'object' && 'ok' in result) return result;
+        if (result && typeof result === 'object' && 'ok' in result) {
+          // BUG-101: not every tool speaks ok()/fail() — some return
+          // `{ok:false, error:'why'}`. Every consumer downstream reads only
+          // `.result` (live-tool-adapter's evaluateOutcome, dispatch-action's
+          // audit `reasonText(result.result)`, the voice agent's summary), so
+          // those failures arrived as a bare "Failed." with the reason dropped
+          // on the floor. Mirror the message into `result` at this one
+          // boundary — keeping `error` intact — instead of teaching every
+          // consumer a second shape.
+          if (result.ok === false && result.result === undefined) {
+            var reason = (typeof result.error === 'string' && result.error)
+              || (typeof result.reason === 'string' && result.reason)
+              || '';
+            if (reason) return Object.assign({}, result, { result: reason });
+          }
+          return result;
+        }
         return { ok: true, result: result };
       } catch (err) {
         return { ok: false, result: err.message };

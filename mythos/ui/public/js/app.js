@@ -59,11 +59,28 @@ fetch('/api/config/vad')
 // Wake-word ("hey jarvis") config, fetched once at boot alongside VAD tuning
 // above. armOnce (below) lazily imports wakeword.js only when enabled AND the
 // models are actually present on disk.
+//
+// The PROMISE is kept, not just the resolved value, and ensureWakeWord() awaits
+// it. It used to read a bare `_wakewordCfg` snapshot: armOnce() unsubscribed
+// itself BEFORE calling ensureWakeWord(), which returned silently when the
+// fetch had not landed yet — so a fast first click (or any fetch failure, which
+// this .catch swallowed) killed wake word for the whole page with no caption, no
+// log and no retry, while every other voice feature kept working. That is
+// indistinguishable from "the wake word doesn't work" from the operator's chair.
+// Unlike the VAD fetch above, a miss here is not recoverable by falling back to
+// defaults — there is nothing to fall back to — so it must be reported.
 let _wakewordCfg = null;
-fetch('/api/config/wakeword')
-  .then((r) => (r.ok ? r.json() : null))
-  .then((cfg) => { if (cfg) _wakewordCfg = cfg; })
-  .catch(() => {});
+let _wakewordCfgError = null;
+const _wakewordCfgReady = fetch('/api/config/wakeword')
+  .then((r) => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then((cfg) => { _wakewordCfg = cfg; return cfg; })
+  .catch((err) => {
+    _wakewordCfgError = (err && err.message) || String(err);
+    return null;
+  });
 
 // Gemini Live speech-to-speech (VOICE_S2S_ENABLED, server/routes/config.js),
 // fetched once at boot like the two above. Stays FALSE unless the server says
@@ -406,20 +423,63 @@ const armOnce = () => {
 };
 document.addEventListener('pointerdown', armOnce);
 
+// Electron only: arm the wake word with NO click at all. The pointerdown gate
+// above exists for Chrome's gesture policy, which the shell opts out of via
+// --autoplay-policy=no-user-gesture-required (electron/main.js). In a browser tab
+// that gate is still correct and stays exactly as it was; here it made "hands-free
+// activation" require a hand — an untouched HUD had no detector running, so
+// speaking "hey jarvis" at a freshly opened window could never work.
+// window.mythos is the established Electron probe in this file (see the hotkey
+// bridge below). Only the wake word is armed early: ensureVoice() stays on the
+// gesture so click-to-talk behaviour is untouched.
+if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHotkey === 'function') {
+  // The PIN gate must hold here exactly as it does in armOnce — including its
+  // 'unknown'-counts-as-locked stance — so a locked HUD never starts listening.
+  // Unlike armOnce this can retry, so poll briefly rather than giving up: the
+  // lock state resolves via a non-blocking GET /api/pin/status.
+  let tries = 0;
+  const armInShell = () => {
+    if (wakeword) return;
+    if (isGateClosed(pinLockScreen.lockState())) {
+      if (++tries < 40) setTimeout(armInShell, 500); // ~20s, then leave it to a click
+      return;
+    }
+    ensureWakeWord();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armInShell, { once: true });
+  else armInShell();
+}
+
 // Wake-word ("hey jarvis") — hands-free activation. Lazily imported (like
 // voice-loop.js above) only on the same first-gesture arm, and only when the
 // server reports it enabled AND the on-device models are actually present
 // (scripts/setup-wakeword.js). Deliberately NOT paused on visibilitychange —
 // unlike hud-canvas.js's render-pause pattern, always-on standby listening is
 // the entire point of this feature, so a backgrounded tab must keep listening.
+let _wakewordArming = false;
 function ensureWakeWord() {
-  if (wakeword) return;
-  if (!_wakewordCfg || !_wakewordCfg.enabled) return;
-  if (!_wakewordCfg.modelsPresent) {
-    mic.setCaption('Wake word enabled but models missing — run scripts/setup-wakeword.js', 'error');
-    return;
-  }
-  import('./voice/wakeword.js').then(({ createWakeWord }) => {
+  if (wakeword || _wakewordArming) return;
+  _wakewordArming = true;
+  // Await the config fetch instead of reading a possibly-unresolved snapshot —
+  // the caller (armOnce, or the Electron load-time arm) has already given up its
+  // one chance to retry by the time this runs.
+  return _wakewordCfgReady.then(() => {
+    if (wakeword) return;
+    if (_wakewordCfgError) {
+      mic.setCaption('Wake word unavailable — could not read its config: ' + _wakewordCfgError, 'error');
+      return;
+    }
+    if (!_wakewordCfg || !_wakewordCfg.enabled) return; // honestly off, not broken
+    if (!_wakewordCfg.modelsPresent) {
+      mic.setCaption('Wake word enabled but models missing — run scripts/setup-wakeword.js', 'error');
+      return;
+    }
+    return startWakeWord();
+  }).finally(() => { _wakewordArming = false; });
+}
+
+function startWakeWord() {
+  return import('./voice/wakeword.js').then(({ createWakeWord }) => {
     wakeword = createWakeWord({
       threshold: _wakewordCfg.threshold,
       onWake: () => {
@@ -437,8 +497,18 @@ function ensureWakeWord() {
       },
       onStatus: (s, msg) => { if (s === 'error') mic.setCaption('Wake word offline: ' + msg, 'error'); },
     });
-    wakeword.start();
+    // start() resolves false (and has already emitted an 'error' status) when the
+    // browser can't support it or the ONNX/mic setup throws. Report the SUCCESS
+    // case too: a listening detector was previously indistinguishable from a
+    // silently dead one — the orb looks identical either way — so there was no
+    // way for the operator to tell "hey jarvis" was armed at all.
+    return wakeword.start().then((ok) => {
+      if (ok) mic.setCaption('Standby — listening for "hey jarvis"', 'info');
+      else wakeword = null; // failed to arm; let a later gesture try again
+      return ok;
+    });
   }).catch((err) => {
+    wakeword = null;
     mic.setCaption('Wake word failed to load: ' + (err && err.message || err), 'error');
   });
 }

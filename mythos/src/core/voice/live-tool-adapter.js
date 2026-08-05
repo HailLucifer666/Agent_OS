@@ -122,7 +122,13 @@ function createLiveToolAdapter(deps) {
     const dispatchOk = Boolean(outcome && outcome.ok);
     const isUnverified = dispatchOk && Boolean(outcome.unverified);
     const result = outcome && outcome.result;
-    const rawError = (result && result.error) || result || 'Failed.';
+    // BUG-101: `outcome.error` is read here too. effectors/adapter.js now
+    // mirrors an effector's `error` into `result` at the registration boundary,
+    // but an outcome that reaches this adapter by any other route (a raw
+    // effector, a future dispatch path) must not degrade to the bare 'Failed.'
+    // the operator heard on 2026-08-05.
+    const rawError = (result && result.error) || result
+      || (outcome && outcome.error) || (outcome && outcome.reason) || 'Failed.';
     return {
       ok: dispatchOk && !isUnverified,
       dispatchOk,
@@ -145,7 +151,15 @@ function createLiveToolAdapter(deps) {
       // it to whatever turn is running now (AD-4: accurate reconciliation).
       if (myGeneration !== turnGeneration) {
         if (bus && typeof bus.emit === 'function') {
-          bus.emit('health.anomaly', { kind: 'live-tool-outcome-late-for-turn', tool: entry.tool });
+          // BUG-105: `target` as well as `tool`. Every immune consumer keys on
+          // `target` (diagnostician, healer, explainer's prompt, the server's
+          // episodic summary line), so a tool named only under `tool` reached
+          // the explainer as "Target: (none)" and the model invented a
+          // component — it told the operator the "music playback tool" was
+          // late when the late tool was list_windows.
+          bus.emit('health.anomaly', {
+            kind: 'live-tool-outcome-late-for-turn', tool: entry.tool, target: entry.tool,
+          });
         }
         return;
       }

@@ -20,7 +20,7 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-04): **2601 tests, 2600 passing, 0 failing, 1 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-05): **2664 tests, 2663 passing, 0 failing, 1 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
 ## Build content comes from Hermes-Agent, not the brain (2026-07-29 onward)
 

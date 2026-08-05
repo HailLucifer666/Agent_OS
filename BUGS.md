@@ -9,9 +9,12 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-02 — the 2026-07-31/08-01 voice-session fixes: 19 defects,
-7 stages, BUG-059(new)..BUG-081 (see the LAST section for the collision note on
-BUG-059/060/061's numbers and the live-verification runbook, still OUTSTANDING).
+Last updated: 2026-08-05 — the 2026-08-05 voice-session incident triage:
+BUG-099..BUG-105, 6 fixed (unit-verified, live gate pending) + BUG-104 registered
+as a §7.6 feature. See the LAST section. The prior entry: 2026-08-02 — the
+2026-07-31/08-01 voice-session fixes, 19 defects, 7 stages,
+BUG-059(new)..BUG-081 (its own section carries the collision note on
+BUG-059/060/061's numbers and a live-verification runbook, still OUTSTANDING).
 Maintainer: update this file as issues are resolved. Strike through the status.
 
 ---
@@ -2364,4 +2367,189 @@ bar the original plan set — zero `live-tool-outcome-late-for-turn`, zero
 BUG-08x above to LIVE-VERIFIED only for what was actually observed, then commit
 and — this branch is not pushed — decide when `fix/voice-session-19` merges to
 `main`.
+
+---
+
+## Session (2026-08-05) — voice-session incident triage: 7 defects from 5 logged incidents
+
+The operator ran a live voice session in the early hours of 2026-08-05, hit a run
+of failures, and told MYTHOS to log them ("Yes, log it", "log it as bug", "log
+this as a bug or log this as a feature to add"). MYTHOS wrote five
+`log_incident` records — a raw voice-side journal with no root cause attached and
+nothing scheduled to fix. This section is that triage.
+
+**Sources.** `mythos/vault/Incidents/2026-08-04.jsonl` (the 5 records; the file is
+named by the store's date rollover, every `ts` in it is from this session) and
+`mythos/vault/Episodic/2026-08-05.jsonl` (108 entries: conversation, every tool
+call, one `live-tool-outcome-late-for-turn` anomaly).
+
+Two of the root causes were NOT what the incidents described, which is the lesson
+worth keeping: the reminder failure was blamed on the reminder tool and was
+actually a case-sensitivity bug in the time parser, and the "wrong tool"
+narration was not a lookup error but an underspecified prompt inviting a guess.
+
+- **BUG-099 (`browser_navigate` cannot target Brave — it always drives Chrome):**
+  FIXED (unit-verified; live gate pending). The operator asked four times for
+  YouTube in **Brave only**. `launch_app('brave')` opened Brave and every
+  `browser_navigate` landed in Chrome, which MYTHOS then narrated as if the
+  request had been honored. Structural, not prompt-level: the browser effectors
+  drive one fixed CDP endpoint (`http://127.0.0.1:9222`) and
+  `findBrowserExecutable()` in `from-browser.js` only ever knew Chrome and Edge,
+  so "in Brave" was unexpressible. **Fix:** Brave joins the resolver as a
+  first-class browser (`BROWSER_SUBPATHS`, env-derived paths only, plus a
+  `BROWSER_EXECUTABLE` override), `browser_launch_debug` takes a `browser`
+  argument with its own profile dir, and it and `browser_navigate` now carry a
+  `browser` field naming the browser MYTHOS can actually vouch for. The honesty
+  half is `checkBrowserTarget()`: a named browser that does not match the
+  attached one is **refused** with both names and the remedy, and an attached
+  browser MYTHOS did not launch reports `unknown` rather than assuming a match —
+  over CDP, Brave deliberately reports a plain `Chrome/<version>` product string,
+  so no version probe can tell them apart. Also added
+  `browser_launch_debug`/`browser_get_title`/`browser_tabs` to `live-tools.js`'s
+  `DEFAULT_ALLOWLIST`: the new refusal tells the model to call
+  `browser_launch_debug`, which was not reachable from the Live path — a failure
+  hint naming an unreachable tool is a dead end (same trap as the
+  `ui_click`-without-`ui_elements` entry above).
+  **Files:** `mythos/src/core/effectors/from-browser.js`,
+  `mythos/src/core/voice/live-tools.js`,
+  `mythos/test/browser-target-honesty.test.js`.
+
+- **BUG-100 (`reminder_add` failed twice on a vet appointment; the operator heard
+  only "Failed"):** FIXED. **Two distinct defects, and the incident text named
+  neither.** (1) The real failure: `parseWhen()` in `from-calendar.js` lowercases
+  its input (`str.trim().toLowerCase()`) and then matched an **uppercase-only**
+  `[T ]` separator class — so *every* ISO datetime the voice model produced
+  (`2026-08-05T16:00:00`) fell straight through to `return null` and came back
+  "Could not parse that time". Confirmed by direct probe, not inference. (2) Next
+  in line behind it: the Live model fills the optional `action` slot with `{}`
+  rather than omitting it, and `addReminder()` treated a truthy object as a
+  fire-action declaration, rejecting the reminder with "action.tool required".
+  **Fix:** match `[t ]` on the already-lowercased string; treat an action object
+  with zero keys (`{}` or `[]`) as no action while keeping the hard error for a
+  non-empty action missing `tool`; tighten the schema string to tell the model to
+  omit the field entirely.
+  **Files:** `mythos/src/core/effectors/from-calendar.js`,
+  `mythos/test/reminder-add-empty-action.test.js`.
+
+- **BUG-101 (a failing tool's reason never reached voice — everything arrived as a
+  bare "Failed"):** FIXED. `addReminder` returned a precise, actionable message
+  and the operator heard "Failed indeed, Sir." The convention is `{ok, result}`
+  (the `ok()`/`fail()` helpers), but several effectors return
+  `{ok:false, error:'...'}` and **every consumer downstream reads only
+  `.result`**: `live-tool-adapter.js`'s `evaluateOutcome()`
+  (`(result && result.error) || result || 'Failed.'` with `result === undefined`)
+  and `dispatch-action.js`'s audit line (`reasonText(result && result.result)` →
+  an empty `reason`). So the audit trail for the vet reminder recorded no reason
+  either. **Fix:** `effectors/adapter.js` mirrors an `{ok:false, error}` message
+  into `result` at the single registration boundary every path shares — voice,
+  audit, and the non-Live voice agent all get the text, and the original `error`
+  field is preserved — plus a defensive read of `outcome.error` in
+  `evaluateOutcome()` for outcomes that reach the Live adapter by another route.
+  **Files:** `mythos/src/core/effectors/adapter.js`,
+  `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/test/live-tool-error-surfacing.test.js`.
+
+- **BUG-102 (`cua_list_windows` demanded human approval for a pure read):** FIXED.
+  Mid-troubleshooting, twice, MYTHOS answered "I've requested the window list
+  now, but I'll need your approval". `tierOf()` fail-safes an unmapped tool to T3
+  (correct, and unchanged), but **none of the four cua-driver tools had a
+  `TIER_TABLE` entry at all** — so listing windows sat on the confirm-and-execute
+  tier. **Fix:** `cua_list_windows: 0`, `cua_get_window_state: 0`,
+  `cua_bring_to_front: 1` (with `focus_window`), `cua_click: 3` (with
+  `click_at`). The second half matters more than the rows:
+  `test/tier-table-conformance.test.js` — the anti-drift gate whose whole job is
+  catching exactly this — **never called `registerFromCua`**, so its hub could not
+  see the four tools and the drift was invisible to the one test written to find
+  it. That registration is now in step with `main.js`, and a new coverage test
+  asserts every registered `cua_*` tool carries an explicit tier so the next one
+  cannot silently inherit T3.
+  **Files:** `mythos/src/core/leash/tiers.js`,
+  `mythos/test/tier-table-conformance.test.js`,
+  `mythos/test/tiers-cua-coverage.test.js`.
+
+- **BUG-103 (`close_window` reported "process couldn't be found" on Chrome and a
+  graceful-close timeout on Brave — and audited a still-open window as success):**
+  FIXED (unit-verified + PowerShell parse-checked; live gate pending). Three
+  faults in one handler. (1) The pid held upstream was a non-windowed child of a
+  multi-process browser (or an already-exited process), so `CloseMainWindow()` had
+  nothing to act on. (2) `WaitForExit(3000)` is the **wrong oracle** for a
+  multi-window browser — closing one window never exits the process, so a
+  successful close looked like a timeout. (3) The timeout branch returned a
+  **hashtable** (`@{closed=$false; note=...}`), and the dispatcher reads any
+  hashtable as `ok:true` — a window that was demonstrably still open was audited
+  as a successful close, the exact evidence-contract violation
+  `src/core/CLAUDE.md` exists to forbid. **Fix:** a pid with no main window is
+  re-resolved to the windowed process of the same executable via the existing
+  `Resolve-WindowedProcessByName` (same class as the `launch_app` MSIX fix); the
+  oracle is now the window handle itself (`HasExited` or
+  `MainWindowHandle -eq Zero`), polled for 3s; and a window still open returns an
+  honest **string**, which this file's dispatcher maps to `ok:false`. No
+  force-kill — closing a browser over unsaved state stays the operator's call.
+  `from-pc.js` carries the Node-side backstop for both shapes and no longer clears
+  `lastLaunchedPid` on a failed close (the pid is still valid — the window is
+  still there).
+  **Files:** `mythos/adapters/pc-child/ps-automation.ps1` (`Handle-CloseWindow`),
+  `mythos/src/core/effectors/from-pc.js`,
+  `mythos/test/close-window-honesty.test.js`. BUG-037's pre-edit protocol was
+  followed: all six load-bearing pieces verified present before the edit (UTF-8
+  console block, `Await-WinRTOperation` with explicit `[type]$ResultType`,
+  `$TargetPid` never `$pid`, DPI-awareness block, `click_at`, command-id echo in
+  `Write-Response`).
+
+- **BUG-104 (calendar write does not exist, and `from-calendar.js` advertises one
+  that does):** REGISTERED, not fixed — feature, see roadmap §7.6. The operator
+  only wanted the appointment marked on his calendar. MYTHOS declined correctly
+  under its honesty rule, then fell back to `reminder_add` and hit BUG-100.
+  `from-calendar.js`'s header still advertises a Google Calendar layer that exists
+  in no file. §7.6 must either implement it (the OAuth adapter already works for
+  Gmail, so this is scope, not new auth) or delete the claim — leaving it standing
+  is what made the fallback look like a bug rather than a missing feature.
+
+- **BUG-105 (a late tool outcome was narrated as the wrong tool):** FIXED.
+  `list_windows` was the late tool; MYTHOS told the operator "It appears the
+  **music playback tool** is running late to turn due to an internal
+  communication delay" (episodic `ts 1785883515932`). Nothing looked it up wrong.
+  `live-tool-adapter.js` emitted the anomaly with the tool under a `tool` key, but
+  every immune consumer keys on **`target`** — so `immune/explainer.js` prompted
+  the brain with `Target: (none)` and the model invented a plausible component to
+  finish the sentence. The server's episodic writer dropped it for the same
+  reason, persisting `anomaly: live-tool-outcome-late-for-turn — ` with the one
+  useful fact missing. **Fix:** emit `target` alongside `tool`; read `tool` as a
+  last resort in the episodic summary; and forbid the explainer from naming any
+  tool, provider or subsystem not present in its prompt (with an explicit "say 'a
+  tool' rather than guessing" clause when no component was identified). Same
+  fabrication class as AD-5's synthesized metrics.
+  **Files:** `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/src/core/immune/explainer.js`, `mythos/server/index.js`,
+  `mythos/test/late-tool-anomaly-attribution.test.js`.
+
+### Also surfaced 2026-08-05 — recorded so they are not re-discovered as new
+
+- **Tetris build rejected at review** (`job-1785884427784-197`), plus one
+  `kanban-review job job-1785884520157-100 failed`. Markup shipped, game logic
+  rejected. Engine quality, not wiring — and one sample proves nothing here
+  (sample at least 3 before calling it).
+- **No tool for Aether BLE / wake-word phone setup guidance** — MYTHOS said so
+  honestly. Documentation gap (`AETHER-WIRING.md`), not a defect.
+- **No tool to probe an external CLI (Mistral / hermes)** — honest refusal.
+- **`gmail_send` went to a personal address** the operator then had to ask about.
+  Worth confirming the self-send default resolves from the authorized account
+  rather than a stored contact string.
+
+### Live gate for this session's fixes (none are LIVE-VERIFIED yet)
+
+1. "Remind me about the vet tomorrow at 4pm" → created, real time read back,
+   visible in `reminder_list`. (BUG-100)
+2. Ask for the window list → **no approval prompt**, real windows. (BUG-102)
+3. Force a tool failure (a reminder with a nonsense time) → MYTHOS speaks the
+   actual reason, not "Failed". (BUG-101)
+4. "Open Brave and open YouTube in it, only Brave" → YouTube is in **Brave**, or
+   MYTHOS says plainly it is attached to Chrome and what to do about it. Never a
+   silent Chrome navigation described as Brave. (BUG-099)
+5. "Close Brave" → it closes, or MYTHOS reports it did not while the window is
+   verifiably still open. (BUG-103)
+6. Afterwards: no `live-tool-outcome-late-for-turn` in
+   `vault/Episodic/<today>.jsonl` narrated with the wrong tool name, and no
+   `outcome:ok` in `vault/Audit/<today>.jsonl` on a payload that says otherwise.
+   (BUG-105, AD-4/AD-5)
 

@@ -31,6 +31,7 @@ const { TIER_TABLE } = require('../src/core/leash/tiers');
 
 const { registerFromComputer } = require('../src/core/effectors/from-computer');
 const { registerFromPc } = require('../src/core/effectors/from-pc');
+const { registerFromCua } = require('../src/core/effectors/from-cua');
 const { registerFromAndroid } = require('../src/core/effectors/from-android');
 const { registerFromSpotify } = require('../src/core/effectors/from-spotify');
 const { registerFromWhatsapp } = require('../src/core/effectors/from-whatsapp');
@@ -120,6 +121,12 @@ describe('anti-drift: TIER_TABLE <-> effector hub conformance', () => {
 
     registerFromComputer(hub);
     registerFromPc(hub, { brain, fs: vault });
+    // BUG-102: main.js registers the cua-driver tools too, but this hub never
+    // did — so the gate could not see that all four cua_* tools had no
+    // TIER_TABLE entry and were resolving to the T3 unknown-tool fail-safe.
+    // That is precisely the "narrows the gate silently" case the header warns
+    // about; keep this in step with main.js.
+    registerFromCua(hub);
     registerFromAndroid(hub);
     registerFromSpotify(hub, { effectors: hub, bus, memory: {}, goals: {}, config });
     registerFromWhatsapp(hub, { memory: { fs: vault }, logger: { warn() {}, info() {} } });
