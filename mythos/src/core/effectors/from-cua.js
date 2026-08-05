@@ -49,6 +49,21 @@ function cuaErrText(result, fallback) {
   }
 }
 
+// BUG-109 (audit 2026-08-05): the model passed window_id:"854628" (a numeric
+// string) and cua-driver answered "Missing required integer field window_id"
+// -- the truthy-string check below let it through untyped instead of taking
+// the pid-resolution path meant for a missing window_id. Coerce ONLY a
+// clean numeric string to a real number; an opaque non-numeric id (e.g. the
+// 'w-1234' ids cua-window-state-resolution.test.js exercises) is a valid id,
+// not a malformed integer, and is left untouched rather than nulled out.
+function coerceWindowId(raw) {
+  if (typeof raw === 'string' && /^-?\d+$/.test(raw.trim())) {
+    var n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n)) return n;
+  }
+  return raw;
+}
+
 function offlineFail() {
   var st = cuaDriver.getStatus();
   return fail('cua-driver is ' + st.state + (st.hint ? ' — ' + st.hint : '') + '. Use ui_click/click_at from pc-child instead, or install cua-driver (see BUGS.md).');
@@ -73,7 +88,7 @@ async function cua_list_windows() {
 async function cua_bring_to_front(params) {
   if (!requireOnline()) return offlineFail();
   var p = params || {};
-  var r = await cuaDriver.invoke('bring_to_front', { pid: p.pid, window_id: p.window_id });
+  var r = await cuaDriver.invoke('bring_to_front', { pid: p.pid, window_id: coerceWindowId(p.window_id) });
   if (!r || !r.ok) return fail(cuaErrText(r && r.result, 'cua-driver bring_to_front failed'));
   return ok(r.result);
 }
@@ -108,7 +123,7 @@ async function resolveWindowIdForPid(pid) {
 async function cua_get_window_state(params) {
   if (!requireOnline()) return offlineFail();
   var p = params || {};
-  var windowId = p.window_id;
+  var windowId = coerceWindowId(p.window_id);
 
   if (!windowId && p.pid !== undefined && p.pid !== null) {
     var resolved = await resolveWindowIdForPid(p.pid);
@@ -139,7 +154,7 @@ async function cua_click(params) {
   if (p.element_index === undefined && p.element_index !== null) {
     return fail('cua_click requires element_index (from cua_get_window_state). For a raw coordinate click use click_at instead.');
   }
-  var clickArgs = { pid: p.pid, window_id: p.window_id, element_index: p.element_index };
+  var clickArgs = { pid: p.pid, window_id: coerceWindowId(p.window_id), element_index: p.element_index };
   var r = await cuaDriver.invoke('click', clickArgs);
   if ((!r || !r.ok) && p.foreground !== false) {
     // Retry in foreground delivery mode — Chromium sometimes drops background clicks.
