@@ -293,9 +293,64 @@ function createLiveSession(deps) {
   // human is present — a desktop streams frames just as happily to an empty
   // room. So video keeps the session USABLE but never keeps it ALIVE: speech
   // extends the session, wallpaper does not.
+  // SECURITY (2026-08-05 review, findings C2 + the frame-bound HIGH): this is the
+  // single choke point every caller must pass to put a desktop frame on the wire,
+  // so all three guards live here rather than only in server/index.js's WS branch
+  // (which also checks, to refuse before touching the session). Previously the
+  // ONLY enforcement of LIVE_SCREEN_SHARE_ENABLED was renderer JS, and the only
+  // size bound was ws's 100MB default — so on stock config (no MYTHOS_AUTH_TOKEN,
+  // PIN_SESSION_ENFORCE false, VOICE_S2S_ENABLED true) any local non-browser
+  // process could open the loopback socket with no Origin header and bill
+  // arbitrary images to the operator's own key with screen share switched off.
+  //
+  // Read at call time, not construction: the flag must be able to go false and
+  // take effect on the very next frame.
+  let lastVideoFrameAt = 0;
+  let videoRefusalLogged = false;
+
+  function screenShareEnabled() {
+    // Strict true. An absent or malformed flag means OFF — the failure mode of
+    // guessing wrong here is streaming somebody's desktop unasked.
+    return config.LIVE_SCREEN_SHARE_ENABLED === true;
+  }
+
+  function maxVideoFrameBytes() {
+    const kb = Number(config.LIVE_SCREEN_MAX_FRAME_KB);
+    return (Number.isFinite(kb) && kb > 0 ? kb : 2048) * 1024;
+  }
+
+  function minVideoFrameIntervalMs() {
+    // The legitimate client throttles itself to LIVE_SCREEN_FPS; a direct WS
+    // caller has no such timer. Allow up to 2x the configured rate so ordinary
+    // timer jitter is not punished, and treat everything faster as abuse.
+    const fps = Number(config.LIVE_SCREEN_FPS);
+    const effective = Number.isFinite(fps) && fps > 0 ? fps : 0.5;
+    return 1000 / (effective * 2);
+  }
+
   function sendVideoFrame(base64Jpeg) {
     if (state !== 'open') return false;
     if (typeof base64Jpeg !== 'string' || !base64Jpeg) return false;
+    if (!screenShareEnabled()) {
+      // Once per session, not per frame — a rejected 0.5fps stream would
+      // otherwise fill the log with the same line.
+      if (!videoRefusalLogged) {
+        videoRefusalLogged = true;
+        logger.warn('live-session: refusing a screen-share frame — LIVE_SCREEN_SHARE_ENABLED is not true');
+      }
+      return false;
+    }
+    if (base64Jpeg.length > maxVideoFrameBytes()) {
+      logger.warn('live-session: refusing an oversized screen-share frame ('
+        + base64Jpeg.length + 'B > LIVE_SCREEN_MAX_FRAME_KB)');
+      return false;
+    }
+    // Rate accounting happens only for frames that are otherwise acceptable, so
+    // a burst of malformed or oversized frames cannot lock out the operator's
+    // own next real one.
+    const now = Date.now();
+    if (now - lastVideoFrameAt < minVideoFrameIntervalMs()) return false;
+    lastVideoFrameAt = now;
     return sendRaw({ realtimeInput: { video: { mimeType: 'image/jpeg', data: base64Jpeg } } });
   }
 

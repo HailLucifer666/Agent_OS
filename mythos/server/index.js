@@ -1981,7 +1981,15 @@ function createServer(deps) {
       // before live-open (or after a close) is a silent no-op, never a throw —
       // the HUD's capture loop and the session lifecycle are independent timers
       // and will always race at the edges.
-      else if (msg.type === 'live-video') { if (liveSession) liveSession.sendVideoFrame(msg.data); }
+      // SECURITY (2026-08-05 review, finding C2): refuse before touching the
+      // session. LIVE_SCREEN_SHARE_ENABLED used to be enforced ONLY in renderer
+      // JS, and this socket is unauthenticated for loopback callers on stock
+      // config, so any local process could stream frames to Gemini on the
+      // operator's key with screen share off. live-session.js's sendVideoFrame
+      // checks too — that is the choke point; this is the cheap, explicit refusal.
+      else if (msg.type === 'live-video') {
+        if (liveSession && config.LIVE_SCREEN_SHARE_ENABLED === true) liveSession.sendVideoFrame(msg.data);
+      }
       else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') { if (liveSession) liveSession.sendText(String(msg.text || '')); }
     });

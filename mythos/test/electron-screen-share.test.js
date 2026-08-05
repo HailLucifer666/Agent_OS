@@ -67,7 +67,15 @@ class FakeSocket extends EventEmitter {
 function fakeDeps(overrides) {
   const sockets = [];
   const deps = Object.assign({
-    config: {},
+    // LIVE_SCREEN_SHARE_ENABLED must be explicitly true here as of 2026-08-05.
+    // These tests originally ran with an empty config because sendVideoFrame had
+    // no opt-in gate at all — which was finding C2 of the first security review of
+    // this surface: the flag was enforced ONLY in renderer JS, so anything that
+    // reached the local socket could stream frames to Gemini with screen share
+    // "off". The gate now lives in sendVideoFrame and fails closed on an absent
+    // flag, so a test asserting the HAPPY path has to opt in like a real operator
+    // does. The refusal paths are covered in test/screen-share-security.test.js.
+    config: { LIVE_SCREEN_SHARE_ENABLED: true },
     bus: { emit() {} },
     logger: { warn() {}, info() {} },
     spend: { recordCall() {} },
@@ -166,13 +174,20 @@ test('Slice 3 / server: a live-video WS message forwards to liveSession.sendVide
   const src = readSource(MYTHOS_DIR, 'server', 'index.js');
   assert.match(src, /msg\.type === 'live-video'/,
     "server/index.js must handle {type:'live-video'} on the HUD socket");
-  const branch = src.slice(src.indexOf("msg.type === 'live-video'"));
-  const line = branch.slice(0, branch.indexOf('\n'));
-  assert.match(line, /sendVideoFrame\(/,
+  // Widened from a single-line slice to the whole branch on 2026-08-05: the
+  // branch stopped being a one-liner when the security review's finding C2 added
+  // the server-side LIVE_SCREEN_SHARE_ENABLED check. The two things this test
+  // guards — the right method, and the liveSession guard — are both still
+  // asserted; only the window they are read from changed.
+  const branch = src.slice(src.indexOf("msg.type === 'live-video'"), src.indexOf("msg.type === 'live-close'"));
+  assert.match(branch, /sendVideoFrame\(/,
     'the live-video branch must call sendVideoFrame — not sendAudio, not sendText');
-  assert.match(line, /if \(liveSession\)/,
-    'must guard on liveSession like the live-audio branch, so a frame arriving '
-    + 'before live-open is a no-op rather than a TypeError');
+  assert.match(branch, /if \(liveSession\s*&&/,
+    'must still guard on liveSession, so a frame arriving before live-open is a '
+    + 'no-op rather than a TypeError');
+  assert.match(branch, /LIVE_SCREEN_SHARE_ENABLED/,
+    'and must refuse when screen share is not enabled — this socket is '
+    + 'unauthenticated for loopback callers on stock config');
 });
 
 // ---------------------------------------------------------------------------

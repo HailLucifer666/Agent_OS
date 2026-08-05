@@ -501,6 +501,12 @@ const SCHEMA = {
   LIVE_SCREEN_SHARE_ENABLED:   { type: 'bool',   default: false },
   LIVE_SCREEN_FPS:             { type: 'number', default: 0.5, min: 0.1, max: 4 },
   LIVE_SCREEN_JPEG_QUALITY:    { type: 'number', default: 0.6, min: 0.1, max: 1 },
+  // Per-frame size ceiling, enforced in live-session.js's sendVideoFrame. The
+  // 2026-08-05 security review found nothing bounded a frame below ws's 100MB
+  // default, so a direct WS caller could push arbitrarily large billed images at
+  // the operator's own Gemini key. A 1280px-edge JPEG at quality 0.6 is a few
+  // hundred KB, so 2MB is generous for the legitimate path and still a real cap.
+  LIVE_SCREEN_MAX_FRAME_KB:    { type: 'number', default: 2048, min: 64, max: 16384 },
 };
 
 module.exports = { SCHEMA };

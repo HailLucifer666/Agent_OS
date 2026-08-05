@@ -352,14 +352,39 @@ if (!gotLock) {
     // renderer is sandboxed + contextIsolated; it can request but not bypass.
     const { session } = require('electron');
     const loopbackOrigin = `http://${BIND}:${PORT}`;
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    // SECURITY (2026-08-05 review, finding C1): these handlers are registered on
+    // session.defaultSession, which is SHARED with electron/media-window.js — a
+    // second BrowserWindow that loads `payload.url` from the `open_web` tool and
+    // therefore can end up running arbitrary third-party JS (an operator typo, a
+    // prompt-injected tool call, a poisoned search result the assistant reads).
+    // Granting by permission NAME alone handed that window the microphone and the
+    // whole desktop. Every capture grant below is now scoped to the HUD window.
+    //
+    // NOT fixed by giving the media window its own partition: the network-level
+    // ad/tracker blocking further down is registered on session.defaultSession,
+    // so isolating that window would silently disable ad blocking for exactly the
+    // surface that shows ads (see BUG-115, where an ad blocker that was never
+    // present got debugged as though it were misconfigured).
+    const isHudContents = (wc) => {
+      try {
+        return !!(wc && mainWindow && !mainWindow.isDestroyed() && wc === mainWindow.webContents);
+      } catch (_) {
+        return false; // a destroyed window mid-teardown is not the HUD
+      }
+    };
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
       const allowed = ['media', 'audioCapture', 'microphone'];
-      callback(allowed.includes(permission));
+      // Mic capture belongs to the HUD alone. The media window plays audio, which
+      // needs no permission at all — only CAPTURE does.
+      callback(allowed.includes(permission) && isHudContents(wc));
     });
     // Pre-seed the permission so getUserMedia doesn't even have to ask:
-    session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
+    session.defaultSession.setPermissionCheckHandler((wc, permission) => {
       const allowed = ['media', 'audioCapture', 'microphone', 'display-capture'];
-      return allowed.includes(permission);
+      if (!allowed.includes(permission)) return false;
+      // display-capture is the whole desktop; a blanket true here let any
+      // webContents on this session pre-seed it and skip the request handler.
+      return isHudContents(wc);
     });
 
     // --- Screen share for Live video (Slice 3, spine §13's desktopCapturer) ---
@@ -378,11 +403,40 @@ if (!gotLock) {
     //
     // No source picker: MYTHOS is a voice assistant answering "what's on my
     // screen", so the primary display is the only sensible answer and a modal
-    // picker on every session would defeat the point. The renderer still cannot
-    // start capture unopted — LIVE_SCREEN_SHARE_ENABLED gates it server-side.
+    // picker on every session would defeat the point.
+    //
+    // CORRECTED 2026-08-05: this comment used to end "the renderer still cannot
+    // start capture unopted — LIVE_SCREEN_SHARE_ENABLED gates it server-side",
+    // and that was false. The flag was checked ONLY in renderer JS
+    // (ui/public/js/voice/s2s-bridge.js), so nothing server-side refused a frame,
+    // and this handler answered ANY requester on the shared session — so the flag
+    // did not gate this path either. Both halves are now real: the frame gate
+    // lives in live-session.js's sendVideoFrame plus the server's live-video
+    // branch, and the grant below is scoped to the HUD window.
     if (typeof session.defaultSession.setDisplayMediaRequestHandler === 'function') {
       session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-        const { desktopCapturer } = require('electron');
+        const { desktopCapturer, webContents } = require('electron');
+        // SECURITY (finding C1): identify the REQUESTER before handing over a
+        // screen. request.frame is a WebFrameMain; webContents.fromFrame maps it
+        // back to the window that asked. Anything that is not the HUD is denied —
+        // including the media window, which shares this session and can be
+        // pointed at an arbitrary URL by the open_web tool.
+        //
+        // Fails CLOSED when the mapping is unavailable (older Electron without
+        // webContents.fromFrame): for a whole-desktop capture, refusing a request
+        // we cannot attribute is the only defensible default.
+        let requester = null;
+        try {
+          if (request && request.frame && webContents && typeof webContents.fromFrame === 'function') {
+            requester = webContents.fromFrame(request.frame);
+          }
+        } catch (_) { requester = null; }
+        if (!isHudContents(requester)) {
+          log('display-media: DENIED — request did not come from the HUD window'
+            + (requester ? '' : ' (requester could not be identified)'));
+          callback({});
+          return;
+        }
         desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
           if (!sources || sources.length === 0) {
             // Deny EXPLICITLY. An un-invoked callback leaves the renderer's
