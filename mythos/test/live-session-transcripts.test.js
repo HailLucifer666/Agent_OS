@@ -261,7 +261,10 @@ describe('BUG-118 — a modelTurn part flagged as the model\'s own thinking is n
 
     const lines = logs.filter((l) => l.event === 'live.turn-parts');
     assert.equal(lines.length, 2);
-    assert.deepEqual(lines[1].detail, { textParts: 1, thoughtParts: 0 },
+    // turnId is BUG-124's join key, carried on the same line; the counters are
+    // what this test is about.
+    assert.equal(lines[1].detail.textParts, 1);
+    assert.equal(lines[1].detail.thoughtParts, 0,
       'a stale count would make a clean turn look like it leaked reasoning');
 
     session.close();

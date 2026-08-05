@@ -77,6 +77,10 @@ function createLiveSession(deps) {
   // filtering here.
   let turnTextParts = 0;
   let turnThoughtParts = 0;
+  // BUG-124: monotonic within this session object, so it survives an
+  // idle/session-max rotation (the reconnect reuses this closure) and a
+  // misalignment spanning a rotation is still traceable across it.
+  let turnCounter = 0;
 
   function setState(next, reason) {
     if (state === next) return;
@@ -107,7 +111,11 @@ function createLiveSession(deps) {
     idleRotationsWithoutSpeech += 1;
     if (idleRotationsWithoutSpeech > MAX_IDLE_ROTATIONS_WITHOUT_SPEECH) {
       if (bus && typeof bus.emit === 'function') {
-        bus.emit('health.anomaly', { kind: 'live-idle-exhausted', rotations: idleRotationsWithoutSpeech });
+        // BUG-124: turnId on every anomaly this module raises, so an anomaly can
+        // be joined to the turn it happened during.
+        bus.emit('health.anomaly', {
+          kind: 'live-idle-exhausted', rotations: idleRotationsWithoutSpeech, turnId: turnCounter,
+        });
       }
       close('idle-timeout-exhausted');
       return;
@@ -213,7 +221,7 @@ function createLiveSession(deps) {
     if (breakers && typeof breakers.fail === 'function') breakers.fail(BREAKER);
     const ok = await open();
     if (!ok && bus && typeof bus.emit === 'function') {
-      bus.emit('health.anomaly', { kind: 'live-reconnect-failed', reason: 'session-resume' });
+      bus.emit('health.anomaly', { kind: 'live-reconnect-failed', reason: 'session-resume', turnId: turnCounter });
     }
   }
 
@@ -258,17 +266,32 @@ function createLiveSession(deps) {
       }
       if (sc.turnComplete) {
         if (breakers && typeof breakers.success === 'function') breakers.success(BREAKER);
-        const turn = { userText: userText.trim(), assistantText: assistantText.trim() };
+        // BUG-124: a monotonic per-session turn number, attached to the turn and
+        // to every anomaly this module raises about it. The reported symptom is
+        // transcripts pairing the wrong user text with the wrong reply, plus
+        // occasional empty replies — and the accumulation logic here is per the
+        // module invariant (independent ifs, no else-if), so nothing on our side
+        // reorders fragments. That points upstream, but "points upstream" is a
+        // hypothesis, and no audit or episodic record currently lets anyone say
+        // WHICH turn an anomaly belonged to. This is the missing join key, not a
+        // fix: correlate a live-turn-no-transcript against the episodic write
+        // with the same turnId and the question stops being a guess.
+        turnCounter += 1;
+        const turn = {
+          userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter,
+        };
         userText = ''; assistantText = '';
         // BUG-118 instrumentation — see the counter declarations above. Logged
         // for every turn (one small line) because the interesting case is the
         // NEGATIVE one: a reasoning leak with thoughtParts:0 rules the text
         // filter out and points at the spoken audio instead.
-        logger.info('live.turn-parts', { textParts: turnTextParts, thoughtParts: turnThoughtParts });
+        logger.info('live.turn-parts', {
+          turnId: turnCounter, textParts: turnTextParts, thoughtParts: turnThoughtParts,
+        });
         turnTextParts = 0; turnThoughtParts = 0;
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
-          bus.emit('health.anomaly', { kind: 'live-turn-no-transcript' });
+          bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });
         }
         if (onTurnComplete) onTurnComplete(turn);
       }

@@ -458,7 +458,7 @@ function createLiveToolAdapter(deps) {
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
   // shape handleUtterance already uses, so recall/audit stay consistent
   // whether a turn came through the batch or Live path.
-  function onLiveTurnComplete({ userText, assistantText }) {
+  function onLiveTurnComplete({ userText, assistantText, turnId }) {
     // Atomic snapshot+clear (splice, not read-then-`.length=0`), and advance
     // the generation BEFORE anything else runs — any commitAction() call that
     // was mid-flight for this now-closing turn sees the new generation and
@@ -482,7 +482,13 @@ function createLiveToolAdapter(deps) {
         summary: 'User: ' + userText.slice(0, 100) + ' | MYTHOS: ' + assistantText.slice(0, 100),
         detail: {
           role: 'user', text: userText.slice(0, 2000), reply: assistantText.slice(0, 1000),
-          turnId: 'live-' + Date.now(), transport: 's2s',
+          // BUG-124: prefer the session's real monotonic turn number when the
+          // transport supplies one. A timestamp identifies WHEN, which is what
+          // made a misalignment report impossible to chase — two records a few
+          // hundred ms apart cannot be ordered against an anomaly by eye. The
+          // timestamp stays as the fallback for any caller that has no turnId.
+          turnId: (turnId === undefined || turnId === null) ? 'live-' + Date.now() : 'live-turn-' + turnId,
+          transport: 's2s',
           actions: actionsThisTurn.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
         },
         salience: 0.6, channel: 'voice',
