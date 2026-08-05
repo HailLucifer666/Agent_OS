@@ -25,7 +25,9 @@ const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispat
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
 const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
-const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
+const {
+  createLiveToolAdapter, SYSTEM_NOTICE_PREFIX, LIVE_SYSTEM_NOTICE_INSTRUCTION,
+} = require('../src/core/voice/live-tool-adapter');
 const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
 // BUG-113: a spoken first-person commitment ("I'll check X") must leave a
 // record — logCommitmentIfPresent is a no-op unless the text matches the
@@ -130,7 +132,11 @@ function createServer(deps) {
   // catalog. Same content as today's per-turn voice prompt, assembled once —
   // V2 estimates ~50x cheaper under S2S (today ~3,524 tokens x every turn).
   function buildLiveSystemInstruction() {
-    const parts = [RULES];
+    // BUG-117: the transport has no system role after setup, so every pipeline
+    // injection arrives as user-role realtimeInput and the model attributed it
+    // to the operator. This clause is the other half of SYSTEM_NOTICE_PREFIX —
+    // both live in live-tool-adapter.js so they cannot drift apart.
+    const parts = [RULES, LIVE_SYSTEM_NOTICE_INSTRUCTION];
     try {
       const persona = identity && typeof identity.persona === 'function' ? identity.persona() : null;
       if (persona) parts.push(persona);
@@ -853,7 +859,9 @@ function createServer(deps) {
     // (the pre-existing/legacy path) behaves exactly as before.
     const liveSession = (targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
     if (liveSession && liveSession.isOpen()) {
-      liveSession.sendText(`[SYSTEM] ${text}`);
+      // BUG-117: same self-describing prefix the tool-outcome pushes use — a
+      // proactive alert is even easier to misread as the operator speaking.
+      liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${text}`);
       try {
         memory.episodic.write({
           kind: 'proactive-speech', channel: 'proactive',

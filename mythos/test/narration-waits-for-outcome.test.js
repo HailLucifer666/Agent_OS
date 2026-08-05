@@ -135,7 +135,7 @@ describe('WAVE 3 — live: a slow tool reports "started", then the real outcome'
     resolveDispatch({ ok: true, result: { nowPlaying: 'Slow It Down' } });
     await new Promise((r) => setTimeout(r, 10));
 
-    const systemPush = sent.filter((s) => typeof s === 'string' && /^\[SYSTEM\]/.test(s));
+    const systemPush = sent.filter((s) => typeof s === 'string' && /^\[SYSTEM NOTICE/.test(s));
     assert.equal(systemPush.length, 1, 'the outcome must arrive through the [SYSTEM] channel');
     assert.match(systemPush[0], /finished/i);
     assert.match(systemPush[0], /Slow It Down/);
@@ -162,7 +162,7 @@ describe('WAVE 3 — live: a slow tool reports "started", then the real outcome'
     resolveDispatch({ ok: true, unverified: true, reason: 'clicked but Spotify is playing BACK 2 LOVE' });
     await new Promise((r) => setTimeout(r, 10));
 
-    const push = sent.find((s) => typeof s === 'string' && /^\[SYSTEM\]/.test(s));
+    const push = sent.find((s) => typeof s === 'string' && /^\[SYSTEM NOTICE/.test(s));
     assert.match(push, /could NOT be confirmed/i);
     assert.match(push, /BACK 2 LOVE/, 'the contradicting evidence must reach the model verbatim');
     assert.match(push, /Do not tell the operator it worked/i);
@@ -177,7 +177,7 @@ describe('WAVE 3 — live: a slow tool reports "started", then the real outcome'
     resolveDispatch({ ok: false, result: { error: 'circuit-open' } });
     await new Promise((r) => setTimeout(r, 10));
 
-    const push = sent.find((s) => typeof s === 'string' && /^\[SYSTEM\]/.test(s));
+    const push = sent.find((s) => typeof s === 'string' && /^\[SYSTEM NOTICE/.test(s));
     assert.match(push, /FAILED/);
     assert.match(push, /circuit-open/);
   });

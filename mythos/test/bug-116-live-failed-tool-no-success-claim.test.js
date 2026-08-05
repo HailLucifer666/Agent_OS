@@ -149,7 +149,7 @@ describe('BUG-116 — the late/slow and confirm channels forbid it as explicitly
     resolveDispatch({ ok: false, result: { error: 'spotify returned error 153' } });
     await new Promise((r) => setTimeout(r, 10));
 
-    const systemPush = sent.filter((s) => typeof s === 'string' && /^\[SYSTEM\]/.test(s));
+    const systemPush = sent.filter((s) => typeof s === 'string' && /^\[SYSTEM NOTICE/.test(s));
     assert.equal(systemPush.length, 1);
     assert.match(systemPush[0], /error 153/, 'the real reason must reach the model');
     assertForbidsSuccessClaim(systemPush[0], 'late failure [SYSTEM] push');

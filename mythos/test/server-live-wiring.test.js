@@ -14,6 +14,7 @@ const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
 const { createBus } = require('../src/core/bus');
 const { createServer } = require('../server');
+const { SYSTEM_NOTICE_PREFIX } = require('../src/core/voice/live-tool-adapter');
 
 function fakeFs() {
   return { vaultPath: (...s) => path.join('/test-vault', ...s) };
@@ -216,6 +217,46 @@ describe('server-live-wiring (Phase 5, V2 §10)', () => {
       await waitFor(() => sockets[1].sent.some((f) => f.setup));
       const secondText = sockets[1].sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
       assert.match(secondText, /Current local date\/time:/, 'the rotated session must ALSO carry a local time, not lose it on reconnect');
+
+      ws.close();
+    } finally {
+      if (prevKey === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = prevKey;
+      await server.stop();
+    }
+  });
+
+  test('BUG-117: the Live systemInstruction explains the automated-notice prefix', async () => {
+    // The transport gives us no system role after setup, so every pipeline
+    // injection arrives as user-role realtimeInput. Without this clause the
+    // model reads a tool outcome or a proactive alert as operator speech —
+    // which is how it came to tell the operator they had said things they
+    // never said. The clause must reach the model in the SETUP frame, before
+    // any notice can arrive.
+    const bus = createBus({ historySize: 50 });
+    const sockets = [];
+    const createLiveSocket = () => { const s = new FakeGeminiSocket(); sockets.push(s); return s; };
+    const prevKey = process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_API_KEY = 'test-key-for-notice-clause';
+    const server = createServer(baseDeps(bus, {
+      config: { VOICE_S2S_ENABLED: true },
+      createLiveSocket,
+    }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+      ws.send(JSON.stringify({ type: 'live-open' }));
+      await waitFor(() => sockets.length === 1);
+      sockets[0].simulateOpen();
+      sockets[0].serverFrame({ setupComplete: {} });
+      await waitFor(() => sockets[0].sent.some((f) => f.setup));
+
+      const text = sockets[0].sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
+      assert.ok(text.includes(SYSTEM_NOTICE_PREFIX),
+        'the prompt must quote the exact prefix the model will later see on the wire');
+      assert.match(text, /never blame the operator/i,
+        'the prompt must forbid attributing an automated notice to the operator');
 
       ws.close();
     } finally {

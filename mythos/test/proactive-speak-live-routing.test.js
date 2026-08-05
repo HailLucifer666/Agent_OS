@@ -150,8 +150,8 @@ describe('proactiveSpeak routes through the Live session instead of edge-tts (St
         f.realtimeInput.text.includes('Stand-up in five minutes'));
       assert.ok(sentToGemini, 'the reminder text must have been sent to the open Live session');
       assert.match(
-        sentToGemini.realtimeInput.text, /\[SYSTEM\]/,
-        'must use the same [SYSTEM] sendText channel reportLateOutcome() uses'
+        sentToGemini.realtimeInput.text, /\[SYSTEM NOTICE/,
+        'must use the same [SYSTEM NOTICE ...] sendText channel reportLateOutcome() uses (BUG-117)'
       );
 
       // Give any (incorrect) speech-chunk path a beat to arrive, then assert

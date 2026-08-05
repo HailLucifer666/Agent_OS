@@ -31,6 +31,34 @@
 // list, so ordinary Live turns are unaffected.
 const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
+// BUG-117 — 2026-08-05: MYTHOS blamed the operator for messages the pipeline
+// injected itself ("you said the click failed"). It is not the model being
+// careless: the frozen Gemini Live wire protocol (V2 spine §3) has NO
+// system-role channel after setup. Everything sent post-setup through
+// liveSession.sendText() leaves as realtimeInput:{text}, which Gemini attributes
+// to the USER role — there is no frame we are allowed to send that says
+// otherwise. Reusing a functionResponse is not an option either: both injection
+// sites fire AFTER the original toolResponse for that call has already gone.
+//
+// So the only honest fix is framing, and it has two halves that must agree:
+//   1. this prefix, which is self-describing on its own, and
+//   2. LIVE_SYSTEM_NOTICE_INSTRUCTION below, which the Live system instruction
+//      carries so the model knows what the prefix means before it ever sees one.
+// They live together in this module so the two can never drift apart. All three
+// injection sites use them: reportLateOutcome(), resolveLiveConfirm(), and
+// server/index.js's proactiveSpeak() Live route.
+const SYSTEM_NOTICE_PREFIX =
+  '[SYSTEM NOTICE — automated message from MYTHOS\'s own pipeline, NOT the operator speaking]';
+
+const LIVE_SYSTEM_NOTICE_INSTRUCTION =
+  `AUTOMATED SYSTEM NOTICES. Some messages that arrive in this conversation as if the operator ` +
+  `spoke them begin with "${SYSTEM_NOTICE_PREFIX}". They are NOT the operator speaking. They are ` +
+  `automated notices from MYTHOS's own pipeline — the real outcome of a tool you called, the ` +
+  `operator's answer to an approval prompt, or a proactive alert. The transport has no separate ` +
+  `system channel, which is the only reason they look like operator speech. Treat them as ground ` +
+  `truth about what happened, act on them, but NEVER say or imply the operator told you any of it, ` +
+  `and never blame the operator for their content.`;
+
 function createLiveToolAdapter(deps) {
   const {
     leash, dispatchAction, bus, logger, connectionId,
@@ -333,7 +361,7 @@ function createLiveToolAdapter(deps) {
 
     const liveSession = getLiveSession ? getLiveSession() : null;
     if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as confirms
-    liveSession.sendText(`[SYSTEM] ${verdict} ${instruction}`);
+    liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`);
   }
 
   // Hook the EXISTING confirm-accept path so an approval/rejection feeds the
@@ -382,7 +410,7 @@ function createLiveToolAdapter(deps) {
 
     const liveSession = getLiveSession ? getLiveSession() : null;
     if (!liveSession || !liveSession.isOpen()) return; // nothing left to tell — best-effort
-    liveSession.sendText(`[SYSTEM] ${verdict} ${instruction}`);
+    liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`);
   }
 
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
@@ -432,4 +460,4 @@ function createLiveToolAdapter(deps) {
   };
 }
 
-module.exports = { createLiveToolAdapter };
+module.exports = { createLiveToolAdapter, SYSTEM_NOTICE_PREFIX, LIVE_SYSTEM_NOTICE_INSTRUCTION };
