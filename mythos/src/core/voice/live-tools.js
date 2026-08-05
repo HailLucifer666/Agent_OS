@@ -19,7 +19,7 @@ const DEFAULT_ALLOWLIST = [
   'capture_idea','pipeline_status','pipeline_advance',
   'kanban_status','kanban_add_card','kanban_move_card',
   'start_project','build_project','project_status','job_status','open_artifact',
-  'get_time','get_weather','web_search','web_fetch',
+  'get_time','get_weather','get_directions','web_search','web_fetch',
   'remember','log_incident','recall_memory',
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
@@ -38,7 +38,10 @@ const DEFAULT_ALLOWLIST = [
   // Chromium/CEF/Electron apps like Spotify desktop, YouTube web, Electron
   // overlays)" — advice the Live model could not follow, because none of the three
   // were reachable from this path while cua-driver was ONLINE and serving Spotify.
-  'cua_list_windows','cua_get_window_state','cua_click',
+  // BUG-110: cua_bring_to_front was the one cua-driver tool left off this list
+  // -- its pc-child twin focus_window is reachable, and its three cua_*
+  // siblings above already are, so its absence was drift, not a choice.
+  'cua_list_windows','cua_get_window_state','cua_click','cua_bring_to_front',
   // whatsapp_send was missing while its sibling gmail_send was present, so MYTHOS
   // truthfully answered "I don't currently have a tool to send WhatsApp messages"
   // and then improvised with ui_type into whatever box had focus. app_reply is the
@@ -54,6 +57,50 @@ const DEFAULT_ALLOWLIST = [
   // operator asked to clean up a stray YouTube tab.
   'browser_launch_debug','browser_get_title','browser_tabs',
   'set_persona_level','ask_agent',
+];
+
+// BUG-110: a T0/T1 (read-only or local-write, auto-allow) effector missing
+// from BOTH this list and DEFAULT_ALLOWLIST is a silent voice-reachability
+// gap of get_directions's exact shape -- test/bug-110-t0-t1-allowlist-reachability
+// .test.js fails loudly if one appears. Each group below is a deliberate
+// curation choice (the tool-count/accuracy tradeoff noted above), not an
+// oversight; promote an entry to DEFAULT_ALLOWLIST the day a session actually
+// needs it from voice.
+const VOICE_ALLOWLIST_EXEMPT = [
+  // Sandboxed folder/file/clipboard reads -- desktop power-user surface, not
+  // asked for in normal conversation; their write-side siblings are already T3.
+  'list_folder','read_file','search_files','clipboard_read',
+  // Status/introspection singletons -- read_status/self_capabilities-style
+  // summaries cover these; not a distinct spoken verb of their own.
+  'get_volume','mission_status','persona_status','self_capabilities',
+  // Loads a skill's guidance text from disk -- internal/debugging surface.
+  'use_skill',
+  // Not yet asked for in a live session; promote if usage shows up.
+  'camera_look','timer_add','timer_cancel',
+  // Documents/code-search (§7.5, §7.11) -- opt-in power feature with its own
+  // UI surface, not curated into the default voice set.
+  'document_list','document_search','document_answer','document_ingest',
+  'search_code','index_project',
+  // MCP transport listing -- introspection for an optional, often-empty
+  // MCP_SERVERS config; mcp_call_tool itself is T3 and correctly absent here.
+  'mcp_list_servers','mcp_list_tools',
+  // Open Knowledge Format bundle tools -- not a spoken verb.
+  'okf_list','okf_import',
+  // Android bridge (Task 10, step 6) -- debugging/status reads for an
+  // optional adapter, not yet part of the curated voice surface.
+  'phone_list_devices','phone_screenshot','phone_notifications','phone_contacts_search',
+  // Dashboard/system writes with their own UI (kanban/widgets/daily brief) --
+  // reachable through the HUD; withheld from voice to keep the tool count down.
+  'write_note','spawn_widget','manage_widget','ambient_awareness','daily_plan',
+  // Browser helper reads not curated alongside the browser_* set above.
+  'browser_screenshot','browser_scroll','browser_go_back','browser_wait_for',
+  // §7.6 calendar read -- gated behind the same missing-write gap BUG-104
+  // documents; exempted rather than exposing a read with no companion action.
+  'calendar_upcoming',
+  // create_goal already covers the voice-reachable case; propose_goal's inert
+  // 'proposed' status is an internal/autonomous-arbiter path (see goals.create
+  // usage elsewhere in this batch).
+  'propose_goal',
 ];
 
 const OPTIONAL_RE = /\(optional\)/i;
@@ -143,4 +190,4 @@ function buildFunctionDeclarations(hub, opts) {
   return { declarations: declared, withheld };
 }
 
-module.exports = { buildFunctionDeclarations, DEFAULT_ALLOWLIST, _internal: { parseParam, toDeclaration } };
+module.exports = { buildFunctionDeclarations, DEFAULT_ALLOWLIST, VOICE_ALLOWLIST_EXEMPT, _internal: { parseParam, toDeclaration } };
