@@ -145,21 +145,70 @@ async function browser_navigate({ url, newTab, browser }) {
   }).catch(err => fail(err.message));
 }
 
+// BUG-121 — 2026-08-05: browser_click could not hit a YouTube video thumbnail.
+// The old body was one bounded visible-wait and then a plain page.click, so an
+// element that is in the DOM but never satisfies Playwright's actionability
+// checks (YouTube's ytd-* custom elements hydrate late; a thumbnail can be
+// attached and clickable-by-JS while still reported not-visible, or be covered
+// by an overlay) had no path at all — it failed with "not visible" and stopped.
+//
+// A ladder, with every rung named in the result so the operator hears WHICH
+// route worked rather than a bare success:
+//   1. visible wait -> scrollIntoViewIfNeeded -> native page.click. Fully
+//      verified: Playwright's actionability check IS the oracle.
+//   2. attached wait -> el.click() in page context. A JS click bypasses
+//      hit-testing, so it can "succeed" against a covered element that a real
+//      user could never have clicked. That is a weaker oracle than rung 1, so
+//      per the evidence contract this rung returns unverified:true with a
+//      spoken-usable reason rather than a bare ok.
+//   3. neither -> fail naming the selector and the rungs tried.
+// No coordinate fallback in this pass — clicking blind screen coordinates in a
+// browser has no oracle at all.
 async function browser_click({ selector }) {
   if (!selector) return fail('CSS selector is required.');
   const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
-    // waitReady replaces the old swallowed-catch waitForSelector(5000): if the
-    // element never becomes visible within BROWSER_PAGE_WAIT_MS, fail CLEANLY
-    // here (with the selector named) instead of silently falling through to
-    // page.click which then rode the 15s page-default timeout. No retry storm.
-    if (!(await waitReady(page, selector))) {
-      return fail(`Element not ready (not visible within ${pageWaitMs()}ms): ${selector}`);
+    const stagesTried = [];
+
+    // Rung 1 — the real thing. waitReady is the same bounded visible-wait that
+    // replaced the old swallowed-catch waitForSelector: no retry storm.
+    stagesTried.push('visible-wait');
+    if (await waitReady(page, selector)) {
+      // A thumbnail below the fold is "visible" to Playwright's state check but
+      // still needs scrolling before the click lands. Bounded and best-effort:
+      // a scroll that cannot run must not lose us the click that would have.
+      try { await page.locator(selector).first().scrollIntoViewIfNeeded({ timeout: 2000 }); } catch (_) {}
+      stagesTried.push('native-click');
+      await page.click(selector);
+      return ok({ clicked: selector, url: page.url(), via: 'native-click', stages: stagesTried });
     }
-    await page.click(selector);
-    return ok({ clicked: selector, url: page.url() });
+
+    // Rung 2 — attached but not actionable. This is the lazy-hydration case.
+    stagesTried.push('attached-wait');
+    let handle = null;
+    try {
+      handle = await page.waitForSelector(selector, { timeout: pageWaitMs(), state: 'attached' });
+    } catch (_) { handle = null; }
+
+    if (handle) {
+      stagesTried.push('js-click');
+      await handle.evaluate((el) => el.click());
+      return {
+        ok: true,
+        unverified: true,
+        reason: `clicked ${selector} from page script because it never became visibly actionable — ` +
+          'a script click skips the checks that prove a real user could have hit it, so I cannot ' +
+          'confirm the page reacted',
+        result: { clicked: selector, url: page.url(), via: 'js-click', stages: stagesTried },
+      };
+    }
+
+    return fail(
+      `Could not click ${selector}: it never became visible within ${pageWaitMs()}ms and was not ` +
+      `in the DOM to click from page script either. Tried: ${stagesTried.join(', ')}.`
+    );
   }).catch(err => fail(err.message));
 }
 

@@ -273,7 +273,11 @@ describe('Browser SPA fix — waitReady pre-wait + no-swallow', () => {
     const { browser_click } = require('../src/core/effectors/from-browser');
     const r = await browser_click({ selector: 'ytd-rich-item-renderer #video-title' });
     assert.equal(r.ok, false, 'must fail when the element never becomes visible');
-    assert.ok(r.result.includes('not ready'), 'failure should name the not-ready reason, got: ' + r.result);
+    // BUG-121 reworded this: the element here is neither visible NOR attached,
+    // so the failure now reports both rungs of the ladder rather than the old
+    // single "not ready". The invariant this test guards is unchanged — a clean
+    // named failure, and no blind native click after the pre-wait fails.
+    assert.ok(r.result.includes('never became visible'), 'failure should name the not-ready reason, got: ' + r.result);
     assert.ok(r.result.includes('ytd-rich-item-renderer'), 'failure should name the selector, got: ' + r.result);
     assert.equal(clicked, false, 'must NOT call page.click after a failed pre-wait (old code did, rode the 15s default)');
   });
