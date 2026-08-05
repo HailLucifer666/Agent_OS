@@ -3086,3 +3086,77 @@ operator running MYTHOS with voice.
 10. Open the app with unread mail waiting → exactly one utterance, not a
     greeting followed by an email summary. (BUG-112 residual)
 
+---
+
+## Session (2026-08-06, later) — the browser root cause, not another symptom
+
+Not a bug entry: this is the mechanism that removes the cause behind BUG-107,
+BUG-119, BUG-120, BUG-121, BUG-122 and their predecessors. Every one of those
+was a different symptom of the same thing — **the model drives the browser
+through CSS selectors it has never seen confirmed** — and every fix so far
+(longer waits, fallback ladders, retries, better refusal messages) treated a
+symptom of that guess. Commits `fbe7727`, `c4dbafe`, `6f231ac`.
+
+**What shipped.** `browser_snapshot` reads the page as an accessibility tree in
+which every interactable element carries a ref (`[ref=e12]`); `browser_click`,
+`browser_type` and `browser_fill_form` accept a ref instead of a selector; each
+ref action reports a post-action page-state capsule as oracle-backed evidence.
+Then the rest of the surface: `browser_upload_file` (resume upload, confined to
+`BROWSER_UPLOAD_DIR`), `browser_select_option`, `browser_press_key`,
+`browser_hover`, `browser_dismiss_overlays` and `browser_check_captcha`. Suite
+2905/2904/0 fail/1 skip; 8 new tools, hub gate 92 → 99.
+
+**Zero new dependencies.** playwright-core 1.61.1 was already here and already
+public-API capable — verified against this repo's installed copy, not assumed:
+`page.ariaSnapshot({mode:'ai'})` mints the refs *and* inlines iframe subtrees,
+and `page.locator('aria-ref=f3e12')` jumps to the owning frame by itself
+(`_jumpToAriaRefFrameIfNeeded`). Iframe support, the piece job-application forms
+need most, is therefore native. The three tools that inspired the design were
+all rejected as software and only their design taken: agent-browser (external
+Rust daemon vs the portability rule, and the BUG-029 orphan class), lightpanda
+(no Windows build, no rendering, AGPL-3.0 against the licensing gate), ego-lite
+(macOS-only).
+
+**One defect found and fixed mid-batch**, worth recording because the shape
+recurs: the ref actions initially returned `ok(await withStateCapsule(...))`,
+which buries `unverified`/`evidence` one level inside `.result`, where
+dispatch-action and `evaluateOutcome` do not look. An unproven action would have
+read as a plain `ok:true`. Same flattening as the Wave 0 evidence defect, one
+wrapper deeper.
+
+**The boundary, stated once:** MYTHOS does not solve or bypass CAPTCHAs. It
+detects them, says so, and asks the operator to complete the challenge by hand.
+This is the operator's own logged-in browser; working around anti-bot checks is
+how real accounts get banned. A source assertion in
+`test/browser-obstacles.test.js` fails if a solver service ever appears in
+`from-browser.js`.
+
+### Live gate — NONE of this is live-verified yet
+
+Unit tests cannot prove a real page behaves. Sample each **≥3 runs**: one lucky
+reply has hidden flakiness in this repo before.
+
+1. **Video (the week-long pain case).** Brave on 9222 → YouTube → `browser_snapshot`
+   → click the first thumbnail by ref → the evidence line must read
+   `video PLAYING`. If a pre-roll runs, the snapshot should expose "Skip Ad" as
+   a ref, clickable like anything else.
+2. **Job form.** A real Greenhouse/Lever posting → snapshot must include the
+   iframe's fields (refs shaped `f<N>e<M>`) → fill name/email by ref →
+   `browser_upload_file` a resume from the allowlisted folder → Next →
+   re-snapshot → read the values back.
+3. **Obstacle.** A consent-walled news site → `browser_dismiss_overlays` clears
+   it and the evidence names exactly what it clicked → `browser_get_text`
+   returns the article.
+4. **Voice end-to-end.** By voice: "open YouTube and play <song>". Confirm the
+   model actually calls `browser_snapshot` BEFORE clicking (allowlist + prompt
+   hint working), that the toolResponse size does not blow up the Live session
+   (the snapshot is capped at 200 nodes / 8KB and states what it dropped), and
+   that the T3 confirm fires once rather than per click (BUG-119's grant).
+5. **CAPTCHA.** Reach any page with a challenge → MYTHOS stops and asks, and
+   makes no attempt at it.
+
+Also unverified: **the Electron shell has not been started since these changes.**
+Nothing under `electron/` was touched and `boot.test.js` (which spawns
+`src/main.js`) passes, but a green suite has proven before that it cannot tell
+you the app boots.
+
