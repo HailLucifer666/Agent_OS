@@ -23,6 +23,9 @@ const { effectorFromTool } = require('./adapter');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
+// BUG-113: surface open spoken commitments in read_status so "where are we
+// on X" is answerable from state instead of memory.
+const { listOpenCommitments } = require('./from-calendar');
 
 function ok(result, uiActions) {
   return uiActions ? { ok: true, result, uiActions } : { ok: true, result };
@@ -51,6 +54,7 @@ function buildTools(ctx) {
   const probes = ctx.probes;
   const config = ctx.config;
   const fs = ctx.fs;
+  const goals = ctx.goals; // BUG-113: raw GoalSystem, optional — commitment ledger read in read_status
 
   // ---- navigate ----
 
@@ -403,7 +407,11 @@ function buildTools(ctx) {
     try {
       const status = probes ? await probes.getStatus() : null;
       const jobs = buildRunner.listJobs().slice(-5);
-      return ok({ status, recentJobs: jobs });
+      // BUG-113: open commitments ("I'll check X") the operator can ask about
+      // later — best-effort, never blocks status on a ledger read failure.
+      let openCommitments = [];
+      try { openCommitments = listOpenCommitments(goals) || []; } catch (_) {}
+      return ok({ status, recentJobs: jobs, openCommitments });
     } catch (err) {
       return fail(err.message);
     }

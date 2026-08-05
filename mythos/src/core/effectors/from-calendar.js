@@ -360,4 +360,116 @@ function registerFromCalendar(hub, ctx) {
   return { count: tools.length, calendar: createCalendarEffector(ctx) };
 }
 
-module.exports = { createCalendarEffector, buildCalendarTools, registerFromCalendar };
+// ---- BUG-113: commitment ledger ----
+//
+// Twice in one session MYTHOS said it would do something ("let me check on
+// that", "I'll look into the ad thing"), the turn ended, and nothing was
+// ever recorded — goals, reminders and the build pipeline all exist as
+// mechanisms, but none of them fire on the ASSISTANT'S OWN spoken text.
+// This section is a self-contained primitive: detect a spoken commitment,
+// log it as an inert goal anchor (same status:'proposed' shape the T3
+// reminder-action goal above already uses), and list what's still open.
+// Call-site wiring (turn-completion in server/index.js + live-tool-
+// adapter.js, and from-dashboard.js's read_status) is deliberately NOT part
+// of this file — a separate pass wires these exports in afterward.
+//
+// Operator decision (final): EXPLICIT-ONLY detection. A missed commitment
+// is merely today's behaviour; a FALSE entry teaches the operator to
+// distrust the ledger, which is worse than not having one. So this stays a
+// small, readable pattern list — never a generic NLP classifier — and each
+// pattern is commented with exactly what it catches and why.
+var COMMITMENT_TITLE_PREFIX = 'Commitment: ';
+
+var COMMITMENT_PATTERNS = [
+  {
+    // "I'll check X", "I will look into Y", "I'll get those", "I'll follow
+    // up on Z", "I'll take care of it" — the canonical first-person FUTURE
+    // commitment shape. Requires "i'll"/"i will" directly followed by one of
+    // a small, closed list of action verbs — NOT a bare "I will be ..." or
+    // any other generic future-tense sentence.
+    regex: /\bi\s*(?:'ll|will)\s+(check|look into|follow up on|follow up with|take care of|handle|find out|dig into|sort out|get|pull up|review|investigate|work on|fix|reach out to|circle back on)\b/i
+  },
+  {
+    // "Let me check on that", "Let me get those numbers for you" — "let me"
+    // used as an immediate promise to act. "know"/"see"/"think" are
+    // deliberately excluded from the verb list so "let me know if..." /
+    // "let me think about it" (permission requests, not commitments) never
+    // match.
+    regex: /\blet\s+me\s+(check|look into|get|find out|pull up|grab|dig up|follow up on|sort out)\b/i
+  }
+];
+
+// Hedges that turn an apparent commitment back into a non-commitment. Kept
+// separate from the verb list above so that list stays readable.
+function isHedgedCommitment(fullText, matchIndex, clause) {
+  // "I'll check X if you like/want" — a conditional offer, not a stated
+  // intent. (This is also how a bare "I can check X if you like" is
+  // excluded, though that case never matches the verb list above at all.)
+  if (/\bif\b/i.test(clause)) return true;
+  // "I don't think I'll check..." / "not sure I'll..." — negation BEFORE
+  // the matched phrase that the verb-anchored regexes above can't see on
+  // their own (they only look forward from "i'll"/"let me").
+  var before = fullText.slice(Math.max(0, matchIndex - 30), matchIndex).toLowerCase();
+  if (/\b(don't think|doesn't think|not sure|doubt)\s*$/.test(before)) return true;
+  return false;
+}
+
+// detectCommitment(text) — returns the matched commitment phrase (a string,
+// trimmed to its clause) if the assistant's turn text contains an explicit
+// first-person future commitment, or null if it doesn't. Never throws.
+function detectCommitment(text) {
+  if (!text || typeof text !== 'string') return null;
+  for (var i = 0; i < COMMITMENT_PATTERNS.length; i++) {
+    var m = COMMITMENT_PATTERNS[i].regex.exec(text);
+    if (!m) continue;
+    var rest = text.slice(m.index);
+    var stop = rest.search(/[.!?\n]/);
+    var clause = (stop === -1 ? rest : rest.slice(0, stop)).trim();
+    if (!clause) continue;
+    if (isHedgedCommitment(text, m.index, clause)) continue;
+    return clause;
+  }
+  return null;
+}
+
+// logCommitmentIfPresent(text, {goals}) — if detectCommitment(text) matches,
+// writes ONE inert commitment-ledger entry via goals.create({status:
+// 'proposed', ...}): the same anchor shape addReminder() already uses for a
+// T3 confirm-gate goal (see near the top of this file) — a real, queryable
+// goal record that getActiveGoals() (goals/index.js, filters strictly on
+// status:'active') never picks up, so the autonomous arbiter/planner never
+// tries to "work on" a commitment record. Returns the created goal, or null
+// if nothing was logged (no match, or no usable goals system — degrades
+// honestly rather than throwing).
+function logCommitmentIfPresent(text, opts) {
+  var goals = opts && opts.goals;
+  var phrase = detectCommitment(text);
+  if (!phrase) return null;
+  if (!goals || typeof goals.create !== 'function') return null;
+  return goals.create({
+    title: COMMITMENT_TITLE_PREFIX + phrase,
+    drive: 'user-service',
+    status: 'proposed',
+    reason: text
+  });
+}
+
+// listOpenCommitments(goals) — every currently-open commitment-ledger entry:
+// status:'proposed' goals created by logCommitmentIfPresent specifically
+// (identified by the COMMITMENT_TITLE_PREFIX title prefix), not every
+// proposed goal in the system (e.g. the T3 reminder-action anchor above
+// carries a different, non-colliding title prefix). Shape is the plain goal
+// record — easy for read_status to consume once wired in. Returns [] if no
+// usable goals system is given.
+function listOpenCommitments(goals) {
+  if (!goals || typeof goals.list !== 'function') return [];
+  var proposed = goals.list({ status: 'proposed' }) || [];
+  return proposed.filter(function(g) {
+    return g && typeof g.title === 'string' && g.title.indexOf(COMMITMENT_TITLE_PREFIX) === 0;
+  });
+}
+
+module.exports = {
+  createCalendarEffector, buildCalendarTools, registerFromCalendar,
+  detectCommitment, logCommitmentIfPresent, listOpenCommitments
+};

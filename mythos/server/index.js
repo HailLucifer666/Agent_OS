@@ -27,6 +27,10 @@ const { createLiveSession } = require('../src/core/voice/live-session');
 const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
 const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
 const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
+// BUG-113: a spoken first-person commitment ("I'll check X") must leave a
+// record — logCommitmentIfPresent is a no-op unless the text matches the
+// explicit commitment-phrase list, so ordinary replies are unaffected.
+const { logCommitmentIfPresent } = require('../src/core/effectors/from-calendar');
 const { createLatencyTracker } = require('../src/core/voice/latency-tracker');
 const skillsLoader = require('../src/core/skills/loader');
 // createNewsFeed moved to routes/news.js (W9 god-file decomposition).
@@ -617,11 +621,24 @@ function createServer(deps) {
 
   app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
 
+  // BUG-111: the Gmail sensor is constructed AFTER createServer() (main.js's
+  // 'sensors' step runs later than 'server'), so main.js injects the poll-count
+  // getter via setGmailPollCountGetter below — same setter-injection pattern
+  // already used for requestCameraFrame/requestClosePanel above.
+  let gmailPollCountGetter = null;
+  function setGmailPollCountGetter(fn) { gmailPollCountGetter = typeof fn === 'function' ? fn : null; }
+
   app.get('/api/status', async (req, res) => {
     try {
       const status = await probes.getStatus();
       // Task 12: real voiceLatency samples only — see latency-tracker.js.
-      res.json(Object.assign({}, status, { voiceLatency: voiceLatencyTracker.stats() }));
+      // BUG-111: surface real Gmail triage poll count so quota burn is visible
+      // instead of inferred after the fact — null when the sensor never ran
+      // (unconfigured, or GMAIL_TRIAGE_MODE:'off').
+      res.json(Object.assign({}, status, {
+        voiceLatency: voiceLatencyTracker.stats(),
+        gmailTriagePollCount: gmailPollCountGetter ? gmailPollCountGetter() : null,
+      }));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1053,6 +1070,12 @@ function createServer(deps) {
     logger.warn('hermes.shared-provider-key', { sameAsMistral: true });
   }
 
+  // BUG-112: one greeting-shaped announcement per session, shared across every
+  // source (boot greeting here, the daily planner's morning brief below) via
+  // conversationAnnouncer's own isRecent/markAnnounced dedup map — reusing its
+  // existing 5-minute window instead of inventing a second dedup mechanism.
+  const GREETING_DEDUP_KEY = 'greeting:session';
+
   async function deliverBootGreeting(targetWs) {
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -1100,7 +1123,16 @@ function createServer(deps) {
             role: 'user',
             content: 'You just finished booting and your operator opened the dashboard. ' +
               'Greet them aloud the way JARVIS greets Tony Stark: brief, in character, ' +
-              'with a one-line situational status woven in naturally. Facts you may use:\n- ' +
+              'with a one-line situational status woven in naturally. ' +
+              // BUG-112: the model previously free-guessed the time of day ("now that
+              // the evening's begun") and contradicted the correctly-computed
+              // salutation sitting unused in this same function. Give it the real
+              // answer and forbid inventing another one — same no-fabrication
+              // pattern as immune/explainer.js's tool-naming clause.
+              'The correct greeting for right now is exactly "' + salutation + '" — open with it or a natural ' +
+              'equivalent for that same time of day, and do not invent, guess, or state a different time of day ' +
+              '(do not say "morning" if the salutation says afternoon or evening, and so on). ' +
+              'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
               'the way someone resumes a conversation rather than starting one.\n' +
@@ -1129,6 +1161,14 @@ function createServer(deps) {
       text = salutation + ', sir. ' + (config.MYTHOS_NAME || 'MYTHOS') + ' online.' +
         (bootUpgrade.upgraded ? ' I have received an upgrade since we last spoke.' : ' All systems nominal.');
     }
+    // Mark THE canonical "session opened" greeting so any other greeting-shaped
+    // source (the daily planner's morning brief) sharing this dedup key is
+    // suppressed for conversationAnnouncer's dedup window (BUG-112).
+    try {
+      if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
+        conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
+      }
+    } catch (_) {}
     await proactiveSpeak(text, targetWs);
   }
 
@@ -1143,7 +1183,27 @@ function createServer(deps) {
   // brief, stall check-ins, and evening review. Same bus.subscribe +
   // proactiveSpeak() pattern as reminder.due above.
   bus.subscribe('plan.morning-brief', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (!e || !e.payload || !e.payload.text) return;
+    // BUG-112: this handler used to call proactiveSpeak() directly with no
+    // dedup check at all — the actual bypass that let a greeting-shaped
+    // morning brief past conversationAnnouncer's dedup mechanism entirely
+    // (that module never subscribes to plan.morning-brief, so its isRecent
+    // guard never even ran for this source). Route it through the SAME
+    // shared greeting key the boot greeting marks, so a morning brief firing
+    // close to a boot greeting (or a re-fire of itself) is suppressed instead
+    // of producing a second/third/fourth greeting-shaped utterance.
+    try {
+      if (conversationAnnouncer && typeof conversationAnnouncer.isRecent === 'function' &&
+          conversationAnnouncer.isRecent(GREETING_DEDUP_KEY)) {
+        return;
+      }
+    } catch (_) {}
+    proactiveSpeak(e.payload.text);
+    try {
+      if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
+        conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
+      }
+    } catch (_) {}
   });
   bus.subscribe('plan.checkin', (e) => {
     if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
@@ -1330,6 +1390,7 @@ function createServer(deps) {
           summarizeActionsForResult,
           getLiveSession: () => liveSession,
           sanitizeErrorForClient,
+          goals, // BUG-113: commitment-ledger logging in onLiveTurnComplete
         });
       }
       if (!liveSession) {
@@ -1601,6 +1662,13 @@ function createServer(deps) {
         const say = result.say || 'Done.';
         historyAppend('user', text);
         historyAppend('assistant', say);
+
+        // BUG-113: capture a spoken commitment as an inert, queryable ledger
+        // entry (status:'proposed' — invisible to the autonomous arbiter,
+        // same anchor pattern as from-calendar.js's reminder-action goals) so
+        // "where are we on X" is answerable from state, not memory. Best-
+        // effort: a ledger miss must never break the turn.
+        try { logCommitmentIfPresent(say, { goals: goals }); } catch (_) {}
 
         // Record action OUTCOMES into history — not just the model's claim.
         // Without this, MYTHOS recalls its own lie as fact: it said "deleting
@@ -2261,9 +2329,9 @@ function createServer(deps) {
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
-    requestCloseMediaWindow,
+    requestCloseMediaWindow, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
-    _internal: { voiceLatencyTracker, sanitizeErrorForClient },
+    _internal: { voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY },
   };
 }
 

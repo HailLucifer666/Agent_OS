@@ -163,6 +163,7 @@ async function main() {
   let piperChild = null;
   let calendarWiring = null;
   let gmailUnread = null;         // bound fn — goes through the hub, wired to gmail-sensor in the 'sensors' step
+  let serverHandle = null;        // BUG-111: hoisted so the later 'sensors' step can wire setGmailPollCountGetter
   let checkpoints = null;          // P22 checkpoint approval registry
   let forge = null;                // P22 Forge multi-file build pipeline
   let checkpointSweepTimer = null;
@@ -370,7 +371,8 @@ async function main() {
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
-        probes: immune.probes, config: config, fs: memory.fs, bus: bus
+        probes: immune.probes, config: config, fs: memory.fs, bus: bus,
+        goals: goals, // BUG-113: raw GoalSystem — read_status surfaces open commitments
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.
@@ -617,7 +619,7 @@ async function main() {
       // local physical presence).
       var pinLock = createPinLock({ fs: memory.fs });
 
-      var serverHandle = createServer({
+      serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
         pinLock: pinLock,
         goalsEffector: goalsEffector,
@@ -836,15 +838,26 @@ async function main() {
         }
       }
 
-      // Gmail unread triage sensor — polls gmail_unread via the hub every
-      // GMAIL_TRIAGE_POLL_MS so genuinely new unread mail emits 'gmail.unread-batch'
-      // for proactive speech. Only started when Gmail is actually configured AND
-      // triage is enabled — otherwise it would error-spam every poll cycle hitting
-      // an unconfigured Gmail API.
-      if (config.GOOGLE_REFRESH_TOKEN && config.GMAIL_TRIAGE_ENABLED) {
-        var gmailSensor = createGmailSensor({ gmailUnread: gmailUnread, bus: bus, pollMs: config.GMAIL_TRIAGE_POLL_MS });
+      // Gmail unread triage sensor — polls gmail_unread via the hub so genuinely
+      // new unread mail emits 'gmail.unread-batch' for proactive speech. Only
+      // constructed when Gmail is actually configured AND triage is enabled AND
+      // GMAIL_TRIAGE_MODE isn't 'off' — otherwise it would error-spam every poll
+      // cycle hitting an unconfigured Gmail API (or simply never do anything).
+      // BUG-111: GMAIL_TRIAGE_MODE ('boot-once' default / 'poll' / 'off') gates
+      // the sensor's own recurring cadence — a stored `remember` note can't stop
+      // a background timer, so this is a config decision, not a memory note.
+      if (config.GOOGLE_REFRESH_TOKEN && config.GMAIL_TRIAGE_ENABLED && config.GMAIL_TRIAGE_MODE !== 'off') {
+        var gmailSensor = createGmailSensor({
+          gmailUnread: gmailUnread, bus: bus,
+          pollMs: config.GMAIL_TRIAGE_POLL_MS, mode: config.GMAIL_TRIAGE_MODE
+        });
         gmailSensor.start();
-        logger.info('sensors.gmail.started', {});
+        logger.info('sensors.gmail.started', { mode: config.GMAIL_TRIAGE_MODE });
+        // BUG-111: /api/status surfaces the real poll count so quota burn is
+        // visible instead of inferred after the fact.
+        if (serverHandle && typeof serverHandle.setGmailPollCountGetter === 'function') {
+          serverHandle.setGmailPollCountGetter(gmailSensor.getPollCount);
+        }
       }
 
       // [Phase 6 — NEW] metric sensor polls immune/probes.js every 4s and feeds
