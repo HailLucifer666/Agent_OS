@@ -213,7 +213,14 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
     unsubscribers = [];
   }
 
-  return { start: start, stop: stop };
+  // isRecent/markAnnounced exposed for external callers (BUG-112): the boot
+  // greeting and the daily planner's morning brief are both greeting-shaped
+  // proactive speech that live outside this module's own bus subscriptions —
+  // without a shared dedup namespace they could each speak independently
+  // within seconds of each other. Sharing THIS module's dedup map (rather
+  // than each caller inventing its own Map/timestamp) means one dedup
+  // window covers every greeting-shaped source.
+  return { start: start, stop: stop, isRecent: isRecent, markAnnounced: markAnnounced };
 }
 
 module.exports = { createConversationAnnouncer: createConversationAnnouncer };

@@ -27,9 +27,23 @@ var DAY_DIR = 'Plans';
 var BRAIN_TIMEOUT_MS = 12000;
 var TICK_MS = 60000;
 
-var CANNED_MORNING = 'Good morning. My reasoning brain is offline right now, so I can\'t compose a full brief, but your plan file is ready — check your active goals when you get a chance.';
 var CANNED_CHECKIN = 'Quick check-in: one of your goals looks stalled. My reasoning brain is offline right now, so I can\'t give specifics — take a look when you can.';
 var CANNED_EVENING = 'Evening review: my reasoning brain is offline right now, so I can\'t summarize today in detail, but your plan file has been updated.';
+
+// BUG-112: CANNED_MORNING used to be a module-load-time constant hardcoded to
+// "Good morning" — a morning brief whose brain call times out at 5pm (the
+// canned fallback IS the reply the operator hears) said "Good morning" at
+// 5pm. Computed per-call from the same hour-bucket rule server/index.js's
+// deliverBootGreeting uses, so the fallback is never time-blind.
+function salutationFor(ts) {
+  var hour = new Date(ts).getHours();
+  return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+function cannedMorning(ts) {
+  return salutationFor(ts) + '. My reasoning brain is offline right now, so I can\'t compose a full brief, ' +
+    'but your plan file is ready — check your active goals when you get a chance.';
+}
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -127,21 +141,32 @@ function createDailyPlanner({ bus, config, memory, goals, brain, identity, logge
       });
     }
 
+    // BUG-112: same "brain invents its own read of the time" failure as
+    // server/index.js's deliverBootGreeting — this brief can fire at any hour
+    // (a first-boot-of-the-day tick after 9am fires it immediately, whatever
+    // the actual clock says), so the brain must be told the real salutation
+    // and told not to guess a different one, same no-fabrication phrasing as
+    // immune/explainer.js's tool-naming clause.
+    var salutation = salutationFor(ts);
+    var salutationClause = 'The correct time-of-day salutation right now is "' + salutation + '" — open with it ' +
+      'or a natural equivalent, and do not invent or contradict it with a different time of day. ';
     var prompt;
     if (active.length === 0) {
       prompt = 'Compose a short (max 3 sentences) spoken morning briefing for the operator. ' +
+        salutationClause +
         'They have no active goals right now. Say so plainly and suggest they pick one to focus on today. ' +
         'Reply with ONLY the spoken briefing, no markdown, no quotes.';
     } else {
       var topTitle = top ? top.title : active[0].title;
       var others = active.map(function (g) { return g.title; }).filter(function (t) { return t !== topTitle; });
       prompt = 'Compose a short (max 3 sentences) spoken morning briefing for the operator. ' +
+        salutationClause +
         'Their top-priority goal today is: "' + topTitle + '". ' +
         (others.length ? ('Other active goals: ' + others.join('; ') + '. ') : '') +
         'Name the top goal and set a focused tone for the day. ' +
         'Reply with ONLY the spoken briefing, no markdown, no quotes.';
     }
-    var text = await brainCompose(prompt, CANNED_MORNING, 'planner:morning');
+    var text = await brainCompose(prompt, cannedMorning(ts), 'planner:morning');
 
     day.focus = focus;
     day.morningFiredAt = ts;
