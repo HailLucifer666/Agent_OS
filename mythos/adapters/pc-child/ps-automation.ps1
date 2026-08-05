@@ -994,7 +994,13 @@ function Resolve-TargetWindow($TargetPid) {
     try {
         $proc = Get-Process -Id $TargetPid -ErrorAction Stop
     } catch {
-        return @{ ok = $false; error = ('Cannot find PID ' + $TargetPid + ': ' + $_.Exception.Message) }
+        # BUG-126: `stale` distinguishes "that process is gone" from every other
+        # refusal below (minimized, no main window, off-screen). Those are
+        # deliberate — reading them anyway would OCR whatever content happens to
+        # occupy the rectangle and report it as the target's. A dead PID is the
+        # only one where widening the read is honest, and only a caller that says
+        # so in its reply may act on this flag.
+        return @{ ok = $false; stale = $true; error = ('Cannot find PID ' + $TargetPid + ': ' + $_.Exception.Message) }
     }
     $hwnd = $proc.MainWindowHandle
     if ($hwnd -eq [IntPtr]::Zero) {
@@ -1335,7 +1341,9 @@ function Handle-ScreenLook($query) {
 # automatic variable and a parameter of that name throws at binding time.
 function Get-TargetWindowRect($TargetPid) {
     $w = Resolve-TargetWindow $TargetPid
-    if (-not $w.ok) { return @{ ok = $false; error = $w.error } }
+    # BUG-126: carry the stale flag through — the caller decides what to do with
+    # it, this function only reports what it found.
+    if (-not $w.ok) { return @{ ok = $false; stale = [bool]$w.stale; error = $w.error } }
     # A minimized window parks at -32000,-32000 with none of its content on
     # screen. OCRing that rectangle would read whatever is actually there and
     # report it as this window's content — the same trap BUG-060 hit in
@@ -1399,11 +1407,36 @@ function Handle-ScreenReadText($TargetPid) {
     # needed for). A target sitting behind another window therefore reads
     # whatever is on top of it. Scoping is what stops a match in an unrelated
     # window; focus_window first is what makes the target the thing being read.
+    #
+    # BUG-126 (2026-08-05): a PID that no longer exists used to dead-end here —
+    # the read returned 'Cannot find PID 1234' and there was nothing the model
+    # could do next, because screen_read_text's only parameter IS the pid (a
+    # name-based re-resolution needs a schema change, tracked separately). A
+    # stale PID is almost always a window that was closed or relaunched between
+    # list_windows and the read, and the full-desktop read the caller would have
+    # got by passing nothing at all is still useful. So widen — and SAY SO in
+    # the reply, naming the dead PID, so neither the model nor the operator can
+    # mistake a whole-screen read for a read of the window they asked about.
+    #
+    # Only the stale case widens. Minimized / no-main-window / entirely
+    # off-screen stay hard refusals: the window exists, so a full-screen read
+    # would be answering a different question than the one asked.
+    $note = $null
     if ($TargetPid) {
         $wr = Get-TargetWindowRect $TargetPid
-        if (-not $wr.ok) { return $wr.error }
-        $capX = [int]$wr.x; $capY = [int]$wr.y; $capW = [int]$wr.width; $capH = [int]$wr.height
-        $scope = 'window'
+        if (-not $wr.ok -and -not $wr.stale) { return $wr.error }
+        if (-not $wr.ok) {
+            $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $capX = [int]$screenBounds.X; $capY = [int]$screenBounds.Y
+            $capW = [int]$screenBounds.Width; $capH = [int]$screenBounds.Height
+            $scope = 'screen'
+            $note = ('PID ' + $TargetPid + ' no longer exists, so I could not read that window. ' +
+                'This is a read of the WHOLE SCREEN instead, not of the window you asked for. ' +
+                'Call list_windows to get a current PID if you need that specific window.')
+        } else {
+            $capX = [int]$wr.x; $capY = [int]$wr.y; $capW = [int]$wr.width; $capH = [int]$wr.height
+            $scope = 'window'
+        }
     } else {
         $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
         $capX = [int]$screenBounds.X; $capY = [int]$screenBounds.Y
@@ -1479,7 +1512,10 @@ function Handle-ScreenReadText($TargetPid) {
                 height = [int][Math]::Round($maxY - $minY)
             }
         }
-        return @{
+        # BUG-126: `note` is present ONLY when the read widened off a dead PID.
+        # Absent on every other path, so the existing reply shape is unchanged
+        # for every existing caller.
+        $reply = @{
             text = ($lines -join "`n")
             lineCount = $lines.Count
             regions = $regions
@@ -1489,6 +1525,8 @@ function Handle-ScreenReadText($TargetPid) {
             origin = @{ x = $capX; y = $capY }
             scope = $scope
         }
+        if ($note) { $reply.note = $note }
+        return $reply
     } catch {
         return ('OCR failed: ' + $_.Exception.Message)
     } finally {

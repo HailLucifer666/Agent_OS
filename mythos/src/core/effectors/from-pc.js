@@ -534,10 +534,20 @@ async function screen_read_text(args) {
   if (!res.ok) return res;
   const result = res.result || {};
   const regions = toAbsoluteRegions(result);
-  // Nothing to translate (text-only reply) or nothing moved (full desktop):
-  // hand back the reply untouched rather than reshaping it.
-  if (!regions || regions === result.regions) return res;
-  return ok(Object.assign({}, result, { regions: regions }));
+  const shaped = (!regions || regions === result.regions)
+    ? result
+    : Object.assign({}, result, { regions: regions });
+  // BUG-126: the adapter sets `note` only when the requested PID was gone and
+  // the read widened to the whole screen. The OCR itself succeeded, so this is
+  // not a failure — but it answered a WIDER question than the one asked, and a
+  // bare ok would let the model report a whole-screen read as a read of the
+  // window. unverified + the adapter's own sentence is exactly the evidence
+  // contract's case for "it ran, say what could not be confirmed".
+  if (shaped.note) {
+    return { ok: true, unverified: true, reason: String(shaped.note), result: shaped };
+  }
+  if (shaped === result) return res;
+  return ok(shaped);
 }
 
 // §7.7 (step 5, desktop gaps) — wallpaper engine (SystemParametersInfo/
