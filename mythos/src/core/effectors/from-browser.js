@@ -813,8 +813,17 @@ const BROWSER_SUBPATHS = {
   brave: ['BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'],
   edge: ['Microsoft', 'Edge', 'Application', 'msedge.exe'],
 };
-// Chrome first — unchanged default, so nothing that relied on the old order moves.
-const BROWSER_SEARCH_ORDER = ['chrome', 'brave', 'edge'];
+// BUG-130 — Brave first when it is installed. The debug browser runs in a
+// dedicated, empty profile (chrome-debug-profile), so the operator's own ad
+// blocker — which lives in their real profile — has never applied to anything
+// MYTHOS drives. On 2026-08-06 that meant sitting through YouTube ads on a
+// page MYTHOS opened. Brave's Shields are part of the browser rather than an
+// extension, so they are on in a fresh profile with nothing installed and no
+// third-party code bundled into this repo (see the BYO note on
+// BROWSER_EXTENSIONS below, and the licensing rules in the root CLAUDE.md).
+// Chrome remains the fallback and an explicit browser:"chrome" still wins —
+// this only changes which one is picked when the caller names none.
+const BROWSER_SEARCH_ORDER = ['brave', 'chrome', 'edge'];
 const BROWSER_ALIASES = {
   chrome: 'chrome', 'google chrome': 'chrome', 'google-chrome': 'chrome',
   brave: 'brave', 'brave browser': 'brave', 'brave-browser': 'brave',
@@ -1241,17 +1250,71 @@ const ALLOWED_KEYS = [
   'Home', 'End', 'PageUp', 'PageDown',
 ];
 
+// 2026-08-06: the model wanted to pause a YouTube video with `k` — the player
+// shortcut every video site shares — and had to fall back to hunting down the
+// .ytp-play-button ref instead. These are the standard HTML5-player keys:
+// k play/pause, m mute, f fullscreen, c captions, j/l seek back/forward 10s.
+//
+// They are single CHARACTERS, which is the one thing that made them unsafe to
+// allow: pressed while a text field has focus they type rather than control,
+// and "press whatever the model produced" typing into a form is exactly what
+// ALLOWED_KEYS exists to prevent. So they are allowed with a focus guard —
+// refused, with the reason, whenever the focused element would swallow them
+// as input. The navigation keys keep their existing unguarded behaviour;
+// Escape in a text field is normal and useful.
+const PLAYER_KEYS = ['k', 'm', 'f', 'j', 'l', 'c'];
+
+// document.activeElement at press time — the only thing that decides where a
+// character key actually lands.
+const FOCUSED_IS_TEXT_ENTRY_JS = `() => {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName ? el.tagName.toLowerCase() : '';
+  if (tag === 'textarea') return true;
+  if (tag !== 'input') return false;
+  const type = (el.getAttribute('type') || 'text').toLowerCase();
+  // Non-text inputs (button, checkbox, radio, submit, file, range...) do not
+  // capture characters, so a player key is safe there.
+  return ['text', 'search', 'url', 'email', 'password', 'tel', 'number', 'date',
+          'datetime-local', 'month', 'week', 'time'].includes(type);
+}`;
+
+const TEXT_FIELD_REFUSAL =
+  'the focused element is a text field — a single-character key would be TYPED into it, not sent to the ' +
+  'player. Click the video (or its play button) first to move focus, then press the key.';
+
 async function browser_press_key({ key, ref, selector }) {
-  if (!key) return fail('A key is required, one of: ' + ALLOWED_KEYS.join(', ') + '.');
-  const match = ALLOWED_KEYS.find((k) => k.toLowerCase() === String(key).trim().toLowerCase());
+  const allKeys = ALLOWED_KEYS.concat(PLAYER_KEYS);
+  if (!key) return fail('A key is required, one of: ' + allKeys.join(', ') + '.');
+  const raw = String(key).trim();
+  const match = allKeys.find((k) => k.toLowerCase() === raw.toLowerCase());
   if (!match) {
-    return fail(`"${key}" is not a key I will press. Allowed: ${ALLOWED_KEYS.join(', ')}. ` +
+    return fail(`"${key}" is not a key I will press. Allowed: ${allKeys.join(', ')}. ` +
       'To enter text use browser_type.');
   }
+  const isPlayerKey = PLAYER_KEYS.includes(match);
   const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
+    if (isPlayerKey) {
+      // Checked for the ref/selector path too: pressing on a located element
+      // still delivers the character to whatever has focus if that element is
+      // itself the text field.
+      let focusedIsTextEntry = false;
+      try {
+        focusedIsTextEntry = await page.evaluate(FOCUSED_IS_TEXT_ENTRY_JS);
+      } catch {
+        // A page that cannot be evaluated (navigating, cross-origin edge) tells
+        // us nothing about focus. Refuse rather than guess — a typed stray
+        // character into an unknown field is the failure this guard exists for.
+        return fail(`I could not check what has focus, so I did not press "${match}": ` + TEXT_FIELD_REFUSAL);
+      }
+      if (focusedIsTextEntry) {
+        return fail(`I did not press "${match}" — ` + TEXT_FIELD_REFUSAL);
+      }
+    }
     // With a ref/selector the key goes to THAT element; without one it goes to
     // whatever currently has focus, which is the normal "I just typed, now
     // press Enter" case.
@@ -1457,7 +1520,7 @@ const TOOLS = [
   { name: 'browser_check_captcha', description: 'Check whether the page is showing a human-verification challenge (reCAPTCHA, hCaptcha, Turnstile, "verify you are human"). MYTHOS never solves or bypasses these — when one is present, tell the operator and ask them to complete it in the browser window.', params: {}, danger: false, fn: browser_check_captcha, needs_result: true },
   { name: 'browser_upload_file', description: 'Attach a file from disk to a file-upload control on the page — the resume step of a job application. Target the upload control by ref from browser_snapshot (preferred) or CSS selector. Only files inside the operator-configured upload folder can be sent; anything else is refused.', params: { ref: 'string (optional) - ref of the file input from browser_snapshot', selector: 'string (optional) - CSS selector of the file input', path: 'string - path of the file to attach, inside the configured upload folder' }, danger: true, fn: browser_upload_file },
   { name: 'browser_select_option', description: 'Choose an option in a native dropdown (<select>) by value or visible label. For a custom (non-native) dropdown, click it open with browser_click and click the option from a fresh snapshot instead.', params: { ref: 'string (optional) - ref of the select element from browser_snapshot', selector: 'string (optional) - CSS selector of the select element', value: 'string (optional) - the option value attribute', label: 'string (optional) - the option text as shown to the user' }, danger: true, fn: browser_select_option },
-  { name: 'browser_press_key', description: 'Press a single navigation or submit key: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown. Goes to the focused element by default, or to a specific element via ref/selector. Use browser_type to enter text.', params: { key: 'string - one of Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown', ref: 'string (optional) - ref of the element to press the key on', selector: 'string (optional) - CSS selector of that element' }, danger: true, fn: browser_press_key },
+  { name: 'browser_press_key', description: 'Press a single navigation, submit, or video-player key. Navigation/submit: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown. Video player (YouTube and most HTML5 players): k play/pause, m mute, f fullscreen, c captions, j back 10s, l forward 10s — these are refused if a text field has focus, so click the video first. Goes to the focused element by default, or to a specific element via ref/selector. Use browser_type to enter text.', params: { key: 'string - one of Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, k, m, f, j, l, c', ref: 'string (optional) - ref of the element to press the key on', selector: 'string (optional) - CSS selector of that element' }, danger: true, fn: browser_press_key },
   { name: 'browser_hover', description: 'Hover the pointer over an element to reveal a hover menu or tooltip. Take a fresh browser_snapshot afterwards to see what appeared.', params: { ref: 'string (optional) - element ref from browser_snapshot', selector: 'string (optional) - CSS selector' }, danger: false, fn: browser_hover },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },

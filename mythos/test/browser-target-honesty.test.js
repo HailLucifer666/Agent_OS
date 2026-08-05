@@ -53,15 +53,20 @@ describe('browser executable resolution', () => {
     }
   });
 
-  test('chrome stays the default and is still first in the default search order', () => {
+  // BUG-130 (2026-08-06) reversed this deliberately: brave now leads the
+  // unnamed default because its Shields are the only ad blocking that works in
+  // the debug browser's empty profile. BUG-099's actual guarantee — a NAMED
+  // browser resolves to that browser or fails — is unaffected and is pinned by
+  // the tests around this one.
+  test('brave leads the default search order (BUG-130), so an unnamed launch gets ad blocking', () => {
     const order = browserCandidatePaths();
     assert.ok(order.length > 0);
-    assert.match(path.basename(order[0]).toLowerCase(), /chrome\.exe$/);
+    assert.match(path.basename(order[0]).toLowerCase(), /brave\.exe$/);
   });
 
-  test('the default order still includes brave and edge as fallbacks', () => {
+  test('the default order still includes chrome and edge as fallbacks', () => {
     const names = browserCandidatePaths().map((p) => path.basename(p).toLowerCase());
-    assert.ok(names.some((n) => n.includes('brave')), 'brave must be reachable without naming it');
+    assert.ok(names.some((n) => n.includes('chrome')), 'chrome must be reachable without naming it');
     assert.ok(names.some((n) => n.includes('msedge')), 'edge must still be a fallback');
   });
 
