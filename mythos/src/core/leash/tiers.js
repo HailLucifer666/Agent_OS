@@ -129,6 +129,14 @@ const TIER_TABLE = {
   'browser_navigate':      2,
   'browser_tabs':          2,
   'browser_launch_debug':  2,  // Phase 6 — on-demand debug-browser launch, local action, no destructive risk
+  'browser_dismiss_overlays': 2,  // Phase 6 — clicks, so not a read; but only visible controls whose
+                               // label is on a bounded dismissal list and only inside a dialog/banner/
+                               // fixed overlay, and it reports every element it clicked. Same local,
+                               // bounded, non-destructive class as browser_scroll/browser_tabs rather
+                               // than the arbitrary-target browser_click.
+  'browser_check_captcha': 0,  // Phase 6 — reads the page to see whether a human-verification
+                               // challenge is present. Pure read; the ANSWER is "stop and ask the
+                               // operator", which is the opposite of an action.
   'browser_switch':        2,  // BUG-107 — disconnects + relaunches, but only a browser MYTHOS itself
                                 // launched (never one it merely attached to); routes through
                                 // browser_launch_debug internally, same risk class, same tier

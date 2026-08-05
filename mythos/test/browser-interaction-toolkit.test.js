@@ -170,7 +170,7 @@ describe('browser_upload_file — the allowlist is the security boundary', () =>
     const call = page._calls.find((c) => c.setInputFiles);
     assert.equal(call.setInputFiles, 'aria-ref=e7');
     assert.equal(fs.realpathSync(call.file), fs.realpathSync(fx.resume));
-    assert.equal(r.result.result.uploaded, 'resume.pdf');
+    assert.equal(r.result.uploaded, 'resume.pdf');
   });
 
   it('never touches the page when the path is refused', async () => {
@@ -287,7 +287,7 @@ describe('browser_hover — reveal, then look again', () => {
     const r = await fb.browser_hover({ ref: 'e9' });
     assert.equal(r.ok, true);
     assert.ok(page._calls.some((c) => c.hover === 'aria-ref=e9'));
-    assert.match(r.result.result.hint, /browser_snapshot/,
+    assert.match(r.result.hint, /browser_snapshot/,
       'hovering exists to reveal something; the next step should not have to be guessed');
   });
 

@@ -212,6 +212,17 @@ async function browser_snapshot({ screenshot } = {}) {
       url: snapshotPageUrl,
       title: await page.title(),
     };
+    // Surface a human-verification challenge in the snapshot itself. A model
+    // that has to call a second tool to notice a CAPTCHA will sometimes not
+    // call it, and then spends the turn clicking at a wall.
+    const captchaMarkers = looksLikeCaptcha(capped.text + ' ' + snapshotPageUrl);
+    if (captchaMarkers.length) {
+      result.captchaDetected = true;
+      result.captchaMarkers = captchaMarkers;
+      result.captchaNote =
+        'This page is showing a human-verification challenge. Do NOT try to solve or bypass it — ' +
+        'ask the operator to complete it in the browser window and to tell you when to continue.';
+    }
     if (capped.truncated) {
       result.omittedNodes = capped.omittedNodes;
       result.truncationNote =
@@ -325,6 +336,14 @@ function describeCapsule(capsule) {
   return bits.join('; ');
 }
 
+// NOTE ON SHAPE, and it is load-bearing: this returns the effector's WHOLE
+// result — `{ok, unverified, evidence, result}` — not something to pass to
+// ok(). Wrapping it (`ok(await withStateCapsule(...))`) buries `unverified` and
+// `evidence` one level down inside `.result`, where dispatch-action and
+// live-tool-adapter's evaluateOutcome do not look; the outcome then reads as a
+// plain ok:true and the voice layer speaks an unproven action as done. That is
+// the exact flattening the evidence contract exists to prevent, and it was
+// briefly live here before this comment existed. Return it directly.
 async function withStateCapsule(page, payload, ref) {
   const capsule = await captureStateCapsule(page, ref);
   const observed = describeCapsule(capsule);
@@ -450,7 +469,7 @@ async function browser_click({ selector, ref }) {
       // check (visible, stable, receives events, not covered) IS the oracle, so
       // this path never needs the unverified downgrade the JS-click rung takes.
       await refLocator(page, ref).click();
-      return ok(await withStateCapsule(page, { clicked: ref, via: 'ref-click' }, ref));
+      return await withStateCapsule(page, { clicked: ref, via: 'ref-click' }, ref);
     }).catch(err => fail(refFailure(ref, 'click', err)));
   }
 
@@ -514,7 +533,7 @@ async function browser_type({ selector, text, clearFirst, ref }) {
       // path makes, kept identical so moving to refs changes targeting only.
       if (clearFirst) await locator.fill(String(text));
       else await locator.type(String(text));
-      return ok(await withStateCapsule(page, { typed: String(text).length, into: ref, via: 'ref-type' }, ref));
+      return await withStateCapsule(page, { typed: String(text).length, into: ref, via: 'ref-type' }, ref);
     }).catch(err => fail(refFailure(ref, 'type into', err)));
   }
 
@@ -1175,9 +1194,9 @@ async function browser_upload_file({ ref, selector, path: filePath }) {
     const t = await resolveTarget(page, { ref, selector }, 'upload a file');
     if (t.failure) return t.failure;
     await t.locator.setInputFiles(sandboxed.resolved);
-    return ok(await withStateCapsule(page,
+    return await withStateCapsule(page,
       { uploaded: path.basename(sandboxed.resolved), from: sandboxed.resolved, into: t.target, via: 'set-input-files' },
-      t.ref));
+      t.ref);
   }).catch(err => fail(t_err(ref, selector, 'upload to', err)));
 }
 
@@ -1204,8 +1223,8 @@ async function browser_select_option({ ref, selector, value, label }) {
     // failure is what stops the model retrying this tool forever.
     const chosen = label !== undefined ? { label: String(label) } : { value: String(value) };
     const applied = await t.locator.selectOption(chosen);
-    return ok(await withStateCapsule(page,
-      { selected: applied, on: t.target, via: 'select-option' }, t.ref));
+    return await withStateCapsule(page,
+      { selected: applied, on: t.target, via: 'select-option' }, t.ref);
   }).catch(err => fail(
     t_err(ref, selector, 'select an option on', err) +
     ' If this is a custom dropdown rather than a real <select>, click it open with browser_click and ' +
@@ -1240,10 +1259,10 @@ async function browser_press_key({ key, ref, selector }) {
       const t = await resolveTarget(page, { ref, selector }, 'press a key');
       if (t.failure) return t.failure;
       await t.locator.press(match);
-      return ok(await withStateCapsule(page, { pressed: match, on: t.target, via: 'ref-press' }, t.ref));
+      return await withStateCapsule(page, { pressed: match, on: t.target, via: 'ref-press' }, t.ref);
     }
     await page.keyboard.press(match);
-    return ok(await withStateCapsule(page, { pressed: match, on: 'focused element', via: 'keyboard-press' }, null));
+    return await withStateCapsule(page, { pressed: match, on: 'focused element', via: 'keyboard-press' }, null);
   }).catch(err => fail(t_err(ref, selector, 'press a key on', err)));
 }
 
@@ -1259,8 +1278,164 @@ async function browser_hover({ ref, selector }) {
     // another snapshot. Say so rather than leaving the model to guess.
     const result = await withStateCapsule(page, { hovered: t.target, via: 'ref-hover' }, t.ref);
     result.result.hint = 'If this was meant to open a menu, call browser_snapshot again to see what appeared.';
-    return ok(result);
+    return result;
   }).catch(err => fail(t_err(ref, selector, 'hover over', err)));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — obstacles. Cookie walls, newsletter modals and "Skip Ad" buttons
+// are not a special class of thing: they appear in the accessibility snapshot
+// exactly like every other control, so the PRIMARY mechanism is the model
+// seeing one and clicking its ref. That keeps every dismissal in the audit
+// trail, which a hidden auto-clicker firing on page load would not.
+//
+// This helper exists only for the boring 90%, and it is deliberately narrow:
+// it clicks visible controls whose accessible NAME matches a bounded, curated
+// list, and only inside a dialog/banner/alert container. "Click anything that
+// looks like a close button, anywhere on the page" would eventually dismiss
+// something the operator wanted.
+// ---------------------------------------------------------------------------
+
+// Matched case-insensitively against an element's accessible name, whole-string
+// or as a leading phrase. One named constant, not a growing pile of regexes.
+const DISMISSAL_NAMES = [
+  // Consent walls
+  'accept all', 'accept all cookies', 'accept cookies', 'i accept', 'agree',
+  'i agree', 'allow all', 'got it', 'ok', 'understood', 'continue',
+  // Newsletter / app-install modals
+  'no thanks', 'not now', 'maybe later', 'dismiss', 'close', 'no, thanks',
+  // Video pre-roll
+  'skip ad', 'skip ads', 'skip', 'skip advertisement',
+];
+
+// Containers a dismissal may live in. Anything outside one of these is page
+// content, and page content is the model's business, not this sweep's.
+const DISMISSAL_CONTAINERS = ['dialog', 'alertdialog', 'banner', 'complementary'];
+
+// Recognising a challenge is not the same as solving one, and MYTHOS does not
+// solve them: a CAPTCHA is where automation stops and the operator takes over.
+// That is a deliberate boundary — working around anti-bot checks is what gets
+// an operator's real, logged-in accounts banned, and this browser IS their real
+// logged-in browser.
+const CAPTCHA_MARKERS = [
+  'recaptcha', 'hcaptcha', 'turnstile', 'are you a robot', 'verify you are human',
+  'i am not a robot', 'security check', 'cloudflare',
+];
+
+function looksLikeCaptcha(snapshotText) {
+  const hay = String(snapshotText || '').toLowerCase();
+  return CAPTCHA_MARKERS.filter((m) => hay.includes(m));
+}
+
+async function browser_dismiss_overlays() {
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    if (typeof page.evaluate !== 'function') {
+      return fail('This page cannot be inspected for overlays. Take a browser_snapshot and click the dismissal yourself.');
+    }
+    // One page.evaluate rather than a locator sweep: the whole point is a cheap
+    // deterministic pass, and the DOM query is the cheap part. Every element it
+    // clicks is returned, so the result says exactly what was dismissed —
+    // "cleared the banner" with no list would be the un-auditable version.
+    const clicked = await page.evaluate((cfg) => {
+      const { names, containers } = cfg;
+      const isVisible = (el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) !== 0;
+      };
+      const accessibleName = (el) => (
+        el.getAttribute('aria-label') ||
+        el.getAttribute('title') ||
+        (el.textContent || '')
+      ).trim().toLowerCase().replace(/\s+/g, ' ');
+      const inContainer = (el) => {
+        let node = el;
+        while (node && node !== document.body) {
+          const role = node.getAttribute && node.getAttribute('role');
+          if (role && containers.includes(role)) return role;
+          // A fixed/sticky full-width block is the un-roled version of the same
+          // thing — the consent bar that never bothered with role="dialog".
+          if (node.nodeType === 1) {
+            const s = window.getComputedStyle(node);
+            if ((s.position === 'fixed' || s.position === 'sticky') &&
+                node.getBoundingClientRect().width > window.innerWidth * 0.6) {
+              return 'fixed-overlay';
+            }
+          }
+          node = node.parentElement;
+        }
+        return null;
+      };
+      const out = [];
+      const candidates = document.querySelectorAll('button, a[role="button"], [role="button"], input[type="button"], input[type="submit"]');
+      for (const el of candidates) {
+        if (out.length >= 5) break; // a page needing six dismissals needs a human
+        const name = accessibleName(el);
+        if (!name || name.length > 40) continue;
+        if (!names.some((n) => name === n || name.startsWith(n + ' '))) continue;
+        if (!isVisible(el)) continue;
+        const container = inContainer(el);
+        if (!container) continue;
+        el.click();
+        out.push({ name: name, container: container });
+      }
+      return out;
+    }, { names: DISMISSAL_NAMES, containers: DISMISSAL_CONTAINERS });
+
+    // Refs from before this sweep describe a page that just had things removed
+    // from it. Force a fresh look rather than letting a stale ref resolve.
+    if (clicked.length) invalidateSnapshotRefs('overlays-dismissed');
+
+    const payload = {
+      dismissed: clicked,
+      count: clicked.length,
+      url: page.url(),
+    };
+    if (!clicked.length) {
+      // Not a failure — "there was nothing to dismiss" is a real, useful answer,
+      // and reporting it as ok:false would make the model treat a clean page as
+      // a broken tool. But it is not evidence of anything either.
+      return evidenceModule.unverified({ result: payload },
+        'I found no cookie banner, modal or skip button matching the ones I know how to dismiss. ' +
+        'If something is still in the way, take a browser_snapshot and click it directly.');
+    }
+    return evidenceModule.verifiedOk({ result: payload }, {
+      oracle: 'page-state',
+      observed: 'dismissed ' + clicked.map((c) => `"${c.name}" (in ${c.container})`).join(', '),
+    });
+  }).catch(err => fail(err.message));
+}
+
+async function browser_check_captcha() {
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    if (typeof page.ariaSnapshot !== 'function') {
+      return fail('This browser build cannot inspect the page for a challenge (page.ariaSnapshot unavailable).');
+    }
+    const tree = String(await page.ariaSnapshot({ mode: 'ai' }) || '');
+    const markers = looksLikeCaptcha(tree + ' ' + page.url());
+    if (!markers.length) {
+      return ok({ captcha: false, url: page.url() });
+    }
+    // blocked, not failed: nothing went wrong, we have simply reached the line
+    // this system does not cross. The message is written to be spoken.
+    return ok({
+      captcha: true,
+      blocked: 'captcha',
+      markers: markers,
+      url: page.url(),
+      message:
+        'This page is showing a human-verification challenge (' + markers.join(', ') + '). ' +
+        'I will not try to work around it — that is what gets real accounts banned, and this is ' +
+        'your own logged-in browser. Solve it yourself in the window and tell me when to carry on.',
+    });
+  }).catch(err => fail(err.message));
 }
 
 // ---- Tool catalog ----
@@ -1278,6 +1453,8 @@ const TOOLS = [
   { name: 'browser_go_back', description: 'Navigate back to the previous page in history.', params: {}, danger: false, fn: browser_go_back },
   { name: 'browser_wait_for', description: 'Wait for an element matching a CSS selector to appear on the page. Fails honestly if it does not appear within the timeout. Use before reading or interacting with a dynamically-loaded element.', params: { selector: 'string - CSS selector to wait for', timeoutMs: 'number (optional) - max wait in ms, default 10000, capped at 30000' }, danger: false, fn: browser_wait_for, needs_result: true },
   { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{ref, value}] using refs from browser_snapshot (preferred), or [{selector, value}]. The two may be mixed. Each field is filled (replacing existing content); a bad ref or selector reports that field failure without aborting the rest.', params: { fields: 'array - [{ref: string, value: string}] or [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
+  { name: 'browser_dismiss_overlays', description: 'Clear the usual things that block a page: cookie-consent banners, newsletter or app-install modals, and "Skip Ad" buttons. Only clicks visible controls whose label matches a known dismissal phrase, and only inside a dialog, banner or fixed overlay — it reports exactly what it clicked. If something is still in the way afterwards, take a browser_snapshot and click it by ref.', params: {}, danger: false, fn: browser_dismiss_overlays, needs_result: true },
+  { name: 'browser_check_captcha', description: 'Check whether the page is showing a human-verification challenge (reCAPTCHA, hCaptcha, Turnstile, "verify you are human"). MYTHOS never solves or bypasses these — when one is present, tell the operator and ask them to complete it in the browser window.', params: {}, danger: false, fn: browser_check_captcha, needs_result: true },
   { name: 'browser_upload_file', description: 'Attach a file from disk to a file-upload control on the page — the resume step of a job application. Target the upload control by ref from browser_snapshot (preferred) or CSS selector. Only files inside the operator-configured upload folder can be sent; anything else is refused.', params: { ref: 'string (optional) - ref of the file input from browser_snapshot', selector: 'string (optional) - CSS selector of the file input', path: 'string - path of the file to attach, inside the configured upload folder' }, danger: true, fn: browser_upload_file },
   { name: 'browser_select_option', description: 'Choose an option in a native dropdown (<select>) by value or visible label. For a custom (non-native) dropdown, click it open with browser_click and click the option from a fresh snapshot instead.', params: { ref: 'string (optional) - ref of the select element from browser_snapshot', selector: 'string (optional) - CSS selector of the select element', value: 'string (optional) - the option value attribute', label: 'string (optional) - the option text as shown to the user' }, danger: true, fn: browser_select_option },
   { name: 'browser_press_key', description: 'Press a single navigation or submit key: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown. Goes to the focused element by default, or to a specific element via ref/selector. Use browser_type to enter text.', params: { key: 'string - one of Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown', ref: 'string (optional) - ref of the element to press the key on', selector: 'string (optional) - CSS selector of that element' }, danger: true, fn: browser_press_key },
@@ -1313,6 +1490,10 @@ module.exports = {
   // testable without a browser or a real page anywhere near it.
   browser_upload_file, browser_select_option, browser_press_key, browser_hover,
   resolveUploadPath, uploadRoots, ALLOWED_KEYS,
+  // Phase 6. looksLikeCaptcha is pure, so the one boundary MYTHOS must never
+  // cross is testable without a page.
+  browser_dismiss_overlays, browser_check_captcha,
+  looksLikeCaptcha, DISMISSAL_NAMES, DISMISSAL_CONTAINERS, CAPTCHA_MARKERS,
   // BUG-099 seams: pure helpers so the browser-target guarantee is testable
   // without requireOnline() launching a real browser on the test machine.
   findBrowserExecutable, browserCandidatePaths, normalizeBrowserName, checkBrowserTarget,

@@ -62,6 +62,11 @@ const DEFAULT_ALLOWLIST = [
   // to typing into whatever has focus and hoping — the exact improvisation
   // BUG-110 and the whatsapp_send gap were both about.
   'browser_upload_file','browser_select_option','browser_press_key','browser_hover',
+  // Obstacles. browser_check_captcha in particular has to be reachable: the
+  // model can only STOP at a challenge it is able to detect, and a bypass
+  // attempt on the operator's own logged-in browser is how real accounts get
+  // banned.
+  'browser_dismiss_overlays','browser_check_captcha',
   // BUG-099: browser_navigate can now refuse a wrong-browser request and tell
   // the model to "call browser_launch_debug with browser:brave" — an instruction
   // it could not follow, because the launcher was not reachable from this path.

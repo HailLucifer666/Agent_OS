@@ -198,7 +198,7 @@ describe('ref actions — acting on an element the model actually saw', () => {
     assert.equal(r.ok, true);
     assert.ok(page._calls.some((c) => c.locator === 'aria-ref=e12'), 'must target the ref, not a selector');
     assert.ok(page._calls.some((c) => c.click === 'aria-ref=e12'), 'must use the native click');
-    assert.equal(r.result.result.via, 'ref-click');
+    assert.equal(r.result.via, 'ref-click');
   });
 
   it('a cross-frame ref is passed through untouched — Playwright jumps frames itself', async () => {
@@ -310,11 +310,11 @@ describe('the verify half — a ref action reports what the page says afterwards
 
     const r = await fb.browser_click({ ref: 'e1' });
 
-    assert.equal(r.result.ok, true);
-    assert.equal(r.result.unverified, false);
-    assert.equal(r.result.evidence.oracle, 'page-state');
-    assert.match(r.result.evidence.observed, /example\.test/);
-    assert.match(r.result.evidence.observed, /focus on <button>/);
+    assert.equal(r.ok, true);
+    assert.equal(r.unverified, false);
+    assert.equal(r.evidence.oracle, 'page-state');
+    assert.match(r.evidence.observed, /example\.test/);
+    assert.match(r.evidence.observed, /focus on <button>/);
   });
 
   it('a video element gives the playing/paused oracle the week-long YouTube case needs', async () => {
@@ -325,8 +325,8 @@ describe('the verify half — a ref action reports what the page says afterwards
     fb.__setSnapshotStateForTest(['e1'], 1);
 
     const r = await fb.browser_click({ ref: 'e1' });
-    assert.match(r.result.evidence.observed, /video PLAYING/);
-    assert.equal(r.result.result.state.video.playing, true);
+    assert.match(r.evidence.observed, /video PLAYING/);
+    assert.equal(r.result.state.video.playing, true);
   });
 
   it('a paused video is reported as paused — the oracle is not there to agree with us', async () => {
@@ -337,7 +337,7 @@ describe('the verify half — a ref action reports what the page says afterwards
     fb.__setSnapshotStateForTest(['e1'], 1);
 
     const r = await fb.browser_click({ ref: 'e1' });
-    assert.match(r.result.evidence.observed, /video paused/);
+    assert.match(r.evidence.observed, /video paused/);
   });
 
   it('a page that tells us nothing yields unverified:true, never a fabricated confirmation', async () => {
@@ -355,9 +355,9 @@ describe('the verify half — a ref action reports what the page says afterwards
     fb.__setSnapshotStateForTest(['e1'], 1);
 
     const r = await fb.browser_click({ ref: 'e1' });
-    assert.equal(r.result.ok, true, 'the click was dispatched — denying it would be its own kind of lying');
-    assert.equal(r.result.unverified, true);
-    assert.match(r.result.reason, /cannot confirm/i);
+    assert.equal(r.ok, true, 'the click was dispatched — denying it would be its own kind of lying');
+    assert.equal(r.unverified, true, 'the flag must be at the TOP level where dispatch and the voice layer read it');
+    assert.match(r.reason, /cannot confirm/i);
   });
 
   it('an evidence capsule that fails does not turn a good click into a failure', async () => {
@@ -367,7 +367,7 @@ describe('the verify half — a ref action reports what the page says afterwards
 
     const r = await fb.browser_click({ ref: 'e1' });
     assert.equal(r.ok, true);
-    assert.equal(r.result.evidence.oracle, 'page-state', 'url/title still answered, so it is still evidence');
+    assert.equal(r.evidence.oracle, 'page-state', 'url/title still answered, so it is still evidence');
   });
 
   it('a ref that stops resolving mid-action fails with the remedy, not a raw Playwright error', async () => {
