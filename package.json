@@ -21,6 +21,7 @@
     "directories": {
       "output": "dist"
     },
+    "icon": "build/icon.ico",
     "asar": false,
     "includeSubNodeModules": true,
     "files": [
