@@ -9,9 +9,9 @@
 <br/>
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-2863%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
+[![Tests](https://img.shields.io/badge/tests-2884%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9?style=for-the-badge)](ROADMAP.md)
-[![Effectors](https://img.shields.io/badge/effectors-154%20tools-eab308?style=for-the-badge)](#-154-tool-effectors)
+[![Effectors](https://img.shields.io/badge/effectors-158%20tools-eab308?style=for-the-badge)](#-158-tool-effectors)
 [![Deploy](https://img.shields.io/badge/deploy-render-4fc08d?style=for-the-badge&logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey?style=for-the-badge)](#%EF%B8%8F-license)
 
@@ -31,13 +31,13 @@
 > [!IMPORTANT]
 > **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you *see* that it doesn't work.
 
-A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 2864 tests.
+A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 2885 tests.
 
 <div align="center">
 
 ### 🧭 Navigate
 
-[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**154 Tools**](#-154-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
+[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**158 Tools**](#-158-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
 
 </div>
 
@@ -75,7 +75,7 @@ flowchart TB
         end
         subgraph IOLayer["I/O"]
             SENS["10 Sensors"]
-            EFF["154 Effectors"]
+            EFF["158 Effectors"]
         end
         CORT --> BRN --> Cloud
         SENS --> BUS --> EFF
@@ -159,7 +159,7 @@ flowchart LR
 │              IDENTITY                                │  self.md · boundaries.md
 │         Human-editable persona                       │  Entity has no write path
 ├─────────────────────────────────────────────────────┤
-│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  11 sensors · 154 effectors
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  11 sensors · 158 effectors
 │  timer·file·ws·job·metric·gmail·screen·window·       │  Publish/subscribe, never direct
 │  reminder·calendar                                   │
 ├─────────────────────────────────────────────────────┤
@@ -386,11 +386,11 @@ flowchart TB
 
 ---
 
-## 154-Tool Effectors
+## 158-Tool Effectors
 
-🧰 Every action MYTHOS can take goes through one of these 154 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
+🧰 Every action MYTHOS can take goes through one of these 158 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
 
-- [142-Tool Effectors](#154-tool-effectors) — the full catalog, generated from the real `from-*.js` arrays.
+- [142-Tool Effectors](#158-tool-effectors) — the full catalog, generated from the real `from-*.js` arrays.
 
 ```mermaid
 pie showData title Tool Distribution
@@ -567,7 +567,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## 📈 Build History
 
-**20 phases shipped.** Linear history on `main`. 2864 tests green.
+**20 phases shipped.** Linear history on `main`. 2885 tests green.
 
 ```mermaid
 gantt
@@ -641,7 +641,7 @@ Full history: [ROADMAP.md](ROADMAP.md) · [MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHIT
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 4 gestures: confirm, deny, mute, vision |
-| **Tests** | Built-in `node:test` | 2864 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 2885 tests, zero test framework deps |
 | **Deps** | 9 total | `@huggingface/transformers` · `@mediapipe/tasks-vision` · `exceljs` · `express` · `kokoro-js` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -655,7 +655,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 9 deps, 2864 tests
+│   ├── package.json             # 9 deps, 2885 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -663,7 +663,7 @@ Agent_OS/
 │   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
 │   │       ├── config/          # Schema validation + env loading
 │   │       ├── cortex/          # OODA loop + orient/decide
-│   │       ├── effectors/       # 154 tools, build-runner, orchestrator
+│   │       ├── effectors/       # 158 tools, build-runner, orchestrator
 │   │       ├── goals/           # Arbitrage + budget system
 │   │       ├── identity/        # self.md + boundaries.md
 │   │       ├── immune/          # watchdog, healer, breakers, announcer
@@ -685,7 +685,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 2864 tests (node --test)
+│   ├── test/                    # 2885 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat           # Windows launcher

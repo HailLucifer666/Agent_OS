@@ -57,6 +57,11 @@ const DEFAULT_ALLOWLIST = [
   // is precisely the guessed-selector failure mode the whole snapshot design
   // exists to end. It ships allowlisted in the same commit as the tool.
   'browser_snapshot',
+  // The rest of the interaction surface, same reasoning: the model can only use
+  // what it can reach. Without these, "fill out this job application" degrades
+  // to typing into whatever has focus and hoping — the exact improvisation
+  // BUG-110 and the whatsapp_send gap were both about.
+  'browser_upload_file','browser_select_option','browser_press_key','browser_hover',
   // BUG-099: browser_navigate can now refuse a wrong-browser request and tell
   // the model to "call browser_launch_debug with browser:brave" — an instruction
   // it could not follow, because the launcher was not reachable from this path.

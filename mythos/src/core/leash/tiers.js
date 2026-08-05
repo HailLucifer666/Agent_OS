@@ -224,6 +224,17 @@ const TIER_TABLE = {
   'browser_click':         3,
   'browser_type':          3,
   'browser_fill_form':     3,  // Phase 4 — autonomous multi-field typing
+  // Snapshot-and-refs toolkit (2026-08-06). Same tier as their siblings above:
+  // each one drives the operator's REAL logged-in browser, so each is a T3
+  // confirm the first time and session-grantable thereafter per BUG-119.
+  'browser_upload_file':   3,  // reads a file off disk and hands it to a web page — the
+                               // widest blast radius here, additionally confined to the
+                               // operator-configured BROWSER_UPLOAD_DIR at the effector
+                               // (a tier alone would not stop a path outside it)
+  'browser_select_option': 3,  // sets a form value, same class as browser_type
+  'browser_press_key':     3,  // Enter submits forms; allowlisted keys only, no free text
+  'browser_hover':         1,  // reveals a menu, changes nothing — read-shaped, same class
+                               // as browser_scroll
   'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
   'run_command':           3,  // Phase 3 (V7) — allow-listed shell command; confirm-once-per-goal. v1 is allowlist+timeout, NOT a full sandbox
   'install_from_github':   3,  // clones + installs a GitHub repo; shares run_command's allowlist gate. Runs the

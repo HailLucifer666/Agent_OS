@@ -126,7 +126,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 93 registered count', () => {
+describe('gate: 97 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -185,8 +185,12 @@ describe('gate: 93 registered count', () => {
     // wrong-browser refusal: disconnect + relaunch the requested browser) = 92,
     // + browser_snapshot (from-browser, snapshot-and-refs 2026-08-06 — reads the
     // page as an accessibility tree with per-element refs so the model acts on an
-    // element it actually saw instead of a guessed CSS selector) = 93.
-    assert.equal(hub.count(), 93);
+    // element it actually saw instead of a guessed CSS selector) = 93,
+    // + browser_upload_file/browser_select_option/browser_press_key/browser_hover
+    // (from-browser, snapshot-and-refs Phase 5 2026-08-06 — the rest of what a
+    // browser can do: resume upload for job applications, native dropdowns,
+    // Enter/Tab/Escape for form flows, and hover to reveal menus) = 97.
+    assert.equal(hub.count(), 97);
   });
 });
 

@@ -1096,6 +1096,173 @@ async function browser_switch(args) {
   return browser_launch_debug({ browser: want });
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5 — the rest of what a browser can do. Each of these is ref-capable,
+// because a ref is the whole point: the model acts on an element it saw in a
+// snapshot. Every one takes the same "ref preferred, selector as fallback"
+// shape as browser_click, and reports the same page-state evidence.
+// ---------------------------------------------------------------------------
+
+// Resolve "ref or selector" to a locator once, so the four tools below cannot
+// drift apart in how they target. Returns {locator, target, describe} or a
+// failure to hand straight back.
+async function resolveTarget(page, { ref, selector }, what) {
+  if (ref) {
+    const refProblem = checkRef(ref);
+    if (refProblem) return { failure: refProblem };
+    return { locator: refLocator(page, ref), target: ref, ref: ref };
+  }
+  if (!selector) {
+    return { failure: fail(`Either ref (from browser_snapshot, preferred) or a CSS selector is required to ${what}.`) };
+  }
+  if (!(await waitReady(page, selector))) {
+    return { failure: fail(`Element not ready (not visible within ${pageWaitMs()}ms): ${selector}`) };
+  }
+  return { locator: page.locator(selector), target: selector, ref: null };
+}
+
+// Upload — the job-application resume case, and the one tool here with real
+// blast radius: it reads a file off the operator's disk and hands it to a web
+// page. So the path is confined to directories the operator explicitly listed,
+// checked lexically AND through realpath (a symlink planted inside an allowed
+// directory must not smuggle a path out of it — the same discipline
+// from-computer.js's resolveSandboxed already uses). With nothing configured it
+// refuses and says how to configure it, rather than defaulting to somewhere
+// convenient like the whole home directory.
+function uploadRoots() {
+  const raw = (config && config.BROWSER_UPLOAD_DIR) || process.env.BROWSER_UPLOAD_DIR || '';
+  return String(raw).split(';').map((s) => s.trim()).filter(Boolean)
+    .map((d) => d.replace(/%USERPROFILE%/gi, os.homedir()));
+}
+
+function resolveUploadPath(rawPath) {
+  if (!rawPath || !String(rawPath).trim()) return { ok: false, reason: 'A file path is required.' };
+  const roots = uploadRoots();
+  if (!roots.length) {
+    return { ok: false, reason:
+      'No upload directory is configured, so I cannot send any file to a web page. Set ' +
+      'BROWSER_UPLOAD_DIR in mythos/.env to the folder your documents live in (semicolon-separated ' +
+      'for more than one), then ask again.' };
+  }
+  const resolved = path.resolve(String(rawPath).replace(/%USERPROFILE%/gi, os.homedir()));
+  if (!fs.existsSync(resolved)) return { ok: false, reason: `No such file: ${resolved}` };
+
+  // realpath both sides before comparing: it is the link-following check that
+  // makes the containment test mean anything.
+  let realFile;
+  try { realFile = fs.realpathSync(resolved); } catch (_) { realFile = resolved; }
+  const contained = roots.some((root) => {
+    let realRoot;
+    try { realRoot = fs.realpathSync(path.resolve(root)); } catch (_) { return false; }
+    const withSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+    return realFile === realRoot || realFile.startsWith(withSep);
+  });
+  if (!contained) {
+    return { ok: false, reason:
+      `"${rawPath}" is outside the folders I am allowed to upload from. I can only send files from: ` +
+      roots.join('; ') + '.' };
+  }
+  return { ok: true, resolved: realFile };
+}
+
+async function browser_upload_file({ ref, selector, path: filePath }) {
+  const sandboxed = resolveUploadPath(filePath);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    const t = await resolveTarget(page, { ref, selector }, 'upload a file');
+    if (t.failure) return t.failure;
+    await t.locator.setInputFiles(sandboxed.resolved);
+    return ok(await withStateCapsule(page,
+      { uploaded: path.basename(sandboxed.resolved), from: sandboxed.resolved, into: t.target, via: 'set-input-files' },
+      t.ref));
+  }).catch(err => fail(t_err(ref, selector, 'upload to', err)));
+}
+
+// Shared failure phrasing for the ref-or-selector tools: a ref failure gets the
+// agent-shaped remedy, a selector failure stays a plain named error.
+function t_err(ref, selector, verb, err) {
+  if (ref) return refFailure(ref, verb, err);
+  return `Could not ${verb} ${selector}: ${(err && err.message) || err}`;
+}
+
+async function browser_select_option({ ref, selector, value, label }) {
+  if (value === undefined && label === undefined) {
+    return fail('Either value or label is required to choose an option.');
+  }
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    const t = await resolveTarget(page, { ref, selector }, 'select an option');
+    if (t.failure) return t.failure;
+    // Native <select> only. A custom dropdown is not a select element and must
+    // NOT be forced through here — it is a ref click to open it and a second ref
+    // click to choose, which the snapshot already exposes. Saying so in the
+    // failure is what stops the model retrying this tool forever.
+    const chosen = label !== undefined ? { label: String(label) } : { value: String(value) };
+    const applied = await t.locator.selectOption(chosen);
+    return ok(await withStateCapsule(page,
+      { selected: applied, on: t.target, via: 'select-option' }, t.ref));
+  }).catch(err => fail(
+    t_err(ref, selector, 'select an option on', err) +
+    ' If this is a custom dropdown rather than a real <select>, click it open with browser_click and ' +
+    'then click the option from a fresh snapshot.'
+  ));
+}
+
+// Keys the model may press. An allowlist rather than free text: "press whatever
+// string the model produced" is how a stray sequence ends up typed into a form,
+// and every key a form flow actually needs is here.
+const ALLOWED_KEYS = [
+  'Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'Space',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Home', 'End', 'PageUp', 'PageDown',
+];
+
+async function browser_press_key({ key, ref, selector }) {
+  if (!key) return fail('A key is required, one of: ' + ALLOWED_KEYS.join(', ') + '.');
+  const match = ALLOWED_KEYS.find((k) => k.toLowerCase() === String(key).trim().toLowerCase());
+  if (!match) {
+    return fail(`"${key}" is not a key I will press. Allowed: ${ALLOWED_KEYS.join(', ')}. ` +
+      'To enter text use browser_type.');
+  }
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    // With a ref/selector the key goes to THAT element; without one it goes to
+    // whatever currently has focus, which is the normal "I just typed, now
+    // press Enter" case.
+    if (ref || selector) {
+      const t = await resolveTarget(page, { ref, selector }, 'press a key');
+      if (t.failure) return t.failure;
+      await t.locator.press(match);
+      return ok(await withStateCapsule(page, { pressed: match, on: t.target, via: 'ref-press' }, t.ref));
+    }
+    await page.keyboard.press(match);
+    return ok(await withStateCapsule(page, { pressed: match, on: 'focused element', via: 'keyboard-press' }, null));
+  }).catch(err => fail(t_err(ref, selector, 'press a key on', err)));
+}
+
+async function browser_hover({ ref, selector }) {
+  const guard = await requireOnline();
+  if (guard) return guard;
+
+  return browserAgent.withPage(async (page) => {
+    const t = await resolveTarget(page, { ref, selector }, 'hover');
+    if (t.failure) return t.failure;
+    await t.locator.hover();
+    // Hovering usually exists to REVEAL something, so the useful next step is
+    // another snapshot. Say so rather than leaving the model to guess.
+    const result = await withStateCapsule(page, { hovered: t.target, via: 'ref-hover' }, t.ref);
+    result.result.hint = 'If this was meant to open a menu, call browser_snapshot again to see what appeared.';
+    return ok(result);
+  }).catch(err => fail(t_err(ref, selector, 'hover over', err)));
+}
+
 // ---- Tool catalog ----
 
 const TOOLS = [
@@ -1111,6 +1278,10 @@ const TOOLS = [
   { name: 'browser_go_back', description: 'Navigate back to the previous page in history.', params: {}, danger: false, fn: browser_go_back },
   { name: 'browser_wait_for', description: 'Wait for an element matching a CSS selector to appear on the page. Fails honestly if it does not appear within the timeout. Use before reading or interacting with a dynamically-loaded element.', params: { selector: 'string - CSS selector to wait for', timeoutMs: 'number (optional) - max wait in ms, default 10000, capped at 30000' }, danger: false, fn: browser_wait_for, needs_result: true },
   { name: 'browser_fill_form', description: 'Fill multiple form fields in one call. Pass fields:[{ref, value}] using refs from browser_snapshot (preferred), or [{selector, value}]. The two may be mixed. Each field is filled (replacing existing content); a bad ref or selector reports that field failure without aborting the rest.', params: { fields: 'array - [{ref: string, value: string}] or [{selector: string, value: string}]' }, danger: true, fn: browser_fill_form },
+  { name: 'browser_upload_file', description: 'Attach a file from disk to a file-upload control on the page — the resume step of a job application. Target the upload control by ref from browser_snapshot (preferred) or CSS selector. Only files inside the operator-configured upload folder can be sent; anything else is refused.', params: { ref: 'string (optional) - ref of the file input from browser_snapshot', selector: 'string (optional) - CSS selector of the file input', path: 'string - path of the file to attach, inside the configured upload folder' }, danger: true, fn: browser_upload_file },
+  { name: 'browser_select_option', description: 'Choose an option in a native dropdown (<select>) by value or visible label. For a custom (non-native) dropdown, click it open with browser_click and click the option from a fresh snapshot instead.', params: { ref: 'string (optional) - ref of the select element from browser_snapshot', selector: 'string (optional) - CSS selector of the select element', value: 'string (optional) - the option value attribute', label: 'string (optional) - the option text as shown to the user' }, danger: true, fn: browser_select_option },
+  { name: 'browser_press_key', description: 'Press a single navigation or submit key: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown. Goes to the focused element by default, or to a specific element via ref/selector. Use browser_type to enter text.', params: { key: 'string - one of Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown', ref: 'string (optional) - ref of the element to press the key on', selector: 'string (optional) - CSS selector of that element' }, danger: true, fn: browser_press_key },
+  { name: 'browser_hover', description: 'Hover the pointer over an element to reveal a hover menu or tooltip. Take a fresh browser_snapshot afterwards to see what appeared.', params: { ref: 'string (optional) - element ref from browser_snapshot', selector: 'string (optional) - CSS selector' }, danger: false, fn: browser_hover },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },
   { name: 'browser_switch', description: 'Switch the debug browser to a different one (chrome, brave, or edge) when browser control is already attached to a different browser than the one requested. Disconnects the current MYTHOS-launched browser, launches the requested one, and re-attaches — the remedy for a "browser control is attached to X, not Y" refusal.', params: { browser: 'string - chrome, brave or edge to switch to' }, danger: false, fn: browser_switch },
@@ -1137,6 +1308,11 @@ module.exports = {
   browser_snapshot, capSnapshot, extractRefs,
   SNAPSHOT_MAX_NODES, SNAPSHOT_MAX_CHARS,
   __resetSnapshotStateForTest, __setSnapshotStateForTest,
+  // Phase 5 toolkit. resolveUploadPath is exported as its own seam: the upload
+  // allowlist is the one security boundary in this file, and it must be
+  // testable without a browser or a real page anywhere near it.
+  browser_upload_file, browser_select_option, browser_press_key, browser_hover,
+  resolveUploadPath, uploadRoots, ALLOWED_KEYS,
   // BUG-099 seams: pure helpers so the browser-target guarantee is testable
   // without requireOnline() launching a real browser on the test machine.
   findBrowserExecutable, browserCandidatePaths, normalizeBrowserName, checkBrowserTarget,
