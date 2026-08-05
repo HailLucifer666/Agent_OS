@@ -2656,7 +2656,12 @@ hole in BUG-099's capability half.
   **Files:** `mythos/src/core/effectors/from-browser.js`,
   `mythos/test/bug-106-attached-browser-stale.test.js`.
 
-- **BUG-107 (the wrong-browser refusal was a dead end):** FIXED. Added
+- **BUG-107 (the wrong-browser refusal was a dead end):** **LIVE-VERIFIED
+  2026-08-06** (audit `aud-05df6d2e14c0` -> `aud-95ba175c5826` -> `aud-3cc8b88cc4d3`:
+  `browser_launch_debug{brave}` refused with "chrome already owns the debug
+  port ... call browser_switch", the model called `browser_switch{brave}`, and it
+  completed ok -- the whole remedy chain walked itself with no operator step).
+  Added
   `browser_switch(browser)`: disconnects, closes only a browser MYTHOS itself
   launched (never one it merely attached to — that could be the operator's own
   window), and routes through `browser_launch_debug` itself (no second launch
@@ -2892,8 +2897,12 @@ repairs, and are labelled so rather than being written up as fixes.
   **Files:** `mythos/src/core/voice/live-session.js`,
   `mythos/test/live-session-transcripts.test.js`.
 
-- **BUG-119 (a T3 approval never held; the model re-prompted forever):** FIXED
-  (unit), **SAFETY-RELEVANT, operator-approved 2026-08-06.** Commit `99e4a11`.
+- **BUG-119 (a T3 approval never held; the model re-prompted forever):**
+  **LIVE-VERIFIED 2026-08-06** (audit `aud-0b5011e2b965`, `aud-88d306085acb`,
+  `aud-2059c9b1ae3f`: three T3 `browser_click` rows across two separate turns,
+  each `granted:true` / `reason:"session-granted"`, with no confirm-request in
+  between -- the grant held instead of re-prompting per click).
+  **SAFETY-RELEVANT, operator-approved 2026-08-06.** Commit `99e4a11`.
   Two defects, and the larger one was not in the report. **The load-bearing
   one:** `leash/index.js`'s `accept()` wrapper read `acceptedAction.tool`, but
   every production caller stores an *envelope* — `cortex/index.js`,
@@ -2932,7 +2941,15 @@ repairs, and are labelled so rather than being written up as fixes.
   **Files:** `mythos/src/core/voice/live-tool-adapter.js`,
   `mythos/test/bug-120-live-duplicate-tool-call.test.js`.
 
-- **BUG-121 (`browser_click` cannot hit lazy-hydrated elements):** FIXED (unit).
+- **BUG-121 (`browser_click` cannot hit lazy-hydrated elements):**
+  **LIVE-VERIFIED 2026-08-06 -- by the mechanism that replaced it.** The
+  snapshot-and-refs path is what actually ran: `browser_snapshot`
+  (`aud-05226c4b145b`) -> `browser_click{ref:"e199"}` ok (`aud-0b5011e2b965`),
+  and again `aud-ff99dc3c5cc0` -> `browser_click{ref:"e196"}` ok
+  (`aud-2059c9b1ae3f`), both on YouTube thumbnails -- the exact elements whose
+  lazy hydration defeated selector clicks all week. The ladder below still
+  exists for the selector path (`.ytp-play-button` also clicked ok that session,
+  `aud-88d306085acb`); it is no longer the primary mechanism.
   Commit `eb56f56`. The body was one bounded visible-wait then a plain
   `page.click`, so an element in the DOM that never satisfies Playwright's
   actionability checks had no path at all — YouTube's `ytd-*` custom elements
@@ -3000,8 +3017,12 @@ repairs, and are labelled so rather than being written up as fixes.
   `mythos/src/core/voice/live-tool-adapter.js`,
   `mythos/test/bug-124-live-turn-id.test.js`.
 
-- **BUG-125 (audit rows with `tool: undefined, outcome: no-match`):** FIXED
-  (unit). Commit `a14be5a`. Not the leash, as first assumed during design:
+- **BUG-125 (audit rows with `tool: undefined, outcome: no-match`):**
+  **LIVE-VERIFIED 2026-08-06** (healer rows written after the restart carry the
+  field explicitly -- `aud-3670c782f9b4`, `aud-c67fd2291189`, both
+  `"tool":null`; rows from earlier the same day, before the restart picked the
+  fix up, still omit it entirely, which is the before/after in one file).
+  Commit `a14be5a`. Not the leash, as first assumed during design:
   `immune/healer.js` writes playbook decisions into the same `Audit/*.jsonl`
   stream the leash writes tool rows into, and a healer row has no tool by
   nature. Omitting the field made readers render `tool: undefined`,
@@ -3160,3 +3181,188 @@ Nothing under `electron/` was touched and `boot.test.js` (which spawns
 `src/main.js`) passes, but a green suite has proven before that it cannot tell
 you the app boots.
 
+
+## Session (2026-08-06, night) — BUG-127..BUG-131 from the ~2:30 AM live session
+
+Five defects the operator scoped out of one live session, plus a media-key
+enhancement that rode along. The same session is also what let four earlier
+fixes flip to LIVE-VERIFIED (see the flips above, each citing its audit row) —
+the browser stack worked: snapshot → ref click on YouTube twice, session grants
+holding, and the wrong-browser dead-end healing itself through `browser_switch`.
+Evidence: `mythos/vault/Incidents/2026-08-05.jsonl`, `vault/Audit/2026-08-05.jsonl`.
+
+- **BUG-127 (`spotify_volume` moved the SYSTEM master volume):** FIXED (unit +
+  a live check of the new PowerShell path), ROOT-CAUSED. Incident
+  `inc-1785964152103-677380`. "Turn Spotify down" turned the whole machine down,
+  MYTHOS's own voice with it. Not a regression and not a mystery:
+  `from-spotify.js`'s `level` path called pc `set_volume`, which is Core Audio's
+  master ENDPOINT volume, and BUG-078 had already documented that honestly while
+  ruling per-app control out as too much surface for one incident. It bit again,
+  so that upgrade path is now built. New pc-child command `set_app_volume
+  {name|pid, level}` enumerates the endpoint's audio SESSIONS
+  (`IAudioSessionManager2` → `IAudioSessionControl2.GetProcessId` →
+  `ISimpleAudioVolume`) and sets the matching app's own volume — the per-app
+  slider the Windows Volume Mixer shows. **The rule that matters as much as the
+  plumbing:** an app with no live audio session FAILS, naming what was searched
+  for and which apps did have sessions. It must never quietly fall back to the
+  master volume, because that silent widening from "Spotify" to "everything" IS
+  the bug. `direction` (up/down/mute) still sends the global media keys — those
+  VKs have no per-app equivalent — and the tool description now says which path
+  does which, so BUG-078's honesty test inverted rather than died.
+  Two platform notes for the next session: the interface declarations are
+  Mythos-prefixed and separate from `Get-AudioEndpointVolumeType`'s, because
+  that block's `IMMDevice.Activate` is typed to `IAudioEndpointVolume` and this
+  path needs `IAudioSessionManager2` out of the same call; and the failure
+  string is deliberately ASCII, because PowerShell 5.1 reads this file in the
+  ANSI codepage and a non-ASCII character inside a STRING (comments are fine)
+  fails to parse — that cost one debugging round here.
+  **Files:** `mythos/adapters/pc-child/ps-automation.ps1`,
+  `mythos/src/core/effectors/from-pc.js`,
+  `mythos/src/core/effectors/from-spotify.js`,
+  `mythos/src/core/leash/tiers.js` (T2, matching the wider `set_volume` — a
+  narrower action cannot warrant a stricter gate),
+  `mythos/test/bug-127-per-app-volume.test.js`,
+  `mythos/test/bug-078-spotify-volume-honesty.test.js` (rewritten to the new
+  behaviour), `mythos/test/spotify-effector.test.js`.
+
+- **BUG-128 (whole tool-call batches re-issued with fresh call ids):** FIXED
+  (unit), ROOT-CAUSED. Three `open_web` calls from one request each ran twice
+  ~28s apart with different `traceId`s, each repeat preceded by a
+  `live-tool-outcome-late-for-turn` anomaly. That ordering is the whole
+  diagnosis: the turn completed before the `toolResponse` went back, so Gemini
+  never saw an answer for the ids it had asked about and re-issued the batch.
+  BUG-120's dedup is keyed on `call.id` **by design** (two genuine clicks on the
+  same button carry different ids, so an args-hash would eat real work), and is
+  therefore structurally blind to fresh ids. Fixing it there would have been
+  wrong. Fixed at the mechanism instead: `SLOW_TOOLS` is a hand-maintained list
+  that is always one incident behind, so any call still unresolved at
+  `TOOL_ACK_DEADLINE_MS` (1500ms) now gets the same `status:'started'` response
+  SLOW_TOOLS gets, with its real outcome delivered afterwards on the existing
+  `[SYSTEM]` channel. No call can reach `turnComplete` unanswered, which is the
+  only reason the model re-issues. `SLOW_TOOLS` stays — it acks instantly, so
+  the operator does not hear 1.5s of silence first; the deadline is the net
+  under everything else, not a replacement. Instrumented too: every batch logs
+  its ids plus a content hash (`live.tool-call-batch`), because a re-issued
+  batch's whole signature is "same content, different ids" and that was not
+  readable from any log.
+  **Files:** `mythos/src/core/voice/live-tool-adapter.js`,
+  `mythos/test/bug-128-live-tool-ack-deadline.test.js`.
+
+- **BUG-129 (typed chat answered in a different voice from the Live session):**
+  FIXED (unit), ROOT-CAUSED. HUD typed input went `compose-bar.js` → ws
+  `{type:'utterance'}` → `handleUtterance`, which is the batch path and speaks
+  through edge-tts, while an open Live session speaks in Gemini's own voice off
+  its own history. Two voices and two contexts in one conversation. The
+  utterance handler now feeds typed text into the Live session via `sendText`
+  when one is open (it IS user content, so the user role is correct), and only
+  falls back to the batch path when there is no Live session. The HUD's per-
+  `reqId` handler is released with an empty `done` — `deliverReply` treats a
+  no-say done as `finishTurn`, and the typed message's own caption is drawn
+  client-side, so nothing is lost by not answering on that channel.
+  **Files:** `mythos/server/index.js`,
+  `mythos/test/bug-129-typed-chat-live-voice.test.js`.
+
+- **BUG-130 (the debug browser has no ad blocking):** FIXED (config + docs),
+  ROOT-CAUSED. Incidents `inc-1785930579042-465487`, `inc-1785931024668-590202`.
+  Never a regression: the debug browser has always run in a dedicated, empty
+  `--user-data-dir`, and BUG-115 verified those profiles have never held an
+  extension — the operator's blocker lives only in their real profile. Fixed
+  BYO, per the repo's portability and licensing rules: **no third-party
+  extension is bundled and nothing is downloaded on the operator's behalf**
+  (that would be both a supply-chain and a licence problem). Two routes instead:
+  Brave now leads `BROWSER_SEARCH_ORDER` when installed, because its Shields are
+  part of the browser and therefore work in a fresh profile with nothing
+  installed; and `BROWSER_EXTENSIONS` is documented in `.env.example` with a
+  worked uBlock-Origin-Lite example the operator unpacks themselves. A named
+  browser still wins outright — BUG-099's guarantee is untouched, and this only
+  decides which one is picked when the caller names none. Verified that no
+  launch arg we pass disables blocking: `--disable-extensions-except` is only
+  ever emitted scoped to a configured list, never bare, and nothing is added at
+  all when no extensions are configured.
+  **Files:** `mythos/src/core/effectors/from-browser.js`, `mythos/.env.example`,
+  `mythos/test/bug-130-debug-browser-ads.test.js`,
+  `mythos/test/browser-target-honesty.test.js` (its Chrome-first assertion was
+  deliberately reversed and re-commented, not deleted).
+
+- **BUG-131 (spoke → no reply → straight back to listening):** INSTRUMENTED,
+  **NOT root-caused — deliberately.** Incidents `inc-1785930579042-465487`,
+  `inc-1785930580437-716815`. There was no per-turn watchdog anywhere:
+  `live-turn-no-transcript` only fires for a `turnComplete` that ARRIVED empty,
+  and the only other timer is the 120s idle one, by which point the operator has
+  repeated themselves twice. `live-session.js` now arms a `LIVE_TURN_STALL_MS`
+  (10s) timer on user transcription and emits `health.anomaly
+  {kind:'live-turn-stalled', turnId}` if no assistant output, tool call or
+  `turnComplete` lands. Re-armed per transcription fragment, so the deadline
+  runs from the operator's last word rather than their first — a long question
+  is not a stall. Disarmed on close, so a dead session cannot raise an anomaly
+  about a turn nobody awaits. A stall could be the client, the network or
+  Gemini; naming one without evidence is exactly the fabrication AD-4 forbids,
+  so the anomaly says only that a turn stalled and carries BUG-124's `turnId` to
+  join it to that turn's frames. Root cause waits for a recurrence with that id
+  attached.
+  **One deliberate deviation from the plan:** `live-turn-stalled` was NOT added
+  to the announcer's `SERIOUS_KINDS`, so it is recorded and visible but not
+  spoken. Speaking it would push MYTHOS's own TTS into the room during an open
+  Live session, and this repo has already established that the Live mic
+  transcribes MYTHOS's own speech as the operator — announcing a stalled turn
+  that way would inject a fake user turn into the very session under
+  investigation. Revisit if the anomaly proves too easy to miss.
+  **Files:** `mythos/src/core/voice/live-session.js`,
+  `mythos/test/bug-131-live-turn-stall.test.js`.
+
+- **Media keys for video players (enhancement, not a bug):** `ALLOWED_KEYS`
+  refused `k`, so the model — which correctly reached for the play/pause
+  shortcut every HTML5 player shares — had to hunt down `.ytp-play-button`
+  instead. `k m f j l c` are now allowed. The reason single characters were
+  excluded is real and has not gone away: pressed while a text field has focus
+  they are TYPED, and stray text in a form is precisely what the allowlist
+  exists to prevent. So they are gated on a `document.activeElement` check, and
+  refused with the reason and the way out ("click the video first") when a text
+  field has focus. The guard covers the `ref` path too — focus, not the target,
+  decides where a character lands — and a page whose focus cannot be read at all
+  refuses rather than guesses. Navigation keys are untouched: Escape in a text
+  field is normal and useful. Tier stays 3.
+  **Files:** `mythos/src/core/effectors/from-browser.js`,
+  `mythos/test/browser-player-keys.test.js`.
+
+### Deliberately NOT flipped: BUG-117 and BUG-118
+
+The `[SYSTEM]`-tag complaint (`inc-1785952778624-586187`) is from Session B,
+before the fix, exactly as the plan predicted. No equivalent complaint appears
+after the last restart — but an absence of complaints is not evidence of a fix,
+only an absence of evidence. Both stay 🔧 CODED until a session produces its own
+positive evidence.
+
+### Live gate for this session's fixes (none are LIVE-VERIFIED yet)
+
+Everything above is unit-verified only, with one exception noted below. Sample
+each ≥3 runs — one lucky reply has hidden flakiness in this repo before.
+
+1. **BUG-129.** Mid Live session, type into the HUD compose bar. The reply must
+   come back in the Live voice (Aoede), not the edge-tts one, and must know what
+   was just said aloud.
+2. **BUG-128.** Drive a deliberately slow tool by voice. The batch must not fire
+   twice; `live.tool-call-batch` should show one hash, and
+   `live.tool-ack-deadline` should appear for the slow call with its late
+   outcome following.
+3. **BUG-127.** "Lower Spotify's volume to 20" while Spotify plays: the Windows
+   Volume Mixer must show only Spotify moving, and MYTHOS's own voice must stay
+   at the same level. Then ask again with Spotify CLOSED — it must refuse and
+   say there is no audio session, not touch the master volume.
+   *(Partially pre-verified: the PowerShell handler itself was exercised on this
+   machine — it enumerated the live sessions, set one app's volume and read the
+   level back. What is NOT verified is the whole voice → effector → pc-child
+   round trip, or the Spotify match specifically, since Spotify was not
+   running.)*
+4. **Media keys.** On a YouTube video, `k` toggles playback; then click into the
+   search box and try again — it must refuse and name the text field.
+5. **BUG-130.** Fresh debug launch with no browser named: Brave should be the one
+   that opens, and a YouTube pre-roll should be blocked by Shields. With Chrome
+   named explicitly, Chrome must still open.
+6. **BUG-131.** Only observable on a recurrence: if a spoken turn goes
+   unanswered again, `live-turn-stalled` with a `turnId` must appear in the
+   health stream, and that id must be joinable to the turn's frames.
+
+Also unverified: **the Electron shell has not been started since these changes.**
+`server/index.js` and the Live path were touched; a green suite has proven before
+that it cannot tell you the app boots.

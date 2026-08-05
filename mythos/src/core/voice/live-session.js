@@ -54,6 +54,17 @@ function createLiveSession(deps) {
   // ceiling; a genuine conversation resets it on the first recognized word.
   // Upgrade path if 3 is wrong in practice: make it operator-configurable.
   const MAX_IDLE_ROTATIONS_WITHOUT_SPEECH = 3;
+  // BUG-131 — 2026-08-06: the operator spoke, MYTHOS transcribed it, and then
+  // nothing came back; the HUD simply returned to listening. Nothing fired,
+  // because nothing was watching: live-turn-no-transcript only covers a
+  // turnComplete that ARRIVED empty, and the only other timer is the 120s idle
+  // one, by which point the operator has long since repeated themselves.
+  //
+  // This is instrumentation, not a fix. A stall could be the client, the
+  // network or Gemini, and guessing between them in the announcer is exactly
+  // the fabrication AD-4 forbids. The anomaly carries the BUG-124 turnId so the
+  // next occurrence can be joined to that turn's frames and told apart.
+  const TURN_STALL_MS = Number(config.LIVE_TURN_STALL_MS) || 10000;
 
   const openSocket = createSocket || ((url) => new WebSocket(url));
 
@@ -61,6 +72,7 @@ function createLiveSession(deps) {
   let state = 'closed';          // closed | opening | open | reconnecting
   let resumeHandle = null;       // from sessionResumptionUpdate
   let idleTimer = null, maxTimer = null;
+  let turnStallTimer = null;     // BUG-131, see TURN_STALL_MS
   let userText = '', assistantText = '';
   let closedByUs = false;
   let idleRotationsWithoutSpeech = 0;
@@ -121,6 +133,34 @@ function createLiveSession(deps) {
       return;
     }
     close('idle-timeout', { final: false });
+  }
+
+  // BUG-131. Re-armed on every user transcription fragment, so the deadline is
+  // measured from when the operator STOPPED being transcribed rather than from
+  // when they started — which is what "final" means here, without depending on
+  // a finality flag the frozen wire protocol does not give us. Any assistant
+  // output at all (audio, text, transcription, or a tool call) disarms it: the
+  // model answering slowly is not the failure being watched for, the model not
+  // answering is.
+  function armTurnStall() {
+    if (turnStallTimer) clearTimeout(turnStallTimer);
+    turnStallTimer = setTimeout(() => {
+      turnStallTimer = null;
+      if (bus && typeof bus.emit === 'function') {
+        // turnCounter increments at turnComplete, so the turn still in flight is
+        // the next one — the same id it will be reported under if it ever lands.
+        bus.emit('health.anomaly', {
+          kind: 'live-turn-stalled', turnId: turnCounter + 1, waitedMs: TURN_STALL_MS,
+        });
+      }
+      logger.warn('live.turn-stalled', { turnId: turnCounter + 1, waitedMs: TURN_STALL_MS });
+    }, TURN_STALL_MS);
+    if (turnStallTimer.unref) turnStallTimer.unref();
+  }
+
+  function disarmTurnStall() {
+    if (turnStallTimer) clearTimeout(turnStallTimer);
+    turnStallTimer = null;
   }
 
   function sendRaw(frame) {
@@ -239,13 +279,16 @@ function createLiveSession(deps) {
       if (sc.inputTranscription && sc.inputTranscription.text) {
         userText += sc.inputTranscription.text;
         idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
+        armTurnStall(); // BUG-131 — the operator said something; a reply is now owed
         if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
+        disarmTurnStall(); // BUG-131 — it IS answering
         assistantText += sc.outputTranscription.text;
         if (onTranscript) onTranscript({ role: 'assistant', text: sc.outputTranscription.text, final: false });
       }
       const parts = (sc.modelTurn && sc.modelTurn.parts) || [];
+      if (parts.length) disarmTurnStall(); // BUG-131 — audio or text is coming back
       for (const p of parts) {
         if (p.inlineData && p.inlineData.data && onAudioOut) onAudioOut(p.inlineData.data);
         // BUG-118: a part the model marks as its own thinking is not the reply.
@@ -265,6 +308,7 @@ function createLiveSession(deps) {
         if (bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
       }
       if (sc.turnComplete) {
+        disarmTurnStall(); // BUG-131 — the turn landed, stalled or not
         if (breakers && typeof breakers.success === 'function') breakers.success(BREAKER);
         // BUG-124: a monotonic per-session turn number, attached to the turn and
         // to every anomaly this module raises about it. The reported symptom is
@@ -298,6 +342,10 @@ function createLiveSession(deps) {
     }
 
     // ---- tool calls → delegated, never executed here (AD-1) ----
+    // BUG-131 — calling a tool is a response, just not a spoken one. Disarmed on
+    // the FRAME, outside the onToolCall guard: whether this process happens to
+    // have a tool handler wired says nothing about whether Gemini answered.
+    if (msg.toolCall) disarmTurnStall();
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
       Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText }))
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
@@ -428,6 +476,9 @@ function createLiveSession(deps) {
     if (final) closedByUs = true;
     if (idleTimer) clearTimeout(idleTimer);
     if (maxTimer) clearTimeout(maxTimer);
+    // BUG-131: a closed session owes no reply, so a pending stall timer would
+    // only ever fire a false anomaly about a turn nobody is waiting on.
+    disarmTurnStall();
     // Null out `ws` BEFORE closing the old socket, not after: a non-final
     // close's own 'close' handler can synchronously call reconnect()->open()
     // (fake sockets emit 'close' synchronously; real ones may coalesce too),
