@@ -112,7 +112,36 @@ function createLiveToolAdapter(deps) {
     hermes_task: true,
     cua_click: true,
     cua_get_window_state: true,
+    // BUG-120 — 2026-08-05: browser_switch was awaited inside the turn, and it
+    // is anything but fast: it disconnects the attached browser, closes it,
+    // relaunches another with a debug port and re-attaches. The turn ended long
+    // before that finished, so Gemini re-issued the same call — twice the
+    // relaunch, from one operator request. Membership here is about DURATION,
+    // per this list's own rule, and by that rule it always belonged.
+    browser_switch: true,
   };
+
+  // BUG-120 — the other half. Making browser_switch slow removes the specific
+  // trigger seen on 2026-08-05, but nothing in this seam ever stopped the model
+  // re-issuing ANY call before its toolResponse arrived, and a re-dispatched
+  // world-changing action is not a cosmetic problem. Dedup is on call.id only:
+  // Gemini reuses the id when it retries the same call, whereas two genuine
+  // clicks on the same button (a legitimate "click it again") carry different
+  // ids, so an args-hash would eat real work. TTL-bounded so the map cannot
+  // grow for the life of a session.
+  const DUPLICATE_CALL_TTL_MS = 30 * 1000;
+  const recentCallIds = new Map(); // call.id -> firstSeenAt
+
+  function isDuplicateCall(callId) {
+    if (!callId) return false; // no id, nothing to key on — never suppress blindly
+    const now = Date.now();
+    for (const [id, seenAt] of recentCallIds) {
+      if (now - seenAt > DUPLICATE_CALL_TTL_MS) recentCallIds.delete(id);
+    }
+    if (recentCallIds.has(callId)) return true;
+    recentCallIds.set(callId, now);
+    return false;
+  }
 
   const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt}
   const liveTurnActions = [];            // AD-4: reconciled on turnComplete
@@ -223,6 +252,19 @@ function createLiveToolAdapter(deps) {
     }
     const responses = [];
     for (const call of calls) {
+      // BUG-120: answer the repeat, run nothing. The model still gets a
+      // functionResponse for the id it asked about (silence would leave the
+      // turn hanging), and the reply names the original so it waits for that
+      // outcome rather than treating this as a fresh failure.
+      if (isDuplicateCall(call.id)) {
+        logger.info('live.duplicate-tool-call', { tool: call.name, callId: call.id });
+        responses.push({ id: call.id, name: call.name, response: {
+          status: 'duplicate-suppressed',
+          message: 'You already issued this exact call and it is still running. It was NOT run a second ' +
+            'time. Wait for the original outcome and report that — do not claim anything happened yet.',
+        }});
+        continue;
+      }
       const decision = { tool: call.name, args: call.args || {} };
       let verdict;
       try {
