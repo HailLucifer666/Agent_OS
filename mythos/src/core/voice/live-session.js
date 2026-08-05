@@ -64,6 +64,19 @@ function createLiveSession(deps) {
   let userText = '', assistantText = '';
   let closedByUs = false;
   let idleRotationsWithoutSpeech = 0;
+  // BUG-118 instrumentation. The operator heard MYTHOS speak its own private
+  // reasoning as if it were the reply. The suspicion — NOT yet evidence — is
+  // that those are modelTurn parts flagged `thought: true`, which this module
+  // forwarded to onTranscript like any other text. The filter below is a safe
+  // no-op if the field never appears, so it cannot be the proof; these two
+  // counters are. One line per turn names how many text parts arrived and how
+  // many of them were flagged, which settles the question in a single live
+  // session. If a leak shows up with thoughtParts:0, the reasoning is inside
+  // the spoken audio (outputTranscription) and no text filter can silence it —
+  // that escalates to a thinkingConfig question in buildSetup(), not more
+  // filtering here.
+  let turnTextParts = 0;
+  let turnThoughtParts = 0;
 
   function setState(next, reason) {
     if (state === next) return;
@@ -227,7 +240,17 @@ function createLiveSession(deps) {
       const parts = (sc.modelTurn && sc.modelTurn.parts) || [];
       for (const p of parts) {
         if (p.inlineData && p.inlineData.data && onAudioOut) onAudioOut(p.inlineData.data);
-        if (p.text && onTranscript) onTranscript({ role: 'assistant', text: p.text, final: false });
+        // BUG-118: a part the model marks as its own thinking is not the reply.
+        // Forwarding it made private reasoning arrive on the transcript channel
+        // (and, through it, the operator's ears). Dropped before onTranscript
+        // rather than regex-stripped downstream — matching on a "Reasoning:"
+        // prefix would be symptom-matching, and would eat legitimate replies
+        // that happen to start the same way.
+        if (p.thought === true) { turnThoughtParts += 1; continue; }
+        if (p.text && onTranscript) {
+          turnTextParts += 1;
+          onTranscript({ role: 'assistant', text: p.text, final: false });
+        }
       }
       if (sc.interrupted) {
         if (onInterrupted) onInterrupted();
@@ -237,6 +260,12 @@ function createLiveSession(deps) {
         if (breakers && typeof breakers.success === 'function') breakers.success(BREAKER);
         const turn = { userText: userText.trim(), assistantText: assistantText.trim() };
         userText = ''; assistantText = '';
+        // BUG-118 instrumentation — see the counter declarations above. Logged
+        // for every turn (one small line) because the interesting case is the
+        // NEGATIVE one: a reasoning leak with thoughtParts:0 rules the text
+        // filter out and points at the spoken audio instead.
+        logger.info('live.turn-parts', { textParts: turnTextParts, thoughtParts: turnThoughtParts });
+        turnTextParts = 0; turnThoughtParts = 0;
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript' });

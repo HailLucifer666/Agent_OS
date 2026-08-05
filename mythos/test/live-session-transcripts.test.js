@@ -160,3 +160,110 @@ describe('live-session -> live-tool-adapter wiring (AD-6, the missing half)', ()
     session.close();
   });
 });
+
+// BUG-118 — the operator heard MYTHOS speak its own private reasoning as the
+// reply. Gemini marks a reasoning part with `thought: true`; this module used to
+// forward every modelTurn part's text to onTranscript regardless. The filter is
+// defensive: if the flag never appears on the wire it changes nothing, which is
+// exactly why the per-turn part counters exist alongside it — they are what
+// turns the suspicion into evidence in one live session.
+describe('BUG-118 — a modelTurn part flagged as the model\'s own thinking is not the reply', () => {
+  function sessionWithCapture() {
+    const transcripts = [];
+    const logs = [];
+    const sockets = [];
+    const session = createLiveSession({
+      config: {},
+      bus: { emit() {} },
+      logger: { warn() {}, info: (event, detail) => logs.push({ event, detail }) },
+      spend: { recordCall() {} },
+      breakers: { allow: () => true, fail() {}, success() {} },
+      systemInstruction: 'test instruction',
+      functionDeclarations: [],
+      onAudioOut: () => {},
+      onTranscript: (t) => transcripts.push(t),
+      onState: () => {},
+      onTurnComplete: () => {},
+      createSocket: () => { const s = new FakeSocket(); sockets.push(s); return s; },
+    });
+    return { session, sockets, transcripts, logs };
+  }
+
+  async function openIt(session, sockets) {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+  }
+
+  test('only the real answer reaches onTranscript — the thought part is dropped', async () => {
+    const { session, sockets, transcripts } = sessionWithCapture();
+    await openIt(session, sockets);
+
+    sockets[0].serverFrame({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            { text: 'The operator probably wants the Spotify one, not the browser tab.', thought: true },
+            { text: 'Putting it on now.' },
+          ],
+        },
+      },
+    });
+
+    const assistant = transcripts.filter((t) => t.role === 'assistant').map((t) => t.text);
+    assert.deepEqual(assistant, ['Putting it on now.'],
+      'private reasoning must never reach the transcript channel the operator hears');
+
+    session.close();
+  });
+
+  test('an unflagged part is untouched — this is a filter, not a rewrite', async () => {
+    const { session, sockets, transcripts } = sessionWithCapture();
+    await openIt(session, sockets);
+
+    sockets[0].serverFrame({ serverContent: { modelTurn: { parts: [{ text: 'plain answer' }] } } });
+
+    assert.deepEqual(transcripts.map((t) => t.text), ['plain answer']);
+    session.close();
+  });
+
+  test('every turn reports how many text parts were flagged — the negative case is the evidence', async () => {
+    const { session, sockets, logs } = sessionWithCapture();
+    await openIt(session, sockets);
+
+    sockets[0].serverFrame({
+      serverContent: {
+        modelTurn: { parts: [{ text: 'thinking out loud', thought: true }, { text: 'answer' }] },
+      },
+    });
+    sockets[0].serverFrame({ serverContent: { turnComplete: true } });
+
+    const line = logs.find((l) => l.event === 'live.turn-parts');
+    assert.ok(line, 'each completed turn must record its part counts');
+    assert.equal(line.detail.thoughtParts, 1);
+    assert.equal(line.detail.textParts, 1);
+
+    session.close();
+  });
+
+  test('the counters reset per turn — turn 2 must not inherit turn 1\'s totals', async () => {
+    const { session, sockets, logs } = sessionWithCapture();
+    await openIt(session, sockets);
+
+    sockets[0].serverFrame({
+      serverContent: { modelTurn: { parts: [{ text: 'a', thought: true }] }, turnComplete: true },
+    });
+    sockets[0].serverFrame({
+      serverContent: { modelTurn: { parts: [{ text: 'b' }] }, turnComplete: true },
+    });
+
+    const lines = logs.filter((l) => l.event === 'live.turn-parts');
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lines[1].detail, { textParts: 1, thoughtParts: 0 },
+      'a stale count would make a clean turn look like it leaked reasoning');
+
+    session.close();
+  });
+});
