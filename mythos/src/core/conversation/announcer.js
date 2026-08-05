@@ -157,6 +157,31 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
     return false;
   }
 
+  // BUG-123 (AD-5) — 2026-08-05: these two handlers used to hand a free-text
+  // prompt to brain.think and speak whatever came back. Asked to narrate a bare
+  // anomaly kind "naturally", a model fills the gap with a plausible cause the
+  // payload never contained, and the operator hears an invented explanation for
+  // a real fault in their own machine. Nowhere else does MYTHOS get to state a
+  // cause it has no evidence for.
+  //
+  // So this event class gets a deterministic template instead: only fields that
+  // are actually present are interpolated, and when there is no reason on the
+  // payload the sentence says so out loud rather than leaving a silence the
+  // listener will fill in. The wording is plainer than a generated line — that
+  // is the trade, and for "something is wrong with your system" it is the right
+  // way round. onJobPerception/onGoalUpdate keep generate(): a build finishing
+  // has no cause to invent.
+  function describeCondition(p) {
+    var what = p.kind || p.syndrome || null;
+    var where = p.target && p.target !== what ? ' in ' + String(p.target) : '';
+    return (what ? String(what) : 'an unnamed condition') + where;
+  }
+
+  function honestCauseClause(p) {
+    if (!p.reason) return ' I do not yet know the cause.';
+    return ' Reported reason: ' + String(p.reason) + '.';
+  }
+
   function onHealthAnomaly(event) {
     var p = event.payload;
     if (!p) return;
@@ -165,14 +190,10 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
     var key = 'anomaly:' + (p.kind || 'unknown') + ':' + Date.now();
     if (isRecent(p.kind)) return; // dedup by kind, not by timestamp
 
-    generate(
-      'A critical problem occurred: ' + (p.kind || 'an anomaly') +
-      '. Say one natural sentence informing the operator about the issue. Be calm and direct.',
-      'Heads up — I have hit a problem with ' + (p.kind || 'something') + '.'
-    ).then(function(text) {
-      if (!DRYRUN) speak(text);
-      bus.emit('conversation.announced', { key: key, text: text, kind: 'anomaly' });
-    });
+    var text = ('Heads up — I have hit a problem: ' + describeCondition(p) + '.' +
+      honestCauseClause(p)).slice(0, 300);
+    if (!DRYRUN) speak(text);
+    bus.emit('conversation.announced', { key: key, text: text, kind: 'anomaly' });
     markAnnounced(p.kind);
   }
 
@@ -186,14 +207,13 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
     var key = 'diagnosed:' + (p.kind || p.syndrome || 'unknown') + ':' + Date.now();
     var dedupKey = 'diag:' + (p.kind || p.syndrome || 'unknown');
     if (isRecent(dedupKey)) return;
-    generate(
-      'A critical issue was diagnosed: ' + (p.kind || p.syndrome || 'a system problem') +
-      '. Say one natural sentence informing the operator. Be calm and direct.',
-      'I have identified a problem with ' + (p.kind || p.syndrome || 'a system') + '.'
-    ).then(function(text) {
-      if (!DRYRUN) speak(text);
-      bus.emit('conversation.announced', { key: key, text: text, kind: 'diagnosed' });
-    });
+    // BUG-123: same deterministic treatment as onHealthAnomaly above. A
+    // diagnosis carries a `reason` more often than a raw anomaly does, which
+    // makes it MORE tempting for a model to embellish, not less.
+    var text = ('I have identified a problem: ' + describeCondition(p) + '.' +
+      honestCauseClause(p)).slice(0, 300);
+    if (!DRYRUN) speak(text);
+    bus.emit('conversation.announced', { key: key, text: text, kind: 'diagnosed' });
     markAnnounced(dedupKey);
   }
 
