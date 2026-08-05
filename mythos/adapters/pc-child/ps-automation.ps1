@@ -756,6 +756,16 @@ function Handle-ListWindows {
             $name = $child.Current.Name
             $cls = $child.Current.ClassName
             $rect = Get-RectBounds $child.Current.BoundingRectangle
+            # BUG-122 instrumentation (2026-08-06). Closing a Brave window was
+            # unreliable, and list_windows appeared to report two windowed Brave
+            # processes for one visible window — appeared, because nothing in the
+            # reply could tell two DISTINCT top-level windows apart from two rows
+            # describing the SAME one. The native handle is what distinguishes
+            # them: two rows sharing one hwnd is a duplicate to be deduped here,
+            # two rows with different hwnds is a real second window (a Chromium
+            # helper, say) and close_window's target choice is the thing at fault.
+            # Additive field, reported honestly as '0' when UIA has no handle.
+            $hwnd = $child.Current.NativeWindowHandle
         } catch {
             $skipped++
             continue
@@ -771,6 +781,7 @@ function Handle-ListWindows {
             className = $cls
             rect = $rect
             visible = ($rect.width -gt 0 -and $rect.height -gt 0)
+            hwnd = ([string]$hwnd)   # BUG-122 instrumentation — see above
         }
     }
     return @{ windows = $windows; total = $windows.Count; skipped = $skipped }
@@ -956,6 +967,15 @@ function Handle-CloseWindow($TargetPid) {
         $resolvedBy = 'windowed-sibling'
     }
 
+    # BUG-122 instrumentation: record WHICH window handle this handler actually
+    # acted on, before acting. The reported symptom is an unreliable Brave close
+    # with two Brave PIDs in play, and the open question is whether the failing
+    # close targeted a different window than the one the operator meant. Without
+    # the handle in the reply, a failure names only a pid — and a pid is exactly
+    # the thing that is ambiguous for a multi-window, multi-process browser.
+    $targetHwnd = ([string]$proc.MainWindowHandle)
+    $targetName = $proc.ProcessName
+
     $proc.CloseMainWindow() | Out-Null
 
     # Oracle: the main window is gone (or the whole process exited). Poll rather
@@ -965,11 +985,13 @@ function Handle-CloseWindow($TargetPid) {
         try {
             $proc.Refresh()
             if ($proc.HasExited -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {
-                return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true; resolvedBy = $resolvedBy }
+                return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true;
+                          resolvedBy = $resolvedBy; hwnd = $targetHwnd; processName = $targetName }
             }
         } catch {
             # Refresh throws once the process is gone — that IS the close.
-            return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true; resolvedBy = $resolvedBy }
+            return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true;
+                      resolvedBy = $resolvedBy; hwnd = $targetHwnd; processName = $targetName }
         }
         Start-Sleep -Milliseconds 150
     }
@@ -977,7 +999,8 @@ function Handle-CloseWindow($TargetPid) {
     # Honest failure as a STRING so the dispatcher reports ok:false. Never a
     # force-kill: closing a browser out from under unsaved state is the
     # operator's call, not this handler's.
-    return ('Window for PID ' + $resolvedPid + ' did not close within 3s and is still open. Nothing was closed. ' +
+    return ('Window for PID ' + $resolvedPid + ' (' + $targetName + ', window handle ' + $targetHwnd +
+            ', resolved by ' + $resolvedBy + ') did not close within 3s and is still open. Nothing was closed. ' +
             'It may be showing a confirmation prompt — check the screen, or ask me to force it.')
 }
 
