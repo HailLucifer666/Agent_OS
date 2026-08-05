@@ -356,8 +356,14 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
     bus.emit('health.healed', { playbookId: playbookId, kind: diagnosis.kind, target: diagnosis.target, outcome: outcome, detail: detail });
 
     if (memory && memory.audit && typeof memory.audit.write === 'function') {
+      // BUG-125: healer rows land in the same Audit/*.jsonl stream as the
+      // leash's tool rows, and a healer row has no tool by nature — it records
+      // a playbook decision, not a dispatch. Omitting the field entirely made
+      // readers render `tool: undefined`, which is indistinguishable from a
+      // dispatch that lost its tool name on the way to the audit. An explicit
+      // null says "there is deliberately no tool here".
       memory.audit.write({
-        actor: 'healer', decision: 'heal', playbookId: playbookId,
+        actor: 'healer', decision: 'heal', tool: null, playbookId: playbookId,
         kind: diagnosis.kind, target: diagnosis.target, outcome: outcome, detail: detail
       });
     }
