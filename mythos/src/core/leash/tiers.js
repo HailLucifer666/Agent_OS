@@ -124,6 +124,9 @@ const TIER_TABLE = {
                                // of local writes to MYTHOS's own notes/goals/screenshots.
   'set_volume':            2,  // REMEDIATION P1-8 — exact system volume set (0-100), same
                                // risk class as media_key's volume_up/down/mute.
+  'set_app_volume':        2,  // BUG-127 — one app's own Core Audio session volume. Strictly
+                               // NARROWER than set_volume (which moves the whole machine), so
+                               // it cannot warrant a higher tier than the tool it replaces.
   'get_volume':            0,  // read-only, same class as media_status
   'ask_agent':             2,
   'browser_navigate':      2,

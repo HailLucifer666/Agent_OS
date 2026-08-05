@@ -1318,6 +1318,192 @@ function Handle-SetVolume($level) {
     }
 }
 
+# BUG-127 — per-application volume. "Lower Spotify" used to move the SYSTEM
+# master volume (Handle-SetVolume above), i.e. it turned down the whole machine
+# including MYTHOS's own voice. Core Audio models each app's playback as a
+# SESSION on the endpoint, and ISimpleAudioVolume sets that session alone —
+# exactly what the Windows Volume Mixer shows per app.
+#
+# Separate interface declarations from Get-AudioEndpointVolumeType's on purpose:
+# that block's IMMDevice.Activate is typed to IAudioEndpointVolume, and this path
+# needs IAudioSessionManager2 out of the same call. Names are Mythos-prefixed so
+# both type blocks can coexist in one AppDomain.
+$script:AppVolumeType = $null
+function Get-AppVolumeType {
+    if ($script:AppVolumeType) { return $script:AppVolumeType }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMythosDeviceEnumerator {
+    int NotImpl1();
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMythosDevice endpoint);
+}
+
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMythosDevice {
+    int Activate(ref Guid id, int clsCtx, IntPtr activationParams,
+                 [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+}
+
+// IAudioSessionManager2 : IAudioSessionManager — the two inherited slots
+// (GetAudioSessionControl, GetSimpleAudioVolume) must be declared to keep the
+// vtable offsets right, even though neither is called here.
+[Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMythosSessionManager2 {
+    int NotImpl1();
+    int NotImpl2();
+    int GetSessionEnumerator(out IMythosSessionEnumerator sessionEnum);
+}
+
+[Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMythosSessionEnumerator {
+    int GetCount(out int sessionCount);
+    int GetSession(int sessionIndex, [MarshalAs(UnmanagedType.IUnknown)] out object session);
+}
+
+// IAudioSessionControl2 : IAudioSessionControl — same rule, the nine inherited
+// slots come first.
+[Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMythosSessionControl2 {
+    int NotImpl1(); int NotImpl2(); int NotImpl3(); int NotImpl4(); int NotImpl5();
+    int NotImpl6(); int NotImpl7(); int NotImpl8(); int NotImpl9();
+    int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string retVal);
+    int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string retVal);
+    int GetProcessId(out uint retVal);
+}
+
+[Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IMythosSimpleAudioVolume {
+    int SetMasterVolume(float level, ref Guid eventContext);
+    int GetMasterVolume(out float level);
+    int SetMute(bool mute, ref Guid eventContext);
+    int GetMute(out bool mute);
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+public class MythosAppVolEnumeratorComObject { }
+
+public static class MythosAppVolume {
+    private static IMythosSessionEnumerator GetSessions() {
+        var enumerator = (IMythosDeviceEnumerator)(new MythosAppVolEnumeratorComObject());
+        IMythosDevice dev;
+        // eRender = 0 (playback), eMultimedia = 1
+        Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out dev));
+        Guid iid = typeof(IMythosSessionManager2).GUID;
+        object raw;
+        // CLSCTX_ALL = 23
+        Marshal.ThrowExceptionForHR(dev.Activate(ref iid, 23, IntPtr.Zero, out raw));
+        IMythosSessionEnumerator sessions;
+        Marshal.ThrowExceptionForHR(((IMythosSessionManager2)raw).GetSessionEnumerator(out sessions));
+        return sessions;
+    }
+
+    private static string NameForPid(uint processId) {
+        if (processId == 0) return "system-sounds";
+        try { return System.Diagnostics.Process.GetProcessById((int)processId).ProcessName; }
+        catch { return ""; }   // process exited between enumeration and lookup
+    }
+
+    // "name|pid" per live session — the honest failure message names what was
+    // actually there, instead of claiming the app does not exist.
+    public static string[] ListSessions() {
+        var found = new List<string>();
+        var sessions = GetSessions();
+        int count;
+        Marshal.ThrowExceptionForHR(sessions.GetCount(out count));
+        for (int i = 0; i < count; i++) {
+            object ctl;
+            if (sessions.GetSession(i, out ctl) != 0 || ctl == null) continue;
+            var ctl2 = ctl as IMythosSessionControl2;
+            if (ctl2 == null) continue;
+            uint processId;
+            if (ctl2.GetProcessId(out processId) != 0) continue;
+            string listName = NameForPid(processId);
+            if (string.IsNullOrEmpty(listName)) listName = "(unknown)";
+            found.Add(listName + "|" + processId);
+        }
+        return found.ToArray();
+    }
+
+    // "name|pid|readBackLevel" per session actually changed. Empty array means
+    // nothing matched — the caller must NOT fall back to master volume.
+    public static string[] SetVolume(string name, int targetProcessId, float level) {
+        var changed = new List<string>();
+        var sessions = GetSessions();
+        int count;
+        Marshal.ThrowExceptionForHR(sessions.GetCount(out count));
+        for (int i = 0; i < count; i++) {
+            object ctl;
+            if (sessions.GetSession(i, out ctl) != 0 || ctl == null) continue;
+            var ctl2 = ctl as IMythosSessionControl2;
+            if (ctl2 == null) continue;
+            uint processId;
+            if (ctl2.GetProcessId(out processId) != 0) continue;
+            string processName = NameForPid(processId);
+            bool match = targetProcessId > 0
+                ? ((int)processId == targetProcessId)
+                : (!string.IsNullOrEmpty(name) &&
+                   string.Equals(processName, name, StringComparison.OrdinalIgnoreCase));
+            if (!match) continue;
+            var vol = ctl as IMythosSimpleAudioVolume;
+            if (vol == null) continue;
+            Guid ctx = Guid.Empty;
+            Marshal.ThrowExceptionForHR(vol.SetMasterVolume(level, ref ctx));
+            float actual;
+            Marshal.ThrowExceptionForHR(vol.GetMasterVolume(out actual));
+            changed.Add(processName + "|" + processId + "|" + ((int)Math.Round(actual * 100)));
+        }
+        return changed.ToArray();
+    }
+}
+'@ -ErrorAction Stop
+    $script:AppVolumeType = [MythosAppVolume]
+    return $script:AppVolumeType
+}
+
+# $TargetPid, never $pid — $pid is a read-only PowerShell automatic variable and
+# a parameter of that name throws at binding time (see adapters/CLAUDE.md).
+function Handle-SetAppVolume($name, $TargetPid, $level) {
+    if ($null -eq $level -or $level -eq '') { return 'level (0-100) is required.' }
+    $lvl = 0
+    if (-not [int]::TryParse("$level", [ref]$lvl)) { return "level must be a number (got '$level')." }
+    if ($lvl -lt 0 -or $lvl -gt 100) { return "level must be 0-100 (got $lvl)." }
+    $wantPid = 0
+    if ($null -ne $TargetPid -and "$TargetPid" -ne '') {
+        if (-not [int]::TryParse("$TargetPid", [ref]$wantPid)) { return "pid must be a number (got '$TargetPid')." }
+    }
+    $wantName = ''
+    if ($null -ne $name) { $wantName = ("$name" -replace '\.exe$', '') }
+    if ($wantPid -le 0 -and $wantName -eq '') { return 'name or pid is required.' }
+    try {
+        $type = Get-AppVolumeType
+        $changed = @($type::SetVolume($wantName, $wantPid, [float]($lvl / 100.0)))
+        if ($changed.Count -eq 0) {
+            # Honest failure: an app with no audio session simply has no volume
+            # to set. Say what was searched for and what was there — never
+            # silently move the master volume instead.
+            $seen = @($type::ListSessions())
+            $target = if ($wantPid -gt 0) { "pid $wantPid" } else { "process '$wantName'" }
+            $names = if ($seen.Count -gt 0) { ($seen -join ', ') } else { '(none)' }
+            # ASCII only inside the literal: PowerShell 5.1 reads this file in the
+            # ANSI codepage, so a non-ASCII character in a STRING (comments are
+            # fine) corrupts the token and fails to parse.
+            return "No audio session for $target - its volume was NOT changed, and nothing else was changed either. Apps with a live audio session right now: $names. An app that is not currently playing audio has no session to set."
+        }
+        $applied = @()
+        foreach ($entry in $changed) {
+            $f = $entry -split '\|'
+            $applied += @{ process = $f[0]; pid = [int]$f[1]; level = [int]$f[2] }
+        }
+        return @{ sessions = $applied; level = [int]$applied[0].level; count = $applied.Count }
+    } catch {
+        return ('set_app_volume failed: ' + $_.Exception.Message)
+    }
+}
+
 function Handle-ScreenLook($query) {
     # Capture full screen screenshot as base64
     # The Node.js bridge (pc-child.js) will handle the VLM vision call.
@@ -3545,6 +3731,10 @@ while ($true) {
         }
         'set_volume' {
             $result = Handle-SetVolume $cmd.level
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'set_app_volume' {
+            $result = Handle-SetAppVolume $cmd.name $cmd.pid $cmd.level
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'screen_look' {

@@ -465,19 +465,26 @@ async function spotify_previous() {
 // master volume via set_volume (real Core Audio API, see ps-automation.ps1's
 // Get-AudioEndpointVolumeType) instead of guessing a step count.
 //
-// ponytail (BUG-078, Stage 6): this genuinely moves the SYSTEM master volume,
-// not a per-app Spotify volume — the tool's own description above says so
-// now (test/bug-078-spotify-volume-honesty.test.js). Real per-app control
-// would mean Core Audio ISimpleAudioVolume COM interop scoped to Spotify's
-// PID, which is a large new surface for one recorded incident. That is the
-// upgrade path if the honesty fix still isn't enough live — do not build it
-// speculatively.
+// BUG-078 documented that this moved the SYSTEM master volume and called real
+// per-app control "the upgrade path if the honesty fix still isn't enough
+// live". It wasn't: on 2026-08-06 "lower Spotify" turned the whole machine
+// down, MYTHOS's own voice with it. BUG-127 built that upgrade — set_app_volume
+// drives Spotify's own Core Audio session (the per-app slider in the Windows
+// Volume Mixer).
+//
+// A `level` request therefore no longer touches the master volume at all, and
+// when Spotify has no audio session (not playing) it FAILS saying so rather
+// than falling back — a silent widening from "Spotify" to "everything" is the
+// bug, not a graceful degradation.
+//
+// `direction` still sends the global media keys: those VKs are hardware-level
+// steps with no per-app equivalent. The tool description says which is which.
 async function spotify_volume({ direction, level }) {
   if (!pcEffectors) return fail('PC effectors not initialized');
   if (level !== undefined && level !== null && level !== '') {
     const lvl = Number(level);
     if (!Number.isFinite(lvl) || lvl < 0 || lvl > 100) return fail(`level must be a number between 0 and 100 (got ${level})`);
-    return pcEffectors.invoke('set_volume', { level: Math.round(lvl) }, {});
+    return pcEffectors.invoke('set_app_volume', { name: 'Spotify', level: Math.round(lvl) }, {});
   }
   if (!direction) return fail('Either level (0-100) or direction (up, down, or mute) is required');
   const keyMap = { up: 'volume_up', down: 'volume_down', mute: 'volume_mute' };
@@ -699,10 +706,10 @@ const TOOLS = [
   },
   {
     name: 'spotify_volume',
-    description: 'Adjust or set system volume (Spotify plays through the system output, same volume control). Prefer level for an exact target ("set volume to 20%", "reduce to 20"); use direction for relative nudges ("volume up", "louder", "mute").',
+    description: 'Set Spotify\'s OWN volume to an exact level (0-100) with `level` — this changes only Spotify, not the system volume, and fails if Spotify is not currently playing. `direction` (up/down/mute) instead sends the global media keys, which DO move the system volume, because those keys have no per-app equivalent. Prefer level for "turn Spotify down to 20%"; use direction only for a relative nudge the user asked for on the whole machine.',
     params: {
-      level: 'number (optional) - exact target volume 0-100, preferred when the user gives a percentage',
-      direction: 'string (optional) - up, down, or mute; required only if level is omitted'
+      level: 'number (optional) - exact target volume 0-100 for Spotify alone, preferred when the user gives a percentage',
+      direction: 'string (optional) - up, down, or mute; steps the SYSTEM volume. Required only if level is omitted'
     },
     danger: false,
     fn: spotify_volume

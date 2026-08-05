@@ -130,6 +130,9 @@ describe('Spotify tool parameter validation', () => {
         if (tool === 'list_windows') return { ok: true, result: { windows: [{ pid: 1, processName: 'Spotify.exe', title: 'Spotify' }] } };
         if (tool === 'media_key') return { ok: true, result: { sent: true } };
         if (tool === 'set_volume') return { ok: true, result: { level: args && args.level } };
+        // BUG-127: the level path is per-app now (Spotify's own Core Audio
+        // session), so the delegate it reaches for changed under this test.
+        if (tool === 'set_app_volume') return { ok: true, result: { level: args && args.level, count: 1 } };
         if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
         if (tool === 'ui_click') return { ok: true, result: { clicked: true } };
         if (tool === 'ui_type') return { ok: true, result: { typed: true } };
@@ -164,7 +167,7 @@ describe('Spotify tool parameter validation', () => {
   // Ordered before the out-of-range test below: 3 consecutive failures on the
   // same tool trips the effector hub's circuit breaker, which would otherwise
   // short-circuit ("circuit-open") these still-valid calls.
-  it('spotify_volume with level routes to set_volume with an exact target', async () => {
+  it('spotify_volume with level routes to set_app_volume (per-app), with an exact target', async () => {
     const result = await hub.invoke('spotify_volume', { level: 20 }, {});
     assert.equal(result.ok, true);
     assert.equal(result.result.level, 20);

@@ -381,6 +381,22 @@ async function set_volume({ level }) {
   return delegate({ cmd: 'set_volume', level: Math.round(lvl) });
 }
 
+// BUG-127: per-application volume. set_volume above moves the SYSTEM master
+// volume — "turn Spotify down" through it turned the whole machine down,
+// MYTHOS's own voice included. This drives the app's own Core Audio session
+// (ISimpleAudioVolume, the same thing the Windows Volume Mixer shows per app).
+// An app with no live audio session fails honestly rather than falling back to
+// the master volume: a silent widening of scope is exactly the bug.
+async function set_app_volume({ name, pid, level }) {
+  if (level === undefined || level === null || level === '') return fail('level (0-100) is required.');
+  const lvl = Number(level);
+  if (!Number.isFinite(lvl) || lvl < 0 || lvl > 100) return fail(`level must be a number between 0 and 100 (got ${level}).`);
+  const targetPid = (pid === undefined || pid === null || pid === '') ? null : Number(pid);
+  if (targetPid !== null && (!Number.isFinite(targetPid) || targetPid <= 0)) return fail(`pid must be a positive number (got ${pid}).`);
+  if (!name && targetPid === null) return fail('name (process name, e.g. "Spotify") or pid is required.');
+  return delegate({ cmd: 'set_app_volume', name: name || '', pid: targetPid, level: Math.round(lvl) });
+}
+
 async function screen_look({ query }) {
   var shot = await delegate({ cmd: 'screen_look' });
   if (!shot.ok) return shot;
@@ -1190,6 +1206,7 @@ const TOOLS = [
   { name: 'media_key', description: 'Send a media key press (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute). For an exact target level ("set volume to 20%"), use set_volume instead — this only steps once per call.', params: { key: 'string - media key name' }, danger: false, fn: media_key },
   { name: 'get_volume', description: 'Read the current system master volume (0-100) and mute state. Use before claiming a volume change worked.', params: {}, danger: false, fn: get_volume, needs_result: true },
   { name: 'set_volume', description: 'Set the system master volume to an exact level. Use for "set/reduce/turn the volume to N%" — converges exactly instead of media_key\'s fixed up/down steps.', params: { level: 'number - target volume 0-100' }, danger: false, fn: set_volume },
+  { name: 'set_app_volume', description: 'Set ONE application\'s own volume (0-100) without touching the system master volume — the per-app sliders in the Windows Volume Mixer. Use for "turn Spotify down". Fails honestly if that app has no live audio session (i.e. it is not playing anything).', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process instead of matching by name', level: 'number - target volume 0-100' }, danger: false, fn: set_app_volume },
   { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
@@ -1230,6 +1247,7 @@ module.exports = {
   KNOWN_DESKTOP_APPS,
   KNOWN_WEB_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
+  set_app_volume,
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
   // pure, no I/O — exported so the matcher can be tested without a screen
   _seeAndClickInternal: { matchRegions, centreOf },

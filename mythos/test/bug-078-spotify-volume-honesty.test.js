@@ -7,38 +7,42 @@
 // as a Spotify-specific tool — the operator asked 20x for the level to
 // change and, getting no per-app effect, kept escalating.
 //
-// The operator's ruling for this stage was explicit: do NOT build
-// ISimpleAudioVolume/per-app Core Audio interop for one incident. Ship the
-// honest version instead — the tool's OWN description must say "system
-// volume", not imply Spotify-only control, so the model stops reaching for
-// it expecting per-track/per-app behavior it cannot deliver.
+// The operator's ruling for that stage was: do NOT build ISimpleAudioVolume
+// interop for one incident — ship the honest description instead. That held
+// until 2026-08-06, when "lower Spotify" turned the whole machine down
+// (MYTHOS's own voice with it) and the operator scoped the real fix as
+// BUG-127. Per-app Core Audio now exists (pc-child's set_app_volume), so the
+// honesty requirement INVERTED: `level` must no longer claim, or be, system
+// volume — while `direction` still is, because the media-key VKs have no
+// per-app equivalent.
 //
-// Cross-checked against git history: commit c5abcde (2026-07-29, predating
-// this whole plan) already rewrote the description to say exactly this.
-// This test exists so that fact is asserted, not assumed — if a future
-// change silently reverts the description to imply per-app control, this
-// must fail red.
+// What this file pins now: the description tells the truth about BOTH paths,
+// and neither one is silently the other.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { TOOLS } = require('../src/core/effectors/from-spotify');
 
-describe('BUG-078 — spotify_volume is honest about controlling SYSTEM volume', () => {
+describe('BUG-078/BUG-127 — spotify_volume is honest about what each path changes', () => {
   const tool = TOOLS.find((t) => t.name === 'spotify_volume');
 
   it('the tool exists', () => {
     assert.ok(tool, 'spotify_volume must still be registered');
   });
 
-  it('its description says system volume, not per-app/Spotify-only control', () => {
-    assert.match(tool.description, /system volume/i,
-      'the description must call this what it is: system volume');
-    assert.doesNotMatch(tool.description, /only (affects|controls) spotify/i,
-      'must not claim a per-app scope it cannot deliver');
+  it('the level path is described as Spotify-only, and says so explicitly', () => {
+    assert.match(tool.description, /only Spotify/i,
+      'the level path now really is per-app — the description must say so');
+    assert.match(tool.description, /not the system volume/i,
+      'and must say what it is NOT, since that was the original bug');
   });
 
-  // ponytail: per-app Core Audio (ISimpleAudioVolume) volume control for
-  // Spotify specifically is the real upgrade path if this bites live again —
-  // deliberately not built here, named so a future session doesn't rebuild
-  // it from scratch. See the operator's ruling in the Stage 6 task.
+  it('the direction path is still described as moving the SYSTEM volume', () => {
+    // Not an oversight and not a regression: volume_up/down/mute are hardware
+    // media keys with no per-app equivalent. Claiming otherwise would be the
+    // same dishonesty in the opposite direction.
+    assert.match(tool.description, /system volume/i);
+    assert.match(tool.params.direction, /SYSTEM volume/i,
+      'the param doc must carry the caveat too — the model reads params, not just prose');
+  });
 });
