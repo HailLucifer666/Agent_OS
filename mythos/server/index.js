@@ -1255,7 +1255,26 @@ function createServer(deps) {
     const noun = count === 1 ? 'email' : 'emails';
     let text = `You have ${count} new ${noun}`;
     if (subjects.length) text += `, including ${subjects.join(', ')}`;
+    // BUG-112 residual (found 2026-08-05): this was the one greeting-shaped
+    // source still calling proactiveSpeak() with no dedup at all. The boot
+    // greeting already reads unread mail into its own opening line, so the
+    // sensor's batch landing seconds later produced a second "you have N new
+    // emails" — the exact duplicate-greeting shape BUG-112 closed everywhere
+    // else. Same key, same order (check, speak, mark) as the morning brief
+    // above; deliberately NOT applied to reminder.due / plan.checkin /
+    // cortex.thought, which are a different class and must stay audible.
+    try {
+      if (conversationAnnouncer && typeof conversationAnnouncer.isRecent === 'function' &&
+          conversationAnnouncer.isRecent(GREETING_DEDUP_KEY)) {
+        return;
+      }
+    } catch (_) {}
     proactiveSpeak(text);
+    try {
+      if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
+        conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
+      }
+    } catch (_) {}
   });
 
   // Live build-job progress relay ('job' OUT type). build-runner's onJobUpdate

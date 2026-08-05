@@ -122,4 +122,96 @@ describe('BUG-112: one greeting owner per session', () => {
       await server.stop();
     }
   });
+
+  // BUG-112 residual, found 2026-08-05. The morning brief was routed through
+  // the shared key, but gmail.unread-batch — the other greeting-shaped source —
+  // still called proactiveSpeak() with no dedup at all. The boot greeting
+  // already reads unread mail into its own opening line, so the sensor's batch
+  // arriving seconds later produced the same duplicate shape BUG-112 closed.
+  it('a gmail.unread-batch firing right after the boot greeting is suppressed too', async () => {
+    const bus = createBus({ historySize: 50 });
+    const brain = { think: async () => ({ content: 'Good evening, sir. MYTHOS online.', offline: false }) };
+    const server = createServer(baseDeps(bus, { brain }));
+    await server.ready;
+    const addr = server.httpServer.address();
+    const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const received = [];
+    ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+
+    try {
+      await server._internal.deliverBootGreeting();
+      await waitForMessages(received, (m) => m.type === 'proactive-speech', 2000);
+
+      bus.emit('gmail.unread-batch', { count: 3, messages: [{ subject: 'Invoice overdue' }] });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const proactiveMsgs = received.filter((m) => m.type === 'proactive-speech');
+      assert.equal(proactiveMsgs.length, 1,
+        'one utterance total — the email summary must not be a second greeting-shaped announcement');
+      assert.equal(
+        proactiveMsgs.some((m) => m.text && m.text.indexOf('Invoice overdue') !== -1),
+        false,
+        'the suppressed email summary must never have reached the client'
+      );
+    } finally {
+      ws.close();
+      await server.stop();
+    }
+  });
+
+  it('a gmail.unread-batch with no prior greeting still speaks — the mail itself is not silenced', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(baseDeps(bus, {}));
+    await server.ready;
+    const addr = server.httpServer.address();
+    const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const received = [];
+    ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+
+    try {
+      bus.emit('gmail.unread-batch', { count: 2, messages: [{ subject: 'Standup notes' }] });
+      await waitForMessages(received, (m) => m.type === 'proactive-speech', 2000);
+
+      const proactiveMsgs = received.filter((m) => m.type === 'proactive-speech');
+      assert.equal(proactiveMsgs.length, 1, 'unread mail with nothing announced yet must still be spoken');
+      assert.match(proactiveMsgs[0].text, /2 new emails/);
+    } finally {
+      ws.close();
+      await server.stop();
+    }
+  });
+
+  it('reminder.due is NOT gated by the greeting key — a different class of speech', async () => {
+    // The dedup exists to stop duplicate GREETINGS. A due reminder landing
+    // inside the same five-minute window is legitimate speech and must survive.
+    const bus = createBus({ historySize: 50 });
+    const brain = { think: async () => ({ content: 'Good evening, sir. MYTHOS online.', offline: false }) };
+    const server = createServer(baseDeps(bus, { brain }));
+    await server.ready;
+    const addr = server.httpServer.address();
+    const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+    await new Promise((resolve) => ws.on('open', resolve));
+    const received = [];
+    ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+
+    try {
+      await server._internal.deliverBootGreeting();
+      await waitForMessages(received, (m) => m.type === 'proactive-speech', 2000);
+
+      bus.emit('reminder.due', { text: 'Stand-up in five minutes' });
+      await waitForMessages(received,
+        (m) => m.type === 'proactive-speech' && /Stand-up/.test(m.text || ''), 2000);
+
+      assert.equal(
+        received.some((m) => m.type === 'proactive-speech' && /Stand-up/.test(m.text || '')),
+        true,
+        'gating this would make MYTHOS miss real reminders — over-correction, not a fix'
+      );
+    } finally {
+      ws.close();
+      await server.stop();
+    }
+  });
 });
