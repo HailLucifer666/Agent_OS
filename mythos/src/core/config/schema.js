@@ -295,6 +295,12 @@ const SCHEMA = {
   // Gmail triage sensor (Item 7 — unread-mail polling, mirrors reminder-sensor)
   GMAIL_TRIAGE_POLL_MS:        { type: 'number', default: 300000, min: 60000 },
   GMAIL_TRIAGE_ENABLED:        { type: 'bool',   default: true },
+  // BUG-111: how often the sensor polls gmail_unread in the background.
+  // 'boot-once' (default) runs a single pass at startup then stops its own
+  // timer entirely; 'poll' is the pre-2026-08-05 always-on recurring
+  // behavior; 'off' disables the sensor. gmail_unread itself (the effector)
+  // is unaffected by this — explicit requests still work in every mode.
+  GMAIL_TRIAGE_MODE:           { type: 'string', default: 'boot-once', enum: ['boot-once', 'poll', 'off'] },
 
   // Android ADB bridge (Task 8-10, Wave 2) — optional. adapters/android-child
   // degrades to OFFLINE with an install hint when adb isn't resolvable;
