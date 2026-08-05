@@ -26,6 +26,11 @@
 // the real outcome is injected later as a realtimeInput text turn once the
 // human accepts via the existing confirm modal (resolveLiveConfirm below).
 
+// BUG-113: same commitment-ledger primitive the batch path (server/index.js)
+// uses — a no-op unless assistantText matches the explicit commitment-phrase
+// list, so ordinary Live turns are unaffected.
+const { logCommitmentIfPresent } = require('../effectors/from-calendar');
+
 function createLiveToolAdapter(deps) {
   const {
     leash, dispatchAction, bus, logger, connectionId,
@@ -33,6 +38,7 @@ function createLiveToolAdapter(deps) {
     summarizeActionsForResult,
     getLiveSession,                 // () => current liveSession (may be null/not-open)
     sanitizeErrorForClient,
+    goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
   } = deps;
 
   if (!leash || typeof leash.check !== 'function') throw new Error('createLiveToolAdapter requires leash');
@@ -143,6 +149,28 @@ function createLiveToolAdapter(deps) {
     return `${toolName} ran but could NOT be confirmed: ${reason || 'no confirmation available'}. Do not tell the operator it worked.`;
   }
 
+  // BUG-116 — 2026-08-05 17:13:04: "The click went through, and the screen did
+  // change afterwards", 49 seconds after see_and_click came back ok:false. Same
+  // shape at 17:10 twice ("I've played Starboy" over error 153, "YouTube is now
+  // present" over a Chrome window).
+  //
+  // On Live there is no turn boundary of ours to correct at — Gemini speaks its
+  // own audio as results arrive, so the text inside the functionResponse is the
+  // ONLY thing that teaches it what happened, both for the sentence it is
+  // speaking now and for the rest of the retained session. status:'started' and
+  // status:'unverified' both carried an explicit prohibition; the failure
+  // branches — the ones with the strongest reason to — carried a bare error
+  // string and nothing else. The status field is for us; the model reasons over
+  // the prose. Hence one shared sentence, used on every "this did not happen"
+  // reply, awaited or late.
+  const NO_SUCCESS_CLAIM = 'This action did NOT succeed. Tell the operator plainly that it failed and what ' +
+    'failed. Do NOT claim it worked, do NOT claim the screen or anything else changed as a result, and do ' +
+    'NOT describe it as done later in this conversation either.';
+
+  function failedNarration(toolName, detail) {
+    return `${toolName} FAILED: ${detail} ${NO_SUCCESS_CLAIM}`;
+  }
+
   async function handleLiveToolCalls(calls, { sendToolResponse }) {
     sweepPendingConfirms();
     const myGeneration = turnGeneration;
@@ -173,7 +201,10 @@ function createLiveToolAdapter(deps) {
         verdict = leash.check(decision, { connectionId, goalId: null });
       } catch (err) {
         logger.warn('live.leash-threw', { tool: call.name, error: err.message });
-        responses.push({ id: call.id, name: call.name, response: { status: 'error', error: 'gate failure' } });
+        responses.push({ id: call.id, name: call.name, response: {
+          status: 'error', error: 'gate failure',
+          message: failedNarration(call.name, 'gate failure — it never ran.'),
+        } });
         continue;
       }
 
@@ -237,8 +268,17 @@ function createLiveToolAdapter(deps) {
         const ev = evaluateOutcome(outcome);
         let summary, response;
         if (!ev.dispatchOk) {
-          summary = sanitizeResultError(ev.rawError).slice(0, 200);
-          response = { status: 'failed', error: sanitizeResultError(ev.rawError).slice(0, 500) };
+          const reason = sanitizeResultError(ev.rawError);
+          summary = reason.slice(0, 200);
+          // BUG-116: `error` alone left the model free to narrate the click it
+          // just failed to make. `message` is the instruction, same as the
+          // unverified/started branches; `summary` stays the bare reason so the
+          // audit/episodic record is not polluted with prompt text.
+          response = {
+            status: 'failed',
+            error: reason.slice(0, 500),
+            message: failedNarration(call.name, reason.slice(0, 500)),
+          };
         } else if (ev.unverified) {
           // Wave 0's evidence contract, on the awaited path too: ok:true +
           // unverified:true must never reach the model as status:'ok'.
@@ -255,8 +295,11 @@ function createLiveToolAdapter(deps) {
         commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, summary });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
-        commitAction({ tool: call.name, ok: false, summary: sanitize(err) });
-        responses.push({ id: call.id, name: call.name, response: { status: 'error', error: sanitize(err) } });
+        const reason = sanitize(err);
+        commitAction({ tool: call.name, ok: false, summary: reason });
+        responses.push({ id: call.id, name: call.name, response: {
+          status: 'error', error: reason, message: failedNarration(call.name, reason),
+        } });
       }
     }
     if (responses.length) sendToolResponse(responses);
@@ -269,10 +312,17 @@ function createLiveToolAdapter(deps) {
   function reportLateOutcome(toolName, outcome) {
     const ev = evaluateOutcome(outcome);
     let verdict;
+    // BUG-116: the closing instruction is what the model is allowed to SAY about
+    // this outcome, so a failure gets the explicit prohibition instead of the
+    // neutral default. It is deliberately NOT folded into `verdict` — verdict is
+    // also the liveTurnActions summary, i.e. the audit/episodic record, which
+    // must stay a plain statement of what happened.
+    let instruction = 'Report this to the operator accurately.';
     if (!ev.dispatchOk) {
       // Same unwrapping as the awaited path above: effectors put the message in
       // result.error, and handing the whole object to sanitizeResultError loses it.
       verdict = `${toolName} FAILED: ${sanitizeResultError(ev.rawError)}`;
+      instruction = NO_SUCCESS_CLAIM;
     } else if (ev.unverified) {
       // Wave 0's contract, on the slow path too.
       verdict = unverifiedNarration(toolName, ev.reason);
@@ -283,7 +333,7 @@ function createLiveToolAdapter(deps) {
 
     const liveSession = getLiveSession ? getLiveSession() : null;
     if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as confirms
-    liveSession.sendText(`[SYSTEM] ${verdict} Report this to the operator accurately.`);
+    liveSession.sendText(`[SYSTEM] ${verdict} ${instruction}`);
   }
 
   // Hook the EXISTING confirm-accept path so an approval/rejection feeds the
@@ -308,10 +358,14 @@ function createLiveToolAdapter(deps) {
     const ok = Boolean(accepted && outcome && outcome.ok);
     const unverified = ok && Boolean(outcome.unverified);
     let verdict;
+    // BUG-116, same split as reportLateOutcome: the record keeps the plain
+    // statement, the model gets the explicit prohibition on a failure.
+    let instruction = 'Report this to the operator accurately.';
     if (!accepted) {
       verdict = 'The operator DECLINED that action.';
     } else if (!ok) {
       verdict = `The operator APPROVED ${pending.name} but it FAILED: ${String((outcome && outcome.result) || 'unknown')}`;
+      instruction = NO_SUCCESS_CLAIM;
     } else if (unverified) {
       verdict = `The operator APPROVED ${pending.name} and it ran, but the outcome is UNVERIFIED: ` +
         String(outcome.reason || 'no confirmation available') +
@@ -328,7 +382,7 @@ function createLiveToolAdapter(deps) {
 
     const liveSession = getLiveSession ? getLiveSession() : null;
     if (!liveSession || !liveSession.isOpen()) return; // nothing left to tell — best-effort
-    liveSession.sendText(`[SYSTEM] ${verdict} Report this to the operator accurately.`);
+    liveSession.sendText(`[SYSTEM] ${verdict} ${instruction}`);
   }
 
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
@@ -344,6 +398,11 @@ function createLiveToolAdapter(deps) {
 
     if (userText) historyAppend('user', userText);
     if (assistantText) historyAppend('assistant', assistantText);
+    // BUG-113: capture a spoken commitment as an inert, queryable ledger entry.
+    // Best-effort — a ledger miss must never break the turn.
+    if (assistantText) {
+      try { logCommitmentIfPresent(assistantText, { goals: goals }); } catch (_) {}
+    }
     // AD-4: the model's spoken claim is NOT the record. Outcomes are.
     const actionSummary = summarizeActionsForResult(actionsThisTurn);
     if (actionSummary) historyAppend('system', actionSummary);
