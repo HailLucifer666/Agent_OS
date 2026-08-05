@@ -1970,7 +1970,22 @@ function createServer(deps) {
       // Quiet-gate reference for proactive follow-ups: an unprompted remark must
       // never land while the operator is mid-conversation.
       if (msg.type === 'utterance' || msg.type === 'vision-query') lastTurnAt = Date.now();
-      if (msg.type === 'utterance') queueTurn(function() { return handleUtterance(msg); });
+      // BUG-129: while a Live (S2S) session is open, typed HUD text belongs to
+      // the SAME conversation as the spoken one. The batch path would answer it
+      // through edge-tts — a different voice, and a separate history from the
+      // one Gemini is holding. Feed it in as user content instead so the reply
+      // comes back on the Live audio path in the Live voice, with context.
+      // The empty `done` releases the HUD's reqId handler (deliverReply treats
+      // a no-say done as finishTurn); the typed message's own caption is drawn
+      // client-side by compose-bar, so nothing is lost by not answering here.
+      if (msg.type === 'utterance') {
+        if (liveSession && liveSession.isOpen()) {
+          liveSession.sendText(String(msg.text || ''));
+          send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
+        } else {
+          queueTurn(function() { return handleUtterance(msg); });
+        }
+      }
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
       else if (msg.type === 'command') handleCommand(msg);
       else if (msg.type === 'confirm-reply') handleConfirmReply(msg);

@@ -29,6 +29,8 @@
 // BUG-113: same commitment-ledger primitive the batch path (server/index.js)
 // uses — a no-op unless assistantText matches the explicit commitment-phrase
 // list, so ordinary Live turns are unaffected.
+const { createHash } = require('crypto');
+
 const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
 // BUG-117 — 2026-08-05: MYTHOS blamed the operator for messages the pipeline
@@ -67,6 +69,7 @@ function createLiveToolAdapter(deps) {
     getLiveSession,                 // () => current liveSession (may be null/not-open)
     sanitizeErrorForClient,
     goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
+    toolAckDeadlineMs,              // BUG-128: test seam only — see TOOL_ACK_DEADLINE_MS
   } = deps;
 
   if (!leash || typeof leash.check !== 'function') throw new Error('createLiveToolAdapter requires leash');
@@ -120,6 +123,55 @@ function createLiveToolAdapter(deps) {
     // per this list's own rule, and by that rule it always belonged.
     browser_switch: true,
   };
+
+  // BUG-128 — 2026-08-06: SLOW_TOOLS is a hand-maintained list, and the list is
+  // always one incident behind. Three open_web calls ran twice ~28s apart with
+  // DIFFERENT call ids, each preceded by a live-tool-outcome-late-for-turn: the
+  // turn ended before the toolResponse went back, the model saw no answer for
+  // the ids it asked about, and re-issued the whole batch. BUG-120's dedup is
+  // keyed on call.id by design, so fresh ids sail straight past it.
+  //
+  // The general fix is to stop letting ANY call outlive its turn unanswered:
+  // whatever has not resolved by this deadline gets the same status:'started'
+  // reply SLOW_TOOLS gets, and its real outcome arrives later on the same
+  // [SYSTEM] channel. SLOW_TOOLS stays because it acks instantly — the model is
+  // told "say what you are doing" without the operator hearing 1.5s of silence
+  // first. This is the net underneath it, not a replacement for it.
+  const TOOL_ACK_DEADLINE_MS = Number.isFinite(toolAckDeadlineMs) ? toolAckDeadlineMs : 1500;
+  const DEADLINE_EXCEEDED = Symbol('tool-ack-deadline-exceeded');
+
+  // Settle to {outcome} | {error} | DEADLINE_EXCEEDED. The timer is cleared on
+  // the fast path so a resolved dispatch never holds the event loop open for
+  // the rest of the deadline, and unref'd so it cannot on its own either.
+  function raceDeadline(promise, ms) {
+    let timer = null;
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(DEADLINE_EXCEEDED), ms);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    });
+    return Promise.race([
+      promise.then((outcome) => ({ outcome }), (error) => ({ error })),
+      deadline,
+    ]).then((settled) => { clearTimeout(timer); return settled; });
+  }
+
+  function logBatch(calls) {
+    try {
+      const list = Array.isArray(calls) ? calls : [];
+      const shape = list.map((c) => `${c.name}:${JSON.stringify(c.args || {})}`).join('|');
+      logger.info('live.tool-call-batch', {
+        count: list.length,
+        tools: list.map((c) => c.name),
+        callIds: list.map((c) => c.id),
+        // Truncated sha1: enough to match two batches, short enough to read.
+        batchHash: createHash('sha1').update(shape).digest('hex').slice(0, 12),
+      });
+    } catch { /* instrumentation must never break a turn */ }
+  }
+
+  const STARTED_MESSAGE =
+    'This action takes longer than this turn. Say what you are DOING, not what happened — ' +
+    'do NOT claim completion. The real outcome will arrive as a [SYSTEM] message; report it then.';
 
   // BUG-120 — the other half. Making browser_switch slow removes the specific
   // trigger seen on 2026-08-05, but nothing in this seam ever stopped the model
@@ -230,6 +282,11 @@ function createLiveToolAdapter(deps) {
 
   async function handleLiveToolCalls(calls, { sendToolResponse }) {
     sweepPendingConfirms();
+    // BUG-128 instrumentation: a re-issued batch carries fresh call ids, so the
+    // only way to recognise one in a log is by its CONTENT. Logging the shape
+    // hash next to the ids makes "same batch, different ids, 28 seconds apart"
+    // readable straight from the log instead of reconstructable from the audit.
+    logBatch(calls);
     const myGeneration = turnGeneration;
     function commitAction(entry) {
       // Late arrival after this turn already completed — do not misattribute
@@ -320,9 +377,7 @@ function createLiveToolAdapter(deps) {
       if (SLOW_TOOLS[call.name]) {
         commitAction({ tool: call.name, ok: false, started: true, summary: `${call.name} started — outcome pending.` });
         responses.push({ id: call.id, name: call.name, response: {
-          status: 'started',
-          message: 'This action takes longer than this turn. Say what you are DOING, not what happened — ' +
-            'do NOT claim completion. The real outcome will arrive as a [SYSTEM] message; report it then.',
+          status: 'started', message: STARTED_MESSAGE,
         }});
         // Deliberately not awaited: the whole point is that the turn does not wait.
         dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
@@ -332,9 +387,27 @@ function createLiveToolAdapter(deps) {
       }
 
       try {
-        const outcome = await dispatchAction(decision, {
+        // BUG-128: await, but not without a bound. Anything still running at
+        // TOOL_ACK_DEADLINE_MS is answered now and reconciled later, exactly
+        // like a SLOW_TOOLS call — the model never reaches turnComplete with an
+        // unanswered call id, which is the only reason it re-issues a batch.
+        const pending = dispatchAction(decision, {
           tier: verdict.tier, channel: 'voice-live', traceId: call.id,
         });
+        const settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
+        if (settled === DEADLINE_EXCEEDED) {
+          logger.info('live.tool-ack-deadline', { tool: call.name, callId: call.id, deadlineMs: TOOL_ACK_DEADLINE_MS });
+          commitAction({ tool: call.name, ok: false, started: true, summary: `${call.name} started — outcome pending.` });
+          responses.push({ id: call.id, name: call.name, response: {
+            status: 'started', message: STARTED_MESSAGE,
+          }});
+          pending
+            .then((outcome) => reportLateOutcome(call.name, outcome))
+            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }));
+          continue;
+        }
+        if (settled.error) throw settled.error;
+        const outcome = settled.outcome;
         const ev = evaluateOutcome(outcome);
         let summary, response;
         if (!ev.dispatchOk) {
