@@ -126,7 +126,7 @@ describe('gate: danger -> tier >= 3', () => {
   });
 });
 
-describe('gate: 99 registered count', () => {
+describe('gate: 100 registered count', () => {
   it('booting a hub with all register* functions (incl. gmail + docs + runner) against the real TOOLS arrays yields correct count', () => {
     const ctx = buildRealCtxForGateTests();
     const bus = fakeBus();
@@ -193,8 +193,11 @@ describe('gate: 99 registered count', () => {
     // + browser_dismiss_overlays/browser_check_captcha (from-browser,
     // snapshot-and-refs Phase 6 2026-08-06 — clearing cookie walls and skip-ad
     // buttons, and detecting a human-verification challenge so MYTHOS STOPS and
-    // asks the operator rather than trying to work around it) = 99.
-    assert.equal(hub.count(), 99);
+    // asks the operator rather than trying to work around it) = 99,
+    // + set_app_volume (from-pc, BUG-127 2026-08-06 — per-application volume via
+    // the Windows Volume Mixer sessions, so turning Spotify down no longer takes
+    // MYTHOS's own voice down with the system master) = 100.
+    assert.equal(hub.count(), 100);
   });
 });
 

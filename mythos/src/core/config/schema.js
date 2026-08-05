@@ -482,6 +482,30 @@ const SCHEMA = {
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
   LIVE_TOOL_ALLOWLIST:         { type: 'string', default: '' },
 
+  // Operator-present trust (leash/index.js, 2026-08-06). Comma-separated tool
+  // names ADDED to the built-in trusted list — local, reversible T3 tools that
+  // auto-allow WITHOUT a confirm, but ONLY when a real operator connection is
+  // driving (voice-agent.js / live-tool-adapter.js). The autonomous loop, the
+  // engagement executor and the reminder sensor pass no connectionId and are
+  // therefore unaffected by anything set here; this is not a ceiling raise and
+  // AUTONOMOUS_MAX_TIER is untouched.
+  //
+  // An entry is IGNORED and reported at boot (health.anomaly
+  // 'leash-trusted-tool-ignored', named) when it is on the never-trustable set
+  // (anything that sends, runs/installs, deletes, or executes arbitrary code —
+  // gmail_send, run_command, delete_file, browser_evaluate, kill_session, …),
+  // is not tier 3, or is not a known tool name. That set cannot be overridden
+  // from env, by design.
+  //
+  // TRUSTED_TOOLS_DISABLED=true is the single switch back to confirm-everything
+  // (which degrades to the BUG-012/BUG-119 session grant: confirm once per tool
+  // per connection, not confirm every time). leash.check() reads it on every
+  // call rather than caching it at construction — same discipline as
+  // AUTONOMOUS_MAX_TIER — but the config object itself is built once at boot and
+  // frozen, so editing .env still needs a restart to take effect.
+  TRUSTED_TOOLS:               { type: 'string', default: '' },
+  TRUSTED_TOOLS_DISABLED:      { type: 'bool',   default: false },
+
   // Live screen share (Electron Slice 3, spine §13's desktopCapturer). Streams
   // desktop JPEG frames into the open Live session as realtimeInput.video, so
   // "what am I looking at?" is answered from the actual screen instead of the

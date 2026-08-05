@@ -106,10 +106,19 @@ describe('FIX-3 — delete_artifact tiering (same unmapped-fail-safe bug class a
 });
 
 describe('BUG-012 — session-scoped T3 grants for goal-less (voice) actions', function() {
+  // TRUSTED_TOOLS_DISABLED: true is not incidental here. Operator-present trust
+  // (2026-08-06) auto-allows the same local UI tools this block exercises on the
+  // first use, so with trust ON these tools never reach the session-grant branch
+  // at all and "the first use must ask" is no longer true of them. The
+  // session-grant path is what the kill switch degrades TO — confirm-once-per-
+  // tool-per-connection rather than confirm-every-time — so this is the
+  // configuration in which it is live, and pinning the block here keeps every
+  // original assertion intact instead of weakening it.
+  // See test/leash-operator-trusted.test.js for the trust-on behaviour.
   function makeLeash() {
     var { createLeash } = require('../src/core/leash');
     return createLeash({
-      bus: fakeBus(), config: fakeConfig(), identity: noopIdentity(),
+      bus: fakeBus(), config: fakeConfig({ TRUSTED_TOOLS_DISABLED: true }), identity: noopIdentity(),
       auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
       effectors: noopEffectors()
     });

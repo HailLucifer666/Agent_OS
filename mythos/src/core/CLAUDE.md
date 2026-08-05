@@ -61,6 +61,61 @@ file adds the invariants specific to this layer.
   `browser_evaluate` is deliberately excluded and is T4 — always confirm,
   never cached; the `accept()` wrapper only records a grant when
   `TIER_TABLE[tool] === 3`, so T4 is structurally ineligible.
+- **Operator-present trust: `connectionId` is load-bearing for containment**
+  (2026-08-06, operator decision). A curated list of local, reversible T3
+  tools (`browser_click`/`browser_type`/`browser_fill_form`/
+  `browser_select_option`/`browser_press_key`/`browser_upload_file`,
+  `ui_click`/`ui_type`/`click_at`/`see_and_click`/`cua_click`,
+  `close_window`) auto-allows with **no confirm at all** — but only when a
+  real operator connection is driving. The audit reason is its own string,
+  `operator-present-trusted`, so the path is visible in the Audit view rather
+  than blending into `within-autonomous-max` or `session-granted`.
+
+  The containment is the call-site table — `check()` receives a
+  `connectionId` from exactly two places, both human-driven, and from nowhere
+  else:
+
+  | Call site | Context passed | Human present? |
+  |---|---|---|
+  | `voice/voice-agent.js:495` | `{ connectionId }` | yes |
+  | `voice/live-tool-adapter.js:271` | `{ connectionId, goalId: null }` | yes |
+  | `cortex/index.js:278` | `{ goalId }` | no — autonomous loop |
+  | `engagements/executor.js:272`, `:422` | `{ goalId: record.goalId }` | no — LLM-authored stages |
+  | `sensors/reminder-sensor.js:37` | `{ goalId }` | no — fires unattended |
+
+  So **do not start passing `connectionId` from an unattended path** — that,
+  not the list, is what would break this. `'system'` is excluded explicitly
+  (`voice-agent.js` passes `connectionId || 'system'` into `confirm.create`,
+  so the sentinel is real here).
+
+  `NEVER_TRUSTABLE` is un-overridable: sending (`gmail_send`,
+  `whatsapp_send`, `phone_*`), running/installing (`run_command`,
+  `install_from_github`, `hermes_task`, `mcp_call_tool`, `security_scan`,
+  the build/pipeline tools), deleting (`delete_file`, `delete_goal`,
+  `delete_artifact`), `reminder_approve_action`, and `browser_evaluate`/
+  `kill_session`. `TRUSTED_TOOLS` (env) can add T3 tools but cannot add
+  anything on that set, anything not T3, or an unknown name — each rejection
+  is emitted by name as `health.anomaly` `leash-trusted-tool-ignored` at
+  construction. `TRUSTED_TOOLS_DISABLED=true` reverts to the pre-trust
+  behaviour; `check()` reads it per call rather than caching it at
+  construction, but the config object is frozen at boot, so an `.env` edit
+  still needs a restart.
+
+  **This is deliberately not a tier change and not a ceiling raise.**
+  Re-tiering these to T2 would hand the same clicking/typing/window-closing
+  to the autonomous loop, and BUGS.md records raising `AUTONOMOUS_MAX_TIER`
+  globally as evaluated and rejected as a safety regression. Trust is checked
+  after the goal grant and before the session grant, and *after* the
+  credential scan, the `boundaries.md` deny and the `DRY_RUN` gate — all of
+  which still run first and still win. `failClosedIfUnwritable` still applies:
+  an unwritable audit at T3 denies, trusted or not.
+
+  Consequence worth knowing: every tool in `SESSION_GRANTABLE` is now also
+  trusted, so with trust ON the session-grant branch is unreachable. It is
+  not dead code — it is what the kill switch degrades to (confirm once per
+  tool per connection rather than every time), which is why
+  `test/leash.test.js`'s BUG-012 block and `leash-grant-scope.test.js`'s
+  BUG-119 block now run with `TRUSTED_TOOLS_DISABLED: true`.
 - Credential-pattern scanning runs before any T3/T4 effector, and the
   scanner's own output is always redacted in the audit reason — never the
   full secret.

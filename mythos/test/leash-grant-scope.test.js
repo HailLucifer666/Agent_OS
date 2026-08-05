@@ -235,11 +235,19 @@ describe('leash T3 grants are tool-scoped, not tier-wide', function() {
 // approval could not have held. Widened on the operator's explicit approval
 // (2026-08-06) — an approval loop trains someone to accept without reading,
 // which costs more safety than the grant does. browser_evaluate stays out.
+//
+// SUPERSEDED IN PRACTICE, KEPT AS THE FALLBACK CONTRACT (2026-08-06). Every tool
+// this block covers is now on the operator-present trusted list, so with trust
+// ON it auto-allows on the FIRST use and never reaches the session-grant branch.
+// The session grant is what TRUSTED_TOOLS_DISABLED=true degrades to — confirm
+// once per tool per connection instead of confirm every time — so the harness
+// below pins that config to keep proving the mechanism, with no assertion
+// weakened. See test/leash-operator-trusted.test.js for the trust-on path.
 describe('BUG-119 — a T3 approval on the voice path actually holds for the session', function() {
   function makeLeash() {
     const { createLeash } = require('../src/core/leash');
     return createLeash({
-      bus: realBus(), config: fakeConfig(), identity: noopIdentity(),
+      bus: realBus(), config: fakeConfig({ TRUSTED_TOOLS_DISABLED: true }), identity: noopIdentity(),
       auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
       effectors: noopEffectors()
     });

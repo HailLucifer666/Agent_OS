@@ -218,6 +218,18 @@ const TIER_TABLE = {
   'phone_app_close':        2,
 
   // T3 — CONFIRM-ONCE-PER-GOAL (grant recorded, dies with goal)
+  //
+  // READ THE TIER TOGETHER WITH leash/index.js's TRUSTED LIST (2026-08-06). T3
+  // no longer means "a prompt always fires". A curated set of local, reversible
+  // T3 tools below — the browser interaction tools, ui_click/ui_type/click_at/
+  // see_and_click/cua_click, and close_window — auto-allows with NO confirm when
+  // a real operator connection is driving (voice or the Live session), audited
+  // as 'operator-present-trusted'. Anything acting on its own passes no
+  // connectionId and still confirms for the very same tools, so the tier here is
+  // still exactly right for the autonomous path. Do not "simplify" any of them
+  // to T2 on the strength of that trust: T2 auto-allows for the autonomous loop
+  // too, which is the mistake documented in the build-tool re-tier note above.
+  // leash/index.js's NEVER_TRUSTABLE pins which T3 entries can never be trusted.
   'delete_goal':           3,
   'project_status':        0,  // P22 Forge — read-only build status (tier 0; flat table, position cosmetic)
   'compose_email':         3,

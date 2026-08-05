@@ -76,6 +76,109 @@ function createLeash(deps) {
     click_at: 1, send_key: 1, focus_window: 1,
     browser_click: 1, browser_type: 1, browser_fill_form: 1
   };
+  // OPERATOR-PRESENT TRUST (2026-08-06, operator decision — safety-relevant,
+  // recorded here, in src/core/CLAUDE.md and in the commit message).
+  //
+  // The problem the session grant above does NOT solve. Even with BUG-119 fixed,
+  // the first use of every T3 tool in every connection still raises a confirm,
+  // and see_and_click/cua_click were never on SESSION_GRANTABLE at all — so
+  // "play a song in the Spotify app" (which routes through cua_click) confirmed
+  // every single time, forever. Approval fatigue is a safety failure, not a
+  // cosmetic one: an operator who clicks Approve fifty times a day stops reading
+  // the prompt and the gate becomes a rubber stamp. That is the same argument
+  // BUG-119 already accepted for the browser tools, applied one step further.
+  //
+  // The mechanism, and why it is contained. check() receives a connectionId from
+  // exactly two call sites, both with a human at the other end:
+  //
+  //   voice/voice-agent.js:495        { connectionId }                human
+  //   voice/live-tool-adapter.js:271  { connectionId, goalId: null }  human
+  //   cortex/index.js:278             { goalId }                      autonomous
+  //   engagements/executor.js:272/422 { goalId: record.goalId }       LLM-authored
+  //   sensors/reminder-sensor.js:37   { goalId }                      unattended
+  //
+  // So gating on operator-presence gives the human zero prompts for local,
+  // reversible actions they asked for out loud, and gives cortex, the engagement
+  // executor and the reminder sensor nothing at all. connectionId is LOAD-BEARING
+  // for that containment — do not start passing it from an unattended path.
+  //
+  // This is deliberately NOT a tier change and NOT a ceiling raise. Re-tiering
+  // these to T2 would auto-allow them for the autonomous loop too — the exact
+  // mistake that let a build launch itself unasked mid-conversation on
+  // 2026-07-29 (see tiers.js's build-tool re-tier note), and BUGS.md records
+  // raising AUTONOMOUS_MAX_TIER globally as evaluated and rejected as a safety
+  // regression. That rejection stands; this routes around the fatigue instead.
+  //
+  // send_key is NOT here despite being an obvious member of this class: it is
+  // T2 (see tiers.js) and already auto-allows before this branch is reached.
+  // focus_window is T1 for the same reason.
+  var OPERATOR_TRUSTED_DEFAULT = {
+    browser_click: 1, browser_type: 1, browser_fill_form: 1,
+    browser_select_option: 1, browser_press_key: 1, browser_upload_file: 1,
+    ui_click: 1, ui_type: 1, click_at: 1,
+    see_and_click: 1, cua_click: 1,
+    close_window: 1
+  };
+
+  // Un-overridable. TRUSTED_TOOLS cannot add anything on this list, and neither
+  // can a future edit to the default above without deleting an explicit test
+  // (test/leash-operator-trusted.test.js, "the hard line"). These are the
+  // categories the operator kept gated by name on 2026-08-06: sending,
+  // running/installing, deleting, and arbitrary-code/session-killing.
+  var NEVER_TRUSTABLE = {
+    gmail_send: 1, compose_email: 1, whatsapp_send: 1,
+    phone_call: 1, phone_sms_send: 1, phone_whatsapp_send: 1, phone_file_push: 1,
+    run_command: 1, install_from_github: 1, mcp_call_tool: 1, hermes_task: 1,
+    security_scan: 1,
+    build_project: 1, revise_project: 1, pipeline_execute: 1,
+    kanban_assemble: 1, kanban_build_card: 1, start_project: 1, run_mission: 1,
+    delete_file: 1, delete_goal: 1, delete_artifact: 1,
+    reminder_approve_action: 1,
+    browser_evaluate: 1, kill_session: 1
+  };
+
+  // TRUSTED_TOOLS is parsed ONCE here so a bad entry is reported at boot rather
+  // than on the Nth voice command. Each rejection is emitted by name — silently
+  // ignoring an entry is how a config lies to its operator (the same reasoning
+  // behind reporting the legacy goal grant below instead of dropping it).
+  var trustedTools = Object.assign({}, OPERATOR_TRUSTED_DEFAULT);
+  String(config.TRUSTED_TOOLS || '')
+    .split(',')
+    .map(function(n) { return n.trim(); })
+    .filter(function(n) { return n.length > 0; })
+    .forEach(function(name) {
+      var why = null;
+      if (NEVER_TRUSTABLE[name]) why = 'never-trustable: this tool sends, runs, deletes or executes arbitrary code';
+      else if (TIER_TABLE[name] !== 3) {
+        why = TIER_TABLE[name] === undefined
+          ? 'not a known tool — check the spelling against leash/tiers.js'
+          : 'not tier 3 (it is tier ' + TIER_TABLE[name] + ') — trust is T3-only';
+      }
+      if (why) {
+        bus.emit('health.anomaly', {
+          kind: 'leash-trusted-tool-ignored',
+          target: name,
+          evidence: { tool: name, reason: why }
+        });
+        return;
+      }
+      trustedTools[name] = 1;
+    });
+
+  // A real human connection is driving. 'system' is excluded deliberately:
+  // voice-agent.js passes `connectionId || 'system'` into confirm.create, so the
+  // sentinel exists in this codebase and must never read as a human here.
+  function isOperatorPresent(ctx) {
+    return !!(ctx && ctx.connectionId && ctx.connectionId !== 'system');
+  }
+
+  // TIER_TABLE[name] === 3 is required, mirroring the accept() wrapper below:
+  // T4 stays structurally ineligible, and an unknown tool that fell back to the
+  // T3 fail-safe never matches because it is not in the table at all.
+  function isTrusted(name) {
+    return !!trustedTools[name] && !NEVER_TRUSTABLE[name] && TIER_TABLE[name] === 3;
+  }
+
   // Keyed by connectionId + ':' + tool (BUG-012 follow-up, security HIGH):
   // was keyed by bare tool name, so an accept on one WS connection granted
   // EVERY connection (including the autonomous goal loop, which passes no
@@ -213,6 +316,20 @@ function createLeash(deps) {
       if (Array.isArray(goalGrant) && goalGrant.indexOf(toolName) !== -1) {
         var grantedWrite = writeAudit(action, goalCtx.goalId, tier, 'allow', { granted: true, reason: 'goal-granted' });
         return failClosedIfUnwritable(tier, grantedWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'goal-granted' });
+      }
+      // Operator-present trust. Placed AFTER the goal grant and BEFORE the
+      // session grant, which it supersedes for any tool on both lists — so the
+      // audit reason is unambiguous rather than depending on whether a confirm
+      // happened to have been accepted earlier. Everything that must win over
+      // trust already ran above and returned: the credential scan, the
+      // boundaries.md deny and the DRY_RUN gate. TRUSTED_TOOLS_DISABLED is read
+      // per call rather than cached at construction (same discipline as
+      // AUTONOMOUS_MAX_TIER) — note the real config object is frozen at boot, so
+      // an .env edit still needs a restart; this only guarantees the leash never
+      // holds a stale copy of the switch.
+      if (!config.TRUSTED_TOOLS_DISABLED && isOperatorPresent(goalCtx) && isTrusted(toolName)) {
+        var trustWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'allow', { granted: true, reason: 'operator-present-trusted' });
+        return failClosedIfUnwritable(tier, trustWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'operator-present-trusted' });
       }
       // BUG-012 (per-connection follow-up): session grant for eligible
       // goal-less tools, scoped to the calling connection. No connectionId
