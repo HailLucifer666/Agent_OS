@@ -610,7 +610,13 @@ async function browser_launch_debug(args) {
     // One CDP port, one browser. If a different one already owns it, say so
     // instead of "launched" — the debug port cannot be shared.
     if (want && attachedBrowser && attachedBrowser !== want) {
-      return fail(`${attachedBrowser} already owns the debug port. Close it first, then launch ${want}.`);
+      // BUG-107: name the remedy here too. checkBrowserTarget()'s refusal points
+      // at browser_switch, but this branch is the one a model asked for a
+      // different browser actually hits first — it calls browser_launch_debug,
+      // not browser_navigate. "Close it first" is an instruction to the operator,
+      // not something MYTHOS can act on, which is the dead end BUG-107 removed.
+      return fail(`${attachedBrowser} already owns the debug port — one port, one browser. `
+        + `Call browser_switch with browser:"${want}" to close ${attachedBrowser} and launch ${want} instead.`);
     }
     return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
   }

@@ -120,6 +120,25 @@ describe('BUG-107 — browser_switch is a real, reachable remedy for the wrong-b
     assert.equal(res.result.launched, false, 'deferred to browser_launch_debug\'s own CONNECTING-join branch');
   });
 
+  // The dead end BUG-107 removed lived in TWO places, not one. checkBrowserTarget()
+  // (the browser_navigate path) now names browser_switch as the remedy, but
+  // browser_launch_debug's own already-ONLINE mismatch branch still told the model
+  // to "close it first" — the same refusal-with-no-remedy, reached by the more
+  // obvious route: a model asked for Brave calls browser_launch_debug, not
+  // browser_navigate. A remedy that only one of two refusals mentions is still a
+  // dead end from wherever the model happened to knock.
+  test('browser_launch_debug\'s own wrong-browser refusal names the remedy too, not just "close it first"', async () => {
+    __setAttachedBrowserForTest('brave');
+    browserAgent.getStatus = () => ({ state: 'ONLINE', mode: 'launched' });
+
+    const res = await browser_launch_debug({ browser: 'chrome' });
+    assert.equal(res.ok, false, 'one debug port, one browser — the mismatch must still be refused');
+    const msg = String(res.result);
+    assert.match(msg, /brave/i, 'it must still say which browser actually owns the port');
+    assert.match(msg, /browser_switch/,
+      'the refusal must name browser_switch as the way out — a manual close is not a remedy MYTHOS can offer');
+  });
+
   test('browser_switch is registered in the tool catalog', () => {
     const t = browserMod.TOOLS.find((x) => x.name === 'browser_switch');
     assert.ok(t, 'browser_switch must be a registered tool');
