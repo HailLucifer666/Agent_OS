@@ -2609,6 +2609,17 @@ hole in BUG-099's capability half.
   `mythos/src/core/voice/live-tools.js`, `mythos/src/core/leash/tiers.js`,
   `mythos/test/bug-107-browser-switch-remedy.test.js`,
   `mythos/test/effectors-hub.test.js`.
+  **Follow-up (`572a157`), found by review after the fix was called done:** the
+  dead end lived in TWO refusals, and only one was fixed. `checkBrowserTarget()`
+  (the `browser_navigate` path) named `browser_switch`, but
+  `browser_launch_debug`'s own already-ONLINE mismatch branch still said "Close
+  it first, then launch chrome" — and that is the branch a model asked to change
+  browsers actually reaches first, since it calls `browser_launch_debug`, not
+  `browser_navigate`. "Close it first" is an instruction to the operator, not
+  something MYTHOS can act on, so the exact defect survived one function over.
+  Both refusals now name the remedy. The general lesson: when a fix is "name the
+  remedy in the refusal", grep for every site that refuses, not the one the
+  incident happened to come through.
 
 - **BUG-115 (the ad blocker cannot work — throwaway debug profile, no
   extensions):** FIXED. Verified read-only during planning: neither debug
