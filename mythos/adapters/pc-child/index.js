@@ -28,6 +28,14 @@ const RING_BUFFER_MAX_LINES = 100;
 const MAX_RESTART_ATTEMPTS = 2;
 const RESTART_BACKOFF_MS = [2000, 5000];
 const COMMAND_TIMEOUT_MS = 15000; // 15s per command
+// BUG-141(b): STARTUP_TIMEOUT_MS (5s) is deliberately shorter than
+// COMMAND_TIMEOUT_MS (15s). The startup ping is queued through the SAME
+// pipeline as any other command (processQueue()), so it carries the full
+// 15s in-flight timer even though handleStartup() gives up polling and
+// reports state OFFLINE at 5s. That means a caller who sees OFFLINE at 5s
+// and retries/restarts can still be delayed behind the stale ping occupying
+// commandInFlight for up to 10 more seconds. Known, accepted split — see
+// startPcChild()'s call site for why cancelling it outright isn't done here.
 const STARTUP_TIMEOUT_MS = 5000; // 5s for ping handshake
 
 // Module-level singleton state
@@ -267,10 +275,28 @@ function spawnChild() {
       state = 'OFFLINE';
       hint = 'PC automation startup handshake timed out.';
       log.warn('pc-child startup timeout');
+      // BUG-141(b): commandInFlight is still occupied by this same ping (it
+      // carries the full 15s COMMAND_TIMEOUT_MS, not STARTUP_TIMEOUT_MS) —
+      // free the slot now so a newly-queued command isn't stuck behind it
+      // for up to 10 more seconds. Matched by id so this only ever touches
+      // THIS ping's own in-flight entry, never a normal command's timeout
+      // or the queue/timeout semantics those use.
+      if (commandInFlight && commandInFlight.id === startupPingId) {
+        clearTimeout(commandInFlight.timer);
+        commandInFlight = null;
+        processQueue();
+      }
       return;
     }
     setTimeout(handleStartup, 100);
   };
+  // BUG (found live-verifying F5b, previously latent): handleStartup was
+  // defined but never actually kicked off anywhere — its own recursive
+  // setTimeout is unreachable without a first call. getStatus() therefore
+  // never reported OFFLINE at STARTUP_TIMEOUT_MS at all; state sat at
+  // STARTING until the ping's own resolve/reject eventually fired via the
+  // 15s command timeout. Start the loop.
+  setTimeout(handleStartup, 100);
 
   // Send ping and wait for response via the normal command pipeline
   commandQueue.unshift({
@@ -290,9 +316,21 @@ function spawnChild() {
     },
   });
   processQueue();
+  // BUG-141(b): capture the id processQueue() just assigned to this ping so
+  // handleStartup's timeout above can identify (and only ever identify)
+  // this exact slot later.
+  const startupPingId = commandInFlight ? commandInFlight.id : null;
 }
 
 async function startPcChild() {
+  // BUG-141(a): startPcChild() used to spawn unconditionally — if ever called
+  // while a previous child was still alive, that old process was orphaned:
+  // never killed, only abandoned once the `proc !== child` identity guards
+  // in spawnChild() started ignoring its events. Currently latent (the only
+  // call site is main.js, once at boot), but defend it anyway. Reuses the
+  // same kill path shutdownPcChild() uses — no second kill mechanism.
+  killLiveChild();
+
   intentionalShutdown = false;
   restartAttempts = 0;
   clearRestartTimer();
@@ -306,6 +344,25 @@ async function startPcChild() {
     state = 'OFFLINE';
     hint = `pc-child spawn failed: ${err.message}`;
     log.warn('pc-child start failed', { error: err.message });
+  }
+}
+
+// BUG-141(a): the actual process-kill, shared by shutdownPcChild() and
+// startPcChild()'s defensive guard below — one kill mechanism, not two.
+// Best-effort; never throws. Leaves `child` null so a stale process's later
+// 'exit'/'error' events fail the `proc !== child` identity guard in
+// spawnChild() and are ignored, same as any other orphan race in this file.
+function killLiveChild() {
+  if (child && !child.killed) {
+    try {
+      if (process.platform === 'win32' && child.pid) {
+        const { execFile } = require('child_process');
+        execFile('taskkill', ['/PID', String(child.pid), '/T', '/F']);
+      } else {
+        child.kill('SIGTERM');
+      }
+    } catch { /* best-effort */ }
+    child = null;
   }
 }
 
@@ -325,17 +382,7 @@ function shutdownPcChild() {
     commandInFlight = null;
   }
 
-  if (child && !child.killed) {
-    try {
-      if (process.platform === 'win32' && child.pid) {
-        const { execFile } = require('child_process');
-        execFile('taskkill', ['/PID', String(child.pid), '/T', '/F']);
-      } else {
-        child.kill('SIGTERM');
-      }
-    } catch { /* best-effort */ }
-    child = null;
-  }
+  killLiveChild();
   state = 'OFFLINE';
 }
 

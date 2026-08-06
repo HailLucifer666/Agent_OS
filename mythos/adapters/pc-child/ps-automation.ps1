@@ -69,6 +69,15 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 
+# BUG-139: resolve the SMTC session-manager WinRT type ONCE here instead of on every
+# media_status / SMTC-control call. Send-SmtcControl and Handle-MediaStatus
+# both re-ran Add-Type + this same [Type]::GetType(...) string on every
+# invocation, and media.js polls media_status every 5s for the life of the
+# media widget -- unbounded repeated assembly-scan + type-string resolution.
+# $null here (older/N-edition Windows without the media stack) is preserved
+# and handled by both callers exactly as before (honest "API not available").
+$script:SmtcManagerType = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+
 # ---- WinRT async bridging ----
 # BUG-004: IAsyncOperation<T> (WinRT) does NOT implement .Wait()/.Result the way a
 # real System.Threading.Tasks.Task does. Calling .Wait() directly on a raw WinRT
@@ -382,8 +391,9 @@ function Send-MediaKey($keyName) {
 # success or an error string on failure (caller can then fall back to VK keys).
 function Send-SmtcControl($action) {
     try {
-        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction SilentlyContinue
-        $type = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        # BUG-139: use the script-scope type resolved once at startup (see line ~70)
+        # instead of re-resolving it on every call.
+        $type = $script:SmtcManagerType
         if (-not $type) { return 'SMTC API not available' }
         $mgrOp = $type::RequestAsync()
         $mgr = Await-WinRTOperation $mgrOp $type
@@ -3385,9 +3395,9 @@ function Handle-MediaStatus {
     try {
         # Try to use Windows SMTC API (Windows 10 1903+)
         # This requires PowerShell 5.1+ with Windows Runtime support
-        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction SilentlyContinue
-
-        $type = [Type]::GetType('Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, Version=255.255.255.255, Culture=neutral, PublicKeyToken=null, ContentType=WindowsRuntime')
+        # BUG-139: use the script-scope type resolved once at startup (see line ~70)
+        # instead of re-resolving it on every call.
+        $type = $script:SmtcManagerType
         if (-not $type) {
             # Type not available - likely older PowerShell/Windows
             return @{ available = $false; error = 'SMTC API not available (requires Windows 10 1903+ and PowerShell 5.1+)' }

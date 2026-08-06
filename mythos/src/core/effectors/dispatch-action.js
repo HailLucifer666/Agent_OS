@@ -98,7 +98,25 @@ async function dispatchAction(decision, ctx) {
   const unverifiedReason = actionUnverified
     ? String((result && result.reason) || 'not confirmed').slice(0, 300)
     : undefined;
-  if (decision.skillRef && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
+  // BUG-137: an unverified action (ok:true, unverified:true) is neither a proven
+  // success nor a proven failure — it is exactly the "we don't know" case the
+  // evidence contract exists to preserve. Both call sites' real bodies were
+  // checked rather than assumed (memory/skills.js recordUse, goals/index.js
+  // markPlanStepDone): passing `false` is NOT a harmless non-advance.
+  // recordUse's EMA (`oldRate*0.9 + newRate*0.1`) treats false as a real 0 and
+  // drags the skill's successRate down; markPlanStepDone would mark the step
+  // 'failed', charge goal.failCount, and at failCount >= 2 fire
+  // distillFailureIntoLesson — inventing a failure nobody observed.
+  //
+  // The two call sites therefore diverge, deliberately:
+  //   recordUse       — skipped entirely. An EMA has no "unknown" slot; the
+  //                     only honest thing is to not move the average.
+  //   markPlanStepDone— still called, with a third argument marking the step
+  //                     'unverified'. It CANNOT be skipped: plan() dispatches
+  //                     the first *pending* step every tick, so a step left
+  //                     unresolved re-runs a real world-changing action
+  //                     (ui_type, ui_click) forever.
+  if (decision.skillRef && !actionUnverified && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
     try {
       // FIX-2: recordUse is async and was previously fire-and-forget with no
       // .catch — a rejection (e.g. a transient Windows EBUSY/EPERM reading a
@@ -116,7 +134,17 @@ async function dispatchAction(decision, ctx) {
     } catch (_) { /* skill bookkeeping is best-effort */ }
   }
   if (goalId && goals && typeof goals.markPlanStepDone === 'function') {
-    try { goals.markPlanStepDone(goalId, actionOk); }
+    // BUG-137: still called for an unverified action, but with the third argument
+    // set so goals.markPlanStepDone() resolves the step as 'unverified' —
+    // neither 'done' (which would launder an unproven action into a success and
+    // advance the learning signal) nor 'failed' (which charges failCount and
+    // trips distillFailureIntoLesson). Skipping the call entirely was the wrong
+    // shape: plan() re-dispatches the first *pending* step every tick, so a
+    // never-resolved step means a real world-changing action (ui_type,
+    // ui_click) repeats forever — strictly worse than the mis-scoring it was
+    // meant to fix. recordUse above is genuinely skipped instead, because an
+    // EMA has no "unknown" slot to record into.
+    try { goals.markPlanStepDone(goalId, actionOk, actionUnverified); }
     catch (_) { /* plan-queue advance is best-effort */ }
   }
 

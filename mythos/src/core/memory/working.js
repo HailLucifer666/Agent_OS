@@ -1,5 +1,13 @@
 'use strict';
 
+// BUG-138: hard cap on the perception queue. The camera producer runs ~7fps
+// (DETECT_INTERVAL_MS in ui/public/js/vision/camera.js) while cortex/index.js
+// skips an entire tick when the previous one is still in flight, and slow
+// brain lanes in this repo take 90-185s — so one stalled tick can otherwise
+// queue 600-1300 unconsumed payloads with no bound. The bus's storm guard
+// (400 events/1000ms) does not cover this: 7fps is under its threshold.
+const PERCEPTION_QUEUE_MAX = 200;
+
 function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints }) {
   let tick = 0;
   let lastModel = null;
@@ -7,6 +15,10 @@ function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints })
   let activeGoalId = null;
   const context = new Map();
   let spendThisTick = 0;
+  // BUG-138: tracks whether we're mid-overflow-burst, so a sustained overflow
+  // emits exactly one health.anomaly instead of one per dropped item. Resets
+  // once drainPerceptions() empties the queue back under the cap.
+  let perceptionOverflowActive = false;
   // V1 (Phase 4): per-tick recall cache. orient() hydrates this once per
   // tick when a high-salience perception arrives; decide()/plan() can read
   // it without re-running recallHybrid (which does an embeddings call). The
@@ -16,11 +28,33 @@ function createWorkingMemory({ fs, config, bus, logger, episodic, checkpoints })
   function drainPerceptions() {
     const drained = perceptionQueue;
     perceptionQueue = [];
+    // BUG-138: back under the cap — allow the next overflow burst to emit again.
+    perceptionOverflowActive = false;
     return drained;
   }
 
   function pushPerception(perception) {
     perceptionQueue.push(perception);
+    if (perceptionQueue.length > PERCEPTION_QUEUE_MAX) {
+      // Drop-oldest: keep the newest PERCEPTION_QUEUE_MAX entries.
+      const dropped = perceptionQueue.length - PERCEPTION_QUEUE_MAX;
+      perceptionQueue.splice(0, dropped);
+      // Emit exactly once per overflow burst (not once per dropped item) —
+      // a sustained overflow would otherwise spam the bus at up to ~7fps.
+      if (!perceptionOverflowActive) {
+        perceptionOverflowActive = true;
+        if (bus && typeof bus.emit === 'function') {
+          try {
+            bus.emit('health.anomaly', {
+              source: 'working.pushPerception',
+              kind: 'perception-queue-overflow',
+              dropped: dropped,
+              queueMax: PERCEPTION_QUEUE_MAX,
+            });
+          } catch (_) { /* a bus failure must never break pushPerception */ }
+        }
+      }
+    }
   }
 
   function resetTickState() {

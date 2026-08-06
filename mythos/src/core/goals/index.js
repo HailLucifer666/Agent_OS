@@ -613,7 +613,16 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
   // Called by dispatchAction once the action outcome is recorded. Marks the
   // current 'executing' step done|failed and clears the queue if every step
   // has resolved (so plan() will re-plan fresh next tick).
-  function markPlanStepDone(goalId, success) {
+  // `unverified` is the evidence contract's third outcome (see
+  // effectors/dispatch-action.js): the effector returned ok:true but could NOT
+  // prove the world changed. It must resolve the step WITHOUT scoring it —
+  // 'done' would launder an unproven action into a success, and 'failed' would
+  // (wrongly) charge failCount and trip distillFailureIntoLesson below. It must
+  // also not be left 'pending': plan() dispatches the first pending step every
+  // tick, so leaving it pending re-runs a real world-changing action (typing,
+  // clicking) forever. Hence a third terminal status, counted as resolved by
+  // the allDone sweep but excluded from every failure signal.
+  function markPlanStepDone(goalId, success, unverified) {
     var goal = goals.get(goalId);
     if (!goal || !goal.plan || goal.plan.length === 0) return;
     var idx = -1;
@@ -623,14 +632,17 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       }
     }
     if (idx === -1) return;
-    goal.plan[idx].status = success ? 'done' : 'failed';
+    var scoredFailure = !success && !unverified;
+    goal.plan[idx].status = unverified ? 'unverified' : (success ? 'done' : 'failed');
     // Track per-goal failure count so plan()'s repeated-failure pause (Layer 3)
     // and distillFailureIntoLesson (Layer 4) have a signal to key on.
-    if (!success) {
+    if (scoredFailure) {
       goal.failCount = (goal.failCount || 0) + 1;
     }
     // Clear the queue when all steps have resolved so plan() re-plans fresh.
-    var allDone = goal.plan.every(function (s) { return s.status === 'done' || s.status === 'failed'; });
+    var allDone = goal.plan.every(function (s) {
+      return s.status === 'done' || s.status === 'failed' || s.status === 'unverified';
+    });
     if (allDone) goal.plan = [];
     saveGoal(goal.id);
     // Learning loop (Layer 4): when a step fails AND the goal has accumulated
@@ -638,7 +650,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     // dispatch path isn't blocked — same contract as complete()→distillIntoSkill.
     // The threshold mirrors REFLECTION_ACTION_MIN's intent: don't distill a
     // single transient flake, wait for a real pattern.
-    if (!success && brain && memory && memory.lessons && goal.failCount >= 2) {
+    if (scoredFailure && brain && memory && memory.lessons && goal.failCount >= 2) {
       distillFailureIntoLesson(goal).catch(function (err) {
         if (bus) bus.emit('health.anomaly', {
           kind: 'goal-fail-distill-failed', target: goal.id, error: err && err.message

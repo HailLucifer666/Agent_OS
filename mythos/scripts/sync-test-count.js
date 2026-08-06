@@ -179,6 +179,14 @@ function readmeSlots(counts) {
     { file, pattern: /(immune system, and )(\d+)( tests\.)/, value: counts.tests },
     { file, pattern: /(tests-)(\d+)(%20pass-)/, value: counts.pass },
     { file, pattern: /(Linear history on `main`\. )(\d+)( tests green\.)/, value: counts.tests },
+    // The README hero also states the count inside the readme-typing-svg URL's
+    // `lines=` query param, where the text is URL-encoded ("N+tests+green.") and
+    // carries none of the prose anchors above. No slot covered it, so it was the
+    // one test-count site this script could not move: it sat at 1761 while every
+    // slot-covered site had advanced past 2900, i.e. README disagreed with itself
+    // three ways. Anchored on the `;`-separated typing-SVG line + the encoded
+    // suffix so it cannot match the plain-prose sites.
+    { file, pattern: /(;)(\d+)(\+tests\+green\.)/, value: counts.tests },
     { file, pattern: /(\*\*Tests\*\* \| Built-in `node:test` \| )(\d+)( tests, zero test framework deps \|)/, value: counts.tests },
     // NOTE: "4 deps" used to be baked into this pattern as a literal, which meant
     // it silently stopped matching (and MISSING PATTERN-reported, not silently

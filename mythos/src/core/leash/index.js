@@ -13,6 +13,22 @@
 var TIER_TABLE = require('./tiers').TIER_TABLE;
 var createConfirmRegistry = require('./confirm').createConfirmRegistry;
 
+// BUG-142: sessionGrants (below) was only ever .set() and read — an expired entry
+// (or one left behind by a connection that never reconnects: voice
+// reconnects, Electron restarts, tab reloads) sat in the Map forever.
+// Opportunistic sweep, not a timer: deletes ONLY entries whose expiresAt has
+// already passed — the read path in check() already treats those as not-live
+// (`Date.now() < sessionExpiry`), so removing them here changes nothing about
+// any allow/deny/confirm outcome, only memory growth. Factored to module
+// scope (taking the Map + a clock fn) so it is unit-testable without
+// exercising the full createLeash() construction/accept() flow.
+function sweepExpiredSessionGrants(grants, now) {
+  var cutoff = typeof now === 'function' ? now() : Date.now();
+  grants.forEach(function(expiresAt, key) {
+    if (expiresAt < cutoff) grants.delete(key);
+  });
+}
+
 function createLeash(deps) {
   var bus = deps.bus, config = deps.config, identity = deps.identity;
   var auditWriter = deps.auditWriter, goals = deps.goals, effectors = deps.effectors;
@@ -375,6 +391,9 @@ function createLeash(deps) {
       var grantedTool = granted && granted.tool;
       if (grantedTool && connectionId &&
           SESSION_GRANTABLE[grantedTool] && TIER_TABLE[grantedTool] === 3) {
+        // BUG-142: opportunistic eviction, piggybacked on the one path that grows
+        // this Map — see sweepExpiredSessionGrants() at module scope above.
+        sweepExpiredSessionGrants(sessionGrants);
         sessionGrants.set(connectionId + ':' + grantedTool, Date.now() + SESSION_GRANT_TTL_MS);
       }
       return acceptedAction;
@@ -387,4 +406,4 @@ function createLeash(deps) {
   };
 }
 
-module.exports = { createLeash };
+module.exports = { createLeash, sweepExpiredSessionGrants };

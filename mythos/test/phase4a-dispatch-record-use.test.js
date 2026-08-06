@@ -180,4 +180,58 @@ describe('Phase 4 / Area A — V2 execution→learning loop in dispatchAction', 
     assert.equal(anomaly.payload.source, 'skills.recordUse');
   });
 
+  // BUG-137: {ok:true, unverified:true} (the evidence contract's "we don't know"
+  // case) must not be scored as a success in either the skill EMA or the
+  // persisted plan queue — see the comment above the recordUse/
+  // markPlanStepDone calls in dispatch-action.js for why `false` is not a
+  // safe substitute either (it actively fails the step / drags the EMA down).
+  it('does NOT score an unverified action into the skill EMA, but DOES resolve the plan step as unverified', async function () {
+    var recorded = [];
+    var marked = [];
+    var mem = fakeMemory();
+    mem.skills.recordUse = function (ref, ok) { recorded.push({ ref: ref, ok: ok }); };
+    var g = fakeGoals();
+    g.markPlanStepDone = function (id, ok, unverified) {
+      marked.push({ id: id, ok: ok, unverified: unverified });
+    };
+    var decision = { tool: 'ui_type', args: { text: 'hello' }, skillRef: 'sk-type', rationale: 'procedural-skill' };
+    var result = await dispatchAction(decision, {
+      effectors: fakeEffectors({ ok: true, unverified: true, reason: 'no readback confirmation' }),
+      bus: fakeBus(), goals: g, memory: mem, config: { ACTION_TIMEOUT_MS: 5000 },
+      goalId: 'g-1', tier: 2
+    });
+    assert.equal(result.unverified, true);
+    assert.equal(recorded.length, 0, 'an unverified action must not be scored into the skill EMA at all');
+    // It MUST still be called: plan() re-dispatches the first *pending* step
+    // every tick, so a step left unresolved re-runs a real world-changing
+    // action forever. The third argument is what keeps it out of both the
+    // success and the failure signal.
+    assert.equal(marked.length, 1, 'an unverified action must still resolve the plan step (else it re-runs forever)');
+    assert.equal(marked[0].unverified, true, 'must be flagged unverified, not scored as done/failed');
+  });
+
+  // Control case: a bare {ok:true} (no unverified flag) is a proven success
+  // and must still fully participate in both bookkeeping paths.
+  it('still calls skills.recordUse(ref, true) and markPlanStepDone(id, true) for a verified (non-unverified) success', async function () {
+    var recorded = [];
+    var marked = [];
+    var mem = fakeMemory();
+    mem.skills.recordUse = function (ref, ok) { recorded.push({ ref: ref, ok: ok }); };
+    var g = fakeGoals();
+    g.markPlanStepDone = function (id, ok, unverified) {
+      marked.push({ id: id, ok: ok, unverified: unverified });
+    };
+    var decision = { tool: 'ui_type', args: { text: 'hello' }, skillRef: 'sk-type', rationale: 'procedural-skill' };
+    await dispatchAction(decision, {
+      effectors: fakeEffectors({ ok: true }),
+      bus: fakeBus(), goals: g, memory: mem, config: { ACTION_TIMEOUT_MS: 5000 },
+      goalId: 'g-1', tier: 2
+    });
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].ok, true);
+    assert.equal(marked.length, 1);
+    assert.equal(marked[0].ok, true);
+    assert.ok(!marked[0].unverified, 'a proven success must not be flagged unverified');
+  });
+
 });

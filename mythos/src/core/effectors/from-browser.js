@@ -993,6 +993,26 @@ function buildLaunchResult(browserName, status, profileDir, extensionDirs) {
   };
 }
 
+// BUG-140: poll interval and worst-case ceiling for waitForDebugPortReady(). The
+// ceiling matches the old flat `setTimeout(r, 2000)` this replaces, so a
+// never-ready port waits no longer than before — only the common case (port
+// answers early) gets faster.
+const COLD_START_POLL_INTERVAL_MS = 200;
+const COLD_START_CEILING_MS = 2000;
+
+// BUG-140: poll `probeFn` (returns a Promise<boolean>) every
+// COLD_START_POLL_INTERVAL_MS, resolving true the moment it does, or false
+// once COLD_START_CEILING_MS has elapsed. Never throws — probeFn is expected
+// to have already swallowed its own errors (see call site).
+async function waitForDebugPortReady(probeFn) {
+  const deadline = Date.now() + COLD_START_CEILING_MS;
+  for (;;) {
+    if (await probeFn()) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, COLD_START_POLL_INTERVAL_MS));
+  }
+}
+
 // On-demand debug-browser launcher (Phase 6a, user-approved). Boot never
 // auto-launches Chrome (main.js's browser-automation step — launching a real
 // browser at boot steals the mic/audio device on Windows) — this is the tool
@@ -1071,10 +1091,18 @@ async function browser_launch_debug(args) {
     return fail(`Failed to launch browser: ${err.message}`);
   }
 
-  // Give Chrome/Edge a moment to open its debug port before the first CDP
-  // connect attempt — ensureOnline() itself has its own connect timeout, this
-  // is just the cold-start window before the port exists at all.
-  await new Promise((r) => setTimeout(r, 2000));
+  // BUG-140: this used to be a flat, unconditional 2s sleep before the first CDP
+  // connect attempt, regardless of how fast the debug port actually came up.
+  // Poll instead — same COLD_START_CEILING_MS worst case as the old flat
+  // wait, but returns as soon as the port answers. The probe IS
+  // ensureOnline() itself (no separate reachability check exists in this
+  // file to reuse): a refused connection fails fast (well under
+  // COLD_START_POLL_INTERVAL_MS) rather than waiting out connect()'s own
+  // 10s timeout, so polling it is cheap. On success the browser is already
+  // connected, so the ensureOnline() call below is a no-op (state is
+  // already ONLINE); on ceiling timeout, fall through exactly as before and
+  // let ensureOnline()'s own timeout/retry report the failure.
+  await waitForDebugPortReady(() => browserAgent.ensureOnline({ cdpUrl }).catch(() => false));
 
   const connected = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
   if (!connected) return fail('Browser launched but CDP connect did not come online — it may still be starting; try again in a moment.');
@@ -1564,4 +1592,7 @@ module.exports = {
   // BUG-115 seams: pure helpers so the extension-loading guarantee is testable
   // without browser_launch_debug spawning a real browser on the test machine.
   parseBrowserExtensionsEnv, resolveBrowserExtensions, buildBrowserLaunchArgs, buildLaunchResult,
+  // BUG-140 seam: the cold-start poll-until-ready loop, pure and testable without
+  // spawning a real browser or waiting out the real ceiling.
+  waitForDebugPortReady, COLD_START_POLL_INTERVAL_MS, COLD_START_CEILING_MS,
 };
