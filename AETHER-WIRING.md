@@ -148,6 +148,31 @@ No fabricated data: `distanceM` is shown exactly as broadcast.
 
 **Goal:** Agent_OS speaks through whichever device the user is nearest to.
 
+> **Precedence, decided by the operator 2026-08-07: LIVE WINS ALWAYS.** Unified
+> Gemini Live voice and Aether audio routing are **mutually exclusive by
+> design** — never both in one turn, and the tie always goes to Live. Aether
+> routing is best-effort: it may be attempted only on a path where no Live
+> session is open. That is already how `server/index.js` is ordered
+> (`proactiveSpeak()` takes its Live branch first and returns; `sendSpokenReply()`
+> and the typed-utterance handler check `getLiveSession()` before
+> `speakViaAether()`), and `test/aether-live-precedence.test.js` now pins both
+> directions so an edit cannot quietly reverse it.
+>
+> **The honest consequence: with `VOICE_UNIFIED_LIVE_VOICE` on — which is the
+> schema default — the Aether audio route will effectively never fire.** That
+> flag makes `proactiveSpeak()` actively *open* a Live session before it reaches
+> the Aether branch, so on the default config the branch is live code that is
+> almost never taken rather than a path the operator can exercise. **Phase 2 can
+> therefore only be walked with `VOICE_UNIFIED_LIVE_VOICE=false`** (plus
+> `AETHER_ENABLED=true`, `AETHER_AUDIO_ROUTE=true`). Suppressing the Live open to
+> let Aether through was considered and rejected: Live is the entity's voice.
+>
+> Phase 2 stays **CODED — needs live verify**. Nothing here is a live-walk
+> result, and the Android node still cannot play audio at all (see the 2026-08-04
+> note below, re-verified 2026-08-07: zero `AudioTrack`/`MediaPlayer`/`ExoPlayer`
+> hits anywhere under `aether-android/`), so even with the flag off "the nearest
+> device speaks" means the open dashboard tab speaks.
+
 **Key insight that simplifies this phase:** the aggregator ALREADY accepts inbound
 `say`/`ask` messages on the same socket the sensor pulls from
 (`aggregator.py:910-924`). So Phase 2 does NOT need a new push channel — the
