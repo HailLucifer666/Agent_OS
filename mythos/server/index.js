@@ -751,6 +751,19 @@ function createServer(deps) {
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
+    // BUG-133. body-parser throws http-errors-shaped failures for a malformed body
+    // (400, entity.parse.failed) and an oversized one (413, entity.too.large).
+    // Blanket-500ing those told the client the SERVER broke when the REQUEST was bad,
+    // and logged every client mistake at error level as an *unhandled* fault — alert
+    // noise, and retry logic retrying something that can never succeed.
+    // Key on `expose`, NOT on status alone: it is the flag http-errors sets to mark a
+    // message client-safe, so a future throw that merely carries a .status can never
+    // leak its raw .message here.
+    const status = Number(err.status || err.statusCode) || 500;
+    if (status >= 400 && status < 500 && err.expose) {
+      logger.warn('bad request', { requestId: req.id, path: req.path, status, error: err.message });
+      return res.status(status).json({ error: err.message, requestId: req.id });
+    }
     logger.error('unhandled route error', { requestId: req.id, path: req.path, error: err.message });
     res.status(500).json({ error: 'Internal server error.', requestId: req.id });
   });

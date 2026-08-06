@@ -5,7 +5,8 @@
   "description": "MYTHOS — Autonomous Entity runtime (evolved from NOVA)",
   "scripts": {
     "start": "node src/main.js",
-    "test": "node --test"
+    "test": "node --test",
+    "e2e": "node test/e2e/run-e2e.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

@@ -3481,3 +3481,60 @@ project-local **headroom** as an optional MCP server for context compression
 (round trip verified through MYTHOS's own MCP client: three tools listed,
 `headroom_stats` returned real figures, `headroom_compress` took a 14,901-char
 JSON payload to 9,346).
+
+---
+
+## Session (2026-08-06, afternoon) — BUG-133: client errors reported as server errors
+
+Found by a new end-to-end harness, not by a person and not by the unit suite.
+Filed as **BUG-133**.
+
+- **BUG-133 (a malformed request body answered HTTP 500 instead of 400):** FIXED
+  (unit-verified, 6 new tests), ROOT-CAUSED, **live-verified against the running
+  server** via `npm run e2e` — 50 pass / 0 fail / 0 skip.
+
+  `POST /api/goals`, `/api/kanban/cards`, `/api/engagements` and
+  `/api/pipeline/capture` all answered **500** to a body of `{"unterminated":`.
+  The root cause was one line in the catch-all error middleware
+  (`server/index.js`, the `app.use((err, req, res, next) => …)` at the bottom of
+  `createServer`): it hardcoded `res.status(500)` and discarded the status the
+  error already carried. Express's body parser raises an `http-errors`-shaped
+  failure — `{ status: 400, type: 'entity.parse.failed', expose: true }` for a
+  malformed body, `{ status: 413, type: 'entity.too.large' }` for one over the
+  `1mb` cap — and every one of those was flattened to "Internal server error."
+
+  Three consequences, none of them cosmetic: a client could not tell "my request
+  was bad" from "the server broke", so retry logic would retry something that can
+  never succeed; every client mistake was logged at **error** level as an
+  *unhandled* fault, which is exactly the signal an operator uses to find real
+  faults; and the 413 case meant an oversized upload looked like a crash.
+
+  The fix keys on **`expose`**, not on status alone. `expose` is the flag
+  http-errors sets to mark a message safe to show a client; keying on status
+  alone would mean any future throw that happens to carry a `.status` leaks its
+  raw `.message`. Two of the six new tests exist only to pin that gate — one
+  proves a plain `Error` still yields a generic 500 with the message withheld,
+  the other proves an error carrying `status: 400` but no `expose` is *not*
+  trusted. Client errors now log at `warn` with the real status, so the error
+  level goes back to meaning what it says.
+
+  **Why 2979 passing tests missed it:** none of them sent a malformed body over
+  real HTTP. This is the same lesson already recorded for the Electron shell —
+  a green unit suite cannot tell you what the running system answers. The gap is
+  now closed by `mythos/test/e2e/run-e2e.mjs` (`npm run e2e`), which boots the
+  real server and the real Electron shell and drives 50 checks across five
+  phases: boot, the full HTTP surface, a real `/ws` subscribe, the HUD in real
+  Chromium (console/page/asset errors), and the Electron shell's `app.ready`
+  invariant. It runs as its own CI job, deliberately separate from the unit job
+  so a flaky boot can never mask the unit baseline.
+
+  It is **not** collected by `node --test` (the file is `.mjs`, not
+  `*.test.js`) — E2E stays opt-in locally. Its `--strict` flag turns an
+  *involuntary* skip (no Chromium, no Electron on the box) into a failure, so a
+  runner that cannot verify something reports red instead of green-having-checked
+  -nothing; an explicitly requested `--skip-ui`/`--skip-electron` stays a skip, so
+  one phase can be dropped in CI without losing the gate. Verified both ways.
+
+  Keyless boot was confirmed for CI (which has no `mythos/.env`) by running the
+  harness with every provider key blanked — preset environment variables win over
+  `process.loadEnvFile`, so this needed no change to the operator's real `.env`.

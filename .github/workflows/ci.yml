@@ -23,3 +23,35 @@ jobs:
           if ($fails -gt 0) { exit 1 }
           $out | node scripts/sync-test-count.js --check
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  # Separate job on purpose: the unit baseline must stay readable even when a
+  # real boot is flaky. A green `node --test` cannot tell you the app STARTS —
+  # a slice once shipped with 2598 passing tests and an Electron shell that died
+  # before app.ready, and BUG-133 (malformed body answered 500) sat behind 2979
+  # passing tests because nothing sent a bad body over real HTTP.
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      # Root deps provide electron for the shell phase; mythos deps provide the server.
+      - run: npm ci
+      - run: npm ci
+        working-directory: mythos
+      - name: Install Chromium for the HUD phase
+        working-directory: mythos
+        run: node node_modules/playwright-core/cli.js install chromium
+      - name: E2E — boot, HTTP surface, WebSocket, HUD, Electron shell
+        working-directory: mythos
+        # --strict fails the job on an involuntary skip, so a runner missing a
+        # browser or electron reports red instead of green-having-checked-nothing.
+        # If one phase turns out to be flaky here, add --skip-ui or --skip-electron
+        # (an explicitly requested skip stays a skip) — never drop --strict.
+        run: npm run e2e -- --strict
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-artifacts
+          path: mythos/test/e2e/artifacts/
+          retention-days: 14

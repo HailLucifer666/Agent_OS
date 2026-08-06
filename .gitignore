@@ -108,3 +108,7 @@ mythos/.tmp-doc-rag-test/
 # providers/local-whisper-stt.js), never committed. See THIRD_PARTY_NOTICES.md.
 /mythos/models/kokoro/
 /mythos/models/whisper/
+
+# E2E run artifacts — screenshots, boot logs and the results JSON that
+# test/e2e/run-e2e.mjs writes on every run. Regenerated per run, never committed.
+/mythos/test/e2e/artifacts/
