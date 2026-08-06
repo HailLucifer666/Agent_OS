@@ -60,7 +60,17 @@ const SCHEMA = {
   // GEMINI_LIVE_VOICE was Aoede (female), so the entity greeted the operator as a
   // British man and then answered as a woman. Change one, change all three, or
   // the split comes straight back.
-  VOICE_TTS_VOICE:          { type: 'string', default: 'en-GB-SoniaNeural' },
+  //
+  // 2026-08-06: retuned from en-GB-SoniaNeural to en-US-AvaNeural. With
+  // VOICE_UNIFIED_LIVE_VOICE (below) the entity now speaks through Gemini Live
+  // (Aoede) on every surface it can, so this edge id is no longer the everyday
+  // voice — it is what the operator hears when Live genuinely cannot open (no
+  // key, S2S off, API down). It therefore has one job: sound like the SAME
+  // person as Aoede rather than like a second character. Aoede is a warm,
+  // US-leaning female; a British voice is the audible mismatch. Paired with
+  // voice-loop.js's PREFERRED_VOICES order — test/voice-identity-consistent.test.js
+  // pins the two together.
+  VOICE_TTS_VOICE:          { type: 'string', default: 'en-US-AvaNeural' },
 
   // Which engine speaks the NON-Live paths (boot greeting, proactive speech,
   // batch replies). 'edge' = edge-tts (~900ms/sentence, free, unofficial
@@ -185,6 +195,21 @@ const SCHEMA = {
   EPISODIC_RETENTION_DAYS:  { type: 'number', default: 30, min: 1 },
   CHAIN_COOLDOWN_MS:        { type: 'number', default: 60000, min: 1000 },
   MODEL_REGISTRY_TTL_MS:    { type: 'number', default: 300000, min: 10000 },
+
+  // Caveman/terse output style (src/core/brain/style-terse.js), comma-separated
+  // lane names. Cuts OUTPUT tokens on prose by dropping articles, filler and
+  // pleasantries while leaving code, commands and error text byte-identical.
+  //
+  // 'voice' is deliberately NOT a default and should not be added: it is spoken
+  // aloud, and clipped fragments sound like a malfunction rather than brevity.
+  // 'build' is also excluded — that lane emits artifact CONTENT (source files),
+  // where a brevity instruction is actively destructive.
+  // 'simple' is the prose-heavy lane (memory consolidation, reflection, goal and
+  // engagement summaries) and is where the savings actually are. Individual
+  // callers on a spoken path opt out per call with think({ terse: false }) —
+  // the boot greeting (server/index.js) does exactly that.
+  // Empty string disables the layer entirely.
+  BRAIN_TERSE_LANES:        { type: 'string', default: 'simple' },
 
   // Autonomy
   AUTONOMOUS_MAX_TIER:      { type: 'number', default: 2, min: 0, max: 4 },
@@ -481,6 +506,26 @@ const SCHEMA = {
   // Comma-separated tool-name allowlist; empty = live-tools.js's curated
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
   LIVE_TOOL_ALLOWLIST:         { type: 'string', default: '' },
+
+  // One voice on every surface (operator report, 2026-08-06: "when mythos boots
+  // there is one voice, when I speak another, when I type another").
+  //
+  // The Live session is created lazily on liveOpen() — the wake-word/cost gate,
+  // deliberately "never at boot, never at connection time" (server/index.js).
+  // That gate is also why the boot greeting and typed-only chat had no Live
+  // session to speak through and fell to edge-tts (and, when the edge-tts
+  // sidecar was still starting, to the browser's own speechSynthesis) — three
+  // engines, three voices, in one session.
+  //
+  // With this true, entity-initiated speech (boot greeting, proactive alerts)
+  // and typed HUD turns OPEN a Live session on demand and speak through it, so
+  // they use the exact GEMINI_LIVE_VOICE the operator hears when speaking.
+  // Honest tradeoff: that is a real Gemini Live session opened without the
+  // operator having said anything, which costs BYO quota. The existing
+  // MAX_IDLE_ROTATIONS_WITHOUT_SPEECH ceiling in live-session.js still applies,
+  // so an unattended session stops rotating rather than burning quota forever.
+  // false = the pre-2026-08-06 behaviour exactly, no code path changed.
+  VOICE_UNIFIED_LIVE_VOICE:    { type: 'bool',   default: true },
 
   // Operator-present trust (leash/index.js, 2026-08-06). Comma-separated tool
   // names ADDED to the built-in trusted list — local, reversible T3 tools that

@@ -124,6 +124,10 @@ directory carries its upstream `LICENSE` alongside its `SKILL.md`.
 | `agent-reach` | https://github.com/Panniantong/Agent-Reach | MIT |
 | `using-superpowers`, `brainstorming`, `writing-plans`, `executing-plans`, `systematic-debugging`, `test-driven-development`, `verification-before-completion` | https://github.com/obra/superpowers | MIT (© 2025 Jesse Vincent) |
 
+`src/core/brain/style-terse.js` is a condensation of the `caveman` skill above,
+rewritten for this repo's brain lanes rather than copied — the skill's own
+`LICENSE` (MIT) in `skills/caveman/` covers the ideas it derives from.
+
 `browser-use`, `desktop-commander`, `strix-security`, `okf-knowledge` and
 `llm-app-patterns` are **written for this repo**, not copied from upstream —
 they describe how MYTHOS drives those tools. No upstream text or code is
@@ -144,6 +148,7 @@ Listed so the licences are on record before any release.
 | Strix | https://github.com/usestrix/strix | Apache-2.0 | `strix` CLI (`pip install strix-agent`; the upstream `curl \| bash` installer is deliberately not used) |
 | Open Knowledge Format | https://github.com/GoogleCloudPlatform/knowledge-catalog | Verify upstream `LICENSE` before shipping an OKF importer/exporter as a product feature | Format only — MYTHOS reads and writes the file shape, linking no upstream code |
 | awesome-llm-apps | https://github.com/Shubhamsaboo/awesome-llm-apps | Apache-2.0 | Reference reading only; nothing installed or imported |
+| headroom | https://github.com/headroomlabs-ai/headroom | Apache-2.0 | MCP stdio server (`headroom mcp serve`) from an operator-installed, project-local venv. Optional; absent → the MCP adapter returns `{ok:false}` and MYTHOS runs uncompressed |
 
 These entries record what upstream states. They are not a legal conclusion —
 the licensing review before any paid release is a separate, tracked gate.

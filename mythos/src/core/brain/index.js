@@ -85,6 +85,13 @@ function createBrain({ config, bus, identity }) {
   const chain = require('./chain');
   const spend = require('./spend');
   const version = require('../identity/version');
+  const { TERSE_STYLE } = require('./style-terse');
+
+  // Lanes that get the terse/caveman output style. Parsed once at construction
+  // (the config object is frozen at boot, so a per-call re-read would buy
+  // nothing). Empty/unset disables the layer.
+  const terseLanes = String((config && config.BRAIN_TERSE_LANES) || '')
+    .split(',').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
 
   // Resolve the version context line once: config override wins, else auto-detect.
   // This runs at brain construction (boot), not per-call — the context is stable
@@ -94,7 +101,11 @@ function createBrain({ config, bus, identity }) {
     : version.contextLine();
 
   return {
-    async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona }) {
+    // `terse` is a per-call OPT-OUT, not an opt-in: pass false from any caller
+    // whose output is spoken aloud even though its lane is in BRAIN_TERSE_LANES
+    // (the boot greeting uses lane 'simple' and is read out, so it passes false).
+    // Undefined means "follow the lane config".
+    async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona, terse }) {
       // 1. Embed lane is placeholder — clean offline
       if (lane === 'embed') {
         return { content: null, offline: true, lane };
@@ -135,6 +146,17 @@ function createBrain({ config, bus, identity }) {
         }
         msgs = [
           { role: 'system', content: personaLine },
+          ...msgs
+        ];
+      }
+
+      // 2b. Terse/caveman output style. AFTER the persona block and prepended,
+      // so it sits alongside the persona system message rather than in front of
+      // a schemaHint that must keep priority. Applies to configured lanes only,
+      // and never when the caller explicitly opted out.
+      if (terse !== false && terseLanes.indexOf(lane) !== -1) {
+        msgs = [
+          { role: 'system', content: TERSE_STYLE },
           ...msgs
         ];
       }

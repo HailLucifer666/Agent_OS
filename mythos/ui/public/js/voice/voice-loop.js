@@ -166,21 +166,35 @@ export function createChunkCompletion({ advance, fallback }) {
 // as a woman. All three are female now; this picks the closest available match
 // instead of taking whatever the OS hands over.
 //
+// 2026-08-06: retuned from en-GB-first to en-US-first. The entity now speaks
+// through Gemini Live (Aoede) on every surface it can — boot greeting and typed
+// turns included (VOICE_UNIFIED_LIVE_VOICE) — so this list's job is no longer
+// "pair with a British edge-tts voice" but "sound like Aoede when neither Live
+// nor edge-tts is available". Aoede is US-leaning, so is en-US-AvaNeural, so is
+// this list. This surface can never literally BE Aoede: speechSynthesis has no
+// access to Gemini. Nearest match is the ceiling here.
+//
 // Pure and exported so it can be unit-tested against fixture voice lists —
 // getVoices() is unavailable and unstubbable in the test runner.
 const PREFERRED_VOICES = [
-  // en-GB female first: pairs with edge-tts en-GB-SoniaNeural.
-  'Sonia', 'Libby', 'Hazel', 'Susan',
-  // then en-US female, then any known-female name.
-  'Aria', 'Jenny', 'Michelle', 'Zira', 'Samantha', 'Victoria',
+  // en-US female first: pairs with edge-tts en-US-AvaNeural, which in turn is
+  // the closest match to Gemini Live's Aoede.
+  'Ava', 'Aria', 'Jenny', 'Michelle', 'Emma',
+  // then other known-female names, en-GB included — a British voice is a worse
+  // match than a US one here, but far better than the OS default (male).
+  'Samantha', 'Zira', 'Victoria', 'Sonia', 'Libby', 'Hazel', 'Susan',
 ];
+// Locale preferred when the same name exists in more than one variant. Matches
+// PREFERRED_VOICES' leading block and VOICE_TTS_VOICE's locale — change all
+// three together (test/voice-identity-consistent.test.js pins them).
+const PREFERRED_LANG = 'en-us';
 export function pickSpeechVoice(voices) {
   if (!Array.isArray(voices) || voices.length === 0) return null;
   for (const wanted of PREFERRED_VOICES) {
-    // Prefer an en-GB match for this name, then the name anywhere.
-    const gb = voices.find((v) => v && typeof v.name === 'string' && v.name.includes(wanted)
-      && typeof v.lang === 'string' && v.lang.toLowerCase().startsWith('en-gb'));
-    if (gb) return gb;
+    // Prefer the preferred-locale match for this name, then the name anywhere.
+    const local = voices.find((v) => v && typeof v.name === 'string' && v.name.includes(wanted)
+      && typeof v.lang === 'string' && v.lang.toLowerCase().startsWith(PREFERRED_LANG));
+    if (local) return local;
     const any = voices.find((v) => v && typeof v.name === 'string' && v.name.includes(wanted));
     if (any) return any;
   }

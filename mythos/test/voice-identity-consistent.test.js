@@ -22,6 +22,15 @@
 // it asserts the two things that are actually checkable: the shipped defaults are
 // the specific voices chosen as a matched set, and the browser fallback makes a
 // deliberate choice instead of deferring to the OS.
+//
+// UPDATED 2026-08-06, after the operator reported the same class of fault again:
+// "when mythos boots there is one voice, when I speak it is another, and when I
+// type it replies with another." Matched *gender* was not enough — three engines
+// still meant three people. The real fix is VOICE_UNIFIED_LIVE_VOICE, which makes
+// the boot greeting and typed turns speak through the SAME Gemini Live session as
+// spoken conversation, so engines (1) and (3) are now fallbacks rather than
+// everyday paths. Their voices were retuned from en-GB to en-US to sit closer to
+// Aoede, which is what this file now pins.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -32,7 +41,7 @@ const { SCHEMA } = require('../src/core/config/schema');
 
 // The matched set. Changing any of these is a deliberate act that should also
 // update the other two — that is the whole point of pinning them together here.
-const EXPECTED_EDGE_TTS_VOICE = 'en-GB-SoniaNeural';
+const EXPECTED_EDGE_TTS_VOICE = 'en-US-AvaNeural';
 const EXPECTED_LIVE_VOICE = 'Aoede';
 
 // Microsoft Neural voice ids that are male. Not exhaustive — it only has to
@@ -54,7 +63,7 @@ describe('voice identity: one entity, one voice, across all three engines', () =
     assert.equal(SCHEMA.GEMINI_LIVE_VOICE.default, EXPECTED_LIVE_VOICE);
   });
 
-  test('both engine defaults are en-GB/female-matched as a SET, not independently', () => {
+  test('both engine defaults are female-matched as a SET, not independently', () => {
     // The failure this guards is subtle: each module was individually defensible.
     // Only the pair is wrong. Assert the pair.
     const pair = [SCHEMA.VOICE_TTS_VOICE.default, SCHEMA.GEMINI_LIVE_VOICE.default];
@@ -91,14 +100,25 @@ describe('pickSpeechVoice()', () => {
 
   const V = (name, lang) => ({ name, lang });
 
-  test('prefers an en-GB female voice over an en-US one with the same rank', async () => {
+  test('prefers a higher-ranked en-US female voice over a lower-ranked en-GB one', async () => {
     const pick = await load();
     const chosen = pick([
       V('Microsoft David - English (United States)', 'en-US'),
       V('Microsoft Aria Online (Natural) - English (United States)', 'en-US'),
       V('Microsoft Sonia Online (Natural) - English (United Kingdom)', 'en-GB'),
     ]);
-    assert.match(chosen.name, /Sonia/);
+    // Aria outranks Sonia since 2026-08-06 — the fallback now pairs with
+    // en-US-AvaNeural/Aoede, not en-GB-SoniaNeural.
+    assert.match(chosen.name, /Aria/);
+  });
+
+  test('prefers the preferred locale when the SAME name exists in two variants', async () => {
+    const pick = await load();
+    const chosen = pick([
+      V('Microsoft Aria Online (Natural) - English (United Kingdom)', 'en-GB'),
+      V('Microsoft Aria Online (Natural) - English (United States)', 'en-US'),
+    ]);
+    assert.equal(chosen.lang, 'en-US');
   });
 
   test('falls further down the list when the top choice is absent', async () => {

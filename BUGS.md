@@ -9,7 +9,13 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-06 — Session B follow-up: BUG-117..BUG-126 (8 fixed
+Last updated: 2026-08-06 (morning) — BUG-132, "three voices in one session":
+the boot greeting, spoken turns and typed turns each answered in a different
+voice. Third visit from this failure class, first time the root cause (the Live
+session's wake-word-only open gate) was addressed instead of the symptom. See
+the LAST section; its live gate has NOT been run.
+
+Previous entry: 2026-08-06 — Session B follow-up: BUG-117..BUG-126 (8 fixed
 unit-level, 3 instrumented-not-root-caused) plus the BUG-112 residual, all in
 the LAST section with their own live gate. **This pass also reconciled the whole
 registry:** the mid-July Priority Queue had gone stale — fifteen items were
@@ -3366,3 +3372,112 @@ each ≥3 runs — one lucky reply has hidden flakiness in this repo before.
 Also unverified: **the Electron shell has not been started since these changes.**
 `server/index.js` and the Live path were touched; a green suite has proven before
 that it cannot tell you the app boots.
+
+---
+
+## Session (2026-08-06, morning) — BUG-132: three voices in one session
+
+Operator report, verbatim: *"When mythos boots up there is a one voice, when i
+speak it is there is another voice and when i type it on the chat bar it replies
+with another voice."* Filed as **BUG-132**.
+
+- **BUG-132 (boot / spoken / typed each answer in a different voice):** FIXED
+  (unit-verified, 5 new tests), ROOT-CAUSED, **live-verified against the real
+  Gemini Live API** — with one honest limit stated below.
+
+  This is the third visit from the same failure class and the first time the
+  root cause was addressed rather than the symptom. BUG-059/060/061 fixed
+  "two voices speaking simultaneously" by routing proactive speech into an open
+  Live session; BUG-129 did the same for typed chat; the 2026-07-31 pass matched
+  the voice IDs across the three engines so they were at least the same gender.
+  Every one of those was correct and none of them was enough, because they all
+  begin with *"if a Live session is open"* — and `liveOpen()` is the wake-word
+  gate, documented in `server/index.js` as running "never at boot, never at
+  connection time". Before the operator speaks, there is no session to join.
+
+  So: the boot greeting fires 2.5s after the first WS connection and fell to the
+  edge-tts chain (voice 1 — or the browser's own `speechSynthesis`, if the
+  edge-tts sidecar on :5050 was still starting, which at boot it usually is).
+  Typing without having spoken hit the same batch path (voice 2). Speaking
+  opened Live and answered as `GEMINI_LIVE_VOICE` (voice 3). Three engines,
+  three voices, exactly as reported, with nothing failing anywhere.
+
+  **The fix** is `liveForSpeech()` in the connection closure: entity-initiated
+  speech and typed turns now OPEN a Live session on demand and speak through it,
+  so all three surfaces are literally the same voice. The pre-existing "is Live
+  open?" branches in `proactiveSpeak()` and the typed-utterance handler were
+  already correct — they are simply taken now. Every fallback below them is
+  untouched and still runs whenever Live genuinely cannot open (no
+  `GOOGLE_API_KEY`, `VOICE_S2S_ENABLED=false`, `VOICE_UNIFIED_LIVE_VOICE=false`,
+  or a failed open), which the tests pin: the batch path must still answer and
+  no session may be opened in any of those three cases.
+
+  **The cost is real and deliberate:** a metered Live session can now open
+  without the operator having said anything. `VOICE_UNIFIED_LIVE_VOICE=false` is
+  a zero-code rollback, and `live-session.js`'s existing
+  `MAX_IDLE_ROTATIONS_WITHOUT_SPEECH` ceiling still stops an unattended session
+  rotating forever.
+
+  Secondary, for when Live is unavailable: the fallback voices were retuned from
+  en-GB to en-US (`VOICE_TTS_VOICE` → `en-US-AvaNeural`, and `voice-loop.js`'s
+  `PREFERRED_VOICES` reordered to match) so they sit near Aoede rather than
+  sounding like a second character. `speechSynthesis` can never literally BE
+  Aoede — no browser-side access to Gemini — so "nearest match" is the ceiling
+  on that surface, not a compromise that could be tightened later.
+
+  **Files:** `mythos/server/index.js` (`liveForSpeech()` + `proactiveSpeak()` +
+  the typed-utterance branch), `mythos/src/core/config/schema.js`,
+  `mythos/.env.example`, `mythos/ui/public/js/voice/voice-loop.js`,
+  `mythos/test/unified-live-voice.test.js` (new),
+  `mythos/test/voice-identity-consistent.test.js` (the paired-voice invariant,
+  updated in the same commit as the defaults it pins).
+
+### Live gate for BUG-132 — RUN 2026-08-06, against the real API
+
+Booted `node src/main.js` with the operator's real `.env` and drove a WS client
+through both surfaces. Observed:
+
+- **Boot greeting:** `live-state: opening -> open` followed by **32
+  `live-audio-out` frames** and the greeting itself in the assistant
+  transcript ("Indeed, quite neat, sir. Always good to have options lined
+  up..."). The greeting opened the Live session and Gemini spoke it. Before this
+  fix there was no session at that moment and it could only have come from the
+  TTS chain.
+- **Typed turn, having never spoken:** `done{reqId:'probe-typed-1',
+  routedToLive:true, say:''}` plus further `live-audio-out` frames and the
+  transcript `assistant: acknowledged`. The typed reply came back on the Live
+  audio path, same session, same voice.
+
+**What this does NOT prove, stated plainly:** a WS probe cannot hear. It proves
+both surfaces are served by the same Gemini Live session — which is what makes
+them the same voice, since one session has one `GEMINI_LIVE_VOICE` — but the
+operator should still confirm by ear, and step 4 below is untested.
+
+One artefact worth knowing before reading a future probe log: a proactive email
+announcement in the same window DID take the TTS path (one `speech-chunk`). That
+is the probe's fault, not the code's — `proactiveSpeak` targets `lastActiveWs`,
+which is set by any inbound message, and the probe never sent one. The real HUD
+sends `{type:'subscribe'}` on connect (`ui/public/js/ws.js:52,110`), so it always
+has a target. A silent client is not a case that occurs in normal use.
+
+Still to confirm by ear:
+
+1. Boot greeting, typed reply and spoken reply are audibly the same voice.
+2. Set `VOICE_S2S_ENABLED=false` and restart: all three surfaces must now match
+   *each other* on the edge-tts/browser fallback voice.
+
+Note for that second check on THIS machine: `.env` already sets
+`VOICE_TTS_CHAIN=gemini,edge,piper`, and boot resolved to `gemini-tts`
+(logged `tts.resolved provider=gemini-tts`). Gemini TTS uses the same voice name
+as Live, so the fallback matches — but it is the ~10-request/day model, so once
+that quota is spent the chain fails over to edge and the fallback voice changes
+mid-session. That is the pre-existing reason `VOICE_TTS_CHAIN=gemini` was
+rejected as the primary fix, and it is why the edge voice was retuned rather
+than left British.
+
+Also shipped this session, unrelated to the voice defect: `BRAIN_TERSE_LANES`, a
+per-lane terse ("caveman") output style on the brain's non-spoken lanes, and
+project-local **headroom** as an optional MCP server for context compression
+(round trip verified through MYTHOS's own MCP client: three tools listed,
+`headroom_stats` returned real figures, `headroom_compress` took a 14,901-char
+JSON payload to 9,346).

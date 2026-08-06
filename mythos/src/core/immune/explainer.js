@@ -44,6 +44,10 @@ function createExplainer({ bus, brain, memory, config, logger }) {
 
     var result = await brain.think({
       lane: 'simple',
+      // Opt out of BRAIN_TERSE_LANES — this explanation is SPOKEN via proactive
+      // speech (see main.js's 'immune-explainer' stage), and the terse style is
+      // for written prose only.
+      terse: false,
       messages: [{
         role: 'user',
         content: [

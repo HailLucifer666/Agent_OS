@@ -857,7 +857,21 @@ function createServer(deps) {
     // (src/core/voice/live-tool-adapter.js ~line 232) so Gemini itself speaks
     // it, and skip edge-tts entirely for this connection. No Live session open
     // (the pre-existing/legacy path) behaves exactly as before.
-    const liveSession = (targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
+    // 2026-08-06: try to OPEN one first (VOICE_UNIFIED_LIVE_VOICE). Without
+    // this, entity-initiated speech — the boot greeting above all, which fires
+    // 2.5s after the first connection, long before any wake word — had no Live
+    // session to use and came out of edge-tts in a different voice than the
+    // conversation that followed. Returns null when unified voice is off, S2S
+    // is off, there is no key, or the open fails; every one of those falls
+    // through to the unchanged edge-tts path below.
+    let liveSession = (targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
+    // readyState guard: targetWs defaults to lastActiveWs, which may be a tab
+    // that has since closed — opening a metered Gemini session to speak into a
+    // dead connection is pure waste.
+    if (!(liveSession && liveSession.isOpen()) && targetWs && targetWs.readyState === 1
+        && typeof targetWs.liveForSpeech === 'function') {
+      try { liveSession = await targetWs.liveForSpeech(); } catch (_) { /* stays on the TTS path */ }
+    }
     if (liveSession && liveSession.isOpen()) {
       // BUG-117: same self-describing prefix the tool-outcome pushes use — a
       // proactive alert is even easier to misread as the operator speaking.
@@ -1147,6 +1161,10 @@ function createServer(deps) {
               'Reply with ONLY the spoken greeting: one to three short sentences, plain natural speech, no markdown, no quotes.',
           }],
           source: 'boot-greeting',
+          // Opt out of BRAIN_TERSE_LANES: this lane is 'simple' (which the terse
+          // style covers by default) but the result is SPOKEN, and caveman-terse
+          // fragments read aloud sound like a fault, not brevity.
+          terse: false,
         }),
         new Promise((resolve) => {
           const t = setTimeout(() => resolve(null), 12000);
@@ -1463,6 +1481,50 @@ function createServer(deps) {
       // Honest-inert: never claim S2S is up when it isn't.
       if (!ok) send({ type: 'live-state', state: 'closed', reason: 'open-failed' });
     }
+
+    // ---- One voice on every surface (operator report, 2026-08-06) ----
+    // "When mythos boots there is one voice, when I speak another, when I type
+    // another." All three were real and all three came from the same root: the
+    // Live session is opened LAZILY by liveOpen() above (the wake-word/cost
+    // gate), so entity-initiated speech and typed-only turns had no Live session
+    // to speak through and fell to edge-tts — or, while the edge-tts sidecar was
+    // still starting, to the browser's own speechSynthesis. Three engines, three
+    // voices, one session.
+    //
+    // This returns an OPEN Live session for this connection, opening one on
+    // demand if that is allowed, or null. Callers that already had an "is Live
+    // open?" branch (proactiveSpeak, the typed-utterance handler) now call this
+    // first, so the branch they already had is simply taken more often — the
+    // edge-tts path below them is untouched and is still what runs when this
+    // returns null.
+    //
+    // Deliberately NOT the same thing as removing the lazy gate: mic capture is
+    // still wake-word gated, and VOICE_UNIFIED_LIVE_VOICE=false restores the
+    // previous behaviour exactly. Cost is real and acknowledged — a session may
+    // now open without the operator having spoken — but live-session.js's
+    // MAX_IDLE_ROTATIONS_WITHOUT_SPEECH ceiling still stops an unattended
+    // session rotating forever.
+    async function liveForSpeech() {
+      if (!config.VOICE_UNIFIED_LIVE_VOICE) return null;
+      if (!config.VOICE_S2S_ENABLED) return null;
+      // No key -> open() would fail anyway; skip the attempt and the log noise.
+      // process.env, not config: GOOGLE_API_KEY is not a schema key, and
+      // live-session.js's open() reads it from the environment too (:207).
+      if (!process.env.GOOGLE_API_KEY) return null;
+      if (liveSession && liveSession.isOpen()) return liveSession;
+      try {
+        await liveOpen();
+      } catch (err) {
+        // Never let a failed open break the speech itself — the caller falls
+        // through to the TTS chain exactly as before.
+        logger.warn('live-for-speech.open-failed', { error: err.message });
+        return null;
+      }
+      return (liveSession && liveSession.isOpen()) ? liveSession : null;
+    }
+    // proactiveSpeak() lives outside this closure — expose it the same way
+    // ws.getLiveSession is (BUG-060), as a getter re-read on every call.
+    ws.liveForSpeech = liveForSpeech;
 
     // Initial entity-state snapshot: lifecycle.* events are broadcast-only, so a
     // client connecting AFTER boot would otherwise sit on 'booting' forever.
@@ -1978,12 +2040,30 @@ function createServer(deps) {
       // The empty `done` releases the HUD's reqId handler (deliverReply treats
       // a no-say done as finishTurn); the typed message's own caption is drawn
       // client-side by compose-bar, so nothing is lost by not answering here.
+      // 2026-08-06: typing without ever having spoken left `liveSession` null,
+      // so this fell to the batch/edge-tts path and answered in a different
+      // voice than the spoken conversation. Open one on demand first
+      // (VOICE_UNIFIED_LIVE_VOICE); the batch fallback below is unchanged and
+      // still runs whenever a Live session genuinely isn't available.
       if (msg.type === 'utterance') {
         if (liveSession && liveSession.isOpen()) {
           liveSession.sendText(String(msg.text || ''));
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
-          queueTurn(function() { return handleUtterance(msg); });
+          const typedText = String(msg.text || '');
+          liveForSpeech().then((live) => {
+            if (live && live.isOpen()) {
+              live.sendText(typedText);
+              send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
+            } else {
+              queueTurn(function() { return handleUtterance(msg); });
+            }
+          }).catch(() => {
+            // liveForSpeech() swallows its own failures, but an unexpected
+            // rejection here would strand the HUD's reqId forever — the turn
+            // must always end up somewhere.
+            queueTurn(function() { return handleUtterance(msg); });
+          });
         }
       }
       else if (msg.type === 'vision-query') handleVisionQuery(msg);
