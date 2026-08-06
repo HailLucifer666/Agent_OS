@@ -142,8 +142,18 @@ function createServer(deps) {
       if (persona) parts.push(persona);
     } catch (err) { logger.warn('live.persona-compose-failed', { error: err.message }); }
     try { parts.push(version.contextLine()); } catch (err) { logger.warn('live.version-compose-failed', { error: err.message }); }
+    // BUG-136: this frame is composed once per open()/rotation and can then ride
+    // unrefreshed for up to ~10 minutes (Gemini Live's own connection ceiling) —
+    // any per-turn-fresh value baked in here goes stale but keeps LOOKING live to
+    // the model. The batch path (voice-agent.js) calls getCapabilityDigest() fresh
+    // every turn and is genuinely live; this is the only composition point where
+    // it is not, so it asks for the labelled `asOf` form instead of the "live —
+    // trust this" default. `version.contextLine()` and the skills catalog below
+    // share the same trap and are not yet labelled — the local time below is the
+    // one prior fix for this class (refreshed on every open(), with its own
+    // comment explaining why).
     try {
-      const digest = getCapabilityDigest ? getCapabilityDigest() : null;
+      const digest = getCapabilityDigest ? getCapabilityDigest({ asOf: 'session-start' }) : null;
       if (digest) parts.push(digest);
     } catch (err) { logger.warn('live.capability-digest-failed', { error: err.message }); }
     try { parts.push(skillsLoader.catalogBlock()); } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/main.js",
     "test": "node --test",
-    "e2e": "node test/e2e/run-e2e.mjs"
+    "e2e": "node scripts/e2e/run-e2e.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",

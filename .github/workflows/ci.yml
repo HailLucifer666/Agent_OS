@@ -53,5 +53,5 @@ jobs:
         if: always()
         with:
           name: e2e-artifacts
-          path: mythos/test/e2e/artifacts/
+          path: mythos/scripts/e2e/artifacts/
           retention-days: 14

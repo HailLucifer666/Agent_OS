@@ -9,7 +9,21 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-06 (morning) — BUG-132, "three voices in one session":
+Last updated: 2026-08-06 (evening) — a deep E2E audit of this registry, in the
+LAST section: BUG-134..BUG-136. No claimed fix was missing from the code, but
+the full `node --test` baseline was **1 FAIL** because Node's discovery DID
+collect `test/e2e/run-e2e.mjs` (BUG-134, contradicting the BUG-133 entry) and
+that harness failed ~40% of runs on a third-party 429 it should never gate on
+(BUG-135). BUG-136 gives BUG-046 — the oldest open defect here — a mechanical
+root cause at last.
+
+**Update (2026-08-07):** BUG-134 and BUG-135 are FIXED and unit/e2e-verified
+(baseline now **3010 tests, 3009 pass, 0 fail, 1 skip**, `npm run e2e` clean
+x3 plus one `--strict` run). BUG-136 is FIXED at the unit level only — its
+attached BUG-046 live conversational pass still needs an operator at a mic
+and is NOT claimed here. See each entry below for detail.
+
+Previous entry: 2026-08-06 (morning) — BUG-132, "three voices in one session":
 the boot greeting, spoken turns and typed turns each answered in a different
 voice. Third visit from this failure class, first time the root cause (the Live
 session's wake-word-only open gate) was addressed instead of the symptom. See
@@ -3521,20 +3535,420 @@ Filed as **BUG-133**.
   **Why 2979 passing tests missed it:** none of them sent a malformed body over
   real HTTP. This is the same lesson already recorded for the Electron shell —
   a green unit suite cannot tell you what the running system answers. The gap is
-  now closed by `mythos/test/e2e/run-e2e.mjs` (`npm run e2e`), which boots the
-  real server and the real Electron shell and drives 50 checks across five
+  now closed by `mythos/scripts/e2e/run-e2e.mjs` (`npm run e2e`), which boots
+  the real server and the real Electron shell and drives 50 checks across five
   phases: boot, the full HTTP surface, a real `/ws` subscribe, the HUD in real
   Chromium (console/page/asset errors), and the Electron shell's `app.ready`
   invariant. It runs as its own CI job, deliberately separate from the unit job
   so a flaky boot can never mask the unit baseline.
 
-  It is **not** collected by `node --test` (the file is `.mjs`, not
-  `*.test.js`) — E2E stays opt-in locally. Its `--strict` flag turns an
-  *involuntary* skip (no Chromium, no Electron on the box) into a failure, so a
-  runner that cannot verify something reports red instead of green-having-checked
-  -nothing; an explicitly requested `--skip-ui`/`--skip-electron` stays a skip, so
-  one phase can be dropped in CI without losing the gate. Verified both ways.
+  **Correction (2026-08-06 evening, BUG-134):** the claim below that this
+  harness is "not collected by `node --test`" because its file is `.mjs` was
+  **false** — Node's test discovery is directory-based: every `.js`/`.cjs`/
+  `.mjs` file under a directory named `test` is collected regardless of name
+  or extension. It genuinely ran inside the unit gate on every commit until
+  BUG-134's fix moved it to `mythos/scripts/e2e/run-e2e.mjs`, outside any
+  `test/` tree, which is what actually keeps `node --test` from collecting it.
+  Its `--strict` flag turns an *involuntary* skip (no Chromium, no Electron on
+  the box) into a failure, so a runner that cannot verify something reports red
+  instead of green-having-checked-nothing; an explicitly requested
+  `--skip-ui`/`--skip-electron` stays a skip, so one phase can be dropped in CI
+  without losing the gate. Verified both ways.
 
   Keyless boot was confirmed for CI (which has no `mythos/.env`) by running the
   harness with every provider key blanked — preset environment variables win over
   `process.loadEnvFile`, so this needed no change to the operator's real `.env`.
+
+---
+
+## Session (2026-08-06, evening) — deep E2E audit of this registry: BUG-134..BUG-136
+
+An independent audit pass, run against a real boot rather than against this
+file's own claims. Method, so it can be repeated: full `node --test`; `npm run
+e2e` five times (flake hunting, not one lucky run); every one of the 98 test
+files this registry cites checked for existence on disk; the load-bearing
+markers of the recently-fixed code (`Await-WinRTOperation`, `$TargetPid`,
+`set_app_volume`, `NativeWindowHandle`, `liveForSpeech`, `TOOL_ACK_DEADLINE_MS`,
+`LIVE_TURN_STALL_MS`, `SYSTEM_NOTICE_PREFIX`, the `expose` gate) grepped in
+place; a real HUD driven in real Chromium against a real server with every
+request and console message recorded.
+
+**Verdict on the question "is everything in this file resolved?" — no, and the
+file is honest about most of it.** No claimed fix was found missing from the
+code, no cited test file was missing, and nothing regressed. What the audit adds
+is three defects this registry did not know about, all in the *gates* rather
+than the product, plus one mechanism that explains the oldest open defect here.
+
+**Measured state at commit `8ea27fd`:** full `node --test` → **2986 tests, 2984
+pass, 1 FAIL, 1 skip**. The single failure is `test/e2e/run-e2e.mjs` — see
+BUG-134 and BUG-135, which are the same event seen from two sides. `npm run e2e`
+standalone: 50 pass / 0 fail on 3 of 5 runs, 49/1 on 2 of 5.
+
+- **BUG-134 (`node --test` DOES collect `test/e2e/run-e2e.mjs`, so the unit gate
+  now boots Electron and reaches the public internet):** FIXED (unit-verified),
+  ROOT-CAUSED. The harness moved to `mythos/scripts/e2e/run-e2e.mjs`, outside
+  any `test/` tree, with `npm run e2e`, the CI `e2e` job's artifact path, and
+  `.gitignore` all repointed. A new guard test
+  (`test/test-dir-hygiene.test.js`) walks `mythos/test/` recursively and fails
+  if any non-`*.test.js` file appears there without being on an explicit
+  allowlist, so the next harness dropped in that tree is caught by a test
+  instead of by a red commit gate. Full `node --test` after the move: **3010
+  tests, 3009 pass, 0 fail, 1 skip** — `run-e2e.mjs` no longer appears in the
+  run at all.
+  The BUG-133 entry above states plainly: *"It is not collected by `node --test`
+  (the file is `.mjs`, not `*.test.js`) — E2E stays opt-in locally."* That is
+  false on this Node (v26.1.0), and was already false on Node 20: the default
+  discovery patterns include **every file under a directory named `test`**,
+  regardless of name or extension, not only `*.test.js`. The proof is in this
+  repo's own numbers: ROADMAP.md's auto-synced line reads 2986 tests where the
+  unit files alone give 2985; that +1 IS the e2e file counted as one test.
+  **Where it breaks, concretely.** `.githooks/pre-commit` and CI's `test` job
+  both run bare `node --test` and block on `# fail > 0`. So every commit on this
+  machine now (a) boots the real server, the real Electron shell and real
+  Chromium inside the *unit* gate, (b) takes ~62s longer, and (c) fails whenever
+  the e2e harness fails — which it does ~40% of the time for a reason that has
+  nothing to do with the committed code (BUG-135). The CI `e2e` job was made
+  separate *on purpose* ("the unit baseline must stay readable even when a real
+  boot is flaky"); that separation does not exist in fact. In CI the unit job
+  installs neither Chromium nor root-level Electron, so the same file runs there
+  as a mostly-skipping no-op that still boots a server — green-having-checked-
+  nothing, the exact failure mode `--strict` was added to prevent.
+  **When it breaks again.** Any future harness dropped anywhere under
+  `mythos/test/` is silently adopted by the unit gate — fixtures, helper
+  scripts, a `.mjs` probe, anything. Node's pattern is directory-based, so
+  "name it something that is not a test" does not protect you.
+  **Fix, in order:** (1) move the harness out of the discovered tree —
+  `mythos/scripts/e2e/run-e2e.mjs` — and repoint `npm run e2e`, the CI job and
+  the docs; nothing about the harness itself needs to change. (2) Re-baseline
+  the count with `node scripts/sync-test-count.js --write` afterwards, since the
+  +1 disappears with it. (3) Correct the BUG-133 paragraph, which is the piece
+  of prose that will otherwise re-teach the wrong rule to the next session.
+  A guard test that asserts no non-`*.test.js` file exists under `test/` would
+  pin it, and is cheap.
+
+- **BUG-135 (the E2E "no console errors" check counts third-party origins, so a
+  public rate limit turns the gate red):** FIXED (unit/live-verified), ROOT-
+  CAUSED. The console and `requestfailed` handlers in
+  `mythos/scripts/e2e/run-e2e.mjs` now split on origin — same-origin (`http://
+  127.0.0.1:<port>`) failures still fail the run exactly as before; a foreign-
+  origin console error / failed request becomes one visible, non-gating
+  `[NOTE]` line naming the URL instead. The weather widget itself is
+  untouched — its ip-api.com fallback still handles the ipapi.co 429 exactly
+  as it did. Verified with `npm run e2e` x3 (50/0/0 each) and once with
+  `--strict` (still 50/0/0), confirming involuntary skips still fail loudly
+  under `--strict` while foreign-origin notes never gate.
+  `run-e2e.mjs:289` pushes every `console` message of type `error` from any
+  origin into `consoleErrors`, and phase D fails if the array is non-empty.
+  **Proven origin, not inferred:** driving the HUD five times against a real
+  server and logging `msg.location()` produced, on 2 of 5 loads,
+  `429 https://ipapi.co/json/` and nothing else. That URL is the weather
+  widget's keyless IP-geolocation fallback (`ui/public/js/widgets/kinds/weather.js:42`,
+  the BUG-043 fix), which fires whenever `navigator.geolocation` is unavailable
+  — i.e. **always** in headless Chromium. ipapi.co throttles bursts, and a
+  CI/e2e loop is a burst. The rate limit is on their side; nothing in MYTHOS is
+  broken by it, and the widget's own `ip-api.com` fallback handles it correctly.
+  The bug is that a free public endpoint's quota is wired into this repo's
+  commit gate.
+  **When it breaks again.** Any third-party the HUD touches — news images, the
+  reverse-geocoder (BigDataCloud), a CDN — can fail the same way, and the
+  failure text (`Failed to load resource ... 429 ()`) names no URL, so the next
+  reader sees an unattributable red. It is also load-bearing on network
+  presence: an offline machine fails phase D rather than skipping it.
+  **Fix:** scope the console/`requestfailed` assertions to the harness's own
+  origin (`http://127.0.0.1:${PORT}`), and report foreign-origin errors as a
+  separate non-fatal *note* so they stay visible without gating. Keep
+  same-origin strictness exactly as it is — that is the part that caught real
+  defects. Do NOT "fix" it by making the widget quieter: the request is
+  legitimate and the console error is Chromium's, not the app's.
+
+- **BUG-136 (the Live session's CAPABILITY SNAPSHOT is frozen at open while
+  telling the model to trust it over any assumption — the mechanism behind
+  BUG-046):** FIXED (unit-verified only — NOT live-verified), ROOT-CAUSED.
+  `summaryDigest()` gained an `asOf` option (default output byte-identical,
+  pinned by `test/voice-precontext.test.js`); `getCapabilityDigest()`
+  (`src/main.js:604`) forwards it; `buildLiveSystemInstruction()`
+  (`server/index.js:146`) is now the only caller that passes `{ asOf:
+  'session-start' }`, so the Live setup frame states its snapshot may be
+  stale instead of claiming to be live. The batch path
+  (`voice-agent.js:687`) is unchanged and stays genuinely fresh-per-turn. RULES
+  gained an `AVAILABILITY RULE` (negative mirror of HONESTY RULE): never call
+  an adapter offline/broken without a tool result from THIS turn; LIMITS RULE
+  narrowed to say it governs drives/folders/apps only, not adapter
+  availability. New `test/bug-136-live-capability-freshness.test.js` pins all
+  four claims, including a behavioural assertion through `createServer`'s
+  `getCapabilityDigest` seam (reusing `test/server-live-wiring.test.js`'s
+  `createLiveSocket` setup) that the Live composition point actually calls
+  with `{ asOf: 'session-start' }`. **What this does NOT prove:** BUG-046's
+  live conversational pass (`list_windows` with pc-child up/down, sampling
+  ≥3 turns for a real audit row each time) still needs an operator at a mic —
+  out of scope for this fix and NOT claimed here.
+  BUG-046 has sat here since 2026-07-24 as "prompt behaviour, needs a guided
+  operator session", on the theory that the voice agent's tone is what makes it
+  say *"PC automation is offline, sir"* without calling anything. There is a
+  mechanical cause, and it is specific. `src/main.js:604` builds the digest from
+  live adapter reads and `identity/capabilities.js:182` labels it
+  **"CAPABILITY SNAPSHOT (live — trust this over any assumption)"**, listing
+  `pc-child ONLINE|OFFLINE, cua-driver …, android-child …, browser-agent …`.
+  On the batch path that is genuinely live — `voice-agent.js:687` re-reads it
+  every turn. On the Live/S2S path it is composed by
+  `buildLiveSystemInstruction()` (`server/index.js:134`) and enters the
+  **setup frame**, so it is refreshed only on `open()`/rotation — up to ~10
+  minutes stale, and stale in a prompt that orders the model to prefer it to
+  reality. A model told "trust this" and asked "list my open windows" behaves
+  exactly as BUG-046 recorded: it answers from the snapshot and calls no tool,
+  producing zero audit rows.
+  **BUG-132 made this materially worse, on purpose and unavoidably.**
+  `liveForSpeech()` now opens a Live session for the boot greeting ~2.5s after
+  the first WS connection — the moment when adapter status is at its least
+  settled. This machine's boot log shows `browser-agent connect failed …
+  ECONNREFUSED 127.0.0.1:9222` at +1.4s and every 15s after, so a session opened
+  at +2.5s freezes `browser-agent OFFLINE` into its system prompt for the whole
+  session even after the on-demand launch brings it up. That is the same shape
+  as the fabricated-failure complaint, one adapter over.
+  **Fix, smallest first:** (1) drop the adapter line from the *Live* setup
+  digest, or mark it `as of session start`, so nothing frozen claims to be live
+  — the honest phrasing costs nothing. (2) Add the missing half of the HONESTY
+  RULE in `voice-agent.js:239` (shared by both surfaces, so one edit covers Live
+  and batch): never assert a capability is unavailable, offline or impossible
+  without a tool result from THIS turn — the mirror of the existing "never claim
+  you are doing it", which is the wording BUG-046 already quotes. (3) Only then
+  a live conversational pass, which is what BUG-046 was waiting for; it now has
+  something falsifiable to test.
+  **When it breaks again.** Any per-turn-fresh context added to the batch prompt
+  and reused in `buildLiveSystemInstruction()` inherits the same freeze —
+  `version.contextLine()`, the skills catalog and the injected local time are all
+  in that list today. The local time is already handled (refreshed per open, with
+  a comment saying why); nothing generalises that lesson to the next addition.
+
+### Registry-wide audit results (no new IDs — these are confirmations)
+
+- **Claims vs. code: clean.** All 98 test files cited across this registry exist.
+  Every load-bearing marker checked was present, including the four
+  `ps-automation.ps1` pieces root `CLAUDE.md` says to re-verify after any pull.
+  No evidence of a BUG-037-style silent revert.
+- **Still genuinely open, unchanged by this audit:** BUG-020, 021, 024, 027,
+  029, 037, 039, 046 (see the reconciliation table above). BUG-046 now has
+  BUG-136's mechanism attached.
+- **Not root-caused, instrumentation only:** BUG-118, BUG-122, BUG-124,
+  BUG-131. Each waits on a recurrence carrying the id it now logs. None can be
+  closed by code inspection, and none should be written up as fixed.
+- **The live-gate backlog is the dominant risk, not the open bugs.** BUG-082..098,
+  099..116, and everything in the 2026-08-06 sections except BUG-119, 121, 125,
+  132 and 133 are unit-verified only. This audit could not reduce that: a WS
+  probe cannot hear a voice and `node --test` cannot prove a page behaved.
+- **Observed on this machine, relevant to BUG-132's gate:** the boot log shows
+  `tts.provider-failed provider=gemini-tts … limit: 10` and failover to
+  edge-tts. The 10-request/day Gemini TTS quota is already spent, so *today* the
+  fallback voice is the edge one — BUG-132's "all three surfaces match" holds
+  only while Live can open. Its second by-ear check (`VOICE_S2S_ENABLED=false`)
+  will therefore hear the retuned en-US edge voice, not Gemini's.
+
+### Ordered plan out of this audit
+
+1. **BUG-134** — move the harness out of `mythos/test/`, repoint `npm run e2e`
+   + CI + docs, correct the BUG-133 paragraph, re-run
+   `sync-test-count.js --write`. Unblocks every commit on this machine.
+2. **BUG-135** — scope the e2e console/request assertions to the harness's own
+   origin; foreign-origin errors become a printed note. Do 1 and 2 together:
+   until both land, a red gate says nothing about the code being committed.
+3. **BUG-136 step 1** (Live digest honesty) — one-line class of change, no
+   behavioural risk, removes a prompt that instructs the model to trust stale
+   data.
+4. **BUG-136 step 2 + BUG-046** — the negative half of the HONESTY RULE, then
+   the guided live pass BUG-046 has always needed. Sample ≥3 turns: ask for
+   `list_windows` with pc-child up and confirm a real audit row exists for each
+   reply, then take pc-child down and confirm the refusal cites a tool result.
+5. **The live-gate backlog** — the runbooks are already written per section; they
+   need an operator with voice, not more code. Highest value first: BUG-127
+   (per-app volume round trip), BUG-128/131 (turn integrity), the browser
+   snapshot/ref stack's five checks, then BUG-132 by ear.
+6. **Long-standing open set** — BUG-020/021/027 need one voice session between
+   them; BUG-029 needs a real orphan repro before D-07 work; BUG-024 is blocked
+   on the operator's own OAuth (plus the two `scripts/google-auth.js` Windows
+   defects recorded outside this file); BUG-037 stays discipline, not code.
+
+---
+
+## Session (2026-08-06/07) — audit remediation: BUG-137..BUG-145
+
+An audit pass (docs-vs-code, `.env.example`-vs-schema, performance,
+silent-failure/correctness, dependency flags) produced a findings list; this
+section records what was FIXED from it, what was deliberately left alone, and
+two things the audit itself got wrong.
+
+**Measured state after this batch:** full `node --test` with
+`MYTHOS_PORT=4999 EDGE_TTS_PORT=5099 EDGE_TTS_URL=http://127.0.0.1:5099` →
+**3005 tests, 3004 pass, 0 fail, 1 skip** (the skip is the pre-existing
+`sensors-file.test.js` `t.skip()`). `scripts/sync-test-count.js --check` clean.
+
+- **BUG-137 (an unverified action was scored as a full success in the
+  learning loop):** FIXED. `effectors/dispatch-action.js` already computed
+  `actionUnverified` for the Wave-0 evidence contract and carried it correctly
+  into the audit row and `action.completed` — but then passed bare `actionOk`
+  to `skills.recordUse()` and `goals.markPlanStepDone()`. So a `ui_type` that
+  could not be read back trained the skill EMA and advanced the plan queue
+  exactly like a proven one, teaching the planner to prefer procedures whose
+  outcomes were never confirmed — the precise failure the evidence contract
+  exists to prevent.
+  **`false` is not the fix, and this is the part worth remembering.** Both call
+  sites were read rather than assumed: `memory/skills.js`'s `recordUse` folds
+  the flag into an EMA (`oldRate*0.9 + newRate*0.1`), where `false` is a real
+  0; `goals/index.js`'s `markPlanStepDone` marks the step `'failed'`, charges
+  `goal.failCount`, and at `failCount >= 2` fires
+  `distillFailureIntoLesson()` — i.e. `false` invents an observed failure and
+  can pause the goal.
+  **Nor is skipping the call, which was the first attempt and was worse.**
+  `goals.plan()` dispatches the first step whose status is `'pending'` on every
+  tick, and `markPlanStepDone` is the only thing that moves that status — so a
+  skipped call leaves the step pending and the loop re-runs a real
+  world-changing action (typing, clicking) forever.
+  Resolution: `markPlanStepDone(goalId, success, unverified)` gained a third
+  terminal status, `'unverified'` — counted as resolved by the `allDone` sweep
+  (so the queue still clears for a fresh re-plan) but excluded from
+  `failCount` and from lesson distillation. `recordUse` is genuinely skipped,
+  because an EMA has no "unknown" slot to record into. Goal plan-step status is
+  read nowhere outside `goals/index.js` (checked), so the new status is
+  contained. Tests: `test/goal-plan-step-unverified.test.js` (5 cases,
+  including the anti-re-dispatch one and a control proving the real failure
+  path still scores) plus two cases in
+  `test/phase4a-dispatch-record-use.test.js`.
+- **BUG-138 (the perception queue was unbounded):** FIXED.
+  `memory/working.js`'s `perceptionQueue` was a plain array with no cap.
+  `cortex/index.js` skips a whole tick while the previous one is in flight
+  (`tickOnce._inFlight`) and slow brain lanes take 90-185s here, while the
+  camera emits at ~7fps (`DETECT_INTERVAL_MS = 150`) — so one stalled tick
+  could queue 600-1300 unconsumed payloads. **The bus storm guard does not
+  cover this:** 7fps is far under its 400-events/1000ms threshold, so the
+  flood never looks like a storm. Now capped at `PERCEPTION_QUEUE_MAX = 200`,
+  drop-oldest, with exactly ONE `health.anomaly` per overflow burst (a flag
+  reset by `drainPerceptions()`) rather than one per dropped item, and the
+  emit wrapped so a bus failure cannot break `pushPerception`. Test:
+  `test/working-memory-perception-cap.test.js`.
+- **BUG-139 (WinRT type reflection re-resolved on every media poll):** FIXED
+  and **live-verified**. `Send-SmtcControl` and `Handle-MediaStatus` in
+  `ps-automation.ps1` each re-ran `Add-Type -AssemblyName
+  System.Runtime.WindowsRuntime` and re-resolved the
+  `GlobalSystemMediaTransportControlsSessionManager` type string on every
+  call, though the assembly is already loaded once at script scope — and
+  `ui/public/js/widgets/kinds/media.js` polls `media_status` every 5s for the
+  life of the media widget. Now resolved once into
+  `$script:SmtcManagerType`; both handlers read it, and the `$null` path
+  (older/N-edition Windows with no media stack) is byte-for-byte unchanged, so
+  a missing capability still reports honestly instead of faking success.
+  Oracle: driven through the real node→pc-child path (a PowerShell-tool probe
+  is UIPI-blocked and cannot measure this), returning real Spotify track data —
+  **cold call 1058ms, warm call 58ms.** The warm path is the one the 5s poll
+  actually hits.
+- **BUG-140 (a flat 2s sleep on every browser launch):** FIXED.
+  `effectors/from-browser.js` slept an unconditional 2000ms after launch
+  before the first CDP connect, although `ensureOnline()` has its own
+  timeout/retry — pure added latency on every `launch_browser`. Replaced with
+  `waitForDebugPortReady()`, polling at 200ms up to the same 2000ms ceiling
+  (so the worst case is unchanged) and returning as soon as the port answers.
+  Reuses the existing `ensureOnline` connect as the probe — there is no
+  lighter-weight `/json/version`-style probe in this file or in
+  `adapters/browser-agent/` to reuse. Test:
+  `test/browser-cold-start-poll.test.js`.
+- **BUG-141 (pc-child: an orphaned child, and a startup watchdog that never
+  ran):** FIXED, and (b) was not in the audit.
+  (a) `startPcChild()` called `spawnChild()` unconditionally, so if it were
+  ever invoked with a child alive, that PowerShell process was orphaned —
+  never killed, merely abandoned once the `proc !== child` identity guards
+  started ignoring its events. Latent (one call site, `main.js` at boot), now
+  defended: the kill body was extracted to `killLiveChild()` and is called
+  first, shared with `shutdownPcChild()` so there is one kill mechanism.
+  (b) While documenting the 5s/15s split, `handleStartup` — the watchdog that
+  is supposed to report OFFLINE at `STARTUP_TIMEOUT_MS` — turned out to be
+  **defined and never invoked anywhere**; its own recursive `setTimeout` was
+  unreachable without a first call. `getStatus()` therefore never reported
+  OFFLINE at 5s at all: state sat at `STARTING` until the ping resolved via
+  its own 15s `COMMAND_TIMEOUT_MS`. The loop is now started, and on timeout it
+  also clears the stale ping's `commandInFlight` slot (matched by that ping's
+  captured id, so no normal command's timeout semantics change) so a newly
+  queued command is not stuck behind it for 10 more seconds. The 5s-vs-15s
+  split is now a comment at the constants. Test:
+  `test/pc-child-startup-guard.test.js`. Independently exercised live: the
+  adapter reached and held ONLINE during BUG-139's verification.
+- **BUG-142 (leash `sessionGrants` was never evicted):** FIXED.
+  The Map was only ever `.set()`; expiry was checked on read, so no grant was
+  ever wrongly honoured, but entries from closed connections (voice
+  reconnects, Electron restarts, tab reloads) accumulated for the life of the
+  process. Now an opportunistic `sweepExpiredSessionGrants()` runs on the one
+  path that grows the Map (`confirm.accept()`), deleting only entries the read
+  path already treated as dead — no timer, and provably neutral for every
+  allow/deny/confirm outcome. `SESSION_GRANTABLE`, `TRUSTED_TOOLS`,
+  `NEVER_TRUSTABLE` and the tier logic are untouched. Test:
+  `test/leash-session-grant-sweep.test.js`.
+- **BUG-143 (README's test count in the typing-SVG was unreachable by
+  `sync-test-count.js`):** FIXED — and this is why README disagreed with
+  itself three ways (1761 / 2985 / 2986). The count also appears inside the
+  `readme-typing-svg` URL's `lines=` parameter, URL-encoded as
+  `N+tests+green.`, carrying none of the prose anchors the script's slots
+  match on. Every slot-covered site had advanced past 2900 while that one sat
+  at 1761. A slot anchored on the encoded suffix now covers it (verified to
+  match exactly once), so it stays synced automatically instead of needing the
+  hand-edit this repo forbids. All four sites now read 3005/3004.
+  **Correction to the audit that found this:** it reported the CLAUDE.md
+  baseline (2488) as authoritative and all three README numbers as wrong. The
+  reverse was closer to true — 2488 was the stale figure, and README's prose
+  numbers were nearly current. Trust `sync-test-count.js`'s output over any
+  number written in prose, including in that audit and in this paragraph.
+- **BUG-144 (README's Provider Fleet table omitted two live providers):**
+  FIXED. The table listed 6 while the architecture diagram above it and
+  `providers/google.js` / `providers/zcode.js` show 8. Rows added from source:
+  Google routes through its OpenAI-compatible base with no separate adapter
+  and appears in four lane preferences; ZCode is wired via `chain.js` but has
+  no `lanes.default.js` entries, so it is lane-config gated by default.
+- **BUG-145 (schema-backed keys absent from `.env.example`):** FIXED. 16 keys
+  existed in `config/schema.js` with real defaults but appeared nowhere in the
+  env template, so an operator reading only that file could not discover the
+  features or tune them — including **`CALENDAR_UPCOMING_ENABLED`, which
+  defaults to ON**, and the `WINDOW_AWARENESS_*` sensor. Added to the W8
+  section, all commented out with their real defaults noted, each sensor with
+  a one-line description derived from its own source file. Each key was
+  confirmed present in the schema and absent from the template before being
+  written.
+
+**Looked at and deliberately NOT changed** (recorded so they are not
+re-litigated):
+
+- `server/index.js`'s `gzipCache` is an unbounded Map with mtime
+  invalidation, but it is keyed on a finite, small set of UI static assets.
+  Benign as scoped; worth a ceiling only if `GZIP_ROOTS` ever grows to a
+  dynamically-named asset set.
+- `bus/index.js`'s `publish()` scans every registered pattern per event rather
+  than indexing by channel. Linear in subscriber patterns, not quadratic, and
+  fine at the current count (tens). Index by first dot-segment if it ever
+  becomes hot.
+- `ps-automation.ps1` calls `GetForegroundWindow()` two-to-four times inside
+  several handlers. This is the deliberate defensive pattern
+  `adapters/CLAUDE.md` documents (verifying focus survived an action), not
+  redundancy — left alone on purpose.
+
+**Dependency audit — no lockfile change, and one false positive.**
+`npm audit` in `mythos/` reports 8 vulnerabilities (6 high, 2 moderate), but
+`npm audit fix` is a **no-op here (0 added / 0 removed / 0 changed)**: every
+one is transitive with no in-range fix.
+
+- `brace-expansion` is a **FALSE POSITIVE** — audit flags it as
+  `<=1.1.17 || 2.0.0-2.1.3`, but the resolved versions installed are
+  **1.1.18 and 2.1.4**, i.e. already past both fix points. Do not chase it.
+- No fix available: `adm-zip@0.5.18` (via `onnxruntime-node`) and
+  `sharp@0.34.5` (via `@huggingface/transformers` → `kokoro-js`).
+- `uuid@8.3.2` (moderate) comes via `exceljs@4.4.0`; the only offered fix
+  downgrades exceljs to 3.4.0, a breaking change, and the advisory needs a
+  `buf` argument passed to v3/v5/v6 to bite. Not taken.
+- **`ws` is already fine**: resolved `8.21.0`, past CVE-2024-37890's 8.17.1
+  fix. `express` is `4.22.2`, past CVE-2024-29041. The audit's speculative
+  flags on both were checked and are not live. Dependabot already has
+  branches open for `ws-8.21.1` and `express-5.2.1`.
+
+**BUG-134 reconfirmed as intermittent, and it does block commits.** Within
+this batch: `node --test test/e2e/run-e2e.mjs` standalone → 50 pass / 0 fail
+in 12s; the same file inside a full recursive run → **failed once (50.8s) and
+passed on the immediately following identical run.** Since the pre-commit hook
+gates on a failure baseline of 0, a commit in this repo is intermittently
+blocked by a third-party/timing flake in the E2E harness rather than by
+anything staged. Not worked around here (no `--no-verify`); BUG-134's fix
+(moving the harness out of `mythos/test/`) remains the right one and remains
+open.

@@ -172,17 +172,34 @@ function writeManifest(fs, hub, adapterStatuses) {
 
 // Compact live-truth digest injected into every voice prompt (pre-context).
 // Hard budget: <= 5 lines, ~80 tokens — this rides on EVERY turn.
+//
+// BUG-136: the batch path calls this fresh on every turn (voice-agent.js),
+// so "live — trust this over any assumption" is true there. The Live/S2S path
+// bakes the same text into the setup frame once per open()/rotation
+// (server/index.js buildLiveSystemInstruction) — up to ~10 minutes stale, in
+// a prompt telling the model to trust it over reality. `opts.asOf` lets a
+// caller that knows its copy will go stale say so honestly instead of
+// reusing the "live" claim. Default output (no `asOf`) is unchanged —
+// test/voice-precontext.test.js pins its exact shape.
 function summaryDigest(opts) {
   opts = opts || {};
   var apps = opts.apps;
   var roots = opts.roots;
   var adapters = opts.adapters;
   var providerCount = opts.providerCount;
+  var asOf = opts.asOf;
 
-  var lines = ['CAPABILITY SNAPSHOT (live — trust this over any assumption):'];
+  var lines = asOf
+    ? ['CAPABILITY SNAPSHOT (as of ' + asOf + ' — adapter state may have changed since; re-check with a tool before relying on it):']
+    : ['CAPABILITY SNAPSHOT (live — trust this over any assumption):'];
   if (apps && apps.length) lines.push('- Desktop apps launchable by name: ' + apps.join(', ') + ' (plus anything on the system PATH).');
   if (roots && roots.length) lines.push('- Files/folders reachable ONLY inside: ' + roots.join('; ') + '. Other drives and folders are NOT accessible.');
-  if (adapters) lines.push('- Adapters: ' + Object.entries(adapters).map(function(entry) { return entry[0] + ' ' + (entry[1] ? 'ONLINE' : 'OFFLINE'); }).join(', ') + '.');
+  if (adapters) {
+    var adapterList = Object.entries(adapters).map(function(entry) { return entry[0] + ' ' + (entry[1] ? 'ONLINE' : 'OFFLINE'); }).join(', ');
+    lines.push(asOf
+      ? '- Adapters (as of ' + asOf + ', may have changed): ' + adapterList + '.'
+      : '- Adapters: ' + adapterList + '.');
+  }
   if (typeof providerCount === 'number') lines.push('- LLM providers reachable: ' + providerCount + '.');
   return lines.join('\n');
 }

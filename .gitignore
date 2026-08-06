@@ -110,5 +110,5 @@ mythos/.tmp-doc-rag-test/
 /mythos/models/whisper/
 
 # E2E run artifacts — screenshots, boot logs and the results JSON that
-# test/e2e/run-e2e.mjs writes on every run. Regenerated per run, never committed.
-/mythos/test/e2e/artifacts/
+# scripts/e2e/run-e2e.mjs writes on every run. Regenerated per run, never committed.
+/mythos/scripts/e2e/artifacts/

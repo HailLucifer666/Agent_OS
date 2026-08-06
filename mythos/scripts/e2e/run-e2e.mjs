@@ -16,9 +16,13 @@
 // execute/ship, kanban build, goal accept, pin verify). Those spend tokens,
 // drive the operator's PC, or mutate real stores. E2E must not do that.
 //
-// Not named *.test.js on purpose: `node --test` must not collect this.
+// Lives outside test/ on purpose (BUG-134): node --test's discovery is
+// directory-based — every .js/.cjs/.mjs file under a directory named `test`
+// is collected regardless of name, so a `.mjs` extension never protected this
+// from the unit gate. It genuinely boots the server, Electron and Chromium,
+// which the unit baseline must not do on every commit — see CLAUDE.md.
 //
-//   node test/e2e/run-e2e.mjs [--skip-electron] [--skip-ui] [--headed] [--strict]
+//   node scripts/e2e/run-e2e.mjs [--skip-electron] [--skip-ui] [--headed] [--strict]
 //
 // --strict treats a skip as a failure. CI runs with it: without it a runner that
 // is missing Chromium or Electron reports green having verified nothing, which is
@@ -64,6 +68,13 @@ const fail = (n, d) => record(n, 'fail', d);
 // scope cut and stays a skip, so CI can drop one flaky phase without losing the gate.
 const skip = (n, d) => record(n, 'skip', d);
 const skipRequested = (n, d) => record(n, 'skip', d, true);
+// BUG-135: a foreign-origin console error / page error / failed request (e.g. the
+// weather widget's ipapi.co fallback hitting a public rate limit in headless
+// Chromium) is not a defect in this app. It stays visible — printed, named by URL —
+// without gating the run. Never pushed into `results`, so it can never fail or skip.
+function note(name, detail = '') {
+  console.log(`  [NOTE] ${name}${detail ? ` — ${detail}` : ''}`);
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ELECTRON_RUN_AS_NODE is exported by some agent/CI shells and makes electron
@@ -286,12 +297,22 @@ async function phaseD_ui() {
   const failedRequests = [];
   try {
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
-    page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+    page.on('console', (m) => {
+      if (m.type() !== 'error') return;
+      // An empty/inline location (no url) is the page's own script, so it counts
+      // as same-origin — only an explicit foreign url is a third party (BUG-135).
+      const url = m.location()?.url || '';
+      if (url && !url.startsWith(BASE)) note('foreign-origin console error', `${url} — ${m.text()}`);
+      else consoleErrors.push(m.text());
+    });
     page.on('pageerror', (e) => pageErrors.push(e.message));
     page.on('requestfailed', (r) => {
       const msg = r.failure()?.errorText || '';
       // aborted media/streaming requests are normal on teardown
-      if (!/ERR_ABORTED/.test(msg)) failedRequests.push(`${r.url().slice(0, 90)} ${msg}`);
+      if (/ERR_ABORTED/.test(msg)) return;
+      const url = r.url();
+      if (!url.startsWith(BASE)) note('foreign-origin request failed', `${url.slice(0, 90)} ${msg}`);
+      else failedRequests.push(`${url.slice(0, 90)} ${msg}`);
     });
 
     const res = await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 45_000 });

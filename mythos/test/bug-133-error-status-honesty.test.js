@@ -8,7 +8,7 @@
 // Blanket-500ing both told the client the SERVER broke when the REQUEST was bad,
 // and logged every client mistake at error level as an *unhandled* fault.
 //
-// Found by test/e2e/run-e2e.mjs, not by this suite: 2979 unit tests passed while
+// Found by scripts/e2e/run-e2e.mjs, not by this suite: 2979 unit tests passed while
 // four real POST endpoints answered 500 to garbage. Nothing here sent a malformed
 // body over real HTTP, so nothing here could see it.
 //

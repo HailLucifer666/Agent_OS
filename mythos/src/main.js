@@ -601,7 +601,7 @@ async function main() {
       // (brain/registry.js's getStatus() is async, and probing it here would
       // be exactly the new-async-call this digest must not introduce) —
       // capabilities.summaryDigest() already treats providerCount as optional.
-      function getCapabilityDigest() {
+      function getCapabilityDigest(opts) {
         var adapterOnline = {};
         try { adapterOnline['pc-child'] = pcChild.getStatus().state === 'ONLINE'; } catch (_) {}
         try { adapterOnline['cua-driver'] = cuaDriver.getStatus().state === 'ONLINE'; } catch (_) {}
@@ -611,6 +611,7 @@ async function main() {
           apps: KNOWN_DESKTOP_APPS,
           roots: allowedRoots(),
           adapters: adapterOnline,
+          asOf: opts && opts.asOf,
         });
       }
 
