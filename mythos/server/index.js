@@ -894,6 +894,20 @@ function createServer(deps) {
     if (!(liveSession && liveSession.isOpen()) && targetWs && targetWs.readyState === 1
         && typeof targetWs.liveForSpeech === 'function') {
       try { liveSession = await targetWs.liveForSpeech(); } catch (_) { /* stays on the TTS path */ }
+      // BUG-149: falling through to the TTS chain here is exactly what the
+      // operator hears as "it greeted me in a different voice" — the chain's
+      // edge-tts default is en-GB-SoniaNeural, a British voice, against Live's
+      // Aoede. It was SILENT: unified voice was on, the fall-through happened
+      // anyway, and nothing said so. Observed 2026-08-07, caused by BUG-148's
+      // duplicate gmail announcement opening/consuming Live moments earlier and
+      // this greeting arriving second. Logged as a warning because with
+      // VOICE_UNIFIED_LIVE_VOICE on, a fall-through is a defect, not a mode.
+      if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE) {
+        logger.warn('proactive.live-unavailable-voice-will-differ', {
+          note: 'unified live voice is ON but no Live session — speaking via the TTS chain instead',
+          chain: String(config.VOICE_TTS_CHAIN || process.env.VOICE_TTS_CHAIN || ''),
+        });
+      }
     }
     if (liveSession && liveSession.isOpen()) {
       // BUG-117: same self-describing prefix the tool-outcome pushes use — a
@@ -1081,6 +1095,16 @@ function createServer(deps) {
   // its TTS-probe/brain fetches leave sockets open past the last test, which
   // wedges the test-file child process (the runner then waits forever).
   let bootGreetingFired = process.env.BOOT_GREETING === 'false' || !!process.env.NODE_TEST_CONTEXT;
+  // BUG-148: bootGreetingFired means "scheduled", not "spoken" — it is set the
+  // moment the timer is armed. The gmail-batch subscriber needs to know whether
+  // the greeting has actually been DELIVERED, which is a different question and
+  // ~2.5s later. See that subscriber for why.
+  let bootGreetingDelivered = bootGreetingFired;   // pre-satisfied when there will be no greeting
+  const serverBootAt = Date.now();
+  // How long after boot the greeting is still considered "about to happen". Only
+  // used to bound the gmail suppression below, so a sensor batch arriving hours
+  // later is never silently swallowed.
+  const BOOT_GREETING_WINDOW_MS = 60000;
   const LAST_BOOT_PATH = 'Identity/last-boot.json';
   const bootUpgrade = { upgraded: false, changes: [] };
   try {
@@ -1219,6 +1243,11 @@ function createServer(deps) {
       }
     } catch (_) {}
     await proactiveSpeak(text, targetWs);
+    // BUG-148: set AFTER the greeting has actually been spoken, so the gmail-batch
+    // subscriber's suppression window closes at the right moment. Set in a finally-
+    // style position rather than early, because a batch arriving while the greeting
+    // is still being synthesized should still yield to it.
+    bootGreetingDelivered = true;
   }
 
   // Calendar reminders — proactive speech when a reminder fires due.
@@ -1310,6 +1339,26 @@ function createServer(deps) {
         return;
       }
     } catch (_) {}
+    // BUG-148: the dedup above only works in ONE direction, and at boot it loses
+    // the race. deliverBootGreeting() calls markAnnounced() but never isRecent(),
+    // so it always speaks; meanwhile the gmail sensor's default 'boot-once' mode
+    // polls IMMEDIATELY at start() while the greeting waits 2.5s for a client to
+    // attach. The sensor therefore spoke first, marked the key, and the greeting
+    // — which reads the inbox into its own opening line — spoke anyway. Result
+    // observed 2026-08-07: "You have 10 new emails, including ..." at 22:08:07
+    // followed by "...a bit more chaos in the inbox since we last spoke" at
+    // 22:08:09. Two mail announcements, seconds apart, on every boot.
+    //
+    // The greeting is the canonical one (it is in-character and the operator asked
+    // for it), so this raw batch yields to it rather than the reverse. Bounded by
+    // BOOT_GREETING_WINDOW_MS so this can only ever suppress the boot-window
+    // batch: mail arriving later still speaks normally. The sensor has already
+    // added these ids to its own seenIds, which is what we want — they are
+    // covered by the greeting, so they should not be re-announced later either.
+    if (!bootGreetingDelivered && (Date.now() - serverBootAt) < BOOT_GREETING_WINDOW_MS) {
+      logger.info('gmail.batch-deferred-to-greeting', { count: count });
+      return;
+    }
     proactiveSpeak(text);
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
@@ -1448,7 +1497,19 @@ function createServer(deps) {
         send({ type: 'live-state', state: 'closed', reason: 'disabled' });
         return;
       }
-      if (liveSession && liveSession.isOpen()) return;
+      // BUG-146: a client that asked to open a session is entitled to be told the
+      // answer, even when the answer is "it was already open". This used to be a
+      // bare `return`, and the HUD paints the orb/caption ONLY from live-state
+      // (ui/public/js/voice/s2s-bridge.js's onLiveStateMsg) — so with a session
+      // already open at boot (which VOICE_UNIFIED_LIVE_VOICE now makes the normal
+      // case, since the greeting opens one ~2.5s in, long before any click), every
+      // orb click produced literally zero visible feedback. Reported as "the gold
+      // button does nothing at all". The reason field distinguishes this from a
+      // fresh open for anyone reading the log.
+      if (liveSession && liveSession.isOpen()) {
+        send({ type: 'live-state', state: 'open', reason: 'already-open' });
+        return;
+      }
       if (!liveAdapter) {
         // AD-1/AD-2/AD-4: identical gate -> dispatch path as this connection's
         // own executeAction()/handleConfirmReply() — leash.check() -> dispatchAction().
@@ -2484,7 +2545,16 @@ function createServer(deps) {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
     requestCloseMediaWindow, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
-    _internal: { voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY },
+    _internal: {
+      voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY,
+      // BUG-148 test seam. Under `node --test`, NODE_TEST_CONTEXT suppresses the
+      // boot greeting entirely, so bootGreetingDelivered is legitimately true at
+      // construction and the "a greeting is still pending" state — the whole
+      // condition under test — is unreachable from the outside. This lets a test
+      // put the server into that state explicitly rather than by faking env.
+      setBootGreetingDelivered: (v) => { bootGreetingDelivered = Boolean(v); },
+      isBootGreetingDelivered: () => bootGreetingDelivered,
+    },
   };
 }
 

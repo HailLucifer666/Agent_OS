@@ -3952,3 +3952,145 @@ blocked by a third-party/timing flake in the E2E harness rather than by
 anything staged. Not worked around here (no `--no-verify`); BUG-134's fix
 (moving the harness out of `mythos/test/`) remains the right one and remains
 open.
+
+---
+
+## Session (2026-08-07) — daily voice: silent boot, dead orb, duplicate mail
+
+Three operator reports: "it boots but never speaks", "the gold middle button
+does nothing at all when clicked", "email read is happening twice as soon as
+boot sequence". A fourth surfaced mid-session and became the real priority:
+the boot greeting spoke in a **different voice** than the conversation.
+
+**The starting diagnosis was wrong, and that is worth recording.** A pre-session
+audit concluded that two of the three TTS engines were "not installed" —
+`python -c "import edge_tts"` fails on this machine, and it read
+`mythos/models/piper` as empty. Both conclusions were artefacts of *how* the
+check was run:
+
+- `edge_tts` **7.2.8 IS installed**, and `piper` with it — inside
+  `mythos/.venv`, which is exactly where this repo's isolation rule says to put
+  them. Only the SYSTEM python lacks them, and nothing uses the system python:
+  `edge-tts-child.js` and `piper-child.js` both already prefer
+  `mythos/.venv/Scripts/python.exe` over PATH (`venvPythons()`, added in
+  `0ef57a7`).
+- `mythos/models/piper` holds three voice models (hfc_female, amy, kristin).
+- Both sidecars were confirmed **live** on their real ports (5050, 5051) during
+  a real boot.
+
+So no engine was missing and no install was needed. **A probe that reports
+"missing" must name the interpreter/path it probed, or it is measuring itself.**
+The same trap bit twice in one session: a WS probe read `m.data` for
+`speech-chunk` audio and reported **0 bytes** on every chunk, which looked like
+a smoking gun for "never speaks". The field is `audioB64`. Audio was flowing
+the whole time.
+
+- **BUG-146 (a click on the orb produced literally no feedback):** FIXED and
+  **live-verified**. `server/index.js`'s `liveOpen()` answered the already-open
+  case with a bare `return` — no `live-state` sent. The HUD paints the orb and
+  caption **only** from `live-state` (`s2s-bridge.js`'s `onLiveStateMsg`), so
+  the client had nothing to repaint from and the click was indistinguishable
+  from a click that never registered. This was latent until BUG-132/
+  `VOICE_UNIFIED_LIVE_VOICE` made "a session is already open before you click"
+  the NORMAL case: the greeting opens one ~2.5s after the first connection,
+  long before any wake word or click. Now sends
+  `{state:'open', reason:'already-open'}`, and opens no second metered session
+  to do it. Oracle: drove the real `/ws` with two `live-open` messages against
+  a running instance — the second answered in **1ms** with
+  `{"type":"live-state","state":"open","reason":"already-open"}`. Before the
+  fix that message did not exist. Test: `test/bug-146-148-boot-voice.test.js`.
+- **BUG-147 (the orb waited on the network before showing anything):** FIXED.
+  Three defects in `ui/public/js/voice/s2s-bridge.js`, all of the same shape —
+  a failure with no visible consequence:
+  (a) nothing repainted until a `live-state` arrived, so any unanswered or slow
+  `live-open` looked like a dead button. `start()` now paints immediately, on
+  the click. **`'processing'`, not a new `'connecting'` state:** `core-orb.js`
+  maps anything outside `listening|processing|speaking` to `'idle'`, so an
+  invented state name would have rendered as no change at all — the bug itself.
+  (b) silence is now bounded: `OPEN_ACK_TIMEOUT_MS` (6s) turns "the server never
+  answered" into a visible caption instead of a blank stare.
+  (c) the BUG-059 auto-reopen guard tested `active`, which is still false during
+  the ~100ms of `getUserMedia` + worklet setup — so a terminal `closed` arriving
+  in that window was **dropped and never retried**. Now tracks "start requested"
+  separately from "capture running". `stop()` clears both before its early
+  return, so giving up mid-startup cannot fire a late failure caption.
+  No behavioural unit test exists for this file by its own design (no Node
+  double for getUserMedia/AudioWorklet); pinned with source-shape assertions per
+  the root CLAUDE.md's Electron lesson —
+  `test/bug-147-orb-click-feedback.test.js` (5 cases, including one that
+  re-derives the orb's rendered state vocabulary from `core-orb.js` so an
+  invented state name fails the test rather than the operator).
+- **BUG-148 (two mail announcements on every boot):** FIXED. The greeting dedup
+  was **one-directional**. `deliverBootGreeting()` calls
+  `conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY)` but never
+  `isRecent()`, while the `gmail.unread-batch` subscriber checks the key
+  properly (the BUG-112 residual fix). At boot the check loses the race: the
+  gmail sensor's default `'boot-once'` mode polls **immediately** at `start()`,
+  whereas the greeting waits 2.5s for a client to attach. So the sensor spoke
+  first, marked the key, and the greeting — which reads the inbox into its own
+  opening line — spoke anyway. Observed 2026-08-07: *"You have 10 new emails,
+  including Your Personalized Developer News…"* at 22:08:07, then *"…a bit more
+  chaos in the inbox since we last spoke"* at 22:08:09.
+  The greeting is the canonical one, so the raw batch now yields to it, bounded
+  by `BOOT_GREETING_WINDOW_MS` (60s) so mail arriving later still speaks. The
+  sensor has already recorded those ids in its own `seenIds`, which is correct —
+  they are covered by the greeting and should not resurface. Note
+  `bootGreetingFired` means *scheduled*, not *spoken*; a separate
+  `bootGreetingDelivered` is set after `proactiveSpeak` returns.
+  Test: `test/bug-146-148-boot-voice.test.js`. It needs the
+  `_internal.setBootGreetingDelivered` seam because under `node --test`,
+  `NODE_TEST_CONTEXT` suppresses the greeting entirely — so the state under test
+  ("a greeting is still pending") is genuinely unreachable from outside.
+- **BUG-149 (the greeting spoke in a different voice, silently):** the silence
+  is FIXED; the cause was BUG-148. `proactiveSpeak()` tries
+  `targetWs.liveForSpeech()` and falls through to the TTS chain when it returns
+  null — and the chain's `edge` default is **en-GB-SoniaNeural, a British
+  voice**, against Live's Aoede. Nothing logged the fall-through, so a wrong
+  voice was the only symptom. It happened because BUG-148's duplicate mail
+  announcement opened/consumed the Live session moments earlier and the greeting
+  arrived second. Now a warning
+  (`proactive.live-unavailable-voice-will-differ`) fires whenever the
+  fall-through happens while `VOICE_UNIFIED_LIVE_VOICE` is on, because in that
+  configuration it is a defect, not a mode.
+  **Verified by measurement, on the default config:** booted server-only as the
+  FIRST WS client and recorded the greeting — **58 `live-audio-out` messages,
+  967,684 base64 chars (~725KB PCM ≈ 15s of speech) and ZERO `speech-chunk`s.**
+  The greeting came entirely from the Live session, i.e. the same voice as the
+  conversation. A contrasting run with `VOICE_UNIFIED_LIVE_VOICE=false` produced
+  `speech-chunk`s with `mime=audio/mpeg` (edge) and no Live audio, which is the
+  wrong-voice path reproduced on demand.
+
+**Config, not code (operator instruction 2026-08-07):** "the voice I hear when I
+click the middle circle — I need that for default for everything."
+`mythos/.env` (gitignored) keeps `VOICE_TTS_CHAIN=gemini,edge,piper` so even the
+fallback path uses Aoede, and `VOICE_UNIFIED_LIVE_VOICE` stays at its default
+`true`, which is the mechanism that actually delivers one voice. An earlier edit
+this session reordered the chain to `piper,edge,gemini` for cost/latency and was
+**reverted** — it optimised for the wrong thing. `.env.example` now says so, and
+says which dial to turn.
+
+**Cost, since it was asked:** routing everything through the already-open Live
+session is *cheaper* than making `gemini` the TTS engine, not more expensive.
+`gemini-2.5-flash-tts` bills a separate quota that is **10 requests/DAY on a
+free key, one request per SENTENCE** — it dies about two replies in, which is
+what produced the exhausted-quota failovers in the operator's log. Reusing a
+session that conversation already opened adds only that text's tokens, no new
+session. The honest caveat, which the code comment at `liveForSpeech()` also
+makes: with unified voice on, entity-initiated speech CAN open a session the
+operator never asked for, and that is real metered cost that would not otherwise
+have been spent. `edge` and `piper` remain free; `piper` is free AND offline.
+
+**NOT done, and not attempted:** the wake word ("hey jarvis", reported as never
+having worked). Configuration is clean and was re-confirmed live —
+`/api/config/wakeword` answers `{"enabled":true,"threshold":0.5,
+"modelsPresent":true}`, all three `.onnx` models are present, `onnxruntime-web`
+is vendored, `preload.js` exposes the `onHotkey` hook, and no PIN is configured
+(`/api/pin/status` → `{"configured":false}`), so every easy explanation is ruled
+out. What remains needs a browser-side measurement that was not taken: whether
+the detector arms, whether the worklet receives audio, and the highest score
+seen over ~30s of speaking. Those three outcomes point at three different
+causes (never armed = wiring; scores near zero = sample rate/frame shape; scores
+near 0.4 = threshold too high for this mic) and guessing between them is what
+already failed for a week. Its wake action calls the same `toggleVoice()` the
+orb uses, so BUG-146/147 may have been breaking it too — worth re-testing before
+assuming a detector fault.

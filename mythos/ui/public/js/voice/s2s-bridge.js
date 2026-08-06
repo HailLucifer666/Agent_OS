@@ -66,6 +66,37 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
   const AUTO_REOPEN_COOLDOWN_MS = 3000;
   let lastAutoReopenAt = 0;
 
+  // BUG-147: "start requested" is tracked SEPARATELY from "capture running".
+  // `active` only becomes true after getUserMedia + the worklet graph are up
+  // (~100ms, longer on first permission grant), and the auto-reopen guard below
+  // tested `active` — so a terminal `closed` arriving during that window was
+  // dropped and the session was never retried, leaving the operator talking to
+  // nothing. It is also what makes a failure DURING startup observable at all.
+  let startRequested = false;
+
+  // BUG-147: nothing repainted the orb until a live-state arrived from the
+  // server, so a click whose live-open produced no reply (the BUG-146
+  // already-open early return, a dropped socket, a stalled open) looked
+  // identical to a click that never registered. The orb now reacts to the CLICK,
+  // and this timer converts silence into a visible refusal instead of a blank
+  // stare.
+  const OPEN_ACK_TIMEOUT_MS = 6000;
+  let openAckTimer = null;
+  function clearOpenAckTimer() {
+    if (openAckTimer) { clearTimeout(openAckTimer); openAckTimer = null; }
+  }
+  function armOpenAckTimer() {
+    clearOpenAckTimer();
+    openAckTimer = setTimeout(() => {
+      openAckTimer = null;
+      if (!startRequested) return;   // stopped in the meantime; nothing to report
+      setState('idle');
+      if (onCaption) {
+        onCaption('Live voice did not respond — click to try again.', 'error');
+      }
+    }, OPEN_ACK_TIMEOUT_MS);
+  }
+
   function setState(s) { if (onState) onState(s); }
 
   // Half-duplex gate for MYTHOS's OWN server-side TTS — the boot greeting,
@@ -136,10 +167,21 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
       return false;
     }
 
+    // BUG-147: react to the click NOW, not to the network round-trip. 'processing'
+    // is deliberate rather than a new state name: core-orb.js maps anything
+    // outside listening/processing/speaking to 'idle', so an invented
+    // 'connecting' would render as no change at all — exactly the bug.
+    startRequested = true;
+    setState('processing');
+
     onAudioOutMsg = (msg) => { if (player && msg && msg.data) player.enqueue(msg.data); };
     onInterruptedMsg = () => { if (player) player.flush(); };
     onLiveStateMsg = (msg) => {
       const s = msg && msg.state;
+      // BUG-147: the server answered, so the "no answer" fallback must not fire.
+      // Includes the BUG-146 already-open ack, which is the whole reason a click
+      // on an already-open session now repaints anything.
+      clearOpenAckTimer();
       setState(s === 'open' ? 'listening' : s || 'idle');
       // BUG-059: the server-side session (live-session.js) now rotates itself
       // transparently through idle-timeout/session-max, so a terminal 'closed'
@@ -156,7 +198,10 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
       // deliberately NOT handled here: the server is already mid-transparent-
       // reconnect for that state, and sending live-open now would stomp its
       // in-flight liveSession with a brand new one.
-      if (s === 'closed' && active && msg.reason !== 'disabled' && msg.reason !== 'no-key') {
+      // BUG-147: `startRequested || active` — see startRequested's declaration.
+      // Testing `active` alone dropped any closed that arrived while the mic was
+      // still being set up.
+      if (s === 'closed' && (active || startRequested) && msg.reason !== 'disabled' && msg.reason !== 'no-key') {
         const now = Date.now();
         if (now - lastAutoReopenAt > AUTO_REOPEN_COOLDOWN_MS) {
           lastAutoReopenAt = now;
@@ -171,6 +216,7 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
     onBroadcast('live-transcript', onTranscriptMsg);
 
     sendMessage({ type: 'live-open' });
+    armOpenAckTimer();   // BUG-147: silence from here on becomes a visible refusal
 
     try {
       stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
@@ -235,6 +281,11 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
   }
 
   async function stop() {
+    // BUG-147: startRequested is cleared and the ack timer cancelled even on the
+    // early return, so a stop() during startup can neither leave the flag set nor
+    // let the "did not respond" caption fire after the operator already gave up.
+    startRequested = false;
+    clearOpenAckTimer();
     if (!active && !stream && !audioCtx) return;
     active = false;
     // Before anything else: a capture loop that outlives the session both keeps
