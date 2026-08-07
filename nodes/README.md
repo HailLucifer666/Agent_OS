@@ -15,7 +15,7 @@ need this directory to run MYTHOS.
 |---|---|
 | `:shared` | Beacon-payload crypto and the MYTHOS `/ws` message shapes. Pure logic, unit-tested on the JVM with no device. |
 | `:wear` | The wrist beacon. Advertises the authenticated payload; that is all it does. |
-| `:phone` | The voice node — scanner, microphone, speaker, UI. *(Stage 2, not yet present.)* |
+| `:phone` | The voice node — scanner, microphone, speaker, UI. |
 
 ## Prerequisites
 
@@ -39,6 +39,7 @@ never be committed (see the repo's open-source portability rules in
 cd nodes
 ./gradlew :shared:testDebugUnitTest     # the byte-exact payload conformance tests
 ./gradlew :wear:assembleDebug           # -> wear/build/outputs/apk/debug/wear-debug.apk
+./gradlew :phone:assembleDebug          # -> phone/build/outputs/apk/debug/phone-debug.apk
 ```
 
 On Windows use `gradlew.bat` — the POSIX `gradlew` script mis-resolves its own
@@ -88,6 +89,46 @@ beacon.
 Treat the key as a secret: `adb shell` command lines can appear in shell history
 and in `logcat` on some devices. Rotate the realm key (`realm.json`'s
 `key_history` supports a grace window) if you think it leaked.
+
+## Setting up a phone node
+
+```bash
+adb install -r phone/build/outputs/apk/debug/phone-debug.apk
+```
+
+Then open the app, tap the gear, and fill in four things:
+
+| Field | Value |
+|---|---|
+| MYTHOS address | `ws://<your PC's LAN IP>:4478` — scheme and host, no path |
+| Auth token | `MYTHOS_AUTH_TOKEN` from `mythos/.env` |
+| Node id | this device's entry in `AETHER_NODE_IDS`, exactly |
+| Realm key | the 64 hex chars from `~/.aether/realm.json` |
+
+On the MYTHOS side the phone needs a reachable bind and the node flags:
+
+```properties
+MYTHOS_BIND=0.0.0.0
+MYTHOS_AUTH_TOKEN=<a long random string>
+AETHER_NODE_TRUST=true
+AETHER_PROXY_ENABLED=true
+AETHER_NODE_IDS=kitchen-phone,desk-phone
+AETHER_NODE_AUDIO=true
+```
+
+**The order of `AETHER_NODE_IDS` is load-bearing.** Position decides the proxy
+port (`AETHER_PROXY_PORT_BASE + i`), and the aggregator's `--peers` must list
+those ports in the same order or one room's readings are attributed to another:
+
+```bash
+python aggregator.py --peers ws://127.0.0.1:8765,ws://127.0.0.1:4480,ws://127.0.0.1:4481
+```
+
+`AETHER_NODE_TRUST` exists because a phone is not a browser: OkHttp sends no
+`Origin` header, and the WS gate rejects no-Origin non-loopback clients before it
+looks at a credential. The flag adds the one branch that admits them, and it
+requires the auth token — no token, no node, regardless of the flag. Only do this
+on a LAN you trust; the Aether protocol defers transport encryption (§11.4).
 
 ## Verifying it actually works
 

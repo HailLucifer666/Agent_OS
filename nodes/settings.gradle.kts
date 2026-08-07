@@ -33,5 +33,4 @@ rootProject.name = "mythos-nodes"
 
 include(":shared")
 include(":wear")
-// :phone arrives with Stage 2 — an include for a directory that does not exist
-// fails the whole build, so it is added when the module is.
+include(":phone")
