@@ -18,6 +18,36 @@ const WebSocket = require('ws');
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
+// BUG-170: BUG-118 added a `p.thought === true` filter and deliberately did NOT
+// regex-strip, on the reasoning that a "Reasoning:" prefix match is
+// symptom-matching and would eat a legitimate reply that starts the same way.
+// The 2026-08-07 session then leaked "Reasoning:" into the transcript three
+// times with the thought flag never set — so the filter that was supposed to
+// be the real fix does not fire on this model at all.
+//
+// This is narrower than the strip BUG-118 refused, on purpose:
+//   - only at the START of a turn's assistant output (assistantText empty),
+//     which is where a leaked reasoning block appears and where a real reply
+//     almost never opens with a bare label;
+//   - only a recognised label immediately followed by a colon;
+//   - and it strips the LABEL, never the content behind it, so the worst case
+//     for a false positive is a missing word, not a swallowed reply.
+// Every strip is logged with its turn id, so a false positive is visible
+// rather than silent.
+//
+// It cannot un-speak the audio. If the reasoning is inside the spoken stream
+// (outputTranscription), the operator has already heard it by the time this
+// runs — the escalation for that remains a thinkingConfig question in
+// buildSetup(), which is not attempted here because the wire protocol is
+// frozen (spine §3) and an unknown setup field risks killing voice outright.
+const REASONING_LABEL_RE = /^[\s>*_#-]*(?:reasoning|thinking|thought|thoughts|chain[\s-]of[\s-]thought|internal(?:\s+monologue)?)[\s*_]*:[\s*_]*/i;
+
+function stripReasoningLead(text) {
+  if (!text) return { text: text, stripped: false };
+  const out = String(text).replace(REASONING_LABEL_RE, '');
+  return { text: out, stripped: out !== String(text) };
+}
+
 function createLiveSession(deps) {
   const {
     config, bus, logger, spend, breakers,
@@ -36,6 +66,12 @@ function createLiveSession(deps) {
     // is what server/index.js actually wires per-connection; the bus emit
     // stays for any other observer (e.g. future health/metrics taps).
     onInterrupted,          // () => void
+    // BUG-170: ({turnId, text}) => void — a turn that produced reply TEXT but
+    // no audio at all. The operator sees the reply in the HUD and hears
+    // nothing, which reads as MYTHOS ignoring them. The session cannot speak
+    // it itself (Live just demonstrably didn't), so the caller routes it to
+    // the TTS chain.
+    onSilentTurn,
 
     // Test-only seam: the wire protocol is frozen, the transport constructor is
     // not. Defaults to the real 'ws' WebSocket against the real endpoint.
@@ -89,6 +125,29 @@ function createLiveSession(deps) {
   // filtering here.
   let turnTextParts = 0;
   let turnThoughtParts = 0;
+  // BUG-170: audio parts seen this turn, and reasoning labels stripped this
+  // turn. Both are per-turn because both questions are per-turn: "did this
+  // reply make a sound" and "did this reply open with a leaked label".
+  let turnAudioParts = 0;
+  let turnReasoningStrips = 0;
+  let turnPartText = '';
+
+  // BUG-170: a strip is never silent. A false positive costs one word and has
+  // to be findable; a true positive is the leak itself, and knowing which
+  // channel carried it is what decides whether a text filter can ever be
+  // enough (it cannot, for outputTranscription — the audio already played).
+  function noteReasoningStripped(channel, original) {
+    turnReasoningStrips += 1;
+    logger.warn('live.reasoning-stripped', {
+      turnId: turnCounter + 1, // the turn in progress; turnCounter increments at turnComplete
+      channel,
+      preview: String(original).slice(0, 80),
+      spokenAnyway: channel === 'outputTranscription',
+    });
+    if (bus && typeof bus.emit === 'function') {
+      bus.emit('health.anomaly', { kind: 'live-reasoning-leak', turnId: turnCounter + 1, channel });
+    }
+  }
   // BUG-124: monotonic within this session object, so it survives an
   // idle/session-max rotation (the reconnect reuses this closure) and a
   // misalignment spanning a rotation is still traceable across it.
@@ -284,13 +343,21 @@ function createLiveSession(deps) {
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
         disarmTurnStall(); // BUG-131 — it IS answering
-        assistantText += sc.outputTranscription.text;
-        if (onTranscript) onTranscript({ role: 'assistant', text: sc.outputTranscription.text, final: false });
+        // BUG-170: strip a leaked reasoning label only while this turn's reply
+        // is still empty — see stripReasoningLead's note above.
+        const cleaned = assistantText ? { text: sc.outputTranscription.text, stripped: false }
+                                      : stripReasoningLead(sc.outputTranscription.text);
+        if (cleaned.stripped) noteReasoningStripped('outputTranscription', sc.outputTranscription.text);
+        assistantText += cleaned.text;
+        if (onTranscript && cleaned.text) onTranscript({ role: 'assistant', text: cleaned.text, final: false });
       }
       const parts = (sc.modelTurn && sc.modelTurn.parts) || [];
       if (parts.length) disarmTurnStall(); // BUG-131 — audio or text is coming back
       for (const p of parts) {
-        if (p.inlineData && p.inlineData.data && onAudioOut) onAudioOut(p.inlineData.data);
+        if (p.inlineData && p.inlineData.data) {
+          turnAudioParts += 1; // BUG-170 — counted whether or not a sink is wired
+          if (onAudioOut) onAudioOut(p.inlineData.data);
+        }
         // BUG-118: a part the model marks as its own thinking is not the reply.
         // Forwarding it made private reasoning arrive on the transcript channel
         // (and, through it, the operator's ears). Dropped before onTranscript
@@ -298,9 +365,21 @@ function createLiveSession(deps) {
         // prefix would be symptom-matching, and would eat legitimate replies
         // that happen to start the same way.
         if (p.thought === true) { turnThoughtParts += 1; continue; }
-        if (p.text && onTranscript) {
+        if (p.text) {
           turnTextParts += 1;
-          onTranscript({ role: 'assistant', text: p.text, final: false });
+          // BUG-170: the same start-of-turn strip as outputTranscription
+          // above. assistantText is the position marker for both paths, so a
+          // label arriving on either one is caught exactly once.
+          const cleanedPart = assistantText ? { text: p.text, stripped: false }
+                                            : stripReasoningLead(p.text);
+          if (cleanedPart.stripped) noteReasoningStripped('modelTurn.part', p.text);
+          // Kept separately from assistantText (which only outputTranscription
+          // feeds) so the silent-turn check below knows whether the operator
+          // was SHOWN a reply, regardless of which channel carried it.
+          turnPartText += cleanedPart.text;
+          if (onTranscript && cleanedPart.text) {
+            onTranscript({ role: 'assistant', text: cleanedPart.text, final: false });
+          }
         }
       }
       if (sc.interrupted) {
@@ -331,11 +410,30 @@ function createLiveSession(deps) {
         // filter out and points at the spoken audio instead.
         logger.info('live.turn-parts', {
           turnId: turnCounter, textParts: turnTextParts, thoughtParts: turnThoughtParts,
+          audioParts: turnAudioParts, reasoningStripped: turnReasoningStrips,
         });
-        turnTextParts = 0; turnThoughtParts = 0;
+        // BUG-170: a turn that produced a reply the operator could READ but no
+        // audio at all. The 2026-08-07 session had one, and it presents as
+        // MYTHOS ignoring the operator — the HUD shows a reply, the room stays
+        // silent. Detected before the counters reset, and handed to the caller
+        // (this session demonstrably cannot speak it itself).
+        const shownText = (turn.assistantText || turnPartText).trim();
+        const wasSilent = !!shownText && turnAudioParts === 0;
+        turnTextParts = 0; turnThoughtParts = 0; turnAudioParts = 0;
+        turnReasoningStrips = 0; turnPartText = '';
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });
+        }
+        if (wasSilent) {
+          logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });
+          if (bus && typeof bus.emit === 'function') {
+            bus.emit('health.anomaly', { kind: 'live-turn-silent', turnId: turnCounter });
+          }
+          if (onSilentTurn) {
+            try { onSilentTurn({ turnId: turnCounter, text: shownText }); }
+            catch (err) { logger.warn('live.silent-turn-handler-failed', { error: err.message }); }
+          }
         }
         if (onTurnComplete) onTurnComplete(turn);
       }
@@ -505,4 +603,10 @@ function createLiveSession(deps) {
            getState: () => state, isOpen: () => state === 'open' };
 }
 
-module.exports = { createLiveSession, _internal: { WS_URL } };
+module.exports = {
+  createLiveSession,
+  // BUG-170: exported so the strip can be tested as the pure function it is —
+  // both what it removes and, more importantly, what it must leave alone.
+  stripReasoningLead,
+  _internal: { WS_URL, REASONING_LABEL_RE },
+};

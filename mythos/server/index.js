@@ -887,11 +887,16 @@ function createServer(deps) {
     // conversation that followed. Returns null when unified voice is off, S2S
     // is off, there is no key, or the open fails; every one of those falls
     // through to the unchanged edge-tts path below.
-    let liveSession = (targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
+    // BUG-170: skipLive is for the one caller whose whole reason for existing
+    // is that Live just failed to make a sound (a turn with reply text and
+    // zero audio parts). Handing that text back to the same session would
+    // reproduce the silence; this is the only way down to the TTS chain.
+    const skipLive = !!(opts && opts.skipLive);
+    let liveSession = (!skipLive && targetWs && typeof targetWs.getLiveSession === 'function') ? targetWs.getLiveSession() : null;
     // readyState guard: targetWs defaults to lastActiveWs, which may be a tab
     // that has since closed — opening a metered Gemini session to speak into a
     // dead connection is pure waste.
-    if (!(liveSession && liveSession.isOpen()) && targetWs && targetWs.readyState === 1
+    if (!skipLive && !(liveSession && liveSession.isOpen()) && targetWs && targetWs.readyState === 1
         && typeof targetWs.liveForSpeech === 'function') {
       try { liveSession = await targetWs.liveForSpeech(); } catch (_) { /* stays on the TTS path */ }
       // BUG-149: falling through to the TTS chain here is exactly what the
@@ -1559,6 +1564,16 @@ function createServer(deps) {
           // live-session.js's onInterrupted comment: a bare bus.subscribe here
           // would fire for every OTHER connection's interruption too).
           onInterrupted: () => send({ type: 'live-interrupted' }),
+          // BUG-170: Live produced a reply the operator could read and no
+          // audio at all — which is indistinguishable, from the room, from
+          // being ignored. Speak it through the TTS chain instead. skipLive
+          // is not optional here: routing it back into the session that just
+          // failed to speak would be the same silence again.
+          onSilentTurn: ({ turnId, text }) => {
+            logger.warn('live.turn-silent.speaking-via-tts', { turnId, chars: text.length });
+            proactiveSpeak(text, ws, { skipLive: true })
+              .catch((err) => logger.warn('live.turn-silent.tts-failed', { turnId, error: err.message }));
+          },
         });
       }
       const ok = await liveSession.open();
