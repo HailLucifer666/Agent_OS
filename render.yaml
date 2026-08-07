@@ -1,3 +1,15 @@
+# render.yaml — Render Blueprint for the MYTHOS web deployment.
+#
+# Rebuilt 2026-08-08 from commit 82ef724 ("fix(render): /health path +
+# persistent vault disk + Phase 5 env vars"), which lived only on
+# phase5/production-and-docs and was never merged — main had diverged 271
+# commits by the time it was recovered. Every key below was re-verified
+# against the CURRENT src/core/config/schema.js rather than trusted from the
+# old manifest; one entry was deliberately dropped (see PORT below).
+#
+# No secret values live in this file. sync:false entries are prompted for
+# once in Render's dashboard and never echoed back into the repo.
+
 services:
   - type: web
     name: agent-os
@@ -5,27 +17,81 @@ services:
     repo: https://github.com/HailLucifer666/Agent_OS
     branch: main
     rootDir: mythos
-    plan: free
+    # NOTE (billing): 'starter' is a PAID tier. It is required here, not
+    # preferred — Render's free tier supports no persistent disk, and the free
+    # instance also sleeps after 15 min of inactivity, which is wrong for a
+    # system whose premise is continuous cognition. Deploying this blueprint
+    # incurs cost; changing this back to 'free' means dropping the disk block
+    # below and accepting that every redeploy wipes the vault.
+    plan: starter
+    # /health returns {ok:true, uptime} and is mounted at ROOT — verified at
+    # server/index.js:660 — deliberately outside /api so the MYTHOS_AUTH_TOKEN
+    # gate on /api never blocks a readiness probe. The previous value here was
+    # '/api/health', which 404s: the health check could never pass, so Render
+    # had no way to detect an unhealthy instance and restart it.
+    healthCheckPath: /health
+    autoDeploy: true
+    # Persistent vault. Without this the container filesystem is ephemeral and
+    # every deploy, restart or idle spin-down destroys Episodic, Semantic,
+    # Identity, Audit and Goals — the instance silently forgets everything and
+    # still reports healthy.
+    disk:
+      name: mythos-vault
+      mountPath: /data
+      sizeGB: 1
     envVars:
-      - key: PORT
-        generateValue: true
+      # There is deliberately NO 'PORT' entry here. Render injects PORT itself,
+      # and src/main.js:106 maps it through to MYTHOS_PORT. The old manifest
+      # declared `PORT / generateValue: true`, which is worse than redundant:
+      # generateValue mints a RANDOM value, that random value overrides the
+      # injected one, and the app then binds a port Render's proxy cannot
+      # reach — a health check that fails for a reason nothing in the logs
+      # explains.
+      #
+      # MYTHOS_BIND must be non-loopback or Render's proxy cannot reach the
+      # app at all; the schema default is 127.0.0.1.
       - key: MYTHOS_BIND
         value: "0.0.0.0"
       - key: MYTHOS_NAME
         value: "MYTHOS"
       - key: LOG_LEVEL
         value: "info"
-      # V2 §7.2 — MYTHOS_BIND above is non-loopback, so server boot now
-      # refuses to start without this set (see mythos/.env.example). sync:
-      # false means Render prompts for a real value in its dashboard instead
-      # of one being committed here.
+      # Points the vault fs-store at the persistent disk mounted above. The
+      # schema default is the CWD-relative './vault', which on a container
+      # resolves inside the ephemeral layer.
+      - key: MYTHOS_VAULT_ROOT
+        value: "/data/vault"
+      # Because MYTHOS_BIND above is non-loopback, boot REFUSES to start
+      # without this (server/index.js). sync:false = set once in the Render
+      # dashboard, never committed. Use a long random string: this is the only
+      # thing standing between the public internet and the full effector set.
       - key: MYTHOS_AUTH_TOKEN
         sync: false
-      # --- Brain provider keys (set these in Render dashboard, NOT here) ---
+      # CORS + WS origin allowlist. Set to the real service URL after the
+      # first deploy.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Cloud-mode disables. There is no operator to greet and no browser,
+      # screen, window or mailbox on a container — left on, these retry
+      # against peripherals that do not exist and bury real errors in
+      # connection-refused noise.
+      - key: BOOT_GREETING
+        value: "false"
+      - key: BROWSER_AUTOMATION
+        value: "false"
+      - key: SCREEN_AWARENESS_ENABLED
+        value: "false"
+      - key: WINDOW_AWARENESS_ENABLED
+        value: "false"
+      - key: GMAIL_TRIAGE_ENABLED
+        value: "false"
+      # --- Brain provider keys: set in the Render dashboard, NEVER here ---
       # NIM_API_KEY=
       # NIM_API_KEY_2=
       # GROQ_API_KEY=
       # MISTRAL_API_KEY=
       # OPENROUTER_API_KEY=
       # CEREBRAS_API_KEY=
-    healthCheckPath: /api/health
+      # GOOGLE_CLIENT_ID=
+      # GOOGLE_CLIENT_SECRET=
+      # GOOGLE_REFRESH_TOKEN=
