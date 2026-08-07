@@ -137,6 +137,25 @@ async function main() {
   }
   logger.info('vault.dirs.created', { root: vaultRoot, dirs: vaultDirs });
 
+  // F4 (go-live proof plan): on a container platform without a mounted volume
+  // (Render free tier — any redeploy), the vault directory is EPHEMERAL:
+  // every redeploy silently wipes episodic/semantic/identity/audit data, and
+  // fs-store JSON/JSONL has no other persistence. Render sets RENDER=true;
+  // Docker/OCI runtimes drop /.dockerenv. Neither exists on a local desktop
+  // boot, so this warning fires only where the risk is real, and it names the
+  // resolution path so the wipe is never silent. This is a warning, not a
+  // gate: whether the cloud deployment persists (volume), externalizes
+  // (object storage / DB) or explicitly accepts ephemeral cloud memory as
+  // documented behavior is the operator's decision — recorded in the roadmap,
+  // never decided by code. Pinned by test/vault-ephemeral-warning.test.js.
+  const inContainer = process.env.RENDER === 'true' || fs.existsSync('/.dockerenv');
+  if (inContainer) {
+    logger.warn('vault.ephemeral', {
+      root: vaultRoot,
+      risk: 'container-local disk is wiped on redeploy — mount a persistent volume or externalize the vault before relying on stored memory',
+    });
+  }
+
   // Step 5: Lifecycle
   const lifecycle = createLifecycle({ bus, logger, config });
 
