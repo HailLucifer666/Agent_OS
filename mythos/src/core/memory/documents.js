@@ -12,8 +12,8 @@ const crypto = require('crypto');
 // lives in vault/Documents/index.json for document_list().
 
 function createDocumentsStore({ fs }) {
-  if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function') {
-    throw new Error('createDocumentsStore requires a vault fs-store with readJSON/writeJSON');
+  if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function' || typeof fs.readJSONStrict !== 'function') {
+    throw new Error('createDocumentsStore requires a vault fs-store with readJSON/readJSONStrict/writeJSON');
   }
 
   const INDEX_PATH = 'Documents/index.json';
@@ -49,9 +49,15 @@ function createDocumentsStore({ fs }) {
 
   // registerDocument(docMeta) — upserts one row into the doc-level index,
   // keyed by docId. docMeta: { docId, sourceType, title|filePath, chunkCount }
+  //
+  // B7: read-mutate-write on INDEX_PATH — readJSON() would read a corrupt
+  // index.json as the empty fallback, and the writeJSON below would then
+  // commit that empty index over the real one, dropping every document's
+  // metadata and orphaning its chunks. readJSONStrict throws instead, so the
+  // corruption surfaces here rather than being silently written away.
   function registerDocument(docMeta) {
     if (!docMeta || !docMeta.docId) return null;
-    const index = fs.readJSON(INDEX_PATH, { docs: [] });
+    const index = fs.readJSONStrict(INDEX_PATH, { docs: [] });
     const docs = Array.isArray(index.docs) ? index.docs : [];
     const idx = docs.findIndex(function(d) { return d.docId === docMeta.docId; });
     const row = Object.assign({ ts: Date.now() }, docMeta);

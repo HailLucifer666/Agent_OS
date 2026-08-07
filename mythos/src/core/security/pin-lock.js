@@ -33,19 +33,34 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 60000;
 
 function createPinLock({ fs }) {
-  if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function') {
-    throw new Error('createPinLock requires a vault fs-store with readJSON/writeJSON');
+  if (!fs || typeof fs.readJSON !== 'function' || typeof fs.writeJSON !== 'function' || typeof fs.readJSONStrict !== 'function') {
+    throw new Error('createPinLock requires a vault fs-store with readJSON/readJSONStrict/writeJSON');
   }
 
   let failCount = 0;
   let lockedUntil = 0;
 
+  // B7 (the serious one): load() used to be fs.readJSON(FILE, null), so a
+  // corrupt pin.json read as null — same as "no PIN configured" — and
+  // isConfigured() below would then return false. server/index.js treats
+  // isConfigured()===false as "skip the PIN gate entirely," so a corrupt file
+  // silently DISABLED a lock the operator deliberately set. readJSONStrict
+  // throws on corruption instead, and every caller below fails closed on that
+  // throw (assume a PIN exists / deny the attempt) rather than treating it as
+  // an empty store.
   function load() {
-    return fs.readJSON(FILE, null);
+    return fs.readJSONStrict(FILE, null);
   }
 
   function isConfigured() {
-    const rec = load();
+    let rec;
+    try {
+      rec = load();
+    } catch (_) {
+      // Fail closed and loud: a corrupt pin.json must never be mistaken for
+      // "no PIN configured" — that would silently disable the gate.
+      return true;
+    }
     return !!(rec && rec.hash && rec.salt);
   }
 
@@ -93,7 +108,14 @@ function createPinLock({ fs }) {
     if (now < lockedUntil) {
       return { ok: false, error: `Too many attempts — locked for ${Math.ceil((lockedUntil - now) / 1000)}s.`, lockedOut: true };
     }
-    const rec = load();
+    let rec;
+    try {
+      rec = load();
+    } catch (_) {
+      // Fail closed: a corrupt pin.json must deny the attempt, not be read as
+      // "no PIN configured" (which would let verify()'s caller through).
+      return { ok: false, error: 'PIN store unreadable — locked for safety.', lockedOut: true };
+    }
     if (!rec || !rec.hash || !rec.salt) return { ok: false, error: 'No PIN configured.' };
 
     const pinStr = String(pin == null ? '' : pin);

@@ -40,16 +40,30 @@ function createCheckpointRegistry({ config, bus, auditWriter, goals, fs }) {
   const TTL_MS = config.CHECKPOINT_TTL_MS;
   const pending = new Map();   // id -> record (incl. onApprove/onReject closures)
   let history = [];            // resolved records, JSON-safe, newest last
+  let persistSuspended = false; // B7: set when history couldn't be loaded — see init()
 
   function persistHistory() {
-    if (!fs) return;
+    if (!fs || persistSuspended) return;
     try { fs.writeJSON(HISTORY_FILE, history.slice(-MAX_HISTORY)); }
     catch (err) { bus.emit('health.anomaly', { kind: 'checkpoint-history-persist-failed', error: err.message }); }
   }
 
   function init() {
     if (!fs) return { loadedHistory: 0 };
-    try { history = fs.readJSON(HISTORY_FILE, []); } catch (_) { history = []; }
+    // B7: readJSON() cannot tell a missing file from a corrupt one, and this
+    // is a read-mutate-write store (finalize() below rewrites the whole
+    // history on every resolve) — a lenient read on a corrupt file would load
+    // as [] and the next finalize() call permanently overwrites real approval
+    // history with an empty array. readJSONStrict throws instead of returning
+    // that fallback; on a real read failure we report it, load nothing, and
+    // suspend persistence so the corrupt file is never overwritten either.
+    try {
+      history = fs.readJSONStrict(HISTORY_FILE, []);
+    } catch (err) {
+      bus.emit('health.anomaly', { kind: 'checkpoint-history-read-failed', path: HISTORY_FILE, error: err.message });
+      persistSuspended = true;
+      return { loadedHistory: 0, degraded: true };
+    }
     if (!Array.isArray(history)) history = [];
     return { loadedHistory: history.length };
   }

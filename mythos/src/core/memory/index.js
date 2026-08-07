@@ -151,17 +151,32 @@ function createMemory({ config, bus, logger, brain }) {
     var mergedFacts = Array.isArray(result.parsed.facts) ? result.parsed.facts : [];
     if (mergedFacts.length === 0) return null;
 
-    // Rewrite: delete the old consolidated-* files, write one fresh
-    // consolidated-<ts> topic with the merged facts. Single atomic swap.
+    // Rewrite: write the merged topic FIRST and verify it actually landed,
+    // THEN delete the old consolidated-* source files.
+    //
+    // B8: this used to delete the sources, then call semantic.write() — but
+    // semantic.write() never throws on a write failure, it swallows the error
+    // and returns { ref: null, degraded: true }, so the old try/catch around
+    // it never caught anything. Any write failure (disk full, permissions,
+    // etc.) therefore permanently destroyed every distilled user-fact topic,
+    // with nothing left to show for it. This was never a "single atomic
+    // swap" despite the old comment — it was two independent steps in the
+    // wrong order. Now: write first, throw loudly if it didn't really
+    // succeed, and only delete the sources once the replacement is confirmed
+    // on disk.
+    let writeResult;
     try {
-      topics.forEach(function (t) { fs.removeFile(t.file); });
-    } catch (_) { /* partial cleanup — next pass will retry */ }
-    try {
-      semantic.write('consolidated-' + Date.now(), mergedFacts, {
+      writeResult = semantic.write('consolidated-' + Date.now(), mergedFacts, {
         confidence: 0.7,
         sources: topics.map(function (t) { return t.file; })
       });
-    } catch (_) { return null; }
+    } catch (err) {
+      throw new Error('mergeConsolidatedTopics: semantic.write threw: ' + err.message);
+    }
+    if (!writeResult || writeResult.degraded || !writeResult.ref) {
+      throw new Error('mergeConsolidatedTopics: semantic.write failed — refusing to delete source topics');
+    }
+    topics.forEach(function (t) { fs.removeFile(t.file); });
 
     bus.emit('memory.merged', {
       inputTopics: topics.length,
@@ -355,8 +370,12 @@ function createMemory({ config, bus, logger, brain }) {
         // used at most once above). Best-effort: never blocks consolidation.
         try {
           await mergeConsolidatedTopics();
-        } catch (_) {
-          // mergeConsolidatedTopics failures are best-effort
+        } catch (err) {
+          // B8: mergeConsolidatedTopics() now throws loudly instead of
+          // silently deleting source topics on a failed write — consolidation
+          // as a whole still stays best-effort, but the failure must be
+          // visible rather than vanishing into an empty catch.
+          bus.emit('health.anomaly', { kind: 'consolidate-merge-failed', error: err.message });
         }
       }
 

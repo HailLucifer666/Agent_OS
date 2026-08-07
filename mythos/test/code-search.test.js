@@ -29,6 +29,7 @@ function memFs() {
   const files = new Map();
   return {
     readJSON: (p, fb) => (files.has(p) ? JSON.parse(files.get(p)) : fb),
+    readJSONStrict: (p, fb) => (files.has(p) ? JSON.parse(files.get(p)) : fb),
     writeJSON: (p, d) => { files.set(p, JSON.stringify(d)); },
     ensureDir: () => {},
     vaultPath: (...segments) => segments.join('/'),
