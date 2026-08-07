@@ -1,0 +1,56 @@
+package com.mythos.nodes.shared
+
+/**
+ * The MYTHOS `/ws` wire shapes a voice node uses.
+ *
+ * Deliberately hand-built JSON with no serialization library: these are four
+ * tiny flat objects, the field names are a contract with `mythos/server/index.js`
+ * (grep `node-reading` there), and a dependency whose only job is to emit
+ * `{"type":"node-reading",...}` earns nothing. The escaping below is the reason
+ * this is a shared, tested object rather than string concatenation at each call
+ * site — a device name containing a quote must not produce a frame the server
+ * silently fails to parse.
+ *
+ * Note these are MYTHOS messages, not Aether protocol messages. The node never
+ * speaks Aether's §4 `reading`/`lost` shape — MYTHOS's scanner-proxy translates,
+ * because a phone cannot be an Aether scanner (it cannot be dialled). See
+ * `mythos/src/core/aether/scanner-proxy.js`.
+ */
+public object NodeMessages {
+
+    /** Minimal JSON string escaping — quotes, backslashes, and control chars. */
+    public fun jsonEscape(raw: String): String {
+        val sb = StringBuilder(raw.length + 8)
+        for (ch in raw) {
+            when (ch) {
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> if (ch < ' ') sb.append("\\u%04x".format(ch.code)) else sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * A verified BLE observation of the tracked beacon. Only ever sent for a
+     * payload that passed [BeaconAuth.verifyBeacon] — an unauthenticated
+     * advertisement must never reach the election.
+     */
+    public fun reading(nodeId: String, rssi: Double, name: String): String =
+        """{"type":"node-reading","nodeId":"${jsonEscape(nodeId)}","rssi":$rssi,"name":"${jsonEscape(name)}"}"""
+
+    /** This node can no longer see the beacon. */
+    public fun lost(nodeId: String): String =
+        """{"type":"node-lost","nodeId":"${jsonEscape(nodeId)}"}"""
+
+    /** Claim a node identity on this socket, so speech can be routed back to it. */
+    public fun identify(nodeId: String): String =
+        """{"type":"identify","role":"node","nodeId":"${jsonEscape(nodeId)}"}"""
+
+    /** A transcribed utterance from this node's microphone. */
+    public fun utterance(reqId: String, text: String): String =
+        """{"type":"utterance","reqId":"${jsonEscape(reqId)}","text":"${jsonEscape(text)}"}"""
+}

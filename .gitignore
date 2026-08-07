@@ -112,3 +112,12 @@ mythos/.tmp-doc-rag-test/
 # E2E run artifacts — screenshots, boot logs and the results JSON that
 # scripts/e2e/run-e2e.mjs writes on every run. Regenerated per run, never committed.
 /mythos/scripts/e2e/artifacts/
+
+# MYTHOS Voice Nodes (nodes/) — the Android/Wear Gradle build. Its outputs and
+# machine-specific SDK path never belong in git; contributors point
+# nodes/local.properties at their own Android SDK (see nodes/README.md).
+nodes/local.properties
+nodes/.gradle/
+nodes/build/
+nodes/*/build/
+nodes/.kotlin/
