@@ -1468,6 +1468,71 @@ public static class MythosAppVolume {
         }
         return changed.ToArray();
     }
+
+    // BUG-161: "name|pid|level|muted" per matching session, read-only. Exists so
+    // a relative step ("turn Spotify down") can read the CURRENT level first and
+    // go through SetVolume's read-back oracle, instead of firing global volume
+    // VK keys that move the master volume (or nothing) while reporting success.
+    public static string[] GetVolume(string name, int targetProcessId) {
+        var found = new List<string>();
+        var sessions = GetSessions();
+        int count;
+        Marshal.ThrowExceptionForHR(sessions.GetCount(out count));
+        for (int i = 0; i < count; i++) {
+            object ctl;
+            if (sessions.GetSession(i, out ctl) != 0 || ctl == null) continue;
+            var ctl2 = ctl as IMythosSessionControl2;
+            if (ctl2 == null) continue;
+            uint processId;
+            if (ctl2.GetProcessId(out processId) != 0) continue;
+            string processName = NameForPid(processId);
+            bool match = targetProcessId > 0
+                ? ((int)processId == targetProcessId)
+                : (!string.IsNullOrEmpty(name) &&
+                   string.Equals(processName, name, StringComparison.OrdinalIgnoreCase));
+            if (!match) continue;
+            var vol = ctl as IMythosSimpleAudioVolume;
+            if (vol == null) continue;
+            float level;
+            Marshal.ThrowExceptionForHR(vol.GetMasterVolume(out level));
+            bool muted;
+            Marshal.ThrowExceptionForHR(vol.GetMute(out muted));
+            found.Add(processName + "|" + processId + "|" + ((int)Math.Round(level * 100)) + "|" + (muted ? "1" : "0"));
+        }
+        return found.ToArray();
+    }
+
+    // BUG-161: set the mute flag on matching sessions; "name|pid|muted" read
+    // back per session actually changed. Same no-match contract as SetVolume:
+    // an empty array means the caller must fail, never widen to the master.
+    public static string[] SetMute(string name, int targetProcessId, bool mute) {
+        var changed = new List<string>();
+        var sessions = GetSessions();
+        int count;
+        Marshal.ThrowExceptionForHR(sessions.GetCount(out count));
+        for (int i = 0; i < count; i++) {
+            object ctl;
+            if (sessions.GetSession(i, out ctl) != 0 || ctl == null) continue;
+            var ctl2 = ctl as IMythosSessionControl2;
+            if (ctl2 == null) continue;
+            uint processId;
+            if (ctl2.GetProcessId(out processId) != 0) continue;
+            string processName = NameForPid(processId);
+            bool match = targetProcessId > 0
+                ? ((int)processId == targetProcessId)
+                : (!string.IsNullOrEmpty(name) &&
+                   string.Equals(processName, name, StringComparison.OrdinalIgnoreCase));
+            if (!match) continue;
+            var vol = ctl as IMythosSimpleAudioVolume;
+            if (vol == null) continue;
+            Guid ctx = Guid.Empty;
+            Marshal.ThrowExceptionForHR(vol.SetMute(mute, ref ctx));
+            bool actual;
+            Marshal.ThrowExceptionForHR(vol.GetMute(out actual));
+            changed.Add(processName + "|" + processId + "|" + (actual ? "1" : "0"));
+        }
+        return changed.ToArray();
+    }
 }
 '@ -ErrorAction Stop
     $script:AppVolumeType = [MythosAppVolume]
@@ -1511,6 +1576,72 @@ function Handle-SetAppVolume($name, $TargetPid, $level) {
         return @{ sessions = $applied; level = [int]$applied[0].level; count = $applied.Count }
     } catch {
         return ('set_app_volume failed: ' + $_.Exception.Message)
+    }
+}
+
+# BUG-161: read-only twin of Handle-SetAppVolume. Exists so a relative volume
+# step ("turn Spotify down") can read the CURRENT per-app level and then go
+# through set_app_volume's read-back oracle, instead of firing global volume
+# VK keys that move the master volume (or nothing) while reporting success.
+function Handle-GetAppVolume($name, $TargetPid) {
+    $wantPid = 0
+    if ($null -ne $TargetPid -and "$TargetPid" -ne '') {
+        if (-not [int]::TryParse("$TargetPid", [ref]$wantPid)) { return "pid must be a number (got '$TargetPid')." }
+    }
+    $wantName = ''
+    if ($null -ne $name) { $wantName = ("$name" -replace '\.exe$', '') }
+    if ($wantPid -le 0 -and $wantName -eq '') { return 'name or pid is required.' }
+    try {
+        $type = Get-AppVolumeType
+        $found = @($type::GetVolume($wantName, $wantPid))
+        if ($found.Count -eq 0) {
+            $seen = @($type::ListSessions())
+            $target = if ($wantPid -gt 0) { "pid $wantPid" } else { "process '$wantName'" }
+            $names = if ($seen.Count -gt 0) { ($seen -join ', ') } else { '(none)' }
+            # ASCII only inside the literal - see Handle-SetAppVolume's note.
+            return "No audio session for $target - there is no per-app volume to read. Apps with a live audio session right now: $names."
+        }
+        $sessions = @()
+        foreach ($entry in $found) {
+            $f = $entry -split '\|'
+            $sessions += @{ process = $f[0]; pid = [int]$f[1]; level = [int]$f[2]; muted = ($f[3] -eq '1') }
+        }
+        return @{ sessions = $sessions; level = [int]$sessions[0].level; muted = [bool]$sessions[0].muted; count = $sessions.Count }
+    } catch {
+        return ('get_app_volume failed: ' + $_.Exception.Message)
+    }
+}
+
+# BUG-161: per-app mute via ISimpleAudioVolume.SetMute, with read-back. Same
+# no-match contract as set_app_volume: fail naming what was searched, never
+# widen to the master mute.
+function Handle-SetAppMute($name, $TargetPid, $mute) {
+    $wantMute = $true
+    if ($null -ne $mute -and ("$mute" -eq 'false' -or "$mute" -eq '0')) { $wantMute = $false }
+    $wantPid = 0
+    if ($null -ne $TargetPid -and "$TargetPid" -ne '') {
+        if (-not [int]::TryParse("$TargetPid", [ref]$wantPid)) { return "pid must be a number (got '$TargetPid')." }
+    }
+    $wantName = ''
+    if ($null -ne $name) { $wantName = ("$name" -replace '\.exe$', '') }
+    if ($wantPid -le 0 -and $wantName -eq '') { return 'name or pid is required.' }
+    try {
+        $type = Get-AppVolumeType
+        $changed = @($type::SetMute($wantName, $wantPid, $wantMute))
+        if ($changed.Count -eq 0) {
+            $seen = @($type::ListSessions())
+            $target = if ($wantPid -gt 0) { "pid $wantPid" } else { "process '$wantName'" }
+            $names = if ($seen.Count -gt 0) { ($seen -join ', ') } else { '(none)' }
+            return "No audio session for $target - its mute state was NOT changed, and nothing else was changed either. Apps with a live audio session right now: $names."
+        }
+        $applied = @()
+        foreach ($entry in $changed) {
+            $f = $entry -split '\|'
+            $applied += @{ process = $f[0]; pid = [int]$f[1]; muted = ($f[2] -eq '1') }
+        }
+        return @{ sessions = $applied; muted = [bool]$applied[0].muted; count = $applied.Count }
+    } catch {
+        return ('set_app_mute failed: ' + $_.Exception.Message)
     }
 }
 
@@ -3745,6 +3876,14 @@ while ($true) {
         }
         'set_app_volume' {
             $result = Handle-SetAppVolume $cmd.name $cmd.pid $cmd.level
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'get_app_volume' {
+            $result = Handle-GetAppVolume $cmd.name $cmd.pid
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'set_app_mute' {
+            $result = Handle-SetAppMute $cmd.name $cmd.pid $cmd.mute
             if ($result -is [string]) { $err = $result; $result = $null }
         }
         'screen_look' {

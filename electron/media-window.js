@@ -36,24 +36,39 @@ const MEDIA_WIDGET_TYPES = new Set(['youtube', 'web']);
 // MYTHOS", and newtab already opens the operator's own external browser via
 // window.open, per app.js). Returns null when this payload isn't one Electron
 // should turn into a real window.
-function resolveMediaUrl(payload) {
+//
+// BUG-166 (mediaBaseUrl): a YouTube EMBED URL must never be loaded as this
+// window's top-level document — a top-level embed carries no referer and
+// YouTube's player answers "Error 153: video player configuration error"
+// (operator incident 2026-08-07 04:04; reproduced in headless Chromium, where
+// the same URL iframed from a local page shows no 153). When mediaBaseUrl is
+// provided, youtube payloads route to the server-hosted wrapper page
+// (ui/public/media-embed.html) which iframes the pre-checked embed — the same
+// shape the dashboard panel already plays through. `web` payloads are real
+// top-level pages and load directly, as before.
+function resolveMediaUrl(payload, mediaBaseUrl) {
   if (!payload || typeof payload !== 'object') return null;
   if (!MEDIA_WIDGET_TYPES.has(payload.widgetType)) return null;
   const url = payload.embedUrl || payload.url;
-  return typeof url === 'string' && url ? url : null;
+  if (typeof url !== 'string' || !url) return null;
+  if (payload.widgetType === 'youtube' && mediaBaseUrl) {
+    return mediaBaseUrl.replace(/\/$/, '') + '/media-embed.html?src=' + encodeURIComponent(url)
+      + (payload.title ? '&title=' + encodeURIComponent(String(payload.title).slice(0, 120)) : '');
+  }
+  return url;
 }
 
 // Builds the handler electron/main.js wires to child.on('message'). Tracks
 // one media window: a second "open" reuses/navigates the existing window
 // (loadURL) instead of stacking a new one every time, per the Stage 5 spec.
-function createMediaWindowController({ BrowserWindowCtor, preloadPath, backgroundThrottling = false }) {
+function createMediaWindowController({ BrowserWindowCtor, preloadPath, backgroundThrottling = false, mediaBaseUrl = '' }) {
   if (typeof BrowserWindowCtor !== 'function') {
     throw new Error('createMediaWindowController requires a BrowserWindowCtor');
   }
   let win = null;
 
   function handleOpenWeb(payload) {
-    const url = resolveMediaUrl(payload);
+    const url = resolveMediaUrl(payload, mediaBaseUrl);
     if (!url) return { opened: false, reason: 'not a media widgetType' };
 
     if (win && !win.isDestroyed()) {

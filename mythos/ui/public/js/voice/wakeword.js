@@ -51,7 +51,67 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   let featureBuffer = []; // array of Float32Array(EMBED_DIM) — embedding history
   let lastWakeAt = 0;
 
-  function status(kind, msg) { if (onStatus) onStatus(kind, msg); }
+  // BUG-150: liveness + diagnostics. Until these existed, "the detector is
+  // listening" was an ASSERTION — start() returned true once the audio graph was
+  // wired, having never confirmed a single frame arrived or a single score was
+  // computed. Every silent failure mode (a suspended AudioContext, a worklet that
+  // never fires, a mic delivering nothing) builds that graph without throwing, so
+  // all of them reported "Standby — listening". A week of "hey jarvis" produced no
+  // information because nothing here was ever measured or logged.
+  let framesSeen = 0;         // incremented in the port handler, BEFORE the running gate
+  let peakScore = 0;          // rolling peak since the last metrics report
+  let scoresComputed = 0;     // how many times the CLASSIFIER actually ran
+  let framesAtLastReport = 0;
+  let metricsTimer = null;
+  let ctxStateAtStart = null; // AudioContext.state as measured, not as assumed
+  // Generous: ~18 frames (1280 samples / 80ms each) are expected in this window,
+  // so zero means genuinely no audio rather than a slow machine.
+  const FIRST_FRAME_TIMEOUT_MS = 3000;
+  const METRICS_INTERVAL_MS = 5000;
+
+  function status(kind, msg, data) { if (onStatus) onStatus(kind, msg, data); }
+
+  // The single most diagnostic number available, and it was being thrown away on
+  // every frame that didn't cross the threshold. Reported WITH the threshold, so
+  // the two are never read apart: a peak of 0.42 against 0.5 is a tuning problem,
+  // a peak of 0.001 is a dead pipeline, and they look identical without both.
+  function reportMetrics() {
+    if (!running) return;
+    const framesSince = framesSeen - framesAtLastReport;
+    framesAtLastReport = framesSeen;
+    const peak = peakScore;
+    const scored = scoresComputed;
+    peakScore = 0;
+    scoresComputed = 0;
+    status('metrics', 'wake-word listening', {
+      // 6dp, not 4: a real classifier on silence emits values like 1e-6, and
+      // rounding those to a flat 0.0000 is indistinguishable from a classifier
+      // that never ran — which is exactly the ambiguity `scores` below resolves.
+      peakScore: Number(peak.toFixed(6)),
+      // THE decisive counter. frames>0 with scores==0 means audio arrives but the
+      // mel -> embedding -> classifier chain never completes a window, i.e. the
+      // detector is structurally incapable of ever firing. frames>0 with scores>0
+      // means the pipeline is whole and the only question left is the score value.
+      scores: scored,
+      frames: framesSince,
+      framesTotal: framesSeen,
+      threshold: THRESHOLD,
+      ctxState: audioCtx ? audioCtx.state : null,
+      streamLive: Boolean(stream && stream.getAudioTracks().some((t) => t.readyState === 'live')),
+    });
+  }
+
+  function waitForFirstFrame(timeoutMs) {
+    if (framesSeen > 0) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      (function poll() {
+        if (framesSeen > 0) return resolve(true);
+        if (Date.now() > deadline) return resolve(false);
+        setTimeout(poll, 50);
+      })();
+    });
+  }
 
   async function loadOrt() {
     // ADAPT: '/vendor/onnxruntime/ort.min.mjs' matches the ESM bundle name
@@ -151,6 +211,10 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       if (featureBuffer.length >= classifierWindow) {
         const score = await runClassifier();
         const now = Date.now();
+        // BUG-150: remember the highest score seen, whether or not it fires. This
+        // is what turns "it never works" into a number that names the cause.
+        scoresComputed++;
+        if (score > peakScore) peakScore = score;
         if (score >= THRESHOLD && now - lastWakeAt >= REFRACTORY_MS) {
           lastWakeAt = now;
           if (onWake) onWake(score);
@@ -167,11 +231,38 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   async function ensureAudio() {
     stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    // BUG-150: Chromium creates an AudioContext 'suspended' unless it is made
+    // during a user gesture, and a suspended context wires its whole graph
+    // happily while NEVER running the worklet — a silently deaf detector that
+    // reports success. The Electron shell relaxes this
+    // (--autoplay-policy=no-user-gesture-required, electron/main.js), which makes
+    // it unlikely here but does not make it false, and nothing in this file ever
+    // read the state to find out. pcm-player.js:16 already does exactly this for
+    // playback; capture needs it just as much. Idempotent when already running.
+    ctxStateAtStart = audioCtx.state;
+    if (audioCtx.state === 'suspended') {
+      try { await audioCtx.resume(); } catch (_) { /* reported via the state below */ }
+    }
+    // A context can also be suspended LATER — an OS audio-device change, sleep/
+    // resume — which would otherwise turn the detector quietly deaf mid-session
+    // with the caption still promising it is listening.
+    audioCtx.addEventListener('statechange', () => {
+      if (!running || !audioCtx) return;
+      if (audioCtx.state === 'suspended') {
+        status('degraded', 'Wake word stopped receiving audio (context suspended) — trying to resume', { ctxState: audioCtx.state });
+        audioCtx.resume().catch(() => {});
+      }
+    });
     const source = audioCtx.createMediaStreamSource(stream);
     await audioCtx.audioWorklet.addModule('/js/voice/wakeword-worklet.js');
     workletNode = new AudioWorkletNode(audioCtx, 'wakeword-frame-processor');
     workletNode.port.onmessage = (e) => {
-      if (e.data && e.data.type === 'frame') onFrame(e.data.samples);
+      if (!e.data || e.data.type !== 'frame') return;
+      // BUG-150: counted BEFORE onFrame's `if (!running) return` gate, and before
+      // any inference. This counter is the evidence that audio is physically
+      // arriving, independent of whether the model does anything useful with it.
+      framesSeen++;
+      onFrame(e.data.samples);
     };
     // Muted gain sink: AudioWorklet is pull-based — without a downstream
     // destination the process() callback never fires (same pattern as
@@ -199,12 +290,44 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       stop();
       return false;
     }
+    // Set BEFORE waiting: onFrame's own `if (!running) return` gate would
+    // otherwise discard every frame we are waiting for.
     running = true;
+
+    // BUG-150: the detector must PROVE it is receiving audio before claiming to
+    // listen. Everything above can succeed while no frame ever arrives, and that
+    // is precisely the state the operator spent a week in — a caption saying
+    // "Standby — listening" over a detector that was deaf. Returning false here
+    // means app.js reports the failure and lets a later gesture re-arm, exactly
+    // as it already does for a throwing start().
+    const gotAudio = await waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS);
+    if (!gotAudio) {
+      const live = Boolean(stream && stream.getAudioTracks().some((t) => t.readyState === 'live'));
+      status('silent',
+        'Wake word armed but received no audio in ' + (FIRST_FRAME_TIMEOUT_MS / 1000) + 's — not listening',
+        { ctxState: audioCtx ? audioCtx.state : null, ctxStateAtStart: ctxStateAtStart, streamLive: live, frames: 0 });
+      stop();
+      return false;
+    }
+
+    status('listening', 'Wake word receiving audio', {
+      ctxState: audioCtx ? audioCtx.state : null,
+      ctxStateAtStart: ctxStateAtStart,
+      framesToFirstAudio: framesSeen,
+      threshold: THRESHOLD,
+    });
+    metricsTimer = setInterval(reportMetrics, METRICS_INTERVAL_MS);
     return true;
   }
 
   function stop() {
     running = false;
+    // BUG-150: the metrics interval must die with the detector, or it keeps
+    // reporting "listening" for a detector that has released the microphone.
+    if (metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
+    framesSeen = 0;
+    framesAtLastReport = 0;
+    peakScore = 0;
     if (workletNode) {
       try { workletNode.port.onmessage = null; workletNode.disconnect(); } catch { /* ok */ }
       workletNode = null;

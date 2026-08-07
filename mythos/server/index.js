@@ -2180,6 +2180,31 @@ function createServer(deps) {
         const ctrl = inflightSpeech.get(msg.reqId);
         if (ctrl) ctrl.abort();
       }
+      // ---- Wake-word telemetry (BUG-150) ----
+      // The wake word runs entirely in the browser and reported entirely to a
+      // transient HUD caption, so NOTHING about it was ever visible server-side:
+      // not whether it armed, not whether audio reached it, not what it scored.
+      // "Hey jarvis has never worked" was therefore undiagnosable from any log,
+      // for a week. This is the read-only pipe that fixes that. It changes no
+      // behaviour and drives nothing — it exists to be greppable.
+      else if (msg.type === 'wakeword-status') {
+        const state = String(msg.state || 'unknown').slice(0, 40);
+        const fields = { state: state, detail: String(msg.detail || '').slice(0, 300) };
+        // Copy only the known numeric/boolean diagnostics, so a client cannot
+        // inflate the log with arbitrary keys.
+        for (const k of ['peakScore', 'score', 'scores', 'frames', 'framesTotal', 'threshold', 'framesToFirstAudio']) {
+          if (typeof msg[k] === 'number' && Number.isFinite(msg[k])) fields[k] = msg[k];
+        }
+        for (const k of ['ctxState', 'ctxStateAtStart', 'reason']) {
+          if (typeof msg[k] === 'string') fields[k] = msg[k].slice(0, 40);
+        }
+        if (typeof msg.streamLive === 'boolean') fields.streamLive = msg.streamLive;
+        // 'silent' means armed-but-deaf and 'detected-suppressed' means heard-but-
+        // ignored; both are the interesting failures, so they warn rather than
+        // disappear into info-level noise.
+        if (state === 'silent' || state === 'error' || state === 'degraded') logger.warn('wakeword.' + state, fields);
+        else logger.info('wakeword.' + state, fields);
+      }
       // ---- S2S Live voice (V2 §10, Phase 5) ----
       else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
       else if (msg.type === 'live-audio') { if (liveSession) liveSession.sendAudio(msg.data); }
@@ -2297,16 +2322,32 @@ function createServer(deps) {
   // Open-web events — relay web content payload (YouTube embed, weather, search
   // cards, etc.) so the dashboard opens a panel or floating widget.
   bus.subscribe('ui.open-web', (e) => {
-    broadcastAll({ type: 'open-web', payload: e.payload });
     // Stage 5 (BUG-075): "open YouTube on the Electron app" (operator,
     // verbatim) needs a real second BrowserWindow, which only electron/main.js
-    // (a SEPARATE OS process — the fork() parent) can create. The broadcast
-    // above only ever reaches this process's own WS clients (the dashboard's
+    // (a SEPARATE OS process — the fork() parent) can create. The WS broadcast
+    // below only ever reaches this process's own WS clients (the dashboard's
     // browser JS), never the Electron main process. process.send() is the
     // fork() IPC channel already set up for lifecycle when running under
     // Electron (stdio slot 3, 'ipc') — reused here, not a new channel. Absent
     // under a plain `node mythos/src/main.js` boot (no send()), which is fine:
     // there is no Electron window to open in that mode anyway.
+    //
+    // BUG-166: ONE surface per open_web call. This used to broadcast AND
+    // relay unconditionally, so under Electron a single
+    // open_web(type:"youtube") produced two players of the same video — the
+    // dashboard panel plus an always-on-top media window showing YouTube's
+    // Error 153 (operator incident 2026-08-07 04:04, "conflicting windows"
+    // with a non-interactive panel underneath). Under Electron the media
+    // window is the designed surface for youtube/web (BUG-075's ask), so the
+    // panel broadcast is suppressed for exactly those two types; every other
+    // widgetType (search/weather/flights/image/dynamic/newtab/news) still
+    // broadcasts as before, and a plain node boot (no process.send) is
+    // byte-identical to the old behaviour. A HUD open in a separate browser
+    // tab while the Electron shell runs will not see a youtube panel — the
+    // media window is the one surface, deliberately.
+    const electronHandles = typeof process.send === 'function'
+      && e.payload && (e.payload.widgetType === 'youtube' || e.payload.widgetType === 'web');
+    if (!electronHandles) broadcastAll({ type: 'open-web', payload: e.payload });
     if (typeof process.send === 'function') {
       try { process.send({ channel: 'mythos:ui.open-web', payload: e.payload }); }
       catch { /* no parent listening (non-Electron boot) — nothing to relay to */ }

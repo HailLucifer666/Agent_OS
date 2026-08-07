@@ -478,33 +478,84 @@ function ensureWakeWord() {
   }).finally(() => { _wakewordArming = false; });
 }
 
+// BUG-150: the wake word's entire state used to live in a transient HUD caption
+// and nowhere else — no status, score or frame count ever reached the server, so
+// no log could answer "did it hear me". These two helpers fix that in the two
+// places it matters: the server log (permanent, greppable) and a DOM attribute
+// (so standby is visible in the UI and inspectable in devtools, which is also
+// how the headless measurement reads it).
+function reportWakeword(state, detail, data) {
+  try {
+    document.documentElement.dataset.wakeword = state;
+  } catch (_) { /* pre-DOM or exotic host; telemetry below still goes out */ }
+  try {
+    sendMessage(Object.assign({
+      type: 'wakeword-status',
+      state: state,
+      detail: typeof detail === 'string' ? detail.slice(0, 300) : '',
+    }, data && typeof data === 'object' ? data : {}));
+  } catch (_) { /* socket not up yet — never let telemetry break the detector */ }
+}
+
 function startWakeWord() {
   return import('./voice/wakeword.js').then(({ createWakeWord }) => {
     wakeword = createWakeWord({
       threshold: _wakewordCfg.threshold,
-      onWake: () => {
-        // Never react to a spoken wake word at a locked (or not-yet-known)
-        // machine — a bystander who knows the wake phrase must not be able
-        // to open a full voice turn, including server-side tool dispatch,
-        // just by speaking at a locked HUD.
-        if (isGateClosed(pinLockScreen.lockState())) return;
-        if (voice && voice.isActive()) return;   // already in a conversation
-        if (s2s && s2s.isActive()) return;        // ...or already in a live S2S session
-        if (s2s && s2s.isSpeaking()) return;      // Live model is talking — no re-trigger
-        if (_voiceState === 'speaking') return;   // MYTHOS is talking — no re-trigger
+      onWake: (score) => {
+        // BUG-150: every one of these five guards was a SILENT return. A wake
+        // word that was heard and then suppressed looked exactly like one that
+        // was never heard at all, which is half of why this went a week without
+        // a diagnosis. Behaviour is deliberately unchanged — the PIN gate in
+        // particular is a security control, not a nuisance — they only say so now.
+        const suppressed =
+          isGateClosed(pinLockScreen.lockState()) ? 'pin-gate-closed' :
+          (voice && voice.isActive()) ? 'voice-turn-already-active' :
+          (s2s && s2s.isActive()) ? 's2s-session-already-active' :
+          (s2s && s2s.isSpeaking()) ? 'mythos-is-speaking' :
+          (_voiceState === 'speaking') ? 'voice-state-speaking' : null;
+        if (suppressed) {
+          reportWakeword('detected-suppressed', 'wake word detected but not acted on', {
+            reason: suppressed, score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+          });
+          return;
+        }
+        reportWakeword('detected', 'wake word detected — opening a turn', {
+          score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+        });
         if (orb.flashAction) orb.flashAction('wake', true);
         toggleVoice();                             // same path as clicking the orb
       },
-      onStatus: (s, msg) => { if (s === 'error') mic.setCaption('Wake word offline: ' + msg, 'error'); },
+      onStatus: (s, msg, data) => {
+        // BUG-150: relay EVERY status to the server so the wake word's state is
+        // readable in the log instead of living only in a caption that scrolls
+        // away. This is what makes "did it hear me" a five-second read.
+        reportWakeword(s, msg, data);
+        if (s === 'error') mic.setCaption('Wake word offline: ' + msg, 'error');
+        // 'silent' is the new honest failure: armed, but no audio ever arrived.
+        // It must NOT read as "listening" — that false reassurance is the bug.
+        if (s === 'silent') mic.setCaption('Wake word is not hearing anything — ' + msg, 'error');
+        if (s === 'degraded') mic.setCaption('Wake word: ' + msg, 'error');
+      },
     });
     // start() resolves false (and has already emitted an 'error' status) when the
     // browser can't support it or the ONNX/mic setup throws. Report the SUCCESS
     // case too: a listening detector was previously indistinguishable from a
     // silently dead one — the orb looks identical either way — so there was no
     // way for the operator to tell "hey jarvis" was armed at all.
+    // BUG-150: `ok` now MEANS something — start() only resolves true once it has
+    // actually received audio frames. Before, this caption promised standby on the
+    // strength of a wired audio graph alone, which is exactly what it said during
+    // the week the wake word did nothing. (Comment kept above the .then() rather
+    // than inside it: wakeword-arming.test.js asserts setCaption appears within
+    // 300 chars of the .then(, and that assertion is worth keeping intact.)
     return wakeword.start().then((ok) => {
       if (ok) mic.setCaption('Standby — listening for "hey jarvis"', 'info');
-      else wakeword = null; // failed to arm; let a later gesture try again
+      else {
+        wakeword = null; // failed to arm; let a later gesture try again
+        // The status handler has already set a specific caption ('silent' /
+        // 'error') and reported it; don't overwrite it with something vaguer.
+        reportWakeword('not-listening', 'wake word did not arm');
+      }
       return ok;
     });
   }).catch((err) => {

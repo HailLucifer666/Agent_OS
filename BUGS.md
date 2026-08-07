@@ -4094,3 +4094,117 @@ near 0.4 = threshold too high for this mic) and guessing between them is what
 already failed for a week. Its wake action calls the same `toggleVoice()` the
 orb uses, so BUG-146/147 may have been breaking it too — worth re-testing before
 assuming a detector fault.
+
+---
+
+## Session (2026-08-07) — BUG-150: the wake word could not be diagnosed at all
+
+"Hey jarvis" had never worked across a week of attempts. The operator's challenge
+was the right one and reframed the whole problem: *does it even have microphone
+access at boot — does it even hear me?*
+
+**It does, and it armed.** The HUD shows `Standby — listening for "hey jarvis"`,
+and that caption is set (`app.js`) **only** when `wakeword.start()` resolves true,
+which requires `getUserMedia` to have resolved, `audioWorklet.addModule` to have
+loaded, and the `AudioWorkletNode` to have been constructed. The Electron shell
+arms with no click at all (`armInShell`), and `electron/main.js` pre-grants
+`media`/`audioCapture`/`microphone` to the HUD through both
+`setPermissionRequestHandler` and `setPermissionCheckHandler`. That branch of
+suspicion is closed.
+
+**The real defect was that none of this could be measured.** Two halves:
+
+1. **`start()` asserted success it had never proven** — it returned `true` once
+   the audio graph was *wired*, having never confirmed a single frame arrived or
+   a single score was computed. Every silent failure mode (suspended
+   `AudioContext`, worklet never firing, mic delivering nothing) builds that graph
+   without throwing, so **all of them displayed "Standby — listening"**. This is
+   the same defect class the repo already named in BUG-137: reporting an outcome
+   that was never observed.
+2. **Nothing about the wake word ever reached the server.** `onStatus` wrote only
+   a transient HUD caption; no status, score or frame count was logged anywhere.
+   So no amount of reading `vault/` or server output could answer "did it hear
+   me" — which is the root reason a week of testing produced zero information,
+   and why every theory stayed a theory.
+
+Also fixed: the orb never turning green during standby is **correct** —
+`core-orb.js` maps everything outside `listening|processing|speaking` to `idle`,
+and standby is not a conversation — but it meant a *listening* detector and a
+*dead* one were visually identical. There is now a `data-wakeword` attribute on
+the document element carrying the live state (also what the headless measurement
+reads).
+
+What changed, all in `ui/public/js/voice/wakeword.js`, `ui/public/js/app.js` and
+`server/index.js`:
+
+- A frame counter incremented **in the worklet port handler, before** `onFrame`'s
+  `if (!running) return` gate — `running` is set after `ensureAudio()`, so
+  counting inside `onFrame` would have missed exactly the frames being waited for.
+- `start()` now waits up to 3s for a real frame (~18 expected at 12.5/s) and
+  resolves `false` with an honest `'silent'` status if none arrives, instead of
+  promising standby.
+- `audioCtx.state` is **read** and, if suspended, resumed — mirroring
+  `pcm-player.js`, the only place in the HUD that already did this — plus a
+  `statechange` listener so a context suspended later (device change, sleep)
+  surfaces instead of going quietly deaf.
+- A rolling peak score, a classifier-run count, and the frame count, reported
+  every 5s **with the threshold attached** so the peak can actually be judged.
+- `onWake`'s **five silent early returns** now name themselves
+  (`pin-gate-closed`, `voice-turn-already-active`, `s2s-session-already-active`,
+  `mythos-is-speaking`, `voice-state-speaking`). Behaviour is unchanged — the PIN
+  gate is a security control and remains the first check — but heard-but-ignored
+  is now distinguishable from never-heard.
+- A `wakeword-status` client→server WS message, logged via `logger`. Read-only and
+  drives nothing; `silent`/`error`/`degraded` log at **warn**. Only known numeric
+  and string keys are copied, truncated, so a client cannot inflate the log.
+
+**MEASURED HEADLESSLY (no operator time), real HUD + real ONNX + Chromium with a
+fake audio device:**
+
+```
+ctxState "running", ctxStateAtStart "running"
+frames 63 per 5s        (expected 12.5/s from 1280-sample/80ms frames — exact)
+scores 63 per 63 frames (the classifier runs on every frame)
+peakScore 4e-6 .. 3.4e-5 on a synthetic tone
+streamLive true
+```
+
+**Two theories died on this measurement, and that is the point of taking it.**
+
+- **The suspended-AudioContext theory is DISPROVEN here, not assumed away.** It
+  was the single most plausible cause (`ensureAudio` never called `resume()`, and
+  `pcm-player.js:16` proves the codebase knows the trap), but `ctxStateAtStart`
+  reads `running` — `app.commandLine.appendSwitch('autoplay-policy',
+  'no-user-gesture-required')` in `electron/main.js` does its job. The `resume()`
+  is kept as cheap correctness for the non-Electron path, **not** claimed as the
+  fix.
+- **`peakScore` at 4 decimal places was itself a measurement bug**, caught only
+  because the first run reported a suspiciously exact `0`. A real classifier on
+  silence emits ~1e-6, which `toFixed(4)` flattens to `0.0000` — indistinguishable
+  from a classifier that never ran. Reporting at 6dp *and* adding the `scores`
+  counter resolved it: the pipeline is whole.
+
+So the detector is structurally healthy end to end, and the remaining question is
+narrowed to exactly one number nobody has yet: **what does it score on the
+operator's real voice saying "hey jarvis"?** The three outcomes and their fixes:
+peak ≈ 0 with a real voice → the mic feeding this graph is not carrying speech;
+peak 0.3–0.49 → `WAKEWORD_THRESHOLD` is too high for this microphone (a config
+change, schema-backed, range 0.1–0.95); peak > 0.5 with no activation → one of
+the five `onWake` guards is swallowing it, and the log now names which.
+
+**A methodological note worth keeping.** The first headless run reported no wake
+word at all, and the cause was the probe, not the product: `armOnce` returns early
+**without unsubscribing** while `pinLockScreen.lockState()` is still `'unknown'`
+(GET `/api/pin/status` is non-blocking), so a single synthetic click at t=0 lands
+in that window and does nothing. Clicking after the lock state resolves armed it
+immediately. Third instance this session of a probe measuring itself rather than
+the system — see the BUG-146..149 section's `.venv` and `audioB64` cases.
+
+Tests: `test/bug-150-wakeword-observability.test.js` — 4 behavioural server tests
+(fields survive, `silent` warns, a suppressed detection names its guard, an
+untrusted client cannot inflate the log) plus 6 source-shape tests for the browser
+files, which have no Node double for `AudioContext`/`AudioWorklet`/`getUserMedia`
+(root CLAUDE.md's Electron rule; precedent
+`test/bug-147-orb-click-feedback.test.js`). One pins the frame counter's position
+relative to the `running` gate, and one pins the PIN gate as the first `onWake`
+check so the added telemetry cannot be refactored into weakening it.

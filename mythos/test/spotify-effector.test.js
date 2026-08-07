@@ -133,6 +133,10 @@ describe('Spotify tool parameter validation', () => {
         // BUG-127: the level path is per-app now (Spotify's own Core Audio
         // session), so the delegate it reaches for changed under this test.
         if (tool === 'set_app_volume') return { ok: true, result: { level: args && args.level, count: 1 } };
+        // BUG-161: direction is per-app too — read current, step, read back;
+        // mute drives the session's own flag.
+        if (tool === 'get_app_volume') return { ok: true, result: { level: 50, muted: false, count: 1 } };
+        if (tool === 'set_app_mute') return { ok: true, result: { muted: !!(args && args.mute), count: 1 } };
         if (tool === 'ui_elements') return { ok: true, result: { elements: [] } };
         if (tool === 'ui_click') return { ok: true, result: { clicked: true } };
         if (tool === 'ui_type') return { ok: true, result: { typed: true } };

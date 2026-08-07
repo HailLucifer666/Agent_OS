@@ -65,11 +65,61 @@ describe('BUG-127 — "lower Spotify" must not move the system master volume', (
     assert.equal(calls[0].tool, 'set_app_volume');
   });
 
-  it('a relative direction still uses the media keys (no per-app equivalent exists)', async () => {
-    const { hub, calls } = harness(() => ({ ok: true, result: { sent: true } }));
-    await hub.invoke('spotify_volume', { direction: 'down' });
-    assert.equal(calls[0].tool, 'media_key');
-    assert.equal(calls[0].args.key, 'volume_down');
+  // Rewritten for BUG-161: `direction` no longer touches the media keys at
+  // all. Live on 2026-08-07 04:23 the VK path reported "sent" while the
+  // operator heard no change — a fabricated success with no oracle. A step
+  // now reads the CURRENT per-app level and sets through the same read-back
+  // path the level fix already proved.
+  it('a relative direction reads the current per-app level and steps it — never the media keys (BUG-161)', async () => {
+    const { hub, calls } = harness((tool) => {
+      if (tool === 'get_app_volume') return { ok: true, result: { level: 50, muted: false, count: 1 } };
+      if (tool === 'set_app_volume') return { ok: true, result: { level: 40, count: 1 } };
+      return { ok: false, result: `unexpected tool: ${tool}` };
+    });
+    const res = await hub.invoke('spotify_volume', { direction: 'down' });
+    assert.deepEqual(calls.map((c) => c.tool), ['get_app_volume', 'set_app_volume'],
+      'read-then-set through the per-app session, nothing else');
+    assert.equal(calls[1].args.level, 40, '50 stepped down by 10');
+    assert.equal(res.ok, true);
+    assert.equal(res.result.before, 50);
+    assert.equal(res.result.after, 40);
+    assert.match(res.result.evidence, /read back/, 'the step must carry read-back evidence');
+  });
+
+  it('direction with no live session fails honestly — never falls back to VK keys or master volume (BUG-161)', async () => {
+    const { hub, calls } = harness((tool) => (
+      tool === 'get_app_volume'
+        ? { ok: false, result: "No audio session for process 'Spotify' - there is no per-app volume to read." }
+        : { ok: false, result: `unexpected tool: ${tool}` }
+    ));
+    const res = await hub.invoke('spotify_volume', { direction: 'down' });
+    assert.equal(res.ok, false);
+    assert.deepEqual(calls.map((c) => c.tool), ['get_app_volume'],
+      'no media_key, no set_volume, nothing after the honest failure');
+  });
+
+  it('mute drives the per-app mute flag with read-back (BUG-161)', async () => {
+    const { hub, calls } = harness((tool) => (
+      tool === 'set_app_mute'
+        ? { ok: true, result: { muted: true, count: 1 } }
+        : { ok: false, result: `unexpected tool: ${tool}` }
+    ));
+    const res = await hub.invoke('spotify_volume', { direction: 'mute' });
+    assert.deepEqual(calls.map((c) => c.tool), ['set_app_mute']);
+    assert.equal(calls[0].args.mute, true);
+    assert.equal(res.ok, true);
+    assert.equal(res.result.muted, true);
+  });
+
+  it('a step at the floor clamps to 0 instead of failing (BUG-161)', async () => {
+    const { hub, calls } = harness((tool) => {
+      if (tool === 'get_app_volume') return { ok: true, result: { level: 4, muted: false, count: 1 } };
+      if (tool === 'set_app_volume') return { ok: true, result: { level: 0, count: 1 } };
+      return { ok: false, result: `unexpected tool: ${tool}` };
+    });
+    const res = await hub.invoke('spotify_volume', { direction: 'down' });
+    assert.equal(calls[1].args.level, 0);
+    assert.equal(res.ok, true);
   });
 
   it('an out-of-range level is rejected before any PC command is sent', async () => {

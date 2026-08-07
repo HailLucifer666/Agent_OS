@@ -39,6 +39,7 @@ const TIER_TABLE = {
   'web_fetch':             0,  // read-only fetch — retrieves public web page content
   'camera_look':           0,  // read-only — captures and describes camera frame
   'remember':              0,
+  'forget_fact':           2,  // BUG-160 — deletes a durable memory: local write, reversible only by re-remembering, so a notch above remember
   'log_incident':          0,
   'reminder_add':          0,  // read-only — creates a local reminder record
   'timer_add':             0,  // Task 5 (step 5) — same class as reminder_add above; a
@@ -128,6 +129,8 @@ const TIER_TABLE = {
                                // NARROWER than set_volume (which moves the whole machine), so
                                // it cannot warrant a higher tier than the tool it replaces.
   'get_volume':            0,  // read-only, same class as media_status
+  'get_app_volume':        0,  // BUG-161 — read-only twin of set_app_volume, same class as get_volume
+  'set_app_mute':          2,  // BUG-161 — one app's own mute flag; same class as set_app_volume
   'ask_agent':             2,
   'browser_navigate':      2,
   'browser_tabs':          2,

@@ -120,10 +120,21 @@ function createSemanticStore({ fs, config, bus, logger }) {
     let allFacts = facts;
     if (opts.append) {
       const existing = fs.readText(relPath, '');
+      const newTriggers = facts.map(directiveTriggerOf).filter(Boolean);
       const existingFacts = parseFacts(existing).filter(function(f) {
-        return !facts.some(function(nf) {
-          return normalizeFact(nf) === normalizeFact(f);
-        });
+        // Exact-match dedup (P3-9) — unchanged.
+        if (facts.some(function(nf) { return normalizeFact(nf) === normalizeFact(f); })) return false;
+        // BUG-160 supersede: a DIRECTIVE fact ("when the operator asks X, do Y")
+        // whose trigger clause matches an incoming fact's trigger is replaced by
+        // it, not kept beside it. Before this, a spoken correction with different
+        // wording never matched the exact-dedup above, so contradictory rules
+        // accumulated — vault evidence: user-facts.md held three conflicting
+        // "open World Monitor" directives at once, and which URL won was a coin
+        // flip per conversation. Deliberately narrow: only when-clause directives
+        // supersede; observational facts still accumulate as before.
+        const trig = directiveTriggerOf(f);
+        if (trig && newTriggers.indexOf(trig) !== -1) return false;
+        return true;
       });
       allFacts = existingFacts.concat(facts);
     }
@@ -143,6 +154,70 @@ function createSemanticStore({ fs, config, bus, logger }) {
 
   function sanitizeFilename(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  // BUG-160: canonical trigger clause of a directive-shaped fact, or null.
+  // "When the operator asks to \"open World Monitor\", open <url>" and
+  // "When asked to 'open world monitor': launch the app" must both yield
+  // the same trigger, so the second supersedes the first. Only the clause
+  // BEFORE the first comma/colon counts, and only when it starts with
+  // "when"/"whenever" — everything else is not a directive and never
+  // supersedes. Subject/verb variance ("the operator asks" / "asked" /
+  // "the user says") is canonicalized to keep the match honest across the
+  // phrasings one operator actually produces; anything smarter (embeddings,
+  // fuzzy similarity) is deliberately out of scope.
+  function directiveTriggerOf(fact) {
+    const n = String(fact).trim().toLowerCase();
+    const clause = n.split(/[,:]/, 1)[0];
+    if (!/^when(ever)?\b/.test(clause)) return null;
+    return clause
+      .replace(/["'“”‘’]/g, '')
+      .replace(/\b(the )?(operator|user)\b/g, '')
+      .replace(/\b(asks?|asked|asking|says?|said|saying|tells?|told|requests?|requested)\b/g, 'asks')
+      .replace(/\bwhenever\b/, 'when')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // BUG-160: remove stored fact bullet(s) matching a query — the missing
+  // counterpart to write(). Until this existed there was NO way, by voice or
+  // by tool, to retire a wrong fact: corrections could only pile a new fact
+  // next to the one they contradicted ("two brains"). Line-filter rewrite on
+  // purpose — everything that is not a removed bullet (header, sidecars,
+  // other facts) survives byte-for-byte.
+  function forget(query, opts) {
+    opts = opts || {};
+    const q = String(query || '').trim().toLowerCase();
+    if (q.length < 3) return { removed: [], searched: [], error: 'query too short' };
+    const MAX_REMOVALS = 5; // a query matching more than this is too broad to trust
+    const files = opts.topic
+      ? [{ name: sanitizeFilename(opts.topic) + '.md', path: 'Semantic/' + sanitizeFilename(opts.topic) + '.md' }]
+      : activeTopicFiles();
+    const searched = [];
+    for (let i = 0; i < files.length; i++) {
+      const content = fs.readText(files[i].path, '');
+      searched.push(files[i].name.replace('.md', ''));
+      if (!content) continue;
+      const lines = content.split('\n');
+      const removed = [];
+      const kept = lines.filter(function(line) {
+        const m = line.match(/^-\s+(.+)$/);
+        if (m && m[1].toLowerCase().includes(q)) { removed.push(m[1].trim()); return false; }
+        return true;
+      });
+      if (!removed.length) continue;
+      if (removed.length > MAX_REMOVALS) {
+        return { removed: [], searched: searched, error: 'query matches ' + removed.length + ' facts in ' + files[i].name + ' — too broad, be more specific' };
+      }
+      try {
+        fs.writeText(files[i].path, kept.join('\n'));
+      } catch (err) {
+        bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'semantic', error: err.message });
+        return { removed: [], searched: searched, error: 'write failed: ' + err.message };
+      }
+      return { removed: removed, topic: files[i].name.replace('.md', ''), searched: searched };
+    }
+    return { removed: [], searched: searched };
   }
 
   function activeTopicFiles() {
@@ -239,7 +314,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
     fs.ensureDir(fs.vaultPath('Semantic'));
   }
 
-  return { write, recall, get, pruneLowConfidence, consolidate, stats, init };
+  return { write, forget, recall, get, pruneLowConfidence, consolidate, stats, init };
 }
 
 module.exports = { createSemanticStore };

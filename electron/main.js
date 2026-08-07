@@ -226,6 +226,12 @@ let mainWindow = null;
 const mediaWindowController = createMediaWindowController({
   BrowserWindowCtor: BrowserWindow,
   preloadPath: path.join(__dirname, 'preload.js'),
+  // BUG-166: YouTube embeds must render inside a local wrapper page, not as a
+  // top-level loadURL — a top-level embed document carries no referer and
+  // YouTube answers "Error 153: video player configuration error" (reproduced
+  // 2026-08-07 in headless Chromium: bare embed URL -> 153; same URL iframed
+  // from this origin -> no 153). The wrapper is served by the mythos server.
+  mediaBaseUrl: `http://${BIND}:${PORT}`,
 });
 
 // Step 7 / Slice 5 of 6 — floating cursor overlay ("summon at cursor,

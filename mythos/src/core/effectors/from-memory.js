@@ -51,6 +51,25 @@ function buildTools(ctx){
     }catch(err){return fail('remember failed: '+(err.message||err));}
   }
 
+  // BUG-160: the missing half of remember(). Without it a spoken correction
+  // could only ADD a fact next to the wrong one it contradicts — semantic
+  // append-dedup is exact-match only, so "actually the URL is X" never
+  // displaced "the URL is Y" and retrieval between the two was a coin flip
+  // (the operator's "two brains" report, 2026-08-07 04:30). Echoes exactly
+  // what it removed: the rewritten file is the oracle, and the spoken reply
+  // must name the retired fact so a wrong match is heard immediately.
+  async function forget_fact(args){
+    var query=(args&&(args.query||args.text||args.fact)||'').trim();
+    if(!query) return fail('query required — a distinctive phrase from the fact to forget');
+    if(!semantic||typeof semantic.forget!=='function') return fail('memory store unavailable');
+    try{
+      var res=semantic.forget(query,{topic:(args&&args.topic)||''});
+      if(res.error) return fail('forget_fact: '+res.error);
+      if(!res.removed.length) return fail('No stored fact contains "'+query.slice(0,80)+'". Topics searched: '+(res.searched.join(', ')||'none'));
+      return ok({forgot:res.removed,topic:res.topic,evidence:'removed '+res.removed.length+' fact(s) from Semantic/'+res.topic+'.md'});
+    }catch(err){return fail('forget_fact failed: '+(err.message||err));}
+  }
+
   async function log_incident(args){
     var text=(args&&(args.text||args.error||args.message)||'').trim();
     if(!text) return fail('text required — describe the incident');
@@ -110,7 +129,8 @@ function buildTools(ctx){
 
   return [
     {name:'self_capabilities',description:'Read your own capabilities manifest (tools, tiers, adapters, skills, recent code changes — regenerated every boot). Use when the user asks "what can you do", "what are your capabilities", "what tools do you have for X", or "what\'s new/changed". Pass topic to filter (e.g. "spotify").',params:{topic:'string (optional) — filter lines matching this word'},danger:false,fn:self_capabilities},
-    {name:'remember',description:'Save a durable fact, preference, or instruction to permanent memory. Use when user says "remember","note that","don\'t forget","from now on","keep in mind", or states a standing rule. Persists across restarts.',params:{text:'string — the fact/preference/instruction'},danger:false,fn:remember},
+    {name:'remember',description:'Save a durable fact, preference, or instruction to permanent memory. Use when user says "remember","note that","don\'t forget","from now on","keep in mind", or states a standing rule. Persists across restarts. When the user CORRECTS something previously remembered, call forget_fact for the old fact first, then remember the corrected one.',params:{text:'string — the fact/preference/instruction'},danger:false,fn:remember},
+    {name:'forget_fact',description:'Remove a wrong or outdated fact from permanent memory. Use when the user says "forget that","that\'s wrong, the real X is...","delete that memory", or corrects something previously remembered. Echoes exactly what was removed — repeat it back so the user can catch a wrong match.',params:{query:'string — a distinctive phrase from the fact to remove',topic:'string (optional) — memory topic file to search, e.g. user-facts'},danger:false,fn:forget_fact},
     {name:'log_incident',description:'Record an error/bug/incident the user flags. Use when user says "log this","this is wrong","you hallucinated","log this as an error". Persists to durable incident log.',params:{text:'string — describe the incident',severity:'string (optional) — info|warn|error (default warn)'},danger:false,fn:log_incident},
     {name:'recall_memory',description:'Search past conversations and remembered facts for something relevant. Use when the user references something from earlier that you don\'t have in front of you, or directly asks "what did I say about X" / "do you remember X". Read-only.',params:{query:'string — what to search memory for',limit:'number (optional) — max results, default 8'},danger:false,fn:recall_memory}
   ];

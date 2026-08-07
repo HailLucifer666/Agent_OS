@@ -196,8 +196,12 @@ describe('gate: 100 registered count', () => {
     // asks the operator rather than trying to work around it) = 99,
     // + set_app_volume (from-pc, BUG-127 2026-08-06 — per-application volume via
     // the Windows Volume Mixer sessions, so turning Spotify down no longer takes
-    // MYTHOS's own voice down with the system master) = 100.
-    assert.equal(hub.count(), 100);
+    // MYTHOS's own voice down with the system master) = 100,
+    // + get_app_volume/set_app_mute (from-pc, BUG-161 2026-08-07 — the read
+    // oracle and the mute flag for that same per-app audio session, so a
+    // relative step ("turn Spotify down a bit") reads the real level first
+    // instead of firing global media keys and claiming success) = 102.
+    assert.equal(hub.count(), 102);
   });
 });
 

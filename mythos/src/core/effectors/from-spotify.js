@@ -477,8 +477,17 @@ async function spotify_previous() {
 // than falling back — a silent widening from "Spotify" to "everything" is the
 // bug, not a graceful degradation.
 //
-// `direction` still sends the global media keys: those VKs are hardware-level
-// steps with no per-app equivalent. The tool description says which is which.
+// BUG-161 closed the other half. `direction` used to send the global volume
+// VK keys — which move the MASTER volume (or, depending on focus/OEM
+// handling, nothing at all) and reported "sent" with no read-back. Live on
+// 2026-08-07 04:23 the operator heard no change while the tool claimed
+// success: a fabricated-success report, the exact evidence-contract
+// violation the level path had already been cured of. `direction` now rides
+// the same per-app session: read the current level (get_app_volume), step
+// +/-10, set through set_app_volume's read-back oracle, and return the
+// before/after pair. `mute` sets the session's own mute flag. No live audio
+// session fails honestly — never the VK keys, never the master volume.
+const DIRECTION_STEP = 10;
 async function spotify_volume({ direction, level }) {
   if (!pcEffectors) return fail('PC effectors not initialized');
   if (level !== undefined && level !== null && level !== '') {
@@ -487,10 +496,23 @@ async function spotify_volume({ direction, level }) {
     return pcEffectors.invoke('set_app_volume', { name: 'Spotify', level: Math.round(lvl) }, {});
   }
   if (!direction) return fail('Either level (0-100) or direction (up, down, or mute) is required');
-  const keyMap = { up: 'volume_up', down: 'volume_down', mute: 'volume_mute' };
-  const key = keyMap[direction.toLowerCase()];
-  if (!key) return fail(`Invalid direction: ${direction}. Use up, down, or mute`);
-  return sendMediaKey(key);
+  const dir = String(direction).toLowerCase();
+  if (dir === 'mute' || dir === 'unmute') {
+    const muted = await pcEffectors.invoke('set_app_mute', { name: 'Spotify', mute: dir === 'mute' }, {});
+    if (!muted.ok) return muted;
+    const m = muted.result || {};
+    return ok({ muted: m.muted, evidence: `Spotify session mute read back as ${m.muted}` });
+  }
+  if (dir !== 'up' && dir !== 'down') return fail(`Invalid direction: ${direction}. Use up, down, or mute`);
+  const current = await pcEffectors.invoke('get_app_volume', { name: 'Spotify' }, {});
+  if (!current.ok) return current; // honest no-session failure comes from pc-child, naming what was there
+  const before = Number(current.result && current.result.level);
+  if (!Number.isFinite(before)) return fail('Could not read Spotify\'s current volume back from its audio session.');
+  const target = Math.max(0, Math.min(100, before + (dir === 'up' ? DIRECTION_STEP : -DIRECTION_STEP)));
+  const set = await pcEffectors.invoke('set_app_volume', { name: 'Spotify', level: target }, {});
+  if (!set.ok) return set;
+  const after = Number(set.result && set.result.level);
+  return ok({ before, after, evidence: `Spotify session volume ${before} -> ${after} (read back)` });
 }
 
 async function spotify_play({ query, trackId }) {
@@ -706,10 +728,10 @@ const TOOLS = [
   },
   {
     name: 'spotify_volume',
-    description: 'Set Spotify\'s OWN volume to an exact level (0-100) with `level` — this changes only Spotify, not the system volume, and fails if Spotify is not currently playing. `direction` (up/down/mute) instead sends the global media keys, which DO move the system volume, because those keys have no per-app equivalent. Prefer level for "turn Spotify down to 20%"; use direction only for a relative nudge the user asked for on the whole machine.',
+    description: 'Change Spotify\'s OWN volume — never the system volume. `level` sets an exact target (0-100); `direction` (up/down/mute) reads Spotify\'s current session volume and steps it by 10, or toggles its own mute flag. Both read the result back as evidence, and both fail honestly if Spotify has no live audio session (not playing). For the SYSTEM volume use set_volume instead.',
     params: {
       level: 'number (optional) - exact target volume 0-100 for Spotify alone, preferred when the user gives a percentage',
-      direction: 'string (optional) - up, down, or mute; steps the SYSTEM volume. Required only if level is omitted'
+      direction: 'string (optional) - up, down, mute, or unmute; steps or mutes Spotify\'s own session. Required only if level is omitted'
     },
     danger: false,
     fn: spotify_volume

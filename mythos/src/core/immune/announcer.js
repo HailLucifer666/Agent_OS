@@ -39,10 +39,24 @@ function createAnnouncer({ bus, config, speak }) {
     }
   }
 
+  // BUG-162: "Self-healed: recurring-failure-record." was the whole sentence —
+  // a playbook ID and nothing else, and when the operator asked what it fixed
+  // (incident 2026-08-07 04:27) nothing could answer. Interpolate ONLY fields
+  // actually present on the event (the AD-5/BUG-123 rule: no brain call, no
+  // invented causes) and say plainly when detail was not recorded.
   function onHealed(event) {
     const h = event.payload;
     if (h.outcome !== 'applied') return;
-    say('Self-healed: ' + h.playbookId + '.');
+    const what = h.title || h.playbookId;
+    let line = 'Self-healed: ' + what + '.';
+    const cause = [h.kind, h.target].filter(Boolean).join(' on ');
+    if (cause) line += ' Trigger: ' + cause + '.';
+    if (Array.isArray(h.actions) && h.actions.length) {
+      line += ' Action taken: ' + h.actions.join(', ') + '.';
+    } else if (!h.title && !cause) {
+      line += ' Details were not recorded.';
+    }
+    say(line);
   }
 
   function onRecovered() {

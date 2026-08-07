@@ -20,7 +20,7 @@ const DEFAULT_ALLOWLIST = [
   'kanban_status','kanban_add_card','kanban_move_card',
   'start_project','build_project','project_status','job_status','open_artifact',
   'get_time','get_weather','get_directions','web_search','web_fetch',
-  'remember','log_incident','recall_memory',
+  'remember','forget_fact','log_incident','recall_memory',
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   'spotify_play','spotify_play_pause','spotify_next','spotify_volume','spotify_status',
@@ -99,6 +99,14 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // Status/introspection singletons -- read_status/self_capabilities-style
   // summaries cover these; not a distinct spoken verb of their own.
   'get_volume','mission_status','persona_status','self_capabilities',
+  // BUG-161: get_app_volume is the read oracle set_app_volume/spotify_volume
+  // call internally to step a per-app level through a read-back. Neither of
+  // its act-side siblings (set_app_volume, set_app_mute) is on the voice
+  // allowlist either — "turn Spotify down" reaches this machinery through
+  // spotify_volume — so exempting it creates no read/act asymmetry of the
+  // kind this repo has been bitten by. Promote all three together the day a
+  // session actually asks to set a non-Spotify app's volume by voice.
+  'get_app_volume',
   // Loads a skill's guidance text from disk -- internal/debugging surface.
   'use_skill',
   // Not yet asked for in a live session; promote if usage shows up.

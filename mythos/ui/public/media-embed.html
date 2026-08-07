@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MYTHOS — media</title>
+<!--
+  BUG-166: wrapper page for the Electron media window. A YouTube EMBED URL
+  loaded as a window's top-level document carries no referer, and YouTube's
+  player answers "Error 153: video player configuration error" (operator
+  incident 2026-08-07 04:04; reproduced in headless Chromium). Iframed from
+  this local page — the same shape the dashboard's web-panel plays through —
+  the embed gets a real referring document and plays.
+
+  Security: ?src is untrusted input arriving through the open_web pipeline.
+  Only YouTube embed origins may be framed here — anything else renders an
+  error instead. Without the allowlist this page is an open frame-anything
+  gadget sitting on the HUD's origin.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #05070d; overflow: hidden; }
+  iframe { border: 0; width: 100vw; height: 100vh; display: block; }
+  .err {
+    color: #d8b25a; font: 14px/1.6 system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center; height: 100vh;
+    padding: 0 2rem; text-align: center;
+  }
+</style>
+</head>
+<body>
+<script>
+  'use strict';
+  var params = new URLSearchParams(location.search);
+  var src = params.get('src') || '';
+  var title = params.get('title') || 'MYTHOS media';
+  var ALLOWED = /^https:\/\/(www\.)?(youtube\.com|youtube-nocookie\.com)\/embed\//;
+  document.title = title.slice(0, 120);
+  if (ALLOWED.test(src)) {
+    var f = document.createElement('iframe');
+    f.src = src;
+    f.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+    f.setAttribute('allowfullscreen', '');
+    f.title = document.title;
+    document.body.appendChild(f);
+  } else {
+    var d = document.createElement('div');
+    d.className = 'err';
+    // textContent, never markup interpolation — src is untrusted (and this
+    // repo's escapeHtml has known gaps around attributes; see BUGS.md).
+    d.textContent = 'Refused to embed this address: only YouTube embed URLs may load here. Got: ' + src.slice(0, 200);
+    document.body.appendChild(d);
+  }
+</script>
+</body>
+</html>

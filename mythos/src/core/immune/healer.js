@@ -8,24 +8,28 @@
 const SEED_PLAYBOOKS = [
   {
     id: 'rotate-nim-key',
+    title: 'NVIDIA provider key rotation',
     when: { kind: 'provider-down', target: { eq: 'nim' } },
     then: [{ do: 'probe-provider', args: { provider: 'nim', rotateKey: true } }],
     cooldownMs: 60000
   },
   {
     id: 'stall-restart',
+    title: 'cortex restart after a stall',
     when: { kind: 'cortex-stall' },
     then: [{ do: 'restart-cortex' }],
     cooldownMs: 30000
   },
   {
     id: 'quota-guard',
+    title: 'voice-lane degrade on low Groq quota',
     when: { kind: 'quota-low', target: { eq: 'groq' } },
     then: [{ do: 'degrade-lane', args: { lane: 'voice', removeProvider: 'groq' } }],
     cooldownMs: 300000
   },
   {
     id: 'mem-consolidate',
+    title: 'memory consolidation after growth',
     // 50000000 must equal monitor.js's MEMORY_GROWTH_BYTES — see Spec Ambiguities
     // Resolved #19; immune.test.js asserts the two literals stay in sync.
     when: { kind: 'memory-growth', target: { bytes: { gt: 50000000 } } },
@@ -34,12 +38,14 @@ const SEED_PLAYBOOKS = [
   },
   {
     id: 'budget-pause',
+    title: 'goal pause on exhausted budget',
     when: { kind: 'budget-exhausted' },
     then: [{ do: 'pause-goal', args: { reason: 'budget-exhausted' } }],
     cooldownMs: 0 // no cooldown — immediate, every time
   },
   {
     id: 'effector-flapping-breaker',
+    title: 'suppression of a flapping tool',
     when: { kind: 'effector-flapping' },
     then: [{ do: 'suppress-tool', args: { tool: '$target' } }],
     cooldownMs: 60000
@@ -56,12 +62,14 @@ const SEED_PLAYBOOKS = [
   // leaving P0-1-class failures undiagnosable.
   {
     id: 'search-provider-degrade',
+    title: 'skip of a failing search provider',
     when: { kind: 'search-provider-failed' },
     then: [{ do: 'suppress-search-provider', args: { provider: '$evidence.provider' } }],
     cooldownMs: 30000
   },
   {
     id: 'build-engine-reprobe',
+    title: 'build-engine reprobe',
     when: { kind: 'build-engine-failed' },
     then: [{ do: 'reprobe-build-engine' }],
     cooldownMs: 60000
@@ -77,6 +85,7 @@ const SEED_PLAYBOOKS = [
   // count rather than spawning duplicate files.
   {
     id: 'recurring-failure-record',
+    title: 'recording of a repeated failure as a lesson',
     when: { kind: 'recurring-failure' },
     then: [{ do: 'record-lesson', args: { lesson: '$evidence.detail', source: 'reflection' } }],
     cooldownMs: 30000
@@ -353,7 +362,15 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
     }
 
     // 'health.healed' — exact string, do not paraphrase.
-    bus.emit('health.healed', { playbookId: playbookId, kind: diagnosis.kind, target: diagnosis.target, outcome: outcome, detail: detail });
+    // BUG-162: carry the playbook's human title and its action list so the
+    // announcer can say WHAT was healed. "Self-healed: recurring-failure-record."
+    // was the operator's entire explanation on 2026-08-07 (incident 04:27), and
+    // when they asked what it fixed, nothing downstream could answer.
+    bus.emit('health.healed', {
+      playbookId: playbookId, kind: diagnosis.kind, target: diagnosis.target, outcome: outcome, detail: detail,
+      title: playbook ? (playbook.title || null) : null,
+      actions: playbook ? playbook.then.map(function(s) { return s.do; }) : [],
+    });
 
     if (memory && memory.audit && typeof memory.audit.write === 'function') {
       // BUG-125: healer rows land in the same Audit/*.jsonl stream as the
@@ -385,7 +402,7 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
           delete process.env[entry.env];
           delete degradedLanes[lane];
           bus.emit('health.healed', {
-            playbookId: 'lane-restore', kind: 'quota-recovered',
+            playbookId: 'lane-restore', title: 'brain lane restored after quota recovery', kind: 'quota-recovered',
             target: lane, outcome: 'applied', detail: { restored: true }
           });
         }
@@ -404,7 +421,7 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
             try { getEffectors().breakers.reset(toolName); } catch (_) { /* tool may not have a breaker */ }
           }
           bus.emit('health.healed', {
-            playbookId: 'tool-restore', kind: 'tool-unsuppressed',
+            playbookId: 'tool-restore', title: 'suppressed tool restored', kind: 'tool-unsuppressed',
             target: toolName, outcome: 'applied', detail: { restored: true }
           });
         }
@@ -414,7 +431,7 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
         if (suppressedSearchProviders[provider].restoreAt <= now) {
           delete suppressedSearchProviders[provider];
           bus.emit('health.healed', {
-            playbookId: 'search-provider-restore', kind: 'search-provider-unsuppressed',
+            playbookId: 'search-provider-restore', title: 'search provider restored', kind: 'search-provider-unsuppressed',
             target: provider, outcome: 'applied', detail: { restored: true }
           });
         }

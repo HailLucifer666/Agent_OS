@@ -153,7 +153,13 @@ function createIdentity({ bus, config, fs, identityStore }) {
     return {
       purpose: extractSection(raw, 'Purpose') || 'An autonomous entity that assists its operator.',
       values: extractSection(raw, 'Values') || 'Helpfulness, honesty, efficiency.',
-      persona: extractSection(raw, 'Persona') || config.MYTHOS_NAME || 'MYTHOS'
+      persona: extractSection(raw, 'Persona') || config.MYTHOS_NAME || 'MYTHOS',
+      // BUG-163: with no origin on file the Live model INVENTED a developer
+      // ("Nexus Team", 2026-08-07 04:00) and then defended it to the operator.
+      // The default states the truth for every install of this open-source
+      // project: whoever runs it is who it answers to. RULES' ORIGIN RULE
+      // points at this; absent detail is said to be unrecorded, never filled.
+      origin: extractSection(raw, 'Origin') || 'Created and operated by your operator. Not a corporate product; origin details beyond this are not recorded.'
     };
   }
 
@@ -227,6 +233,12 @@ function createIdentity({ bus, config, fs, identityStore }) {
       var opProfile = this.getOperatorProfile();
       if (opProfile) {
         out += ' Operator profile (durable facts — never contradict these): ' + opProfile;
+      }
+      // BUG-163: the origin must reach the prompt, not just live in self.md —
+      // RULES' ORIGIN RULE names self.md as the only source, so the model has
+      // to actually see it or it fills the silence with an invented developer.
+      if (self.origin) {
+        out += ' Origin (the only truth about who made you): ' + self.origin;
       }
       out += ' ' + STYLE_GUARDRAIL;
       return out;

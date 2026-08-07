@@ -397,6 +397,27 @@ async function set_app_volume({ name, pid, level }) {
   return delegate({ cmd: 'set_app_volume', name: name || '', pid: targetPid, level: Math.round(lvl) });
 }
 
+// BUG-161: read-only twin of set_app_volume — the current per-app level/mute.
+// Exists so a relative step ("turn Spotify down") reads the real level first
+// and then sets through the read-back oracle, instead of firing global volume
+// VK keys that move the master volume (or nothing) while reporting success.
+async function get_app_volume({ name, pid }) {
+  const targetPid = (pid === undefined || pid === null || pid === '') ? null : Number(pid);
+  if (targetPid !== null && (!Number.isFinite(targetPid) || targetPid <= 0)) return fail(`pid must be a positive number (got ${pid}).`);
+  if (!name && targetPid === null) return fail('name (process name, e.g. "Spotify") or pid is required.');
+  return delegate({ cmd: 'get_app_volume', name: name || '', pid: targetPid });
+}
+
+// BUG-161: per-app mute with read-back. Same honest-failure contract as
+// set_app_volume — no live session means NOTHING was changed, never the master.
+async function set_app_mute({ name, pid, mute }) {
+  const targetPid = (pid === undefined || pid === null || pid === '') ? null : Number(pid);
+  if (targetPid !== null && (!Number.isFinite(targetPid) || targetPid <= 0)) return fail(`pid must be a positive number (got ${pid}).`);
+  if (!name && targetPid === null) return fail('name (process name, e.g. "Spotify") or pid is required.');
+  const wantMute = !(mute === false || mute === 'false' || mute === 0 || mute === '0');
+  return delegate({ cmd: 'set_app_mute', name: name || '', pid: targetPid, mute: wantMute });
+}
+
 async function screen_look({ query }) {
   var shot = await delegate({ cmd: 'screen_look' });
   if (!shot.ok) return shot;
@@ -1207,6 +1228,8 @@ const TOOLS = [
   { name: 'get_volume', description: 'Read the current system master volume (0-100) and mute state. Use before claiming a volume change worked.', params: {}, danger: false, fn: get_volume, needs_result: true },
   { name: 'set_volume', description: 'Set the system master volume to an exact level. Use for "set/reduce/turn the volume to N%" — converges exactly instead of media_key\'s fixed up/down steps.', params: { level: 'number - target volume 0-100' }, danger: false, fn: set_volume },
   { name: 'set_app_volume', description: 'Set ONE application\'s own volume (0-100) without touching the system master volume — the per-app sliders in the Windows Volume Mixer. Use for "turn Spotify down". Fails honestly if that app has no live audio session (i.e. it is not playing anything).', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process instead of matching by name', level: 'number - target volume 0-100' }, danger: false, fn: set_app_volume },
+  { name: 'get_app_volume', description: 'Read the current per-app volume (0-100) and mute state of ONE application from its live audio session. Use before a relative change ("turn Spotify down a bit"). Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process' }, danger: false, fn: get_app_volume, needs_result: true },
+  { name: 'set_app_mute', description: 'Mute or unmute the audio session of ONE application without touching the system master volume. Reads the mute state back as evidence. Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process', mute: 'boolean - true to mute, false to unmute (default true)' }, danger: false, fn: set_app_mute },
   { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
@@ -1247,7 +1270,7 @@ module.exports = {
   KNOWN_DESKTOP_APPS,
   KNOWN_WEB_APPS,
   launch_app, list_windows, focus_window, close_window, media_key, get_volume, set_volume,
-  set_app_volume,
+  set_app_volume, get_app_volume, set_app_mute,
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
   // pure, no I/O — exported so the matcher can be tested without a screen
   _seeAndClickInternal: { matchRegions, centreOf },
