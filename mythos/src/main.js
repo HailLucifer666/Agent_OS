@@ -27,6 +27,7 @@ const { createGmailSensor } = require('./core/sensors/gmail-sensor');
 const { createScreenSensor } = require('./core/sensors/screen-sensor');
 const { createWindowSensor } = require('./core/sensors/window-sensor');
 const { createAetherSensor } = require('./core/sensors/aether');
+const { createScannerProxy } = require('./core/aether/scanner-proxy');
 const { createDailyPlanner } = require('./core/planner/daily');
 const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
@@ -171,6 +172,7 @@ async function main() {
   let screenSensor = null;         // Phase 2 Jarvis upgrade — ambient screen awareness
   let windowSensor = null;         // V8 (Phase 4) — opt-in active-window perception
   let aetherSensor = null;         // Aether-BLE proximity-focus sensor (pull model)
+  let scannerProxy = null;         // Voice Nodes — one loopback Aether scanner per phone
   let pcToolsWiring = null;        // from-pc.js's registerFromPc() return (holds setScreenSensorHandle)
   let mcpWiring = null;            // from-mcp.js's registerFromMcp() return (holds autostart/shutdown)
   let dailyPlanner = null;         // Phase 3 Jarvis upgrade — daily planning + accountability
@@ -620,6 +622,26 @@ async function main() {
       // local physical presence).
       var pinLock = createPinLock({ fs: memory.fs });
 
+      // Voice Nodes (Stage 1) — stood up BEFORE createServer because the server
+      // destructures deps once, and a phone can connect the moment /ws is open.
+      // Deliberately boot-fatal on a bad id list rather than silently off: the
+      // ids map to ports by position and must line up with the aggregator's
+      // --peers, so "enabled but proxying nothing" would look healthy while
+      // every reading vanished — the exact failure class this repo keeps paying
+      // for. Same posture as the MYTHOS_BIND/AUTH_TOKEN boot guard.
+      if (config.AETHER_PROXY_ENABLED) {
+        scannerProxy = createScannerProxy({ config: config, logger: logger });
+        scannerProxy.start();
+        // Binding is async; whenReady() is what knows the ports are really
+        // accepting. A bind failure (base range already in use) is reported
+        // here rather than swallowed — the aggregator would otherwise just
+        // retry a dead port every 2s forever with nothing explaining why.
+        scannerProxy.whenReady().then(
+          () => logger.info('aether.proxy.started', { ports: scannerProxy.ports() }),
+          (err) => logger.error('aether.proxy.bind-failed', { error: err && err.message })
+        );
+      }
+
       serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
         pinLock: pinLock,
@@ -640,6 +662,7 @@ async function main() {
         // step than the server. Resolves false (route off) when Aether is not
         // enabled or its socket is down, so the server fails open to local TTS.
         aetherSpeak: (text) => (aetherSensor && typeof aetherSensor.speak === 'function' ? aetherSensor.speak(text) : false),
+        scannerProxy: scannerProxy, // Voice Nodes — null unless AETHER_PROXY_ENABLED
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.
@@ -1019,6 +1042,7 @@ async function main() {
     if (metricSensor) metricSensor.stop();
     if (screenSensor) screenSensor.stop();
     if (aetherSensor) aetherSensor.stop();   // closes WS client + clears reconnect timer
+    if (scannerProxy) scannerProxy.stop();   // closes each per-node WS server + its timers
     if (dailyPlanner) dailyPlanner.stop();
     if (fileSensor) fileSensor.stop();
     if (wsSensor) wsSensor.stop();

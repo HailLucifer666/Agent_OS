@@ -43,6 +43,9 @@ const { createPinSessionStore } = require('../src/core/security/pin-session');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
+// IN (voice nodes, no reqId): 'node-reading' {nodeId, rssi, name} — a phone's BLE
+//                  observation of the tracked beacon, republished by the
+//                  scanner-proxy in Aether §4.1 shape; 'node-lost' {nodeId}
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
 //                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
 //                  'proactive-speech' (entity-initiated, no inbound utterance)
@@ -99,6 +102,14 @@ function createServer(deps) {
   const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
   const identity = deps.identity;                      // S2S (Phase 5) — identity.persona() for buildLiveSystemInstruction (may be undefined in tests)
   const pinLock = deps.pinLock;                        // §7.3 — local PIN lock (may be undefined in tests)
+  // Voice Nodes — the per-phone Aether scanner-proxy (src/core/aether/
+  // scanner-proxy.js), undefined unless AETHER_PROXY_ENABLED. The server's only
+  // job here is transport: a phone's inbound 'node-reading' becomes an
+  // updateReading() call, and the proxy owns all the protocol shape.
+  const scannerProxy = deps.scannerProxy;
+  // Inbound types that are pure telemetry, not operator activity — see the
+  // lastActiveWs guard in ws.on('message').
+  const NODE_TELEMETRY_TYPES = new Set(['node-reading', 'node-lost']);
   // Test-only seam, undefined in production (mirrors live-session.js's own
   // createSocket seam one level up): lets test/server-live-wiring.test.js
   // drive a fake Gemini socket through the real connection wiring without a
@@ -310,6 +321,17 @@ function createServer(deps) {
   // network surface; the PIN gates local physical presence — see
   // pin-lock.js's header for why these stay two independent layers rather
   // than one subsuming the other).
+  // MYTHOS_AUTH_TOKEN and ONLY MYTHOS_AUTH_TOKEN — no PIN-session alternative,
+  // no "unset means open" back-compat. Used by the AETHER_NODE_TRUST branch of
+  // verifyClient, where both of those leniencies would be wrong (see there).
+  // Everything else keeps using tokenOk().
+  function authTokenMatches(presented) {
+    if (!AUTH_TOKEN) return false;
+    const a = Buffer.from(String(presented || ''));
+    const b = Buffer.from(AUTH_TOKEN);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
   function tokenOk(presented) {
     if (pinSession.isValid(presented)) return true;
     if (!AUTH_TOKEN) return !pinSessionRequired();
@@ -817,8 +839,38 @@ function createServer(deps) {
       return callback(false, 403, 'Forbidden');
     }
     if (!origin && !isLoopback(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
-      return callback(false, 403, 'Forbidden');
+      // Voice Nodes: a phone is not a browser — OkHttp (and every other
+      // non-browser WS client) sends no Origin header, so this rule rejects it
+      // before the token check ever runs, and no ALLOWED_ORIGINS value can
+      // admit it. This branch is the only way in, and it is deliberately
+      // narrower than the rule it sidesteps:
+      //   - opt-in (AETHER_NODE_TRUST, default false), so an install that
+      //     doesn't own a phone node keeps V2 §7.2's behaviour byte-for-byte;
+      //   - a real MYTHOS_AUTH_TOKEN must be CONFIGURED, checked here rather
+      //     than left to tokenOk() below, because tokenOk() returns true when
+      //     no token is set (the loopback back-compat path) — and a
+      //     non-loopback caller must never inherit that;
+      //   - and it must PRESENT that token, via the fall-through to the same
+      //     tokenOk(extractToken(...)) gate every other client passes. Nothing
+      //     is trusted about the client beyond the shared secret.
+      // Reject stays the default: any of those three failing lands on the 403.
+      const nodeTrusted = config.AETHER_NODE_TRUST === true && !!AUTH_TOKEN;
+      if (!nodeTrusted) {
+        logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
+        return callback(false, 403, 'Forbidden');
+      }
+      // ...and the credential really is MYTHOS_AUTH_TOKEN and nothing else.
+      // tokenOk() below would also accept a live PIN-session token, which exists
+      // to gate LOCAL PHYSICAL PRESENCE (pin-session.js) — a different claim
+      // entirely from "I am an enrolled device on this LAN". Accepting it here
+      // would mean a PIN session leaked from the HUD (XSS, or a capture on the
+      // deliberately-unencrypted LAN of PROTOCOL.md §11.4) authenticates a
+      // remote socket, which is exactly the widening this branch is supposed not
+      // to be. So the node path checks the shared secret directly.
+      if (!authTokenMatches(extractToken(info.req))) {
+        logger.warn('ws-upgrade-rejected', { reason: 'node trust: not the auth token' });
+        return callback(false, 401, 'Unauthorized');
+      }
     }
     if (!tokenOk(extractToken(info.req))) {
       logger.warn('ws-upgrade-rejected', { reason: 'bad or missing token' });
@@ -2127,7 +2179,13 @@ function createServer(deps) {
       // connection is whichever tab last sent ANY message, not just an
       // utterance — keeps a silently-idle-but-focused tab as the target
       // over a tab that's just replaying subscriptions on load.
-      lastActiveWs = ws;
+      //
+      // Voice-node telemetry is excluded: a phone pushes 'node-reading' several
+      // times a second whenever it can see the beacon, which would pin
+      // lastActiveWs to a socket that has no HUD and no speech-chunk player,
+      // permanently starving reminders/nudges of the tab the operator is
+      // actually looking at. Proximity is not activity.
+      if (!NODE_TELEMETRY_TYPES.has(msg.type)) lastActiveWs = ws;
       // Quiet-gate reference for proactive follow-ups: an unprompted remark must
       // never land while the operator is mid-conversation.
       if (msg.type === 'utterance' || msg.type === 'vision-query') lastTurnAt = Date.now();
@@ -2221,6 +2279,18 @@ function createServer(deps) {
         else logger.info('wakeword.' + state, fields);
       }
       // ---- S2S Live voice (V2 §10, Phase 5) ----
+      // Voice Nodes (Stage 1): a phone's BLE observation of the tracked beacon.
+      // The phone has already verified the §11.2 authenticated payload locally,
+      // so a reading arriving here is one this node vouches for; the proxy turns
+      // it into Aether §4.1/§4.2 wire shape for the aggregator. Unknown nodeIds
+      // are logged and dropped by the proxy — never auto-registered, or a rogue
+      // client could invent a room and win the election.
+      else if (msg.type === 'node-reading') {
+        if (scannerProxy) scannerProxy.updateReading(String(msg.nodeId || ''), { rssi: msg.rssi, name: msg.name });
+      }
+      else if (msg.type === 'node-lost') {
+        if (scannerProxy) scannerProxy.markLost(String(msg.nodeId || ''));
+      }
       else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
       else if (msg.type === 'live-audio') { if (liveSession) liveSession.sendAudio(msg.data); }
       // Slice 3 screen share. Same guard shape as live-audio: a frame arriving
@@ -2610,6 +2680,10 @@ function createServer(deps) {
       // put the server into that state explicitly rather than by faking env.
       setBootGreetingDelivered: (v) => { bootGreetingDelivered = Boolean(v); },
       isBootGreetingDelivered: () => bootGreetingDelivered,
+      // Voice Nodes: proactive speech targets lastActiveWs, and a phone pushing
+      // proximity telemetry several times a second must never become that
+      // target. There is no other observable for it from outside.
+      getLastActiveWs: () => lastActiveWs,
     },
   };
 }

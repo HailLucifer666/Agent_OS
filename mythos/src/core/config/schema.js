@@ -175,6 +175,30 @@ const SCHEMA = {
   // `say`) instead of the local TTS chain. Requires AETHER_ENABLED + a live
   // aggregator; falls back to local TTS when the socket is down.
   AETHER_AUDIO_ROUTE:        { type: 'bool',   default: false },
+  // Voice Nodes (phones as Aether scanners + audio endpoints).
+  //
+  // The Aether protocol (PROTOCOL.md §2) has the aggregator dial OUT to every
+  // scanner as a WS client — a scanner MUST serve its own WS server. A phone
+  // on Wi-Fi cannot reliably be dialled (roaming IP, doze, no stable port), so
+  // MYTHOS runs one loopback WS server per phone and republishes whatever that
+  // phone pushes up its own outbound socket in §4.1 `reading` / §4.2 `lost`
+  // shape. The aggregator dials the proxy; the phone dials MYTHOS. Nothing
+  // Python-side changes.
+  //
+  // AETHER_NODE_IDS is a comma-separated list; ORDER IS LOAD-BEARING — the
+  // first id gets AETHER_PROXY_PORT_BASE, the second base+1, and so on, which
+  // is the order those ports must appear in the aggregator's --peers. The proxy
+  // refuses to start on a malformed/duplicate list rather than silently
+  // mis-assigning a port.
+  AETHER_PROXY_ENABLED:      { type: 'bool',   default: false },
+  AETHER_PROXY_PORT_BASE:    { type: 'number', default: 4480, min: 1024, max: 65000 },
+  AETHER_NODE_IDS:           { type: 'string', default: '' },
+  // Admits non-browser voice-node clients (OkHttp sends no Origin header) to
+  // the WS upgrade. This deliberately relaxes the V2 §7.2 "no Origin +
+  // non-loopback => 403" rule, so it is OFF by default and — unlike the
+  // loopback back-compat path — a valid MYTHOS_AUTH_TOKEN is MANDATORY on
+  // every request it admits, never optional. No token, no node access.
+  AETHER_NODE_TRUST:         { type: 'bool',   default: false },
 
   // Daily planning + accountability (hands-free morning brief / stall
   // check-ins / evening review — src/core/planner/daily.js). On by default
