@@ -7,6 +7,16 @@ const zlib = require('zlib');
 // FsStore — base filesystem abstraction (CA from NOVA vault.js)
 // Extended with append, entries, prune for episodic/audit stores.
 // vaultRoot read live per call for test isolation.
+//
+// Record shapes (documented here so a shape change is a decision, not an
+// accident): JSONL files under vault/ are arrays of JSON objects, one per
+// line. New records written through appendLine() carry `schemaVersion: 1`
+// (F8, go-live proof plan 2026-08-08) so a future shape change is
+// detectable instead of silently unreadable. Readers (readLines /
+// readDirLines) are deliberately lenient — they JSON.parse each line and
+// skip corrupt ones with a health.anomaly — so records written before the
+// stamp exist today, read unchanged, and there is no migration machinery
+// (per repo YAGNI).
 
 function createFsStore(vaultRootFn, bus) {
   const root = typeof vaultRootFn === 'function' ? vaultRootFn : () => vaultRootFn;
@@ -108,7 +118,11 @@ function createFsStore(vaultRootFn, bus) {
   function appendLine(relPath, obj) {
     const full = vaultPath(relPath);
     ensureDir(path.dirname(full));
-    const line = JSON.stringify(obj) + '\n';
+    // F8 (go-live proof plan, 2026-08-08): every NEW record carries a
+    // schemaVersion stamp. Object.assign puts the DEFAULT first, so a caller
+    // that already sets schemaVersion wins (their value overrides). Readers
+    // are lenient, so existing unstamped records read unchanged.
+    const line = JSON.stringify(Object.assign({ schemaVersion: 1 }, obj)) + '\n';
     // Atomic-ish: open in append mode
     fs.appendFileSync(full, line, 'utf8');
   }
