@@ -121,3 +121,24 @@ nodes/.gradle/
 nodes/build/
 nodes/*/build/
 nodes/.kotlin/
+
+# ---------------------------------------------------------------------------
+# Agent-tool scratch directories and stray plan-mode artifacts.
+#
+# These were TRACKED and therefore public, while containing point-in-time
+# findings that current code has since fixed. .qoder/specs/ still carried a
+# "CRITICAL: no authentication on any REST route or WS" finding that commit
+# 8be82f2 (bearer auth + WS ?token=) closed on 2026-07-30 — a stale CRITICAL
+# in a public repo reads as a live advisory to anyone who finds it, so these
+# are untracked deliberately rather than left to rot in the open.
+#
+# The three canonical plan documents live in mythos/Plans/ and stay tracked;
+# see the root CLAUDE.md for why there are exactly three and no more.
+# i-just-installed-the-virtual-sketch.md is the auto-named plan-mode ancestor
+# of mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md (same title, same wave
+# structure) and is superseded by it — ignored, not deleted, because
+# CLAUDE.md's "plans can hide outside the repo" rule was written after a plan
+# was nearly lost this exact way.
+.qoder/
+.zcode/
+/i-just-installed-the-virtual-sketch.md
