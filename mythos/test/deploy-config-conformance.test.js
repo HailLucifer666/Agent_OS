@@ -34,6 +34,35 @@ const MAIN_PATH = path.join(MYTHOS_ROOT, 'src', 'main.js');
 const RENDER_HOSTNAME = 'agent-os.onrender.com';
 const TOKEN = 'deploy-config-conformance-test-token';
 
+// The same minimal fake deps every server test in this repo uses (server-auth,
+// config-s2s-route, pin-routes, …) — createServer() only exercises the paths
+// the test drives, and these stubs are enough for it to boot.
+function fakeFs() {
+  return { vaultPath: (...s) => path.join('/test-vault', ...s) };
+}
+
+function baseDeps(bus, overrides) {
+  return Object.assign({
+    bus,
+    config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: '' },
+    logger: { info() {}, warn() {}, error() {} },
+    memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() },
+    goalsEffector: { listGoals: () => [], stats: () => ({ total: 0, done: 0, active: 0 }) },
+    kanbanEffector: { listBoard: () => ({ cards: [] }) },
+    pipelineEffector: { listAll: () => ({}) },
+    effectors: { breakers: new Map(), invoke: async () => ({ ok: true }), effectors: new Map() },
+    leash: { confirm: { create: () => 'cf-1', accept: () => null, reject: () => true } },
+    goals: { debitBudget: () => {} },
+    probes: { getStatus: async () => ({ ok: true }) },
+    agentActions: {
+      assembleKanbanPlan: () => ({ job: { id: 'j1', status: 'queued' } }),
+      buildKanbanCard: () => ({ job: { id: 'j1', status: 'queued' }, board: { cards: [] } }),
+      reviewKanbanCard: () => ({ job: { id: 'j1', status: 'queued' } }),
+    },
+    buildRunner: { getJob: () => null, onJobUpdate: () => () => {} },
+  }, overrides || {});
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -139,6 +168,75 @@ describe('F1 · render.yaml healthCheckPath matches the real route', () => {
       child.kill('SIGKILL');
       await new Promise((resolve) => child.once('close', resolve));
       try { fs.rmSync(vaultDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2 — the WS origin allowlist must admit the deployed hostname.
+//
+// server/index.js's verifyClient() rejects any WS upgrade whose Origin is not
+// in ALLOWED_ORIGINS (defaults: http://localhost:<port> + http://127.0.0.1:
+// <port> only — server/index.js:355-358). On Render the HUD connects
+// same-origin to the deployed hostname (ui/public/js/ws.js), so without an
+// ALLOWED_ORIGINS entry the ENTIRE live layer (voice, confirms, entity state,
+// tick stream) is 403-rejected in production. render.yaml declared no
+// ALLOWED_ORIGINS — the deployment had no way to learn its own hostname.
+// ---------------------------------------------------------------------------
+
+describe('F2 · render.yaml carries the WS origin allowlist for the deployed hostname', () => {
+  test('ALLOWED_ORIGINS is declared and includes the Render hostname', () => {
+    const lines = readLines(RENDER_YAML_PATH);
+    const keyIdx = lines.findIndex((l) => l.trim() === '- key: ALLOWED_ORIGINS');
+    assert.notEqual(keyIdx, -1, 'render.yaml must declare an ALLOWED_ORIGINS env var');
+    const valueLine = lines.slice(keyIdx + 1).find((l) => l.trim().startsWith('value:'));
+    assert.ok(valueLine, 'ALLOWED_ORIGINS must carry a value (comma-separated origins)');
+    assert.ok(valueLine.includes(RENDER_HOSTNAME),
+      `ALLOWED_ORIGINS must include https://${RENDER_HOSTNAME}; got: ${valueLine.trim()}`);
+  });
+
+  test('mechanism: a foreign-but-allowlisted Origin + ?token= opens a REAL ws; a non-allowlisted foreign Origin still 403s', async () => {
+    // createServer builds its allowlist from process.env.ALLOWED_ORIGINS at
+    // construction (server/index.js:358) — exactly the env var render.yaml
+    // now supplies. Set it to prove the deployed config would actually work
+    // end-to-end, then restore. Note: this mechanism test is green even on
+    // the pre-fix code; the RED proof for F2 is the static guard above, which
+    // fails on a render.yaml with no ALLOWED_ORIGINS.
+    const prev = process.env.ALLOWED_ORIGINS;
+    process.env.ALLOWED_ORIGINS = `https://${RENDER_HOSTNAME}`;
+    try {
+      const bus = createBus({ historySize: 50 });
+      const server = createServer(baseDeps(bus, {
+        config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN },
+      }));
+      await server.ready;
+      const { port } = server.httpServer.address();
+      try {
+        // Allowlisted foreign origin + ?token= -> must OPEN. This is the
+        // connection that 403s on Render today because render.yaml never
+        // declared the hostname.
+        const opened = await new Promise((resolve) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${TOKEN}`, { origin: `https://${RENDER_HOSTNAME}` });
+          ws.on('open', () => { ws.close(); resolve('opened'); });
+          ws.on('unexpected-response', () => resolve('rejected'));
+          ws.on('error', () => resolve('rejected'));
+        });
+        assert.equal(opened, 'opened', 'allowlisted foreign origin must connect (dead on Render without this)');
+
+        // A DIFFERENT foreign origin that is NOT allowlisted -> still 403.
+        // Pins the security property the allowlist exists for.
+        const rejected = await new Promise((resolve) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${TOKEN}`, { origin: 'https://evil.example.com' });
+          ws.on('open', () => resolve('opened'));
+          ws.on('unexpected-response', () => resolve('rejected'));
+          ws.on('error', () => resolve('rejected'));
+        });
+        assert.equal(rejected, 'rejected', 'non-allowlisted foreign origin must stay rejected');
+      } finally {
+        await server.stop();
+      }
+    } finally {
+      process.env.ALLOWED_ORIGINS = prev;
     }
   });
 });
