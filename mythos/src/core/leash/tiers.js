@@ -41,6 +41,8 @@ const TIER_TABLE = {
   'remember':              0,
   'forget_fact':           2,  // BUG-160 — deletes a durable memory: local write, reversible only by re-remembering, so a notch above remember
   'log_incident':          0,
+  'list_incidents':        0,  // BUG-171 — read-only replay of the incident log
+  'incident_status':       0,  // BUG-171 — appends a status line next to log_incident's own line; same class
   'reminder_add':          0,  // read-only — creates a local reminder record
   'timer_add':             0,  // Task 5 (step 5) — same class as reminder_add above; a
                                // relative-time reminder additionally flagged to ring alertSound

@@ -70,15 +70,61 @@ function buildTools(ctx){
     }catch(err){return fail('forget_fact failed: '+(err.message||err));}
   }
 
+  // BUG-171: the same incident was written twice from one spoken report. The
+  // model called log_incident, the turn re-derived, and it called it again —
+  // two lines, two ids, one problem. Dedup on the normalized text within a
+  // short window. Deliberately in-memory and deliberately short: this guards
+  // against a double-fire inside one exchange, NOT against the operator
+  // legitimately reporting the same recurring problem again an hour later,
+  // which is real signal and must still be recorded.
+  var INCIDENT_DEDUP_WINDOW_MS = 60000;
+  var recentIncidents = new Map(); // normalized text -> { id, ts, date }
+
+  // Incident ids were `inc-<ts>-<Math.random()>`. Two incidents logged in the
+  // same millisecond is the only collision this has to survive, and a counter
+  // covers that exactly — while a random suffix sitting one line away from a
+  // `status:` field trips AD-5's fabricated-telemetry gate, which is a rule
+  // worth keeping sharp rather than allowlisting around.
+  var incidentSeq = 0;
+  function nextIncidentId(now){
+    incidentSeq += 1;
+    return 'inc-'+now+'-'+incidentSeq;
+  }
+
+  function normalizeIncident(text){
+    return String(text).toLowerCase().replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+  }
+
+  function pruneRecentIncidents(now){
+    for (var entry of recentIncidents) {
+      if (now - entry[1].ts >= INCIDENT_DEDUP_WINDOW_MS) recentIncidents.delete(entry[0]);
+    }
+  }
+
   async function log_incident(args){
     var text=(args&&(args.text||args.error||args.message)||'').trim();
     if(!text) return fail('text required — describe the incident');
     if(!fs||typeof fs.appendLine!=='function') return fail('fs store unavailable');
     try{
       var severity=(args&&args.severity)||'warn';
-      var d=new Date().toISOString().slice(0,10);
+      var now=Date.now();
+      var norm=normalizeIncident(text);
+      pruneRecentIncidents(now);
+      var prev=recentIncidents.get(norm);
+      if (prev) {
+        // Reported honestly rather than silently: the caller is told the
+        // record exists and which one it is, so a "logged it" reply is true
+        // without a second line appearing in the file.
+        return ok({logged:text.slice(0,200),date:prev.date,deduped:true,existingId:prev.id,
+          evidence:'already logged '+Math.round((now-prev.ts)/1000)+'s ago as '+prev.id+' — not written twice'});
+      }
+
+      var d=new Date(now).toISOString().slice(0,10);
+      var id=nextIncidentId(now);
       fs.ensureDir('Incidents');
-      fs.appendLine('Incidents/'+d+'.jsonl',{id:'inc-'+Date.now()+'-'+Math.floor(Math.random()*1e6),ts:Date.now(),text:text,severity:severity,source:'voice'});
+      fs.appendLine('Incidents/'+d+'.jsonl',{id:id,ts:now,text:text,severity:severity,source:'voice',status:'open'});
+      recentIncidents.set(norm,{id:id,ts:now,date:d});
+
       // Learning loop (Layer 3): incidents were write-only — nothing ever read
       // Incidents/ back. Also feed the lesson into the Lessons store so the goal
       // planner can ground against it next time. Best-effort: a failed lesson
@@ -86,8 +132,115 @@ function buildTools(ctx){
       if (memory && memory.lessons && typeof memory.lessons.recordFailure === 'function') {
         try { memory.lessons.recordFailure({ tool: '', goalTitle: text.slice(0, 60) }, text, { source: 'incident' }); } catch (_) {}
       }
-      return ok({logged:text.slice(0,200),date:d});
+      // BUG-171: index into semantic memory at write time, so recall_memory
+      // can surface it. Incidents/ was a dead drop — the operator reported
+      // problems all session and nothing could ever find them again, including
+      // MYTHOS itself. Own topic, so this never contaminates user-facts.
+      // Best-effort for the same reason as the lesson write above.
+      if (semantic && typeof semantic.write === 'function') {
+        try { semantic.write('incidents',['Incident '+id+' ('+severity+', '+d+'): '+text],
+          {confidence:0.9,append:true,sources:['incident']}); } catch (_) {}
+      }
+      return ok({logged:text.slice(0,200),date:d,id:id,
+        evidence:'wrote '+id+' to Incidents/'+d+'.jsonl'});
     }catch(err){return fail('log_incident failed: '+(err.message||err));}
+  }
+
+  // BUG-171: the read side. Incidents were written and never read by anything
+  // — no tool, no route, no sensor — so "what bugs are still open" had no
+  // answer and the log was, in the operator's words, a place reports went to
+  // die. Status is not a field that gets rewritten in place (the file is
+  // append-only jsonl by design); a status change appends a status line and
+  // the LATEST one wins, so nothing is ever lost or overwritten.
+  var INCIDENT_STATUSES = ['open','acknowledged','resolved'];
+  var INCIDENT_SCAN_LIMIT = 500;
+
+  function readIncidents(){
+    if(!fs||typeof fs.readDirLinesReverse!=='function') return null;
+    var lines=fs.readDirLinesReverse('Incidents',{limit:INCIDENT_SCAN_LIMIT})||[];
+    var byId=new Map();
+    var statusById=new Map();
+    // newest-first, so the FIRST status line seen for an id is the latest one
+    for (var i=0;i<lines.length;i++){
+      var e=lines[i];
+      if(!e||!e.id) continue;
+      if(e.kind==='status'){
+        if(!statusById.has(e.id)) statusById.set(e.id,{status:e.status,ts:e.ts,note:e.note||''});
+        continue;
+      }
+      if(!byId.has(e.id)) byId.set(e.id,e);
+    }
+    var out=[];
+    for (var rec of byId.values()){
+      var st=statusById.get(rec.id);
+      out.push({id:rec.id,ts:rec.ts,text:rec.text,severity:rec.severity||'warn',
+        status:(st&&st.status)||rec.status||'open',
+        statusNote:(st&&st.note)||'',
+        statusTs:(st&&st.ts)||null});
+    }
+    out.sort(function(a,b){return (b.ts||0)-(a.ts||0);});
+    return out;
+  }
+
+  function list_incidents(args){
+    var incidents=readIncidents();
+    if(incidents===null) return fail('incident log unavailable');
+    var status=String((args&&args.status)||'open').toLowerCase();
+    var limit=Number(args&&args.limit)||10;
+    var filtered=(status==='all')?incidents:incidents.filter(function(i){return i.status===status;});
+    if(!filtered.length){
+      // Honest empty: "no open incidents" is an answer, and it must not be
+      // confusable with "the log is broken" or with silence.
+      return ok({status:status,count:0,incidents:[],
+        note:'no '+(status==='all'?'':status+' ')+'incidents recorded'+
+             (status!=='all'&&incidents.length?' ('+incidents.length+' total in the log, none '+status+')':'')});
+    }
+    return ok({status:status,count:filtered.length,total:incidents.length,
+      incidents:filtered.slice(0,limit).map(function(i){
+        return {id:i.id,text:i.text.slice(0,200),severity:i.severity,status:i.status,
+          when:new Date(i.ts).toISOString().slice(0,16).replace('T',' ')};
+      })});
+  }
+
+  function incident_status(args){
+    var status=String((args&&args.status)||'').toLowerCase().trim();
+    if(INCIDENT_STATUSES.indexOf(status)===-1){
+      return fail('status must be one of: '+INCIDENT_STATUSES.join(', '));
+    }
+    var incidents=readIncidents();
+    if(incidents===null) return fail('incident log unavailable');
+    if(!fs||typeof fs.appendLine!=='function') return fail('fs store unavailable');
+
+    var id=(args&&args.id||'').trim();
+    var query=(args&&(args.query||args.text)||'').trim().toLowerCase();
+    var target=null;
+    if(id) target=incidents.find(function(i){return i.id===id;})||null;
+    else if(query){
+      var matches=incidents.filter(function(i){return i.text.toLowerCase().indexOf(query)!==-1;});
+      if(matches.length>1){
+        // Never guess which one. Naming the candidates back is what lets the
+        // operator disambiguate by voice in one more turn.
+        return fail(matches.length+' incidents match "'+query.slice(0,60)+'". Use id — candidates: '+
+          matches.slice(0,5).map(function(i){return i.id+' ("'+i.text.slice(0,50)+'")';}).join('; '));
+      }
+      target=matches[0]||null;
+    } else {
+      return fail('id or query required — which incident to update');
+    }
+    if(!target) return fail('No incident matches '+(id?('id '+id):('"'+query.slice(0,60)+'"'))+'.');
+    if(target.status===status){
+      return ok({id:target.id,status:status,unchanged:true,
+        evidence:target.id+' was already '+status});
+    }
+
+    try{
+      var d=new Date().toISOString().slice(0,10);
+      fs.ensureDir('Incidents');
+      fs.appendLine('Incidents/'+d+'.jsonl',
+        {kind:'status',id:target.id,status:status,ts:Date.now(),note:(args&&args.note)||'',source:'voice'});
+      return ok({id:target.id,text:target.text.slice(0,120),from:target.status,status:status,
+        evidence:'appended status '+status+' for '+target.id+' to Incidents/'+d+'.jsonl'});
+    }catch(err){return fail('incident_status failed: '+(err.message||err));}
   }
 
   // Item 9 stretch (RAG follow-up): explicit mid-conversation memory search —
@@ -103,9 +256,22 @@ function buildTools(ctx){
     var limit=(args&&Number(args.limit))||8;
     try{
       var hits=await memory.recallHybrid(query,{limit:limit});
+      var raw=(hits||[]).length;
       var results=(hits||[]).map(function(h){
         return {store:h.store,snippet:h.snippet||(h.record&&h.record.summary)||'',score:h.score};
       }).filter(function(r){ return r.snippet; });
+      // BUG-172: an empty recall used to return a bare {count:0,results:[]},
+      // which the model read as "the tool worked" and reported as "I recalled
+      // that" with nothing behind it. A zero result is a real answer and has
+      // to say so in words the reply cannot round off. The raw-vs-kept split
+      // matters: "nothing matched" and "matches came back empty" are different
+      // failures, and only the second one points at the store.
+      if(!results.length){
+        return ok({query:query,count:0,results:[],
+          note:raw
+            ? 'NO USABLE MEMORIES: '+raw+' match(es) came back with empty text. Tell the user you found nothing for "'+query.slice(0,60)+'" — do not invent a recollection.'
+            : 'NO MATCHING MEMORIES for "'+query.slice(0,60)+'". Say you do not have anything stored about this — do not invent a recollection.'});
+      }
       return ok({query:query,count:results.length,results:results});
     }catch(err){return fail('recall_memory failed: '+(err.message||err));}
   }
@@ -132,7 +298,9 @@ function buildTools(ctx){
     {name:'remember',description:'Save a durable fact, preference, or instruction to permanent memory. Use when user says "remember","note that","don\'t forget","from now on","keep in mind", or states a standing rule. Persists across restarts. When the user CORRECTS something previously remembered, call forget_fact for the old fact first, then remember the corrected one.',params:{text:'string — the fact/preference/instruction'},danger:false,fn:remember},
     {name:'forget_fact',description:'Remove a wrong or outdated fact from permanent memory. Use when the user says "forget that","that\'s wrong, the real X is...","delete that memory", or corrects something previously remembered. Echoes exactly what was removed — repeat it back so the user can catch a wrong match.',params:{query:'string — a distinctive phrase from the fact to remove',topic:'string (optional) — memory topic file to search, e.g. user-facts'},danger:false,fn:forget_fact},
     {name:'log_incident',description:'Record an error/bug/incident the user flags. Use when user says "log this","this is wrong","you hallucinated","log this as an error". Persists to durable incident log.',params:{text:'string — describe the incident',severity:'string (optional) — info|warn|error (default warn)'},danger:false,fn:log_incident},
-    {name:'recall_memory',description:'Search past conversations and remembered facts for something relevant. Use when the user references something from earlier that you don\'t have in front of you, or directly asks "what did I say about X" / "do you remember X". Read-only.',params:{query:'string — what to search memory for',limit:'number (optional) — max results, default 8'},danger:false,fn:recall_memory}
+    {name:'recall_memory',description:'Search past conversations and remembered facts for something relevant. Use when the user references something from earlier that you don\'t have in front of you, or directly asks "what did I say about X" / "do you remember X". Read-only.',params:{query:'string — what to search memory for',limit:'number (optional) — max results, default 8'},danger:false,fn:recall_memory},
+    {name:'list_incidents',description:'Read back the incidents the user has logged. Use for "what bugs are open", "what did I report", "any incidents today". Read-only.',params:{status:'string (optional) — open|acknowledged|resolved|all (default open)',limit:'number (optional) — max results, default 10'},danger:false,fn:list_incidents,needs_result:true},
+    {name:'incident_status',description:'Mark a logged incident acknowledged or resolved. Use when the user says "that one is fixed","mark it resolved","I know about that one". Identify it by id, or by a distinctive phrase from the incident text.',params:{status:'string — open|acknowledged|resolved',id:'string (optional) — the incident id',query:'string (optional) — a distinctive phrase from the incident text',note:'string (optional) — why'},danger:false,fn:incident_status}
   ];
 }
 function registerFromMemory(hub,ctx){var t=buildTools(ctx);for(var i=0;i<t.length;i++)hub.register(effectorFromTool(t[i]));return{count:t.length};}

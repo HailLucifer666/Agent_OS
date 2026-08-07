@@ -581,10 +581,13 @@ describe('from-memory: recall_memory', () => {
 // tool structure invariants
 // ---------------------------------------------------------------------------
 describe('from-memory: tool structure', () => {
-  it('exports exactly 5 tools (P5 added self_capabilities, BUG-160 added forget_fact)', () => {
+  it('exports exactly 7 tools (P5 self_capabilities, BUG-160 forget_fact, BUG-171 the incident read side)', () => {
     const tools = buildTools({ semantic: { write: () => ({}) }, fs: { ensureDir: () => {}, appendLine: () => {} }, memory: { recallHybrid: async () => [] } });
-    assert.equal(tools.length, 5);
-    assert.deepEqual(tools.map(t => t.name).sort(), ['forget_fact', 'log_incident', 'recall_memory', 'remember', 'self_capabilities']);
+    assert.equal(tools.length, 7);
+    assert.deepEqual(tools.map(t => t.name).sort(), [
+      'forget_fact', 'incident_status', 'list_incidents', 'log_incident',
+      'recall_memory', 'remember', 'self_capabilities',
+    ]);
   });
 
   it('remember tool has correct metadata', () => {

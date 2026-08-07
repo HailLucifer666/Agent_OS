@@ -243,11 +243,20 @@ function createSemanticStore({ fs, config, bus, logger }) {
         const sidecars = parseSidecar(content);
         const facts = parseFacts(content);
         const sc = sidecars[0] || {};
+        // BUG-172: a topic file that MATCHES the query but parses to zero
+        // facts (header-only, or every fact archived) produced a hit whose
+        // snippet was the empty string. Callers then dropped it downstream and
+        // were left holding count:0 from a call that had reported hits —
+        // which is how recall_memory came to answer "I recalled that" with
+        // nothing to say. A hit with no text is not a hit; drop it here, at
+        // the one place that knows WHY it is empty.
+        const snippet = facts.slice(0, 3).join('; ').slice(0, 200);
+        if (!snippet) continue;
         hits.push({
           ref: sc.id || files[i].name,
           score: score,
           record: { topic: files[i].name.replace('.md', ''), sidecar: sc, facts: facts },
-          snippet: facts.slice(0, 3).join('; ').slice(0, 200),
+          snippet: snippet,
           store: 'semantic'
         });
       }

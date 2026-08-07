@@ -20,7 +20,11 @@ const DEFAULT_ALLOWLIST = [
   'kanban_status','kanban_add_card','kanban_move_card',
   'start_project','build_project','project_status','job_status','open_artifact',
   'get_time','get_weather','get_directions','web_search','web_fetch',
-  'remember','forget_fact','log_incident','recall_memory',
+  // BUG-171: list_incidents/incident_status are the read + close half of
+  // log_incident. Allowlisting the write without them is exactly the
+  // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
+  // before — and it is what made Incidents/ a place reports went to die.
+  'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory',
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   'spotify_play','spotify_play_pause','spotify_next','spotify_volume','spotify_status',
