@@ -91,11 +91,17 @@ test('build.files excludes the edge-tts server script (LGPLv3 BYO boundary)', ()
     'mythos/services/edge-tts-server.py must be excluded from the installer');
 });
 
-test('build.files excludes the vendored edge-tts LGPLv3 package under mythos/.venv', () => {
+test('build.files excludes the vendored edge-tts LGPLv3 package under mythos/.venv', (t) => {
+  const target = path.join(REPO_ROOT, 'mythos', '.venv', 'Lib', 'site-packages', 'edge_tts', '__init__.py');
+  // edge-tts is BYO (LGPLv3, never vendored — see THIRD_PARTY_NOTICES.md): a
+  // machine that has not installed it into a .venv cannot exercise this
+  // assertion honestly. Skip, don't fake the fixture — same discipline as the
+  // deliberate non-generalisation of withStandInIfAbsent to model weights, and
+  // the sensors-file.test.js honest-skip precedent. (The operator's main
+  // machine, which runs edge-tts, still executes it for real.)
+  if (!fs.existsSync(target)) return t.skip('fixture absent: edge-tts is not installed under mythos/.venv on this machine');
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
-  const target = path.join(REPO_ROOT, 'mythos', '.venv', 'Lib', 'site-packages', 'edge_tts', '__init__.py');
-  assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);
   assert.equal(isIncluded(filterFn, target), false,
     'the installed edge_tts LGPLv3 package under mythos/.venv must never be packaged');
 });
@@ -149,11 +155,16 @@ test('build.files excludes gesture_recognizer.task — the one committed model, 
     'gesture_recognizer.task must stay out of the installer while its model licence is unverified');
 });
 
-test('build.files excludes the Silero VAD weights (gitignored, but present on disk)', () => {
+test('build.files excludes the Silero VAD weights (gitignored, but present on disk)', (t) => {
+  const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'silero', 'silero_vad.onnx');
+  // The weights are fetched per-machine by scripts/setup-silero.js; a checkout
+  // that has never run it has no such file. Skip honestly rather than
+  // materialising a fake weight here — faking model state is exactly the trap
+  // CLAUDE.md's wakeword rename-race entry documents. The operator's machine,
+  // where the weights exist, still runs this assertion for real.
+  if (!fs.existsSync(target)) return t.skip('fixture absent: Silero VAD weights not fetched on this machine (scripts/setup-silero.js)');
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
-  const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'silero', 'silero_vad.onnx');
-  assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);
   assert.equal(isIncluded(filterFn, target), false,
     'silero_vad.onnx is fetched per-machine by scripts/setup-silero.js and must not be redistributed');
 });

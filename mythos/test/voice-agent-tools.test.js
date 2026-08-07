@@ -55,7 +55,13 @@ describe('voice-agent persona prompt', () => {
   // The probe is now opt-in (the operator has to ask) rather than forced.
   it('never forces a status probe on frustration, and forbids speaking working notes', () => {
     const rule = RULES.slice(RULES.indexOf('FRUSTRATION RULE'));
-    const ruleBlock = rule.slice(0, rule.indexOf('\n\n') === -1 ? rule.length : rule.indexOf('\n\n'));
+    // CRLF-tolerant split: on a Windows checkout (core.autocrlf=true, no
+    // .gitattributes) RULES uses \r\n separators, so a literal '\n\n' never
+    // matches and the "block" would swallow every later rule — several of
+    // which legitimately mention needs_result. Match an optional-\r blank
+    // line instead so the split is line-ending independent.
+    const blockEnd = rule.search(/\r?\n\r?\n/);
+    const ruleBlock = rule.slice(0, blockEnd === -1 ? rule.length : blockEnd);
 
     assert.doesNotMatch(ruleBlock, /needs_result/,
       'the frustration rule must not reference needs_result — RULES is shared with the Live path, '

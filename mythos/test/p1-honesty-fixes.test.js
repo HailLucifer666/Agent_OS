@@ -30,6 +30,19 @@ function toolFn(built, name) {
   return tool.fn;
 }
 
+// The vaultUrl resolver prefers process.env.PORT (a generic deployment var)
+// over the explicitly-passed config.MYTHOS_PORT. A desktop-shell environment
+// that exports PORT (e.g. the Freebuff host env, which sets PORT for its own
+// dev server) would otherwise override the explicit config these tests pass
+// and break them on that machine. Isolate the env for the duration of fn.
+function withoutAmbientPort(fn) {
+  const savedPort = process.env.PORT;
+  delete process.env.PORT;
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => { if (savedPort !== undefined) process.env.PORT = savedPort; });
+}
+
 describe('vault-url: shared resolver', () => {
   it('recognizes vault-relative paths with or without a leading slash', () => {
     assert.equal(vaultRelativePath('/vault/builds/pipeline/foo.html'), 'builds/pipeline/foo.html');
@@ -44,9 +57,9 @@ describe('vault-url: shared resolver', () => {
     assert.equal(vaultRelativePath('https://example.com/page'), null);
   });
 
-  it('builds the URL the dashboard HTTP server serves a vault path at', () => {
+  it('builds the URL the dashboard HTTP server serves a vault path at', () => withoutAmbientPort(() => {
     assert.equal(vaultUrl('builds/pipeline/foo.html', { MYTHOS_PORT: 4478 }), 'http://localhost:4478/vault/builds/pipeline/foo.html');
-  });
+  }));
 });
 
 describe('open_artifact: existence + reachability checks (P1-6)', () => {
@@ -298,7 +311,7 @@ describe('browser_navigate: vault-path resolution (P1-7)', () => {
     });
   });
 
-  it('resolves an existing vault artifact to the served http(s) URL, not file://', async () => {
+  it('resolves an existing vault artifact to the served http(s) URL, not file://', () => withoutAmbientPort(async () => {
     let navigatedTo = null;
     await withMockedBrowser({
       getStatus: () => ({ state: 'ONLINE' }),
@@ -313,5 +326,5 @@ describe('browser_navigate: vault-path resolution (P1-7)', () => {
       assert.equal(result.ok, true);
       assert.equal(navigatedTo, 'http://localhost:4478/vault/builds/pipeline/real.html');
     });
-  });
+  }));
 });
