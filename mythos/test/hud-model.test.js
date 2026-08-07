@@ -137,7 +137,11 @@ describe('panel-registry (pure)', () => {
 });
 
 describe('widget-registry (pure)', () => {
-  it('every widget has id/title/defaultPos/mount and ids are unique', () => {
+  // BUG-176: defaultPos is gone — positions are computed from measured card
+  // sizes by auto-layout.js, because .widget-card is content-sized and a
+  // declared offset could never say whether two cards overlap. `column` is the
+  // placement input now, and it is what has to be present on every entry.
+  it('every widget has id/title/column/mount and ids are unique', () => {
     const { WIDGETS, widgetIds } = widgetRegistry;
     assert.ok(WIDGETS.length >= 7, 'clock/weather/agents/spend/wip/tick-rate/breakers');
     const ids = widgetIds();
@@ -146,7 +150,7 @@ describe('widget-registry (pure)', () => {
       assert.equal(typeof w.id, 'string');
       assert.equal(typeof w.title, 'string');
       assert.equal(typeof w.mount, 'function');
-      assert.ok(w.defaultPos && typeof w.defaultPos === 'object');
+      assert.ok(['left', 'right'].includes(w.column), w.id + ' needs a column hint');
     });
   });
 });

@@ -174,7 +174,9 @@ describe('voice-latency tile module chain (ceiling: imports + registry shape)', 
     const tile = WIDGETS.find((w) => w.id === 'voice-latency');
     assert.equal(tile.title, 'VOICE LATENCY');
     assert.equal(typeof tile.mount, 'function');
-    assert.ok(tile.defaultPos && typeof tile.defaultPos === 'object');
+    // BUG-176: defaultPos replaced by a column hint (auto-layout.js computes
+    // the position from the card's measured size).
+    assert.ok(['left', 'right'].includes(tile.column));
   });
 
   it('the tile id matches manage_widget\'s server-side BOOT_WIDGET_IDS (voice control stays in sync)', async () => {

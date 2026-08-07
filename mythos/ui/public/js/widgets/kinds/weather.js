@@ -9,6 +9,16 @@
 //   3. Final fallback: a fixed constant, clearly labelled.
 // network/permission failure degrades HONEST-OFFLINE — the widget says so
 // instead of faking a reading. External deps documented in ROADMAP.md P9.
+//
+// BUG-176: this showed two data points (temperature + a one-word condition) and
+// the operator asked for the richer card they had seen. That richer card exists
+// only in design/mythos-living-core.html, where it runs on a hardcoded SIM
+// object — so it was not something to port, it was something to actually FETCH.
+// open-meteo was already being called; it was simply never asked for more than
+// two fields. Everything added below is a real value from that same free,
+// keyless endpoint, and every one of them independently falls back to
+// "unavailable" rather than a dash — a dash reads as "loading", which is the
+// ambiguity the honest-inert contract exists to kill.
 
 const WMO = {
   0: 'Clear', 1: 'Mostly clear', 2: 'Partly cloudy', 3: 'Overcast',
@@ -19,6 +29,49 @@ const WMO = {
 };
 
 const FALLBACK = { lat: 22.57, lon: 88.36, label: 'Kolkata (fallback)' };
+const UNAVAILABLE = 'unavailable';
+
+// Pure, exported for node:test. Formats one current-conditions row from
+// open-meteo's `current` block. A field the API omitted must never become 0.
+export function formatConditions(cur) {
+  const c = cur || {};
+  const parts = [];
+  parts.push(Number.isFinite(c.apparent_temperature)
+    ? 'feels ' + Math.round(c.apparent_temperature) + '\u00B0'
+    : 'feels ' + UNAVAILABLE);
+  parts.push(Number.isFinite(c.relative_humidity_2m)
+    ? 'humidity ' + Math.round(c.relative_humidity_2m) + '%'
+    : 'humidity ' + UNAVAILABLE);
+  parts.push(Number.isFinite(c.wind_speed_10m)
+    ? 'wind ' + Math.round(c.wind_speed_10m) + ' km/h'
+    : 'wind ' + UNAVAILABLE);
+  return parts.join('  \u00B7  ');
+}
+
+// Pure, exported for node:test. open-meteo returns daily arrays in parallel;
+// index 0 is today. Returns [] when the payload has no usable daily block, so
+// the caller renders nothing rather than a row of empty cells.
+export function formatForecast(daily, now) {
+  const d = daily || {};
+  const times = Array.isArray(d.time) ? d.time : [];
+  const highs = Array.isArray(d.temperature_2m_max) ? d.temperature_2m_max : [];
+  const lows = Array.isArray(d.temperature_2m_min) ? d.temperature_2m_min : [];
+  const codes = Array.isArray(d.weather_code) ? d.weather_code : [];
+  const out = [];
+  for (let i = 0; i < times.length && out.length < 5; i++) {
+    if (!Number.isFinite(highs[i]) || !Number.isFinite(lows[i])) continue;
+    const date = new Date(times[i] + 'T00:00:00');
+    const isToday = now instanceof Date && date.toDateString() === now.toDateString();
+    out.push({
+      key: times[i],
+      day: isToday ? 'today' : date.toLocaleDateString(undefined, { weekday: 'short' }).toLowerCase(),
+      high: Math.round(highs[i]),
+      low: Math.round(lows[i]),
+      desc: WMO[codes[i]] || '',
+    });
+  }
+  return out;
+}
 
 // Reverse-geocode coords → a human city label. No API key (BigDataCloud's
 // client endpoint is free + keyless). Returns '' on any failure so the caller
@@ -64,11 +117,15 @@ async function ipLocate() {
 export function mountWeather(el) {
   // xss-safe: static template, no interpolation
   el.innerHTML = `
-    <div class="widget-value mono" data-role="temp">--</div>
-    <div class="widget-sub mono" data-role="desc">locating…</div>
+    <div class="widget-value mono" data-role="temp">${UNAVAILABLE}</div>
+    <div class="widget-sub mono" data-role="desc">locating\u2026</div>
+    <div class="widget-sub mono text-faint" data-role="cond"></div>
+    <div class="weather-forecast" data-role="forecast"></div>
   `;
   const tempEl = el.querySelector('[data-role="temp"]');
   const descEl = el.querySelector('[data-role="desc"]');
+  const condEl = el.querySelector('[data-role="cond"]');
+  const fcEl = el.querySelector('[data-role="forecast"]');
   let disposed = false;
   let timer = null;
 
@@ -87,6 +144,27 @@ export function mountWeather(el) {
       tempEl.textContent = '--';
       descEl.textContent = 'weather offline';
     }
+  }
+
+  function renderForecast(days) {
+    if (!days.length) { fcEl.replaceChildren(); return; }
+    const nodes = days.map(function (d) {
+      const col = document.createElement('div');
+      col.className = 'weather-day';
+      const day = document.createElement('span');
+      day.className = 'weather-day-name text-faint';
+      day.textContent = d.day;
+      const hi = document.createElement('span');
+      hi.className = 'weather-day-hi mono';
+      hi.textContent = d.high + '\u00B0';
+      const lo = document.createElement('span');
+      lo.className = 'weather-day-lo mono text-faint';
+      lo.textContent = d.low + '\u00B0';
+      col.title = d.desc;
+      col.append(day, hi, lo);
+      return col;
+    });
+    fcEl.replaceChildren.apply(fcEl, nodes);
   }
 
   function start(lat, lon, label) {

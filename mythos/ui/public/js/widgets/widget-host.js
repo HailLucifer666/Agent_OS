@@ -8,6 +8,7 @@
 // These have a × close button and are not persisted — close them and they're gone.
 
 import { WIDGETS } from './widget-registry.js';
+import { packColumns, measureCards } from './auto-layout.js';
 import { mountWebResult } from './kinds/web-result.js';
 import { mountDynamicWidget } from './kinds/dynamic.js';
 import { h } from '../dom.js';
@@ -119,7 +120,11 @@ export function mountWidgets(root, ctx) {
       <div class="widget-body"></div>
       <div class="widget-resize" aria-label="Resize"></div>
     `;
-    applyPos(card, saved[widget.id] || widget.defaultPos);
+    // BUG-176: a stored position still wins outright and is applied now. Cards
+    // WITHOUT one are left unpositioned here and placed by the measuring pass
+    // after this loop — their height is content-driven and unknowable until
+    // they have rendered.
+    if (saved[widget.id]) applyPos(card, saved[widget.id]);
     // Restore saved size (width/height) if previously resized.
     const sv = saved[widget.id];
     if (sv && sv.width) card.style.width = sv.width + 'px';
@@ -169,6 +174,61 @@ export function mountWidgets(root, ctx) {
       card.remove();
     });
   });
+
+  // BUG-176: place every card that has no stored position, from its MEASURED
+  // size. Deferred one frame so the mount() calls above have painted and font
+  // loading has settled once — getBoundingClientRect before that reads a card
+  // that has not laid out yet, which is how a "measured" layout can still be
+  // wrong.
+  //
+  // Runs exactly once. Not on resize and not when a card is opened or closed
+  // later: re-flowing would move cards the operator never touched. Its result
+  // is deliberately NOT persisted — see auto-layout.js for why.
+  function packUnplaced() {
+    const entries = [];
+    for (const widget of WIDGETS) {
+      if (saved[widget.id]) continue;              // the user's own choice wins
+      const card = cards.get(widget.id);
+      if (!card || card.classList.contains('widget-hidden')) continue;
+      entries.push({ id: widget.id, column: widget.column, el: card });
+    }
+    if (!entries.length) return;
+    const positions = packColumns(measureCards(entries), { viewportHeight: window.innerHeight });
+    for (const [id, pos] of Object.entries(positions)) {
+      const card = cards.get(id);
+      if (card) applyPos(card, pos);
+    }
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(packUnplaced);
+  else packUnplaced();
+
+  // BUG-176: one animation frame is NOT enough, and measuring at that point is
+  // how the first version of this still shipped overlapping. Several cards get
+  // their content from an async fetch (SYSTEM's per-core list needs the first
+  // /api/system poll; NEWS needs its feed), so at first paint they are short
+  // and then grow — SYSTEM measured 442px on the rAF and rendered 697px a
+  // second later, straight through the card packed beneath it.
+  //
+  // So: re-pack while cards are still settling, then stop. The window is
+  // deliberately short and time-bounded rather than a permanent observer —
+  // after it closes, a later content change (a news refresh) must NOT move
+  // cards the operator is already reading.
+  const SETTLE_MS = 6000;
+  if (typeof ResizeObserver === 'function') {
+    const settleUntil = Date.now() + SETTLE_MS;
+    const ro = new ResizeObserver(() => {
+      if (Date.now() > settleUntil) { ro.disconnect(); return; }
+      packUnplaced();
+    });
+    for (const widget of WIDGETS) {
+      if (saved[widget.id]) continue;
+      const card = cards.get(widget.id);
+      if (card) ro.observe(card);
+    }
+    cleanups.push(() => ro.disconnect());
+    const stop = setTimeout(() => ro.disconnect(), SETTLE_MS);
+    if (stop.unref) stop.unref();
+  }
 
   function setWidgetHidden(id, hidden) {
     const card = cards.get(id);

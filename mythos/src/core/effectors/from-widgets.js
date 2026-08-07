@@ -42,8 +42,13 @@ const VALID_TONES = ['gold', 'dim', 'warn'];
 // registry count 11 -> 18. Those ship defaultHidden:true (widget-registry.js),
 // so voice is the PRIMARY way an operator reaches them, not a convenience:
 // "open system" is how the card appears at all.
+// Changelog (BUG-176, 2026-08-07): 19 -> 16. 'cores', 'gpu' and 'sensors' are
+// no longer widgets — they are sections of the merged SYSTEM card. Their spoken
+// names are REPOINTED at 'system' below rather than deleted: a phrase that
+// still describes something real must keep resolving to it, or "open gpu"
+// starts answering "I don't have that" about a card the operator is looking at.
 const BOOT_WIDGET_IDS = ['clock', 'weather', 'agents', 'spend', 'tokens', 'wip', 'tick-rate', 'breakers', 'news', 'media', 'voice-latency',
-  'system', 'cores', 'gpu', 'sensors', 'voice', 'memory', 'terminal', 'aether'];
+  'system', 'voice', 'memory', 'terminal', 'aether'];
 const WIDGET_SYNONYMS = {
   'clock': 'clock', 'time': 'clock', 'local time': 'clock',
   'weather': 'weather',
@@ -60,9 +65,11 @@ const WIDGET_SYNONYMS = {
   // below, not to the new SYSTEM card — that mapping predates this widget and
   // repointing an existing spoken phrase would be a silent behaviour change.
   'system': 'system', 'cpu': 'system', 'host': 'system', 'system monitor': 'system',
-  'cores': 'cores', 'per core': 'cores', 'core load': 'cores', 'threads': 'cores',
-  'gpu': 'gpu', 'graphics': 'gpu', 'graphics card': 'gpu', 'video card': 'gpu',
-  'sensors': 'sensors', 'device': 'sensors', 'battery': 'sensors', 'hardware': 'sensors',
+  // BUG-176: all three folded into SYSTEM's sections. Every phrase still
+  // resolves — to the card that now actually shows that reading.
+  'cores': 'system', 'per core': 'system', 'core load': 'system', 'threads': 'system',
+  'gpu': 'system', 'graphics': 'system', 'graphics card': 'system', 'video card': 'system',
+  'sensors': 'system', 'device': 'system', 'battery': 'system', 'hardware': 'system',
   'voice': 'voice', 'voice status': 'voice', 'microphone': 'voice', 'speech': 'voice',
   'memory': 'memory', 'memories': 'memory', 'knowledge': 'memory', 'what you know': 'memory',
   'terminal': 'terminal', 'logs': 'terminal', 'log': 'terminal', 'console': 'terminal',

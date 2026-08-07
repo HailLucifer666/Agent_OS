@@ -28,6 +28,18 @@ describe('manage_widget', () => {
     assert.deepEqual(lastCommand(), { mode: 'close', targets: ['media'] });
   });
 
+  // BUG-176: CORES, GPU and SENSORS stopped being widgets and became sections
+  // of the merged SYSTEM card. Their spoken names were REPOINTED rather than
+  // deleted — a phrase that still describes something real on screen must keep
+  // resolving to it, or "open gpu" starts answering "I don't have that" about a
+  // card the operator is looking at.
+  it('the folded widget names still resolve — to the card that now shows them', () => {
+    for (const name of ['gpu', 'graphics card', 'cores', 'per core', 'threads', 'sensors', 'battery', 'hardware']) {
+      tool.fn({ action: 'open', name });
+      assert.deepEqual(lastCommand(), { mode: 'open', targets: ['system'] }, name + ' should open SYSTEM');
+    }
+  });
+
   it('hide/show verb synonyms map to close/open', () => {
     tool.fn({ action: 'hide', name: 'news' });
     assert.deepEqual(lastCommand(), { mode: 'close', targets: ['news'] });
@@ -57,7 +69,7 @@ describe('manage_widget', () => {
     //
     // "open all" covering the new seven is load-bearing, not incidental: they
     // ship defaultHidden, so voice is how they get on screen at all.
-    assert.equal(cmd.targets.length, 19);
+    assert.equal(cmd.targets.length, 16);
   });
 
   it('solo keeps only the named widget', () => {

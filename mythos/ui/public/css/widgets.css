@@ -238,19 +238,27 @@
 .news-foot { margin-top: 6px; font-size: 9px; color: var(--text-faint); }
 
 /* MEDIA widget — now playing from Windows SMTC */
+/* BUG-176: a FIXED square box, not just a max-height. Album art arrives at
+   whatever size the source has, so a height-capped box let the card resize
+   itself every time the track changed — the layout jumping under the
+   operator's cursor. aspect-ratio pins the footprint; object-fit does the
+   rest. */
 .widget-art {
   width: 100%;
-  max-height: 240px;
+  aspect-ratio: 1 / 1;
+  max-height: 320px;
   object-fit: cover;
   border-radius: var(--radius-sm);
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: var(--hairline);
 }
 /* The <img> injected into .widget-art was unstyled — it rendered at its
    native pixel size and overflowed the card. .widget-art (the wrapping div)
    already caps height; the image itself needs the same treatment. */
 .widget-art-img {
   width: 100%;
-  max-height: 240px;
+  height: 100%;
   object-fit: cover;
   border-radius: var(--radius-sm);
   display: block;
@@ -282,10 +290,28 @@
 .media-controls button:hover { color: var(--text); background: var(--hairline); }
 .media-controls button:active { color: var(--accent); }
 
+/* BUG-176: the timeline is a row — elapsed, bar, duration. The bar itself is
+   deliberately NOT interactive: server/routes/media.js accepts only
+   play_pause / next_track / prev_track / volume_*, so there is no seek command
+   to send. A draggable-looking bar would be a control that silently does
+   nothing, which is worse than an honest read-only indicator. */
+.media-timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.media-time {
+  font-size: 10px;
+  flex-shrink: 0;
+  min-width: 30px;
+}
+.media-time:last-child { text-align: right; }
+
 .media-progress {
-  margin-top: 8px;
+  flex: 1 1 auto;
   width: 100%;
-  height: 3px;
+  height: 4px;
   border-radius: 2px;
   background: var(--hairline);
   overflow: hidden;
@@ -325,3 +351,75 @@
 }
 
 .widget-bar > i.warn { background: var(--status-warn); }
+
+/* BUG-176: section label inside the merged SYSTEM card. Sections stay present
+   even when their content is unavailable, so the label has to read as a quiet
+   divider rather than a heading competing with the card title. */
+.widget-section {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint, rgba(180, 210, 235, 0.38));
+  padding: 10px 14px 4px;
+  border-top: 1px solid rgba(120, 200, 255, 0.08);
+  margin-top: 6px;
+}
+.widget-section:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 2px;
+}
+
+/* BUG-176: WEATHER 5-day row. Real open-meteo daily min/max — the design
+   mockup's equivalent panel ran on a hardcoded SIM object, so this is fetched,
+   not ported. Columns are equal-width so the row reads as a strip rather than
+   ragged text. */
+.weather-forecast {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(120, 200, 255, 0.08);
+}
+.weather-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.weather-day-name { font-size: 9px; letter-spacing: 0.08em; }
+.weather-day-hi { font-size: 11px; }
+.weather-day-lo { font-size: 10px; }
+
+/* BUG-176: the merged SYSTEM card holds four sections and its height scales
+   with the machine — a 24-thread CPU alone is ~670px of per-core bars, and
+   measured at 679px tall it claimed two thirds of a 1080p gutter on its own,
+   forcing every card beneath it into the packer's clamp.
+   Bound the BODY, not the individual sections: one scroll region rather than
+   nested ones, every section still reachable, nothing truncated or hidden. The
+   number is the largest that lets the curated nine fit two gutters at 1080p
+   MEASURED, not estimated: at a 360px cap the card rendered 405px tall and the
+   column ran 27px past the viewport, clamping WORK IN PROGRESS on top of VOICE.
+   320 makes the whole left column fit with room to spare at 1080p. */
+[data-widget-id="system"] .widget-body {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* And bound its WIDTH: a long GPU renderer string ("NVIDIA GeForce RTX 4060
+   Laptop GPU Direct3D11 vs_5_0 ps_5_0") stretched the card to the 640px
+   max-width and pushed it out of the gutter toward the orb. The full string
+   stays on the title attribute. */
+[data-widget-id="system"] {
+  max-width: 300px;
+}
+[data-widget-id="system"] .widget-value-text,
+[data-widget-id="system"] .widget-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

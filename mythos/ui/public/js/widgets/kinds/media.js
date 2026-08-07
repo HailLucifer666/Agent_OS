@@ -6,6 +6,18 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
 }
 
+// BUG-176: mm:ss for the timeline labels. Pure, exported for node:test.
+// A non-finite position renders as a dash placeholder rather than 0:00 —
+// "the player did not report a position" and "the track just started" are
+// different facts, and 0:00 would state the second one confidently.
+export function formatClock(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return '–:––';
+  const total = Math.floor(sec);
+  const m = Math.floor(total / 60);
+  const ss = String(total % 60).padStart(2, '0');
+  return m + ':' + ss;
+}
+
 export function mountMedia(el) {
   // xss-safe: static template, no interpolation
   el.innerHTML = `
@@ -13,7 +25,11 @@ export function mountMedia(el) {
     <div class="widget-value" data-role="media-title">—</div>
     <div class="widget-sub" data-role="media-artist">no media playing</div>
     <div class="widget-sub" data-role="media-status"></div>
-    <div class="media-progress" data-role="media-progress" hidden><div class="media-progress-fill" data-role="media-progress-fill"></div></div>
+    <div class="media-timeline" data-role="media-timeline" hidden>
+      <span class="media-time mono text-faint" data-role="media-elapsed"></span>
+      <div class="media-progress" data-role="media-progress"><div class="media-progress-fill" data-role="media-progress-fill"></div></div>
+      <span class="media-time mono text-faint" data-role="media-duration"></span>
+    </div>
     <div class="media-controls" data-role="media-controls">
       <button data-key="prev_track" title="Previous" aria-label="Previous track">⏮</button>
       <button data-key="play_pause" title="Play/Pause" aria-label="Play or pause">⏯</button>
@@ -26,7 +42,9 @@ export function mountMedia(el) {
   const titleEl = el.querySelector('[data-role="media-title"]');
   const artistEl = el.querySelector('[data-role="media-artist"]');
   const statusEl = el.querySelector('[data-role="media-status"]');
-  const progressEl = el.querySelector('[data-role="media-progress"]');
+  const progressEl = el.querySelector('[data-role="media-timeline"]');
+  const elapsedEl = el.querySelector('[data-role="media-elapsed"]');
+  const durationEl = el.querySelector('[data-role="media-duration"]');
   const progressFillEl = el.querySelector('[data-role="media-progress-fill"]');
   const controlsEl = el.querySelector('[data-role="media-controls"]');
   let disposed = false;
@@ -96,6 +114,8 @@ export function mountMedia(el) {
       // (keep it honest: the bar reflects the last known position, not a guess).
       if (m.durationSec > 0) {
         progressEl.hidden = false;
+        elapsedEl.textContent = formatClock(m.positionSec);
+        durationEl.textContent = formatClock(m.durationSec);
         const pct = Math.max(0, Math.min(100, (m.positionSec / m.durationSec) * 100));
         progressFillEl.style.width = pct + '%';
       } else {

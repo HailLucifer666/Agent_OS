@@ -241,19 +241,24 @@ describe('memory route — the degenerate empty-query score stays hidden', () =>
 });
 
 // ---------------------------------------------------------------------------
-// BUG-169: the port shipped but nobody could see it
+// BUG-176: curation + computed positions
 // ---------------------------------------------------------------------------
-// All eight ported widgets shipped `defaultHidden: true`, on the reasoning that
-// they were look-it-up instruments and the two gutters were already full. The
-// operator's 2026-08-07 session reported the living-core widgets as simply
-// missing — which is what "hidden behind a hover control, discoverable only by
-// already knowing the widget's name" amounts to. Operator decision the same
-// day: show the six real-data instruments by default; keep terminal (unbounded
-// content) and aether (opt-in, needs AETHER_ENABLED) hidden.
+// BUG-169 made all eight ported widgets visible, reaching 17 cards and burying
+// the orb. The operator's actual want was narrower: one COMPLETE hardware card,
+// weather, the media player, token usage and work-in-progress, plus the
+// activity cards — explicitly not brain spend and not breakers. CORES, GPU and
+// SENSORS stopped being widgets at all and became sections of SYSTEM.
 //
-// This block pins that set AND the geometry, because "visible by default" is
-// worth nothing if six new cards land on top of the eleven existing ones.
-describe('BUG-169 — living-core widget defaults', () => {
+// WHAT THIS BLOCK NO LONGER ASSERTS, AND WHY. BUG-169's geometry tests
+// ("no two share an anchor", "clear of the original gutter slots") are DELETED
+// rather than rewritten. There is no defaultPos left to compare — positions are
+// computed from measured card sizes by auto-layout.js — and more importantly
+// those assertions never worked: card height is content-driven, so declared
+// offsets say nothing about whether anything overlaps. That lesson cost two
+// shipped-broken layouts. The packing math is now pinned properly in
+// test/widget-auto-layout.test.js, and real rendered non-overlap is a
+// live-browser check, which is the only oracle that ever applied.
+describe('BUG-176 — widget curation and placement inputs', () => {
   let WIDGETS;
 
   before(async () => {
@@ -262,49 +267,50 @@ describe('BUG-169 — living-core widget defaults', () => {
     ).href));
   });
 
-  const HIDDEN_BY_DESIGN = ['terminal', 'aether'];
+  const VISIBLE = ['system', 'tokens', 'agents', 'voice', 'wip', 'clock', 'weather', 'media', 'news'];
+  const HIDDEN = ['spend', 'breakers', 'tick-rate', 'voice-latency', 'memory', 'terminal', 'aether'];
 
-  it('only terminal and aether are hidden by default', () => {
+  it('exactly the nine curated widgets are visible on a fresh profile', () => {
+    const visible = WIDGETS.filter((w) => !w.defaultHidden).map((w) => w.id).sort();
+    assert.deepEqual(visible, [...VISIBLE].sort());
+  });
+
+  it('the rest are hidden but still present — curation, not deletion', () => {
     const hidden = WIDGETS.filter((w) => w.defaultHidden).map((w) => w.id).sort();
-    assert.deepEqual(hidden, [...HIDDEN_BY_DESIGN].sort());
+    assert.deepEqual(hidden, [...HIDDEN].sort(),
+      'every one of these is a real live card, reachable with "open <name>"');
   });
 
-  it('the six real-data living-core widgets are visible by default', () => {
-    const visible = new Set(WIDGETS.filter((w) => !w.defaultHidden).map((w) => w.id));
-    for (const id of ['system', 'cores', 'gpu', 'sensors', 'voice', 'memory']) {
-      assert.ok(visible.has(id), id + ' must be visible on a fresh profile');
+  it('brain spend and breakers are off by default, as the operator asked', () => {
+    for (const id of ['spend', 'breakers']) {
+      const w = WIDGETS.find((x) => x.id === id);
+      assert.ok(w, id + ' must still exist');
+      assert.equal(w.defaultHidden, true);
     }
   });
 
-  it('no two default-visible widgets share an anchor point', () => {
-    const seen = new Map();
-    for (const w of WIDGETS.filter((x) => !x.defaultHidden)) {
-      const key = JSON.stringify(w.defaultPos);
-      assert.ok(!seen.has(key), w.id + ' sits exactly on top of ' + seen.get(key) + ' at ' + key);
-      seen.set(key, w.id);
+  it('cores, gpu and sensors are no longer widgets — they are SYSTEM sections', () => {
+    for (const id of ['cores', 'gpu', 'sensors']) {
+      assert.equal(WIDGETS.find((w) => w.id === id), undefined, id + ' should be folded into system');
+    }
+    assert.ok(WIDGETS.find((w) => w.id === 'system'), 'system must still exist to hold them');
+  });
+
+  it('every widget declares a column, since that is the packer\'s only placement input', () => {
+    for (const w of WIDGETS) {
+      assert.ok(['left', 'right'].includes(w.column), w.id + ' has column ' + JSON.stringify(w.column));
     }
   });
 
-  it('the six BUG-169 widgets are anchored clear of the eleven originals', () => {
-    // WHAT THIS CANNOT PROVE, deliberately stated: declared offsets say
-    // nothing about whether cards overlap. .widget-card is min-width:170px
-    // and CONTENT-sized above that — these six render 133-349px tall and
-    // 170-640px wide — so a "96px apart" rule looked fine here and collided
-    // badly in a real browser. The first version of this position set shipped
-    // exactly that mistake and was caught only by rendering the HUD at
-    // 1920x1080 and measuring getBoundingClientRect. That measurement is the
-    // real oracle and lives in the wave's live-verification run, not here.
-    //
-    // What IS worth pinning statically: the six do not sit in the eleven
-    // originals' gutter slots, and no two widgets share an anchor at all.
-    const ORIGINAL_LEFT_TOPS = [24, 208, 296];
-    const added = WIDGETS.filter((w) => ['system', 'cores', 'gpu', 'sensors', 'voice', 'memory'].includes(w.id));
-    assert.equal(added.length, 6);
-    for (const w of added) {
-      if (w.defaultPos.left === 24) {
-        assert.ok(!ORIGINAL_LEFT_TOPS.includes(w.defaultPos.top),
-          w.id + ' sits in an original left-gutter slot (top ' + w.defaultPos.top + ')');
-      }
+  it('no widget carries a defaultPos any more — positions are measured, not declared', () => {
+    for (const w of WIDGETS) {
+      assert.equal(w.defaultPos, undefined,
+        w.id + ' still declares a position; auto-layout.js owns placement now');
     }
+  });
+
+  it('ids are unique', () => {
+    const ids = WIDGETS.map((w) => w.id);
+    assert.equal(new Set(ids).size, ids.length);
   });
 });

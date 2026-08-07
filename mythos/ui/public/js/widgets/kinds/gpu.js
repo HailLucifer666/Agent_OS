@@ -41,7 +41,9 @@ export function readRenderer(gl) {
   };
 }
 
-function probe() {
+// BUG-176: exported so the merged SYSTEM widget can run the same one-shot read
+// without duplicating the throwaway-context + lose-context dance.
+export function probe() {
   let gl = null;
   try {
     const canvas = document.createElement('canvas');
