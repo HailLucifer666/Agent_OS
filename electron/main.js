@@ -183,12 +183,60 @@ function decryptedKeysForChild() {
 // themselves in .env — we deliberately do NOT inject it as one of "our" keys,
 // so it never appears in getKeyNames()/hasKey() and is never echoed anywhere.
 
-ipcMain.handle('mythos:set-key', async (_e, name, value) => {
+// ---- child lifecycle ----------------------------------------------------------
+let child = null;
+let mainWindow = null;
+
+// security-reviewer B2/H6 (2026-08-08): the key-store IPC channels below used to
+// answer ANY sender holding a contextBridge handle to this preload — including
+// electron/media-window.js's window, which loadURL()s a caller-supplied URL (the
+// open_web tool, Tier 0 auto-allowed — see mythos/src/core/effectors/from-dashboard.js
+// and mythos/src/core/leash/tiers.js) and can therefore run arbitrary third-party
+// JS. That page could call window.mythos.setKey('GEMINI_API_KEY', attacker_key)
+// and reroute all model traffic. isHudContents is the SAME trust boundary the
+// 2026-08-05 mic/screen-capture review already applies (see the permission and
+// display-media grant handlers further down) — only the one real BrowserWindow
+// loading the loopback HUD counts. Kept at module scope so the handlers registered below
+// can use it, and moved (not duplicated) out of the whenReady() block, where the
+// mic/screen handlers now reference this same instance instead of a second copy.
+const isHudContents = (wc) => {
+  try {
+    return !!(wc && mainWindow && !mainWindow.isDestroyed() && wc === mainWindow.webContents);
+  } catch (_) {
+    return false; // a destroyed window mid-teardown is not the HUD
+  }
+};
+
+// Denylist for env-injection vectors: `name` is written verbatim into the
+// forked server child's env (see decryptedKeysForChild()/startChild()), and the
+// charset validator below (letters/digits/underscore) does not exclude these.
+// NODE_OPTIONS=--inspect=0.0.0.0:9229 opens a debugger port on the child (RCE);
+// the rest are equivalent code/library-injection vectors. Denied even when the
+// name passes the charset check. Compared case-insensitively since env var
+// lookup is case-insensitive on Windows.
+const ENV_INJECTION_DENYLIST = new Set([
+  'NODE_OPTIONS',
+  'ELECTRON_RUN_AS_NODE',
+  'NODE_REPL_EXTERNAL_MODULE',
+  'LD_PRELOAD',
+  'DYLD_INSERT_LIBRARIES',
+]);
+
+ipcMain.handle('mythos:set-key', async (event, name, value) => {
+  // B2: only the HUD's own webContents may touch the key store. Throw loudly —
+  // a silent {ok:false} reads as "it ran but did nothing", which is exactly the
+  // quiet failure an attacker page depends on to keep probing unnoticed.
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:set-key: denied — sender is not the HUD window');
+  }
   // security-reviewer MEDIUM: validate the name charset/length and reject the
   // prototype-poisoning reserved names. name becomes a child env var verbatim,
   // so keep it to a conservative identifier shape.
   if (typeof name !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(name)) {
     return { ok: false, error: 'invalid key name (use letters, digits, underscore; max 64)' };
+  }
+  if (ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
+    return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
   }
   if (typeof value !== 'string') {
     return { ok: false, error: 'invalid key value' };
@@ -207,16 +255,20 @@ ipcMain.handle('mythos:set-key', async (_e, name, value) => {
   return { ok: true };
 });
 
-ipcMain.handle('mythos:get-key-names', async () => Object.keys(loadStore()));
+ipcMain.handle('mythos:get-key-names', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:get-key-names: denied — sender is not the HUD window');
+  }
+  return Object.keys(loadStore());
+});
 
-ipcMain.handle('mythos:has-key', async (_e, name) => {
+ipcMain.handle('mythos:has-key', async (event, name) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:has-key: denied — sender is not the HUD window');
+  }
   if (typeof name !== 'string') return false;
   return Object.prototype.hasOwnProperty.call(loadStore(), name);
 });
-
-// ---- child lifecycle ----------------------------------------------------------
-let child = null;
-let mainWindow = null;
 
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
@@ -225,7 +277,12 @@ let mainWindow = null;
 // preloadPath is resolved once here since it never changes across opens/closes.
 const mediaWindowController = createMediaWindowController({
   BrowserWindowCtor: BrowserWindow,
-  preloadPath: path.join(__dirname, 'preload.js'),
+  // B2 fix (2026-08-08): this window used to share the HUD's preload.js, which
+  // exposes window.mythos.{getKeyNames,setKey,hasKey}. Because this window
+  // loadURL()s a caller-supplied URL (open_web, Tier 0 auto-allowed), any page
+  // it opens could call setKey() and rewrite/exfiltrate provider keys. It
+  // needs none of that surface — see electron/media-preload.js.
+  preloadPath: path.join(__dirname, 'media-preload.js'),
   // BUG-166: YouTube embeds must render inside a local wrapper page, not as a
   // top-level loadURL — a top-level embed document carries no referer and
   // YouTube answers "Error 153: video player configuration error" (reproduced
@@ -371,13 +428,8 @@ if (!gotLock) {
     // so isolating that window would silently disable ad blocking for exactly the
     // surface that shows ads (see BUG-115, where an ad blocker that was never
     // present got debugged as though it were misconfigured).
-    const isHudContents = (wc) => {
-      try {
-        return !!(wc && mainWindow && !mainWindow.isDestroyed() && wc === mainWindow.webContents);
-      } catch (_) {
-        return false; // a destroyed window mid-teardown is not the HUD
-      }
-    };
+    // isHudContents is now declared at module scope (shared with the key-store
+    // IPC handlers above, B2/H6 fix) — no local redefinition here.
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
       const allowed = ['media', 'audioCapture', 'microphone'];
       // Mic capture belongs to the HUD alone. The media window plays audio, which
@@ -557,6 +609,21 @@ if (!gotLock) {
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       log('setWindowOpenHandler: denied external open for', url);
       return { action: 'deny' };
+    });
+
+    // H6: the HUD window carries the privileged preload (getKeyNames/setKey/
+    // hasKey). A top-level navigation away from its own loopback origin — a
+    // link inside rendered content, a redirect, anything that can trigger
+    // will-navigate — would carry that preload's trust to whatever page loads
+    // next. Only the HUD's own origin may load in this window; everything else
+    // is denied (the in-app web panel/media window are the correct paths for
+    // external content and are unaffected).
+    const hudOrigin = `http://${BIND}:${PORT}`;
+    mainWindow.webContents.on('will-navigate', (navEvent, url) => {
+      if (!url.startsWith(hudOrigin)) {
+        navEvent.preventDefault();
+        log('will-navigate: denied navigation away from the HUD origin to', url);
+      }
     });
 
     mainWindow.on('closed', () => { mainWindow = null; });
