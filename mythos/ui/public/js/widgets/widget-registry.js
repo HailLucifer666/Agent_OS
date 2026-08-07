@@ -47,21 +47,34 @@ export const WIDGETS = [
   { id: 'voice-latency', title: 'VOICE LATENCY', defaultPos: { left: 24, bottom: 128 }, mount: mountVoiceLatency },
 
   // --- Ported from design/mythos-living-core.html ---
-  // defaultHidden: these are look-it-up instruments, not permanent-corner
-  // tiles. Eleven cards already compete for the two side gutters; adding seven
-  // more visible-by-default buried the orb. Reached via voice ("open system")
-  // or the hover control like any other widget, and the choice then persists.
-  { id: 'system',   title: 'SYSTEM',   defaultPos: { left: 24, top: 384 },     mount: mountSystem,       defaultHidden: true },
-  { id: 'cores',    title: 'CORES',    defaultPos: { left: 24, top: 488 },     mount: mountCores,        defaultHidden: true },
-  { id: 'gpu',      title: 'GPU',      defaultPos: { left: 200, top: 24 },     mount: mountGpu,          defaultHidden: true },
-  { id: 'sensors',  title: 'SENSORS',  defaultPos: { left: 200, top: 128 },    mount: mountSensors,      defaultHidden: true },
-  { id: 'voice',    title: 'VOICE',    defaultPos: { left: 200, bottom: 24 },  mount: mountVoice,        defaultHidden: true },
-  { id: 'memory',   title: 'MEMORY',   defaultPos: { right: 200, top: 24 },    mount: mountMemoryWidget, defaultHidden: true },
-  { id: 'terminal', title: 'TERMINAL', defaultPos: { right: 200, bottom: 24 }, mount: mountTerminal,     defaultHidden: true },
+  // These shipped defaultHidden on the theory that they were look-it-up
+  // instruments and eleven cards already competed for the two gutters. In
+  // practice the port read as never delivered: the operator's 2026-08-07
+  // session reported the living-core widgets as missing, because a widget
+  // nobody knows exists is not discoverable by "open system". Operator
+  // decision the same day: show them by default. terminal and aether stay
+  // hidden (see their own notes below).
+  //
+  // Positions are single-column-per-gutter, continuing the slots the eleven
+  // originals already use, so nothing overlaps: left runs 24/208/296 then
+  // 384/480/576, right runs 24/128/232 then 336/432/528. The earlier
+  // left:200 / right:200 second column would have collided with the first —
+  // .widget-card is min-width:170px and content-sized above that, so a
+  // 176px gutter step is not a safe clearance.
+  { id: 'system',   title: 'SYSTEM',   defaultPos: { left: 24, top: 384 },     mount: mountSystem },
+  { id: 'cores',    title: 'CORES',    defaultPos: { left: 24, top: 480 },     mount: mountCores },
+  { id: 'gpu',      title: 'GPU',      defaultPos: { left: 24, top: 576 },     mount: mountGpu },
+  { id: 'sensors',  title: 'SENSORS',  defaultPos: { right: 24, top: 336 },    mount: mountSensors },
+  { id: 'voice',    title: 'VOICE',    defaultPos: { right: 24, top: 432 },    mount: mountVoice },
+  { id: 'memory',   title: 'MEMORY',   defaultPos: { right: 24, top: 528 },    mount: mountMemoryWidget },
+  // Still hidden: a terminal pane is a genuine look-it-up instrument rather
+  // than an at-a-glance readout, and it is the one card whose content grows
+  // without bound.
+  { id: 'terminal', title: 'TERMINAL', defaultPos: { left: 24, top: 672 },     mount: mountTerminal,     defaultHidden: true },
   // Aether-BLE nearest-device chip — opt-in; only meaningful when AETHER_ENABLED
   // and a live aggregator. Hidden by default so a no-Aether setup keeps the
   // gutter uncluttered; toggle via the widget hover control (choice persists).
-  { id: 'aether',   title: 'NEAREST DEVICE', defaultPos: { right: 24, top: 320 }, mount: mountAether, defaultHidden: true },
+  { id: 'aether',   title: 'NEAREST DEVICE', defaultPos: { right: 24, top: 624 }, mount: mountAether, defaultHidden: true },
 ];
 
 export function widgetIds() {

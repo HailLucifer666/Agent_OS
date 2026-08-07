@@ -239,3 +239,71 @@ describe('memory route — the degenerate empty-query score stays hidden', () =>
       'routes/memory.js must not emit a score field — it is a constant on the browse path');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-169: the port shipped but nobody could see it
+// ---------------------------------------------------------------------------
+// All eight ported widgets shipped `defaultHidden: true`, on the reasoning that
+// they were look-it-up instruments and the two gutters were already full. The
+// operator's 2026-08-07 session reported the living-core widgets as simply
+// missing — which is what "hidden behind a hover control, discoverable only by
+// already knowing the widget's name" amounts to. Operator decision the same
+// day: show the six real-data instruments by default; keep terminal (unbounded
+// content) and aether (opt-in, needs AETHER_ENABLED) hidden.
+//
+// This block pins that set AND the geometry, because "visible by default" is
+// worth nothing if six new cards land on top of the eleven existing ones.
+describe('BUG-169 — living-core widget defaults', () => {
+  let WIDGETS;
+
+  before(async () => {
+    ({ WIDGETS } = await import(pathToFileURL(
+      path.join(__dirname, '..', 'ui', 'public', 'js', 'widgets', 'widget-registry.js')
+    ).href));
+  });
+
+  const HIDDEN_BY_DESIGN = ['terminal', 'aether'];
+
+  it('only terminal and aether are hidden by default', () => {
+    const hidden = WIDGETS.filter((w) => w.defaultHidden).map((w) => w.id).sort();
+    assert.deepEqual(hidden, [...HIDDEN_BY_DESIGN].sort());
+  });
+
+  it('the six real-data living-core widgets are visible by default', () => {
+    const visible = new Set(WIDGETS.filter((w) => !w.defaultHidden).map((w) => w.id));
+    for (const id of ['system', 'cores', 'gpu', 'sensors', 'voice', 'memory']) {
+      assert.ok(visible.has(id), id + ' must be visible on a fresh profile');
+    }
+  });
+
+  it('no two default-visible widgets share an anchor point', () => {
+    const seen = new Map();
+    for (const w of WIDGETS.filter((x) => !x.defaultHidden)) {
+      const key = JSON.stringify(w.defaultPos);
+      assert.ok(!seen.has(key), w.id + ' sits exactly on top of ' + seen.get(key) + ' at ' + key);
+      seen.set(key, w.id);
+    }
+  });
+
+  it('default-visible widgets in the same gutter clear each other vertically', () => {
+    // .widget-card is min-width:170px and content-sized above that, so the two
+    // gutters are effectively one column each — cards in the same gutter must
+    // be separated vertically, not horizontally. 88px is the tightest gap the
+    // pre-existing eleven already use (left: tick-rate 208 -> tokens 296), so
+    // it is the honest floor to hold new cards to rather than a number picked
+    // here. The six added by BUG-169 use 96.
+    const MIN_GAP = 88;
+    for (const gutter of ['left', 'right']) {
+      const tops = WIDGETS
+        .filter((w) => !w.defaultHidden && w.defaultPos[gutter] !== undefined && w.defaultPos.top !== undefined)
+        .map((w) => ({ id: w.id, top: w.defaultPos.top }))
+        .sort((a, b) => a.top - b.top);
+      for (let i = 1; i < tops.length; i += 1) {
+        assert.ok(
+          tops[i].top - tops[i - 1].top >= MIN_GAP,
+          `${gutter} gutter: ${tops[i].id} (top ${tops[i].top}) is less than ${MIN_GAP}px below ${tops[i - 1].id} (top ${tops[i - 1].top})`
+        );
+      }
+    }
+  });
+});
