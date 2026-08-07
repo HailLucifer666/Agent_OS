@@ -9,7 +9,14 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-06 (evening) — a deep E2E audit of this registry, in the
+Last updated: 2026-08-07 — the fix wave, BUG-167..BUG-174 (LAST section): ten
+defects from one live session, six live-verified, four honestly listed as not
+verified. Two of the ten were only found by live verification *after* their
+unit tests were already green — a widget layout that looked separated on paper
+and overlapped in a browser, and a memory recall that matched a nonsense query
+on the word "about". Baseline 3131 tests, 3130 pass, 0 fail, 1 skip.
+
+Previous entry: 2026-08-06 (evening) — a deep E2E audit of this registry, in the
 LAST section: BUG-134..BUG-136. No claimed fix was missing from the code, but
 the full `node --test` baseline was **1 FAIL** because Node's discovery DID
 collect `test/e2e/run-e2e.mjs` (BUG-134, contradicting the BUG-133 entry) and
@@ -4208,3 +4215,255 @@ files, which have no Node double for `AudioContext`/`AudioWorklet`/`getUserMedia
 `test/bug-147-orb-click-feedback.test.js`). One pins the frame counter's position
 relative to the `running` gate, and one pins the PIN gate as the first `onWake`
 check so the added telemetry cannot be refactored into weakening it.
+
+---
+
+## Session (2026-08-07) — the fix wave: BUG-167..BUG-174, ten reported defects
+
+Ten bugs from one live session on 2026-08-07. Two were single-root-cause
+outages that took a whole capability surface with them; the rest were trust
+defects — success claimed with no world change, private reasoning reaching the
+operator, reports logged twice and read back never.
+
+Baseline before: **3077 tests, 3076 pass, 0 fail, 1 skip.**
+Baseline after: **3131 tests, 3130 pass, 0 fail, 1 skip.**
+
+**Two of these were found by live verification after the unit tests were
+already green, which is the most useful thing in this section.** See BUG-169's
+layout note and BUG-172's score floor.
+
+### BUG-167 — a hung pc-child left desktop control dead for the whole session — FIXED, LIVE-VERIFIED
+
+Every effector routing through pc-child — `screen_look`, `send_key`,
+`focus_window`, per-app volume — answered "PC automation offline" for the
+session's whole duration, while `ps-automation.ps1` parsed clean and the child
+process was still alive.
+
+Root cause: the exponential-backoff restart lived inline in the child's
+`'exit'` handler, so it was reachable **only when the child actually died**. A
+child that spawned but never answered the startup ping (cold first PowerShell
+spawn, Defender on-access scan, a hang before stdout) hit `handleStartup()`'s
+timeout, which set `state = OFFLINE` and returned — permanently, with a live
+zombie still holding the pipes.
+
+Fixed by extracting `scheduleRestart()` and entering it from the handshake
+timeout too, after killing the hung child. Also: the child's stderr, captured
+in the ring buffer since forever and never once read, is now logged on a
+handshake timeout and rides the OFFLINE hint — that absence is why the live
+failure was undiagnosable after the fact. `STARTUP_TIMEOUT_MS` 5s to 12s (a
+cold `powershell.exe` spawn routinely exceeds 5s; the deliberate split with
+`COMMAND_TIMEOUT_MS` = 15s is preserved). `probePcChild()` is the recovery
+surface for after the restart budget is spent.
+
+**Live-verified** against real `powershell.exe`: ONLINE in 2064ms, a real
+`list_windows` round trip, then the child killed with `taskkill /T /F`,
+restart logged, ONLINE again in ~4s, `list_windows` working. Commit `b209bb9`.
+Tests: `test/bug-167-pcchild-handshake-retry.test.js` (5).
+`test/pc-child-startup-guard.test.js` asserted the OLD contract (OFFLINE at
+the first timeout) and was updated to the new one rather than left pinning
+behaviour this fix deliberately changes.
+
+### BUG-168 — the build engine was the one adapter nobody probed at boot — FIXED, LIVE-VERIFIED
+
+Six consecutive builds failed with one uninformative line — "hermes-agent not
+installed/running" — naming neither the binary checked, nor whether it was
+missing or merely unrunnable, nor whether a provider was configured. The
+capability manifest reported nothing wrong the whole time, because
+hermes-agent has no `start*()` of its own and its first probe ran inside the
+first build. It is the only build-content engine and has no brain fallback by
+design, so this is a capability outage, not a degraded mode.
+
+`src/main.js` now probes it in the adapters boot step, announces the result
+once with its impact, and includes it in `adapterStatuses()`. Every OFFLINE
+build failure carries the evidence the probe already had (binary path, probe
+kind/code, provider slots, install command); keys are never included, which a
+test pins. `setup-hermes.js --check` now exits non-zero for a non-`openai-api`
+provider — that is a guaranteed 401 on every build, not a warning.
+
+**NOT REPRODUCED:** Hermes probes ONLINE on this machine, so the original
+OFFLINE cause is unknown. That is exactly the gap closed here — the next
+occurrence reports what it saw. **Live-verified** that the manifest now
+carries `- hermes-agent: ONLINE (one-shot via ...)`, a line that did not exist
+before. Commit `c14f7d9`. Tests:
+`test/bug-168-hermes-offline-evidence.test.js` (6).
+
+### BUG-169 — the living-core widgets shipped invisible — FIXED, LIVE-VERIFIED (and the first fix was wrong)
+
+All eight widgets ported from `design/mythos-living-core.html` shipped
+`defaultHidden: true`. The operator reported them as missing — which is what
+"reachable only by already knowing the widget's name" amounts to. Operator
+decision the same day: show them. `system`, `cores`, `gpu`, `sensors`,
+`voice`, `memory` are now visible on a fresh profile; `terminal` (unbounded
+content) and `aether` (opt-in) stay hidden.
+
+**The first attempt at this was wrong, and only rendering it showed that.**
+The six were stacked down the two gutters on a 96px step, with a test
+asserting they "clear each other vertically" — a claim declared offsets cannot
+support. `.widget-card` is `min-width:170px` but CONTENT-sized above that, and
+these six render **133-349px tall and 170-640px wide**. Measuring
+`getBoundingClientRect` in a real browser at 1920x1080 showed them overlapping
+each other and the originals.
+
+The same measurement showed both gutters are already effectively full at
+1080p — `news` alone is a 640x413 card holding the right gutter from y232 to
+y645 — so six free gutter slots never existed. The three wide readouts now sit
+in the empty band left of centre (x320..960); the two narrow ones take the
+real gaps in the left gutter. Re-measured: **none of the six overlaps
+anything.** The test now asserts what static offsets can actually support and
+names the live measurement as the real oracle.
+
+Stated rather than hidden: the wide cards sit closer to the central orb than
+the corner-tiles rule prefers, and below ~1920px wide they will collide.
+Existing users keep their layout — a stored `mythos.widgets.v1` flag still
+wins in both directions; open each widget or clear the key to pick up the new
+defaults. Commits `af2fab7`, `2417462`.
+
+**Flagged, NOT fixed (pre-existing, untouched):** at 1920x1080 three original
+pairs already overlap — BRAIN SPEND x VOICE LATENCY, TOKEN USAGE x TICK RATE,
+BREAKERS x NOW PLAYING.
+
+### BUG-170 — "Reasoning:" reached the operator, and one turn was silent — FIXED (unit), live gate NOT run
+
+Two symptoms, both in `live-session.js`.
+
+**The leak.** BUG-118 added a `p.thought === true` filter for exactly this and
+deliberately refused to regex-strip, arguing a prefix match would eat
+legitimate replies. The leak arriving anyway is the evidence that decision was
+waiting for: **the thought flag is never set on this model, so the filter
+never fires.** The strip added here is narrower than the one BUG-118 refused —
+start of the turn only, a recognised label followed by a colon only, and it
+removes the LABEL rather than the text behind it, so a false positive costs a
+word and not a reply. Applied to both `outputTranscription` and unflagged
+`modelTurn` parts, and never silent: each strip logs `live.reasoning-stripped`
+with the turn id, the channel, and whether that channel had already spoken it.
+
+**This cannot un-speak audio.** When the label rides `outputTranscription` the
+operator has already heard it. The escalation for that is a `thinkingConfig`
+question in `buildSetup()`, deliberately not attempted — the wire protocol is
+frozen (spine section 3) and an unknown setup field risks killing voice
+outright.
+
+**The silent turn.** One turn produced reply text and no audio at all. From
+the room that is indistinguishable from being ignored.
+`live-turn-no-transcript` did not cover it (it fires only when the turn is
+empty on both channels). The session now counts audio parts per turn, emits
+`live-turn-silent`, and hands the text to a new `onSilentTurn` callback;
+`server/index.js` speaks it through the TTS chain via
+`proactiveSpeak(..., { skipLive: true })`. `skipLive` is load-bearing —
+routing it back into the session that just failed to speak would reproduce the
+silence, and `proactiveSpeak` would otherwise even OPEN a session to do it.
+
+Commit `2ef4869`. Tests:
+`test/bug-170-reasoning-strip-and-silent-turn.test.js` (13), which spend more
+assertions on what the strip must NOT touch than on what it must.
+**Live gate NOT run:** both halves need a real spoken Gemini Live turn.
+
+### BUG-171 — Incidents/ was a dead drop, and logged one report twice — FIXED, LIVE-VERIFIED
+
+The operator reported problems all session; every one landed in a jsonl file
+that **nothing in the codebase ever read back** — no tool, no route, no
+sensor. So "what bugs are still open" had no answer, and MYTHOS could not find
+its own reported faults. The same session also logged one spoken report twice
+(the model called `log_incident`, the turn re-derived, it called it again).
+
+- Dedup on the normalized text within a 60s window. In-memory and deliberately
+  short: this stops a double-fire inside one exchange, not the operator
+  reporting a recurring problem again an hour later, which is real signal. A
+  duplicate returns `ok` with `deduped:true` and the existing id.
+- Each incident is indexed into semantic memory at write time, in its own
+  `incidents` topic, so `recall_memory` surfaces it. Best-effort — a failed
+  index never costs the operator their report.
+- `list_incidents` (read) and `incident_status` (open/acknowledged/resolved).
+  Status is **appended, never rewritten**: the log stays append-only and the
+  latest status line wins. `incident_status` refuses to guess between two
+  matching incidents and names the candidate ids instead.
+- Both are on `DEFAULT_ALLOWLIST` and in `TIER_TABLE`. Registering an effector
+  does not reach voice, and `log_incident` being allowlisted without its read
+  side is much of why the log was write-only from the operator's chair.
+
+**Deliberately NOT built:** an auto-triage or self-healing pipeline. The
+complaint was "nothing picks them up", and a recall + status surface answers
+that without inventing a loop nobody asked for.
+
+**Live-verified** against the real `fs-store` and real semantic store in a
+throwaway vault: duplicate produced one line on disk; `list_incidents` read
+both back newest-first; `incident_status` closed one and the open list
+honoured it; a logged incident was recallable. Commit `60d652f`. Tests:
+`test/bug-171-incident-dedup-and-readback.test.js` (14).
+
+### BUG-172 — an empty recall reported success — FIXED, LIVE-VERIFIED (and live found a second defect)
+
+`recall_memory` returned a bare `{ok:true, count:0, results:[]}`, which the
+model read as "the tool worked" and reported as a recollection it did not
+have. It now carries an explicit note naming the query and forbidding an
+invented recall.
+
+The count could reach zero a second way that looked identical and is not:
+`semantic.recall()` returned hits whose snippet was the empty string (a topic
+file matching the query but parsing to zero facts), which `from-memory` then
+filtered out — so a call that found hits still handed back zero. Fixed at the
+source: a hit with no text is not a hit. The two cases now report differently.
+
+**Then live verification found a third problem the unit tests could not.** The
+query `"zzz nothing about this topic exists zzz"` came back with a
+confident-looking hit: `recall()` accepted any score above zero, and the
+substring scorer matched an unrelated file on `"about"` and `"this"` alone. A
+coincidence the caller cannot tell from a memory is worse than an empty
+result. The floor is now half the query's terms. The deliberate empty-query
+browse path used by `routes/memory.js` scores exactly 1 and is unaffected,
+which is pinned. Commits `60d652f`, `2417462`. Tests:
+`test/bug-172-recall-honesty.test.js` (7).
+
+### BUG-173 — build verification hard-failed on library-driven motion — FIXED (unit); build oracle NOT re-run
+
+Two of the session's builds hard-failed with "missing required design element:
+animation" **while being visibly animated**. The pattern list held
+hand-written CSS only (`@keyframes` / `animation:` / `transition:`), so an
+artifact animating through Tailwind utilities, animate.css, framer-motion,
+GSAP, AOS or the Web Animations API matched nothing and a finished build was
+thrown away.
+
+Patterns broadened to what motion actually looks like in shipped markup, and
+the four MOTION elements (`animation`, `fade-in`, `scroll-reveal`, `particle`)
+demoted from hard-fail issues to warnings: an unmatched motion pattern is far
+more likely to mean the list does not know that library than that the artifact
+is broken, and the cost of being wrong is discarding real work. Structural
+elements — hero, cta, dark theme, responsive — stay hard fails, because their
+absence is the artifact genuinely not being what was ordered.
+
+Commit `b3bcdde`. Tests: 5 in
+`test/bug-173-174-verify-motion-and-refresh.test.js`. **NOT re-run:** the two
+originally-failing builds (AI news digest, Tetris) as the end-to-end oracle.
+
+### BUG-174 — no way to refresh a page — FIXED, LIVE-VERIFIED
+
+F5 was not on `browser_press_key`'s allowlist. The interesting half is that
+adding it as a plain keystroke would have been **worse than not having it**:
+browsers handle F5 in the chrome, not in the page, so
+`page.keyboard.press('F5')` delivers an event nobody acts on and would have
+reported a successful press against an unchanged page — the "success it didn't
+earn" shape this repo keeps getting burned by.
+
+F5 (and the spoken aliases `Refresh` / `Reload`) route to `page.reload()`
+instead, with the returned URL as evidence, and a `ref`/`selector` is ignored
+rather than obeyed because a reload is not an element action.
+
+**Live-verified with a real oracle rather than a status code:** a value was
+stamped into the live document (`window.__mythosF5Probe`), F5 pressed, and the
+stamp was gone afterwards — which only a genuine reload does, and which a
+synthetic keypress would have left in place. Commit `b3bcdde`. Tests: 5.
+
+### NOT VERIFIED IN THIS WAVE — read before trusting the section above
+
+- **Per-app Spotify volume (BUG-161, the carried-in work).** Unit-tested and
+  committed, but the live check needs Spotify **playing** — a Core Audio
+  session only exists while an app produces audio — and "hear the difference"
+  is the operator's check, not one this session can make. Starting playback on
+  the operator's machine unprompted was declined. To verify: play something in
+  Spotify, ask MYTHOS to turn it down, confirm it is audibly quieter and that
+  the evidence string names a read-back level.
+- **BUG-170, both halves.** Need a real spoken Gemini Live turn.
+- **BUG-173's end-to-end oracle.** The two failing builds were not re-run.
+- **`screen_look`'s vision hallucination** (reported in the same session) is a
+  vision-model quality issue, not a code defect. No fix attempted; recorded
+  here as a known limitation, per the wave's stated non-goals.
