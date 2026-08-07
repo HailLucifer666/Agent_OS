@@ -130,10 +130,12 @@ describe('BUG-141(b): startup-handshake timeout frees the stale in-flight ping s
   let realSpawn;
   let realExecFile;
   let spawnedChildren;
+  let killCalls;
   let pcChild;
 
   function install() {
     spawnedChildren = [];
+    killCalls = [];
     realSpawn = cp.spawn;
     realExecFile = cp.execFile;
 
@@ -142,9 +144,15 @@ describe('BUG-141(b): startup-handshake timeout frees the stale in-flight ping s
       spawnedChildren.push(proc);
       return proc;
     };
-    // Never actually invoked in this describe block (no previous child to
-    // kill), but stub it anyway so no real taskkill.exe could ever be spawned.
-    cp.execFile = function fakeExecFile() {};
+    // BUG-167 made this reachable: killLiveChild() now runs on a handshake
+    // timeout too, not only on shutdown. Stubbed (and recorded) so no real
+    // taskkill.exe is ever spawned against the fake pids above.
+    cp.execFile = function fakeExecFile(bin, args) { killCalls.push({ bin, args }); };
+
+    // BUG-167: drive the real timeout/backoff paths in milliseconds instead
+    // of 12s + 2s + 5s. Read at require time, so set before requiring.
+    process.env.PC_CHILD_STARTUP_TIMEOUT_MS = '200';
+    process.env.PC_CHILD_RESTART_BACKOFF_MS = '50,50';
 
     delete require.cache[PC_CHILD_PATH];
     pcChild = require(PC_CHILD_PATH);
@@ -156,6 +164,8 @@ describe('BUG-141(b): startup-handshake timeout frees the stale in-flight ping s
     }
     cp.spawn = realSpawn;
     cp.execFile = realExecFile;
+    delete process.env.PC_CHILD_STARTUP_TIMEOUT_MS;
+    delete process.env.PC_CHILD_RESTART_BACKOFF_MS;
     delete require.cache[PC_CHILD_PATH];
   }
 
@@ -168,16 +178,26 @@ describe('BUG-141(b): startup-handshake timeout frees the stale in-flight ping s
     await pcChild.startPcChild();
 
     // The fake child never emits a ping response, so the real
-    // ps-automation.ps1 handshake never completes. Poll getStatus() past
-    // STARTUP_TIMEOUT_MS (5s) — before the fix this stayed STARTING forever
-    // because handleStartup's own watchdog loop was never kicked off.
-    const deadline = Date.now() + 6000;
+    // ps-automation.ps1 handshake never completes. Before BUG-141(b) this
+    // stayed STARTING forever because handleStartup's own watchdog loop was
+    // never kicked off.
+    //
+    // BUG-167 changed WHEN OFFLINE is reached, deliberately: a handshake
+    // timeout now kills the hung child and retries with backoff, so the
+    // adapter only settles OFFLINE after the restart budget
+    // (MAX_RESTART_ATTEMPTS = 2) is spent. Poll past all three attempts.
+    const deadline = Date.now() + 4000;
     let sawOffline = false;
     while (Date.now() < deadline) {
       if (pcChild.getStatus().state === 'OFFLINE') { sawOffline = true; break; }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 50));
     }
 
-    assert.ok(sawOffline, 'expected getStatus().state to reach OFFLINE once the handshake times out');
+    assert.ok(sawOffline, 'expected getStatus().state to reach OFFLINE once the handshake times out and the restart budget is spent');
+    assert.equal(spawnedChildren.length, 3, 'initial spawn + 2 backoff restarts before giving up');
+    assert.ok(
+      killCalls.some((c) => c.bin === 'taskkill' && c.args.includes(String(spawnedChildren[0].pid))),
+      'the hung child must be killed rather than orphaned, got: ' + JSON.stringify(killCalls)
+    );
   });
 });

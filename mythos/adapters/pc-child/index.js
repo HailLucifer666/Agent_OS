@@ -26,17 +26,28 @@ const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const RING_BUFFER_MAX_LINES = 100;
 const MAX_RESTART_ATTEMPTS = 2;
-const RESTART_BACKOFF_MS = [2000, 5000];
+// Env overrides exist so the lifecycle tests can exercise the real timeout /
+// backoff code paths in milliseconds instead of tens of seconds. Production
+// never sets them; the defaults below are the real values.
+const RESTART_BACKOFF_MS = process.env.PC_CHILD_RESTART_BACKOFF_MS
+  ? process.env.PC_CHILD_RESTART_BACKOFF_MS.split(',').map(Number)
+  : [2000, 5000];
 const COMMAND_TIMEOUT_MS = 15000; // 15s per command
-// BUG-141(b): STARTUP_TIMEOUT_MS (5s) is deliberately shorter than
+// BUG-141(b): STARTUP_TIMEOUT_MS is deliberately shorter than
 // COMMAND_TIMEOUT_MS (15s). The startup ping is queued through the SAME
 // pipeline as any other command (processQueue()), so it carries the full
 // 15s in-flight timer even though handleStartup() gives up polling and
-// reports state OFFLINE at 5s. That means a caller who sees OFFLINE at 5s
-// and retries/restarts can still be delayed behind the stale ping occupying
-// commandInFlight for up to 10 more seconds. Known, accepted split — see
-// startPcChild()'s call site for why cancelling it outright isn't done here.
-const STARTUP_TIMEOUT_MS = 5000; // 5s for ping handshake
+// reports state OFFLINE at the startup deadline. That means a caller who
+// sees OFFLINE and retries/restarts can still be delayed behind the stale
+// ping occupying commandInFlight. handleStartup() frees that slot itself
+// (matched by id) to keep the window small.
+//
+// BUG-167: raised 5s -> 12s. The first `powershell.exe` spawn after boot
+// (cold script cache, Defender on-access scan of the .ps1) routinely takes
+// longer than 5s on real machines, and a handshake that missed the deadline
+// used to leave the adapter OFFLINE *forever* with a live zombie child. The
+// split with COMMAND_TIMEOUT_MS is preserved (12s < 15s).
+const STARTUP_TIMEOUT_MS = Number(process.env.PC_CHILD_STARTUP_TIMEOUT_MS) || 12000;
 
 // Module-level singleton state
 let child = null;
@@ -181,6 +192,46 @@ function sendCommand(cmdObj) {
 
 // ---- Child process lifecycle ----
 
+// BUG-167: the exponential-backoff restart used to live inline in the 'exit'
+// handler, so it was reachable ONLY when the child actually died. A child
+// that spawned but never answered the startup ping (hung PowerShell, AV
+// scan, a parse error that never reaches stdout) left the adapter OFFLINE
+// permanently — every desktop-control effector dead for the rest of the
+// session, with a live zombie process still holding the pipes. Extracted so
+// the handshake-timeout path enters the SAME sequence.
+// Returns true if a restart was scheduled.
+function scheduleRestart(reason) {
+  if (intentionalShutdown) return false;
+
+  if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+    state = 'OFFLINE';
+    hint = 'PC automation exceeded restart budget. Retry with a health re-probe.';
+    log.warn('pc-child exceeded restart attempts', { reason });
+    return false;
+  }
+
+  const backoffMs = RESTART_BACKOFF_MS[restartAttempts] || RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
+  restartAttempts += 1;
+  log.warn('pc-child restarting', { attempt: restartAttempts, backoffMs, reason });
+  state = 'STARTING';
+  clearRestartTimer();
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    spawnChild();
+  }, backoffMs);
+  if (restartTimer.unref) restartTimer.unref();
+  return true;
+}
+
+// Diagnostic tail for handshake failures: the child's stderr has always been
+// captured into the ring buffer and then never looked at, so a failed
+// handshake reported "timed out" and nothing else. Surface it.
+function recentStderr(maxLines = 20) {
+  return ringBuffer
+    .filter((line) => line.startsWith('[stderr]'))
+    .slice(-maxLines);
+}
+
 function spawnChild() {
   const scriptPath = resolveScriptPath();
   if (!fs.existsSync(scriptPath)) {
@@ -244,24 +295,7 @@ function spawnChild() {
     }
 
     pushRingLine(`[pc-child] exited unexpectedly (code=${code}, signal=${signal})`);
-
-    if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
-      state = 'OFFLINE';
-      hint = 'PC automation exceeded restart budget.';
-      log.warn('pc-child exceeded restart attempts');
-      return;
-    }
-
-    const backoffMs = RESTART_BACKOFF_MS[restartAttempts] || RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
-    restartAttempts += 1;
-    log.warn('pc-child restarting', { attempt: restartAttempts, backoffMs });
-    state = 'STARTING';
-    clearRestartTimer();
-    restartTimer = setTimeout(() => {
-      restartTimer = null;
-      spawnChild();
-    }, backoffMs);
-    if (restartTimer.unref) restartTimer.unref();
+    scheduleRestart(`exit code=${code} signal=${signal}`);
   });
 
   // Startup handshake: send ping, wait for pong
@@ -270,21 +304,42 @@ function spawnChild() {
 
   const handleStartup = () => {
     if (state === 'ONLINE') return; // already resolved
+    // BUG-167: if this child is already gone (spawn 'error' / 'exit' fired,
+    // or a newer child replaced it) the poll has nothing left to wait for —
+    // those handlers own the outcome. Stop instead of running the clock down
+    // and then "timing out" a process that never existed.
+    if (proc !== child) return;
     const elapsed = Date.now() - pingStart;
     if (elapsed > STARTUP_TIMEOUT_MS) {
-      state = 'OFFLINE';
-      hint = 'PC automation startup handshake timed out.';
-      log.warn('pc-child startup timeout');
+      const stderr = recentStderr();
+      // BUG-167: the child's own stderr was captured and never surfaced, so
+      // every handshake failure looked identical and undiagnosable.
+      log.warn('pc-child.handshake-timeout', {
+        timeoutMs: STARTUP_TIMEOUT_MS,
+        restartAttempts,
+        stderr,
+      });
       // BUG-141(b): commandInFlight is still occupied by this same ping (it
       // carries the full 15s COMMAND_TIMEOUT_MS, not STARTUP_TIMEOUT_MS) —
       // free the slot now so a newly-queued command isn't stuck behind it
-      // for up to 10 more seconds. Matched by id so this only ever touches
+      // for up to 3 more seconds. Matched by id so this only ever touches
       // THIS ping's own in-flight entry, never a normal command's timeout
       // or the queue/timeout semantics those use.
       if (commandInFlight && commandInFlight.id === startupPingId) {
         clearTimeout(commandInFlight.timer);
         commandInFlight = null;
-        processQueue();
+      }
+      // BUG-167: the child is hung, not dead — 'exit' will never fire, so
+      // nothing else will ever restart it. Kill it (otherwise it lingers as
+      // a zombie holding the pipes) and enter the same backoff sequence an
+      // unexpected exit uses. killLiveChild() nulls `child`, so this child's
+      // later exit event fails the `proc !== child` guard and is ignored.
+      killLiveChild();
+      if (!scheduleRestart('handshake-timeout')) {
+        state = 'OFFLINE';
+        hint = stderr.length
+          ? `PC automation startup handshake timed out. Last child stderr: ${stderr[stderr.length - 1]}`
+          : 'PC automation startup handshake timed out.';
       }
       return;
     }
@@ -366,6 +421,31 @@ function killLiveChild() {
   }
 }
 
+// BUG-167: once the restart budget is spent the adapter is OFFLINE with no
+// way back short of restarting the whole app — sendCommand() rejects
+// immediately and nothing ever tries to spawn again. This is the recovery
+// surface: an explicit, operator/health-check-driven re-probe that resets the
+// budget and tries once more. Idempotent — a no-op while a child is alive or
+// a restart is already pending, so a periodic health check can call it
+// blindly without stacking spawns.
+function probePcChild() {
+  if (intentionalShutdown) return getStatus();
+  if (child || restartTimer) return getStatus();
+  if (state === 'ONLINE') return getStatus();
+
+  log.info('pc-child re-probe requested', { previousHint: hint });
+  restartAttempts = 0;
+  hint = null;
+  try {
+    spawnChild();
+  } catch (err) {
+    state = 'OFFLINE';
+    hint = `pc-child re-probe failed: ${err.message}`;
+    log.warn('pc-child re-probe failed', { error: err.message });
+  }
+  return getStatus();
+}
+
 function shutdownPcChild() {
   intentionalShutdown = true;
   clearRestartTimer();
@@ -389,6 +469,7 @@ function shutdownPcChild() {
 module.exports = {
   startPcChild,
   shutdownPcChild,
+  probePcChild,
   sendCommand,
   getStatus,
 };
