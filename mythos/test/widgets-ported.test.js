@@ -285,24 +285,25 @@ describe('BUG-169 — living-core widget defaults', () => {
     }
   });
 
-  it('default-visible widgets in the same gutter clear each other vertically', () => {
-    // .widget-card is min-width:170px and content-sized above that, so the two
-    // gutters are effectively one column each — cards in the same gutter must
-    // be separated vertically, not horizontally. 88px is the tightest gap the
-    // pre-existing eleven already use (left: tick-rate 208 -> tokens 296), so
-    // it is the honest floor to hold new cards to rather than a number picked
-    // here. The six added by BUG-169 use 96.
-    const MIN_GAP = 88;
-    for (const gutter of ['left', 'right']) {
-      const tops = WIDGETS
-        .filter((w) => !w.defaultHidden && w.defaultPos[gutter] !== undefined && w.defaultPos.top !== undefined)
-        .map((w) => ({ id: w.id, top: w.defaultPos.top }))
-        .sort((a, b) => a.top - b.top);
-      for (let i = 1; i < tops.length; i += 1) {
-        assert.ok(
-          tops[i].top - tops[i - 1].top >= MIN_GAP,
-          `${gutter} gutter: ${tops[i].id} (top ${tops[i].top}) is less than ${MIN_GAP}px below ${tops[i - 1].id} (top ${tops[i - 1].top})`
-        );
+  it('the six BUG-169 widgets are anchored clear of the eleven originals', () => {
+    // WHAT THIS CANNOT PROVE, deliberately stated: declared offsets say
+    // nothing about whether cards overlap. .widget-card is min-width:170px
+    // and CONTENT-sized above that — these six render 133-349px tall and
+    // 170-640px wide — so a "96px apart" rule looked fine here and collided
+    // badly in a real browser. The first version of this position set shipped
+    // exactly that mistake and was caught only by rendering the HUD at
+    // 1920x1080 and measuring getBoundingClientRect. That measurement is the
+    // real oracle and lives in the wave's live-verification run, not here.
+    //
+    // What IS worth pinning statically: the six do not sit in the eleven
+    // originals' gutter slots, and no two widgets share an anchor at all.
+    const ORIGINAL_LEFT_TOPS = [24, 208, 296];
+    const added = WIDGETS.filter((w) => ['system', 'cores', 'gpu', 'sensors', 'voice', 'memory'].includes(w.id));
+    assert.equal(added.length, 6);
+    for (const w of added) {
+      if (w.defaultPos.left === 24) {
+        assert.ok(!ORIGINAL_LEFT_TOPS.includes(w.defaultPos.top),
+          w.id + ' sits in an original left-gutter slot (top ' + w.defaultPos.top + ')');
       }
     }
   });

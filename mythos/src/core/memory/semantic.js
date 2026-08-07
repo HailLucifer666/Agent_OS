@@ -224,9 +224,22 @@ function createSemanticStore({ fs, config, bus, logger }) {
     return fs.listFiles('Semantic', '.md').filter(function(f) { return f.name !== '_archive.md'; });
   }
 
+  // BUG-172: the score is (query terms appearing anywhere in the file) /
+  // (query terms), by plain substring. Accepting anything above zero meant a
+  // single common word carried a hit: live-verifying this wave, the query
+  // "zzz nothing about this topic exists zzz" matched an unrelated incidents
+  // file on "about"/"this" alone and came back looking like a real
+  // recollection. That is worse than an empty result, because the caller has
+  // no way to tell a coincidence from a memory. Half the query's terms is the
+  // floor. It cannot break the deliberate empty-query browse path used by
+  // routes/memory.js — ''.split(/\s+/) is [''], which every file contains, so
+  // that path scores exactly 1.
+  const MIN_RECALL_SCORE = 0.5;
+
   function recall(query, opts) {
     opts = opts || {};
     const limit = opts.limit || 20;
+    const minScore = (typeof opts.minScore === 'number') ? opts.minScore : MIN_RECALL_SCORE;
     const files = activeTopicFiles();
     const hits = [];
 
@@ -239,7 +252,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
       const matched = terms.filter(function(t) { return lower.includes(t); }).length;
       const score = terms.length > 0 ? matched / terms.length : 0;
 
-      if (score > 0) {
+      if (score >= minScore && score > 0) {
         const sidecars = parseSidecar(content);
         const facts = parseFacts(content);
         const sc = sidecars[0] || {};

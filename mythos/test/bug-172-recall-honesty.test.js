@@ -101,4 +101,29 @@ describe('BUG-172 — semantic.recall drops textless hits at the source', () => 
       assert.match(hits[0].snippet, /desktop app/);
     });
   });
+  it('a coincidental match on one common word is not a memory', () => {
+    // Found live-verifying this wave, not by reading the code: the query
+    // "zzz nothing about this topic exists zzz" matched an unrelated topic
+    // file on "about"/"this" alone and came back looking like a real
+    // recollection. A coincidence the caller cannot tell from a memory is
+    // worse than an empty result.
+    withVault((semantic) => {
+      semantic.write('incidents', ['Incident inc-1 (warn): the volume command claimed success'],
+        { confidence: 0.9, append: true });
+
+      assert.deepEqual(semantic.recall('zzz nothing about this topic exists zzz'), []);
+      assert.equal(semantic.recall('volume command claimed success').length, 1,
+        'a query that genuinely matches must still come back');
+    });
+  });
+
+  it('the deliberate empty-query browse path still returns everything', () => {
+    // routes/memory.js browses with recall(''). ''.split(/\s+/) is [''], which
+    // every file contains, so it scores exactly 1 — the score floor must not
+    // silently break browsing.
+    withVault((semantic) => {
+      semantic.write('spotify', ['a fact worth browsing'], { confidence: 0.9, append: true });
+      assert.equal(semantic.recall('').length, 1);
+    });
+  });
 });

@@ -55,18 +55,32 @@ export const WIDGETS = [
   // decision the same day: show them by default. terminal and aether stay
   // hidden (see their own notes below).
   //
-  // Positions are single-column-per-gutter, continuing the slots the eleven
-  // originals already use, so nothing overlaps: left runs 24/208/296 then
-  // 384/480/576, right runs 24/128/232 then 336/432/528. The earlier
-  // left:200 / right:200 second column would have collided with the first —
-  // .widget-card is min-width:170px and content-sized above that, so a
-  // 176px gutter step is not a safe clearance.
-  { id: 'system',   title: 'SYSTEM',   defaultPos: { left: 24, top: 384 },     mount: mountSystem },
-  { id: 'cores',    title: 'CORES',    defaultPos: { left: 24, top: 480 },     mount: mountCores },
-  { id: 'gpu',      title: 'GPU',      defaultPos: { left: 24, top: 576 },     mount: mountGpu },
-  { id: 'sensors',  title: 'SENSORS',  defaultPos: { right: 24, top: 336 },    mount: mountSensors },
-  { id: 'voice',    title: 'VOICE',    defaultPos: { right: 24, top: 432 },    mount: mountVoice },
-  { id: 'memory',   title: 'MEMORY',   defaultPos: { right: 24, top: 528 },    mount: mountMemoryWidget },
+  // POSITIONS COME FROM MEASURED GEOMETRY, NOT FROM THE DECLARED OFFSETS.
+  // These first shipped stacked down the two gutters on a 96px step, which
+  // looked separated on paper and overlapped badly in a real browser: a
+  // .widget-card is min-width:170px but CONTENT-sized above that, and these
+  // six render at 164px (system), 349px (cores), 187px (sensors), 133px
+  // (voice) tall and 447-640px wide. Rendering them at 1920x1080 is the only
+  // thing that showed it.
+  //
+  // What the measurement also showed: both gutters are already effectively
+  // full at 1080p — news alone is a 640x413 card occupying the right gutter
+  // from y232 to y645 — so a seventh and eighth gutter card is not available
+  // to be had. The three WIDE readouts therefore sit in the empty band left
+  // of centre (x320..960) rather than in a 170px gutter they never fit, and
+  // the two narrow ones take the real gaps in the left gutter.
+  //
+  // Tradeoff, stated rather than hidden: the wide cards now come closer to
+  // the central orb than the corner-tiles rule prefers. Verified non-
+  // overlapping at 1920x1080; at smaller widths they will collide, as the
+  // pre-existing eleven already do. Every position is drag-to-taste and the
+  // choice persists, so this is a starting layout, not a constraint.
+  { id: 'sensors',  title: 'SENSORS',  defaultPos: { left: 320, top: 24 },     mount: mountSensors },
+  { id: 'memory',   title: 'MEMORY',   defaultPos: { left: 320, top: 232 },    mount: mountMemoryWidget },
+  { id: 'cores',    title: 'CORES',    defaultPos: { left: 320, top: 384 },    mount: mountCores },
+  { id: 'gpu',      title: 'GPU',      defaultPos: { left: 320, top: 760 },    mount: mountGpu },
+  { id: 'system',   title: 'SYSTEM',   defaultPos: { left: 24, top: 528 },     mount: mountSystem },
+  { id: 'voice',    title: 'VOICE',    defaultPos: { left: 24, top: 704 },     mount: mountVoice },
   // Still hidden: a terminal pane is a genuine look-it-up instrument rather
   // than an at-a-glance readout, and it is the one card whose content grows
   // without bound.
