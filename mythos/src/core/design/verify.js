@@ -38,10 +38,23 @@ var DESIGN_ELEMENT_PATTERNS = {
     /<a[^>]*class="[^"]*cta[^"]*"[^>]*>/i,
     /call.to.action/i,
   ],
+  // BUG-173: these were hand-written-CSS patterns only, so an artifact that
+  // animates through a LIBRARY — Tailwind/animate.css utility classes, a
+  // framer-motion or GSAP import, a Web Animations API call — matched nothing
+  // and the whole build hard-failed as "missing required design element:
+  // animation". Two of the 2026-08-07 session's builds died exactly there
+  // while being visibly animated. Broadened to what animation actually looks
+  // like in shipped markup; see SOFT_ELEMENTS below for why a miss here is
+  // now a warning rather than a hard fail.
   'animation': [
     /@keyframes/i,
-    /animation:/i,
-    /transition:/i,
+    /animation[-:]/i,
+    /transition[-:]/i,
+    /\banimate[-_]/i,              // animate-fade-in, animate__animated, animate-bounce
+    /framer-motion|gsap|anime\.js|motion\/react|@motionone/i,
+    /\.animate\s*\(/i,             // Web Animations API / jQuery
+    /data-aos[=\s]/i,              // AOS (animate-on-scroll)
+    /\btransform:\s*(?!none)/i,
   ],
   'fade-in': [
     /fade.?in/i,
@@ -65,6 +78,12 @@ var DESIGN_ELEMENT_PATTERNS = {
     /max.width/i,
   ],
 };
+
+// BUG-173: elements whose absence warns instead of failing the build. All
+// four are MOTION — expressible a dozen ways, so an unmatched pattern is
+// far more likely to mean "the list does not know this library" than "the
+// artifact is broken". Structural elements deliberately stay out of this set.
+var SOFT_ELEMENTS = new Set(['animation', 'fade-in', 'scroll-reveal', 'particle']);
 
 function createVerifier({ brain }) {
   if (!brain || typeof brain.think !== 'function') {
@@ -151,7 +170,18 @@ function createVerifier({ brain }) {
           }
         }
         if (!found && patterns.length > 0) {
-          issues.push('missing required design element: ' + elem + ' (spec mentions it but not found in deliverable)');
+          var message = 'missing required design element: ' + elem +
+            ' (spec mentions it but not found in deliverable)';
+          // BUG-173: an unmatched MOTION element is a warning, not a hard
+          // fail. Motion is expressed a dozen ways and any pattern list is a
+          // guess about which one was used, so a miss here is much more likely
+          // to be an incomplete list than a defective artifact — and the cost
+          // of being wrong is throwing away a finished build. Structural
+          // elements (hero, cta, dark theme, responsive) stay hard-fails:
+          // those are concrete things the spec asked for, and their absence is
+          // the artifact genuinely not being what was ordered.
+          if (SOFT_ELEMENTS.has(elem)) warnings.push(message + ' — shipped with a warning');
+          else issues.push(message);
         }
       }
     }

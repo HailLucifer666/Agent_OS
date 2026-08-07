@@ -1276,7 +1276,19 @@ const ALLOWED_KEYS = [
   'Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'Space',
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'Home', 'End', 'PageUp', 'PageDown',
+  // BUG-174: the 2026-08-07 session asked to refresh a page and had no way to.
+  // F5 is a non-character virtual key like Enter or Escape, so it needs no
+  // text-field guard — but see RELOAD_KEYS: it is NOT delivered as a keystroke.
+  'F5',
 ];
+
+// BUG-174: a synthetic F5 keypress does nothing. Reload is handled by the
+// browser chrome, not by the page's DOM, so page.keyboard.press('F5') sends a
+// key event no one acts on — and would have reported a successful press with
+// the page unchanged, which is precisely the "success it didn't earn" shape
+// this repo keeps getting burned by. These names route to page.reload()
+// instead, and the evidence is the URL that actually came back.
+const RELOAD_KEYS = ['F5', 'Refresh', 'Reload'];
 
 // 2026-08-06: the model wanted to pause a YouTube video with `k` — the player
 // shortcut every video site shares — and had to fall back to hunting down the
@@ -1313,7 +1325,7 @@ const TEXT_FIELD_REFUSAL =
   'player. Click the video (or its play button) first to move focus, then press the key.';
 
 async function browser_press_key({ key, ref, selector }) {
-  const allKeys = ALLOWED_KEYS.concat(PLAYER_KEYS);
+  const allKeys = ALLOWED_KEYS.concat(PLAYER_KEYS, RELOAD_KEYS.slice(1));
   if (!key) return fail('A key is required, one of: ' + allKeys.join(', ') + '.');
   const raw = String(key).trim();
   const match = allKeys.find((k) => k.toLowerCase() === raw.toLowerCase());
@@ -1322,10 +1334,20 @@ async function browser_press_key({ key, ref, selector }) {
       'To enter text use browser_type.');
   }
   const isPlayerKey = PLAYER_KEYS.includes(match);
+  const isReload = RELOAD_KEYS.some((k) => k.toLowerCase() === match.toLowerCase());
   const guard = await requireOnline();
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
+    // BUG-174: reload before anything else — ref/selector and the focus guard
+    // are both meaningless for an action the page never sees.
+    if (isReload) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      return await withStateCapsule(page, {
+        reloaded: true, via: 'page.reload',
+        evidence: 'reloaded ' + page.url(),
+      }, null);
+    }
     if (isPlayerKey) {
       // Checked for the ref/selector path too: pressing on a located element
       // still delivers the character to whatever has focus if that element is
@@ -1548,7 +1570,7 @@ const TOOLS = [
   { name: 'browser_check_captcha', description: 'Check whether the page is showing a human-verification challenge (reCAPTCHA, hCaptcha, Turnstile, "verify you are human"). MYTHOS never solves or bypasses these — when one is present, tell the operator and ask them to complete it in the browser window.', params: {}, danger: false, fn: browser_check_captcha, needs_result: true },
   { name: 'browser_upload_file', description: 'Attach a file from disk to a file-upload control on the page — the resume step of a job application. Target the upload control by ref from browser_snapshot (preferred) or CSS selector. Only files inside the operator-configured upload folder can be sent; anything else is refused.', params: { ref: 'string (optional) - ref of the file input from browser_snapshot', selector: 'string (optional) - CSS selector of the file input', path: 'string - path of the file to attach, inside the configured upload folder' }, danger: true, fn: browser_upload_file },
   { name: 'browser_select_option', description: 'Choose an option in a native dropdown (<select>) by value or visible label. For a custom (non-native) dropdown, click it open with browser_click and click the option from a fresh snapshot instead.', params: { ref: 'string (optional) - ref of the select element from browser_snapshot', selector: 'string (optional) - CSS selector of the select element', value: 'string (optional) - the option value attribute', label: 'string (optional) - the option text as shown to the user' }, danger: true, fn: browser_select_option },
-  { name: 'browser_press_key', description: 'Press a single navigation, submit, or video-player key. Navigation/submit: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown. Video player (YouTube and most HTML5 players): k play/pause, m mute, f fullscreen, c captions, j back 10s, l forward 10s — these are refused if a text field has focus, so click the video first. Goes to the focused element by default, or to a specific element via ref/selector. Use browser_type to enter text.', params: { key: 'string - one of Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, k, m, f, j, l, c', ref: 'string (optional) - ref of the element to press the key on', selector: 'string (optional) - CSS selector of that element' }, danger: true, fn: browser_press_key },
+  { name: 'browser_press_key', description: 'Press a single navigation, submit, refresh, or video-player key. Navigation/submit: Enter, Tab, Escape, Backspace, Delete, Space, arrows, Home, End, PageUp, PageDown. Refresh: F5 (or "Refresh"/"Reload") reloads the page - this performs a real page reload, not a keystroke, because browsers handle F5 outside the page. Video player (YouTube and most HTML5 players): k play/pause, m mute, f fullscreen, c captions, j back 10s, l forward 10s — these are refused if a text field has focus, so click the video first. Goes to the focused element by default, or to a specific element via ref/selector. Use browser_type to enter text.', params: { key: 'string - one of Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F5, Refresh, Reload, k, m, f, j, l, c', ref: 'string (optional) - ref of the element to press the key on', selector: 'string (optional) - CSS selector of that element' }, danger: true, fn: browser_press_key },
   { name: 'browser_hover', description: 'Hover the pointer over an element to reveal a hover menu or tooltip. Take a fresh browser_snapshot afterwards to see what appeared.', params: { ref: 'string (optional) - element ref from browser_snapshot', selector: 'string (optional) - CSS selector' }, danger: false, fn: browser_hover },
   { name: 'browser_evaluate', description: 'Run a JavaScript expression in the browser and return the result as a string.', params: { script: 'string - JavaScript expression to evaluate' }, danger: true, fn: browser_evaluate },
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },
