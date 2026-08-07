@@ -569,4 +569,211 @@ describe('aether-sensor (Phase 1)', function () {
     assert.equal(sensor.speak('after stop'), false);
   });
 
+  // ---- Phase 4: speak-gating (defer say during a handoff, drain on IDLE) ----
+
+  // Same-socket `conversation` broadcast builder (messages.py locked schema).
+  function conversation(phase, speakingScanner) {
+    return {
+      type: 'conversation',
+      transcript: [],
+      utterance: null,
+      speakingScanner: speakingScanner,
+      phase: phase,
+      phaseFrom: phase === 'IDLE' ? null : 'PC',
+      phaseTo: phase === 'IDLE' ? null : 'Phone',
+      conversationEvent: null
+    };
+  }
+
+  it('Phase 4 speak-gating: speak() defers while the FSM is mid-handoff, drains on IDLE', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      var received = [];
+      client.on('message', function (raw) { received.push(JSON.parse(raw.toString())); });
+
+      // FSM mid-handoff: the say must be deferred, not sent.
+      client.send(JSON.stringify(conversation('TRANSFER', 'PC')));
+      await sleep(50);
+      assert.equal(sensor.speak('hello during handoff'), true, 'must queue optimistically');
+      assert.ok(sensor._internal._queueState().queued, 'the say must be queued while busy');
+      await sleep(50);
+      assert.equal(received.length, 0, 'nothing may reach the wire while the FSM is busy');
+
+      // FSM returns to idle: the queued say drains immediately.
+      client.send(JSON.stringify(conversation('IDLE', null)));
+      assert.ok(await waitFor(function () { return received.length === 1; }, 1000), 'queued say must drain on IDLE');
+      assert.equal(received[0].type, 'say');
+      assert.equal(received[0].text, 'hello during handoff');
+      assert.equal(sensor._internal._queueState().queued, null, 'queue must be empty after the drain');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('Phase 4 speak-gating: speak() sends immediately when the FSM is IDLE (no queue)', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      // Explicitly idle FSM (the default state when Aether audio routing is off).
+      client.send(JSON.stringify(conversation('IDLE', null)));
+      await sleep(50);
+      var received = new Promise(function (resolve) {
+        client.once('message', function (raw) { resolve(JSON.parse(raw.toString())); });
+      });
+      assert.equal(sensor.speak('hi when idle'), true);
+      var msg = await received;
+      assert.equal(msg.type, 'say');
+      assert.equal(msg.text, 'hi when idle');
+      assert.equal(sensor._internal._queueState().queued, null, 'the idle path must never queue');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('Phase 4 speak-gating: the queue is capped at 1 — a second speak replaces the first', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      var received = [];
+      client.on('message', function (raw) { received.push(JSON.parse(raw.toString())); });
+      client.send(JSON.stringify(conversation('TRANSFER', 'PC')));
+      await sleep(50);
+      assert.equal(sensor.speak('first'), true);
+      assert.equal(sensor.speak('second'), true);
+      assert.equal(sensor._internal._queueState().queued.text, 'second', 'newest must replace the queued first');
+      client.send(JSON.stringify(conversation('IDLE', null)));
+      assert.ok(await waitFor(function () { return received.length === 1; }, 1000), 'exactly one say may drain');
+      assert.equal(received[0].text, 'second', 'only the newest may reach the wire');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('Phase 4 speak-gating: the safety timer delivers the queued text even if IDLE never returns', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      var received = [];
+      client.on('message', function (raw) { received.push(JSON.parse(raw.toString())); });
+      client.send(JSON.stringify(conversation('TRANSFER', 'PC')));
+      await sleep(50);
+      assert.equal(sensor.speak('fail-open text'), true);
+      assert.equal(sensor._internal._queueState().timerActive, true, 'safety timer must be armed');
+      // No IDLE broadcast ever arrives — the timer must fail open (~1.2s).
+      assert.ok(await waitFor(function () { return received.length === 1; }, 2500), 'queued text must reach the wire via the safety timer');
+      assert.equal(received[0].text, 'fail-open text');
+      assert.equal(sensor._internal._queueState().queued, null);
+      assert.equal(sensor._internal._queueState().timerActive, false);
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('Phase 4 speak-gating: a socket drop clears the queued say (no stale send after reconnect)', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      client.send(JSON.stringify(conversation('TRANSFER', 'PC')));
+      await sleep(50);
+      assert.equal(sensor.speak('stale queued text'), true);
+      assert.ok(sensor._internal._queueState().queued, 'must be queued');
+
+      // Kill the connection: the drop must clear queue and timer.
+      client.close();
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 0; }, 1000), 'connection must drop');
+      assert.equal(sensor._internal._queueState().queued, null, 'drop must clear the queued say');
+      assert.equal(sensor._internal._queueState().timerActive, false, 'drop must clear the safety timer');
+
+      // Reconnect: the stale text must never arrive; the next speak works.
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 3000), 'sensor must reconnect');
+      var reconnected = [...agg.wss.clients][0];
+      var staleArrived = false;
+      reconnected.on('message', function (raw) {
+        if (JSON.parse(raw.toString()).type === 'say') staleArrived = true;
+      });
+      await sleep(150);
+      assert.equal(staleArrived, false, 'the pre-drop queued text must never be sent after reconnect');
+      var fresh = new Promise(function (resolve) {
+        reconnected.once('message', function (raw) { resolve(JSON.parse(raw.toString())); });
+      });
+      assert.equal(sensor.speak('fresh after reconnect'), true, 'forward progress must continue');
+      assert.equal((await fresh).text, 'fresh after reconnect');
+    } finally {
+      sensor.stop();
+      await closeAggregator(agg.wss);
+    }
+  });
+
+  it('Phase 4 speak-gating: stop() clears the queued say and the safety timer', async function () {
+    var agg = await fakeAggregator();
+    var sensor = createAetherSensor({
+      bus: fakeBus(),
+      config: { AETHER_WS_URL: 'ws://127.0.0.1:' + agg.port },
+      logger: SILENT
+    });
+    sensor.start();
+    try {
+      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      var client = [...agg.wss.clients][0];
+      client.send(JSON.stringify(conversation('TRANSFER', 'PC')));
+      await sleep(50);
+      assert.equal(sensor.speak('queued then stopped'), true);
+      assert.ok(sensor._internal._queueState().queued, 'must be queued');
+      assert.ok(sensor._internal._queueState().timerActive, 'timer must be armed');
+
+      sensor.stop();
+      assert.equal(sensor._internal._queueState().queued, null, 'stop must clear the queue');
+      assert.equal(sensor._internal._queueState().timerActive, false, 'stop must clear the timer');
+
+      // Nothing may arrive even past the old timer deadline — the timer was
+      // cleared, not merely orphaned.
+      var lateArrived = false;
+      client.on('message', function () { lateArrived = true; });
+      await sleep(1400);
+      assert.equal(lateArrived, false, 'a stopped sensor must never deliver the queued text');
+    } finally {
+      await closeAggregator(agg.wss);
+    }
+  });
+
 });

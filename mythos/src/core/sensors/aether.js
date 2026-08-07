@@ -56,6 +56,7 @@ var RECONNECT_MAX_MS = 5000;
 var DRIFT_DB = 3;             // owner-stable re-emit threshold on smoothedRssi
 var DRIFT_THROTTLE_MS = 1000; // cap owner-stable emits to 1 Hz
 var SALIENCE = 0.5;           // one salience for every aether perception
+var QUEUE_SAFETY_MS = 1200;   // Phase 4 speak-gating fail-open ceiling (FSM window ~800ms + jitter)
 
 // The aggregator only broadcasts ranging while a chirp/contest is live, so
 // entries in the per-instance ranging cache are real ToF measurements, never
@@ -94,6 +95,16 @@ function createAetherSensor(ctx) {
   var convPhase = 'IDLE';
   var convSpeakingScanner = null;
   var pendingConvEvent = null; // one-shot {phase, from, to} — carried once
+
+  // Phase 4 speak-gating state: while the conversation FSM is mid-handoff
+  // (phase != IDLE, ~800ms), outgoing say messages are deferred so a fresh
+  // 'say' does not call the aggregator's start_utterance and cancel the
+  // device-to-device sentence move (AETHER-WIRING.md §Phase 4, the load-
+  // bearing constraint). Cap 1: a second speak during the same window
+  // replaces the first — the aggregator's own "new utterance replaces
+  // in-flight" semantics, so we never fight it.
+  var queuedSay = null;    // { text, queuedAt } — newest wins
+  var safetyTimer = null;  // fail-open: deliver the queued say after QUEUE_SAFETY_MS even if IDLE never returns
 
   // Pull the owner scanner entry (with its smoothedRssi) out of the election
   // payload. Aggregator sends scanners as a list; owner may be null.
@@ -211,17 +222,26 @@ function createAetherSensor(ctx) {
           to: (ev.toScanner == null) ? null : String(ev.toScanner)
         };
       }
+      // Phase 4 speak-gating drain: the FSM returned to idle — deliver any
+      // queued say now instead of waiting out the safety timer. No-op when
+      // the queue is empty (the aggregator re-broadcasts IDLE every 400ms).
+      if (msg.phase === 'IDLE') flushQueuedSay();
     }
   }
 
   // Real-data-only hygiene: a socket drop (or stop) must never leave stale
-  // enrichment or FSM state behind for the next reconnect to reuse.
+  // enrichment or FSM state behind for the next reconnect to reuse. The queued
+  // say and its safety timer are cleared too — a reconnect must never deliver
+  // a pre-disconnect message (a stale say mid-handoff would itself cancel a
+  // handoff).
   function clearEnrichment() {
     myRanging = {};
     myPosition = null;
     convPhase = 'IDLE';
     convSpeakingScanner = null;
     pendingConvEvent = null;
+    queuedSay = null;
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
   }
 
   function emitOffline() {
@@ -357,22 +377,65 @@ function createAetherSensor(ctx) {
     connected = false;
   }
 
-  // Phase 2 — nearest-device voice output. Sends {type:'say', text} down the
-  // open socket to the aggregator, which generates TTS and assigns the
-  // utterance to the CURRENT owner (aggregator.py _handle_say) — this is the
-  // whole Aether routing mechanism. Returns true only when the message was
-  // actually put on the wire; false when there is no live connection, so the
-  // caller can fail open to local TTS. Never throws.
-  function speak(text) {
-    var msgText = (text == null) ? '' : String(text).trim();
-    if (!msgText) return false;
+  // Single guarded send — shared by the immediate path, the drain hook and the
+  // safety timer. Returns true only when the message was actually put on the
+  // wire; false when there is no live connection.
+  function sendSay(text) {
     if (!running || !connected || !ws || ws.readyState !== 1) return false;
     try {
-      ws.send(JSON.stringify({ type: 'say', text: msgText }));
+      ws.send(JSON.stringify({ type: 'say', text: text }));
       return true;
     } catch (_) {
       return false;
     }
+  }
+
+  // Deliver the queued say (best-effort) and clear queue + timer. Called from
+  // the IDLE drain and the safety timer; if the socket died in the meantime,
+  // this is the acknowledged drop edge case (clearEnrichment has already
+  // cleared both, so the timer path cannot even reach here after a drop).
+  function flushQueuedSay() {
+    if (!queuedSay) return;
+    var entry = queuedSay;
+    queuedSay = null;
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null; }
+    sendSay(entry.text);
+  }
+
+  // Phase 2 — nearest-device voice output. Sends {type:'say', text} down the
+  // open socket to the aggregator, which generates TTS and assigns the
+  // utterance to the CURRENT owner (aggregator.py _handle_say) — this is the
+  // whole Aether routing mechanism. Returns true only when the message was
+  // actually put on the wire (or is guaranteed to reach it via the queue +
+  // fail-open timer); false when there is no live connection, so the caller
+  // can fail open to local TTS. Never throws.
+  //
+  // Phase 4 speak-gating: while the conversation FSM is mid-handoff
+  // (convPhase != 'IDLE'), the say is deferred into the 1-entry queue and
+  // `true` is still returned — the server treats true as "sent, skip local
+  // TTS" (server/index.js speakViaAether), which is the desired caption-only,
+  // device-routed behavior during a handoff. The queue drains on the next
+  // IDLE broadcast; the safety timer fails open within QUEUE_SAFETY_MS even
+  // if IDLE never returns, so the text is never dropped while the socket
+  // stays live. (A socket drop before delivery clears the queue — the
+  // acknowledged edge case; the offline perception + the next speak returning
+  // false handle forward progress.)
+  function speak(text) {
+    var msgText = (text == null) ? '' : String(text).trim();
+    if (!msgText) return false;
+    if (!running || !connected || !ws || ws.readyState !== 1) return false;
+    if (convPhase !== 'IDLE') {
+      queuedSay = { text: msgText, queuedAt: Date.now() };
+      if (!safetyTimer) {
+        safetyTimer = setTimeout(function () {
+          safetyTimer = null;
+          if (queuedSay) flushQueuedSay(); // fail-open: by now the handoff ended
+        }, QUEUE_SAFETY_MS);
+        if (safetyTimer.unref) safetyTimer.unref();
+      }
+      return true;
+    }
+    return sendSay(msgText);
   }
 
   function isRunning() { return running; }
@@ -392,6 +455,9 @@ function createAetherSensor(ctx) {
         lastEmitTs = 0;
         hadFirstEmit = false;
         clearEnrichment();
+      },
+      _queueState: function () { // test hook: inspect the speak-gating queue
+        return { queued: queuedSay, timerActive: safetyTimer !== null, phase: convPhase };
       }
     }
   };

@@ -111,7 +111,7 @@ Aether handles all device routing.
 | **1.5** | Ranging enrichment — real ToF distance rides the perception once the ranging tier is wired | ✅ **DONE** | `08f9a28` |
 | 2 | Voice output routing — Agent_OS speaks through the nearest device | 🔧 **CODED — needs live verify** | `08f9a28` |
 | 3 | Voice input routing — nearest device's mic reaches Agent_OS | 📐 **DESIGNED — blocked on Aether-side audio transport** | — |
-| 4 | Conversation handoff — mid-sentence migration between devices | 🔧 **PARTIAL — listen+awareness coded; speak-gating + e2e need Phase 2 live + Phase 3** | `1c94303` |
+| 4 | Conversation handoff — mid-sentence migration between devices | 🔧 **CODED — sensor side complete (listen+awareness+speak-gating); end-to-end still needs Phase 2 live + Phase 3** | `5c206e4` |
 | 5 | Multi-device mesh — multiple rooms, multiple users | ⬚ | — |
 
 ---
@@ -329,7 +329,7 @@ end-to-end test needs both).
 
 ---
 
-## Phase 4 — Conversation Handoff 📐 DESIGNED — needs Phase 2 live + Phase 3
+## Phase 4 — Conversation Handoff 🔧 CODED (sensor side) — e2e needs Phase 2 live + Phase 3
 
 **Goal:** mid-conversation migration between devices — the "Google problem."
 
@@ -374,22 +374,31 @@ end-to-end test needs both).
    — so the cortex can know "a handoff is mid-flight (moving to phone…)"
    instead of seeing stale silence. Covered by 4 tests incl. a real-WS
    round-trip with drop-clear (27/27 sensor tests).
-3. **Speak-gating (the real fix — REMAINING):** while `phase != IDLE`,
-   `speak()` should defer the outgoing `say` (short queue, ~1 s — the FSM
-   window is ~800 ms) and drain it once IDLE. This is what actually keeps
-   the "sentence moves devices" experience intact: without it, a reply
-   landing mid-migration cancels the handoff (the aggregator's
-   `start_utterance` replaces the in-flight utterance and forces IDLE).
-   Fail-open: if the queue outlives the window or the socket drops, the text
-   falls through to local TTS (never dropped, never fabricated). Deferred to
-   the full phase because it changes `speak()`'s contract and only matters
-   once Phase 2's routed audio is live-proven.
+3. **Speak-gating ✅ CODED (2026-08-08):** while `phase != IDLE`, `speak()`
+   defers the outgoing `say` into a 1-entry queue (newest wins — the
+   aggregator's own "new utterance replaces in-flight" semantics, so we
+   never fight it) and drains it when an IDLE broadcast arrives; a 1.2 s
+   safety timer (FSM window is ~800 ms) fails open and delivers the text
+   anyway if IDLE never returns. This is what actually keeps the "sentence
+   moves devices" experience intact: without it, a reply landing
+   mid-migration cancels the handoff (the aggregator's `start_utterance`
+   replaces the in-flight utterance and forces IDLE).
+   Contract note: `speak()` returns `true` while queued, so the server's
+   caption-only path (`speakViaAether`) treats it as sent — the desired
+   device-routed, caption-only behavior during a handoff. The socket-down
+   case still returns `false` and falls through to local TTS unchanged. A
+   socket drop or `stop()` clears the queue and the timer — never a stale
+   say after reconnect. Covered by 6 new tests (34 sensor tests). The only
+   remaining Phase 4 work is the end-to-end migration test, still gated on
+   Phase 2 live-proven (device audio actually playing) + Phase 3 (a user
+   utterance arriving mid-migration).
 
 **Gated on (per the phase gate — one phase at a time):** the end-to-end
 migration test wants Phase 2 live-proven (device audio actually playing) and
 Phase 3 built (a user utterance arriving mid-migration). The sensor-side
 listen + awareness slice landed early (same pattern as Phase 1.5) as
-`1c94303`; speak-gating + the end-to-end test are sequenced after 2+3.
+`5c206e4`, and speak-gating landed 2026-08-08; only the end-to-end test
+remains, sequenced after 2+3.
 
 ---
 
