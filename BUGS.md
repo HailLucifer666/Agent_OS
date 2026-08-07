@@ -9,7 +9,14 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-07 — the fix wave, BUG-167..BUG-174 (LAST section): ten
+Last updated: 2026-08-07 (later) — BUG-175/176 in the LAST section: the wake
+word was DEAF, not mute (openWakeWord's `spec/10 + 2` mel transform was missing,
+measured 0.0073 -> 0.998 on a real spoken "hey jarvis"), and the dashboard was
+curated to nine cards whose positions are now MEASURED rather than declared.
+BUG-150 had already recorded the score that diagnosed the wake word a day
+earlier and nobody read it. Baseline 3156 tests, 3155 pass, 0 fail, 1 skip.
+
+Previous entry: 2026-08-07 — the fix wave, BUG-167..BUG-174: ten
 defects from one live session, six live-verified, four honestly listed as not
 verified. Two of the ten were only found by live verification *after* their
 unit tests were already green — a widget layout that looked separated on paper
@@ -4467,3 +4474,157 @@ synthetic keypress would have left in place. Commit `b3bcdde`. Tests: 5.
 - **`screen_look`'s vision hallucination** (reported in the same session) is a
   vision-model quality issue, not a code defect. No fix attempted; recorded
   here as a known limitation, per the wave's stated non-goals.
+
+---
+
+## Session (2026-08-07, later) — BUG-175/176: the deaf wake word, and a dashboard that arranges itself
+
+Two operator reports after the BUG-167..174 wave. Baseline before: 3131 tests.
+Baseline after: **3156 tests, 3155 pass, 0 fail, 1 skip.**
+
+### BUG-175 — "Hey Jarvis" did nothing for a week: the mel transform was missing — FIXED, MEASURED
+
+The HUD said it was listening. Speaking the wake word did nothing. Clicking the
+orb made voice work, which read as "the mic only turns on when I click".
+
+**The mic was never the problem.** BUG-150's gate means the standby caption
+only appears after a real audio frame has arrived, so the microphone was
+provably live the whole time. The DETECTOR was deaf. And the orb click proves
+nothing either way: `wakeword.js` owns its own mic and AudioContext, so
+clicking the orb starts `voice-loop.js`'s separate click-to-talk capture — a
+different stream entirely.
+
+Root cause: `wakeword.js` ports openWakeWord and reproduces every tensor SHAPE
+from `openwakeword/utils.py` + `model.py` — 1280-sample chunks, 32 mel bins, a
+76-frame embedding window at stride 8, 96-dim embeddings, classifier window
+read from the model itself. It missed the one VALUE transform in that same
+source:
+
+```python
+spec = np.squeeze(outputs[0])
+spec = spec/10 + 2      # "Arbitrary transform of melspectrogram"
+```
+
+The embedding model was TRAINED on features in that scale. Without it the
+classifier reads out-of-distribution input and floors near zero.
+
+**BUG-150 had already measured this and nobody read the number.** Its entry
+records `peakScore 4e-6 .. 3.4e-5` against a 0.5 threshold — five orders of
+magnitude short, which is a dead pipeline, not a mis-tuned threshold. The
+diagnosis was sitting in this file for a day.
+
+**MEASURED, before and after, with no human and no mic.** Windows SAPI
+synthesized a real spoken "hey jarvis" and an unrelated control phrase to
+16kHz mono WAV; a node harness replicated `onFrame()` over the real three ONNX
+models:
+
+| audio | before | after |
+|---|---|---|
+| "hey jarvis" | 0.0073 — no wake | **0.998 — WAKES** |
+| unrelated speech | 0.00019 | 0.0000305 |
+
+137x on the target AND the non-target score falls — a corrected feature scale,
+not a sensitivity trade. Mel range moved from a raw `[-100, 7]` to
+openWakeWord's expected `[-8, 2.9]`. The threshold was never touched; lowering
+it against 1e-5 scores would only have hidden the cause. The second run drove
+the SHIPPED `reshapeMelOutput`, not a copy of it.
+
+Two supporting fixes:
+- `ensureWakeWord()` guarded on `if (wakeword)` alone, so a detector that had
+  stopped was permanently unrecoverable — every later gesture saw a non-null
+  object and returned, making "click it and retry" silently a no-op. It now
+  drops a non-running detector and re-arms.
+- The peak score went to the server log and nowhere else. It is mirrored to the
+  DOM and rendered in the VOICE widget beside the threshold:
+  `listening · peak 3.0e-5 / 0.5`. Neither number is judgeable alone, and a
+  score rounded to `0.00` is indistinguishable from a classifier that never
+  ran — which is how this survived a week of use.
+
+`reshapeMelOutput` moved to module scope and is exported so the transform is
+pinned BY VALUE. A source-shape assertion would not have caught this; the value
+IS the bug. Commit `1a18078`. Tests:
+`test/bug-175-wakeword-mel-transform.test.js` (11).
+
+**NOT VERIFIED:** the operator's own voice through their own microphone. The
+measurement above used synthesized speech. If it still does not fire, the next
+read is `wakeword.metrics` in the server log — `peakScore` now means something.
+
+### BUG-176 — the dashboard was cluttered, and its layout could never have been right — FIXED, LIVE-VERIFIED
+
+BUG-169 made all eight ported widgets visible, reaching 17 cards. The operator
+asked for a narrower, deliberate set and an organized starting arrangement that
+still drags.
+
+**Curation.** Nine visible: system, tokens, agents, voice, wip (left); clock,
+weather, media, news (right). Hidden but present — one "open <name>" away, and
+the choice persists: spend, breakers, tick-rate, voice-latency, memory,
+terminal, aether. BRAIN SPEND and BREAKERS were named as unwanted.
+
+CORES, GPU and SENSORS stop being widgets — four cards answering one question —
+and become sections of a merged SYSTEM card. Their spoken names are REPOINTED
+to `system` rather than deleted: a phrase that still describes something on
+screen must keep resolving to it, or "open gpu" starts denying a card the
+operator is looking at. `BOOT_WIDGET_IDS` 19 → 16.
+
+**Positions are computed now.** Every `defaultPos` literal is gone;
+`auto-layout.js` measures the mounted cards and flows them down the two
+gutters. This was the third attempt at this layout and the first that CAN be
+correct: `.widget-card` is `min-width:170px` but CONTENT-sized above that, so a
+declared offset says nothing about overlap. The previous test asserted the
+visible cards "clear each other vertically" from those offsets and passed while
+the browser showed them stacked on top of one another.
+
+Deliberate rules: a stored position always wins and is never re-packed; the
+computed layout is **never persisted** (if it were, the first auto-pack would
+be indistinguishable from a user drag, and every future adjustment would be
+silently overridden for anyone who had already loaded the HUD); overflow
+**clamps** rather than spilling to the other column (spilling makes a card's
+side depend on runtime measurement — the nondeterminism the explicit column
+hint exists to remove) or shrinking gaps; and it does not re-flow on viewport
+resize or when a card is opened/closed, because that moves cards the operator
+never touched.
+
+**THREE DEFECTS ONLY MEASUREMENT FOUND, each of which would have shipped:**
+
+1. **One animation frame is too early.** SYSTEM measured 442px on the rAF and
+   rendered 697px a second later once `/api/system` answered — packing the next
+   card straight through it. A `ResizeObserver` now re-packs during a bounded
+   6s settle window and then stops, so async content settles while a later news
+   refresh never moves cards mid-read.
+2. **SYSTEM rendered 640px wide and 679px tall.** A long GPU renderer string
+   stretched it to the max-width and out of the gutter toward the orb, and its
+   per-core list scales with the machine. Body bounded and scrollable at 320px,
+   card at 300px wide — nothing truncated, it just stops dictating the column.
+   The 320 is measured, not chosen: at 360 the column ran 27px long and clamped
+   WORK IN PROGRESS onto VOICE.
+3. **The unit test's card heights were plausible guesses, wrong by 250px.** They
+   are now real numbers read out of a browser, with a comment saying re-measure
+   rather than adjust them to pass.
+
+**Weather** now requests what open-meteo could always return: feels-like,
+humidity, wind, and a real 5-day min/max row. `timezone=auto` is load-bearing —
+without it the daily block aligns to UTC and "today" is wrong around local
+midnight. The richer card the operator remembered exists only in
+`design/mythos-living-core.html`, where it runs on a hardcoded `SIM` object, so
+this is fetched rather than ported. The old `'--'` placeholder is gone; it read
+as "loading" rather than "genuinely absent".
+
+**Media** gets the visual upgrade only: album art in a fixed square box so the
+card stops resizing itself between tracks, elapsed/duration labels, a taller
+bar. The bar stays **read-only** — `/api/media/control` accepts only
+`play_pause`, `next_track`, `prev_track`, `volume_*`, so a draggable-looking
+scrubber would be a control that silently does nothing. No spectrum
+visualiser: SMTC exposes no frequency data, so the mockup's bars are
+`Math.sin`, not audio.
+
+**LIVE-VERIFIED** at 1920x1080 in a real browser on a fresh profile: nine cards
+visible, the de-curated ones absent, zero overlapping pairs. And a dragged card
+stays exactly where it was dropped across a reload while the other eight pack
+cleanly around it, with the packer writing nothing to localStorage.
+
+Commit `f7c8aab`. Tests: `test/widget-auto-layout.test.js` (10) plus rewritten
+blocks in `widgets-ported.test.js`, `manage-widget.test.js`,
+`hud-model.test.js`, `ui-wiring-smoke.test.js`.
+
+**NOT VERIFIED:** rendering below 1920px wide. The clamp path is unit-tested
+but has not been looked at in a real browser at, say, 1366x768.
