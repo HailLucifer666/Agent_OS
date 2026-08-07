@@ -920,6 +920,61 @@ function createServer(deps) {
   // every open tab at once. Explicit targetWs callers (the boot greeting)
   // are unaffected.
   let lastActiveWs = null;
+
+  // ---- Voice Nodes (Stage 3): which device the reply comes out of ----------
+  //
+  // nodeId -> ws, claimed by an inbound {type:'identify', role:'node', nodeId}.
+  // A node's socket is the delivery address for its speech-chunk stream; the
+  // node id is the SAME string everywhere — its entry in AETHER_NODE_IDS, its
+  // position in the aggregator's --peers, and what it identifies as here.
+  const voiceNodes = new Map();
+  // The Aether aggregator's current election owner, cached from the sensor's
+  // perception. Read at speak time rather than passed in, because the sensor
+  // starts in a later boot step than the server and the owner changes as the
+  // operator walks around.
+  let aetherOwner = null;
+
+  // Where a spoken reply's AUDIO should go: the elected node's socket, or null
+  // to speak locally exactly as before.
+  //
+  // Fail-honest by construction — every one of these has to hold, and any of
+  // them failing means local TTS rather than silence:
+  //   - the operator opted in (AETHER_NODE_AUDIO);
+  //   - Aether has actually elected somebody (a null owner means no device is
+  //     present, not "pick one");
+  //   - that owner has identified itself here and its socket is still OPEN.
+  // Note what this does NOT claim: delivering to an open socket is not proof the
+  // phone played anything. A {type:'played'} ack is deliberately deferred, so
+  // "routed" is the honest word for it, never "spoken".
+  function nodeSpeechTarget() {
+    if (!config.AETHER_NODE_AUDIO) return null;
+    if (!aetherOwner) return null;
+    const ws = voiceNodes.get(aetherOwner);
+    if (!ws || ws.readyState !== 1) return null;
+    return { nodeId: aetherOwner, ws };
+  }
+
+  // Send one speech-chunk to wherever it belongs. The three synthesis sites
+  // (proactiveSpeak, sendSpokenReply, vision-query) all route through this
+  // rather than each re-deciding — they had already drifted apart once, which is
+  // how the third site came to be missed in planning.
+  //
+  // The origin connection deliberately receives NOTHING per chunk. Sending it a
+  // text-only copy would look harmless and isn't: playNextChunk() speaks any
+  // chunk whose audioB64 is null via speechSynthesis, so the PC would narrate
+  // the reply alongside the phone — the same two-voices defect as BUG-060.
+  function sendSpeechChunk(localSend, target, msg) {
+    if (target) {
+      try {
+        target.ws.send(JSON.stringify(msg));
+        return;
+      } catch (_) {
+        // The node died mid-reply. Remaining chunks fall back to the origin
+        // below rather than vanishing.
+      }
+    }
+    localSend(msg);
+  }
   async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
     targetWs = targetWs || lastActiveWs;
@@ -997,7 +1052,13 @@ function createServer(deps) {
     // (chunked:true, zero chunks — voice-loop.js deliverReply finishes the
     // turn silently) so the HUD shows what was said without the local machine
     // speaking it. Aggregator down -> speakViaAether() false -> local TTS.
-    if (speakViaAether(speak)) {
+    //
+    // Stage 3 precedence: if a voice node is elected AND connected, MYTHOS's own
+    // voice goes to that phone instead. Both flags routing at once would speak
+    // twice — once from the aggregator's TTS on whatever machine it runs on, once
+    // from the phone — so the node wins, being the endpoint we synthesize for and
+    // can name in the audit.
+    if (!nodeSpeechTarget() && speakViaAether(speak)) {
       sendOut({ type: 'proactive-speech', reqId, text, speak });
       sendOut({ type: 'done', reqId, say: text, speak, chunked: true, proactive: true });
       return;
@@ -1026,13 +1087,18 @@ function createServer(deps) {
       // clipped the tail. The boot greeting rides this path, which is why the
       // operator heard the greeting cut short too.
       const textChunks = splitSentences(speak);
+      // Resolved ONCE per reply, not per chunk: a reply whose chunks split
+      // across two devices mid-sentence because the operator moved is worse
+      // than one that finishes where it started. Stage 5's conversation handoff
+      // is the deliberate, FSM-sequenced way for a sentence to move.
+      const speechTarget = nodeSpeechTarget();
       // Alert tone counts as chunk 0 of the SAME reqId's sequence (not a
       // separate turn) so it plays through the existing chunk-queue ordering
       // instead of racing a second, unregistered reqId on the client.
       const totalChunks = (alertB64 ? 1 : 0) + textChunks.length;
       let idx = 0;
       if (alertB64 && !ctrl.signal.aborted) {
-        sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' });
+        sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' });
         idx++;
       }
       for (let i = 0; i < textChunks.length; i++) {
@@ -1049,7 +1115,7 @@ function createServer(deps) {
           }
         }
         if (ctrl.signal.aborted) break;
-        sendOut({ type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] });
+        sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] });
         idx++;
       }
       // chunked forced true on abort, or when the alert tone alone was sent
@@ -1057,8 +1123,11 @@ function createServer(deps) {
       // the session-checked chunk-queue path, never the non-chunked
       // speechSynthesis fallback (which would otherwise speak the just-
       // barged-in-on reply after the fact, or skip the alert chunk's queue).
-      const chunked = ctrl.signal.aborted ? true : (totalChunks > 0);
-      sendOut({ type: 'done', reqId, say: text, speak, chunked, proactive: true });
+      // chunked stays true when the audio went to a node: the origin's queue is
+      // empty, and voice-loop.js's chunked branch finishes the turn silently
+      // instead of narrating the reply a second time through speechSynthesis.
+      const chunked = (ctrl.signal.aborted || speechTarget) ? true : (totalChunks > 0);
+      sendOut({ type: 'done', reqId, say: text, speak, chunked, proactive: true, ...(speechTarget ? { routedToNode: speechTarget.nodeId } : {}) });
     } finally {
       inflightSpeech.delete(reqId);
     }
@@ -1716,7 +1785,10 @@ function createServer(deps) {
       // on this connection, Live's PCM playback is already the entity's voice —
       // never ALSO route the batch reply to the Aether device (two voices).
       const liveSession = (typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
-      if (!(liveSession && liveSession.isOpen()) && speakViaAether(speak)) {
+      // Same three-way precedence as proactiveSpeak: an open Live session wins
+      // over everything (its PCM playback IS the entity's voice — BUG-060), then
+      // an elected voice node, then the aggregator's own TTS.
+      if (!(liveSession && liveSession.isOpen()) && !nodeSpeechTarget() && speakViaAether(speak)) {
         try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
         return;
       }
@@ -1731,6 +1803,8 @@ function createServer(deps) {
       // never at fault (all 29 replies round-trip splitSentences losslessly).
       // Chunk-per-sentence keeps each utterance short enough to finish.
       const chunks = splitSentences(speak);
+      // See proactiveSpeak: resolved once per reply, never per chunk.
+      const speechTarget = nodeSpeechTarget();
       // Item B: register an abort controller so a 'stop' for this reqId
       // (barge-in) can cancel remaining chunk synthesis below — otherwise
       // edge-tts keeps synthesizing chunks nobody will hear after the client
@@ -1766,14 +1840,14 @@ function createServer(deps) {
               voiceLatencyTracker.record(Date.now() - micStoppedAt);
               latencyRecorded = true;
             }
-            send({ type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] });
+            sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] });
           }
         }
         // chunked forced true on abort (even with zero chunks sent): routes the
         // client's 'done' handling through the session-checked chunk-queue path,
         // never the non-chunked speechSynthesis fallback (which would otherwise
         // speak the just-barged-in-on reply after the fact).
-        send({ type: 'done', reqId, say, speak, chunked: ctrl.signal.aborted ? true : chunks.length > 0, ...meta });
+        send({ type: 'done', reqId, say, speak, chunked: (ctrl.signal.aborted || speechTarget) ? true : chunks.length > 0, ...meta, ...(speechTarget ? { routedToNode: speechTarget.nodeId } : {}) });
       } finally {
         inflightSpeech.delete(reqId);
       }
@@ -2000,6 +2074,11 @@ function createServer(deps) {
 
         const ttsUp = await tts.isAvailable();
         const streamer = createSentenceStreamer();
+        // The third synthesis site. It streams sentences as the vision model
+        // produces them, so it needs the same routing decision as the other two
+        // — missing it would answer a vision question on the laptop while every
+        // other reply came out of the phone.
+        const speechTarget = nodeSpeechTarget();
         let chunkIndex = 0;
         let sendChain = Promise.resolve(); // serializes synth+send so chunks stay in order
         // total is unknown until the stream ends; the client's own barge-in-aware
@@ -2020,7 +2099,7 @@ function createServer(deps) {
             } catch (err) {
               logger.warn('tts.chunk-failed', { error: err.message, index: i });
             }
-            send({ type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, mime: chunkMime, text: spoken });
+            sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, mime: chunkMime, text: spoken });
           });
         }
 
@@ -2061,7 +2140,10 @@ function createServer(deps) {
           if (tail) enqueueChunk(tail);
           await sendChain;
         }
-        send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: ttsUp && chunkIndex > 0 });
+        // Same reason as the other two sites: with the audio on a node, the
+        // origin must take the chunked branch (silent finish) rather than
+        // speaking the answer again locally.
+        send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: speechTarget ? true : (ttsUp && chunkIndex > 0), ...(speechTarget ? { routedToNode: speechTarget.nodeId } : {}) });
       } catch (err) {
         logger.warn('vision-query-error', { error: err.message, reqId: msg.reqId });
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${sanitizeErrorForClient(err)}`, error: true });
@@ -2291,6 +2373,30 @@ function createServer(deps) {
       else if (msg.type === 'node-lost') {
         if (scannerProxy) scannerProxy.markLost(String(msg.nodeId || ''));
       }
+      // A node claims its identity, so speech can be routed back to it. Last
+      // writer wins (a reconnecting phone must be able to replace its own stale
+      // socket), but a duplicate claim is reported as an anomaly because the
+      // usual cause is two devices misconfigured with one id — which would make
+      // the election attribute one room's readings to both.
+      else if (msg.type === 'identify' && msg.role === 'node') {
+        const nodeId = String(msg.nodeId || '').trim();
+        if (!nodeId) {
+          send({ type: 'identified', ok: false, error: 'nodeId is required' });
+        } else {
+          const previous = voiceNodes.get(nodeId);
+          if (previous && previous !== ws && previous.readyState === 1) {
+            bus.emit('health.anomaly', {
+              kind: 'voice-node-duplicate-identify',
+              summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
+              detail: { nodeId },
+            });
+          }
+          voiceNodes.set(nodeId, ws);
+          ws._mythosNodeId = nodeId;
+          logger.info('voice-node.identified', { nodeId });
+          send({ type: 'identified', ok: true, nodeId });
+        }
+      }
       else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
       else if (msg.type === 'live-audio') { if (liveSession) liveSession.sendAudio(msg.data); }
       // Slice 3 screen share. Same guard shape as live-audio: a frame arriving
@@ -2315,6 +2421,16 @@ function createServer(deps) {
     // with no client left to hear the reply.
     ws.on('close', () => {
       if (liveSession) liveSession.close('ws-closed');
+      // Drop this node's registration — but ONLY if the map still points at THIS
+      // socket. A phone that reconnected before its old socket's close event
+      // landed has already overwritten the entry, and unconditionally deleting
+      // here would evict the live replacement and route the next reply to the
+      // laptop instead.
+      const nodeId = ws._mythosNodeId;
+      if (nodeId && voiceNodes.get(nodeId) === ws) {
+        voiceNodes.delete(nodeId);
+        logger.info('voice-node.disconnected', { nodeId });
+      }
     });
   });
 
@@ -2368,6 +2484,16 @@ function createServer(deps) {
   // 'perception.*' — relay only human-initiated ('ws' channel, always) or salience
   // above config.MYTHOS_IDLE_SALIENCE (config-read, not a new magic number — Lesson #6).
   // Field is `.salience`, never `.salienceHint` (cross-phase consistency fix, P6 vs P9).
+  // Voice Nodes: track who Aether currently says is nearest. Subscribed
+  // separately from the HUD relay below because that relay drops anything under
+  // MYTHOS_IDLE_SALIENCE, and speech routing must follow the election whether or
+  // not the perception was interesting enough to paint. The sensor's fail-honest
+  // offline emit carries owner:null, which correctly returns routing to local.
+  bus.subscribe('perception.aether', (e) => {
+    const detail = (e.payload && e.payload.detail) || {};
+    aetherOwner = detail.owner || null;
+  });
+
   bus.subscribe('perception.*', (e) => {
     const p = e.payload;
     if (p.channel !== 'ws' && (p.salience || 0) < config.MYTHOS_IDLE_SALIENCE) return;

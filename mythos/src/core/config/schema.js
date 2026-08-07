@@ -199,6 +199,15 @@ const SCHEMA = {
   // loopback back-compat path — a valid MYTHOS_AUTH_TOKEN is MANDATORY on
   // every request it admits, never optional. No token, no node access.
   AETHER_NODE_TRUST:         { type: 'bool',   default: false },
+  // Speak through the elected voice node instead of the local speakers: MYTHOS
+  // synthesizes as usual and the speech-chunk stream is delivered to the phone
+  // Aether currently names as owner, while the HUD still captions the reply.
+  // Distinct from AETHER_AUDIO_ROUTE, which hands the TEXT to the aggregator and
+  // lets IT synthesize on whatever machine it runs on. This one keeps MYTHOS's
+  // own voice and just changes which speaker it comes out of, so it takes
+  // precedence when both are set. Falls back to local TTS whenever no node is
+  // connected, and a live Gemini Live session always wins over both.
+  AETHER_NODE_AUDIO:         { type: 'bool',   default: false },
 
   // Daily planning + accountability (hands-free morning brief / stall
   // check-ins / evening review — src/core/planner/daily.js). On by default
