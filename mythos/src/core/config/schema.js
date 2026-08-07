@@ -517,12 +517,18 @@ const SCHEMA = {
   STRIX_TIMEOUT_MS:            { type: 'number', default: 1800000, min: 10000 },
 
   // Native speech-to-speech (Gemini Live, V2 §6-§10, merged-order step 4).
-  // Default true — Gemini Live (real-time duplex audio via s2s-bridge.js) is
-  // now the primary voice path. voice-agent.js's batch STT path remains the
-  // untouched fallback if GOOGLE_API_KEY is missing or a live session fails.
-  // Flipping this back to false is a total, zero-code rollback (V2 §16). See
-  // .env.example for the full story on each key, including the voice choice.
-  VOICE_S2S_ENABLED:           { type: 'bool',   default: true },
+  // Opt-in and OFF by default (F5, go-live proof plan 2026-08-08): the Live
+  // API is metered per open session and bills for the time the socket is
+  // open, and .env.example has ALWAYS documented it as "Opt-in and OFF by
+  // default" — the schema default of true contradicted the docs, so a fresh
+  // deploy with a GOOGLE_API_KEY opened billed Live sessions with no explicit
+  // opt-in. Set true to make Gemini Live (real-time duplex audio via
+  // s2s-bridge.js) the primary voice path; voice-agent.js's batch STT path
+  // remains the untouched fallback when it is off, no key is present, or a
+  // live session fails. Flipping back to false is a total, zero-code rollback
+  // (V2 §16). See .env.example for the full story on each key, including the
+  // voice choice.
+  VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
   GEMINI_LIVE_MODEL:           { type: 'string', default: 'models/gemini-3.1-flash-live-preview' },
   // Aoede | Kore | Leda | Zephyr | Puck | Charon — Aoede kept as default (see
   // .env.example): auditioning by ear across all six needs a human with
