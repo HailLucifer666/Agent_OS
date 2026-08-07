@@ -112,6 +112,18 @@ async function waitForStatus(port, pathName, wantStatus, timeoutMs) {
   throw lastErr;
 }
 
+// Kill a spawned child WITHOUT hanging: if the child already exited (a boot
+// crash), 'close' was emitted before we got here and awaiting it would never
+// resolve. Race the close with a bounded timeout instead.
+async function stopChild(child) {
+  if (child.exitCode !== null) return; // already exited
+  child.kill('SIGKILL');
+  await Promise.race([
+    new Promise((resolve) => child.once('close', resolve)),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 // F1 — Render's health probe must hit a route that actually exists.
 //
@@ -165,8 +177,7 @@ describe('F1 · render.yaml healthCheckPath matches the real route', () => {
       const apiHealth = await httpGet(port, '/api/health');
       assert.equal(apiHealth.status, 404, '/api/health must stay 404 — it is not a route');
     } finally {
-      child.kill('SIGKILL');
-      await new Promise((resolve) => child.once('close', resolve));
+      await stopChild(child);
       try { fs.rmSync(vaultDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
     }
   });
@@ -191,8 +202,19 @@ describe('F2 · render.yaml carries the WS origin allowlist for the deployed hos
     assert.notEqual(keyIdx, -1, 'render.yaml must declare an ALLOWED_ORIGINS env var');
     const valueLine = lines.slice(keyIdx + 1).find((l) => l.trim().startsWith('value:'));
     assert.ok(valueLine, 'ALLOWED_ORIGINS must carry a value (comma-separated origins)');
-    assert.ok(valueLine.includes(RENDER_HOSTNAME),
-      `ALLOWED_ORIGINS must include https://${RENDER_HOSTNAME}; got: ${valueLine.trim()}`);
+    const value = valueLine.trim().replace(/^value:\s*"?/, '').replace(/"?$/, '');
+    // The server SILENTLY drops any origin that fails its isValidOrigin regex
+    // (server/index.js) — so the pinned string must be one it will actually
+    // accept, or the deploy 403s with a green suite. Check every part of the
+    // comma-separated list.
+    const originRe = /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?$/;
+    const parts = value.split(',').map((s) => s.trim()).filter(Boolean);
+    assert.ok(parts.length >= 1, `ALLOWED_ORIGINS must not be empty; got: ${value}`);
+    for (const part of parts) {
+      assert.ok(originRe.test(part), `origin "${part}" would be silently dropped by the server's isValidOrigin — must match ^https?://[a-zA-Z0-9._-]+(:\d+)?$`);
+    }
+    assert.ok(parts.some((p) => p.includes(RENDER_HOSTNAME)),
+      `ALLOWED_ORIGINS must include https://${RENDER_HOSTNAME}; got: ${value}`);
   });
 
   test('mechanism: a foreign-but-allowlisted Origin + ?token= opens a REAL ws; a non-allowlisted foreign Origin still 403s', async () => {
@@ -236,7 +258,8 @@ describe('F2 · render.yaml carries the WS origin allowlist for the deployed hos
         await server.stop();
       }
     } finally {
-      process.env.ALLOWED_ORIGINS = prev;
+      if (prev === undefined) delete process.env.ALLOWED_ORIGINS;
+      else process.env.ALLOWED_ORIGINS = prev;
     }
   });
 });

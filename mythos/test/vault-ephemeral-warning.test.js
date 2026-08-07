@@ -73,8 +73,14 @@ async function waitFor(pattern, state, timeoutMs) {
 }
 
 async function stop(child) {
+  // Never hang: if the child already exited (boot crash), 'close' was already
+  // emitted and awaiting it would never resolve — race with a timeout.
+  if (child.exitCode !== null) return;
   child.kill('SIGKILL');
-  await new Promise((resolve) => child.once('close', resolve));
+  await Promise.race([
+    new Promise((resolve) => child.once('close', resolve)),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
 }
 
 describe('F4 · the vault is ephemeral on a container without a volume — boot must say so', () => {
