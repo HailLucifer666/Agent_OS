@@ -735,6 +735,31 @@ async function main() {
         adbBin: config.ANDROID_ADB_BIN, pollMs: config.ANDROID_ADB_POLL_MS, cmdTimeoutMs: config.ANDROID_CMD_TIMEOUT_MS,
       });
       logger.info('android-child.starting', {});
+
+      // BUG-168: hermes-agent is the ONLY build-content engine (there is no
+      // brain fallback by design), yet it was the one adapter nobody probed at
+      // boot — it has no start*() of its own, so its first probe happened
+      // inside the first build. A live session on 2026-08-07 therefore
+      // discovered it was OFFLINE by watching six consecutive builds fail with
+      // the same message, and the capability manifest ("what can you do")
+      // claimed nothing was wrong the whole time. Probe once here, announce
+      // the result, and let it into adapterStatuses() below. Never fatal and
+      // never awaited: a slow probe must not hold boot.
+      require('../adapters/hermes-agent').probe(true).then(function(online) {
+        var s = require('../adapters/hermes-agent').getStatus();
+        if (online) {
+          logger.info('hermes-agent.online', { mode: s.mode, slots: (s.slots || []).length });
+        } else {
+          logger.warn('hermes-agent.offline', {
+            hint: s.hint,
+            cliProbeDiagnostic: s.cliProbeDiagnostic,
+            impact: 'every build will fail — there is no brain fallback by design',
+          });
+        }
+        if (refreshCapabilities) refreshCapabilities();
+      }).catch(function(err) {
+        logger.warn('hermes-agent.probe-failed', { error: err && err.message });
+      });
     }},
 
     { name: 'capabilities-manifest', fail: 'degraded', fn: function() {
@@ -749,6 +774,10 @@ async function main() {
         try { out.push(Object.assign({ name: 'cua-driver' }, cuaDriver.getStatus())); } catch (_) {}
         try { out.push(Object.assign({ name: 'android-child' }, androidChild.getStatus())); } catch (_) {}
         try { out.push(Object.assign({ name: 'browser-agent' }, browserAgent.getStatus())); } catch (_) {}
+        // BUG-168: the build engine belongs in the honest capability report
+        // like every other adapter. Its probe settles async (above), which is
+        // exactly what the 10s re-write below already exists for.
+        try { out.push(Object.assign({ name: 'hermes-agent' }, require('../adapters/hermes-agent').getStatus())); } catch (_) {}
         return out;
       }
       function writeIt() {

@@ -93,6 +93,11 @@ function check() {
   // A provider must be configured or every build returns an auth error. Hermes
   // reports provider failures on stdout with exit code 0, so this is worth
   // saying out loud rather than discovering inside a failed build.
+  // BUG-168: a misconfigured provider is not a "warning" — it is a guaranteed
+  // build failure on every single build, reported as an HTTP 401 that looks
+  // like a MYTHOS bug. --check now exits non-zero for it, same as a missing
+  // -z/--yolo flag, so the operator finds out here instead of in a build.
+  let providerOk = true;
   const cfg = path.join(HERMES_HOME, 'config.yaml');
   if (fs.existsSync(cfg)) {
     const src = fs.readFileSync(cfg, 'utf8');
@@ -109,7 +114,8 @@ function check() {
     // plugin, so either one authenticates as nobody: every call comes back
     // "HTTP 401: Missing Authentication header". Root-caused live 2026-07-29.
     if (!provider || provider[1] !== 'openai-api') {
-      console.log('  WARNING: model.provider should be "openai-api" for MYTHOS.');
+      providerOk = false;
+      console.log('  ERROR: model.provider must be "openai-api" for MYTHOS (found: ' + (provider ? provider[1] : 'unset') + ').');
       console.log('    That is the only registry id that reads the OPENAI_API_KEY/');
       console.log('    OPENAI_BASE_URL pair the adapter forwards. With anything else');
       console.log('    (including "openai" or "custom") every build fails with');
@@ -119,7 +125,12 @@ function check() {
   }
   reportProviderSlots();
   reportKeyShadowing();
-  return (hasOneshot && hasYolo) ? 0 : 1;
+  if (!providerOk) {
+    console.log('');
+    console.log('hermes: NOT USABLE FOR BUILDS — fix model.provider above, then re-run this check.');
+    console.log('  Builds have no brain fallback by design, so this fails every build, not some.');
+  }
+  return (hasOneshot && hasYolo && providerOk) ? 0 : 1;
 }
 
 // ROOT-CAUSED LIVE 2026-08-03, against Hermes v0.19.0's own source.

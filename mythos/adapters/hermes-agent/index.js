@@ -628,13 +628,36 @@ function runViaCliWithRotation(prompt, opts) {
 //   requireCli     — true: fail loudly instead of silently falling back to
 //                    the HTTP gateway, which can't be cwd-pinned to a project
 //   maxPromptChars — overrides the 8000-char default prompt clamp
+// BUG-168: a build that dies on an OFFLINE engine used to say only
+// "not installed/running" — the operator could not tell WHICH binary was
+// checked, whether it was missing or merely unrunnable, or whether a provider
+// was configured at all, so six builds in a row failed with one uninformative
+// line. Every build failure now carries the same evidence the boot probe
+// logs. Keys are never included — describeSlot() reports endpoint and model
+// only.
+function offlineEvidence() {
+  var parts = [' [checked: ' + cliBin() + ']'];
+  if (lastCliProbeDiagnostic) {
+    parts.push(' [probe: ' + lastCliProbeDiagnostic.kind +
+      (lastCliProbeDiagnostic.code != null ? ' ' + lastCliProbeDiagnostic.code : '') +
+      (lastCliProbeDiagnostic.signal ? ' signal ' + lastCliProbeDiagnostic.signal : '') +
+      (lastCliProbeDiagnostic.detail ? ' — ' + lastCliProbeDiagnostic.detail : '') + ']');
+  }
+  var slots = providerSlots();
+  parts.push(slots.length
+    ? ' [provider slots: ' + slots.map(function (s) { return describeSlot(s).model; }).join(', ') + ']'
+    : ' [provider slots: NONE CONFIGURED — set HERMES_PROVIDER_KEY/HERMES_INFERENCE_MODEL in mythos/.env]');
+  parts.push(' [fix: node mythos/scripts/setup-hermes.js --install]');
+  return parts.join('');
+}
+
 async function runTask(prompt, opts) {
   if (!prompt || !String(prompt).trim()) throw new Error('prompt required');
   opts = opts || {};
   var online = await probe(false);
-  if (!online) throw new Error('hermes-agent OFFLINE: ' + hint);
+  if (!online) throw new Error('hermes-agent OFFLINE: ' + hint + offlineEvidence());
   if (opts.requireCli && !caps.cli) {
-    throw new Error('hermes-agent CLI required but not available: ' + hint);
+    throw new Error('hermes-agent CLI required but not available: ' + hint + offlineEvidence());
   }
 
   var maxPromptChars = (typeof opts.maxPromptChars === 'number') ? opts.maxPromptChars : 8000;
