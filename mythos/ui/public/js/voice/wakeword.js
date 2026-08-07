@@ -25,10 +25,56 @@
 // exact exported name isn't recoverable from the Python source alone.
 import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
 
+// Shared with createWakeWord below AND exported for tests. openWakeWord's mel
+// bin count is fixed by the model, so these are module constants, not
+// per-instance state.
+export const MEL_BINS = 32;
+// BUG-175: openWakeWord's own melspectrogram transform — see reshapeMelOutput.
+// Named rather than inline so the two halves of `x/10 + 2` cannot drift apart
+// or be mistaken for magic numbers.
+export const MEL_SCALE_DIV = 10;
+export const MEL_SCALE_ADD = 2;
+
+// Python does `spec = np.squeeze(outputs[0])`, producing a 2D (frames, 32)
+// array. onnxruntime-web gives us flat data + dims instead of squeeze — this
+// strips singleton dims and treats the last remaining dimension as mel bins,
+// which is robust to whatever rank the specific ONNX export reports.
+//
+// BUG-175 — THE MEL SCALING IS NOT OPTIONAL AND IS NOT A TUNING KNOB.
+// openwakeword/utils.py's AudioFeatures._get_melspectrogram does:
+//     spec = np.squeeze(outputs[0])
+//     spec = spec/10 + 2      # "Arbitrary transform of melspectrogram"
+// and the embedding model was TRAINED on features in that scale. This port
+// reproduced every tensor SHAPE from that same source (1280-sample chunks,
+// 32 bins, 76-frame window, stride 8, 96-dim output) and missed the one
+// VALUE transform, which left the embedding model reading out-of-distribution
+// input and the classifier floored near zero. That is why "hey jarvis" never
+// fired for a week while the HUD honestly reported a live mic: the microphone
+// was fine, the detector was deaf.
+//
+// MEASURED, on real synthesized speech through these exact three ONNX models
+// (2026-08-07, harness replicating onFrame() in node):
+//     "hey jarvis"          without: 0.0073   with: 0.998   (threshold 0.5)
+//     unrelated speech      without: 0.00019  with: 0.0000305
+// 137x on the target phrase, and the NON-target score drops — so this is a
+// corrected feature scale, not a sensitivity trade. Do not "simplify" it away.
+export function reshapeMelOutput(out) {
+  const dims = out.dims.filter((d) => d !== 1);
+  const bins = dims.length ? dims[dims.length - 1] : MEL_BINS;
+  const data = out.data;
+  const frames = Math.floor(data.length / bins);
+  const rows = [];
+  for (let i = 0; i < frames; i++) {
+    const row = Float32Array.from(data.subarray(i * bins, (i + 1) * bins));
+    for (let k = 0; k < row.length; k++) row[k] = row[k] / MEL_SCALE_DIV + MEL_SCALE_ADD;
+    rows.push(row);
+  }
+  return rows;
+}
+
 export function createWakeWord({ threshold, onWake, onStatus }) {
   const THRESHOLD = typeof threshold === 'number' ? threshold : 0.5;
   const REFRACTORY_MS = 2000;
-  const MEL_BINS = 32;
   const EMBED_WINDOW = 76;   // mel frames per embedding window
   const EMBED_STRIDE = 8;    // mel-frame stride between successive embedding windows
   const EMBED_DIM = 96;      // speech-embedding output dimension
@@ -138,22 +184,6 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       const dim = clsSession.inputMetadata[0].shape[1];
       if (typeof dim === 'number' && dim > 0) classifierWindow = dim;
     } catch { /* keep DEFAULT_CLASSIFIER_WINDOW */ }
-  }
-
-  // Python does `spec = np.squeeze(outputs[0])`, producing a 2D (frames, 32)
-  // array. onnxruntime-web gives us flat data + dims instead of squeeze — this
-  // strips singleton dims and treats the last remaining dimension as mel bins,
-  // which is robust to whatever rank the specific ONNX export reports.
-  function reshapeMelOutput(out) {
-    const dims = out.dims.filter((d) => d !== 1);
-    const bins = dims.length ? dims[dims.length - 1] : MEL_BINS;
-    const data = out.data;
-    const frames = Math.floor(data.length / bins);
-    const rows = [];
-    for (let i = 0; i < frames; i++) {
-      rows.push(Float32Array.from(data.subarray(i * bins, (i + 1) * bins)));
-    }
-    return rows;
   }
 
   async function runMelspectrogram(frame1280) {

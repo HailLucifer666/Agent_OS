@@ -34,6 +34,23 @@ export function normalizeState(raw) {
   return STATES.includes(raw) ? raw : 'idle';
 }
 
+// BUG-175: the wake word spent a week armed and deaf while every surface said
+// "listening". app.js mirrors its state and rolling peak score onto
+// documentElement.dataset (wakeword / wakewordPeak); this renders them
+// together, because either alone is misleading — "listening" without a score
+// is the exact false reassurance that hid the bug, and a score without the
+// threshold cannot be judged. Pure, exported for node:test.
+export function formatWakeword(state, peakRaw, threshold) {
+  if (!state) return { text: UNAVAILABLE, faint: true };
+  const peak = Number(peakRaw);
+  const thr = typeof threshold === 'number' ? threshold : 0.5;
+  if (!Number.isFinite(peak)) return { text: state, faint: state !== 'listening' };
+  // Two significant figures is enough to tell 1e-5 from 0.4 at a glance, and
+  // an exponent is the honest rendering for a score that small.
+  const shown = peak >= 0.01 ? peak.toFixed(2) : peak.toExponential(1);
+  return { text: `${state} · peak ${shown} / ${thr}`, faint: peak < thr };
+}
+
 const STATE_CLASS = {
   idle: 'text-faint',
   listening: 'text-dim',
@@ -50,6 +67,7 @@ export function mountVoice(el, ctx) {
 
   const caps = readVoiceCapabilities(window);
   const rows = [
+    { key: 'wakeword', label: 'wake word', value: UNAVAILABLE },
     { key: 'recognition', label: 'browser stt', value: caps.recognition },
     { key: 'synthesis', label: 'browser tts', value: caps.synthesis },
     { key: 's2s', label: 'live s2s', value: 'checking…' },
@@ -92,8 +110,33 @@ export function mountVoice(el, ctx) {
     stateEl.textContent = UNAVAILABLE;
   }
 
+  // BUG-175: watch the wake word's own dataset attributes on <html>, the same
+  // observe-don't-rebroadcast pattern this widget already uses for the voice
+  // pill. app.js owns those attributes; nothing new is plumbed.
+  const root = document.documentElement;
+  function paintWakeword() {
+    const ww = formatWakeword(root.dataset.wakeword, root.dataset.wakewordPeak, wakewordThreshold);
+    rows[0].value = ww.text;
+    paintRows();
+  }
+  let wakewordThreshold = 0.5;
+  paintWakeword();
+  const wwObserver = new MutationObserver(paintWakeword);
+  wwObserver.observe(root, { attributes: true, attributeFilter: ['data-wakeword', 'data-wakeword-peak'] });
+  bag.add(() => wwObserver.disconnect());
+
   let disposed = false;
   bag.add(() => { disposed = true; });
+
+  // The threshold is a server fact; without it a peak score cannot be judged.
+  fetch('/api/config/wakeword')
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+    .then((cfg) => {
+      if (disposed) return;
+      if (cfg && typeof cfg.threshold === 'number') wakewordThreshold = cfg.threshold;
+      paintWakeword();
+    })
+    .catch(() => { /* keep the documented default; never block the row */ });
 
   // S2S availability is a real server fact — /api/config/s2s exposes only the
   // boolean, never the key or model id (see server/routes/config.js).

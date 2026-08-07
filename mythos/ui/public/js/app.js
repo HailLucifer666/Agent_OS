@@ -458,6 +458,16 @@ if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHot
 // the entire point of this feature, so a backgrounded tab must keep listening.
 let _wakewordArming = false;
 function ensureWakeWord() {
+  // BUG-175: this used to be a bare `if (wakeword)`, which made a detector
+  // that had stopped — or was constructed and then failed — permanently
+  // unrecoverable: every later gesture saw a non-null object and returned. The
+  // operator's instinct ("click it and try again") was silently a no-op. A
+  // detector only counts as armed if it is actually RUNNING; otherwise drop
+  // the dead object and let this arm a fresh one.
+  if (wakeword && typeof wakeword.isRunning === 'function' && !wakeword.isRunning()) {
+    try { wakeword.stop(); } catch (_) { /* already down; we only want the slot free */ }
+    wakeword = null;
+  }
   if (wakeword || _wakewordArming) return;
   _wakewordArming = true;
   // Await the config fetch instead of reading a possibly-unresolved snapshot —
@@ -487,6 +497,14 @@ function ensureWakeWord() {
 function reportWakeword(state, detail, data) {
   try {
     document.documentElement.dataset.wakeword = state;
+    // BUG-175: the peak score is the one number that separates "armed and
+    // hearing you" from "armed and deaf", and it only ever went to the server
+    // log. Mirror it onto the DOM too so the VOICE widget can show it — the
+    // whole reason the broken pipeline survived a week is that nobody watching
+    // the screen could see it was scoring 1e-5.
+    if (data && typeof data.peakScore === 'number') {
+      document.documentElement.dataset.wakewordPeak = String(data.peakScore);
+    }
   } catch (_) { /* pre-DOM or exotic host; telemetry below still goes out */ }
   try {
     sendMessage(Object.assign({
