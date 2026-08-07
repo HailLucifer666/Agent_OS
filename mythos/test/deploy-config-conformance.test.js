@@ -240,3 +240,49 @@ describe('F2 · render.yaml carries the WS origin allowlist for the deployed hos
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// F3 — the Dockerfile must not bundle the LGPLv3 edge-tts package.
+//
+// Repo policy (CLAUDE.md + roadmap step 6.5, Decision 1): TTS is BYO — "the
+// step-7 installer never bundles the LGPL package". The Dockerfile used to
+// `pip3 install --break-system-packages edge-tts || true`, which shipped the
+// LGPLv3 Python package inside the production image — the exact exposure the
+// licensing gate exists to prevent. The desktop path already excludes
+// edge-tts-server.py via package.json build.files (pinned by
+// test/electron-builder-files-allowlist.test.js); the cloud image must honor
+// the same policy. Absent the package, server TTS stays off and the browser's
+// speechSynthesis fallback speaks instead — the same honest degrade as on
+// desktop.
+// ---------------------------------------------------------------------------
+
+describe('F3 · Dockerfile honors the TTS-is-BYO licensing gate', () => {
+  const dockerfile = () => fs.readFileSync(DOCKERFILE_PATH, 'utf8');
+
+  test('no pip install line may reference edge-tts (LGPLv3 — never bundled)', () => {
+    const installs = dockerfile().split(/\r?\n/).filter((l) => /pip(\d)?\s+install/.test(l));
+    const edgeInstalls = installs.filter((l) => /edge-tts/i.test(l));
+    assert.equal(edgeInstalls.length, 0,
+      `edge-tts must never be pip-installed in the image (LGPLv3 — BYO). Found: ${edgeInstalls.join(' | ')}`);
+  });
+
+  test('positive control: the image still boots MYTHOS and states the BYO policy', () => {
+    const df = dockerfile();
+    // The CMD must survive so this guard can never pass vacuously on a gutted file.
+    assert.match(df, /CMD\s+\["node",\s*"src\/main\.js"\]/, 'Dockerfile must keep CMD ["node", "src/main.js"]');
+    // And the policy comment must be present so the removal is a documented
+    // decision, not an accident that later gets silently re-added.
+    assert.match(df, /edge-tts is BYO — never bundled/i, 'Dockerfile must carry the TTS-is-BYO comment');
+  });
+
+  test('cross-doc consistency: .env.example, Dockerfile and THIRD_PARTY_NOTICES all say never-bundled', () => {
+    const docs = [
+      ['.env.example', fs.readFileSync(path.join(MYTHOS_ROOT, '.env.example'), 'utf8')],
+      ['Dockerfile', dockerfile()],
+      ['THIRD_PARTY_NOTICES.md', fs.readFileSync(path.join(MYTHOS_ROOT, 'THIRD_PARTY_NOTICES.md'), 'utf8')],
+    ];
+    for (const [name, content] of docs) {
+      assert.ok(/never bundled/i.test(content), `${name} must state that edge-tts is never bundled (BYO)`);
+    }
+  });
+});

@@ -3,6 +3,22 @@
 This file documents third-party code and models used by MYTHOS beyond what's
 declared in `package.json` (npm dependency licenses are not repeated here).
 
+## edge-tts (optional voice synthesis — BYO, never bundled)
+
+- **Project:** https://github.com/rany2/edge-tts (PyPI: `edge-tts`)
+- **License:** LGPLv3 (upstream LICENSE file + PyPI classifier), verified
+  2026-07-30 against upstream sources.
+
+edge-tts is **BYO — never bundled, never installed for you**. MYTHOS ships zero
+of its code: `services/edge-tts-server.py` does `import edge_tts` with no
+requirements.txt, so the user supplies the Python package themselves. The
+desktop installer excludes `edge-tts-server.py` from `package.json`
+`build.files` (pinned by `test/electron-builder-files-allowlist.test.js`),
+and the Docker image must not `pip install edge-tts` (pinned by
+`test/deploy-config-conformance.test.js`). Absent the package, server TTS
+stays off and the browser's speechSynthesis speaks instead. This label is a
+reading of what upstream states, not a legal conclusion.
+
 ## openWakeWord (wake-word detection)
 
 - **Project:** https://github.com/dscripka/openWakeWord
