@@ -22,6 +22,59 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 <!-- SYNC:TEST-COUNT:START -->
 **Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-08): **3232 tests, 3231 passing, 0 failing, 1 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
+## Go-live proof plan (F1–F9) — 2026-08-08
+
+Red-first fixes, each with tests that parse the REAL render.yaml / Dockerfile /
+config — so a deploy that dies is visible to `node --test`, not discovered by a
+Render incident. Full detail lives in the individual commit messages.
+
+- **F1 — Render health probe** ✅: render.yaml `healthCheckPath` was
+  `/api/health`, which 404s (the only route is `GET /health`) — every deploy
+  marked UNHEALTHY and restarted in a loop. Fixed → `/health`. Pinned by
+  `mythos/test/deploy-config-conformance.test.js`.
+- **F2 — WS origin allowlist** ✅: `verifyClient()` 403s any Origin outside
+  `ALLOWED_ORIGINS` (localhost only by default), so the whole live layer
+  (voice, confirms, entity state, tick stream) would be dead on Render.
+  render.yaml now ships `ALLOWED_ORIGINS=https://agent-os.onrender.com` — add
+  any custom domain there too. Pinned by the same conformance file.
+- **F3 — licensing gate** ✅: the Dockerfile pip-installed LGPLv3 edge-tts into
+  the production image, contradicting the TTS-is-BYO policy (roadmap step 6.5,
+  Decision 1). Install removed; THIRD_PARTY_NOTICES.md gained the missing
+  edge-tts entry (LGPLv3, never bundled). Pinned by the same conformance file.
+- **F4 — ephemeral vault (OPERATOR DECISION PENDING)** ✅ code / ⏳ decision:
+  on Render free tier the vault is container-local — every redeploy wipes
+  episodic/semantic/identity/audit data, and fs-store has no other
+  persistence. Boot now warns loudly (`vault.ephemeral`, naming the resolved
+  path) so a wipe is never silent. The decision itself is the operator's:
+  (a) persistent disk / paid instance, (b) externalize the vault (object
+  storage or a real DB — post-parity architecture), or (c) explicitly accept
+  ephemeral cloud memory as documented product behavior.
+- **F5 — VOICE_S2S_ENABLED default** ✅: schema default was `true` while
+  .env.example and the UI comments all documented Gemini Live as "opt-in and
+  OFF by default" — a fresh deploy with a GOOGLE_API_KEY opened billed Live
+  sessions with no explicit opt-in. Schema default flipped to `false` (the
+  documented posture). Operator override at any time: `VOICE_S2S_ENABLED=true`
+  — if Live-on-by-default is preferred instead, the fix direction reverses to
+  a docs update; the contradiction is gone either way.
+- **F6 — rate-limit bucket leak** ✅: buckets used to grow unbounded (every
+  distinct IP was a permanent entry). Now swept lazily on traffic at a bounded
+  cadence; in-window 429 behavior unchanged.
+- **F7 — gzipCache** ✅ (verdict: leave alone): bounded by construction
+  (path-keyed, finite asset set); documented, no code change.
+- **F8 — store-shape version stamp** ✅: `appendLine()` stamps
+  `schemaVersion: 1` on new JSONL records; lenient readers leave pre-stamp
+  records untouched. No migration machinery.
+
+**Phase 4 — operator-only (cannot be ticked by a session; surfaced here so
+none of it is silently dropped):** the F4 posture decision above; the F5
+Live-default direction (already taken toward the documented posture); the
+four standing step-7 decisions (`PIN_SESSION_ENFORCE` default in packaged
+builds — recommended ON; appId/product identity; `gesture_recognizer.task`
+licence; NC wake-word weights); Track C's one Electron sitting to live-verify
+Slices 1/2/3/5 (press-to-talk, Ctrl+Alt+X OCR, screen share, cursor overlay;
+judge persona by ear; real p50 from `/api/status`); and the installer
+install-on-clean-path check.
+
 ## Build content comes from Hermes-Agent, not the brain (2026-07-29 onward)
 
 This file described builds for a long time without ever naming the engine that
