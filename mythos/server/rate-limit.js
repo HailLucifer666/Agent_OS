@@ -20,13 +20,36 @@
  */
 function createLimiter({ windowMs, max, scope = 'default' }) {
   // Map<key, { count, resetAt }>. Fixed-window counters (simpler than sliding
-  // window, sufficient for this scale). Lazy GC: stale entries are overwritten.
+  // window, sufficient for this scale).
   const buckets = new Map();
+  // F6 (go-live proof plan, 2026-08-08): buckets used to grow UNBOUNDED — a
+  // key was only overwritten when the same key recurred, so every distinct IP
+  // added a permanent entry. Fine for a single-user desktop; on a public
+  // deploy (Render) the health-check host plus crawlers add distinct IPs
+  // forever. Fixed with a lazy sweep, throttled to at most once per windowMs
+  // (an idle server therefore sweeps lazily on traffic, and sweep cost is
+  // bounded) — expired entries are deleted when a request arrives after the
+  // cadence. In-window behavior is byte-identical: a well-behaved client
+  // never notices. Pinned by test/rate-limit-prune.test.js.
+  let lastSweepAt = 0;
 
-  return function limit(req, res, next) {
+  function sweepExpired(now) {
+    for (const [key, bucket] of buckets) {
+      if (now >= bucket.resetAt) buckets.delete(key);
+    }
+  }
+
+  const limit = function middleware(req, res, next) {
     const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
     const key = `${ip}:${scope}`;
     const now = Date.now();
+
+    // Lazy GC at a bounded cadence: at most one sweep per windowMs. Without
+    // traffic nothing can grow, so sweeping only on traffic is complete.
+    if (now - lastSweepAt >= windowMs) {
+      lastSweepAt = now;
+      sweepExpired(now);
+    }
 
     let bucket = buckets.get(key);
     if (!bucket || now >= bucket.resetAt) {
@@ -49,6 +72,12 @@ function createLimiter({ windowMs, max, scope = 'default' }) {
 
     next();
   };
+
+  // Test-only seam (mirrors server._internal / createLiveSocket conventions):
+  // lets test/rate-limit-prune.test.js assert the map stays bounded without
+  // guessing at internals. Production never calls this.
+  limit._bucketCount = () => buckets.size;
+  return limit;
 }
 
 module.exports = { createLimiter };
