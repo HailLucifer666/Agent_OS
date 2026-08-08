@@ -1,10 +1,12 @@
 package com.mythos.nodes.phone
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -192,9 +194,14 @@ class VoiceNodeService : Service() {
             player?.stopAndClear()
 
             if (!recorder.start()) {
+                // Silently returning to IDLE here is what makes a broken mic
+                // indistinguishable from a button that does nothing — the operator
+                // presses, nothing happens, and there is nowhere to look.
+                _micStatus.value = recorder.lastError ?: "microphone unavailable"
                 _phase.value = Phase.IDLE
                 return@launch
             }
+            _micStatus.value = ""
             _phase.value = Phase.LISTENING
             val pcm = withContext(Dispatchers.IO) { recorder.readUntilStopped() }
             recorder.stop()
@@ -324,12 +331,24 @@ class VoiceNodeService : Service() {
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
+            // From API 34 the declared type must be BACKED BY a granted permission:
+            // claiming FOREGROUND_SERVICE_TYPE_MICROPHONE without RECORD_AUDIO
+            // throws SecurityException and kills the service on start.
+            //
+            // The UI path grants mic before ever starting us, so that case is
+            // covered — but this service is START_STICKY, so Android also restarts
+            // it after a kill with a null intent, and by then the operator may have
+            // revoked the permission from system settings. Deriving the type from
+            // what is actually granted keeps the node alive as a proximity scanner
+            // instead of crash-looping, which is both the honest degradation and
+            // the more useful one.
+            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                _micStatus.value = "microphone permission not granted — listening is off"
+            }
+            startForeground(NOTIFICATION_ID, notification, types)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -378,6 +397,10 @@ class VoiceNodeService : Service() {
          *  realm-key or beacon-name mismatch, not an absent beacon. */
         private val _rejections = MutableStateFlow(0)
         val rejections: StateFlow<Int> = _rejections.asStateFlow()
+
+        private val _micStatus = MutableStateFlow("")
+        /** Non-empty only when something is actually wrong with the mic path. */
+        val micStatus: StateFlow<String> = _micStatus.asStateFlow()
 
         private val _wakeStatus = MutableStateFlow("off")
         /** Verbatim in the UI — colour alone cannot say WHY hands-free is off. */

@@ -54,25 +54,56 @@ class MicRecorder(private val settings: NodeSettings) {
     fun start(): Boolean {
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         if (minBuffer <= 0) return false
-        val rec = AudioRecord(
-            // VOICE_RECOGNITION rather than MIC: it applies the platform's
-            // noise suppression/AGC tuned for speech and skips the effects meant
-            // for music capture.
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE,
-            CHANNEL,
-            ENCODING,
-            minBuffer * 4,
-        )
-        if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            rec.release()
+        // Everything here can throw, and an uncaught throw takes the whole
+        // foreground service down on the operator's first press:
+        //  - the constructor raises SecurityException without RECORD_AUDIO (the
+        //    grant can be revoked from settings after the service started, and
+        //    START_STICKY restarts us without going through the UI's request);
+        //  - it also throws when another app holds the mic exclusively;
+        //  - startRecording() raises IllegalStateException if the device hands
+        //    back a record object that initialised but cannot start.
+        // Returning false instead lets the caller say "microphone unavailable",
+        // which is the difference between a diagnosable node and a dead one.
+        val rec = try {
+            AudioRecord(
+                // VOICE_RECOGNITION rather than MIC: it applies the platform's
+                // noise suppression/AGC tuned for speech and skips the effects meant
+                // for music capture.
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE,
+                CHANNEL,
+                ENCODING,
+                minBuffer * 4,
+            )
+        } catch (e: SecurityException) {
+            lastError = "microphone permission denied"
+            return false
+        } catch (e: IllegalArgumentException) {
+            lastError = "microphone unavailable on this device"
             return false
         }
-        record = rec
-        recording = true
-        rec.startRecording()
-        return true
+        if (rec.state != AudioRecord.STATE_INITIALIZED) {
+            rec.release()
+            lastError = "microphone busy — another app may be using it"
+            return false
+        }
+        return try {
+            rec.startRecording()
+            record = rec
+            recording = true
+            lastError = null
+            true
+        } catch (e: IllegalStateException) {
+            rec.release()
+            lastError = "microphone could not start"
+            false
+        }
     }
+
+    /** Why the last start() failed, for the UI to show verbatim. */
+    @Volatile
+    var lastError: String? = null
+        private set
 
     /**
      * Read until [stop] is called, returning the captured PCM. Blocking — call

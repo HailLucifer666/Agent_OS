@@ -17,19 +17,52 @@ import androidx.security.crypto.MasterKey
  * happens to see. Without it the scanner reports nothing at all — an unverified
  * advertisement must never reach the election.
  */
-class NodeSettings(context: Context) {
+// `context` is a property, not a bare constructor param: openPrefs() below is a
+// member function, and Kotlin only lets initializers capture a non-val parameter.
+class NodeSettings(private val context: Context) {
 
-    private val prefs by lazy {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
+    /**
+     * Why this is guarded rather than a bare `create()`: the Android keystore can
+     * become unreadable in real, ordinary situations — a device restored from
+     * backup, a keystore reset after a lock-screen change, or the known
+     * androidx.security failure where the master key exists but the prefs file was
+     * encrypted under a previous one. `create()` throws then, and because it is
+     * reached from the service's start path an uncaught throw kills the node at
+     * launch with nothing to read.
+     *
+     * The recovery is to delete the unreadable file and start clean: the contents
+     * are the server address, node id and token — configuration the operator can
+     * re-enter in a minute — so losing them beats a node that cannot boot. It is
+     * deliberately NOT a fallback to plaintext SharedPreferences: the auth token
+     * guards MYTHOS's entire tool surface, and silently downgrading where it is
+     * stored would be the wrong trade made invisibly.
+     */
+    private val prefs by lazy { openPrefs() }
+
+    /** Non-null when the encrypted store had to be reset, for the UI to show. */
+    var storeWarning: String? = null
+        private set
+
+    private fun openPrefs(): android.content.SharedPreferences {
+        fun build() = EncryptedSharedPreferences.create(
             context,
-            "mythos_node",
-            masterKey,
+            PREFS_NAME,
+            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
+        return try {
+            build()
+        } catch (first: Exception) {
+            // One retry, after clearing the unreadable file. If it fails again the
+            // device genuinely cannot provide a keystore and there is nothing
+            // honest left to do but surface it.
+            runCatching {
+                context.deleteSharedPreferences(PREFS_NAME)
+            }
+            storeWarning = "secure storage was reset — re-enter this node's settings"
+            build()
+        }
     }
 
     /** e.g. `ws://192.168.0.10:4478` — scheme included, no path. */
@@ -104,6 +137,7 @@ class NodeSettings(context: Context) {
         ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
     companion object {
+        private const val PREFS_NAME = "mythos_node"
         const val REALM_KEY_BYTES = 32
         const val DEFAULT_BEACON_NAME = "mythos-wrist"
         private const val KEY_SERVER = "server_url"

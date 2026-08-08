@@ -73,6 +73,7 @@ fun TalkScreen(
     val scanning by VoiceNodeService.scanning.collectAsState()
     val rejections by VoiceNodeService.rejections.collectAsState()
     val wakeStatus by VoiceNodeService.wakeStatus.collectAsState()
+    val micStatus by VoiceNodeService.micStatus.collectAsState()
     val wakeSuppressed by VoiceNodeService.wakeSuppressed.collectAsState()
 
     val offline = connection != NodeLink.Status.CONNECTED
@@ -157,6 +158,19 @@ fun TalkScreen(
                     text = it,
                     color = MythosTheme.Danger,
                     fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            // A revoked microphone permission would otherwise present as a
+            // press-and-hold that simply does nothing. Say it instead.
+            if (micStatus.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = micStatus,
+                    color = MythosTheme.Danger,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     textAlign = TextAlign.Center,
                 )
