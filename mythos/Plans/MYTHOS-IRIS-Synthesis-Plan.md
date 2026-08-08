@@ -12,6 +12,81 @@
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-08-08 — pre-release security audit remediation (interleaved with the Stage 0-5 voice-node session)
+
+**This section is about the RELEASE LAYER, not the parity build.** The merged-order
+position below is unchanged by it. A full pre-release audit ran and its blocking
+findings were fixed; steps 6.5/6.6/7 still gate shipping.
+
+**Landed (11 commits): `e400885` `70d94a5` `1c6154b` `4b33ad6` `6dad1c2` `8b13ba1`
+`9c8a0d1` `26fa034` `81ffa1f` `122af24` `4f09394`.** Suite 3255 / 3254 pass / 0 fail
+/ 1 skip throughout.
+
+- **B2/H6** — the Electron key-store IPC channels answered ANY sender holding the
+  preload bridge, and the media window (which `loadURL()`s caller-supplied URLs via
+  Tier-0 `open_web`) shared the HUD's preload. A poisoned page could
+  `setKey('GEMINI_API_KEY', …)` to reroute all model traffic, or `setKey('NODE_OPTIONS',
+  '--inspect=…')` for RCE in the forked child. Now scoped to `isHudContents`, media
+  window has its own empty preload, env-injection denylist, `will-navigate` guard.
+- **H1 + a worse inverse.** `tokenOk()` let the bearer token bypass `PIN_SESSION_ENFORCE`
+  — and, unconditionally first, let a PIN session alone satisfy every `/api/*` route and
+  the WS upgrade. Since `POST /api/pin/verify` is exempt from auth by design, a
+  network-exposed instance with a PIN set was a **remote auth bypass**: the
+  `MYTHOS_AUTH_TOKEN` was reducible to a short numeric PIN behind a 5-attempt lockout.
+  Both layers are now required on distinct channels when both are configured.
+- **B7/B8** — `readJSONStrict` at the four remaining read-mutate-write sites. The
+  serious one: a corrupt `pin.json` read as "no PIN configured" and silently DISABLED the
+  lock. `mergeConsolidatedTopics` reordered write-verify-delete (it deleted every source
+  topic before a write that never throws).
+- **B3** — vault out of the install tree: Electron resolves under `userData` with a
+  copy-and-verify migration that never touches the source; the bare-node default is now
+  absolute, anchored to `mythos/`, not `process.cwd()`. This is the "factory-reset
+  MYTHOS" incident's actual root cause, finally closed. **ROADMAP D-05 can be ticked.**
+- **B4** — `render.yaml`: `healthCheckPath` was `/api/health`, which 404s, so the check
+  could never pass; added the 1 GB persistent disk (the vault was ephemeral); dropped
+  `PORT: generateValue`, which minted a random value that overrode Render's injected port.
+- **H3/H7** — WS-upgrade rate limit, weak-`MYTHOS_AUTH_TOKEN` boot refusal, and a split
+  CSP (narrow enforcing + fuller report-only; three real HUD features violate the strict
+  policy today).
+- **H8/H9/H12/H13/H14** — audit-log rotation, engagement back-fill on load, rate-limit
+  bucket eviction, Aether partial-bind socket teardown, identity preserving malformed
+  preference blocks.
+- **B1/B5** — Electron 32.3.3 (17 months EOL) → 43.3.0, audited per-major against real
+  upstream notes across all 8 modules used, and **verified by an actual launch**; Docker
+  Node 20 → 22 with an `engines` floor.
+- **H5** — the installer was shipping `Plans/` and `scripts/` (confirmed in a real
+  `dist/win-unpacked/`). Excluded, but `setup-*.js` deliberately kept: runtime hint
+  strings name them.
+- **R3/R4** — untracked `.qoder/`/`.zcode/` scratch specs that still asserted "no
+  authentication on any REST route or WS", fixed in `8be82f2`, in a public repo.
+
+**Deliberately NOT done, with reasons — do not "fix" these without reading why:**
+- **H11 (asar)** — two agents independently reached the same conclusion: a `fork()`'d
+  child cannot `cwd` into an asar archive, and `asarUnpack` alone doesn't help because
+  `MYTHOS_DIR` resolves to the virtual `app.asar` path. Needs `main.js` to rewrite to
+  `app.asar.unpacked` under `app.isPackaged` + a real packaged run. Flipping the flag
+  alone passes every test and breaks boot on install.
+- **H4 (wake-word models)** — the exclusion is deliberate: CC BY-NC-SA weights, product
+  intended for sale. Absence is already loud and the setup hint stays actionable.
+- **B9** — `sharp`, `adm-zip`, `uuid`, `image-size` all traced NOT reachable (rationale
+  in `122af24`); only `brace-expansion` was fixed. Don't re-litigate each audit.
+- **B6 (signing + auto-update)** — needs a purchased certificate and an update host.
+  Cannot be completed in-session. **This is the sequencing risk: without it, every fix
+  above reaches existing installs only by manual reinstall.**
+
+**BLOCKED ON THE OPERATOR — these are the live ones:**
+1. **`https://agent-os-7gg5.onrender.com` still answers `/api/status` 200 with no
+   credentials.** It predates `8be82f2`, so the auth gate is absent from every `/api/*`
+   route on that build. Suspend it and rotate what it held.
+2. **The repo is still PUBLIC with no LICENSE**, and `gh` here authenticates as a
+   different account than the owner, so visibility could not be changed from this session.
+   Note the commits above describe the vulnerabilities in detail and are already pushed.
+
+**Unverified:** no `electron-builder` installer was built and walked after the Electron 43
+and `files` changes; cross-version `safeStorage` decryption of a `keys.json` encrypted
+under Electron 32 was never proven (no fixture existed) — if provider keys read empty
+after upgrading, check that first.
+
 | | |
 |---|---|
 | **Status** | Merged-order steps 0-5 ✅ (unchanged from before this session) AND **6 ✅ the ADB phone bridge is closed.** Task 8 (`android-child` adapter — per-device queues over one-shot `adb` calls, not a copy of `pc-child`'s persistent daemon), Task 9 (`setup-android.js` — install/pair/connect, argv-only unit-tested, never executed for real), Task 10 (`from-android.js` — 14 registered tools/13 table rows, `phone_flashlight_toggle` omitted, `phone_shell` refused, WhatsApp resolved as option (b): honest deep-link-open, never a claimed send). Three commits, each red-first tested. security-reviewer (sonnet) ran on `from-android.js` before its commit and found 3 issues, all fixed same-session: HIGH (`deviceId`/`serial` never actually reached `adb`'s argv — a real multi-device-breaking bug, fixed with a new `buildAdbArgs()`, plus `checkDevice()` now confirms the serial is currently known, not merely truthy), MEDIUM-HIGH (`phone_file_pull` mistiered T1 despite being a local write — re-tiered to T3), LOW/informational (`resolveSandboxed()`'s pre-existing, repo-wide lack of symlink-awareness — flagged as a spawned background task, not fixed here, out of scope for this file). Real AD-9 proof, not just unit-green: booted the actual app with `adb` absent from PATH — `android-child.offline` with the exact install hint, `capabilities-manifest.written` lists it honestly, boot succeeds, all 139 other effectors register, `pc-child`/`cua-driver` come online normally. Baseline grew 1690→1727 tests, 125→139 effectors, 0 fail throughout. Physical-phone-dependent checkboxes (Task 9 Step 5, Task 10 Step 9, and Task 10's original Step 3 uiautomator-tap approach) are explicitly left unticked — no Android device exists on this machine, and nothing here fabricates that verification. **Post-step-6 integration (same session):** two local-only branches were reconciled into `main` rather than left to rot on one machine — `78a4c2d` (symlink/junction-aware `resolveSandboxed()`, merged as `e263ae1`) and `claude/stoic-williams-6a1c85` (CRLF-safe `sync-test-count.js` + the missing brain lanes in README's two mermaid diagrams). The first branch was cut from `39ceb00` and reported Task 10 as "never pushed" when it was already on `origin/main` — the BUG-037 stale-base shape, caught by `git merge-base` before any merge. Nothing was lost because that fix landed in the shared helper, so `from-android.js`'s two call sites inherited it despite the branch being blind to them. The CRLF fix is the root cause of a duplicate-sync-block bug hit by hand during the first merge: `ROADMAP_BLOCK_RE` hardcoded `
