@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 # edge-tts for voice synthesis (optional — degrades gracefully if missing)
 RUN apk add --no-cache python3 py3-pip && \

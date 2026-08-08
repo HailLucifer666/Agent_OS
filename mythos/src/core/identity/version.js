@@ -49,7 +49,16 @@ function captureGitRef() {
   var described = git(['describe', '--tags', '--always', '--dirty']);
   if (described) return described;
   var hash = git(['rev-parse', '--short', 'HEAD']);
-  return hash || 'unknown';
+  if (hash) return hash;
+  // H10: a packaged build ships no .git directory, so both git calls above
+  // always fail here — this used to return the literal string 'unknown' on
+  // every boot, which made server/index.js's upgrade check
+  // (`prev.gitRef !== v.gitRef`) permanently false ('unknown' !== 'unknown'
+  // is never true). Fall back to the package.json version instead: it's the
+  // one build identifier every packaged install actually has, so a version
+  // bump between boots still flips this string and the upgrade check fires.
+  // Dev checkouts are unaffected — they hit the git paths above first.
+  return 'v' + readPackageVersion();
 }
 
 function captureRecentChanges(maxCommits) {

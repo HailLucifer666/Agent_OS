@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "MYTHOS — Autonomous Entity runtime (evolved from NOVA)",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "node src/main.js",
     "test": "node --test",

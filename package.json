@@ -12,7 +12,7 @@
     "cross-fetch": "^4.0.0"
   },
   "devDependencies": {
-    "electron": "^32.0.0",
+    "electron": "^43.2.0",
     "electron-builder": "^25.0.0"
   },
   "build": {
@@ -37,7 +37,18 @@
       "!**/.cache{,/**/*}",
       "!mythos/test{,/**/*}",
       "!mythos/test-fixtures{,/**/*}",
-      "!**/*.map"
+      "!**/*.map",
+      "!mythos/Plans{,/**/*}",
+      "!mythos/BUGS.md",
+      "!mythos/ROADMAP.md",
+      "!mythos/scripts/verify-*.js",
+      "!mythos/scripts/triage-drift.js",
+      "!mythos/scripts/sync-test-count.js",
+      "!mythos/scripts/graphify.js",
+      "!mythos/scripts/graphify-validate.js",
+      "!mythos/scripts/live-logs.js",
+      "!mythos/scripts/diagnose-type-mechanisms.js",
+      "!mythos/scripts/e2e{,/**/*}"
     ],
     "win": {
       "target": "nsis"
