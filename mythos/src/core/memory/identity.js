@@ -64,6 +64,25 @@ function createIdentityStore({ fs, config, bus, logger }) {
     return prefs;
   }
 
+  // Same blocks as parsePrefs(), but keeps a malformed sidecar instead of
+  // dropping it — carries its raw source text so a rewrite (consolidate())
+  // can put it back byte-for-byte instead of silently erasing it (H14).
+  // parsePrefs() itself stays untouched: recall()/get()/stats() only ever
+  // need entries with a real, queryable sidecar.
+  function parseAllBlocks(raw) {
+    var blocks = [];
+    var m;
+    var re = new RegExp(PREF_BLOCK_RE.source, PREF_BLOCK_RE.flags);
+    while ((m = re.exec(raw)) !== null) {
+      try {
+        blocks.push({ text: m[1].trim(), sidecar: JSON.parse(m[2]), raw: m[0], malformed: false });
+      } catch (_) {
+        blocks.push({ text: m[1].trim(), sidecar: null, raw: m[0], malformed: true });
+      }
+    }
+    return blocks;
+  }
+
   function extractSection(raw, header) {
     var re = new RegExp('## ' + header + '\\n([\\s\\S]*?)(?=\\n## |\\n*$)');
     var m = raw.match(re);
@@ -163,16 +182,35 @@ function createIdentityStore({ fs, config, bus, logger }) {
     opts = opts || {};
     var threshold = opts.threshold !== undefined ? opts.threshold : 0.2;
     var raw = readRaw();
-    var prefs = parsePrefs(raw);
+    var blocks = parseAllBlocks(raw);
     var keep = [];
     var archived = [];
+    var malformedCount = 0;
 
-    for (var i = 0; i < prefs.length; i++) {
-      if (prefs[i].sidecar.confidence < threshold) {
-        archived.push(prefs[i]);
-      } else {
-        keep.push(prefs[i]);
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].malformed) {
+        // A bullet whose sidecar didn't parse is not evidence it's disposable
+        // — it is evidence something upstream wrote or edited self.md badly.
+        // Keep it verbatim rather than let a rewrite erase it (H14; house
+        // pattern from 70d94a5's B7/B8: corrupt data fails loudly, is never
+        // silently overwritten out of existence).
+        keep.push(blocks[i]);
+        malformedCount++;
+        continue;
       }
+      if (blocks[i].sidecar.confidence < threshold) {
+        archived.push(blocks[i]);
+      } else {
+        keep.push(blocks[i]);
+      }
+    }
+
+    if (malformedCount > 0 && bus) {
+      bus.emit('health.anomaly', {
+        kind: 'identity-malformed-pref-preserved',
+        store: 'identity',
+        count: malformedCount
+      });
     }
 
     if (archived.length === 0) {
@@ -185,8 +223,11 @@ function createIdentityStore({ fs, config, bus, logger }) {
     var existingArchive = fs.readText(ARCHIVE_PATH, '# Identity Archive\n\n');
     fs.writeText(ARCHIVE_PATH, existingArchive + archiveLines);
 
+    // Preserved verbatim from the source (p.raw), rather than re-serialized
+    // from p.sidecar — the only way a malformed entry (sidecar === null) can
+    // be written back out at all.
     var keptBlock = '## Learned Preferences\n' + keep.map(function(p) {
-      return '- ' + p.text + '\n<!-- ' + JSON.stringify(p.sidecar) + ' -->\n';
+      return p.raw + '\n';
     }).join('');
     var rewritten = raw.replace(/## Learned Preferences\n[\s\S]*$/, keptBlock);
     fs.writeText(SELF_PATH, rewritten);

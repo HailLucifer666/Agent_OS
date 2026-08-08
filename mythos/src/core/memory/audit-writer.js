@@ -5,6 +5,11 @@ const crypto = require('crypto');
 function createAuditWriter({ fs, config, bus, logger }) {
   let count = 0;
   let lastWriteTs = 0;
+  // Matches episodic.js's retention convention (config ? config.X : default);
+  // no AUDIT_RETENTION_DAYS schema key exists yet, so this just reads it if a
+  // future config ever adds one and otherwise falls back to a year — audit
+  // trails are evidence, so the default is generous rather than aggressive.
+  const retentionDays = (config && config.AUDIT_RETENTION_DAYS) || 365;
 
   const REDACT_KEYS = ['apiKey', 'api_key', 'token', 'authorization', 'password', 'secret', 'cookie', 'credential', 'session'];
 
@@ -94,9 +99,13 @@ function createAuditWriter({ fs, config, bus, logger }) {
     return { count: count, files: files.length, lastWriteTs: lastWriteTs };
   }
 
+  // Rotation, not deletion — follows episodic.js's consolidate()/prune()
+  // pattern: fs.pruneOldFiles gzips each day file past retentionDays into
+  // Audit/_archive/<name>.md.gz and removes only the original, so the JSONL
+  // directory stops growing forever while nothing is ever destroyed outright.
   function consolidate() {
-    // audit is append-only, retention out of scope
-    return { moved: 0, distilled: 0, archived: 0 };
+    const archived = fs.pruneOldFiles('Audit', retentionDays);
+    return { moved: 0, distilled: 0, archived: archived };
   }
 
   async function init() {

@@ -79,6 +79,22 @@ function createScannerProxy(ctx) {
   // else on the machine.
   let readyPromise = Promise.resolve();
 
+  // Shared by stop() and a failed start(): closes every socket/server this
+  // instance has opened and clears the sweep/broadcast timers. Split out so a
+  // partial bind failure (one node's port already taken) can tear down the
+  // sibling nodes that DID bind instead of leaving them listening for the
+  // rest of the process lifetime while boot reports healthy.
+  function closeAllServers() {
+    if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
+    if (broadcastTimer) { clearInterval(broadcastTimer); broadcastTimer = null; }
+    nodes.forEach((node) => {
+      node.clients.forEach((ws) => { try { ws.close(); } catch (_) {} });
+      node.clients.clear();
+      if (node.wss) { try { node.wss.close(); } catch (_) {} }
+    });
+    nodes.clear();
+  }
+
   function stateOf(node, now) {
     // §4.2: past the lost threshold (or never seen) the scanner reports `lost`
     // and nothing else — no last-known rssi, which the aggregator would treat
@@ -225,20 +241,30 @@ function createScannerProxy(ctx) {
       });
       nodes.set(id, node);
     });
-    readyPromise = Promise.all(listens).then(() => {
-      nodes.forEach((node) => logger.info('aether.proxy.listening', { nodeId: node.id, port: node.port }));
-    });
-
-    sweepTimer = setInterval(sweep, SWEEP_MS);
-    if (sweepTimer.unref) sweepTimer.unref();
-    // §4.3's bounded re-broadcast: without it a phone that goes quiet for
-    // exactly under the threshold leaves the aggregator's own lastSeenMs
-    // growing stale between pushes.
-    broadcastTimer = setInterval(() => {
-      const now = Date.now();
-      nodes.forEach((node) => pushNode(node, now));
-    }, BROADCAST_MS);
-    if (broadcastTimer.unref) broadcastTimer.unref();
+    readyPromise = Promise.all(listens).then(
+      () => {
+        nodes.forEach((node) => logger.info('aether.proxy.listening', { nodeId: node.id, port: node.port }));
+        sweepTimer = setInterval(sweep, SWEEP_MS);
+        if (sweepTimer.unref) sweepTimer.unref();
+        // §4.3's bounded re-broadcast: without it a phone that goes quiet for
+        // exactly under the threshold leaves the aggregator's own lastSeenMs
+        // growing stale between pushes.
+        broadcastTimer = setInterval(() => {
+          const now = Date.now();
+          nodes.forEach((node) => pushNode(node, now));
+        }, BROADCAST_MS);
+        if (broadcastTimer.unref) broadcastTimer.unref();
+      },
+      (err) => {
+        // One port collision must not leave the OTHER nodes' servers (which
+        // bound fine) listening for the rest of the process lifetime while
+        // boot reports healthy — tear every one of them down and let the
+        // caller retry start() after fixing whatever held the port.
+        closeAllServers();
+        running = false;
+        throw err;
+      }
+    );
   }
 
   function stop() {
@@ -246,14 +272,7 @@ function createScannerProxy(ctx) {
     // A rejected readyPromise nobody awaited (stop() straight after a failed
     // bind) would surface as an unhandled rejection; swallow it here only.
     readyPromise = readyPromise.catch(() => {});
-    if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
-    if (broadcastTimer) { clearInterval(broadcastTimer); broadcastTimer = null; }
-    nodes.forEach((node) => {
-      node.clients.forEach((ws) => { try { ws.close(); } catch (_) {} });
-      node.clients.clear();
-      if (node.wss) { try { node.wss.close(); } catch (_) {} }
-    });
-    nodes.clear();
+    closeAllServers();
   }
 
   return {

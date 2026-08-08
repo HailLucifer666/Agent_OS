@@ -55,6 +55,30 @@ describe('identity store', () => {
     assert.equal(hits.filter(h => h.record.text === 'Low confidence guess').length, 0);
   });
 
+  it('H14: consolidate preserves a malformed sidecar entry instead of erasing it, and surfaces health.anomaly', () => {
+    // Same shape write() produces, but with the sidecar corrupted by hand —
+    // the kind of damage a bad manual edit or a partial write leaves behind.
+    // A genuine low-confidence entry is included too, so consolidate() has
+    // real archiving to do and actually rewrites self.md — the parsePrefs()
+    // early-return-when-nothing-archived path would otherwise leave the file
+    // untouched and hide the bug entirely.
+    store.write('High confidence fact', { confidence: 0.9 });
+    store.write('Low confidence guess', { confidence: 0.05 });
+    let raw = fsStore.readText('Identity/self.md');
+    raw += '- Malformed bullet\n<!-- {id: "idn-broken", ts: 1, confidence: not-json} -->\n';
+    fsStore.writeText('Identity/self.md', raw);
+
+    const result = store.consolidate({ threshold: 0.2 });
+
+    const rawAfter = fsStore.readText('Identity/self.md');
+    assert.match(rawAfter, /Malformed bullet/, 'a bullet with an unparseable sidecar must survive consolidate(), never be silently dropped');
+    assert.match(rawAfter, /High confidence fact/, 'the valid high-confidence entry must still be kept too');
+    assert.equal(result.archived, 1, 'only the genuinely low-confidence valid entry is archived — the malformed one is preserved, not treated as archivable');
+
+    const anomaly = bus._emitted().find((e) => e.type === 'health.anomaly' && e.payload && e.payload.kind === 'identity-malformed-pref-preserved');
+    assert.ok(anomaly, 'a malformed sidecar must be surfaced as health.anomaly, not silently swallowed');
+  });
+
   it('stats() returns bare {count} — matches real house convention (D-20), not spec\'s illustrative {count,bytes,lastWrite}', () => {
     store.write('a');
     store.write('b');

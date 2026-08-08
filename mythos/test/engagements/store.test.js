@@ -206,6 +206,45 @@ describe('engagements/store', () => {
     });
   });
 
+  describe('H9: back-fill on read — legacy/future-schema records must never throw', () => {
+    // Simulates a record written before a nested section existed (or hand-
+    // corrupted), bypassing store.create()'s validateEngagement() gate the
+    // way store.read()/get()/list()/update() do for every record already on
+    // disk — those paths never validated or defaulted before this fix.
+    function writeLegacyRecord(id) {
+      fsStore.writeJSON('Engagements/' + id + '.json', {
+        id: id,
+        version: 1,
+        status: 'DRAFT',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        ttlMs: 604800000
+        // interview/spec/plan/execution/completion deliberately absent.
+      });
+    }
+
+    it('read() backfills every missing nested section instead of returning them undefined', () => {
+      writeLegacyRecord('eng-legacy1');
+      const record = store.read('eng-legacy1');
+      assert.ok(record.interview && Array.isArray(record.interview.questions), 'interview must be backfilled');
+      assert.ok(record.spec && typeof record.spec.markdown === 'string', 'spec must be backfilled');
+      assert.ok(record.plan && Array.isArray(record.plan.stages), 'plan must be backfilled');
+      assert.ok(record.execution && Array.isArray(record.execution.stageResults), 'execution must be backfilled');
+      assert.ok(record.completion && typeof record.completion.reportMarkdown === 'string', 'completion must be backfilled');
+    });
+
+    it('update() on a legacy record does not throw reaching into a missing nested section', async () => {
+      writeLegacyRecord('eng-legacy2');
+      // Exercises exactly the access pattern engagements/index.js's
+      // transitionEngagement() uses on the record update() hands back
+      // (record.plan.currentStageIndex, etc.) — must not be undefined.
+      const updated = await store.update('eng-legacy2', { status: 'INTERVIEWING' });
+      assert.equal(updated.status, 'INTERVIEWING');
+      assert.doesNotThrow(() => { updated.plan.currentStageIndex = 0; });
+      assert.doesNotThrow(() => { updated.interview.completedAt = Date.now(); });
+    });
+  });
+
   describe('emitEvent', () => {
     it('emits event on bus', () => {
       store.emitEvent('engagement.saved', { id: 'eng-1' });

@@ -576,6 +576,24 @@ describe('audit-writer', () => {
     const result = audit.consolidate();
     assert.deepEqual(result, { moved: 0, distilled: 0, archived: 0 });
   });
+
+  it('H8: consolidate rotates old audit day-files into _archive instead of growing forever', () => {
+    const { createFsStore } = require('../src/core/memory/fs-store');
+    const fsStore = createFsStore(() => dir);
+    audit.write({ tool: 'ancient', tier: 0, decision: 'allow' });
+    // pruneOldFiles keys off the file's mtime, not the ts field inside the
+    // line — backdate the actual day-file well past any retention window.
+    const files = fsStore.listFiles('Audit', '.jsonl');
+    assert.equal(files.length, 1);
+    const old = new Date(Date.now() - 400 * 24 * 3600000);
+    fs.utimesSync(files[0].full, old, old);
+
+    const result = audit.consolidate();
+    assert.equal(result.archived, 1, 'the aged-out day-file must be rotated, not left to grow the JSONL directory forever');
+    assert.equal(fsStore.exists('Audit/' + files[0].name), false, 'original day-file should be gone after rotation');
+    const archives = fsStore.listFiles('Audit/_archive', '.gz');
+    assert.equal(archives.length, 1, 'a gzip archive should exist in place of the deleted original');
+  });
 });
 
 // ---- Checkpoint Store Tests ----

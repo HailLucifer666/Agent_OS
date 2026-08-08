@@ -238,6 +238,27 @@ describe('aether scanner-proxy — §4 wire contract', () => {
     } finally { p.stop(); }
   });
 
+  it('H13: a partial bind failure tears down every port it already opened', async () => {
+    const base = await freeBase(2);
+    // Occupy the second port so this node's bind fails while the first (which
+    // starts binding first) succeeds — exactly the "one collision, N nodes"
+    // shape the audit finding describes.
+    const blocker = net.createServer();
+    await new Promise((resolve) => blocker.listen(base + 1, '127.0.0.1', resolve));
+    try {
+      const p = proxy('kitchen-phone,desk-phone', base);
+      p.start();
+      await assert.rejects(p.whenReady(), /could not bind/);
+      assert.equal(p.isRunning(), false, 'proxy must not report itself running after a partial bind failure');
+      // The sibling node's server DID bind — it must be closed too, or it
+      // keeps listening (and the aggregator keeps talking to it) for the
+      // rest of the process lifetime while boot reports healthy.
+      assert.ok(await canBind(base), 'first node\'s port is still held after the partial bind failure');
+    } finally {
+      blocker.close();
+    }
+  });
+
   it('stop() releases the ports so a restart can rebind them', async () => {
     const base = await freeBase(1);
     const p1 = proxy('kitchen-phone', base);

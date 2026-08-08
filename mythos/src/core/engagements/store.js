@@ -46,9 +46,28 @@ function createEngagementStore({ fs, config, bus }) {
     return fs.writeJSON(relPath, record);
   }
 
+  // H9: validateEngagement() only ever ran from create() — read/get/list/
+  // update never validated, and engagements/index.js reaches into
+  // record.interview/spec/plan/execution/completion with no defaulting, so
+  // any future required nested field (or a legacy/corrupt file missing one)
+  // throws a bare TypeError deep in a transition instead of degrading.
+  // Mirrors goals/index.js's load-time back-fill (its init(), around
+  // :750-763): every record read from disk gets its known nested sections
+  // defaulted to the same empty shape create() would have written, so old
+  // data never crashes new code.
+  function backfillRecord(record) {
+    if (!record) return record;
+    record.interview = record.interview || { questions: [] };
+    record.spec = record.spec || { markdown: '', schema: {}, recommendations: [], selectedRecommendation: null };
+    record.plan = record.plan || { stages: [], currentStageIndex: 0 };
+    record.execution = record.execution || { stageResults: [], currentStageId: null, repairBudget: { used: 0, max: 3 } };
+    record.completion = record.completion || { reportMarkdown: '', artifactRefs: [], verificationSummary: { passed: 0, failed: 0, repaired: 0 }, completedAt: null };
+    return record;
+  }
+
   function read(id) {
     var relPath = vaultPath() + '/' + id + '.json';
-    return fs.readJSON(relPath, null);
+    return backfillRecord(fs.readJSON(relPath, null));
   }
 
   function list() {

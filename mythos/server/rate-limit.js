@@ -20,13 +20,31 @@
  */
 function createLimiter({ windowMs, max, scope = 'default' }) {
   // Map<key, { count, resetAt }>. Fixed-window counters (simpler than sliding
-  // window, sufficient for this scale). Lazy GC: stale entries are overwritten.
+  // window, sufficient for this scale). A stale entry for a key that never
+  // comes back is never overwritten — H12: on an always-on process, every
+  // distinct client IP permanently grows this Map. Evicted opportunistically
+  // on access below (no timer, so it never keeps the process alive) rather
+  // than by a background sweep.
   const buckets = new Map();
+  let lastSweepAt = 0;
 
-  return function limit(req, res, next) {
+  // Throttled to once per windowMs so it never becomes an O(n) tax on every
+  // single request under heavy traffic — only entries past their own reset
+  // are ever removed, so no live bucket is disturbed early.
+  function evictExpired(now) {
+    if (now - lastSweepAt < windowMs) return;
+    lastSweepAt = now;
+    buckets.forEach((bucket, k) => {
+      if (now >= bucket.resetAt) buckets.delete(k);
+    });
+  }
+
+  function limit(req, res, next) {
     const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
     const key = `${ip}:${scope}`;
     const now = Date.now();
+
+    evictExpired(now);
 
     let bucket = buckets.get(key);
     if (!bucket || now >= bucket.resetAt) {
@@ -48,7 +66,13 @@ function createLimiter({ windowMs, max, scope = 'default' }) {
     }
 
     next();
-  };
+  }
+
+  // Test-only introspection — mirrors the `_internal` convention used
+  // elsewhere in this repo (e.g. aether/scanner-proxy.js) rather than adding
+  // a real public API surface just to observe eviction.
+  limit._internal = { buckets, evictExpired };
+  return limit;
 }
 
 module.exports = { createLimiter };
