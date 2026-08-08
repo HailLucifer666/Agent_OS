@@ -14,9 +14,14 @@ const PROVIDER_ACCENTS = {
   openrouter: '--accent-openrouter-free',
   zcode: '--accent-zcode',
   ollama: '--status-ok',
+  // The spend key live-session.js records under. Missing here meant the entire
+  // S2S voice path drew in the generic cyan fallback, and missing from
+  // ALL_PROVIDERS below meant it never appeared in the idle column either — so
+  // a Live session that had not spoken yet looked like it did not exist.
+  'google-live': '--accent-google-live',
 };
 
-const ALL_PROVIDERS = ['groq', 'mistral', 'cerebras', 'nim', 'openrouter', 'zcode', 'ollama'];
+const ALL_PROVIDERS = ['groq', 'mistral', 'cerebras', 'nim', 'openrouter', 'zcode', 'ollama', 'google-live'];
 
 // Provider names arrive from server telemetry rather than this file's constant
 // list (an unrecognized provider falls through to the cyan default), so they are

@@ -346,4 +346,29 @@ describe('live-session (Phase 1, V2 §6)', () => {
     assert.equal(events.spendCalls[0].provider, 'google-live');
     session.close();
   });
+
+  test('usageMetadata also emits brain-spend, so the HUD counter moves on a Live turn', async () => {
+    // Live spend was always COUNTED — the 4s token-usage snapshot picked it up.
+    // What was missing is the instant per-call bump every batch brain.think()
+    // emits, so during a voice conversation the widget only moved on the tick
+    // and read as stuck rather than as a path nobody had wired.
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const emitted = [];
+    const { deps, sockets } = fakeDeps({ bus: { emit(type, payload) { emitted.push({ type, payload }); } } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    sockets[0].serverFrame({ usageMetadata: { promptTokenCount: 10, responseTokenCount: 20 } });
+
+    const spend = emitted.filter((e) => e.type === 'brain-spend');
+    assert.equal(spend.length, 1);
+    // The provider key must match what recordCall stores, or the widget bumps a
+    // row the snapshot never reconciles against.
+    assert.equal(spend[0].payload.provider, 'google-live');
+    assert.equal(spend[0].payload.lane, 'voice-live');
+    session.close();
+  });
 });

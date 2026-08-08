@@ -471,6 +471,15 @@ function createLiveSession(deps) {
         inputTokens: Number(msg.usageMetadata.promptTokenCount) || 0,
         outputTokens: Number(msg.usageMetadata.responseTokenCount) || 0,
       });
+      // The HUD's token widget bumps its counter the instant a call happens and
+      // reconciles against the 4s token-usage snapshot. Only batch brain.think()
+      // ever emitted this, so on a Live turn the number moved only on the
+      // snapshot tick — which reads as a widget that is stuck, not as spend the
+      // server is not counting. It IS counted; it was just invisible between
+      // ticks. Same event, same shape, one lane name that says which path.
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('brain-spend', { provider: 'google-live', model: MODEL, lane: 'voice-live', source: 'voice-live' });
+      }
     }
   }
 

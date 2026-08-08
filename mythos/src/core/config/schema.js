@@ -306,7 +306,16 @@ const SCHEMA = {
   LESSON_RETENTION_DAYS:     { type: 'number', default: 90, min: 1, max: 3650 },
 
   // Leash (Phase 5)
-  LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 30000, min: 1000 },
+  // 30s was a desktop-modal assumption: the operator is already looking at the
+  // screen, so the window only has to cover "read it and click". Approvals now
+  // also reach the phone (2026-08-09), where the window has to cover hearing the
+  // request, picking the device up, unlocking it, reading and deciding — and a
+  // confirm that lapses mid-decision is worse than a slower one, because the
+  // registry sweeps it passively and the late tap is a silent no-op.
+  // Widening it does keep an un-answered T3/T4 action approvable for longer;
+  // it does NOT widen who may approve (accept() is still connection-scoped and
+  // single-use) or what may be approved without a human.
+  LEASH_CONFIRM_TTL_MS:     { type: 'number', default: 120000, min: 1000 },
 
   // Cortex / server action dispatch (Phase 9 — closes the Gap-4 hardcoded
   // fallback in cortex/index.js:21; both cortex act() and server dispatchAction()

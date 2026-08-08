@@ -10,8 +10,10 @@ export function mountConfirmModal(root, opts) {
   const onResolved = (opts && opts.onResolved) || (() => {});
   let overlay = null;
   let releaseTrap = null;
+  let shownId = null;
 
   function closeModal() {
+    shownId = null;
     if (releaseTrap) { releaseTrap(); releaseTrap = null; }
     if (overlay) { overlay.remove(); overlay = null; }
     onResolved();
@@ -22,6 +24,7 @@ export function mountConfirmModal(root, opts) {
       if (releaseTrap) { releaseTrap(); releaseTrap = null; }
       overlay.remove();
     }
+    shownId = payload.id;
     overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
     // xss-safe: static template, no interpolation
@@ -56,8 +59,18 @@ export function mountConfirmModal(root, opts) {
 
   const unsub = subscribe(['confirm-request'], (msg) => showModal(msg.payload));
 
+  // Approvals now have more than one surface (the phone answers the same
+  // confirm-request), and the modal used to close only when THIS screen
+  // clicked. Whoever resolves it, everyone else's prompt is dead — dismiss
+  // rather than keep offering a button that is a silent no-op.
+  const unsubResolved = subscribe(['confirm-resolved'], (msg) => {
+    const p = msg && msg.payload;
+    if (p && overlay && p.id === shownId) closeModal();
+  });
+
   return () => {
     unsub();
+    unsubResolved();
     if (releaseTrap) { releaseTrap(); releaseTrap = null; }
     if (overlay) { overlay.remove(); overlay = null; }
   };

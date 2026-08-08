@@ -102,6 +102,10 @@
   --accent-cerebras: #e45550;
   --accent-mistral: #ff7000;
   --accent-mastermind: #4fd8ff;
+  /* Gemini Live (spend provider key 'google-live'). It had no entry, so every
+     Live turn — the whole S2S voice path — rendered in the generic cyan
+     fallback and was indistinguishable from zcode in the usage widget. */
+  --accent-google-live: #4285f4;
 
   /* layout */
   --sidebar-w: 56px;

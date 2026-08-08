@@ -53,6 +53,11 @@ const { createPinSessionStore } = require('../src/core/security/pin-session');
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
 //                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
 //                  'proactive-speech' (entity-initiated, no inbound utterance)
+//                  'confirm-resolved' {id, outcome} — a pending confirm is over
+//                  (accepted | rejected | expired), so every OTHER surface
+//                  showing it can dismiss instead of offering a dead button.
+//                  Also sent to one connection with outcome 'not-permitted'
+//                  when it replied to a confirm scoped to a different one.
 // OUT (per-reqId reply stream): 'speech-chunk' (0..N) then 'done' (1, metadata only)
 
 function isLoopback(req) {
@@ -1117,6 +1122,22 @@ function createServer(deps) {
     wss.clients.forEach((client) => {
       if (client.readyState === 1) client.send(payload);
     });
+  }
+
+  // A confirm-request goes to EVERY open surface (see the bus subscription
+  // below), but only one of them answers — so the rest sit there showing a
+  // prompt for an action that has already been dispatched or declined. With
+  // one screen that was invisible; with the phone as a second approval surface
+  // it means the operator can approve something twice, or read a decision on
+  // the phone that the desktop already made.
+  //
+  // Only ever announce a confirm that is genuinely GONE from the registry. A
+  // failed accept can also mean "wrong connection" (T3/T4 are scoped to the
+  // originating connection and a mismatch deliberately does NOT consume the
+  // entry) — broadcasting that would tell the surface that legitimately owns
+  // the confirm to dismiss a prompt that is still live.
+  function announceConfirmResolved(confirmId, outcome) {
+    broadcastAll({ type: 'confirm-resolved', payload: { id: confirmId, outcome: outcome } });
   }
 
   // Same fan-out, but at most ONE socket per voice node.
@@ -2608,6 +2629,28 @@ function createServer(deps) {
       send({ type: 'done', reqId: msg.reqId, command: msg.command });
     }
 
+    // Close the loop for whoever is still showing this prompt. `resolution` is
+    // the outcome when the reply genuinely consumed the confirm, or null when
+    // it did not — in which case we look at the registry to tell the two very
+    // different failures apart:
+    //   entry gone   -> already answered elsewhere, or swept after its TTL.
+    //                   Safe to announce to everyone; nothing is pending.
+    //   entry still  -> this connection is not the one that raised it (T3/T4
+    //   pending         are connection-scoped). Only the replier is told, so
+    //                   the surface that DOES own the confirm keeps its prompt.
+    function reportConfirmOutcome(confirmId, resolution) {
+      if (resolution) { announceConfirmResolved(confirmId, resolution); return; }
+      let stillPending = null;
+      try {
+        if (typeof leash.confirm.peek === 'function') stillPending = leash.confirm.peek(confirmId);
+      } catch (_) {}
+      if (stillPending && !stillPending.expired) {
+        send({ type: 'confirm-resolved', payload: { id: confirmId, outcome: 'not-permitted' } });
+        return;
+      }
+      announceConfirmResolved(confirmId, 'expired');
+    }
+
     async function handleConfirmReply(msg) {
       const { confirmId, accept } = msg;
       if (!accept) {
@@ -2624,7 +2667,8 @@ function createServer(deps) {
         // Try this connection's scope first, then the cortex 'system' sentinel —
         // a wrong-scope reject never deletes the entry (leash/confirm.js), so the
         // two-step probe cannot DoS another connection's pending confirm.
-        if (!leash.confirm.reject(confirmId, connectionId)) leash.confirm.reject(confirmId, 'system');
+        const didReject = leash.confirm.reject(confirmId, connectionId) || leash.confirm.reject(confirmId, 'system');
+        reportConfirmOutcome(confirmId, didReject ? 'rejected' : null);
         // Write audit entry after reject so the record reflects the final decision.
         try {
           if (rejectInfo && memory && memory.audit && typeof memory.audit.write === 'function') {
@@ -2652,7 +2696,15 @@ function createServer(deps) {
           action = leash.confirm.accept(confirmId, 'system');
         }
       }
-      if (!action) return; // expired / already consumed / wrong connection — silent no-op, matches NOVA
+      if (!action) {
+        // Was a silent no-op (matching NOVA). Silence is survivable on a modal
+        // the operator is staring at; it is not on a phone, where "I tapped
+        // Approve and nothing happened" is indistinguishable from a dropped
+        // frame. The reply still does nothing — it just says so.
+        reportConfirmOutcome(confirmId, null);
+        return;
+      }
+      announceConfirmResolved(confirmId, 'accepted');
       // Cortex stores {decision, goalId, tier} envelopes (cortex/index.js act());
       // a bare {tool, args} decision (the spec's own test 2 fixture) passes through
       // unchanged — one normalization, no shadow dispatch paths.
@@ -3257,7 +3309,15 @@ function createServer(deps) {
   });
 
   bus.subscribe('confirm-request', (e) => {
-    broadcastAll({ type: 'confirm-request', payload: { id: e.payload.confirmId, tool: e.payload.tool, summary: e.payload.summary, tier: e.payload.tier } });
+    // ttlMs rides along so a surface that has to run its OWN expiry clock (the
+    // phone — nothing tells a client when a confirm lapses; the registry sweeps
+    // it passively) can show a truthful one instead of hardcoding a copy of
+    // LEASH_CONFIRM_TTL_MS that silently disagrees the moment it is configured.
+    let ttlMs = null;
+    try {
+      if (leash.confirm && typeof leash.confirm.stats === 'function') ttlMs = leash.confirm.stats().ttlMs;
+    } catch (_) { /* a leash without stats() just means the client keeps its default */ }
+    broadcastAll({ type: 'confirm-request', payload: { id: e.payload.confirmId, tool: e.payload.tool, summary: e.payload.summary, tier: e.payload.tier, ttlMs: ttlMs } });
   });
 
   // brain-spend — exact string with hyphen (D-28 fixed).
