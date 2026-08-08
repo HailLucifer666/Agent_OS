@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const child_process = require('node:child_process');
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
+const { resolveVaultRoot } = require('./vault-migration');
 
 // Disable Chromium's background timer/media throttling process-wide. Pairs with
 // per-window backgroundThrottling:false below: the YouTube iframe's media
@@ -73,7 +74,17 @@ const SERVER_ENTRY = path.resolve(__dirname, '..', 'mythos', 'src', 'main.js');
 // mythos/ is the child's CWD: MYTHOS_VAULT_ROOT defaults to './vault' and is
 // resolved relative to process.cwd(), so forking without setting cwd made the
 // server use <repo>/vault (empty) instead of mythos/vault (the real one).
+//
+// B3 (audit finding): pinning cwd fixed the fork bug but left the vault
+// inside the install tree — any launcher/portable build/scheduled task with
+// a different cwd still opens an empty vault, and uninstall/reinstall
+// destroys the real one. startChild() below overrides MYTHOS_VAULT_ROOT to a
+// stable app.getPath('userData') location (see ./vault-migration.js),
+// matching keys.json/the server log/the adblock cache further down — unless
+// the operator (or render.yaml) has already set it explicitly, which always
+// wins.
 const MYTHOS_DIR = path.resolve(__dirname, '..', 'mythos');
+const OLD_VAULT_DIR = path.join(MYTHOS_DIR, 'vault');
 const PORT = Number(process.env.MYTHOS_PORT) || 4478;
 const BIND = process.env.MYTHOS_BIND || '127.0.0.1';
 
@@ -342,9 +353,20 @@ function startChild() {
   try { childLogStream = fs.createWriteStream(childLogPath(), { flags: 'w' }); }
   catch (err) { log('could not open child log:', err.message); }
 
+  // B3: resolve + (one-time, best-effort) migrate the vault BEFORE fork so
+  // the child never even sees the install-tree default. Explicit env (the
+  // operator's own .env, render.yaml's /data/vault) always wins inside
+  // resolveVaultRoot and skips migration entirely.
+  const vaultRoot = resolveVaultRoot({
+    explicitEnv: process.env.MYTHOS_VAULT_ROOT,
+    oldVaultDir: OLD_VAULT_DIR,
+    userDataDir: app.getPath('userData'),
+    log,
+  });
+
   child = child_process.fork(SERVER_ENTRY, [], {
-    cwd: MYTHOS_DIR, // ./vault, .browser-agent.pid etc. resolve to mythos/
-    env: { ...process.env, ...decryptedKeysForChild() },
+    cwd: MYTHOS_DIR, // .browser-agent.pid etc. still resolve to mythos/
+    env: { ...process.env, ...decryptedKeysForChild(), MYTHOS_VAULT_ROOT: vaultRoot },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });
   if (childLogStream) {
