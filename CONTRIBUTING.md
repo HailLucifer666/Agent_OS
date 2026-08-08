@@ -75,6 +75,52 @@ node --test test/anti-drift-no-absolute-paths.test.js
 before opening a PR that touches docs or scripts — it's cheap to run in
 isolation and catches this class of mistake before CI does.
 
+## Building the desktop installer
+
+`npm run dist` (electron-builder --win) builds the packaged app. Two things
+are opt-in via environment variables — **never** via a tracked file:
+
+- **Code signing** — set `CSC_LINK` (path or URL to a `.pfx`/`.p12`
+  certificate) and `CSC_KEY_PASSWORD` (its passphrase) before running
+  `npm run dist`. These are electron-builder's own standard env var names; no
+  package.json change is needed to use them. With neither set, the build
+  produces an **unsigned** installer — that is the default, working case, not
+  an error (`build.win.forceCodeSigning` is `false` on purpose).
+- **Update host** — `MYTHOS_UPDATE_URL` (a URL electron-updater can poll for
+  a generic-provider feed). With it unset, the packaged app logs "no update
+  host configured" once at startup and skips the check entirely — it does not
+  fail. `build.publish` stays `null` for the same reason: a plain build never
+  depends on a host existing. Auto-update never auto-installs; it only checks
+  and logs (`electron/main.js`'s `checkForUpdates()`).
+
+### Publishing a release that the update check can actually see
+
+`MYTHOS_UPDATE_URL` is enough on the **client**: the feed URL is read at
+runtime, so an already-installed app needs no rebuild to start checking. It is
+**not** enough on the **release** side, and it is worth being blunt about that
+because the shape invites the wrong assumption:
+
+1. electron-updater polls the feed for a **`latest.yml`** metadata file (version,
+   file name, sha512, blockmap). electron-builder writes that file only when a
+   publish config exists — with `build.publish: null` a build produces the
+   `.exe` and its `.blockmap` and no `latest.yml` at all. So the release build
+   must set `build.publish` (`{"provider": "generic", "url": "…"}`) even if you
+   upload the artifacts by hand afterwards.
+2. Upload the installer, its `.blockmap`, and `latest.yml` together to that
+   URL. A `latest.yml` naming a file that is not beside it is how an update
+   check "succeeds" and then fails at download time.
+3. **Sign the release build if you want the signature check to mean anything.**
+   On Windows, electron-updater verifies a downloaded installer against the
+   installed app's publisher name; an unsigned build has nothing to verify
+   against, so a compromised update host would be free to serve any executable.
+   Today the exposure is nil only because nothing downloads or installs
+   automatically (`autoDownload` is `false`, `quitAndInstall` is never called).
+   Do not enable automatic download before the build is signed.
+
+Neither variable is documented in `mythos/.env.example` — that file is for
+the MYTHOS *server's* provider keys (brain/STT/TTS), which are a different
+layer from the electron-builder/shell build-time config here.
+
 ## Directory-scoped rules
 
 Some areas of the codebase have their own `CLAUDE.md` with rules specific to

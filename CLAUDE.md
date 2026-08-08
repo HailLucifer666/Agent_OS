@@ -282,6 +282,28 @@ testing discipline (below).
     `node.exe` processes — not a regression. Count them
     (`@(Get-Process node -ErrorAction SilentlyContinue).Count`), kill strays,
     rerun.
+  - **A short (8.3) `TEMP` kills any test that spawns a server with a temp
+    vault, and it looks like a dead server. Seen 2026-08-08.** Some shells —
+    notably an agent/tool shell — export `TEMP`/`TMP` in Windows' 8.3 short
+    form, i.e. with the profile folder written as `<NAME>~1` rather than the
+    full account name. `os.tmpdir()` inherits that short
+    form, so `fs.mkdtempSync()` hands the server a short-name vault path, and
+    the watcher over it trips a libuv bug: the child aborts with
+    `Assertion failed: !_wcsnicmp(filename, dir, dirlen), file
+    src\win\fs-event.c, line 72` and exit code 3221226505
+    (`0xC0000409`). The test then reports only the symptom —
+    `connect ECONNREFUSED 127.0.0.1:<port>` after its full timeout — because
+    the spawned child's stderr is captured and never printed
+    (`deploy-config-conformance.test.js`'s "real boot" test is the one that
+    bites). Same libuv fault as `sensors-file.test.js`'s honest `t.skip()` —
+    and that skip is the same artefact: with a long-form `TEMP` the file does
+    not skip at all, so the truthful baseline on this machine is **0 skipped**,
+    not 1. A committed test count that carries a skip was measured in a shell
+    with the short form.
+    Confirm by re-running with `TEMP` and `TMP` both set to the long-form
+    equivalent of `%LOCALAPPDATA%\Temp` (spell the profile folder out in full,
+    no `~1`) before `node --test` — and only then start looking for a
+    regression.
 - README.md/ROADMAP.md test-count mentions are kept in sync with the real
   suite by `mythos/scripts/sync-test-count.js` (`--check` to verify, `--write`
   to fix) — run `--write` and commit the result whenever the test count

@@ -18,6 +18,8 @@ const path = require('node:path');
 const http = require('node:http');
 const fs = require('node:fs');
 const child_process = require('node:child_process');
+// NOTE: electron-updater is deliberately NOT required here — see
+// checkForUpdates() below for why it is required lazily at its use site.
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
 const { resolveVaultRoot } = require('./vault-migration');
@@ -66,11 +68,36 @@ process.on('uncaughtException', (err) => {
   log('main process uncaughtException:', err && err.stack ? err.stack : err);
 });
 
+// ---- asar-unpack path translation (H11) ---------------------------------------
+// asar:true (see package.json's build.asarUnpack) unpacks the whole mythos/**
+// tree to real files on disk next to the archive, at
+// "<...>/resources/app.asar.unpacked/mythos/...". electron/** itself stays
+// packed inside app.asar — its own require()s and the BrowserWindow preload
+// path are fine there (Electron's fs patches make in-process reads
+// asar-transparent). But __dirname-derived paths computed HERE are still
+// "<...>/resources/app.asar/mythos/...", and two things below need the REAL
+// unpacked path instead of that virtual one:
+//   - child_process.fork()'s script path and cwd: a fork is a fresh OS
+//     process with no asar-fs patching of its own, and a process cwd cannot
+//     point inside an archive at all.
+//   - fs.readdir/copy in vault-migration.js's OLD_VAULT_DIR check.
+// Once the forked entry (SERVER_ENTRY) and its cwd (MYTHOS_DIR) are real
+// unpacked paths, every requires()/path.resolve() inside that CHILD process
+// (mythos/src/**, mythos/server/**, adapters, node_modules, model files) is
+// relative to that real directory and never touches the archive again — so
+// no further translation is needed anywhere else in mythos/.
+// No-op in dev (app.isPackaged is false) and harmless if the string doesn't
+// contain "app.asar" at all (e.g. a future packaging layout).
+function toRealPathIfPackaged(p) {
+  if (!app.isPackaged) return p;
+  return p.split(`${path.sep}app.asar${path.sep}`).join(`${path.sep}app.asar.unpacked${path.sep}`);
+}
+
 // ---- resolved paths / ports (never hardcoded) ---------------------------------
 // The Electron app ships as <repo>/electron/, so the server entry is two levels
 // up under mythos/. path.resolve keeps this correct regardless of where the
 // binary is installed (dev checkout or asar-packed app).
-const SERVER_ENTRY = path.resolve(__dirname, '..', 'mythos', 'src', 'main.js');
+const SERVER_ENTRY = toRealPathIfPackaged(path.resolve(__dirname, '..', 'mythos', 'src', 'main.js'));
 // mythos/ is the child's CWD: MYTHOS_VAULT_ROOT defaults to './vault' and is
 // resolved relative to process.cwd(), so forking without setting cwd made the
 // server use <repo>/vault (empty) instead of mythos/vault (the real one).
@@ -83,7 +110,7 @@ const SERVER_ENTRY = path.resolve(__dirname, '..', 'mythos', 'src', 'main.js');
 // matching keys.json/the server log/the adblock cache further down — unless
 // the operator (or render.yaml) has already set it explicitly, which always
 // wins.
-const MYTHOS_DIR = path.resolve(__dirname, '..', 'mythos');
+const MYTHOS_DIR = toRealPathIfPackaged(path.resolve(__dirname, '..', 'mythos'));
 const OLD_VAULT_DIR = path.join(MYTHOS_DIR, 'vault');
 const PORT = Number(process.env.MYTHOS_PORT) || 4478;
 const BIND = process.env.MYTHOS_BIND || '127.0.0.1';
@@ -412,6 +439,64 @@ function stopChild() {
   child = null;
 }
 
+// ---- B6: update check (electron-updater) --------------------------------------
+// No auto-update host is chosen yet — the operator has neither bought a code-
+// signing cert nor picked an update host (see root CLAUDE.md's B6 note). So
+// this stays "honest-inert" (house style, see README's "Honest-inert by
+// design"): with no MYTHOS_UPDATE_URL, it logs and returns rather than
+// pretending to check.
+//
+// What setting MYTHOS_UPDATE_URL alone does and does NOT do — be precise here,
+// because the earlier draft of this comment overclaimed it. On the CLIENT it
+// needs no code change and no rebuild: the feed URL is read at runtime and
+// setFeedURL() below bypasses the packaged app-update.yml that build.publish:
+// null deliberately does not emit. On the RELEASE side it is not enough:
+// electron-builder only writes the `latest.yml` metadata a generic feed is
+// polled FOR when a publish config exists, so the release build must set
+// build.publish (and, for update-signature verification to mean anything, be
+// a signed build). That recipe lives in CONTRIBUTING.md, "Building the desktop
+// installer". build.publish stays null in the tracked config so that an
+// ordinary `npm run dist` never depends on a host existing.
+//
+// autoDownload stays false: a download that starts silently in the
+// background is the "auto-install without logging" failure this exists to
+// avoid; every step below is logged, and nothing calls quitAndInstall().
+function checkForUpdates() {
+  const feedUrl = String(process.env.MYTHOS_UPDATE_URL || '').trim();
+  if (!feedUrl) {
+    log('auto-update: no update host configured (MYTHOS_UPDATE_URL unset) — skipping check.');
+    return;
+  }
+  try {
+    // Required HERE, not at module scope, and this is not a style preference.
+    // electron-updater exports `autoUpdater` as a GETTER that constructs the
+    // platform updater on first property read, so a top-level
+    // `const { autoUpdater } = require('electron-updater')` runs that
+    // constructor at load time — before app.whenReady(). On 6.8.9 that happens
+    // to be survivable (it reads app.getVersion(); electron's ready-gated
+    // `session`/`net` are reached lazily inside createRequest()), but this repo
+    // has already lost a boot to exactly this shape: a module-scope property
+    // read of a ready-gated Electron export, where even the defensive check WAS
+    // the crash (see root CLAUDE.md, Slice 5 / `screen`). Requiring at the use
+    // site means the constructor runs inside whenReady, only when an update
+    // host is actually configured, and a future version of the library moving
+    // more work into that constructor cannot take boot down with it.
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = false;
+    autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+    autoUpdater.on('error', (err) => log('auto-update: check failed —', err && err.message));
+    autoUpdater.on('update-available', (info) => {
+      log('auto-update: update available —', info && info.version, '(not downloaded automatically)');
+    });
+    autoUpdater.on('update-not-available', () => log('auto-update: already on the latest version'));
+    autoUpdater.checkForUpdates().catch((err) => {
+      log('auto-update: checkForUpdates rejected —', err && err.message);
+    });
+  } catch (err) {
+    log('auto-update: setup failed —', err && err.message);
+  }
+}
+
 // ---- single instance + window ------------------------------------------------
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -427,6 +512,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     startChild();
+    checkForUpdates();
 
     // --- Microphone permission for the HUD's getUserMedia() -----------------
     // This is a VOICE assistant: the HUD's mic capture (ui/public/js/voice/)

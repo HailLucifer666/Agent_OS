@@ -227,26 +227,36 @@ test('build.files still includes the files the packaged app needs to run', () =>
 // flag was added — express/ws/etc. would have been missing at runtime. The
 // FileMatcher-only test above cannot catch this because it is not part of the
 // matcher; assert the raw build.includeSubNodeModules config flag instead.
-// electron-builder prints "asar usage is disabled — this is strongly not
-// recommended" twice on every build and suggests enabling asar with
-// asarUnpack. DO NOT FOLLOW THAT ADVICE HERE. electron/main.js:242 forks the
-// server as a child process — `child_process.fork(SERVER_ENTRY, [], { cwd:
-// MYTHOS_DIR })` where SERVER_ENTRY is mythos/src/main.js — and a fork's cwd
-// cannot be a path inside an asar archive. The child also writes ./vault,
-// .browser-agent.pid and friends relative to that cwd (see the comment at
-// main.js:63 recording the bug from forking WITHOUT setting cwd), and an asar
-// archive is read-only. So asar:false is load-bearing for the architecture,
-// not an oversight — and the failure it prevents would appear ONLY in a
-// packaged build, never in dev or in this suite, which is exactly the kind of
-// gap that gets "fixed" by a well-meaning future reader following the build
-// warning. If asar is ever genuinely wanted, mythos/ must be asarUnpack'd
-// (which is most of the payload anyway) and the fork path re-verified against
-// a real installed build first.
-test('build.asar stays false — the child-server fork() cannot cwd into an asar archive', () => {
+//
+// H11 (2026-08-08): asar is now ENABLED, but not by just flipping the flag —
+// two earlier sessions correctly refused that, because electron/main.js forks
+// the server as a child process (`child_process.fork(SERVER_ENTRY, [], { cwd:
+// MYTHOS_DIR })`) and a fork's cwd cannot be a path inside an asar archive.
+// The fix keeps that constraint intact: build.asarUnpack covers the ENTIRE
+// mythos/** tree (server, adapters, node_modules, model files — most of the
+// payload anyway, exactly as the old comment here anticipated), so it is
+// extracted to real files on disk at app.asar.unpacked/mythos/ alongside the
+// archive. electron/main.js's SERVER_ENTRY and MYTHOS_DIR constants are then
+// translated from the virtual "app.asar/mythos/..." path to the real
+// "app.asar.unpacked/mythos/..." path (toRealPathIfPackaged(), main.js) before
+// fork() ever sees them — once the fork's own entry file and cwd are real
+// paths, every require()/path.resolve() inside that child process (all of
+// mythos/) resolves relative to that real directory and never touches the
+// archive again, so no further translation is needed anywhere else in
+// mythos/. Only electron/** itself (and package.json) ship inside the asar
+// archive — in-process require()s and the BrowserWindow preload path are the
+// well-supported asar case, since Electron's fs patches make those reads
+// asar-transparent.
+test('build.asar is enabled, with the whole mythos/ tree unpacked to real files', () => {
   const config = loadBuildConfig();
-  assert.equal(config.asar, false,
-    'asar must stay disabled: electron/main.js forks mythos/src/main.js with ' +
-    'cwd set to the mythos directory, which must be a real writable path');
+  assert.equal(config.asar, true,
+    'asar should be enabled now that mythos/ is asarUnpack\'d — see the H11 comment above');
+  assert.ok(Array.isArray(config.asarUnpack), 'build.asarUnpack must be an array');
+  assert.ok(config.asarUnpack.includes('mythos/**/*'),
+    'mythos/** must be asarUnpack\'d: electron/main.js forks mythos/src/main.js with cwd set ' +
+    'to the mythos directory, which must be a REAL writable path, not a virtual asar path — ' +
+    'and any spawned child inside mythos/ (edge-tts, piper, hermes, pc-child PowerShell, native ' +
+    '.node addons) needs real files on disk too');
 });
 
 test('build.includeSubNodeModules is set (mythos/node_modules would otherwise be dropped)', () => {
