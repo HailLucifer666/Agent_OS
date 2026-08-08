@@ -315,16 +315,57 @@ function createServer(deps) {
   // mechanism: a valid PIN-session token (issued by POST /api/pin/verify,
   // see routes/pin.js) travels through the EXACT SAME extractToken() chain
   // as the bearer token below (Authorization header -> ?token= -> the
-  // mythos_token cookie) and is accepted here as an alternative credential.
-  // It does not weaken the bearer-token path: a caller who already holds the
-  // real MYTHOS_AUTH_TOKEN is unaffected either way (that secret gates the
-  // network surface; the PIN gates local physical presence — see
-  // pin-lock.js's header for why these stay two independent layers rather
-  // than one subsuming the other).
+  // mythos_token cookie) and is accepted here as an alternative credential
+  // WHEN ONLY ONE of the two layers is actually active for this deployment.
+  //
+  // H1 FIX (security audit, 2026-08-08): when BOTH layers are actually active
+  // — MYTHOS_AUTH_TOKEN is set AND pinSessionRequired() is true — neither
+  // credential alone is accepted any more. Presenting the bearer token used
+  // to short-circuit tokenOk() before pinSessionRequired() was ever
+  // consulted, so an operator who explicitly turned PIN_SESSION_ENFORCE on
+  // got zero benefit from it as long as MYTHOS_AUTH_TOKEN was also set — the
+  // exact "one subsuming the other" the old comment here disclaimed while
+  // the code below it did precisely that.
+  //
+  // The fix cannot mean "one presented string satisfies both" — extractToken()
+  // resolves to a single credential per request. Instead the two layers are
+  // pinned to DISTINCT channels for the combined case:
+  //   - the bearer secret must arrive via Authorization header or ?token=
+  //     query (extractBearerChannel) — the channels a non-browser/API client
+  //     can always set;
+  //   - the PIN session must arrive via the mythos_token cookie
+  //     (extractCookieToken) — the only channel routes/pin.js ever issues it
+  //     on.
+  // This is forced by a real naming collision: routes/pin.js's session
+  // cookie and the plain back-compat bearer-via-cookie path (see the
+  // 'mythos_token cookie' test in server-auth.test.js) share the literal
+  // cookie name mythos_token. Splitting the bearer check to header/query-only
+  // for the combined case avoids that collision instead of relying on it —
+  // a browser can send both a query/header bearer token AND its session
+  // cookie on the same request (including a WS upgrade, which sends normal
+  // headers/cookies even though it can't be scripted to set arbitrary ones
+  // after the fact), so this is satisfiable by a real client, not just in
+  // theory.
+  //
+  // Four combinations, stated explicitly:
+  //   token unset,  PIN not required -> open (no credential needed) — unchanged.
+  //   token unset,  PIN required     -> valid PIN session (any channel) — unchanged.
+  //   token set,    PIN not required -> valid bearer token (any channel) — unchanged.
+  //   token set,    PIN required     -> valid bearer (header/query) AND
+  //                                      valid PIN session (cookie) — THE FIX.
+  // Never "PIN session alone" when a token is configured: that would let
+  // anyone who can reach POST /api/pin/verify (deliberately unauthenticated,
+  // for lockout-avoidance — see routes/pin.js) obtain full access without
+  // ever knowing MYTHOS_AUTH_TOKEN, making the PIN's 5-attempt lockout the
+  // entire remaining attack surface on a network-exposed instance. That would
+  // be worse than the bug being fixed, not a fix.
+  //
   // MYTHOS_AUTH_TOKEN and ONLY MYTHOS_AUTH_TOKEN — no PIN-session alternative,
   // no "unset means open" back-compat. Used by the AETHER_NODE_TRUST branch of
   // verifyClient, where both of those leniencies would be wrong (see there).
-  // Everything else keeps using tokenOk().
+  // Everything else keeps using tokenOk(). Untouched by the H1 fix: it never
+  // consulted pinSessionRequired() and still doesn't — voice nodes have no PIN
+  // concept.
   function authTokenMatches(presented) {
     if (!AUTH_TOKEN) return false;
     const a = Buffer.from(String(presented || ''));
@@ -332,7 +373,14 @@ function createServer(deps) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
-  function tokenOk(presented) {
+  function tokenOk(req) {
+    if (AUTH_TOKEN && pinSessionRequired()) {
+      // Both layers active: distinct channels, both required. See the block
+      // comment above for why neither may be satisfied from the other's
+      // channel or from a single merged credential.
+      return authTokenMatches(extractBearerChannel(req)) && pinSession.isValid(extractCookieToken(req));
+    }
+    const presented = extractToken(req);
     if (pinSession.isValid(presented)) return true;
     if (!AUTH_TOKEN) return !pinSessionRequired();
     const a = Buffer.from(String(presented || ''));
@@ -340,18 +388,21 @@ function createServer(deps) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
-  // Shared by the /api|/vault/builds HTTP gate and the WS verifyClient below.
-  // Order: Authorization: Bearer header (any client) -> ?token= query (the
-  // §18.2 fix — a browser WebSocket cannot set headers, so this is how a
-  // remote HUD tab authenticates the WS upgrade) -> mythos_token cookie (set
-  // by the HUD once the operator enters the token, reused on plain HTTP nav).
-  function extractToken(req) {
+  // extractBearerChannel/extractCookieToken are the two channels extractToken
+  // (below) merges in priority order; split out so tokenOk()'s combined-layer
+  // branch above can pin each credential to its own channel instead of the
+  // single merged value every other branch still uses.
+  function extractBearerChannel(req) {
     const auth = req.headers && req.headers.authorization;
     if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
     try {
       const fromQuery = new URL(req.url, 'http://internal').searchParams.get('token');
       if (fromQuery) return fromQuery;
-    } catch (_) { /* malformed url — fall through to cookie */ }
+    } catch (_) { /* malformed url */ }
+    return null;
+  }
+
+  function extractCookieToken(req) {
     const cookieHeader = req.headers && req.headers.cookie;
     if (cookieHeader) {
       const parts = cookieHeader.split(';');
@@ -363,9 +414,21 @@ function createServer(deps) {
     return null;
   }
 
+  // Shared by the /api|/vault/builds HTTP gate and the WS verifyClient below.
+  // Order: Authorization: Bearer header (any client) -> ?token= query (the
+  // §18.2 fix — a browser WebSocket cannot set headers, so this is how a
+  // remote HUD tab authenticates the WS upgrade) -> mythos_token cookie (set
+  // by the HUD once the operator enters the token, reused on plain HTTP nav).
+  function extractToken(req) {
+    return extractBearerChannel(req) || extractCookieToken(req);
+  }
+
   function requireToken(req, res, next) {
-    if (!tokenOk(extractToken(req))) {
-      return res.status(401).json({ error: 'Unauthorized — set MYTHOS_AUTH_TOKEN via Authorization: Bearer <token> or the mythos_token cookie.' });
+    if (!tokenOk(req)) {
+      const hint = (AUTH_TOKEN && pinSessionRequired())
+        ? 'Unauthorized — this deployment requires BOTH the MYTHOS_AUTH_TOKEN bearer token (Authorization: Bearer <token> or ?token=) AND an unlocked PIN session (the mythos_token cookie from POST /api/pin/verify).'
+        : 'Unauthorized — set MYTHOS_AUTH_TOKEN via Authorization: Bearer <token> or the mythos_token cookie.';
+      return res.status(401).json({ error: hint });
     }
     next();
   }
@@ -809,7 +872,19 @@ function createServer(deps) {
   // only moves on a real provider failure, and then stays moved (see providers/tts.js).
   // synthesize() returns { audio, mime, provider }: the engines emit different
   // containers (edge=MP3, gemini/piper=WAV) so the mime travels PER CHUNK.
-  const tts = createTtsChain({ config, logger });
+  // Test-only seam, undefined in production (same shape as createLiveSocket
+  // below): lets a test drive synthesis timing, which is the only way to observe
+  // a reply that is still IN FLIGHT. With the real chain unavailable, every chunk
+  // is emitted in one synchronous burst, so "mid-reply" — the entire premise of
+  // the Stage 5 handoff — cannot be expressed at all.
+  //
+  // Named `ttsChain`, NOT `tts`, deliberately. Several existing test files already
+  // pass a `tts:` dep that this file has never read, so those objects are inert
+  // fakes missing most of the chain's surface (chainNames, synthesize). Honouring
+  // `deps.tts` here activated all of them at once and broke 21 tests that had
+  // nothing to do with this feature. Left inert rather than "fixed": making them
+  // real would change what those tests exercise, which is their authors' call.
+  const tts = deps.ttsChain || createTtsChain({ config, logger });
   logger.info('tts.chain', { chain: tts.chainNames.join(',') });
   const httpServer = app.listen(PORT, BIND, () => {
     logger.info('server.listening', { url: `http://${BIND}:${PORT}`, bind: BIND });
@@ -851,8 +926,8 @@ function createServer(deps) {
       //     no token is set (the loopback back-compat path) — and a
       //     non-loopback caller must never inherit that;
       //   - and it must PRESENT that token, via the fall-through to the same
-      //     tokenOk(extractToken(...)) gate every other client passes. Nothing
-      //     is trusted about the client beyond the shared secret.
+      //     tokenOk(info.req) gate every other client passes. Nothing is
+      //     trusted about the client beyond the shared secret.
       // Reject stays the default: any of those three failing lands on the 403.
       const nodeTrusted = config.AETHER_NODE_TRUST === true && !!AUTH_TOKEN;
       if (!nodeTrusted) {
@@ -872,7 +947,7 @@ function createServer(deps) {
         return callback(false, 401, 'Unauthorized');
       }
     }
-    if (!tokenOk(extractToken(info.req))) {
+    if (!tokenOk(info.req)) {
       logger.warn('ws-upgrade-rejected', { reason: 'bad or missing token' });
       return callback(false, 401, 'Unauthorized');
     }
@@ -964,9 +1039,15 @@ function createServer(deps) {
   // chunk whose audioB64 is null via speechSynthesis, so the PC would narrate
   // the reply alongside the phone — the same two-voices defect as BUG-060.
   function sendSpeechChunk(localSend, target, msg) {
-    if (target) {
+    // Stage 5: a deliberate, FSM-sequenced handoff may have moved this reply to
+    // another device since the target was resolved. `target` is a live object so
+    // the redirect applies to the chunks that have not been sent yet — which is
+    // the whole trick: the sentence continues on the new device instead of
+    // restarting there.
+    const current = target && target.ws;
+    if (current) {
       try {
-        target.ws.send(JSON.stringify(msg));
+        current.send(JSON.stringify(msg));
         return;
       } catch (_) {
         // The node died mid-reply. Remaining chunks fall back to the origin
@@ -975,6 +1056,47 @@ function createServer(deps) {
     }
     localSend(msg);
   }
+
+  // Everything MYTHOS is currently speaking, keyed by reqId, so a handoff can
+  // redirect a reply that is already in flight. Entries are removed by the
+  // synthesis sites' own finally blocks — a leak here would pin closed sockets.
+  const activeSpeech = new Map();
+
+  // A handoff reached CONFIRM: §6.3 says attribution flips to the NEW owner at
+  // that phase, so this is the moment to move any reply still being streamed.
+  // Earlier (PREPARE/TRANSFER) the old device is still the speaker; later
+  // (RELEASE) the audio is already resuming and moving it would stutter.
+  function moveActiveSpeechToCurrentOwner() {
+    if (activeSpeech.size === 0) return;
+    const next = nodeSpeechTarget();
+    activeSpeech.forEach((entry, reqId) => {
+      const previous = entry.ws;
+      const nextWs = next ? next.ws : null;
+      if (previous === nextWs) return;
+      // Tell the losing device to drop what it still has queued, or it would
+      // keep talking over the device that now owns the sentence.
+      if (previous && previous.readyState === 1) {
+        try { previous.send(JSON.stringify({ type: 'cancel', reqId })); } catch (_) { /* gone */ }
+      }
+      entry.ws = nextWs;
+      entry.nodeId = next ? next.nodeId : null;
+      logger.info('voice-node.speech-moved', { reqId, to: entry.nodeId });
+    });
+  }
+
+  // Relay the conversation FSM to every identified node. Nodes need every phase,
+  // not just CONFIRM: TRANSFER is when a phone pauses and records its playhead,
+  // and RELEASE is when it resumes from that offset (§6.3).
+  bus.subscribe('aether.conversation', (e) => {
+    const p = e.payload || {};
+    const frame = JSON.stringify({
+      type: 'conversation', phase: p.phase, from: p.from, speakingScanner: p.speakingScanner,
+    });
+    voiceNodes.forEach((ws) => {
+      if (ws.readyState === 1) { try { ws.send(frame); } catch (_) { /* gone */ } }
+    });
+    if (p.phase === 'CONFIRM') moveActiveSpeechToCurrentOwner();
+  });
   async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
     targetWs = targetWs || lastActiveWs;
@@ -1092,6 +1214,11 @@ function createServer(deps) {
       // than one that finishes where it started. Stage 5's conversation handoff
       // is the deliberate, FSM-sequenced way for a sentence to move.
       const speechTarget = nodeSpeechTarget();
+      // Stage 5: registered as a MUTABLE entry so a CONFIRM-phase handoff can
+      // repoint it mid-reply. A reply that started LOCALLY is not registered and
+      // stays local — pushing audio onto a device that was not already speaking
+      // it is a different feature, and would startle the operator mid-sentence.
+      if (speechTarget) activeSpeech.set(reqId, speechTarget);
       // Alert tone counts as chunk 0 of the SAME reqId's sequence (not a
       // separate turn) so it plays through the existing chunk-queue ordering
       // instead of racing a second, unregistered reqId on the client.
@@ -1130,6 +1257,7 @@ function createServer(deps) {
       sendOut({ type: 'done', reqId, say: text, speak, chunked, proactive: true, ...(speechTarget ? { routedToNode: speechTarget.nodeId } : {}) });
     } finally {
       inflightSpeech.delete(reqId);
+      activeSpeech.delete(reqId);
     }
     // B6: Persist proactive speech to episodic memory for conversation continuity.
     try {
@@ -1803,8 +1931,10 @@ function createServer(deps) {
       // never at fault (all 29 replies round-trip splitSentences losslessly).
       // Chunk-per-sentence keeps each utterance short enough to finish.
       const chunks = splitSentences(speak);
-      // See proactiveSpeak: resolved once per reply, never per chunk.
+      // See proactiveSpeak: resolved once per reply, never per chunk — but
+      // registered so Stage 5's handoff can move it deliberately.
       const speechTarget = nodeSpeechTarget();
+      if (speechTarget) activeSpeech.set(reqId, speechTarget);
       // Item B: register an abort controller so a 'stop' for this reqId
       // (barge-in) can cancel remaining chunk synthesis below — otherwise
       // edge-tts keeps synthesizing chunks nobody will hear after the client
@@ -1850,6 +1980,7 @@ function createServer(deps) {
         send({ type: 'done', reqId, say, speak, chunked: (ctrl.signal.aborted || speechTarget) ? true : chunks.length > 0, ...meta, ...(speechTarget ? { routedToNode: speechTarget.nodeId } : {}) });
       } finally {
         inflightSpeech.delete(reqId);
+        activeSpeech.delete(reqId);
       }
     }
 
@@ -2079,6 +2210,7 @@ function createServer(deps) {
         // — missing it would answer a vision question on the laptop while every
         // other reply came out of the phone.
         const speechTarget = nodeSpeechTarget();
+        if (speechTarget) activeSpeech.set(msg.reqId, speechTarget);
         let chunkIndex = 0;
         let sendChain = Promise.resolve(); // serializes synth+send so chunks stay in order
         // total is unknown until the stream ends; the client's own barge-in-aware
@@ -2144,6 +2276,7 @@ function createServer(deps) {
         // origin must take the chunked branch (silent finish) rather than
         // speaking the answer again locally.
         send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: speechTarget ? true : (ttsUp && chunkIndex > 0), ...(speechTarget ? { routedToNode: speechTarget.nodeId } : {}) });
+        activeSpeech.delete(msg.reqId);
       } catch (err) {
         logger.warn('vision-query-error', { error: err.message, reqId: msg.reqId });
         send({ type: 'done', reqId: msg.reqId, say: `Error: ${sanitizeErrorForClient(err)}`, error: true });

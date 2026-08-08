@@ -42,6 +42,12 @@ const ALLOWED_EVENTS = new Set([
   'perception.calendar',   // V8 (Phase 4): upcoming-event perception (calendar-upcoming-sensor)
   'perception.window',     // V8 (Phase 4): opt-in active-window perception (window-sensor)
   'perception.aether',     // Aether-BLE proximity-focus sensor (owner-change / RSSI drift)
+  // Voice Nodes Stage 5 — the conversation handoff FSM phase (§6.3), relayed to
+  // phone nodes so a half-played sentence can pause, seek and resume in step with
+  // the ~200ms-per-phase sequence. Deliberately NOT a perception.*: it is not an
+  // observation for the cortex to reason about, it is a control signal with a
+  // deadline, and the perception gate drops anything under MYTHOS_IDLE_SALIENCE.
+  'aether.conversation',
 
   // action.*
   'action.completed',

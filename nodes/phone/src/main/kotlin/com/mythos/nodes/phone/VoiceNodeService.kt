@@ -50,6 +50,9 @@ class VoiceNodeService : Service() {
     private var lastSightingMs = 0L
     private var reportedLost = true
 
+    /** Playhead recorded at TRANSFER, resumed from at RELEASE (§6.3). */
+    private var handoffOffsetMs = 0L
+
     override fun onCreate() {
         super.onCreate()
         settings = NodeSettings(applicationContext)
@@ -194,6 +197,36 @@ class VoiceNodeService : Service() {
                 "cancel" -> {
                     player?.stopAndClear()
                     _phase.value = Phase.IDLE
+                }
+                // Stage 5 — the conversation handoff FSM (§6.3). Each phase lasts
+                // ~200ms, so this must act on the phase itself rather than waiting
+                // for the next election perception, which arrives after the whole
+                // handoff is over.
+                //
+                // Both devices receive every phase. The one holding the sentence
+                // pauses on TRANSFER and remembers the playhead; the one taking it
+                // seeks to that offset on CONFIRM and resumes on RELEASE. Chunks
+                // that have not been synthesized yet are redirected server-side,
+                // which is why the sentence CONTINUES here instead of restarting.
+                "conversation" -> when (msg.optString("phase")) {
+                    "TRANSFER" -> {
+                        // Attribution is still the old owner here, so whoever is
+                        // actually playing is the one who pauses.
+                        if (player?.isPlaying == true) {
+                            handoffOffsetMs = player?.pauseForHandoff() ?: 0L
+                        }
+                    }
+                    "CONFIRM" -> {
+                        // Attribution flips now. Seek but do NOT resume — resuming
+                        // a beat early is audible as a stutter across the two
+                        // devices.
+                        if (handoffOffsetMs > 0L) player?.seekTo(handoffOffsetMs)
+                    }
+                    "RELEASE" -> {
+                        player?.resume()
+                        handoffOffsetMs = 0L
+                    }
+                    "IDLE" -> handoffOffsetMs = 0L
                 }
                 "identified" -> _identified.value = msg.optBoolean("ok", false)
             }

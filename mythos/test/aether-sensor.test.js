@@ -520,15 +520,22 @@ describe('aether-sensor (Phase 1)', function () {
         conversationEvent: { phase: 'TRANSFER', fromScanner: 'PC', toScanner: 'Phone', atTick: 4831 }
       }));
       client.send(JSON.stringify(election('PC', [scanner('PC', -59)])));
-      assert.ok(await waitFor(function () { return bus._events.length === 1; }, 1000), 'perception must emit');
-      assert.equal(bus._events[0].payload.detail.phase, 'TRANSFER');
-      assert.deepEqual(bus._events[0].payload.detail.handoffPhase, { phase: 'TRANSFER', from: 'PC', to: 'Phone' });
+      // Count PERCEPTIONS, not every bus event. Since the voice-nodes handoff
+      // slice the sensor also emits `aether.conversation` on a phase CHANGE — a
+      // control signal for phone nodes, on its own channel — so a bare
+      // _events.length here would be measuring two unrelated things at once.
+      function perceptions() {
+        return bus._events.filter(function (e) { return e.name === 'perception.aether'; });
+      }
+      assert.ok(await waitFor(function () { return perceptions().length === 1; }, 1000), 'perception must emit');
+      assert.equal(perceptions()[0].payload.detail.phase, 'TRANSFER');
+      assert.deepEqual(perceptions()[0].payload.detail.handoffPhase, { phase: 'TRANSFER', from: 'PC', to: 'Phone' });
 
       // Kill the socket: drop must clear the FSM cache.
       client.close();
-      assert.ok(await waitFor(function () { return bus._events.length === 2; }, 1000), 'offline must emit');
-      assert.equal(bus._events[1].payload.detail.phase, 'IDLE', 'offline has no FSM phase');
-      assert.equal(bus._events[1].payload.detail.handoffPhase, null);
+      assert.ok(await waitFor(function () { return perceptions().length === 2; }, 1000), 'offline must emit');
+      assert.equal(perceptions()[1].payload.detail.phase, 'IDLE', 'offline has no FSM phase');
+      assert.equal(perceptions()[1].payload.detail.handoffPhase, null);
     } finally {
       sensor.stop();
       await closeAggregator(agg.wss);

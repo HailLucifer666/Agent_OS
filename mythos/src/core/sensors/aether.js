@@ -211,7 +211,17 @@ function createAetherSensor(ctx) {
         myPosition = { x: msg.x, y: msg.y, uncertaintyRadiusM: msg.uncertaintyRadiusM };
       }
     } else if (msg.type === 'conversation') {
-      // Phase 4 listen slice — cache the FSM state; never emits on its own.
+      // Phase 4 listen slice — cache the FSM state; never emits a PERCEPTION on
+      // its own (the election gate owns those).
+      //
+      // Stage 5 (voice nodes) does need the phase on the bus, though: a phone
+      // holding a half-played sentence has to pause, seek and resume in step with
+      // the FSM's 200ms-per-phase sequence (§6.3), and by the time the next
+      // election perception carries the phase the handoff is already over.
+      // Emitted on CHANGE only — the aggregator re-broadcasts the same phase
+      // every 400ms, and relaying that would be a 2.5Hz flood into the bus's
+      // storm guard for no new information.
+      var previousPhase = convPhase;
       if (typeof msg.phase === 'string') convPhase = msg.phase;
       convSpeakingScanner = (msg.speakingScanner == null) ? null : String(msg.speakingScanner);
       if (msg.conversationEvent && typeof msg.conversationEvent === 'object') {
@@ -221,6 +231,19 @@ function createAetherSensor(ctx) {
           from: (ev.fromScanner == null) ? null : String(ev.fromScanner),
           to: (ev.toScanner == null) ? null : String(ev.toScanner)
         };
+      }
+      if (convPhase !== previousPhase) {
+        // Stage 5: the payload the server relays to voice nodes verbatim. `from`
+        // is our own observed previous phase rather than the aggregator's
+        // phaseFrom, because a client that connected mid-handoff has no
+        // phaseFrom to trust and would otherwise report a transition from null.
+        try {
+          bus.emit('aether.conversation', {
+            phase: convPhase,
+            from: previousPhase,
+            speakingScanner: convSpeakingScanner
+          });
+        } catch (_) { /* a bus failure must never break the socket loop */ }
       }
       // Phase 4 speak-gating drain: the FSM returned to idle — deliver any
       // queued say now instead of waiting out the safety timer. No-op when
