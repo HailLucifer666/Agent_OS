@@ -292,3 +292,71 @@ describe('server-auth (§7.2): boot guard', () => {
     assert.match(stderr, /MYTHOS_AUTH_TOKEN/, `expected the refusal message to name MYTHOS_AUTH_TOKEN; stderr: ${stderr}`);
   });
 });
+
+describe('server-auth (H3b, security audit 2026-08-08): weak MYTHOS_AUTH_TOKEN is rejected at boot', () => {
+  test('no token at all still boots (loopback back-compat is untouched)', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(baseDeps(bus));
+    await server.ready;
+    await server.stop();
+  });
+
+  test('a short token refuses to boot', () => {
+    const bus = createBus({ historySize: 50 });
+    assert.throws(
+      () => createServer(baseDeps(bus, { config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: 'short' } })),
+      /too weak/
+    );
+  });
+
+  test('a long but single-repeated-character token refuses to boot', () => {
+    const bus = createBus({ historySize: 50 });
+    assert.throws(
+      () => createServer(baseDeps(bus, { config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: 'aaaaaaaaaaaaaaaaaaaaaa' } })),
+      /too weak/
+    );
+  });
+
+  test('a common weak word (even if padded to length) refuses to boot', () => {
+    const bus = createBus({ historySize: 50 });
+    assert.throws(
+      () => createServer(baseDeps(bus, { config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: 'password1234567890' } })),
+      /too weak/
+    );
+  });
+
+  test('a long, high-entropy token boots fine', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(baseDeps(bus, { config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN } }));
+    await server.ready;
+    await server.stop();
+  });
+});
+
+describe('server-auth (H3a, security audit 2026-08-08): the WS upgrade path is rate limited', () => {
+  test('repeated wrong-token WS upgrade attempts from one IP eventually get 429, not endless 401s', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(baseDeps(bus, {
+      config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN },
+    }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      let sawTooMany = false;
+      // The default cap is 30/min per IP; 40 rapid wrong-token guesses must
+      // trip it before completing.
+      for (let i = 0; i < 40; i++) {
+        const status = await new Promise((resolve) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=guess-${i}`);
+          ws.on('unexpected-response', (req, res) => resolve(res.statusCode));
+          ws.on('open', () => { try { ws.close(); } catch (_) {} resolve('opened'); });
+          ws.on('error', () => resolve('error'));
+        });
+        if (status === 429) { sawTooMany = true; break; }
+      }
+      assert.equal(sawTooMany, true, 'expected a 429 once the per-IP WS-upgrade rate limit was exceeded');
+    } finally {
+      await server.stop();
+    }
+  });
+});

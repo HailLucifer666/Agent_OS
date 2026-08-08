@@ -1,8 +1,28 @@
 'use strict';
 
+const path = require('path');
+
 // MYTHOS Phase 0 config schema
 // Keys: type, default, min?, max?, enum?, bool?, required?
 // validate() in index.js reads this to coerce + validate raw env
+
+// B3-remainder (security audit, 2026-08-08): MYTHOS_VAULT_ROOT used to default
+// to the LITERAL string './vault', resolved by main.js's path.resolve() against
+// process.cwd() at boot — so the vault MYTHOS opens depended on whatever
+// directory launched the process, not on where the repo/install lives. A fork
+// with an unexpected cwd silently opened an empty <cwd>/vault instead of the
+// real vault holding thousands of episodic entries and reported healthy (the
+// "factory-reset MYTHOS" incident — see
+// mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md). electron/vault-migration.js
+// already fixed the packaged/Electron path by resolving under
+// app.getPath('userData') and always deferring to an explicit env value; this
+// fixes the same failure mode for the bare-node path by computing the default
+// as an ABSOLUTE path anchored to this file's own location (mythos/), which is
+// stable regardless of process.cwd(). An explicit MYTHOS_VAULT_ROOT (operator
+// .env, Dockerfile, render.yaml's /data/vault, or Electron's resolved
+// userData path) is read verbatim by validate() below and always wins — this
+// default is only ever reached when the key is completely unset.
+const DEFAULT_VAULT_ROOT = path.join(__dirname, '..', '..', '..', 'vault');
 
 const SCHEMA = {
   // MYTHOS entity
@@ -32,7 +52,7 @@ const SCHEMA = {
   // (sliding — src/core/security/pin-session.js extends it on every
   // authenticated request), ms.
   PIN_SESSION_TTL_MS:       { type: 'number', default: 1800000, min: 60000, max: 86400000 },
-  MYTHOS_VAULT_ROOT:        { type: 'string', default: './vault' },
+  MYTHOS_VAULT_ROOT:        { type: 'string', default: DEFAULT_VAULT_ROOT },
   MYTHOS_TICK_MS:           { type: 'number', default: 1000, min: 100, max: 60000 },
   MYTHOS_IDLE_SALIENCE:     { type: 'number', default: 0.3, min: 0, max: 1 },
   MYTHOS_DRY_RUN:           { type: 'bool',  default: false },

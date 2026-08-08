@@ -290,6 +290,36 @@ function createServer(deps) {
     );
   }
 
+  // H3(b) (security audit, 2026-08-08) — MYTHOS_AUTH_TOKEN had no minimum
+  // length or entropy requirement, yet it is the ONLY thing standing between
+  // the public internet and 166 effectors including tier-3 confirm-and-execute
+  // once MYTHOS_BIND is non-loopback (see the guard just above). Reject an
+  // obviously weak token at boot with the same fail-loud posture — but ONLY
+  // when a token is actually configured. Running with NO token at all on
+  // loopback is the documented, intentional back-compat default (every
+  // pre-existing test depends on it) and is completely untouched by this;
+  // this only tightens what counts as a VALID token once the operator has
+  // chosen to set one.
+  const MIN_AUTH_TOKEN_LENGTH = 16;
+  const WEAK_AUTH_TOKEN_RE = /^(password|changeme|admin|secret|letmein|qwerty|default|token|test|12345678)/i;
+  function weakAuthTokenReason(token) {
+    if (token.length < MIN_AUTH_TOKEN_LENGTH) return `shorter than the ${MIN_AUTH_TOKEN_LENGTH}-char minimum`;
+    if (/^(.)\1*$/.test(token)) return 'a single character repeated';
+    if (new Set(token.toLowerCase()).size < 4) return 'too few distinct characters (low entropy)';
+    if (WEAK_AUTH_TOKEN_RE.test(token)) return 'matches a common/weak token pattern';
+    return null;
+  }
+  if (AUTH_TOKEN) {
+    const weakReason = weakAuthTokenReason(AUTH_TOKEN);
+    if (weakReason) {
+      throw new Error(
+        `MYTHOS_AUTH_TOKEN is set but too weak (${weakReason}). ` +
+        `Use a random token of at least ${MIN_AUTH_TOKEN_LENGTH} characters, e.g. ` +
+        `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`
+      );
+    }
+  }
+
   // Track B1 — the PIN-unlock session store. Always constructed (cheap: one
   // closure, no I/O) so tokenOk() below has a stable thing to ask; whether it
   // can ever actually gate a request depends on pinSessionRequired() below,
@@ -491,10 +521,108 @@ function createServer(deps) {
 
   const app = express();
   app.use((req, res, next) => { req.id = crypto.randomUUID(); next(); });
+
+  // H7 (security audit, 2026-08-08) — no Content-Security-Policy anywhere in
+  // the response pipeline. Not independently exploitable today (no
+  // reflected-XSS route was found), but it is the layer that would have
+  // contained a B2-style key-theft chain — an attacker-influenced string
+  // (open_web/model output) becoming script instead of just being displayed.
+  //
+  // Two headers, split deliberately after grepping ui/public/js for every
+  // pattern that would make a strict policy break the HUD:
+  //
+  // 1. ENFORCING now, narrow, and verified safe: no <base>/<object>/<embed>
+  //    exists anywhere in the HUD, and nothing legitimately frames it from
+  //    another origin. These three directives cost the app nothing.
+  // 2. REPORT-ONLY, broader, for everything that CANNOT be safely turned on
+  //    yet without breaking a real, documented feature:
+  //      - style-src needs 'unsafe-inline': views/conversation.js sets
+  //        element.style.cssText directly, which CSP treats as inline style
+  //        with no nonce mechanism for JS-set style attributes.
+  //      - frame-src has to stay wide open (https:/http:): views/web-panel.js
+  //        embeds ARBITRARY URLs from the open_web tool (YouTube videos and
+  //        general web pages) — that is the feature, not a bug, and no scoped
+  //        allowlist can express "any URL the operator asked to open."
+  //      - connect-src needs the two geo-IP fallback hosts
+  //        widgets/kinds/weather.js calls directly from the browser
+  //        (ipapi.co, ip-api.com).
+  //    script-src itself DID come back clean — no eval()/new Function() and
+  //    no inline <script>/on*= handlers exist anywhere in ui/public/js or
+  //    index.html — so it rides along in the report-only line as 'self'
+  //    'wasm-unsafe-eval' (the latter only for onnxruntime-web's WASM
+  //    compile step, ui/public/js/voice/{wakeword,silero-vad}.js) to observe
+  //    whether anything trips it before it is ever made enforcing for real.
+  //
+  // UNVERIFIED, left alone rather than guessed at: no COOP/COEP headers are
+  // set here (deliberately — they would break web-panel's third-party iframe
+  // embeds by requiring every framed origin to opt in), so onnxruntime-web's
+  // cross-origin-isolation-gated threaded WASM variant should never be
+  // selected — matching today's un-isolated behaviour either way, but not
+  // independently re-verified by this change.
+  function setCspHeaders(req, res, next) {
+    res.setHeader('Content-Security-Policy', "object-src 'none'; base-uri 'self'; frame-ancestors 'self'");
+    res.setHeader(
+      'Content-Security-Policy-Report-Only',
+      "default-src 'self'; " +
+      "script-src 'self' 'wasm-unsafe-eval'; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob: https: http:; " +
+      "media-src 'self' blob:; " +
+      "font-src 'self'; " +
+      "worker-src 'self' blob:; " +
+      "connect-src 'self' ws: wss: https://ipapi.co https://ip-api.com http://ip-api.com; " +
+      "frame-src https: http:; " +
+      "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    );
+    next();
+  }
+  app.use(setCspHeaders);
+
   app.use(express.json({ limit: '1mb' }));
 
   const globalLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_GLOBAL) || 240, scope: 'global-api' });
   const expensiveLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_EXPENSIVE) || 8, scope: 'expensive' });
+
+  // H3(a) (security audit, 2026-08-08) — globalLimit above covers /api/* only;
+  // the /ws upgrade (verifyClient below) had NO rate limit at all, so a wrong
+  // MYTHOS_AUTH_TOKEN guess against the WS auth path could be retried at full
+  // LAN speed. createLimiter is Express (req,res,next) middleware and the WS
+  // upgrade path is a plain (info, callback) verifyClient — same token-bucket
+  // shape as rate-limit.js, applied directly here rather than adapting that
+  // module to a second calling convention. Keyed by remote IP only (there is
+  // no authenticated identity yet at upgrade time); scoped separately from the
+  // /api limiters so a noisy REST client can never exhaust a legitimate
+  // client's WS reconnect budget or vice versa.
+  const WS_UPGRADE_LIMIT_WINDOW_MS = 60000;
+  const WS_UPGRADE_LIMIT_MAX = Number(process.env.RATE_LIMIT_WS_UPGRADE) || 30;
+  const wsUpgradeBuckets = new Map(); // ip -> { count, resetAt }
+  // Same opportunistic eviction rate-limit.js's createLimiter uses (H12): the
+  // bucket Map would otherwise keep one permanent entry per distinct client IP
+  // for the life of an always-on process, which is the exact unbounded-growth
+  // defect H12 fixed — reintroducing it here, in the same change that adds the
+  // WS limiter, would be a straight regression. Throttled to one sweep per
+  // window so it never becomes an O(n) tax per upgrade, and only entries past
+  // their own resetAt are removed, so no live bucket is disturbed early.
+  let wsUpgradeLastSweepAt = 0;
+  function wsUpgradeEvictExpired(now) {
+    if (now - wsUpgradeLastSweepAt < WS_UPGRADE_LIMIT_WINDOW_MS) return;
+    wsUpgradeLastSweepAt = now;
+    wsUpgradeBuckets.forEach((bucket, k) => {
+      if (now >= bucket.resetAt) wsUpgradeBuckets.delete(k);
+    });
+  }
+  function wsUpgradeRateLimited(req) {
+    const ip = (req.socket && req.socket.remoteAddress) || 'unknown';
+    const now = Date.now();
+    wsUpgradeEvictExpired(now);
+    let bucket = wsUpgradeBuckets.get(ip);
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 0, resetAt: now + WS_UPGRADE_LIMIT_WINDOW_MS };
+      wsUpgradeBuckets.set(ip, bucket);
+    }
+    bucket.count += 1;
+    return bucket.count > WS_UPGRADE_LIMIT_MAX;
+  }
 
   // W4 (Phase 2 — Wiring Integrity): audit helper for REST mutations. Every
   // POST/DELETE on /api/goals, /api/kanban, /api/pipeline, /api/engagements
@@ -908,6 +1036,14 @@ function createServer(deps) {
   // branch; tokenOk() itself is a no-op when no MYTHOS_AUTH_TOKEN is set, so
   // the loopback-no-token back-compat path is unaffected either way.
   function verifyClient(info, callback) {
+    // H3(a) — checked before any origin/token logic, so a brute-force run
+    // against the token check itself (not just successful connections) is
+    // capped regardless of which branch below would otherwise accept or
+    // reject it.
+    if (wsUpgradeRateLimited(info.req)) {
+      logger.warn('ws-upgrade-rejected', { reason: 'rate limit exceeded' });
+      return callback(false, 429, 'Too Many Requests');
+    }
     const origin = info.origin;
     if (origin && !ALLOWED_ORIGINS.has(origin)) {
       logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });

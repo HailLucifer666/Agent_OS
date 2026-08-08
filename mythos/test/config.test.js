@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { validate, SCHEMA } = require('../src/core/config');
@@ -11,7 +12,14 @@ describe('config', () => {
     assert.equal(result.config.MYTHOS_NAME, 'MYTHOS');
     assert.equal(result.config.MYTHOS_PORT, 4478);
     assert.equal(result.config.MYTHOS_BIND, '127.0.0.1');
-    assert.equal(result.config.MYTHOS_VAULT_ROOT, './vault');
+    // B3-remainder (security audit, 2026-08-08): the default used to be the
+    // literal relative string './vault', resolved against whatever cwd
+    // launched the process — the exact shape of the "factory-reset MYTHOS"
+    // incident. It is now an ABSOLUTE path anchored to mythos/ (this file's
+    // own package root), independent of process.cwd(). An explicit
+    // MYTHOS_VAULT_ROOT (tested elsewhere) is untouched and still wins.
+    assert.equal(path.isAbsolute(result.config.MYTHOS_VAULT_ROOT), true, 'default vault root must not depend on cwd');
+    assert.equal(result.config.MYTHOS_VAULT_ROOT, path.join(__dirname, '..', 'vault'));
     assert.equal(result.config.MYTHOS_TICK_MS, 1000);
     assert.equal(result.config.MYTHOS_IDLE_SALIENCE, 0.3);
     assert.equal(result.config.MYTHOS_DRY_RUN, false);
