@@ -5,7 +5,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -136,28 +135,60 @@ class MicRecorder(private val settings: NodeSettings) {
     fun isUsable(pcm: ByteArray): Boolean = pcm.size >= SAMPLE_RATE / 3 * 2
 
     /**
-     * POST the audio and return the transcript, or null on any failure. Null is
-     * honest here: the caller shows "didn't catch that" rather than inventing
-     * text, and nothing is sent to the brain.
+     * The outcome of one transcription attempt. A plain `String?` was not enough:
+     * it collapsed a 503, a 401, a dead network and a genuinely silent room into
+     * the same null, which the UI rendered as "didn't catch that" — a phrase that
+     * is only honest for the last of those. Chasing that message cost a live
+     * session, because it points at the microphone when the fault was the request.
      */
-    fun transcribe(pcm: ByteArray): String? {
+    sealed class Result {
+        /** Words came back. */
+        data class Text(val text: String) : Result()
+        /** The round trip worked and the audio genuinely had no speech in it. */
+        object NoSpeech : Result()
+        /** Something broke; [reason] is shown verbatim so it can be acted on. */
+        data class Failed(val reason: String) : Result()
+    }
+
+    /**
+     * POST the audio and return what happened.
+     *
+     * BODY SHAPE IS LOAD-BEARING. `/api/voice/transcribe` reads its body with
+     * express.raw() over every content-type, and hands THOSE EXACT BYTES, plus
+     * this request's own Content-Type, to providers/groq-stt.js — which uploads them
+     * as `utterance.<ext>` where the extension is derived from that same header.
+     * So the route wants raw audio, not a multipart form. Sending multipart made
+     * Groq receive the MIME envelope as if it were the audio and reject it, and
+     * because this phone is the route's ONLY consumer (the HUD uses Gemini Live
+     * and browser speech recognition), nothing else ever exercised it.
+     */
+    fun transcribe(pcm: ByteArray): Result {
         val wav = wrapAsWav(pcm)
-        val body = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("audio", "node.wav", wav.toRequestBody("audio/wav".toMediaType()))
-            .build()
         val request = Request.Builder()
             .url("${settings.httpBase()}/api/voice/transcribe")
             .addHeader("Authorization", "Bearer ${settings.authToken}")
-            .post(body)
+            .post(wav.toRequestBody("audio/wav".toMediaType()))
             .build()
-        return runCatching {
+        return try {
             http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
-                val json = JSONObject(response.body?.string().orEmpty())
-                json.optString("text").takeIf { it.isNotBlank() }
+                if (!response.isSuccessful) {
+                    // Named per status: these have different fixes in different
+                    // places, and "didn't catch that" pointed at none of them.
+                    return when (response.code) {
+                        401 -> Result.Failed("auth token rejected by MYTHOS")
+                        429 -> Result.Failed("too many requests — wait a moment")
+                        503 -> Result.Failed("speech-to-text is down on MYTHOS")
+                        else -> Result.Failed("MYTHOS returned HTTP ${response.code}")
+                    }
+                }
+                val text = JSONObject(response.body?.string().orEmpty()).optString("text")
+                if (text.isBlank()) Result.NoSpeech else Result.Text(text)
             }
-        }.getOrNull()
+        } catch (e: Exception) {
+            // Cannot reach the server at all: wrong address, phone off the LAN,
+            // MYTHOS not running. Distinct from every case above.
+            Result.Failed(e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName)
+        }
     }
 
     /** The canonical 44-byte RIFF/WAVE header for PCM16, little-endian. */

@@ -91,6 +91,7 @@ class VoiceNodeService : Service() {
         // Mirror the socket state onto a companion flow so the UI has one place
         // to read from and never needs a handle on the service instance.
         scope.launch { link.status.collect { _connection.value = it } }
+        scope.launch { link.lastError.collect { _linkError.value = it } }
         startScanner()
         startWakeWord()
         scope.launch { lostSweep() }
@@ -211,13 +212,25 @@ class VoiceNodeService : Service() {
                 return@launch
             }
             _phase.value = Phase.THINKING
-            val text = withContext(Dispatchers.IO) { recorder.transcribe(pcm) }
-            if (text.isNullOrBlank()) {
-                // Honest failure: no transcript means no utterance. Never guess.
-                _lastError.value = "Didn't catch that"
-                _phase.value = Phase.IDLE
-                return@launch
+            val text = when (val result = withContext(Dispatchers.IO) { recorder.transcribe(pcm) }) {
+                is MicRecorder.Result.Text -> result.text
+                // The one case the old message was actually right about.
+                MicRecorder.Result.NoSpeech -> {
+                    _lastError.value = "Didn't catch that"
+                    _phase.value = Phase.IDLE
+                    return@launch
+                }
+                // Everything else is a fault worth naming. Saying "didn't catch
+                // that" for a 503 sends the operator to check their microphone
+                // when the microphone was never the problem.
+                is MicRecorder.Result.Failed -> {
+                    _lastError.value = result.reason
+                    _phase.value = Phase.IDLE
+                    return@launch
+                }
             }
+            // Honest failure above, never a guess: no transcript means no utterance
+            // reaches the brain.
             _lastHeard.value = text
             _lastError.value = null
             val sent = link.sendUtterance("node-" + System.currentTimeMillis(), text)
@@ -397,6 +410,12 @@ class VoiceNodeService : Service() {
          *  realm-key or beacon-name mismatch, not an absent beacon. */
         private val _rejections = MutableStateFlow(0)
         val rejections: StateFlow<Int> = _rejections.asStateFlow()
+
+        private val _linkError = MutableStateFlow<String?>(null)
+        /** Why the socket is down, shown verbatim under the NO LINK chip. A red
+         *  chip with no reason sent a live session hunting the server for a
+         *  failure that never left the phone. */
+        val linkError: StateFlow<String?> = _linkError.asStateFlow()
 
         private val _micStatus = MutableStateFlow("")
         /** Non-empty only when something is actually wrong with the mic path. */

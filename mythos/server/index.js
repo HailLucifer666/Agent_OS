@@ -952,6 +952,16 @@ function createServer(deps) {
   // is the same one already proven reachable all session for chat completions.
   // express.raw() is scoped to this one route only — the global express.json()
   // above only matches 'application/json' and won't consume this body.
+  //
+  // THE BODY IS RAW AUDIO BYTES, NOT A FORM. req.body goes to the provider
+  // untouched, and req's own Content-Type picks the upload's extension
+  // (extFor() in providers/groq-stt.js). A multipart/form-data POST therefore
+  // sends the MIME envelope itself to the STT provider as if it were audio, and
+  // fails with a 503 that reads like an outage rather than a bad request. That
+  // is not hypothetical: the phone node shipped doing exactly this, and nothing
+  // caught it because the HUD uses Gemini Live / browser speech recognition and
+  // never calls this route — the node is its only consumer.
+  // Pinned by test/voice-node-launch-guards.test.js.
   app.post('/api/voice/transcribe', express.raw({ type: '*/*', limit: '15mb' }), expensiveLimit, async (req, res) => {
     try {
       let text;

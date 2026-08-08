@@ -58,6 +58,25 @@ class NodeLink(private val settings: NodeSettings) {
     private val _inbound = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
     val inbound: SharedFlow<JSONObject> = _inbound.asSharedFlow()
 
+    /**
+     * Why the socket last failed, verbatim from the throwable, or null while
+     * connected.
+     *
+     * This exists because its absence cost a live debugging session. onFailure
+     * received the Throwable and discarded it, so every distinct cause —
+     * cleartext blocked by network policy, wrong port, no route to host, a 401
+     * from a mistyped token — collapsed into the same red "NO LINK" chip with
+     * nothing to read. The server side is no help for the failures that never
+     * reach it: its log shows no rejection AND no attempt, which is
+     * indistinguishable from the phone being asleep.
+     *
+     * The HTTP status is included when there is one: it is the difference
+     * between "rejected" (a credential problem) and "never arrived" (a network
+     * or policy problem), which are opposite fixes.
+     */
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
     fun connect() {
         if (!settings.isConfigured()) {
             _status.value = Status.DISCONNECTED
@@ -81,6 +100,7 @@ class NodeLink(private val settings: NodeSettings) {
     private val listener = object : WebSocketListener() {
         override fun onOpen(ws: WebSocket, response: Response) {
             attempt = 0
+            _lastError.value = null
             _status.value = Status.CONNECTED
             // Claim our identity immediately. Until this lands the server has no
             // socket for this node id and will speak replies locally instead —
@@ -94,6 +114,17 @@ class NodeLink(private val settings: NodeSettings) {
         }
 
         override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+            val code = response?.code
+            val detail = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
+            _lastError.value = when {
+                // Distinguish the credential failures from the network ones, since
+                // the fix is a different field in a different place.
+                code == 401 -> "401 — the auth token does not match MYTHOS_AUTH_TOKEN"
+                code == 403 -> "403 — refused; set AETHER_NODE_TRUST=true on MYTHOS"
+                code == 429 -> "429 — too many attempts; wait a moment"
+                code != null -> "HTTP $code — $detail"
+                else -> detail
+            }
             _status.value = Status.DISCONNECTED
             scheduleReconnect()
         }

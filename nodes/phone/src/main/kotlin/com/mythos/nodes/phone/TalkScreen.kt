@@ -74,6 +74,7 @@ fun TalkScreen(
     val rejections by VoiceNodeService.rejections.collectAsState()
     val wakeStatus by VoiceNodeService.wakeStatus.collectAsState()
     val micStatus by VoiceNodeService.micStatus.collectAsState()
+    val linkError by VoiceNodeService.linkError.collectAsState()
     val wakeSuppressed by VoiceNodeService.wakeSuppressed.collectAsState()
 
     val offline = connection != NodeLink.Status.CONNECTED
@@ -158,6 +159,19 @@ fun TalkScreen(
                     text = it,
                     color = MythosTheme.Danger,
                     fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            // The reason the socket is down, when it is. Shown only while
+            // offline: once linked it is stale history, not status.
+            if (offline) linkError?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = it,
+                    color = MythosTheme.Danger,
+                    fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     textAlign = TextAlign.Center,
                 )

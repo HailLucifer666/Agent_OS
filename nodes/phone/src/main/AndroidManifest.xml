@@ -25,7 +25,22 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- WHY CLEARTEXT IS PERMITTED, and why it is not a lapse.
+         MYTHOS runs on the operator's own machine on their own LAN, reached as
+         ws://<lan-ip>:4478 — an IP address, so there is no certificate to
+         validate and no HTTPS to offer. Since API 28 Android blocks cleartext by
+         DEFAULT, and OkHttp then fails the connection with
+         UnknownServiceException("CLEARTEXT communication to <ip> not permitted by
+         network security policy") BEFORE a packet leaves the phone. That is
+         invisible from the server: the operator sees "no link" while the server
+         log shows no rejection and no attempt, because there was none.
+         Aether PROTOCOL.md §11.4 already defers transport encryption for the
+         mesh; the shared MYTHOS_AUTH_TOKEN is what authenticates this node, not
+         the transport. Not scoped to a domain because the operator's LAN address
+         is assigned by their router and a network-security-config domain entry
+         cannot express a private IP range. -->
     <application
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:icon="@android:drawable/ic_btn_speak_now"
         android:label="@string/app_name"

@@ -65,13 +65,29 @@ class NodeSettings(private val context: Context) {
         }
     }
 
+    /**
+     * Build-time prefill, used ONLY when the operator has stored nothing for that
+     * field yet. Stored values always win, so editing a field in Settings is
+     * permanent and a stale baked-in default can never override it — the failure
+     * mode that would make this feature worse than typing.
+     *
+     * Empty in release builds by construction (see phone/build.gradle.kts), and
+     * empty in debug too unless the operator put the values in the gitignored
+     * nodes/local.properties themselves.
+     */
+    private fun stored(key: String, prefill: String): String {
+        val v = prefs.getString(key, null)
+        if (v != null) return v
+        return prefill
+    }
+
     /** e.g. `ws://192.168.0.10:4478` — scheme included, no path. */
     var serverUrl: String
-        get() = prefs.getString(KEY_SERVER, "") ?: ""
+        get() = stored(KEY_SERVER, BuildConfig.PREFILL_SERVER_URL)
         set(v) = prefs.edit().putString(KEY_SERVER, v.trim().trimEnd('/')).apply()
 
     var authToken: String
-        get() = prefs.getString(KEY_TOKEN, "") ?: ""
+        get() = stored(KEY_TOKEN, BuildConfig.PREFILL_AUTH_TOKEN)
         set(v) = prefs.edit().putString(KEY_TOKEN, v.trim()).apply()
 
     /**
@@ -80,12 +96,12 @@ class NodeSettings(private val context: Context) {
      * dials. One string per device, everywhere.
      */
     var nodeId: String
-        get() = prefs.getString(KEY_NODE_ID, "") ?: ""
+        get() = stored(KEY_NODE_ID, BuildConfig.PREFILL_NODE_ID)
         set(v) = prefs.edit().putString(KEY_NODE_ID, v.trim()).apply()
 
     /** The tracked beacon's name, used to derive uid_hash. Not a secret. */
     var beaconName: String
-        get() = prefs.getString(KEY_BEACON, DEFAULT_BEACON_NAME) ?: DEFAULT_BEACON_NAME
+        get() = stored(KEY_BEACON, BuildConfig.PREFILL_BEACON_NAME.ifEmpty { DEFAULT_BEACON_NAME })
         set(v) = prefs.edit().putString(KEY_BEACON, v.trim().ifEmpty { DEFAULT_BEACON_NAME }).apply()
 
     var hapticsEnabled: Boolean
@@ -94,7 +110,13 @@ class NodeSettings(private val context: Context) {
 
     /** 32-byte realm key, or null until provisioned. */
     fun realmKey(): ByteArray? {
-        val hex = prefs.getString(KEY_REALM, null) ?: return null
+        // Same precedence as every other field, and the same validation: a
+        // prefilled key that is the wrong length or not hex is treated as absent
+        // rather than half-trusted, so the scanner reports nothing instead of
+        // failing every verification and looking like an empty room.
+        val hex = prefs.getString(KEY_REALM, null)
+            ?: BuildConfig.PREFILL_REALM_KEY.takeIf { it.isNotEmpty() }
+            ?: return null
         return runCatching { hexToBytes(hex) }.getOrNull()?.takeIf { it.size == REALM_KEY_BYTES }
     }
 

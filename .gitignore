@@ -48,6 +48,12 @@ mythos/ui/public/models/silero/
 .env
 *.env.local
 Nvidia NIM.env
+# A copy of .env is still .env: `.env` alone does not match `.env.bak`,
+# `.env.save`, `.env.2026-08-08` and friends, so an ordinary "back it up before
+# editing" leaves a file holding MYTHOS_AUTH_TOKEN fully trackable — and two
+# sessions share this working tree, where one `git add -A` would commit it.
+.env.*
+!.env.example
 
 # session/tooling junk
 .claude/

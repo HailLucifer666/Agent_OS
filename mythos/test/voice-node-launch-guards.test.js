@@ -102,6 +102,46 @@ describe('voice node — launch-blocking hazards stay fixed', () => {
       'the service must surface the mic error rather than just going IDLE');
   });
 
+  it('the phone posts RAW audio to /api/voice/transcribe, not a multipart form', (t) => {
+    if (!present) return t.skip('nodes/phone not present in this checkout');
+    const mic = read('MicRecorder.kt');
+
+    // The route reads its body with express.raw({type:'*/*'}) and hands those
+    // exact bytes plus the request's Content-Type to the STT provider. A
+    // multipart POST sends the MIME envelope as if it were the audio; Groq
+    // rejects it and the route answers 503, which reads like an outage rather
+    // than a malformed request. Measured, not theorised: the same 1s WAV gave
+    // 200 {"ok":true} raw and 503 stt-down as multipart.
+    //
+    // No unit test can catch this — it needs the real route AND a real provider
+    // — and the phone is the endpoint's ONLY consumer, so no other client would
+    // ever fail first. A source-shape guard is the only automated defence there
+    // is, which is exactly why this file exists.
+    assert.doesNotMatch(mic, /MultipartBody/,
+      'the transcribe body must not be a multipart form — the route reads it raw');
+    assert.match(mic, /post\(\s*wav\.toRequestBody\("audio\/wav"\.toMediaType\(\)\)\s*\)/,
+      'the WAV must be posted as the raw body with an audio content-type');
+  });
+
+  it('a failed transcription says which failure it was', (t) => {
+    if (!present) return t.skip('nodes/phone not present in this checkout');
+    const mic = read('MicRecorder.kt');
+    const svc = read('VoiceNodeService.kt');
+
+    // Returning a bare String? made a 503, a 401, a dead network and a silent
+    // room indistinguishable — all four rendered as "didn't catch that", which
+    // sends the operator to check a microphone that was never at fault.
+    assert.match(mic, /sealed class Result/, 'the outcome must be typed, not a nullable string');
+    assert.match(mic, /object NoSpeech/, '"no speech" must be distinct from "failed"');
+    assert.match(mic, /401 ->|503 ->/, 'HTTP failures must be named, not collapsed');
+
+    // And the distinction must survive into the UI, or it bought nothing.
+    assert.match(svc, /MicRecorder\.Result\.NoSpeech/,
+      'the service must branch on the outcome rather than on blankness');
+    assert.match(svc, /is MicRecorder\.Result\.Failed/,
+      'a failure must reach the screen with its reason');
+  });
+
   it('unreadable secure storage resets instead of killing the node, and never falls back to plaintext', (t) => {
     if (!present) return t.skip('nodes/phone not present in this checkout');
     const src = read('NodeSettings.kt');
