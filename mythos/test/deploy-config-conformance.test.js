@@ -196,25 +196,34 @@ describe('F1 · render.yaml healthCheckPath matches the real route', () => {
 // ---------------------------------------------------------------------------
 
 describe('F2 · render.yaml carries the WS origin allowlist for the deployed hostname', () => {
-  test('ALLOWED_ORIGINS is declared and includes the Render hostname', () => {
+  test('ALLOWED_ORIGINS is declared — as a committed value, or as a dashboard-supplied sync:false entry', () => {
     const lines = readLines(RENDER_YAML_PATH);
     const keyIdx = lines.findIndex((l) => l.trim() === '- key: ALLOWED_ORIGINS');
-    assert.notEqual(keyIdx, -1, 'render.yaml must declare an ALLOWED_ORIGINS env var');
-    const valueLine = lines.slice(keyIdx + 1).find((l) => l.trim().startsWith('value:'));
-    assert.ok(valueLine, 'ALLOWED_ORIGINS must carry a value (comma-separated origins)');
-    const value = valueLine.trim().replace(/^value:\s*"?/, '').replace(/"?$/, '');
-    // The server SILENTLY drops any origin that fails its isValidOrigin regex
-    // (server/index.js) — so the pinned string must be one it will actually
-    // accept, or the deploy 403s with a green suite. Check every part of the
-    // comma-separated list.
-    const originRe = /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?$/;
-    const parts = value.split(',').map((s) => s.trim()).filter(Boolean);
-    assert.ok(parts.length >= 1, `ALLOWED_ORIGINS must not be empty; got: ${value}`);
-    for (const part of parts) {
-      assert.ok(originRe.test(part), `origin "${part}" would be silently dropped by the server's isValidOrigin — must match ^https?://[a-zA-Z0-9._-]+(:\d+)?$`);
+    assert.notEqual(keyIdx, -1, 'render.yaml must declare an ALLOWED_ORIGINS env var (a deploy without one 403s the whole live layer)');
+    const rest = lines.slice(keyIdx + 1).filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+    const valueLine = rest.find((l) => l.trim().startsWith('value:'));
+    const syncLine = rest.find((l) => l.trim().startsWith('sync:'));
+    if (valueLine) {
+      // Committed value: must be a list of origins the server will actually
+      // accept — isValidOrigin (server/index.js) SILENTLY drops anything that
+      // fails ^https?://[a-zA-Z0-9._-]+(:\d+)?$, so a schemeless string would
+      // pass here yet leave the deploy 403-dead with a green suite.
+      const value = valueLine.trim().replace(/^value:\s*"?/, '').replace(/"?$/, '');
+      const originRe = /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?$/;
+      const parts = value.split(',').map((s) => s.trim()).filter(Boolean);
+      assert.ok(parts.length >= 1, `ALLOWED_ORIGINS must not be empty; got: ${value}`);
+      for (const part of parts) {
+        assert.ok(originRe.test(part), `origin "${part}" would be silently dropped by the server's isValidOrigin — must match ^https?://[a-zA-Z0-9._-]+(:\d+)?$`);
+      }
+      assert.ok(parts.some((p) => p.includes(RENDER_HOSTNAME)),
+        `ALLOWED_ORIGINS must include https://${RENDER_HOSTNAME}; got: ${value}`);
+    } else {
+      // Dashboard-supplied (sync:false, per render.yaml B4): the key exists
+      // and is explicitly marked sync:false — a bare key with no value and no
+      // sync flag means Render deploys it empty and the live layer 403s.
+      assert.ok(syncLine && /sync:\s*false/.test(syncLine),
+        'ALLOWED_ORIGINS with no committed value must be declared sync:false (set once in the Render dashboard)');
     }
-    assert.ok(parts.some((p) => p.includes(RENDER_HOSTNAME)),
-      `ALLOWED_ORIGINS must include https://${RENDER_HOSTNAME}; got: ${value}`);
   });
 
   test('mechanism: a foreign-but-allowlisted Origin + ?token= opens a REAL ws; a non-allowlisted foreign Origin still 403s', async () => {

@@ -42,8 +42,15 @@ async function pickFreePort() {
   return 4499; // last resort — nothing else in the suite binds 4499
 }
 
-async function spawnBoot(extraEnv) {
-  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-vault-warn-'));
+// A vault root is "under the app dir" when it resolves inside mythos/ — the
+// shape of the schema default ./vault (-> /app/vault in the container image),
+// which lives in the ephemeral writable layer. mkdtemp under MYTHOS_ROOT
+// simulates that without touching the real repo vault.
+function makeUnderAppVaultDir() {
+  return fs.mkdtempSync(path.join(MYTHOS_ROOT, '.mythos-vault-warn-'));
+}
+
+async function spawnBoot(extraEnv, vaultDir) {
   const port = await pickFreePort();
   const child = spawn(process.execPath, [MAIN_PATH], {
     cwd: MYTHOS_ROOT,
@@ -84,8 +91,8 @@ async function stop(child) {
 }
 
 describe('F4 · the vault is ephemeral on a container without a volume — boot must say so', () => {
-  test('a container-like boot (RENDER=true) emits the vault.ephemeral warning naming the path and the risk', async () => {
-    const state = await spawnBoot({ RENDER: 'true' });
+  test('container + vault under the app dir (the default ./vault shape) emits the warning naming path and risk', async () => {
+    const state = await spawnBoot({ RENDER: 'true' }, makeUnderAppVaultDir());
     try {
       const seen = await waitFor(/vault\.ephemeral/, state, 20000);
       assert.equal(seen, true,
@@ -98,8 +105,26 @@ describe('F4 · the vault is ephemeral on a container without a volume — boot 
     }
   });
 
+  test('container + vault explicitly outside the app dir (the /data/vault disk shape) stays silent', async () => {
+    // The persistent-disk deployment (render.yaml B4: MYTHOS_VAULT_ROOT=/data/vault
+    // on a mounted volume) is the operator's deliberate choice — warning it
+    // would be a false alarm. os.tmpdir() is outside mythos/, same shape.
+    const state = await spawnBoot({ RENDER: 'true' }, fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-vault-warn-')));
+    try {
+      const reachedVault = await waitFor(/vault\.dirs\.created/, state, 25000);
+      assert.equal(reachedVault, true,
+        'boot never reached the vault step. Output: ' + state.getOutput().slice(-1200));
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(/vault\.ephemeral/.test(state.getOutput()), false,
+        'an explicitly external vault root must NOT emit vault.ephemeral');
+    } finally {
+      await stop(state.child);
+      try { fs.rmSync(state.vaultDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ }
+    }
+  });
+
   test('a normal local boot stays silent — no false alarms', async () => {
-    const state = await spawnBoot({});
+    const state = await spawnBoot({}, makeUnderAppVaultDir());
     try {
       const reachedVault = await waitFor(/vault\.dirs\.created/, state, 25000);
       assert.equal(reachedVault, true,
