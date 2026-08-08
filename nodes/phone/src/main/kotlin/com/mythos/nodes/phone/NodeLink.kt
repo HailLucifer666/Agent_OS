@@ -43,9 +43,12 @@ class NodeLink(private val settings: NodeSettings) {
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    private var webSocket: WebSocket? = null
-    private var closedByUs = false
-    private var attempt = 0
+    // Written from OkHttp's dispatcher threads and read from the reconnect
+    // thread and the UI's callers, so none of these may be cached per-thread.
+    @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var closedByUs = false
+    @Volatile private var attempt = 0
+    @Volatile private var reconnectPending = false
 
     private val _status = MutableStateFlow(Status.DISCONNECTED)
     val status: StateFlow<Status> = _status.asStateFlow()
@@ -78,6 +81,12 @@ class NodeLink(private val settings: NodeSettings) {
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
     fun connect() {
+        // Idempotent on purpose: a second call used to open a second socket and
+        // drop the reference to the first without closing it, so the server saw
+        // two live sockets claiming one node id. The caller is now guarded too
+        // (VoiceNodeService.wired), but a link that leaks sockets when called
+        // twice is a trap for the next caller.
+        if (webSocket != null && _status.value != Status.DISCONNECTED) return
         if (!settings.isConfigured()) {
             _status.value = Status.DISCONNECTED
             return
@@ -86,7 +95,16 @@ class NodeLink(private val settings: NodeSettings) {
         openSocket()
     }
 
+    @Synchronized
     private fun openSocket() {
+        // Close whatever we are replacing. Without this every reconnect LEAKED a
+        // live socket: the field was overwritten, but the old connection stayed
+        // open on both ends, still delivering frames into the same _inbound. The
+        // device then played one reply once per leaked socket.
+        val previous = webSocket
+        webSocket = null
+        if (previous != null) runCatching { previous.cancel() }
+
         _status.value = Status.CONNECTING
         val request = Request.Builder()
             .url(settings.webSocketUrl())
@@ -97,23 +115,43 @@ class NodeLink(private val settings: NodeSettings) {
         webSocket = client.newWebSocket(request, listener)
     }
 
+    /**
+     * One listener instance serves every socket this link ever opens, so each
+     * callback MUST establish that it speaks for the current one.
+     *
+     * Without that check a dead socket's `onClosed` set the whole link
+     * DISCONNECTED and scheduled a reconnect while a healthy socket was already
+     * carrying traffic — and once the server started closing superseded sockets,
+     * each close produced another socket, which superseded another, forever. It
+     * also flipped the UI's connection chip on and off fast enough that the error
+     * text under it could not be read.
+     */
     private val listener = object : WebSocketListener() {
         override fun onOpen(ws: WebSocket, response: Response) {
-            attempt = 0
+            if (ws !== webSocket) return
             _lastError.value = null
             _status.value = Status.CONNECTED
             // Claim our identity immediately. Until this lands the server has no
             // socket for this node id and will speak replies locally instead —
             // correct behaviour, but only briefly.
-            ws.send(NodeMessages.identify(settings.nodeId))
+            // LIVE_AUDIO says this build has LivePcmPlayer, so MYTHOS may answer
+            // through Gemini Live instead of the batch lane.
+            ws.send(NodeMessages.identify(settings.nodeId, listOf(CAP_LIVE_AUDIO)))
         }
 
         override fun onMessage(ws: WebSocket, text: String) {
+            if (ws !== webSocket) return
+            // Backoff resets here rather than in onOpen: a socket that opens and
+            // immediately dies is not a working socket, and treating it as one
+            // pinned the delay at its 250ms floor for as long as the failure
+            // lasted. A frame we can read is the first real proof of health.
+            attempt = 0
             val json = runCatching { JSONObject(text) }.getOrNull() ?: return
             _inbound.tryEmit(json)
         }
 
         override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+            if (ws !== webSocket) return
             val code = response?.code
             val detail = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
             _lastError.value = when {
@@ -130,19 +168,31 @@ class NodeLink(private val settings: NodeSettings) {
         }
 
         override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+            if (ws !== webSocket) return
             _status.value = Status.DISCONNECTED
+            // MYTHOS closes a socket with exactly this code and reason when a
+            // NEWER socket of ours claimed the same node id. Reconnecting would
+            // mean racing our own replacement.
+            if (code == 1000 && reason == SUPERSEDED) return
             scheduleReconnect()
         }
     }
 
+    @Synchronized
     private fun scheduleReconnect() {
         if (closedByUs) return
+        // One pending reconnect at a time. Several callbacks can report the same
+        // dead socket, and each used to start its own thread — every one of which
+        // opened a real socket.
+        if (reconnectPending) return
+        reconnectPending = true
         // Capped at 5s: this is a device on a home LAN that should recover
         // quickly, not a client politely backing off a busy public API.
         val delayMs = min(RECONNECT_MAX_MS, RECONNECT_BASE_MS shl min(attempt, 5))
         attempt++
         Thread {
             Thread.sleep(delayMs)
+            reconnectPending = false
             if (!closedByUs) openSocket()
         }.apply { isDaemon = true }.start()
     }
@@ -164,6 +214,8 @@ class NodeLink(private val settings: NodeSettings) {
     fun sendUtterance(reqId: String, text: String): Boolean =
         send(NodeMessages.utterance(reqId, text))
 
+    fun sendStop(reqId: String): Boolean = send(NodeMessages.stop(reqId))
+
     fun disconnect() {
         closedByUs = true
         runCatching { webSocket?.close(1000, "node stopping") }
@@ -174,5 +226,11 @@ class NodeLink(private val settings: NodeSettings) {
     companion object {
         private const val RECONNECT_BASE_MS = 250L
         private const val RECONNECT_MAX_MS = 5_000L
+
+        /** Close reason MYTHOS uses when a newer socket claims the same node id. */
+        const val SUPERSEDED = "superseded"
+
+        /** This build can render Gemini Live's raw 24kHz PCM (LivePcmPlayer). */
+        const val CAP_LIVE_AUDIO = "live-audio"
     }
 }

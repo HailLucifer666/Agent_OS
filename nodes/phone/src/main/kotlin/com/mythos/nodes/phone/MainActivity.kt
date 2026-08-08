@@ -1,10 +1,14 @@
 package com.mythos.nodes.phone
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
@@ -60,9 +64,17 @@ class MainActivity : ComponentActivity() {
                     if (settings.hapticsEnabled) {
                         window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     }
-                    sendServiceAction(VoiceNodeService.ACTION_START_LISTENING)
+                    withService(
+                        { it.startListeningOnce() },
+                        VoiceNodeService.ACTION_START_LISTENING,
+                    )
                 },
-                onHoldEnd = { sendServiceAction(VoiceNodeService.ACTION_STOP_LISTENING) },
+                onHoldEnd = {
+                    withService(
+                        { it.stopListening() },
+                        VoiceNodeService.ACTION_STOP_LISTENING,
+                    )
+                },
                 onOpenSettings = { showSettings = true },
             )
 
@@ -105,6 +117,45 @@ class MainActivity : ComponentActivity() {
     private fun startNodeService() {
         if (!settings.isConfigured()) return
         startForegroundService(Intent(this, VoiceNodeService::class.java))
+    }
+
+    // ---- Direct handle on the service, so a press is a method call -----------
+    //
+    // Hold-to-talk used to be startService(Intent), which is a Binder round trip
+    // into ActivityManager and another one back before onStartCommand ran on the
+    // service's main thread. The first press after an idle period routinely felt
+    // like nothing happened — and a press that feels ignored gets repeated, which
+    // is how one question became three answers.
+    //
+    // The Intent path is kept as the fallback for the window before the binding
+    // lands, and it remains how the wake word and a START_STICKY restart arrive.
+
+    private var boundService: VoiceNodeService? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            boundService = (binder as? VoiceNodeService.LocalBinder)?.service()
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            boundService = null
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        bindService(Intent(this, VoiceNodeService::class.java), connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        runCatching { unbindService(connection) }
+        boundService = null
+    }
+
+    private fun withService(direct: (VoiceNodeService) -> Unit, fallbackAction: String) {
+        if (!settings.isConfigured()) return
+        val bound = boundService
+        if (bound != null) direct(bound) else sendServiceAction(fallbackAction)
     }
 
     private fun sendServiceAction(action: String) {

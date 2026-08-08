@@ -1119,6 +1119,30 @@ function createServer(deps) {
     });
   }
 
+  // Same fan-out, but at most ONE socket per voice node.
+  //
+  // A phone can hold several open sockets at once (a reconnect that raced its
+  // own close, and historically a client that leaked one per reconnect). They
+  // all feed a single inbound handler on the device, so a broadcast reply is
+  // played once per socket — the operator hears the same sentence two or three
+  // times. Text frames duplicating that way are invisible; audio is not, which
+  // is why only speech uses this and the general broadcast is left alone.
+  function broadcastSpeech(msg) {
+    const payload = JSON.stringify(msg);
+    const spokenTo = new Set();
+    wss.clients.forEach((client) => {
+      if (client.readyState !== 1) return;
+      const nodeId = client._mythosNodeId;
+      if (nodeId) {
+        // The map is the authority on which socket currently IS this node.
+        if (voiceNodes.get(nodeId) !== client) return;
+        if (spokenTo.has(nodeId)) return;
+        spokenTo.add(nodeId);
+      }
+      client.send(payload);
+    });
+  }
+
   // Proactive speech — the entity speaks without an inbound utterance.
   // Synthesizes via edge-tts (same as reactive sendSpokenReply) and delivers
   // to a single connection as a synthetic reqId'd turn (see targeting below).
@@ -1194,7 +1218,7 @@ function createServer(deps) {
   // text-only copy would look harmless and isn't: playNextChunk() speaks any
   // chunk whose audioB64 is null via speechSynthesis, so the PC would narrate
   // the reply alongside the phone — the same two-voices defect as BUG-060.
-  function sendSpeechChunk(localSend, target, msg) {
+  function sendSpeechChunk(localSend, target, msg, originWs) {
     // Stage 5: a deliberate, FSM-sequenced handoff may have moved this reply to
     // another device since the target was resolved. `target` is a live object so
     // the redirect applies to the chunks that have not been sent yet — which is
@@ -1209,6 +1233,14 @@ function createServer(deps) {
         // The node died mid-reply. Remaining chunks fall back to the origin
         // below rather than vanishing.
       }
+    }
+    // Both fallback paths below are silent by design (localSend's send() is a
+    // no-op on a closed socket) — that's fine when the origin is legitimately
+    // gone, but it means "answered and nobody heard it" leaves no trace. Log it
+    // once here, the one place every synthesis site funnels through, instead of
+    // at each send() call site.
+    if (originWs && originWs.readyState !== 1) {
+      logger.warn('speech.undeliverable', { reqId: msg.reqId, nodeId: target ? target.nodeId : null });
     }
     localSend(msg);
   }
@@ -1416,7 +1448,7 @@ function createServer(deps) {
     // we fire, fall back to the normal broadcast so the speech isn't lost.
     const sendOut = (targetWs && targetWs.readyState === 1)
       ? (msg) => { try { targetWs.send(JSON.stringify(msg)); } catch (_) { /* client vanished mid-send */ } }
-      : broadcastAll;
+      : broadcastSpeech;
     const reqId = 'proactive-' + Date.now() + '-' + (++proactiveSeq);
     const speak = sanitizeSpoken(text);
     // Phase 2 (AETHER-WIRING): when enabled, the announcement goes to the
@@ -1476,7 +1508,7 @@ function createServer(deps) {
       const totalChunks = (alertB64 ? 1 : 0) + textChunks.length;
       let idx = 0;
       if (alertB64 && !ctrl.signal.aborted) {
-        sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' });
+        sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' }, targetWs);
         idx++;
       }
       for (let i = 0; i < textChunks.length; i++) {
@@ -1493,7 +1525,7 @@ function createServer(deps) {
           }
         }
         if (ctrl.signal.aborted) break;
-        sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] });
+        sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] }, targetWs);
         idx++;
       }
       // chunked forced true on abort, or when the alert tone alone was sent
@@ -1972,7 +2004,38 @@ function createServer(deps) {
     // (WAVE 3 slow tools) doesn't get conflated with a real failure — see
     // that module's header for the exact defect this closed.
 
-    function send(msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
+    // A turn's reply is addressed to the socket that ASKED, but a voice node's
+    // identity outlives its sockets: a phone reconnects mid-turn (documented as
+    // the normal case in NodeLink.kt — sleep, Wi-Fi roam, a server restart), and
+    // since the duplicate-identify branch below now closes the superseded
+    // socket, the reply for a turn already in flight had nowhere to land. It
+    // vanished into the readyState check, and because `done` is the only frame
+    // that returns the phone to IDLE, the phone waited forever. Live-verified
+    // 2026-08-09: "thinking, thinking, thinking".
+    //
+    // So re-home to whatever socket currently holds this node id rather than
+    // giving up on the captured one. A HUD connection has no node identity and
+    // is unaffected — it keeps the old behaviour exactly.
+    function send(msg) {
+      if (ws.readyState === ws.OPEN) { ws.send(JSON.stringify(msg)); return; }
+      const nodeId = ws._mythosNodeId;
+      if (nodeId) {
+        const current = voiceNodes.get(nodeId);
+        if (current && current !== ws && current.readyState === 1) {
+          try {
+            current.send(JSON.stringify(msg));
+            logger.info('speech.rehomed', { nodeId, type: msg && msg.type, reqId: msg && msg.reqId });
+            return;
+          } catch (_) { /* the replacement died too — fall through to the warn */ }
+        }
+      }
+      // Silence here is what made the last two rounds of this bug invisible.
+      // Only the terminal frame is worth a line: a dropped chunk is already
+      // covered by sendSpeechChunk's speech.undeliverable.
+      if (msg && msg.type === 'done') {
+        logger.warn('speech.undeliverable', { reqId: msg.reqId, nodeId: nodeId || null, frame: 'done' });
+      }
+    }
 
     // ---- S2S Live voice (V2 §10, merged-order step 4, Phase 5) ----
     // One session per WS connection, created LAZILY on liveOpen() (wake-word/
@@ -2059,6 +2122,13 @@ function createServer(deps) {
             liveAdapter.onLiveTurnComplete(turn);
             liveTurnUserSpeechAt = null;
             liveTurnAudioRecorded = false;
+            // The HUD infers the end of a Live turn from its own audio queue
+            // draining. A voice node cannot: its `done` ack arrives before the
+            // first audio frame (say:'', routedToLive:true), so without an
+            // explicit end-of-turn it has no moment at which to reopen the mic
+            // or stop its reply-timeout clock. Ignored by clients that don't
+            // know the frame.
+            send({ type: 'live-turn-complete' });
           },
           // Direct per-connection barge-in callback — NOT the shared bus (see
           // live-session.js's onInterrupted comment: a bare bus.subscribe here
@@ -2221,7 +2291,7 @@ function createServer(deps) {
               voiceLatencyTracker.record(Date.now() - micStoppedAt);
               latencyRecorded = true;
             }
-            sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] });
+            sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] }, ws);
           }
         }
         // chunked forced true on abort (even with zero chunks sent): routes the
@@ -2482,7 +2552,7 @@ function createServer(deps) {
             } catch (err) {
               logger.warn('tts.chunk-failed', { error: err.message, index: i });
             }
-            sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, mime: chunkMime, text: spoken });
+            sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId: msg.reqId, index: i, total: null, audioB64, mime: chunkMime, text: spoken }, ws);
           });
         }
 
@@ -2669,7 +2739,23 @@ function createServer(deps) {
       // (VOICE_UNIFIED_LIVE_VOICE); the batch fallback below is unchanged and
       // still runs whenever a Live session genuinely isn't available.
       if (msg.type === 'utterance') {
-        if (liveSession && liveSession.isOpen()) {
+        // A voice node that cannot RENDER Live's audio must not be routed into
+        // it. Live's reply leaves as 'live-audio-out' frames on this socket, and
+        // a client with no case for them discards them silently while the ack
+        // carries say:'' — so not even a caption survives. Live-verified
+        // 2026-08-09: the brain answered (live.turn-parts audioParts=57) and the
+        // room stayed silent.
+        //
+        // The batch fallback is honest but it is NOT equivalent: it answers from
+        // the 'voice' lane's text chain, whose last resort the lane table itself
+        // calls "fast but flat", while the desktop is talking to a native-audio
+        // model. The operator heard that difference immediately. So the gate is
+        // the client's declared capability, not "is it a node" — a phone that
+        // says it can play PCM gets the same brain the desktop does, and an older
+        // build that says nothing still gets a reply it can actually hear.
+        if (ws._mythosNodeId && !ws._nodeLiveAudio) {
+          queueTurn(function() { return handleUtterance(msg); });
+        } else if (liveSession && liveSession.isOpen()) {
           liveSession.sendText(String(msg.text || ''));
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
@@ -2789,10 +2875,20 @@ function createServer(deps) {
               summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
               detail: { nodeId },
             });
+            // "Newer one wins" only ever applied to voiceNodes; the superseded
+            // socket stayed open and kept receiving, because a reply goes to the
+            // socket that ASKED, not to the map. A phone that opened three
+            // sockets therefore had three live conversations with one server.
+            // Close it here so a stale socket cannot outlive its replacement,
+            // whatever client build is on the other end.
+            try { previous.close(1000, 'superseded'); } catch (_) { /* already gone */ }
           }
           voiceNodes.set(nodeId, ws);
           ws._mythosNodeId = nodeId;
-          logger.info('voice-node.identified', { nodeId });
+          // Absent or unparseable caps mean "assume nothing" — an older phone
+          // build predates this field entirely and must keep the batch path.
+          ws._nodeLiveAudio = Array.isArray(msg.caps) && msg.caps.includes('live-audio');
+          logger.info('voice-node.identified', { nodeId, liveAudio: ws._nodeLiveAudio });
           send({ type: 'identified', ok: true, nodeId });
         }
       }

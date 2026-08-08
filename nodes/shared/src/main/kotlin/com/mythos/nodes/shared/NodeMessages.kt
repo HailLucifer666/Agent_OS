@@ -58,7 +58,30 @@ public object NodeMessages {
     public fun wake(nodeId: String): String =
         """{"type":"node-wake","nodeId":"${jsonEscape(nodeId)}"}"""
 
+    /**
+     * Claim a node identity, declaring what this build can play.
+     *
+     * `caps` is the whole reason a phone can be answered by Gemini Live: the
+     * server refuses to route a node into Live unless the client says it can
+     * render Live's raw PCM frames, because a build that cannot is answered into
+     * silence. An older APK sends no caps and keeps the batch path, so upgrading
+     * MYTHOS never breaks a phone that is already in someone's pocket.
+     */
+    public fun identify(nodeId: String, caps: List<String>): String {
+        val list = caps.joinToString(",") { "\"${jsonEscape(it)}\"" }
+        return """{"type":"identify","role":"node","nodeId":"${jsonEscape(nodeId)}","caps":[$list]}"""
+    }
+
     /** A transcribed utterance from this node's microphone. */
     public fun utterance(reqId: String, text: String): String =
         """{"type":"utterance","reqId":"${jsonEscape(reqId)}","text":"${jsonEscape(text)}"}"""
+
+    /**
+     * Abandon a turn already in flight — the operator started talking again.
+     *
+     * MYTHOS aborts the chunks it has not synthesized yet, so it stops speaking
+     * into a listener that has moved on instead of finishing the sentence.
+     */
+    public fun stop(reqId: String): String =
+        """{"type":"stop","reqId":"${jsonEscape(reqId)}"}"""
 }

@@ -25,6 +25,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -252,6 +253,9 @@ private fun Orb(
     )
 
     var pressed by remember { mutableStateOf(false) }
+    // The gesture reads this instead of capturing `enabled`, so the handler sees
+    // the current value without the modifier having to be re-keyed on it.
+    val enabledState = rememberUpdatedState(enabled)
 
     Box(
         modifier = Modifier
@@ -262,17 +266,31 @@ private fun Orb(
                 contentDescription = "Talk to MYTHOS. Current state: $stateLabel. " +
                     "Press and hold to speak."
             }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
+            // Keyed on Unit, and `enabled` is read INSIDE the handler.
+            //
+            // This used to be pointerInput(enabled), where enabled folds in the
+            // socket status. A reconnect is the normal case on a phone, so a
+            // status flip mid-hold re-keyed the modifier, cancelled the coroutine
+            // while it was suspended in tryAwaitRelease(), and the lines after it
+            // never ran: onHoldEnd() was never called, the mic was never told to
+            // stop, and `pressed` stuck on. The gesture must not be at the mercy
+            // of the network.
+            .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
+                        if (!enabledState.value) return@detectTapGestures
                         pressed = true
-                        onHoldStart()
-                        // Suspends until release, which is exactly push-to-talk:
-                        // the mic is open for as long as the finger is down.
-                        tryAwaitRelease()
-                        pressed = false
-                        onHoldEnd()
+                        try {
+                            onHoldStart()
+                            // Suspends until release, which is exactly push-to-talk:
+                            // the mic is open for as long as the finger is down.
+                            tryAwaitRelease()
+                        } finally {
+                            // Runs even if this gesture is cancelled, so the mic is
+                            // always told to close and the orb never sticks pressed.
+                            pressed = false
+                            onHoldEnd()
+                        }
                     },
                 )
             },

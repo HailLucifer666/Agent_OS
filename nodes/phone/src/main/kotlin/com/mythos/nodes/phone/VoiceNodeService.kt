@@ -8,8 +8,10 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +47,8 @@ class VoiceNodeService : Service() {
     private lateinit var link: NodeLink
     private var scanner: BeaconScanner? = null
     private var player: SpeechPlayer? = null
+    /** Gemini Live's raw 24kHz PCM — a different sink from `player`, see LivePcmPlayer. */
+    private var livePlayer: LivePcmPlayer? = null
     private var mic: MicRecorder? = null
     private var listenJob: Job? = null
 
@@ -57,6 +61,16 @@ class VoiceNodeService : Service() {
 
     private var detector: WakeWordDetector? = null
     private var wakeGate: WakeWordGate? = null
+
+    /** Guards the one-time wiring in onStartCommand — see the comment there. */
+    private var wired = false
+
+    /** Foreground promotion is one-shot; see onStartCommand. */
+    private var foregrounded = false
+
+    /** reqId of the hold-to-talk turn awaiting a reply, or null when idle. */
+    @Volatile private var pendingReqId: String? = null
+    private var deadlineJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -74,17 +88,42 @@ class VoiceNodeService : Service() {
                 wakeGate?.notePlaying(playing)
             }
         }
+        livePlayer = LivePcmPlayer().also { p ->
+            p.setListener { playing ->
+                if (playing) _phase.value = Phase.SPEAKING
+                else if (_phase.value == Phase.SPEAKING) _phase.value = Phase.IDLE
+                wakeGate?.notePlaying(playing)
+            }
+        }
         mic = MicRecorder(settings)
         createChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundCompat()
+        // Promotion is a Binder round trip and the notification never changes, so
+        // doing it per action put two IPC hops between the operator's finger and
+        // the microphone. Once is enough; Android keeps us in the foreground.
+        if (!foregrounded) {
+            foregrounded = true
+            startForegroundCompat()
+        }
 
         when (intent?.action) {
             ACTION_START_LISTENING -> { startListeningOnce(); return START_STICKY }
             ACTION_STOP_LISTENING -> { stopListening(); return START_STICKY }
         }
+
+        // Android delivers onStartCommand for EVERY startService call, and
+        // MainActivity fires a bare one on each launch/resume. Everything below
+        // is one-time wiring, so re-running it added a SECOND collector to the
+        // same link.inbound SharedFlow — one speech-chunk frame then reached
+        // consumeInbound() once per start and was enqueued into the player that
+        // many times. Live symptom (operator, 2026-08-09): every sentence of the
+        // reply spoken three times before the next one, matching the three
+        // `voice-node.identified` lines in the server log. The scanner, the wake
+        // detector and lostSweep were being tripled by the same path.
+        if (wired) return START_STICKY
+        wired = true
 
         link.connect()
         scope.launch { consumeInbound() }
@@ -186,6 +225,24 @@ class VoiceNodeService : Service() {
      */
     fun startListeningOnce() {
         if (listenJob?.isActive == true) return
+        // A turn is not over when this coroutine ends.
+        //
+        // `listenJob` completes the instant sendUtterance() hands the frame to the
+        // socket — sendUtterance and armReplyDeadline both return immediately — so
+        // the old guard was already open while MYTHOS was still thinking and before
+        // the phone had spoken a word. Every press in that window started a WHOLE
+        // NEW TURN: another recording, another STT call, another reqId, another
+        // reply. Three presses of one question is three questions, and MYTHOS
+        // answered all three. That is the "it repeats the entire answer three, then
+        // more than three times" the operator reported across several builds — real
+        // turns, never duplicated frames.
+        //
+        // Pressing again is still allowed; it just means "cancel that and listen to
+        // me instead" rather than "ask a second time". Refusing outright would make
+        // the orb feel dead for the length of a reply, which is the behaviour that
+        // provoked the extra presses in the first place.
+        val outgoing = pendingReqId
+        if (outgoing != null) bargeIn(outgoing)
         listenJob = scope.launch {
             val recorder = mic ?: return@launch
             // Never record over our own voice: the mic would capture the TTS and
@@ -193,6 +250,7 @@ class VoiceNodeService : Service() {
             // MYTHOS just said (the same self-answering loop the HUD guards
             // against, and proven in this repo's episodic history).
             player?.stopAndClear()
+            livePlayer?.stopAndClear()
 
             if (!recorder.start()) {
                 // Silently returning to IDLE here is what makes a broken mic
@@ -233,21 +291,92 @@ class VoiceNodeService : Service() {
             // reaches the brain.
             _lastHeard.value = text
             _lastError.value = null
-            val sent = link.sendUtterance("node-" + System.currentTimeMillis(), text)
+            val reqId = "node-" + System.currentTimeMillis()
+            // A fresh turn owns the speaker. Anything still queued belongs to a
+            // reply we are no longer waiting for.
+            player?.stopAndClear()
+            pendingReqId = reqId
+            val sent = link.sendUtterance(reqId, text)
             if (!sent) {
+                pendingReqId = null
                 _lastError.value = "Not connected to MYTHOS"
                 _phase.value = Phase.IDLE
+            } else {
+                armReplyDeadline(reqId)
             }
         }
+    }
+
+    /**
+     * THINKING has to be able to fail.
+     *
+     * The phase left THINKING only on an inbound frame, so a reply that never
+     * arrived — the socket it was promised to having closed mid-turn — left the
+     * orb spinning with nothing to read and nothing to retry. Indistinguishable,
+     * from the operator's side, from being ignored. That cost this build two
+     * debugging rounds, so the wait now names itself.
+     */
+    private fun armReplyDeadline(reqId: String) {
+        deadlineJob?.cancel()
+        deadlineJob = scope.launch {
+            delay(REPLY_TIMEOUT_MS)
+            if (pendingReqId != reqId) return@launch
+            pendingReqId = null
+            _lastError.value = "No reply from MYTHOS — it may have dropped the turn"
+            _phase.value = Phase.IDLE
+        }
+    }
+
+    /** A frame arrived for the turn we are waiting on: stop the clock. */
+    private fun noteReplyProgress() {
+        deadlineJob?.cancel()
+        deadlineJob = null
+    }
+
+    /**
+     * Abandon the turn we are waiting on, because the operator started another.
+     *
+     * Both halves matter. Locally, the queued audio is dropped and the reqId is
+     * forgotten, so `isStaleTurn` discards anything that still arrives for it.
+     * Remotely, `stop` aborts the chunks MYTHOS has not synthesized yet — without
+     * it the server finishes speaking into a socket whose listener no longer wants
+     * it, which costs TTS budget and, if the barge-in is later abandoned, can still
+     * be heard.
+     */
+    private fun bargeIn(reqId: String) {
+        pendingReqId = null
+        deadlineJob?.cancel()
+        deadlineJob = null
+        player?.stopAndClear()
+        livePlayer?.stopAndClear()
+        link.sendStop(reqId)
+        Log.d(TAG, "barge-in over reqId=$reqId")
     }
 
     fun stopListening() {
         mic?.stop() // ends readUntilStopped's loop; the job finishes on its own
     }
 
+    /**
+     * True when this frame belongs to a hold-to-talk turn we have already given
+     * up on or never started.
+     *
+     * Entity-initiated speech (greetings, reminders) carries a `proactive-…`
+     * reqId and is always ours to play — only a stale `node-…` turn is dropped.
+     */
+    private fun isStaleTurn(reqId: String): Boolean =
+        reqId.startsWith("node-") && reqId != pendingReqId
+
     private suspend fun consumeInbound() {
         link.inbound.collect { msg ->
-            when (msg.optString("type")) {
+            val type = msg.optString("type")
+            val reqId = msg.optString("reqId")
+            if (type == "speech-chunk" || type == "done") {
+                Log.d(TAG, "inbound $type reqId=$reqId pending=$pendingReqId")
+                if (isStaleTurn(reqId)) return@collect
+                noteReplyProgress()
+            }
+            when (type) {
                 "speech-chunk" -> {
                     val played = player?.enqueue(
                         msg.optString("audioB64").takeIf { it.isNotEmpty() },
@@ -259,12 +388,49 @@ class VoiceNodeService : Service() {
                     if (played) _phase.value = Phase.SPEAKING
                 }
                 "done" -> {
+                    // A Live-routed turn acks IMMEDIATELY with an empty `say` and
+                    // routedToLive:true — the answer is still coming, as
+                    // live-audio-out frames. Treating that ack as the end of the
+                    // turn would reopen the mic mid-sentence and drop the caption,
+                    // so only a batch `done` closes the turn here; the Live one is
+                    // closed by live-turn-complete below.
+                    if (msg.optBoolean("routedToLive")) {
+                        armReplyDeadline(reqId)
+                        return@collect
+                    }
+                    if (reqId == pendingReqId) pendingReqId = null
                     msg.optString("say").takeIf { it.isNotBlank() }?.let { _caption.value = it }
                     if (player?.isPlaying != true) _phase.value = Phase.IDLE
                 }
+                // ---- Gemini Live: the same brain the desktop app talks to ------
+                // Raw 24kHz PCM, no container, so it goes to LivePcmPlayer rather
+                // than the ExoPlayer queue. Before these three cases existed the
+                // frames were silently dropped by a `when` with no else, which is
+                // why voice nodes had to be routed to the flatter batch lane.
+                "live-audio-out" -> {
+                    noteReplyProgress()
+                    livePlayer?.write(msg.optString("data").takeIf { it.isNotEmpty() })
+                }
+                "live-transcript" -> {
+                    noteReplyProgress()
+                    if (msg.optString("role") != "user") {
+                        msg.optString("text").takeIf { it.isNotBlank() }?.let { _caption.value = it }
+                    }
+                }
+                "live-turn-complete" -> {
+                    pendingReqId = null
+                    noteReplyProgress()
+                    if (livePlayer?.isPlaying != true) _phase.value = Phase.IDLE
+                }
+                // Barge-in decided on the server (the model was interrupted).
+                "live-interrupted" -> livePlayer?.stopAndClear()
                 // Stage 3 sends this when a reply's remaining chunks were moved to
                 // another device: drop what is queued rather than talking over it.
                 "cancel" -> {
+                    // The turn is over as far as this device is concerned, so the
+                    // mic must not stay gated behind a reqId nothing will answer.
+                    pendingReqId = null
+                    noteReplyProgress()
                     player?.stopAndClear()
                     _phase.value = Phase.IDLE
                 }
@@ -367,7 +533,22 @@ class VoiceNodeService : Service() {
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    /**
+     * A direct handle for the UI, so a press does not have to travel through
+     * ActivityManager and back.
+     *
+     * The Intent path stays — the wake-word caller and the START_STICKY restart
+     * both still use it — but hold-to-talk went finger → Binder → system_server →
+     * Binder → service main thread → coroutine before the microphone opened, and
+     * the first press after an idle period routinely felt dead. A dead-feeling
+     * press is what made the operator press again, and every extra press was a
+     * whole extra turn.
+     */
+    inner class LocalBinder : Binder() {
+        fun service(): VoiceNodeService = this@VoiceNodeService
+    }
+
+    override fun onBind(intent: Intent?): IBinder = LocalBinder()
 
     override fun onDestroy() {
         super.onDestroy()
@@ -375,6 +556,7 @@ class VoiceNodeService : Service() {
         detector?.stop()
         mic?.stop()
         player?.release()
+        livePlayer?.release()
         link.disconnect()
         _phase.value = Phase.IDLE
         _scanning.value = false
@@ -382,6 +564,15 @@ class VoiceNodeService : Service() {
     }
 
     companion object {
+        private const val TAG = "MythosNode"
+
+        /**
+         * How long a hold-to-talk turn may go unanswered before the phone says so.
+         * Generous on purpose: a slow brain lane plus TTS synthesis is seconds, and
+         * a false timeout that cuts off a real reply is worse than a late error.
+         */
+        private const val REPLY_TIMEOUT_MS = 45_000L
+
         const val ACTION_START_LISTENING = "com.mythos.nodes.phone.START_LISTENING"
         const val ACTION_STOP_LISTENING = "com.mythos.nodes.phone.STOP_LISTENING"
 
