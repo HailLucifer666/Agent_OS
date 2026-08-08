@@ -21,16 +21,26 @@
 function createLimiter({ windowMs, max, scope = 'default' }) {
   // Map<key, { count, resetAt }>. Fixed-window counters (simpler than sliding
   // window, sufficient for this scale). A stale entry for a key that never
-  // comes back is never overwritten — H12: on an always-on process, every
-  // distinct client IP permanently grows this Map. Evicted opportunistically
-  // on access below (no timer, so it never keeps the process alive) rather
-  // than by a background sweep.
+  // comes back is never overwritten — on an always-on process every distinct
+  // client IP would otherwise grow this Map forever. Fine on a single-user
+  // desktop; on a public deploy the health-check host plus crawlers add
+  // distinct IPs indefinitely.
+  //
+  // MERGE NOTE (2026-08-08): two sessions fixed this same leak independently —
+  // H12 here and F6 on the other machine — with the same design (a lazy sweep
+  // on access, throttled to once per windowMs, no timer so it never keeps the
+  // process alive). They are kept as ONE implementation below, with BOTH test
+  // seams preserved, because both sides' tests are now in the tree and each
+  // pins a different one. In-window behavior is unchanged either way: only
+  // entries past their own resetAt are removed, so no live bucket is disturbed
+  // early and a well-behaved client never notices.
+  // Pinned by test/rate-limit.test.js and test/rate-limit-prune.test.js.
   const buckets = new Map();
   let lastSweepAt = 0;
 
-  // Throttled to once per windowMs so it never becomes an O(n) tax on every
-  // single request under heavy traffic — only entries past their own reset
-  // are ever removed, so no live bucket is disturbed early.
+  // Throttled so it never becomes an O(n) tax on every request under load. An
+  // idle server sweeps lazily on the next request, which is complete: with no
+  // traffic nothing can grow.
   function evictExpired(now) {
     if (now - lastSweepAt < windowMs) return;
     lastSweepAt = now;
@@ -39,7 +49,7 @@ function createLimiter({ windowMs, max, scope = 'default' }) {
     });
   }
 
-  function limit(req, res, next) {
+  const limit = function middleware(req, res, next) {
     const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
     const key = `${ip}:${scope}`;
     const now = Date.now();
@@ -66,12 +76,13 @@ function createLimiter({ windowMs, max, scope = 'default' }) {
     }
 
     next();
-  }
+  };
 
-  // Test-only introspection — mirrors the `_internal` convention used
-  // elsewhere in this repo (e.g. aether/scanner-proxy.js) rather than adding
-  // a real public API surface just to observe eviction.
+  // Test-only introspection. BOTH seams are kept deliberately: each side's test
+  // was written against its own, and dropping either would fail a test that is
+  // correct about the behaviour it checks. Production calls neither.
   limit._internal = { buckets, evictExpired };
+  limit._bucketCount = () => buckets.size;
   return limit;
 }
 

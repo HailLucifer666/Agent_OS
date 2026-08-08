@@ -137,6 +137,36 @@ async function main() {
   }
   logger.info('vault.dirs.created', { root: vaultRoot, dirs: vaultDirs });
 
+  // F4 (go-live proof plan): on a container platform without a mounted volume,
+  // the vault directory is EPHEMERAL — every redeploy silently wipes
+  // episodic/semantic/identity/audit data, and fs-store JSON/JSONL has no
+  // other persistence. Render sets RENDER=true; Docker/OCI runtimes drop
+  // /.dockerenv. Neither exists on a local desktop boot.
+  //
+  // The risk is specific to the vault resolving INSIDE the app's own
+  // directory (the schema default ./vault -> /app/vault in the image, which
+  // sits in the container's ephemeral writable layer). An explicit override
+  // to a path outside the app dir — e.g. MYTHOS_VAULT_ROOT=/data/vault on a
+  // mounted disk (render.yaml, B4) — is the operator's deliberate persistent
+  // choice and must NOT be warned about. This keeps the warning honest for
+  // the pre-disk Render config, any Docker run without a volume, and
+  // disappears the moment the vault is pointed at real storage.
+  //
+  // This is a warning, not a gate: persist (volume), externalize (object
+  // storage / DB) or accept ephemeral cloud memory as documented behavior is
+  // the operator's decision — recorded in the roadmap, never decided by code.
+  // Pinned by test/vault-ephemeral-warning.test.js.
+  const inContainer = process.env.RENDER === 'true' || fs.existsSync('/.dockerenv');
+  const appDir = path.join(__dirname, '..'); // mythos/ (WORKDIR /app in the image)
+  const vaultRel = path.relative(appDir, vaultRoot);
+  const vaultUnderAppDir = vaultRel !== '' && !vaultRel.startsWith('..') && !path.isAbsolute(vaultRel);
+  if (inContainer && vaultUnderAppDir) {
+    logger.warn('vault.ephemeral', {
+      root: vaultRoot,
+      risk: 'container-local disk is wiped on redeploy — mount a persistent volume (e.g. /data) or externalize the vault before relying on stored memory',
+    });
+  }
+
   // Step 5: Lifecycle
   const lifecycle = createLifecycle({ bus, logger, config });
 

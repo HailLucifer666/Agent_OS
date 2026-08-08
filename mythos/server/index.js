@@ -742,6 +742,12 @@ function createServer(deps) {
     { prefix: '/vendor/mediapipe', dir: path.join(NODE_MODULES_DIR, '@mediapipe', 'tasks-vision'), immutable: true },
     { prefix: '', dir: UI_PUBLIC_DIR, immutable: false },
   ];
+  // F7 (go-live proof plan, 2026-08-08): gzipCache is bounded BY CONSTRUCTION
+  // — keyed by absolute path, and the key space is the finite set of on-disk
+  // text assets under GZIP_ROOTS (UI_PUBLIC_DIR + two vendor dirs), so it can
+  // never grow without bound. Do NOT "fix" this into an eviction/cap scheme
+  // without a measurement: a cap here would be premature optimization over a
+  // provably finite set.
   const gzipCache = new Map(); // absolute path -> { buf, mtimeMs }
 
   function immutableHeaders(res) {

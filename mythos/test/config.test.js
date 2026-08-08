@@ -127,6 +127,22 @@ describe('config', () => {
     assert.equal(result.config.PLANNER_CHECKIN_EVERY_MS, 3600000);
   });
 
+  // F5 (go-live proof plan, 2026-08-08): VOICE_S2S_ENABLED must default to
+  // OFF. Gemini Live is metered per open session and bills while the socket is
+  // open, and .env.example has always documented it as "Opt-in and OFF by
+  // default" — the schema default of true contradicted the docs, so a fresh
+  // deploy with a GOOGLE_API_KEY billed Live sessions with no explicit opt-in.
+  it('VOICE_S2S_ENABLED defaults to OFF (Live is opt-in) and accepts a true override', () => {
+    const defaults = validate({}, SCHEMA);
+    assert.equal(defaults.ok, true);
+    assert.equal(defaults.config.VOICE_S2S_ENABLED, false,
+      'a fresh install must NOT open billed Live sessions without an explicit opt-in');
+
+    const overridden = validate({ VOICE_S2S_ENABLED: 'true' }, SCHEMA);
+    assert.equal(overridden.ok, true);
+    assert.equal(overridden.config.VOICE_S2S_ENABLED, true);
+  });
+
   it('rejects PLANNER_MORNING_HOUR outside its 0-23 range and PLANNER_CHECKIN_EVERY_MS below its floor', () => {
     const badHour = validate({ PLANNER_MORNING_HOUR: '24' }, SCHEMA);
     assert.equal(badHour.ok, false);

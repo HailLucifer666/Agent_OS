@@ -1,8 +1,14 @@
 FROM node:22-alpine
 
-# edge-tts for voice synthesis (optional — degrades gracefully if missing)
-RUN apk add --no-cache python3 py3-pip && \
-    pip3 install --break-system-packages edge-tts || true
+# edge-tts is BYO — never bundled, never installed for you (LGPLv3 upstream;
+# see THIRD_PARTY_NOTICES.md). This image deliberately ships NO Python
+# edge-tts toolchain: services/edge-tts-server.py is inert without the
+# package, and every TTS call degrades honestly when it is absent (server
+# TTS stays off, the browser's speechSynthesis speaks instead) — the same
+# posture as the desktop installer, which excludes edge-tts-server.py from
+# build.files. Operators who want cloud TTS supply their own image layer or
+# a shippable engine (e.g. Piper, MIT). Pinned by
+# test/deploy-config-conformance.test.js.
 
 WORKDIR /app
 
