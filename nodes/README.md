@@ -178,6 +178,19 @@ To let the desktop compete on the same footing, set `AETHER_LOCAL_SCANNER_ID` in
 A green build proves nothing about radio. Verify in this order, stopping at the
 first step that fails:
 
+**Step 0 needs no hardware at all, and is already passing.** Everything above the
+BLE radio can be driven against the real aggregator:
+
+```bash
+MYTHOS_DIR=/path/to/mythos AGG_DIR=/path/to/Aether-BLE/aether-bridge AGG_PYTHON=/path/to/Aether-BLE/aether-bridge/.venv/Scripts/python.exe node mythos/scripts/verify-voice-nodes.js
+```
+
+It spawns `aggregator.py`, lets it dial the scanner-proxy as a peer, and checks
+that its own election steers a real reply to the right socket and that a wake
+arbitration names exactly one winner — 11/11 at the time of writing. Run this
+first: if it fails, the steps below cannot succeed and the fault is not your
+radio.
+
 1. **The watch is transmitting something the mesh can verify.** On your machine:
 
    ```bash
