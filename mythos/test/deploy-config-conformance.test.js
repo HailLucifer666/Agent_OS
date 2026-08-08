@@ -200,9 +200,16 @@ describe('F2 · render.yaml carries the WS origin allowlist for the deployed hos
     const lines = readLines(RENDER_YAML_PATH);
     const keyIdx = lines.findIndex((l) => l.trim() === '- key: ALLOWED_ORIGINS');
     assert.notEqual(keyIdx, -1, 'render.yaml must declare an ALLOWED_ORIGINS env var (a deploy without one 403s the whole live layer)');
-    const rest = lines.slice(keyIdx + 1).filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
-    const valueLine = rest.find((l) => l.trim().startsWith('value:'));
-    const syncLine = rest.find((l) => l.trim().startsWith('sync:'));
+    // Scan ONLY this env entry — stop at the next '- key:' line, or a later
+    // key's value: line (e.g. BOOT_GREETING's value: "false") gets mistaken
+    // for this entry's. This exact bug shipped once and B4's render.yaml
+    // caught it.
+    const afterKey = lines.slice(keyIdx + 1);
+    const entryEnd = afterKey.findIndex((l) => /^\s*- key:/.test(l));
+    const entryLines = (entryEnd === -1 ? afterKey : afterKey.slice(0, entryEnd))
+      .filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+    const valueLine = entryLines.find((l) => l.trim().startsWith('value:'));
+    const syncLine = entryLines.find((l) => l.trim().startsWith('sync:'));
     if (valueLine) {
       // Committed value: must be a list of origins the server will actually
       // accept — isValidOrigin (server/index.js) SILENTLY drops anything that
