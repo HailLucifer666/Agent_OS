@@ -150,16 +150,24 @@ function buildTools(ctx) {
       const stem = titleToStem(title);
       const rendered = markdown ? markdownToHtml(String(markdown), title) : wrapHtml(String(html), title);
 
-      const chromePath = resolveChromePath();
-      // No Chrome → honest HTML fallback.
-      if (!chromePath) {
+      // Honest HTML fallback. Used for BOTH "no Chrome on this machine" and
+      // "Chrome is here but the print failed" — a Chrome that launches and
+      // exits without producing a PDF (wrong build, locked profile, sandbox
+      // denied, headless disabled by policy) is just as much an absent PDF
+      // pipeline as no binary at all, and the caller asked for a document.
+      // Returning ok:false there threw away a perfectly good rendered HTML.
+      function degradeToHtml(note) {
         const out = resolveOutputPath(vault, stem, 'html');
         vault.writeText(out.rel, rendered);
         return ok({
           savedTo: out.rel, format: 'html', bytes: fs.statSync(out.abs).size,
-          degraded: true,
-          note: 'Chrome was not found, so the document was saved as styled HTML instead of PDF. Install Chrome (or set CHROME_PATH) to enable PDF output.',
+          degraded: true, note: note,
         });
+      }
+
+      const chromePath = resolveChromePath();
+      if (!chromePath) {
+        return degradeToHtml('Chrome was not found, so the document was saved as styled HTML instead of PDF. Install Chrome (or set CHROME_PATH) to enable PDF output.');
       }
 
       // Write HTML to a temp file under the vault, have Chrome print it to PDF,
@@ -170,6 +178,8 @@ function buildTools(ctx) {
       const pdfOut = resolveOutputPath(vault, stem, 'pdf');
       try {
         await runChromePrintToPdf(chromePath, htmlAbs, pdfOut.abs);
+      } catch (printErr) {
+        return degradeToHtml('Chrome was found but could not produce a PDF (' + printErr.message + '), so the document was saved as styled HTML instead. Check that the Chrome at ' + (process.env.CHROME_PATH ? 'CHROME_PATH' : 'its default install location') + ' can run headless.');
       } finally {
         try { fs.unlinkSync(htmlAbs); } catch (_) {}
       }

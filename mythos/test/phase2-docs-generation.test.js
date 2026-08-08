@@ -129,6 +129,36 @@ describe('Phase 2 — from-docs effector tools', () => {
     }
   });
 
+  it('generate_pdf degrades honestly when Chrome EXISTS but produces no PDF', async () => {
+    // The "Chrome absent" path was always handled; a Chrome that launches and
+    // exits without writing a PDF (wrong build, locked profile, sandbox denied,
+    // headless disabled by policy) used to hard-fail with ok:false and throw
+    // away the already-rendered HTML. That is the failure this suite hit on a
+    // machine with a real Chrome installed.
+    //
+    // Point CHROME_PATH at this Node binary: it EXISTS (so resolveChromePath
+    // returns it rather than falling through to the absent-Chrome branch) and
+    // it will exit without producing a PDF, deterministically, on any machine
+    // and regardless of whether real Chrome is installed.
+    const prev = process.env.CHROME_PATH;
+    process.env.CHROME_PATH = process.execPath;
+    try {
+      const result = await fn('generate_pdf')({
+        title: 'Chrome Broken Report',
+        markdown: '# Broken\n\nChrome ran and produced nothing.',
+      });
+      assert.equal(result.ok, true, 'must degrade, not fail: ' + JSON.stringify(result));
+      assert.equal(result.result.format, 'html');
+      assert.equal(result.result.degraded, true);
+      assert.ok(result.result.bytes > 0);
+      assert.match(result.result.note, /Chrome/i, 'note must explain what happened');
+      const content = vault.readText(result.result.savedTo);
+      assert.match(content, /Chrome ran and produced nothing/);
+    } finally {
+      if (prev === undefined) delete process.env.CHROME_PATH; else process.env.CHROME_PATH = prev;
+    }
+  });
+
   it('generate_pdf rejects when neither markdown nor html provided', async () => {
     const result = await fn('generate_pdf')({ title: 'Empty' });
     assert.equal(result.ok, false);
