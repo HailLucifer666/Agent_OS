@@ -48,6 +48,10 @@ const ALLOWED_EVENTS = new Set([
   // observation for the cortex to reason about, it is a control signal with a
   // deadline, and the perception gate drops anything under MYTHOS_IDLE_SALIENCE.
   'aether.conversation',
+  // Voice Nodes Stage 4 — the aggregator's wake arbitration verdict (§6.1
+  // wakeOutcome), relayed to phone nodes so exactly one of them answers. One-shot
+  // and time-critical, so it bypasses the perception dedup gate entirely.
+  'aether.wake-outcome',
 
   // action.*
   'action.completed',

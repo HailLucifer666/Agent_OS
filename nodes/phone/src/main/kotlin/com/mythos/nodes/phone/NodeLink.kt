@@ -128,6 +128,8 @@ class NodeLink(private val settings: NodeSettings) {
 
     fun sendLost(): Boolean = send(NodeMessages.lost(settings.nodeId))
 
+    fun sendWake(): Boolean = send(NodeMessages.wake(settings.nodeId))
+
     fun sendUtterance(reqId: String, text: String): Boolean =
         send(NodeMessages.utterance(reqId, text))
 

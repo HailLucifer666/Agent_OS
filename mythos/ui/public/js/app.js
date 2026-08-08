@@ -494,6 +494,52 @@ function ensureWakeWord() {
 // places it matters: the server log (permanent, greppable) and a DOM attribute
 // (so standby is visible in the UI and inspectable in devtools, which is also
 // how the headless measurement reads it).
+// Voice Nodes Stage 4 — wake arbitration for the desktop.
+//
+// The PC is a scanner in the Aether mesh like any phone (the operator's own
+// bridge.py), so saying the wake phrase in the kitchen should NOT also open a turn
+// here. The HUD reports what it heard and waits briefly for the mesh's verdict.
+//
+// FAIL OPEN, deliberately and on a short fuse. If no verdict arrives — Aether down,
+// AETHER_LOCAL_SCANNER_ID unset, the local scanner not present in the election —
+// the desktop behaves exactly as it always has. Only an explicit "suppressed"
+// stands it down. A wake word that goes deaf waiting for a network answer is a far
+// worse defect than one that occasionally answers alongside a phone.
+var WAKE_VERDICT_TIMEOUT_MS = 700; // §6.4 round trip is ~400ms; this is that plus slack
+var _pendingWakeVerdict = null;
+
+subscribe(['wake-verdict'], function (msg) {
+  var pending = _pendingWakeVerdict;
+  if (!pending) return;
+  _pendingWakeVerdict = null;
+  clearTimeout(pending.timer);
+  pending.resolve({
+    accepted: !msg || msg.accepted !== false,
+    reason: (msg && msg.reason) || 'unknown',
+  });
+});
+
+// Resolves to {accepted, reason}. Never rejects, never hangs.
+function askWakeArbitration() {
+  return new Promise(function (resolve) {
+    var settled = false;
+    function finish(v) { if (!settled) { settled = true; resolve(v); } }
+    var timer = setTimeout(function () {
+      _pendingWakeVerdict = null;
+      finish({ accepted: true, reason: 'no-verdict-timeout' });
+    }, WAKE_VERDICT_TIMEOUT_MS);
+    _pendingWakeVerdict = { resolve: finish, timer: timer };
+    try {
+      sendMessage({ type: 'node-wake' });
+    } catch (_) {
+      // Socket not up: nothing can arbitrate, so proceed as before.
+      clearTimeout(timer);
+      _pendingWakeVerdict = null;
+      finish({ accepted: true, reason: 'socket-down' });
+    }
+  });
+}
+
 function reportWakeword(state, detail, data) {
   try {
     document.documentElement.dataset.wakeword = state;
@@ -537,11 +583,26 @@ function startWakeWord() {
           });
           return;
         }
-        reportWakeword('detected', 'wake word detected — opening a turn', {
-          score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+        // The five guards above are local truths (PIN gate, already-in-a-turn,
+        // MYTHOS speaking). This one is the mesh's: with several devices hearing
+        // the same phrase, exactly one should answer. Reported as its own
+        // suppression reason so 'the kitchen phone took it' is visible in the log
+        // rather than looking like a missed detection.
+        askWakeArbitration().then(function (verdict) {
+          if (!verdict.accepted) {
+            reportWakeword('detected-suppressed', 'wake word detected but another device won arbitration', {
+              reason: verdict.reason,
+              score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+            });
+            return;
+          }
+          reportWakeword('detected', 'wake word detected — opening a turn', {
+            score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+            arbitration: verdict.reason,
+          });
+          if (orb.flashAction) orb.flashAction('wake', true);
+          toggleVoice();                           // same path as clicking the orb
         });
-        if (orb.flashAction) orb.flashAction('wake', true);
-        toggleVoice();                             // same path as clicking the orb
       },
       onStatus: (s, msg, data) => {
         // BUG-150: relay EVERY status to the server so the wake word's state is

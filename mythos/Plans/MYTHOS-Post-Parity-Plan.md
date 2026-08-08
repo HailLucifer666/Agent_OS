@@ -46,11 +46,11 @@ sometimes only thing the next machine reads.*
 
 | | |
 |---|---|
-| **Status** | **Nothing started.** This document was authored 2026-07-31 as a plan only; zero source files were changed by the session that wrote it. No phase below is in progress, and no phase is startable yet — see Blocked on. |
-| **Next action** | None in this file. Go to `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`'s RESUME HERE and do step 6.5. The only work here that may begin before then is **P0-parallel** (filing the Instagram/Facebook app-review and TikTok audit paperwork — calendar time, zero engineering, zero code) and **P8** (multi-device wake-word arbitration — independent of everything else here and of the parity build, but gated on the operator's own repo, see below). |
-| **Blocked on** | (1) Parity steps 6.5 and 7 (except the two `PARALLEL-SAFE` items). (2) **Four operator decisions** — see "Open decisions" below; three of them (product name, AGPL-internal-use, autonomous posting) gate real design choices, not just wording. (3) **P8 is blocked on the operator supplying their own wake-word-collision repo**, which they said exists. Do not commit to the design sketched in §P8 before reading it. (4) Several research findings this plan rests on are flagged UNVERIFIED or LIKELY-WRONG in "Research corrections" below — verify before building a step on one. |
+| **Status** | **P8 implemented by a different route; everything else unstarted.** The 2026-08-08 Voice Nodes build (see Progress log) delivered multi-device wake-word arbitration through Aether's own election rather than the design sketched in §P8, and made the phone a native voice surface, which partly overtakes §P7. Neither step is TICKED: nothing in either is live-verified, and §P7's actual deliverable (a dashboard PWA) is untouched. No other phase is in progress. |
+| **Next action** | Live-verify the Voice Nodes build — it is the only thing here with code behind it, and none of it has met real hardware (`nodes/README.md` has the checks, in order: walk with `bridge.py`, then the election, then a phone answering). Everything else is unchanged: go to `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`'s RESUME HERE, with **P0-parallel** (platform paperwork, zero code) still the only startable item in this file. |
+| **Blocked on** | (1) Parity steps 6.5 and 7 (except the two `PARALLEL-SAFE` items). (2) **Four operator decisions** — see "Open decisions"; three gate real design choices, not wording. (3) **Voice Nodes live-verification needs hardware** — a paired watch and at least two phones; `adb devices` was empty for the whole build. (4) **Hands-free needs a wake-word model the operator supplies** — none ships, deliberately, since weights are routinely licensed apart from the code that runs them and MYTHOS is sold. (5) The operator's own wake-word-collision repo is still unread — §P8 was implemented via Aether without it. (6) Several research findings below are flagged UNVERIFIED or LIKELY-WRONG — verify before building on one. |
 | **Relationship to the parity build** | Strictly downstream. Parity roadmap wins on any overlap. This file never edits `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` or the V2 spine except to add its own one-line pointer. |
-| **Last updated** | 2026-07-31 |
+| **Last updated** | 2026-08-08 |
 
 **Sequence (the only order — justified in the next section):**
 P0 ☐ · P0-parallel ☐ `PARALLEL-SAFE` · P1 ☐ · P2 ☐ · P3 ☐ · P4 ☐ · P5 ☐ · P6 ☐ · P7 ☐ · P8 ☐ `PARALLEL-SAFE` · P9 ☐ · P10 ☐ · P11 ☐
@@ -83,6 +83,7 @@ P0 ☐ · P0-parallel ☐ `PARALLEL-SAFE` · P1 ☐ · P2 ☐ · P3 ☐ · P4 �
 |---|---|---|---|
 | 2026-07-31 | Authored this file. Read the parity roadmap (RESUME HERE, merged order, step-6.5 section, Progress log), the V2 spine's §0–§2 including AD-1…AD-10, root `CLAUDE.md`, and the real seams: `src/main.js` registration/boot-step/capability-manifest wiring, `src/core/leash/tiers.js`, `src/core/leash/confirm.js`, `src/core/effectors/{from-calendar,from-gmail,from-android,from-computer,from-mission,orchestrator,adapter}.js`, `adapters/android-child/index.js`, `adapters/google/index.js`, `src/core/agents/personas.js`, `src/core/engagements/index.js`, `src/core/voice/{live-tools,latency-tracker}.js`, `ui/public/js/voice/wakeword.js`, `server/index.js`'s WS message switch, `src/core/config/schema.js`, `.env.example`, `test/effectors-hub.test.js`. No source file changed. | (this commit) | n/a (docs) — and deliberately so: this is a plan, there is nothing to live-verify yet |
 | 2026-08-02 | **Capability-pack integration** (appendix CAP below, independent of P0–P11). Twelve operator-named upstream packs made reachable on a fresh clone: 13 skills vendored + loader block-scalar/plugin-root/optional-entry fixes; an MCP stdio client (`adapters/mcp-client/`) + `from-mcp.js`; OKF (`memory/okf.js` + `from-okf.js`); Strix (`from-strix.js`). | `c626b4e`, `2ec3278`, (this commit) | Unit-green (2352 pass). MCP client tested against a real stub server over real pipes. NOT yet live: a real Desktop Commander / browser-use / Strix run against the installed tool — that is the outstanding live-verify, see CAP. |
+| 2026-08-08 | **Voice Nodes v2** — proximity-arbitrated speech across a watch beacon, phone nodes and the desktop. Six stages: `nodes/` Gradle build (`:shared`/`:wear`/`:phone`, 11 JVM tests); an Aether scanner-proxy so a phone can be a conformant scanner it could never be directly; a flag+token-gated WS branch admitting non-browser nodes; speech routed to the elected device; the §6.3 conversation handoff so a sentence follows the operator; and wake arbitration (§6.4/§6.1) so one phrase lights one device. **Bears on P7 and P8** — see the note under each. | `29b880d`, `c6aad3c`, `cf0e8f6`, `a07c5ca`, `b3b3e4b`, (this commit) | **NO.** Unit-green (49 new Node tests, full suite 0 fail) and both APKs build, but NOTHING has been live-verified: no watch is paired and `adb devices` is empty, so no beacon has transmitted, no phone has scanned, recorded or played, and no handoff has moved real audio. The physical checks are in `nodes/README.md`. |
 
 ---
 
@@ -528,6 +529,14 @@ WS `?token=` — and it was live-verified with real `curl` and real WS connects
 against a process bound to `0.0.0.0`. So "drive the desktop server from my phone"
 is a **small delta**, not a project. Resist rebuilding it.
 
+**Partly overtaken by Voice Nodes (2026-08-08).** The phone is now a first-class
+*voice* surface — a native app (`nodes/phone/`) that scans, listens, speaks and is
+routed to by Aether — rather than a browser pointed at the HUD. That does NOT
+deliver this step: a PWA that drives the dashboard (goals, kanban, panels) is a
+different capability from a voice node, and the manifest/responsive work below is
+untouched. Read `nodes/README.md` before starting, so this step does not rebuild
+the auth/bind delta a second time.
+
 **Files:** create `mythos/ui/public/manifest.webmanifest`,
 `mythos/ui/public/js/pwa.js`; modify `mythos/ui/public/index.html`,
 `mythos/ui/public/css/*` (responsive only); test
@@ -565,6 +574,30 @@ them — the failure mode Google Assistant and Siri both have. **The operator
 believes they may have solved it and will supply a repo. Read that repo before
 committing to any design.** What follows is a baseline to compare it against, and
 an honest statement of what this repo's shape makes easy.
+
+**IMPLEMENTED 2026-08-08 by a different route — read this before designing.** The
+Voice Nodes build solved this through **Aether**, not through the single-writer
+election sketched below: every device reports `node-wake` to MYTHOS, MYTHOS asks
+the aggregator to arbitrate (`{type:'wake'}`, §6.4), and the aggregator marks the
+current proximity owner `ACCEPTED` and every other present scanner `SUPPRESSED`
+(§6.1's one-shot `wakeOutcome`). The winner opens a mic; the losers are told so
+explicitly, because silence is indistinguishable from "nobody heard you".
+
+That lands on the same conclusion as "the observation that makes this tractable"
+below — one authoritative sequencer, no quorum protocol — but ranks candidates by
+**measured proximity** rather than by classifier score, which is the signal the
+operator actually cares about ("answer on the device I am standing next to").
+Desktop parity is opt-in via `AETHER_LOCAL_SCANNER_ID`, and every path fails OPEN:
+no verdict, no local scanner id, or Aether down, and the device that heard the
+phrase answers rather than the mesh going deaf.
+
+**Still open, and NOT delivered by that work:** the operator's own
+wake-word-collision repo has still not been read (this used the Aether protocol
+already in the tree instead); the ~200ms budget is asserted, not measured, and
+`latency-tracker.js` is the honest way to check it; and none of it is
+live-verified — no phone has ever run the detector, because no wake-word model
+ships (BYO, for licensing reasons — see `nodes/README.md`). The design below is
+kept for comparison, not because it is superseded on the evidence.
 
 ### The problem, stated precisely
 

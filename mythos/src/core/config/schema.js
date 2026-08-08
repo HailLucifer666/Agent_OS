@@ -228,6 +228,16 @@ const SCHEMA = {
   // precedence when both are set. Falls back to local TTS whenever no node is
   // connected, and a live Gemini Live session always wins over both.
   AETHER_NODE_AUDIO:         { type: 'bool',   default: false },
+  // The id THIS machine's own scanner uses in the mesh — i.e. `bridge.py
+  // --scanner <id>`, conventionally 'PC'. MYTHOS cannot infer it: the scanner is a
+  // separate process the operator starts, and the aggregator only ever reports ids.
+  //
+  // Set it and the HUD competes in wake arbitration like any phone, standing down
+  // when Aether names another device. Leave it unset and the desktop wake word
+  // behaves exactly as it does today — which is why the default is empty rather
+  // than a guess at 'PC': a wrong id here would make the HUD look suppressed
+  // forever, or compete as a device that is not in the election at all.
+  AETHER_LOCAL_SCANNER_ID:   { type: 'string', default: '' },
 
   // Daily planning + accountability (hands-free morning brief / stall
   // check-ins / evening review — src/core/planner/daily.js). On by default

@@ -2,6 +2,7 @@ package com.mythos.nodes.shared
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class NodeMessagesTest {
@@ -32,6 +33,17 @@ class NodeMessagesTest {
     fun `control characters are escaped as unicode`() {
         val msg = NodeMessages.reading("n", -50.0, "a\u0001b")
         assertTrue(msg.contains("\\u0001"), msg)
+    }
+
+    @Test
+    fun `wake interpolates the node id rather than emitting a literal template`() {
+        // Caught in review: a raw-string escaping slip produced the literal text
+        // ${jsonEscape(nodeId)} instead of the value, which the server would then
+        // treat as an unknown node id and silently drop — a wake word that reports
+        // nothing, with no error anywhere.
+        val msg = NodeMessages.wake("kitchen-phone")
+        assertEquals("""{"type":"node-wake","nodeId":"kitchen-phone"}""", msg)
+        assertFalse(msg.contains("jsonEscape"), "template leaked into the payload: $msg")
     }
 
     @Test

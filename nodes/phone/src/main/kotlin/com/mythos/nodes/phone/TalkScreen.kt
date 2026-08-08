@@ -72,6 +72,8 @@ fun TalkScreen(
     val error by VoiceNodeService.lastError.collectAsState()
     val scanning by VoiceNodeService.scanning.collectAsState()
     val rejections by VoiceNodeService.rejections.collectAsState()
+    val wakeStatus by VoiceNodeService.wakeStatus.collectAsState()
+    val wakeSuppressed by VoiceNodeService.wakeSuppressed.collectAsState()
 
     val offline = connection != NodeLink.Status.CONNECTED
 
@@ -159,6 +161,18 @@ fun TalkScreen(
                     textAlign = TextAlign.Center,
                 )
             }
+
+            // Hands-free state, in words. "off because there is no model" and
+            // "listening" must never be the same silence — a wake word that
+            // quietly never fires is the single worst failure mode available.
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "wake: $wakeStatus" + if (wakeSuppressed > 0) " · $wakeSuppressed suppressed" else "",
+                color = MythosTheme.TextFaint,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.Center,
+            )
 
             // The diagnostic that would otherwise cost an evening: payloads seen
             // and rejected means a realm-key or beacon-name mismatch, which looks

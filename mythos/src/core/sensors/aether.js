@@ -341,6 +341,25 @@ function createAetherSensor(ctx) {
         return;
       }
       if (msg.type !== 'election') return;
+      // Stage 4 (voice nodes): wakeOutcome rides the election message but must
+      // NOT go through decide()'s dedup gate. It is one-shot — present on exactly
+      // the one broadcast after a `wake` request (§6.1) — and the gate is designed
+      // to swallow most broadcasts, so a change-detection-only path would drop the
+      // verdict entirely whenever the owner and RSSI happened to be stable, which
+      // is precisely the common case.
+      if (msg.wakeOutcome && typeof msg.wakeOutcome === 'object') {
+        try {
+          bus.emit('aether.wake-outcome', {
+            owner: msg.wakeOutcome.owner || null,
+            // §6.1: `results` lists only PRESENT scanners, so a node that cannot
+            // see the beacon appears nowhere in it. Passed through as-is — the
+            // consumer must treat a missing entry as "not chosen", never as
+            // consent.
+            results: Array.isArray(msg.wakeOutcome.results) ? msg.wakeOutcome.results.slice() : [],
+            requestedAtTick: msg.wakeOutcome.requestedAtTick
+          });
+        } catch (_) { /* a bus failure must never break the socket loop */ }
+      }
       var payload = decide(msg, Date.now());
       if (payload) bus.emit('perception.aether', payload);
     });
@@ -461,12 +480,34 @@ function createAetherSensor(ctx) {
     return sendSay(msgText);
   }
 
+  // Stage 4 — ask the aggregator to arbitrate a wake. The aggregator marks the
+  // CURRENT owner ACCEPTED and every other present scanner SUPPRESSED, and the
+  // verdict arrives on the next election broadcast (§6.4) — within ~400ms.
+  //
+  // MYTHOS must ask; the aggregator never arbitrates on its own. Nothing here
+  // decides anything: the point of routing a local detection through the mesh is
+  // that four devices hearing the same phrase produce ONE answer, and the only
+  // component that can rank them is the one holding every scanner's RSSI.
+  //
+  // Returns false when there is no live socket, so the caller can fall back to
+  // "whoever heard it answers" rather than going deaf while Aether is down.
+  function requestWake() {
+    if (!running || !connected || !ws || ws.readyState !== 1) return false;
+    try {
+      ws.send(JSON.stringify({ type: 'wake' }));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function isRunning() { return running; }
 
   return {
     start: start,
     stop: stop,
     speak: speak,
+    requestWake: requestWake,
     isRunning: isRunning,
     _internal: {
       decide: decide,            // test hook: drive the dedup gate directly

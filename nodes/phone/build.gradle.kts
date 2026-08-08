@@ -74,4 +74,6 @@ dependencies {
 
     // One outbound WebSocket for everything, both directions.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    testImplementation(kotlin("test"))
 }

@@ -638,7 +638,17 @@ async function main() {
         // retry a dead port every 2s forever with nothing explaining why.
         scannerProxy.whenReady().then(
           () => logger.info('aether.proxy.started', { ports: scannerProxy.ports() }),
-          (err) => logger.error('aether.proxy.bind-failed', { error: err && err.message })
+          (err) => {
+            // scanner-proxy.js already tears down any sibling ports it opened
+            // on a partial bind failure; stop() here is the documented way to
+            // release this instance's own state, and is idempotent if it
+            // already did so. Report via health.anomaly, not just the log
+            // line, so this is visible the same way other boot-time failures
+            // are — not swallowed.
+            logger.error('aether.proxy.bind-failed', { error: err && err.message });
+            scannerProxy.stop();
+            bus.emit('health.anomaly', { kind: 'aether-proxy-bind-failed', error: err && err.message });
+          }
         );
       }
 
@@ -663,6 +673,12 @@ async function main() {
         // enabled or its socket is down, so the server fails open to local TTS.
         aetherSpeak: (text) => (aetherSensor && typeof aetherSensor.speak === 'function' ? aetherSensor.speak(text) : false),
         scannerProxy: scannerProxy, // Voice Nodes — null unless AETHER_PROXY_ENABLED
+        // Stage 4 — ask Aether to arbitrate a wake. Read at call time for the
+        // same reason as aetherSpeak: the sensor starts in a later boot step
+        // than the server. Resolves false when Aether is off or its socket is
+        // down, which the server degrades to "the device that heard it answers"
+        // rather than going deaf.
+        aetherRequestWake: () => (aetherSensor && typeof aetherSensor.requestWake === 'function' ? aetherSensor.requestWake() : false),
       });
       lifecycle.registerStopServer(serverHandle.stop); // shutdown step 0 (Ambiguity #5)
       // Wire camera_look — server-initiated frame capture from dashboard clients.

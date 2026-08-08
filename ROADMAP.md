@@ -13,14 +13,34 @@
 > Every phase must pass: (1) `npm test` green, (2) manual smoke check, (3) **zero open
 > CRITICAL drift items against MYTHOS-ARCHITECTURE.md** — before proceeding to next.
 
-Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-core`,
-`ws`). Vanilla JS CommonJS. `node:test` + `node:assert/strict`. Separate
+Vanilla JS CommonJS. `node:test` + `node:assert/strict`. Separate
 `mythos/package.json` for isolation. `MYTHOS_PORT` 4478 (NOVA stays 4477).
+
+**Dependencies — the original "zero new npm dependencies, same 4 as NOVA" rule no
+longer describes this repo and was removed on 2026-08-08 rather than left standing
+as a false constraint.** It named `dotenv`, `express`, `playwright-core` and `ws`;
+`dotenv` was deleted outright in `91ae8b2` (replaced by `process.loadEnvFile()`),
+and the real runtime set is now **9**, each earning its place:
+
+| Dependency | Why |
+|---|---|
+| `express`, `ws` | HTTP + WebSocket surface |
+| `playwright-core` | browser automation |
+| `@huggingface/transformers`, `kokoro-js` | local STT/TTS (audio only — no image pipeline) |
+| `onnxruntime-web` | wake-word inference in the HUD |
+| `@mediapipe/tasks-vision` | gesture recognition |
+| `exceljs`, `pptxgenjs` | spreadsheet + deck effectors |
+
+The count is emitted by `mythos/scripts/sync-test-count.js` on every commit (`deps=`),
+so it stays honest without being hand-maintained here. Adding one is a real decision —
+each carries its own CVE surface and licence obligations (see `THIRD_PARTY_NOTICES.md`
+and the step 6.5/6.6 licensing gate) — but the rule as written was being silently
+violated rather than enforced.
 
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-08): **3232 tests, 3231 passing, 0 failing, 1 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-08): **3255 tests, 3254 passing, 0 failing, 1 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
 ## Build content comes from Hermes-Agent, not the brain (2026-07-29 onward)
 

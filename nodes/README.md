@@ -130,6 +130,49 @@ looks at a credential. The flag adds the one branch that admits them, and it
 requires the auth token — no token, no node, regardless of the flag. Only do this
 on a LAN you trust; the Aether protocol defers transport encryption (§11.4).
 
+## Hands-free (wake word)
+
+Push-to-talk works out of the box. Hands-free needs a wake-word model, and **this
+app ships none** — you supply one:
+
+```bash
+adb push <your-model> /sdcard/Android/data/com.mythos.nodes.phone/files/wakeword/
+```
+
+That is a licensing decision as much as a technical one. Wake-word *weights* are
+often licensed separately from the code that runs them — MYTHOS's own
+openWakeWord weights are CC BY-NC-SA 4.0 (non-commercial) while its code is
+Apache-2.0 — so nothing under restricted terms is redistributed here. What to
+bundle in a shipped product, if anything, stays a decision for whoever ships it.
+Nothing in this repo asserts what any particular licence permits.
+
+With no model the app says `wake: no wake-word model installed` on screen. It
+never silently pretends to listen: a wake word that quietly never fires is the
+worst failure mode available, indistinguishable from a broken mic or a phrase
+you're mispronouncing.
+
+`WakeWordDetector` is the seam to implement against — feed it 16 kHz mono PCM16,
+call `onDetected`. Two hazards are documented in that file, both learned here:
+verify your mel/feature transform **by value** against a reference vector (BUG-175
+was a port with every tensor shape correct and one scaling step missing — deaf at
+1e-5, and perfectly plausible-looking), and never let the detector fire on the
+node's own playback.
+
+### How one phrase lights one device
+
+A detection is a *report*, not a decision. The node sends `node-wake`; MYTHOS asks
+the aggregator to arbitrate; the aggregator marks the current owner `ACCEPTED` and
+every other present scanner `SUPPRESSED`; the verdict goes back to every node.
+Only `ACCEPTED` opens a mic — and a node **absent** from the results (it cannot
+currently see the beacon, so it is not in the election) stands down too, because
+absence is not consent.
+
+If Aether is down, the device that heard the phrase answers. Failing closed there
+would make the entire mesh deaf, which is both worse and invisible.
+
+To let the desktop compete on the same footing, set `AETHER_LOCAL_SCANNER_ID` in
+`mythos/.env` to whatever you pass to `bridge.py --scanner <id>`.
+
 ## Verifying it actually works
 
 A green build proves nothing about radio. Verify in this order, stopping at the

@@ -45,7 +45,11 @@ const { createPinSessionStore } = require('../src/core/security/pin-session');
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
 // IN (voice nodes, no reqId): 'node-reading' {nodeId, rssi, name} — a phone's BLE
 //                  observation of the tracked beacon, republished by the
-//                  scanner-proxy in Aether §4.1 shape; 'node-lost' {nodeId}
+//                  scanner-proxy in Aether §4.1 shape; 'node-lost' {nodeId};
+//                  'node-wake' {nodeId} — this node heard the wake phrase (a
+//                  report, not a claim: Aether decides who answers)
+// OUT (voice nodes): 'wake-outcome' {arbitrated, owner, results}, 'conversation'
+//                  {phase, from, speakingScanner}, 'cancel' {reqId}, 'identified'
 // OUT (broadcast): 'entity-state', 'tick', 'goal-update', 'perception', 'action',
 //                  'health', 'audit', 'confirm-request', 'brain-spend', 'log', 'job', 'mission'
 //                  'proactive-speech' (entity-initiated, no inbound utterance)
@@ -1219,6 +1223,101 @@ function createServer(deps) {
       logger.info('voice-node.speech-moved', { reqId, to: entry.nodeId });
     });
   }
+
+  // ---- Stage 4: one wake phrase lights exactly one device -----------------
+  //
+  // Every node runs its own detector locally, so a phrase spoken in a hallway is
+  // heard by several at once. Whichever heard it says so; MYTHOS asks Aether to
+  // rank them; the winner listens and the rest visibly stand down. Nothing is
+  // decided here or on the phone — the only component holding every scanner's
+  // RSSI is the aggregator.
+  //
+  // The debounce is the whole reason this is not just a passthrough: four devices
+  // reporting the same phrase within a few hundred ms must produce ONE
+  // arbitration, not four. Four would each emit a one-shot wakeOutcome, and the
+  // later ones would arrive after the winner had already started listening —
+  // suppressing the device that was mid-utterance.
+  let lastWakeRequestAt = 0;
+  const WAKE_DEBOUNCE_MS = 1000;
+
+  function requestWakeArbitration(fromNodeId) {
+    const now = Date.now();
+    if (now - lastWakeRequestAt < WAKE_DEBOUNCE_MS) return 'debounced';
+    lastWakeRequestAt = now;
+    const asked = typeof deps.aetherRequestWake === 'function' ? deps.aetherRequestWake() : false;
+    if (!asked) {
+      // Aether is down or not enabled. Failing closed here would make the whole
+      // mesh deaf, so the device that heard the phrase answers — the pre-Stage-4
+      // behaviour, and the honest degradation.
+      logger.info('voice-node.wake-unarbitrated', { nodeId: fromNodeId || null });
+      const frame = JSON.stringify({
+        type: 'wake-outcome',
+        arbitrated: false,
+        results: fromNodeId ? [{ id: fromNodeId, outcome: 'ACCEPTED' }] : [],
+      });
+      voiceNodes.forEach((ws, nodeId) => {
+        if (ws.readyState !== 1) return;
+        // Only the reporter is told to listen; the others are told nothing, which
+        // leaves them idle rather than suppressed.
+        if (nodeId === fromNodeId) { try { ws.send(frame); } catch (_) { /* gone */ } }
+      });
+      return 'unarbitrated';
+    }
+    return 'requested';
+  }
+
+  // HUD parity. The desktop is a scanner in the mesh too (the operator's own
+  // bridge.py), so it should win or lose the same arbitration a phone does —
+  // otherwise saying the wake phrase in the kitchen opens a turn on the PC as well
+  // and two devices answer.
+  //
+  // The HUD cannot judge its own verdict alone: the aggregator reports scanner ids,
+  // and only the operator knows which id their local bridge.py uses. So the server
+  // holds the pending request and tells that one connection whether it may proceed.
+  //
+  // FAIL-OPEN by construction. A verdict that never arrives (Aether down, no
+  // AETHER_LOCAL_SCANNER_ID configured, the local scanner absent from `results`)
+  // leaves the HUD to behave exactly as it does today. Only an explicit SUPPRESSED
+  // stands it down — being deaf is a worse failure than answering twice.
+  let pendingLocalWake = null;
+
+  function resolveLocalWake(results) {
+    const target = pendingLocalWake;
+    if (!target) return;
+    pendingLocalWake = null;
+    if (target.readyState !== 1) return;
+    const localId = String(config.AETHER_LOCAL_SCANNER_ID || '').trim();
+    let accepted = true;
+    let reason = 'not-arbitrated';
+    if (localId) {
+      const entry = (results || []).find((r) => r && r.id === localId);
+      if (entry) {
+        accepted = entry.outcome === 'ACCEPTED';
+        reason = accepted ? 'accepted' : 'suppressed-by-aether';
+      } else {
+        // Absent from results means this scanner is not present — it cannot be the
+        // owner, but it also was not asked to stand down, and the operator IS at
+        // this machine if the HUD heard them. Fail open.
+        reason = 'local-scanner-not-in-results';
+      }
+    }
+    try { target.send(JSON.stringify({ type: 'wake-verdict', accepted, reason })); } catch (_) { /* gone */ }
+  }
+
+  // The verdict, straight from the aggregator. Relayed to every node — the losers
+  // need it as much as the winner, because a device that heard the phrase and is
+  // told nothing has no way to distinguish "you lost" from "nobody heard you",
+  // and would either answer too or sit there looking broken.
+  bus.subscribe('aether.wake-outcome', (e) => {
+    const p = e.payload || {};
+    const frame = JSON.stringify({
+      type: 'wake-outcome', arbitrated: true, owner: p.owner || null, results: p.results || [],
+    });
+    voiceNodes.forEach((ws) => {
+      if (ws.readyState === 1) { try { ws.send(frame); } catch (_) { /* gone */ } }
+    });
+    resolveLocalWake(p.results || []);
+  });
 
   // Relay the conversation FSM to every identified node. Nodes need every phase,
   // not just CONFIRM: TRANSFER is when a phone pauses and records its playhead,
@@ -2641,6 +2740,21 @@ function createServer(deps) {
       }
       else if (msg.type === 'node-lost') {
         if (scannerProxy) scannerProxy.markLost(String(msg.nodeId || ''));
+      }
+      // Stage 4: this node heard the wake phrase. It is a REPORT, not a claim —
+      // the node does not get to decide it should answer.
+      else if (msg.type === 'node-wake') {
+        const reportingNodeId = String(msg.nodeId || '').trim() || null;
+        // A wake reported by a connection that has NOT identified as a node is the
+        // HUD competing (see resolveLocalWake). It gets an answer on this socket
+        // rather than through the node relay, which it is not part of.
+        if (!ws._mythosNodeId) pendingLocalWake = ws;
+        const outcome = requestWakeArbitration(reportingNodeId);
+        if (outcome !== 'requested' && pendingLocalWake === ws) {
+          // Nothing will arrive to resolve it — answer now rather than leaving the
+          // HUD waiting out its timeout on every wake.
+          resolveLocalWake([]);
+        }
       }
       // A node claims its identity, so speech can be routed back to it. Last
       // writer wins (a reconnecting phone must be able to replace its own stale

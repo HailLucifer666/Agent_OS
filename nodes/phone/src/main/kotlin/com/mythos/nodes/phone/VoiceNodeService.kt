@@ -53,6 +53,9 @@ class VoiceNodeService : Service() {
     /** Playhead recorded at TRANSFER, resumed from at RELEASE (§6.3). */
     private var handoffOffsetMs = 0L
 
+    private var detector: WakeWordDetector? = null
+    private var wakeGate: WakeWordGate? = null
+
     override fun onCreate() {
         super.onCreate()
         settings = NodeSettings(applicationContext)
@@ -64,6 +67,9 @@ class VoiceNodeService : Service() {
                 // that hears its own TTS would answer itself.
                 if (playing) _phase.value = Phase.SPEAKING
                 else if (_phase.value == Phase.SPEAKING) _phase.value = Phase.IDLE
+                // The gate measures its tail from the END of playback, so it needs
+                // the transition, not a poll.
+                wakeGate?.notePlaying(playing)
             }
         }
         mic = MicRecorder(settings)
@@ -84,6 +90,7 @@ class VoiceNodeService : Service() {
         // to read from and never needs a handle on the service instance.
         scope.launch { link.status.collect { _connection.value = it } }
         startScanner()
+        startWakeWord()
         scope.launch { lostSweep() }
         return START_STICKY
     }
@@ -121,6 +128,49 @@ class VoiceNodeService : Service() {
                 reportedLost = true
                 link.sendLost()
             }
+        }
+    }
+
+    // ---- Wake word: heard here, arbitrated by Aether ------------------------
+
+    /**
+     * Start hands-free listening, if the operator supplied a model.
+     *
+     * A detection is NOT a decision. It becomes a `node-wake` report, MYTHOS asks
+     * Aether to rank every device that heard the phrase, and only the device named
+     * ACCEPTED opens its mic — otherwise four phones in a hallway all answer one
+     * sentence. The gate drops detections caused by our own playback before any of
+     * that, since a phone that hears its own TTS answers itself.
+     */
+    private fun startWakeWord() {
+        val gate = WakeWordGate(isSpeaking = { player?.isPlaying == true })
+        wakeGate = gate
+
+        val model = WakeWordDetector.findModel(getExternalFilesDir(null) ?: filesDir)
+        val d: WakeWordDetector = if (model == null) {
+            // Honest and visible: hands-free is off because there is no model, not
+            // because anything is broken. Push-to-talk still works.
+            NoOpDetector("no wake-word model installed")
+        } else {
+            // A model is present but this build ships no inference engine for it —
+            // see WakeWordDetector's header for why no model or engine is bundled.
+            // Reporting the file we found makes a wrong-format drop diagnosable.
+            NoOpDetector("model found (${model.name}) but no detector engine in this build")
+        }
+        detector = d
+        _wakeStatus.value = d.statusLabel
+        if (!d.isAvailable) return
+
+        d.start {
+            val reason = gate.rejectionReason()
+            if (reason != null) {
+                _wakeSuppressed.value = _wakeSuppressed.value + 1
+                return@start
+            }
+            if (!gate.allow()) return@start
+            // If the socket is down there is nobody to arbitrate; answering locally
+            // is better than being deaf, and MYTHOS's own fallback does the same.
+            if (!link.sendWake()) startListeningOnce()
         }
     }
 
@@ -228,6 +278,30 @@ class VoiceNodeService : Service() {
                     }
                     "IDLE" -> handoffOffsetMs = 0L
                 }
+                // Stage 4 — the arbitration verdict. Every node receives it,
+                // including the losers, because a device that heard the phrase and
+                // is told nothing cannot tell "you lost" from "nobody heard you":
+                // it would either answer as well, or sit there looking broken.
+                "wake-outcome" -> {
+                    val results = msg.optJSONArray("results")
+                    var mine: String? = null
+                    if (results != null) {
+                        for (i in 0 until results.length()) {
+                            val entry = results.optJSONObject(i) ?: continue
+                            if (entry.optString("id") == settings.nodeId) {
+                                mine = entry.optString("outcome")
+                            }
+                        }
+                    }
+                    when (mine) {
+                        "ACCEPTED" -> startListeningOnce()
+                        // §6.1: `results` lists only PRESENT scanners, so a node
+                        // that cannot currently see the beacon appears nowhere in
+                        // it. Absence is NOT consent — anything that is not an
+                        // explicit ACCEPTED stands down.
+                        else -> _wakeSuppressed.value = _wakeSuppressed.value + 1
+                    }
+                }
                 "identified" -> _identified.value = msg.optBoolean("ok", false)
             }
         }
@@ -266,6 +340,7 @@ class VoiceNodeService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         scanner?.stop()
+        detector?.stop()
         mic?.stop()
         player?.release()
         link.disconnect()
@@ -303,6 +378,16 @@ class VoiceNodeService : Service() {
          *  realm-key or beacon-name mismatch, not an absent beacon. */
         private val _rejections = MutableStateFlow(0)
         val rejections: StateFlow<Int> = _rejections.asStateFlow()
+
+        private val _wakeStatus = MutableStateFlow("off")
+        /** Verbatim in the UI — colour alone cannot say WHY hands-free is off. */
+        val wakeStatus: StateFlow<String> = _wakeStatus.asStateFlow()
+
+        private val _wakeSuppressed = MutableStateFlow(0)
+        /** Detections that did not become a turn: own playback, retrigger, or lost
+         *  the arbitration. Visible so "it heard me and stayed quiet" is
+         *  distinguishable from "it never heard me". */
+        val wakeSuppressed: StateFlow<Int> = _wakeSuppressed.asStateFlow()
 
         private val _connection = MutableStateFlow(NodeLink.Status.DISCONNECTED)
         val connection: StateFlow<NodeLink.Status> = _connection.asStateFlow()

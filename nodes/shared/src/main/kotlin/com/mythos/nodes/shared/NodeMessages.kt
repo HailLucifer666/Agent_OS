@@ -50,6 +50,14 @@ public object NodeMessages {
     public fun identify(nodeId: String): String =
         """{"type":"identify","role":"node","nodeId":"${jsonEscape(nodeId)}"}"""
 
+    /**
+     * This node heard the wake phrase. A REPORT, not a claim — MYTHOS asks Aether
+     * to rank every device that heard it, and only the winner listens. A node that
+     * decided for itself would mean four devices answering one phrase.
+     */
+    public fun wake(nodeId: String): String =
+        """{"type":"node-wake","nodeId":"${jsonEscape(nodeId)}"}"""
+
     /** A transcribed utterance from this node's microphone. */
     public fun utterance(reqId: String, text: String): String =
         """{"type":"utterance","reqId":"${jsonEscape(reqId)}","text":"${jsonEscape(text)}"}"""
