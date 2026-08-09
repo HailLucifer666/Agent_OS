@@ -11,6 +11,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
+// fs/os are for the resolveAdbBin cases below, which build their own temp
+// "install" instead of depending on whether this machine has one.
+const fs = require('fs');
+const os = require('os');
 const setupAndroid = require('../scripts/setup-android.js');
 
 test('buildDownloadUrl resolves the official Google platform-tools zip per OS, never a script', () => {
@@ -49,21 +53,49 @@ test('VAULT_DEVICES_PATH resolves under mythos/vault/Identity, not .env (a growi
   assert.strictEqual(p.includes(path.join('vault', 'Identity', 'android-devices.json')), true);
 });
 
-test('resolveAdbBin prefers ANDROID_ADB_BIN, falls back to bare "adb" (PATH lookup) when unset and no local install exists', () => {
+test('resolveAdbBin prefers ANDROID_ADB_BIN, then a local install, then bare "adb" (PATH lookup)', () => {
+  // This test used to assert the bare-'adb' fallback by relying on the operator
+  // NOT having installed platform-tools on whatever machine ran the suite. That
+  // premise expires the moment anyone runs `--install`, and on 2026-08-10 a
+  // concurrent session did exactly that mid-run: the test began failing
+  // deterministically while presenting as an intermittent flake, because
+  // "adb.exe exists" flipped between runs. The path is injected now, so all
+  // three branches are covered on any machine, installed or not.
+  const prev = process.env.ANDROID_ADB_BIN;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adb-resolve-'));
+  const absent = path.join(dir, 'not-installed', 'adb.exe');
+  const present = path.join(dir, 'adb.exe');
+  fs.writeFileSync(present, 'not a real binary');
+  try {
+    delete process.env.ANDROID_ADB_BIN;
+    assert.strictEqual(setupAndroid.resolveAdbBin(absent), 'adb',
+      'with no local install, adb must come from PATH');
+    assert.strictEqual(setupAndroid.resolveAdbBin(present), present,
+      'a local install must win over the PATH lookup');
+
+    process.env.ANDROID_ADB_BIN = '/custom/path/to/adb';
+    assert.strictEqual(setupAndroid.resolveAdbBin(present), '/custom/path/to/adb',
+      'and an explicit ANDROID_ADB_BIN outranks even a local install');
+  } finally {
+    if (prev === undefined) delete process.env.ANDROID_ADB_BIN;
+    else process.env.ANDROID_ADB_BIN = prev;
+  }
+});
+
+test('resolveAdbBin with no argument still resolves the real install path (the seam must not become the only path that works)', () => {
+  // Guards the wakeword-seam failure mode: an injectable path that quietly stops
+  // matching production, so the tests pass while the feature is broken.
   const prev = process.env.ANDROID_ADB_BIN;
   try {
     delete process.env.ANDROID_ADB_BIN;
     const resolved = setupAndroid.resolveAdbBin();
-    // No local "Android Platform Tools/platform-tools" install exists in
-    // this test environment (never created it — --install is never run),
-    // so this must fall all the way back to the bare PATH lookup.
-    assert.strictEqual(resolved, 'adb');
-
-    process.env.ANDROID_ADB_BIN = '/custom/path/to/adb';
-    assert.strictEqual(setupAndroid.resolveAdbBin(), '/custom/path/to/adb');
+    const real = setupAndroid.resolveAdbPath();
+    assert.strictEqual(resolved === real || resolved === 'adb', true,
+      'with no injection it must be either the real local install or the PATH fallback — nothing else');
+    assert.strictEqual(resolved, fs.existsSync(real) ? real : 'adb',
+      'and which one it is must follow whether that real path actually exists');
   } finally {
-    if (prev === undefined) delete process.env.ANDROID_ADB_BIN;
-    else process.env.ANDROID_ADB_BIN = prev;
+    if (prev !== undefined) process.env.ANDROID_ADB_BIN = prev;
   }
 });
 

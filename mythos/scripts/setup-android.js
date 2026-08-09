@@ -62,10 +62,20 @@ function resolveAdbPath() {
 
 // Resolution order: explicit env override -> the project-local install this
 // script's own --install step produces -> bare 'adb' (PATH lookup).
-function resolveAdbBin() {
+// `localAdbPath` is an injectable-path seam, and it exists for the same reason
+// routes/config.js's wakewordModelsDir does: the test for this function used to
+// assert the bare-'adb' fallback by relying on the operator NOT having installed
+// platform-tools on the machine running the suite. That premise silently expires
+// the first time anyone runs `--install` (or a concurrent session does), and then
+// the test fails deterministically while looking like a flake — which is exactly
+// what happened here on 2026-08-10. Production passes nothing and resolves the
+// real path; the test passes a path it controls and can therefore cover BOTH
+// branches instead of whichever one the machine happens to be in.
+function resolveAdbBin(localAdbPath) {
   if (process.env.ANDROID_ADB_BIN) return process.env.ANDROID_ADB_BIN;
+  const candidate = localAdbPath || resolveAdbPath();
   try {
-    if (fs.existsSync(resolveAdbPath())) return resolveAdbPath();
+    if (fs.existsSync(candidate)) return candidate;
   } catch (_) { /* fall through to PATH */ }
   return 'adb';
 }
