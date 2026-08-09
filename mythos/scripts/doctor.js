@@ -234,11 +234,65 @@ function assetChecks() {
 // is an allowlist of names and nothing here reads a key's value.
 const PARITY_SETTINGS = [
   'VOICE_S2S_ENABLED', 'VOICE_UNIFIED_LIVE_VOICE', 'VOICE_TTS_PROVIDER', 'VOICE_TTS_CHAIN',
+  // The voice-IDENTITY keys. These belong here for a specific operator
+  // requirement: the entity must sound like the same person on the laptop, the
+  // PC and the phone. providers/tts.js already makes that true within one
+  // machine (a matched set of defaults, VOICE_UNIFIED_LIVE_VOICE routing
+  // greeting/typed/spoken through one Live session, and
+  // voice-identity-consistent.test.js as the gate) — but nothing could tell you
+  // whether the OTHER machine agreed, and a single differing value there is a
+  // different person answering. The phone needs no entry: it plays
+  // server-synthesized audio and has no TTS of its own, so it inherits whichever
+  // engine answered.
+  'GEMINI_LIVE_VOICE', 'VOICE_TTS_VOICE', 'PIPER_VOICE', 'KOKORO_VOICE', 'GEMINI_TTS_MODEL',
   'VOICE_STT_CHAIN', 'VOICE_STT_PROVIDER', 'WAKEWORD_ENABLED', 'WAKEWORD_THRESHOLD',
   'AETHER_ENABLED', 'AETHER_NODE_AUDIO', 'AETHER_NODE_IDS', 'AETHER_NODE_TRUST',
   'MYTHOS_PORT', 'MYTHOS_BIND', 'MYTHOS_NAME', 'BOOT_GREETING',
   'BRAIN_LANE_VOICE', 'BRAIN_LANE_CODE', 'PIPER_MODEL_DIR', 'EDGE_TTS_PORT',
 ];
+
+// Which voice each engine would actually use, resolved through production's OWN
+// voiceFor() rather than a copy of its rules — a copy is how "the report says they
+// match" and "they match" drift apart. Reported as plain data: doctor cannot hear,
+// so it never claims two voices SOUND alike, only which ids are in play and which
+// engine is first in the chain.
+//
+// The point of printing this at all is cross-machine: run it on both, and a
+// different id anywhere is a different person answering on that machine.
+function voiceIdentity() {
+  let voiceFor;
+  try {
+    ({ voiceFor } = require(path.join(MYTHOS_DIR, 'providers', 'tts.js')));
+  } catch (err) {
+    return { error: `could not load the TTS chain: ${err.message}`, rows: [] };
+  }
+  // Schema defaults UNDER env overrides, which is the layering production uses.
+  // Reporting env-only would print "(engine default)" for any voice the operator
+  // has not explicitly set — understating the answer for exactly the keys that
+  // matter here, since the matched-set defaults ARE the mechanism (edge-tts's
+  // en-US-AvaNeural was chosen to sit beside Gemini's Aoede, not left to chance).
+  const cfg = {};
+  try {
+    const { SCHEMA } = require(path.join(MYTHOS_DIR, 'src', 'core', 'config', 'schema.js'));
+    for (const key of ['GEMINI_LIVE_VOICE', 'VOICE_TTS_VOICE', 'PIPER_VOICE', 'KOKORO_VOICE']) {
+      if (SCHEMA[key] && SCHEMA[key].default !== undefined) cfg[key] = SCHEMA[key].default;
+      if (envPresent(key)) cfg[key] = String(process.env[key]);
+    }
+  } catch { /* schema unreadable — fall back to voiceFor's own env chain */ }
+  const engines = [
+    { name: 'gemini-tts', label: 'Gemini (Live + TTS)' },
+    { name: 'edge-tts', label: 'edge-tts (fallback)' },
+    { name: 'piper-tts', label: 'piper (offline fallback)' },
+    { name: 'kokoro-tts', label: 'kokoro (fallback)' },
+  ];
+  const rows = engines.map((e) => ({
+    engine: e.label,
+    voice: voiceFor({ name: e.name }, cfg) || '(engine default)',
+  }));
+  const chain = String(process.env.VOICE_TTS_CHAIN || process.env.VOICE_TTS_PROVIDER || 'edge')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  return { error: null, rows, chain, unified: process.env.VOICE_UNIFIED_LIVE_VOICE !== 'false' };
+}
 
 function collectSettings() {
   const out = {};
@@ -294,6 +348,7 @@ function buildReport(envDir) {
     keys,
     assets,
     settings: collectSettings(),
+    voice: voiceIdentity(),
     gaps,
     requiredGaps: gaps.filter((g) => g.required),
   };
@@ -329,6 +384,20 @@ function printReport(report) {
 
   printSection('Keys', report.keys);
   printSection('Models and binaries', report.assets);
+
+  console.log('');
+  console.log('Voice identity (must be identical on every machine)');
+  console.log('--------------------------------------------------');
+  if (report.voice.error) {
+    console.log(`  ${report.voice.error}`);
+  } else {
+    console.log(`  chain order: ${report.voice.chain.join(' -> ')}`);
+    console.log(`  unified Live voice: ${report.voice.unified ? 'on — greeting, typed and spoken all use the Live session' : 'OFF — the greeting and typed replies use the TTS chain instead, which is a different engine'}`);
+    for (const row of report.voice.rows) console.log(`  ${row.engine.padEnd(28)} ${row.voice}`);
+    console.log('  The phone has no TTS of its own — it plays whatever the server synthesized,');
+    console.log('  so it matches by construction. A DIFFERENT id here than on the other machine');
+    console.log('  is a different person answering there.');
+  }
 
   console.log('');
   console.log('Non-secret settings on this machine');

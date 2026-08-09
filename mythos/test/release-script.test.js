@@ -14,6 +14,10 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+// For the workflow-shape assertions at the bottom: the release route's promise
+// ("--ci needs no personal token") is only true if .github/workflows/release.yml
+// actually exists and does what it claims.
+const fs = require('fs');
 
 const release = require(path.join(__dirname, '..', '..', 'scripts', 'release.js'));
 
@@ -152,6 +156,69 @@ describe('evaluatePreflight', () => {
     // Fixing them one release attempt at a time is how a half-release happens.
     const res = release.evaluatePreflight(okFacts({ clean: false, branch: 'x', ahead: 1, hasToken: false }));
     assert.ok(res.blockers.length >= 4, `expected several blockers, got ${res.blockers.length}`);
+  });
+});
+
+describe('the --ci route (no personal token)', () => {
+  it('a missing GH_TOKEN is a warning, not a blocker, when CI will publish', () => {
+    // The whole point: on this project one machine's `gh` is authenticated as a
+    // different account than the repo owner, so requiring a local personal token
+    // is the step most likely to stall a release. secrets.GITHUB_TOKEN is scoped
+    // to the repository by GitHub and needs nothing minted by hand.
+    const res = release.evaluatePreflight(okFacts({ hasToken: false, ci: true }));
+    assert.equal(res.ok, true, res.blockers.join('; '));
+    assert.match(res.warnings.join(' '), /release\.yml/, 'and it must say who is going to do the upload');
+  });
+
+  it('without --ci a missing GH_TOKEN still blocks, and names --ci as the way out', () => {
+    const res = release.evaluatePreflight(okFacts({ hasToken: false, ci: false }));
+    assert.equal(res.ok, false);
+    assert.match(res.blockers.join(' '), /--ci/);
+  });
+});
+
+describe('the release workflow', () => {
+  const WORKFLOW = path.join(__dirname, '..', '..', '.github', 'workflows', 'release.yml');
+
+  it('exists, and is what --ci relies on', () => {
+    assert.equal(fs.existsSync(WORKFLOW), true,
+      '--ci downgrades the GH_TOKEN blocker on the promise that this workflow does the upload');
+  });
+
+  it('publishes with the repository-scoped token and asks for no more permission than it needs', () => {
+    const text = fs.readFileSync(WORKFLOW, 'utf8');
+    assert.match(text, /GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/,
+      'the built-in token is the entire reason this route needs no personal one');
+    // Assert the GUARANTEE, not the comment layout: exactly one write scope, and
+    // it is contents. Counting comment lines (the first version of this) breaks
+    // the moment someone edits the prose, which is a test failing for a reason
+    // that has nothing to do with what it protects.
+    const permissions = /\npermissions:\n((?:[ \t]+[^\n]*\n)+)/.exec(text);
+    assert.ok(permissions, 'the workflow must declare permissions explicitly rather than inheriting the default');
+    const grants = permissions[1]
+      .split('\n')
+      .map((l) => l.replace(/#.*$/, '').trim())
+      .filter(Boolean);
+    assert.deepEqual(grants, ['contents: write'],
+      `contents: write is required to create the release; anything broader is not (found: ${grants.join(', ')})`);
+    // Comment-stripped, because the workflow's header deliberately NAMES CSC_LINK
+    // in order to explain why it does not use it — and a test that reads prose as
+    // code fails for the opposite of the reason it exists. (Second time this shape
+    // has bitten in this session; see electron-vault-sync-wiring.test.js.)
+    const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    assert.doesNotMatch(code, /CSC_LINK|CSC_KEY_PASSWORD|secrets\.CSC/,
+      'a signing certificate must not be wired into repository secrets before that decision is actually made');
+  });
+
+  it('refuses a tag that disagrees with package.json, and proves latest.yml was produced', () => {
+    const text = fs.readFileSync(WORKFLOW, 'utf8');
+    // A tag/version mismatch produces a release electron-updater never offers,
+    // because it compares semver against package.json's version. Catching it
+    // before the build costs seconds; after it costs a wasted run and a bad tag.
+    assert.match(text, /does not match package\.json version/,
+      'the tag/version check must fail loudly rather than shipping a silent no-op');
+    assert.match(text, /latest\.yml is missing/,
+      'latest.yml is the file the updater polls — a release without it reports "no update" forever');
   });
 });
 

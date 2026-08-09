@@ -110,6 +110,24 @@ tag with no artifacts, artifacts with a stale version) is worse than none.
 It is a **dry run** until you pass `--yes`; without it, it prints the exact
 commands it would run. `--no-publish` builds and tags without uploading.
 
+**The route that needs no personal token: `--ci`.**
+
+```
+node scripts/release.js patch --yes --ci
+```
+
+This bumps, commits, tags, builds locally as a smoke test, and pushes the branch
+and the tag — then `.github/workflows/release.yml` does the upload on the tag
+push, using the `GITHUB_TOKEN` that GitHub scopes to this repository
+automatically. Nothing to mint, store, or rotate, and no dependency on which
+account the local `gh` happens to be logged in as. With `--ci`, a missing
+`GH_TOKEN` is a warning rather than a blocker.
+
+That workflow refuses a tag that disagrees with `package.json`'s version (such a
+release is one electron-updater would never offer, since it compares semver) and
+fails if `latest.yml` was not produced. It does not sign: no `CSC_*` is wired
+into repository secrets, deliberately, until that decision is actually made.
+
 Two things it warns about without blocking, because neither is fatal and both
 have bitten this project: an **unsigned** build (no `CSC_LINK`), and a `gh` CLI
 logged in as an account other than `build.publish`'s owner. `GH_TOKEN` is what

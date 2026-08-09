@@ -1,0 +1,101 @@
+name: release
+
+# Cut a release from a tag, using the token GitHub already gives the workflow.
+#
+# WHY THIS EXISTS. Publishing from a laptop needs a personal GH_TOKEN with write
+# access to this repo, and on at least one of this project's machines the `gh` CLI
+# is authenticated as a DIFFERENT account than the repo owner — so a local
+# `--publish always` builds for several minutes and then fails at the upload. The
+# built-in secrets.GITHUB_TOKEN is scoped to this repository by definition, so
+# pushing a tag is the whole ceremony: no personal token to mint, store, rotate,
+# or accidentally commit.
+#
+# HOW TO USE IT:
+#   node scripts/release.js patch --yes --no-publish
+# ...which bumps the version, commits, tags, builds locally as a smoke test, and
+# pushes both the branch and the tag. The tag push is what starts this workflow,
+# and this workflow is what uploads the installer + .blockmap + latest.yml
+# together — the three files electron-updater needs to see beside each other.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: sign the build. CSC_LINK/CSC_KEY_PASSWORD are
+# not referenced here, because a certificate does not belong in repository secrets
+# on a project that has not decided how it handles signing yet (CONTRIBUTING.md's
+# release gate). Unsigned means Windows SmartScreen warns on install and
+# electron-updater cannot verify a downloaded installer — which is survivable only
+# because autoDownload is false and quitAndInstall is never called. Do not enable
+# automatic download before this is signed.
+
+on:
+  push:
+    tags: ['v*']
+  # Manual re-run for a tag whose upload failed halfway. electron-builder
+  # overwrites its own artifacts on the existing draft/release rather than
+  # duplicating them, so re-running is the documented recovery, not a hazard.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (e.g. v0.1.2)'
+        required: true
+
+permissions:
+  # The only elevated permission needed: creating the release and uploading assets.
+  # Everything else stays read-only, so a compromised build step cannot push code.
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # electron-builder reads the git history for nothing here, but a shallow
+          # clone has bitten enough tools that the full one is cheap insurance.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      # Two installs on purpose: the shell (electron, electron-builder) and the
+      # server (mythos/), which build.includeSubNodeModules ships into the package.
+      # Skipping the second produces an installer whose mythos/node_modules is
+      # empty — confirmed by a real build once already.
+      - name: Install shell dependencies
+        run: npm ci
+
+      - name: Install server dependencies
+        working-directory: mythos
+        run: npm ci
+
+      # The version in package.json is what electron-updater compares, so a tag
+      # that disagrees with it produces a release nobody is ever offered. Fail
+      # here, before a five-minute build, rather than shipping a silent no-op.
+      - name: Verify the tag matches package.json's version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          Write-Host "tag=$tag packageVersion=$version"
+          if ($tag -ne "v$version") {
+            Write-Host "::error::tag $tag does not match package.json version $version - an installed app would never be offered this release"
+            exit 1
+          }
+
+      - name: Build and publish the installer
+        env:
+          # Scoped to this repository by GitHub. Never a personal token, and
+          # nothing here reads CSC_* (see the header).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always
+
+      # Proof, not assumption: latest.yml is the file the updater actually polls,
+      # and a release without it is one where every client reports "no update"
+      # forever while the installer sits right there.
+      - name: Confirm latest.yml was produced
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/latest.yml)) {
+            Write-Host "::error::dist/latest.yml is missing - electron-updater would have nothing to poll"
+            exit 1
+          }
+          Get-Content dist/latest.yml

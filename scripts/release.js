@@ -26,6 +26,8 @@
 //   node scripts/release.js patch --yes           do it
 //   node scripts/release.js 0.2.0 --yes           explicit version
 //   node scripts/release.js patch --yes --no-publish   bump/tag/build, no upload
+//   node scripts/release.js patch --yes --ci          let CI publish from the tag
+//                                                     (no personal GH_TOKEN needed)
 
 const fs = require('fs');
 const path = require('path');
@@ -93,7 +95,17 @@ function evaluatePreflight(facts) {
 
   if (f.publishing) {
     if (!f.hasToken) {
-      blockers.push('GH_TOKEN is not set — the upload would be skipped and the tag would exist with no artifacts. Set it, or pass --no-publish');
+      // Not a blocker when CI is doing the upload: .github/workflows/release.yml
+      // publishes on the tag push using secrets.GITHUB_TOKEN, which is scoped to
+      // this repository by GitHub and needs no personal token at all. That is the
+      // recommended route precisely because a local GH_TOKEN has to belong to an
+      // account with write access here, and on at least one machine `gh` is logged
+      // in as a different one.
+      if (f.ci) {
+        warnings.push('GH_TOKEN is not set locally — the tag push will let .github/workflows/release.yml do the upload with the repository-scoped GITHUB_TOKEN');
+      } else {
+        blockers.push('GH_TOKEN is not set — the upload would be skipped and the tag would exist with no artifacts. Set it, pass --ci to let the release workflow publish, or pass --no-publish');
+      }
     }
     // The gotcha this whole function exists for: `gh` on a machine can be
     // authenticated as an account with no write access to the publish target,
@@ -173,6 +185,10 @@ function main(argv) {
   const spec = args.find((a) => !a.startsWith('--'));
   const confirmed = args.includes('--yes');
   const publishing = !args.includes('--no-publish');
+  // --ci: the tag push is the release. Builds locally as a smoke test but does not
+  // upload; .github/workflows/release.yml publishes from the tag with the
+  // repository-scoped GITHUB_TOKEN. This is the route that needs no personal token.
+  const ci = args.includes('--ci');
 
   if (!spec) {
     console.error('usage: node scripts/release.js <patch|minor|major|x.y.z> [--yes] [--no-publish]');
@@ -192,6 +208,7 @@ function main(argv) {
   console.log(`release: ${pkg.version} -> ${version}  (tag ${tag}, publish ${publishing ? 'yes' : 'no'})`);
 
   const facts = gatherFacts(pkg, tag, publishing);
+  facts.ci = ci;
   const pre = evaluatePreflight(facts);
   for (const w of pre.warnings) console.log(`  warning: ${w}`);
   for (const b of pre.blockers) console.log(`  BLOCKER: ${b}`);
@@ -204,7 +221,7 @@ function main(argv) {
     ['git', ['add', 'package.json']],
     ['git', ['commit', '-m', `chore(release): ${tag}`]],
     ['git', ['tag', '-a', tag, '-m', `MYTHOS ${tag}`]],
-    ['npx', ['electron-builder', '--win', ...(publishing ? ['--publish', 'always'] : [])]],
+    ['npx', ['electron-builder', '--win', ...(publishing && !ci ? ['--publish', 'always'] : [])]],
     ['git', ['push', 'origin', 'main']],
     ['git', ['push', 'origin', tag]],
   ];

@@ -174,6 +174,62 @@ describe('doctor: cli contracts', () => {
   });
 });
 
+describe('doctor: voice identity', () => {
+  // The operator's requirement is that MYTHOS sounds like the same person on the
+  // laptop, the PC and the phone. providers/tts.js already makes that true within
+  // one machine; what these pin is that doctor can PROVE it across machines.
+  it('every voice-identity key is tracked for parity, or a mismatch is invisible', () => {
+    for (const key of ['GEMINI_LIVE_VOICE', 'VOICE_TTS_VOICE', 'PIPER_VOICE', 'KOKORO_VOICE']) {
+      assert.equal(doctor.PARITY_SETTINGS.includes(key), true,
+        `${key} decides who is speaking — if --compare does not track it, the other machine can answer ` +
+        'in a different voice and nothing reports it');
+    }
+  });
+
+  it('resolves each engine through production\'s own voiceFor, with the schema defaults applied', () => {
+    const report = doctor.buildReport();
+    assert.equal(report.voice.error, null, report.voice.error || '');
+    const byEngine = Object.fromEntries(report.voice.rows.map((r) => [r.engine, r.voice]));
+    // The matched set: these two ids were deliberately chosen to sit beside each
+    // other (see voice-identity-consistent.test.js). Reporting "(engine default)"
+    // for the edge row would understate exactly the mechanism that matters.
+    assert.equal(byEngine['Gemini (Live + TTS)'], 'Aoede');
+    assert.equal(byEngine['edge-tts (fallback)'], 'en-US-AvaNeural');
+    for (const row of report.voice.rows) {
+      assert.notEqual(row.voice, '(engine default)',
+        `${row.engine} must resolve to a concrete voice id — an unresolved row cannot be compared between machines`);
+    }
+  });
+
+  it('an explicit env override wins, so a deliberate voice change is visible in the report', () => {
+    const saved = process.env.GEMINI_LIVE_VOICE;
+    process.env.GEMINI_LIVE_VOICE = 'Puck';
+    try {
+      const report = doctor.buildReport();
+      const gemini = report.voice.rows.find((r) => /Gemini/.test(r.engine));
+      assert.equal(gemini.voice, 'Puck');
+    } finally {
+      if (saved === undefined) delete process.env.GEMINI_LIVE_VOICE;
+      else process.env.GEMINI_LIVE_VOICE = saved;
+    }
+  });
+
+  it('reports the chain order and whether the unified Live voice is on', () => {
+    // With unified off, the greeting and typed replies leave the Live session and
+    // come from a different engine — the original "three voices in one session"
+    // complaint. Whether it is on is therefore part of voice identity, not a detail.
+    const saved = process.env.VOICE_UNIFIED_LIVE_VOICE;
+    process.env.VOICE_UNIFIED_LIVE_VOICE = 'false';
+    try {
+      assert.equal(doctor.buildReport().voice.unified, false);
+    } finally {
+      if (saved === undefined) delete process.env.VOICE_UNIFIED_LIVE_VOICE;
+      else process.env.VOICE_UNIFIED_LIVE_VOICE = saved;
+    }
+    assert.equal(Array.isArray(doctor.buildReport().voice.chain), true);
+  });
+});
+
 describe('doctor: asset checks', () => {
   it('every asset row carries a runnable fix, and none advertises a script that does not exist', () => {
     const rows = doctor.assetChecks();
