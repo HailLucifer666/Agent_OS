@@ -38,6 +38,7 @@
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
 import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
+import { createBargeInBackstop } from './barge-in-backstop.js';
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -53,6 +54,13 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
   let captureNode = null;
   let player = null;
   let screenCapture = null;   // Slice 3 screen share, null unless opted in
+
+  // Client-side barge-in backstop (V2 spine §1002-1005). The server's
+  // `live-interrupted` is the primary signal and still does all the work when
+  // Gemini's VAD fires; this only covers the case where it MISSES, which is
+  // what the operator experiences as "it talks over me". Local flush only —
+  // see barge-in-backstop.js for why nothing is sent to the server here.
+  const bargeBackstop = createBargeInBackstop({ onFlush: () => { if (player) player.flush(); } });
 
   // Bound listener refs, so stop() can precisely unsubscribe the exact
   // functions start() registered (offBroadcast matches by reference).
@@ -175,7 +183,11 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
     setState('processing');
 
     onAudioOutMsg = (msg) => { if (player && msg && msg.data) player.enqueue(msg.data); };
-    onInterruptedMsg = () => { if (player) player.flush(); };
+    // The server won this race: stop the audio and clear the local run, so a
+    // half-accumulated loud streak cannot tip over on the first frame of the
+    // NEXT reply. A local flush that already happened makes this a no-op —
+    // flush() on nothing scheduled stops nothing.
+    onInterruptedMsg = () => { bargeBackstop.reset(); if (player) player.flush(); };
     onLiveStateMsg = (msg) => {
       const s = msg && msg.state;
       // BUG-147: the server answered, so the "no answer" fallback must not fire.
@@ -228,6 +240,12 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
       });
       captureNode.port.onmessage = (e) => {
         if (!active || captureSuspended) return;   // see setCaptureSuspended
+        // Measured on the way out, on the same frames the server hears, so the
+        // backstop and Gemini's VAD are looking at identical audio. Deliberately
+        // AFTER the captureSuspended gate: while we are knowingly making noise
+        // ourselves (own TTS, media playback) those frames are not the operator
+        // and must not count toward an interruption.
+        bargeBackstop.observe(e.data, player ? player.isSpeaking() : false);
         sendMessage({ type: 'live-audio', data: arrayBufferToBase64(e.data) });
       };
       source.connect(captureNode);
@@ -300,6 +318,7 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }
     if (player) { player.close(); player = null; }
+    bargeBackstop.reset();
     setState('idle');
   }
 

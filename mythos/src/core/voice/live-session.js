@@ -246,7 +246,23 @@ function createLiveSession(deps) {
       },
       systemInstruction: { parts: [{ text: currentSystemInstruction() }] },
       tools: (functionDeclarations && functionDeclarations.length) ? [{ functionDeclarations }] : undefined,
-      realtimeInputConfig: { automaticActivityDetection: {} },
+      // Pinned rather than inherited. `{}` took whatever Google's current
+      // defaults happen to be, which means the operator's barge-in behaviour
+      // could change under them with no release on this side and nothing to
+      // diff. HIGH start-of-speech sensitivity is the point of the whole
+      // barge-in path — the reported failure is MYTHOS talking OVER the
+      // operator, i.e. speech onset being missed, so the tuning error worth
+      // making here is firing slightly early, not slightly late. The 800ms
+      // end-of-speech silence is deliberately NOT aggressive: a shorter window
+      // cuts the operator off mid-sentence at every natural pause, which reads
+      // as rudeness rather than as responsiveness.
+      realtimeInputConfig: {
+        automaticActivityDetection: {
+          startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+          endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+          silenceDurationMs: 800,
+        },
+      },
       inputAudioTranscription: {},   // AD-6
       outputAudioTranscription: {},  // AD-6
       // Session dies at ~10min and ~15min of audio without these. Not optional.
