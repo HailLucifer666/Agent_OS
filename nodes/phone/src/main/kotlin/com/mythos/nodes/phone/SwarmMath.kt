@@ -19,9 +19,9 @@ import kotlin.math.sqrt
  *
  * Two departures from the reference, both intentional:
  *
- *  - **1500 particles, not 20,000.** Each particle costs about a dozen
- *    transcendental calls per frame. 900 measured at 0.21ms on this machine, so
- *    1500 is roughly a third of a millisecond; 20,000 is a dropped frame.
+ *  - **2400 particles, not 20,000.** Each particle costs about a dozen
+ *    transcendental calls per frame; 900 measured at 0.21ms and 1500 at 0.30ms on
+ *    this machine, so 2400 is roughly half a millisecond. 20,000 is a dropped frame.
  *  - **Hue biased toward a state colour.** The reference drifts freely through cyan
  *    → violet → magenta. Here that drift is retained but pulled most of the way
  *    toward the current state's colour, so LISTENING and SPEAKING are unmistakable
@@ -142,11 +142,12 @@ class SwarmMath(val count: Int = DEFAULT_COUNT) {
 
     companion object {
         /**
-         * Raised from 900 when the orb grew to fill the screen: at the larger
-         * diameter the old count read as sparse. Anything much beyond this needs
+         * Raised from 900, then again to 2400 once the projection was fixed and
+         * the orb actually filled its box: on a device the earlier counts read as
+         * a grainy point cloud rather than a lit sphere. Anything much beyond this needs
          * the golden-angle precision note in [SwarmMath.init] taken seriously.
          */
-        const val DEFAULT_COUNT = 1500
+        const val DEFAULT_COUNT = 2400
 
         /** The reference's own golden angle, in Double for precision (see init). */
         private const val GOLDEN_ANGLE = 2.399963229728653
@@ -156,15 +157,50 @@ class SwarmMath(val count: Int = DEFAULT_COUNT) {
         /** Reference lerp was 0.1/frame at 60fps; 6/s is the same feel, dt-correct. */
         private const val LERP_RATE = 6f
 
-        private const val AMP_RADIUS = 0.22f
-        private const val AMP_TURB = 0.55f
-        private const val AMP_LIGHT = 0.18f
+        // How much a full-scale signal grows the swarm.
+        //
+        // These were 0.22/0.55/0.18, which measured badly on a device: the loudest
+        // possible frame reached 1.43x the resting one, so scaling the projection to
+        // fit it left the orb drawing at ~60% of the space allotted to it whenever
+        // nobody was talking — which is nearly all the time. Growth is now smaller
+        // and the difference is made up in BRIGHTNESS, which costs no space at all.
+        private const val AMP_RADIUS = 0.12f
+        private const val AMP_TURB = 0.35f
+        private const val AMP_LIGHT = 0.30f
 
-        /** The furthest a particle can travel from centre, for bounds/tests. */
-        fun maxExtent(p: SwarmParams): Float {
-            val radius = p.radius * (1f + AMP_RADIUS)
+        /**
+         * The furthest a particle can travel from centre at full volume.
+         *
+         * A genuine bound, not an estimate — measured p99.9 reaches 0.96 of it — so
+         * it is the right thing for bounds tests. It is the WRONG thing to scale the
+         * projection by: see [restExtent].
+         */
+        fun maxExtent(p: SwarmParams): Float = extentAt(p, 1f)
+
+        /**
+         * The extent with no audio, which is what the projection should be scaled to.
+         *
+         * The orb is silent most of the time. Sizing it so that the loudest
+         * conceivable frame fits exactly means the resting state — the state anyone
+         * actually looks at — is drawn small, and no amount of increasing the
+         * layout size fixes that, because the shrink is inside the projection.
+         * Scaling to rest instead lets a shout overflow the box slightly, which is
+         * the correct trade: the particles that spill are the dim outer ones.
+         */
+        fun restExtent(p: SwarmParams): Float = extentAt(p, 0f)
+
+        /**
+         * How much of the orb's half-size the RESTING swarm is drawn at.
+         *
+         * Lives here rather than in the renderer so the test that bounds the
+         * full-volume spill is checking the number actually used to draw.
+         */
+        const val PROJECTION_FILL = 0.88f
+
+        private fun extentAt(p: SwarmParams, amplitude: Float): Float {
+            val radius = p.radius * (1f + AMP_RADIUS * amplitude)
             val breathMax = 1f + 0.06f + 0.03f
-            val turbMax = (p.turb + AMP_TURB).coerceAtMost(1.6f)
+            val turbMax = (p.turb + AMP_TURB * amplitude).coerceAtMost(1.6f)
             // |base| <= 1, |w| <= 1, and py carries the 1.15 factor.
             return radius * breathMax * (1f + turbMax * 0.22f * 1.15f)
         }

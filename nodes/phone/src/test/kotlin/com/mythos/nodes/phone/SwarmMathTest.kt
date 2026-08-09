@@ -37,6 +37,35 @@ class SwarmMathTest {
     }
 
     @Test
+    fun `the resting swarm nearly fills the extent the projection uses`() {
+        // The defect this pins, measured on a device: the projection was scaled to
+        // maxExtent — the loudest conceivable frame — so with nobody talking the orb
+        // drew at ~60% of the space allotted to it, and no layout change could fix
+        // it because the shrink was inside the projection.
+        val swarm = SwarmMath(count = SwarmMath.DEFAULT_COUNT)
+        val rest = SwarmMath.restExtent(params)
+        var t = 0f
+        repeat(200) { t += 1f / 60f; swarm.step(t, 1f / 60f, params) }
+        val peak = (0 until swarm.count).maxOf { radiusOf(swarm, it) }
+        assertTrue(
+            peak > rest * 0.90f,
+            "resting swarm only reached $peak of the $rest it is scaled by",
+        )
+        assertTrue(peak <= rest, "resting swarm overflowed its own extent at $peak")
+    }
+
+    @Test
+    fun `a shout overflows the box only slightly`() {
+        // The trade for the test above: scaling to rest means full volume spills
+        // past the layout bounds. Dim outer particles crossing the edge is fine; a
+        // large overflow would run into the caption below the orb.
+        val ratio = SwarmMath.maxExtent(params) / SwarmMath.restExtent(params)
+        val spill = SwarmMath.PROJECTION_FILL * ratio
+        assertTrue(spill < 1.15f, "full volume reaches ${spill}x the half-size — it would hit the caption")
+        assertTrue(ratio > 1.05f, "full volume barely grows the orb (${ratio}x) — it would look dead")
+    }
+
+    @Test
     fun `the first step seeds instead of lerping in from the origin`() {
         // Without seeding, every entry into composition would show the swarm
         // exploding outward from a single point.
