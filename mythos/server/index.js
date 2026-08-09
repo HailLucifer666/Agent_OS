@@ -693,7 +693,13 @@ function createServer(deps) {
   // relative to that mount point (e.g. '/pin/verify', not '/api/pin/verify')
   // — matched against the full path here would silently never hit and this
   // exemption would do nothing.
-  const PIN_UNLOCK_EXEMPT_PATHS = new Set(['/pin/status', '/pin/verify']);
+  //
+  // /auth/session joins them for the same reason, one layer up: it is the
+  // login endpoint for the bearer token itself (routes/auth.js). Gating the
+  // route that hands out the credential behind that credential would be a
+  // closed loop — the browser tab that has nothing yet could never get
+  // anything. It presents the secret in its own body and rate-limits itself.
+  const PIN_UNLOCK_EXEMPT_PATHS = new Set(['/pin/status', '/pin/verify', '/auth/session']);
   app.use('/api', (req, res, next) => {
     if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
@@ -863,7 +869,11 @@ function createServer(deps) {
     etag: true, lastModified: true, maxAge: IMMUTABLE_MAX_AGE, immutable: true, setHeaders: immutableHeaders,
   }));
 
-  app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime() }); });
+  // Deliberately public, and deliberately carries authRequired: the HUD needs a
+  // definitive answer to "must I ask the operator for a token?" before it can
+  // decide whether to paint the auth gate. This discloses nothing new — the
+  // same boolean is already inferable from a 401 vs 200 on any /api/* route.
+  app.get('/health', (req, res) => { res.json({ ok: true, uptime: process.uptime(), authRequired: !!AUTH_TOKEN }); });
 
   // BUG-111: the Gmail sensor is constructed AFTER createServer() (main.js's
   // 'sensors' step runs later than 'server'), so main.js injects the poll-count
@@ -938,6 +948,18 @@ function createServer(deps) {
   // checks, so the PIN screen becomes actual access control instead of a
   // visual deterrent. ----
   require('./routes/pin').mountPinRoutes(app, { pinLock, pinSession });
+
+  // ---- /api/auth/session — exchange MYTHOS_AUTH_TOKEN for the mythos_token
+  // cookie extractCookieToken() above already reads. Without this the HUD
+  // (a plain browser tab, which cannot set an Authorization header on its own
+  // navigation and cannot set headers on a WebSocket upgrade at all) had no
+  // way to authenticate on a token-configured deployment. See routes/auth.js. ----
+  require('./routes/auth').mountAuthRoutes(app, {
+    authToken: AUTH_TOKEN,
+    authTokenMatches,
+    pinSessionRequired,
+    cookieTtlMs: config.AUTH_SESSION_COOKIE_TTL_MS,
+  });
 
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/

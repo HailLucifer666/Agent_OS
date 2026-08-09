@@ -14,6 +14,8 @@
   <link rel="stylesheet" href="/css/compose-bar.css" />
   <link rel="stylesheet" href="/css/confirm.css" />
   <link rel="stylesheet" href="/css/pin.css" />
+  <link rel="stylesheet" href="/css/auth.css" />
+  <link rel="stylesheet" href="/css/status-banner.css" />
   <link rel="stylesheet" href="/css/mic-settings.css" />
   <!-- NOVA view styles — CV byte-identical; the copied views depend on these class names -->
   <link rel="stylesheet" href="/css/goals.css" />
@@ -40,6 +42,16 @@
        other root; stays empty unless GET /api/pin/status reports a PIN is
        configured, in which case the HUD behind it is made inert. -->
   <div id="pin-root"></div>
+  <!-- MYTHOS_AUTH_TOKEN prompt. Stays empty unless GET /health reports
+       authRequired AND GET /api/status answers 401 — a default loopback
+       install with no token configured never paints anything here.
+       Stacks above #pin-root: the PIN screen's own status call is itself
+       gated by the token, so this must be satisfied first. -->
+  <div id="auth-root"></div>
+  <!-- Persistent condition strip: says out loud when the socket has stopped
+       reconnecting or an /api call came back 401, both of which were
+       previously silent. -->
+  <div id="status-banner-root"></div>
   <!-- Compose bar — multimodal input surface (text + voice). Replaces the bare mic ring. -->
   <div id="compose-bar" role="search" aria-label="MYTHOS input"></div>
   <!-- Legacy mic indicator — kept hidden for backward compat; compose bar renders its own voice button -->

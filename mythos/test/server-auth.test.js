@@ -360,3 +360,248 @@ describe('server-auth (H3a, security audit 2026-08-08): the WS upgrade path is r
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/session — the exchange endpoint (server/routes/auth.js).
+//
+// The bug this closes: MYTHOS_BIND=0.0.0.0 (needed so the phone node can reach
+// the server) makes MYTHOS_AUTH_TOKEN mandatory at boot, and a browser tab had
+// no way to present it — it cannot set an Authorization header on its own
+// navigation and cannot set headers on a WS upgrade at all. So every /api/*
+// fetch 401'd and the socket was refused, while the deliberately-open static
+// shell still loaded: the dashboard looked normal and was completely inert.
+//
+// extractToken()/tokenOk() already accepted the mythos_token cookie, and the
+// comment there already described the HUD setting it. Only the endpoint that
+// sets it was missing. These tests pin that it is a real check, not a bypass.
+// ---------------------------------------------------------------------------
+describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', () => {
+  function httpPostJson(port, pathName, obj, headers) {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(obj || {});
+      const req = http.request({
+        host: '127.0.0.1', port, path: pathName, method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }, headers || {}),
+      }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+      });
+      req.on('error', reject);
+      req.end(data);
+    });
+  }
+
+  // The shared httpGet above drops response headers; this exchange is entirely
+  // about a Set-Cookie, so it needs its own.
+  function httpGetFull(port, pathName, headers) {
+    return new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: pathName, headers: headers || {} }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+      }).on('error', reject);
+    });
+  }
+
+  function authDeps(bus, overrides) {
+    return baseDeps(bus, Object.assign({
+      config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN },
+    }, overrides || {}));
+  }
+
+  function setCookieFor(res, name) {
+    const raw = res.headers['set-cookie'] || [];
+    return raw.find((c) => c.startsWith(name + '=')) || null;
+  }
+
+  test('404 when no MYTHOS_AUTH_TOKEN is configured — nothing to exchange for, said honestly', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(baseDeps(bus)); // default deps carry MYTHOS_AUTH_TOKEN ''
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpPostJson(port, '/api/auth/session', { token: 'anything' });
+      assert.equal(res.status, 404);
+      assert.equal(setCookieFor(res, 'mythos_token'), null, 'a deployment with no token must never hand out a credential');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a wrong token is 401 and sets NO cookie — the browser keeps exactly what it had', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(authDeps(bus));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpPostJson(port, '/api/auth/session', { token: 'not-the-token' });
+      assert.equal(res.status, 401);
+      assert.equal(setCookieFor(res, 'mythos_token'), null);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a missing token is 400 — not a 500, and certainly not a pass', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(authDeps(bus));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpPostJson(port, '/api/auth/session', {});
+      assert.equal(res.status, 400);
+      assert.equal(setCookieFor(res, 'mythos_token'), null);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('the correct token is 200 and sets an HttpOnly; SameSite=Strict mythos_token cookie', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(authDeps(bus));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
+      assert.equal(res.status, 200);
+      const cookie = setCookieFor(res, 'mythos_token');
+      assert.ok(cookie, 'expected a mythos_token cookie');
+      assert.match(cookie, /HttpOnly/i, 'must not be readable from document.cookie');
+      assert.match(cookie, /SameSite=Strict/i);
+      assert.match(cookie, /Path=\//i);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('that cookie ALONE satisfies GET /api/status — no Authorization header anywhere', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(authDeps(bus));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const before = await httpGetFull(port, '/api/status');
+      assert.equal(before.status, 401, 'precondition: the tab starts unauthenticated');
+
+      const exchange = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
+      const cookiePair = setCookieFor(exchange, 'mythos_token').split(';')[0];
+
+      const after = await httpGetFull(port, '/api/status', { Cookie: cookiePair });
+      assert.equal(after.status, 200, 'the cookie the HUD now sets must be a credential tokenOk() accepts');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  // THE POINT OF THE WHOLE CHANGE for the live HUD: every WS-fed widget, the
+  // core orb, agent actions and token usage ride this upgrade. A browser cannot
+  // attach headers to it, but it DOES send cookies — so if this fails, the
+  // dashboard stays dead even with a working REST path.
+  test('that cookie ALONE lets the WS upgrade succeed, with no ?token= in the URL', async () => {
+    const port = await pickFreePort();
+    const origin = `http://localhost:${port}`;
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(baseDeps(bus, {
+      config: { MYTHOS_PORT: port, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN },
+    }));
+    await server.ready;
+    try {
+      const exchange = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
+      const cookiePair = setCookieFor(exchange, 'mythos_token').split(';')[0];
+
+      const result = await new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin, headers: { Cookie: cookiePair } });
+        ws.on('open', () => { ws.close(); resolve('opened'); });
+        ws.on('unexpected-response', () => resolve('rejected'));
+        ws.on('error', () => resolve('rejected'));
+      });
+      assert.equal(result, 'opened', 'the cookie must authenticate the upgrade — this is what revives every WS-fed widget');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('brute force is capped: repeated wrong-token exchanges hit 429', async () => {
+    const bus = createBus({ historySize: 50 });
+    const server = createServer(authDeps(bus));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      let sawTooMany = false;
+      for (let i = 0; i < 10; i++) {
+        const res = await httpPostJson(port, '/api/auth/session', { token: `guess-${i}` });
+        if (res.status === 429) { sawTooMany = true; break; }
+      }
+      assert.equal(sawTooMany, true, 'expected the dedicated 5/min auth-exchange limiter to trip');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  // Combined mode is NOT this bug's configuration, and mishandling it would be
+  // worse than declining it: tokenOk()'s H1 fix reserves the mythos_token
+  // cookie for the PIN session there, so writing the bearer token into that
+  // same cookie would clobber a live PIN session with a value pinSession
+  // rejects — locking the operator out of the surface they just unlocked.
+  test('combined mode (token + enforced PIN) returns 409 and leaves /api/pin/verify working', async () => {
+    const { createPinLock } = require('../src/core/security/pin-lock');
+    const bus = createBus({ historySize: 50 });
+    // This file's shared fakeFs() is vaultPath-only; pin-lock needs a real
+    // read/write store (same in-memory shape as test/pin-session.test.js).
+    const store = {};
+    const pinLock = createPinLock({
+      fs: {
+        readJSON: (p, fallback) => (p in store ? store[p] : fallback),
+        readJSONStrict: (p, fallback) => (p in store ? store[p] : fallback),
+        writeJSON: (p, d) => { store[p] = d === null ? null : JSON.parse(JSON.stringify(d)); },
+        vaultPath: (...s) => s.join('/'),
+      },
+    });
+    pinLock.setPin('4242');
+    const server = createServer(baseDeps(bus, {
+      pinLock,
+      config: {
+        MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3,
+        ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN,
+        PIN_SESSION_ENFORCE: true, PIN_SESSION_TTL_MS: 1800000,
+      },
+    }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
+      assert.equal(res.status, 409, 'the exchange must decline rather than clobber the PIN-session cookie');
+      assert.equal(setCookieFor(res, 'mythos_token'), null);
+
+      const verify = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
+      assert.equal(verify.status, 200, 'the PIN unlock path must be untouched by this change');
+      assert.ok(setCookieFor(verify, 'mythos_token'), 'the PIN session still owns that cookie in combined mode');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('GET /health reports authRequired so the HUD knows whether to prompt at all', async () => {
+    const bus = createBus({ historySize: 50 });
+    const withToken = createServer(authDeps(bus));
+    await withToken.ready;
+    try {
+      const res = await httpGetFull(withToken.httpServer.address().port, '/health');
+      assert.equal(res.status, 200);
+      assert.equal(JSON.parse(res.body).authRequired, true);
+    } finally {
+      await withToken.stop();
+    }
+
+    const bus2 = createBus({ historySize: 50 });
+    const noToken = createServer(baseDeps(bus2));
+    await noToken.ready;
+    try {
+      const res = await httpGetFull(noToken.httpServer.address().port, '/health');
+      assert.equal(JSON.parse(res.body).authRequired, false, 'a default install must report false so the HUD never prompts');
+    } finally {
+      await noToken.stop();
+    }
+  });
+});

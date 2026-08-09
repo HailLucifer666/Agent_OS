@@ -52,6 +52,14 @@ const SCHEMA = {
   // (sliding — src/core/security/pin-session.js extends it on every
   // authenticated request), ms.
   PIN_SESSION_TTL_MS:       { type: 'number', default: 1800000, min: 60000, max: 86400000 },
+  // How long the mythos_token cookie issued by POST /api/auth/session lives —
+  // i.e. how long a browser tab stays authenticated after the operator types
+  // MYTHOS_AUTH_TOKEN once (server/routes/auth.js). Not sliding: the cookie
+  // carries the bearer token itself, so this is an expiry, not a session.
+  // Longer than the PIN session on purpose — the PIN gates physical presence
+  // and should lapse quickly; this one only saves re-typing a token the
+  // operator already has in .env.
+  AUTH_SESSION_COOKIE_TTL_MS: { type: 'number', default: 2592000000, min: 3600000, max: 31536000000 },
   MYTHOS_VAULT_ROOT:        { type: 'string', default: DEFAULT_VAULT_ROOT },
   MYTHOS_TICK_MS:           { type: 'number', default: 1000, min: 100, max: 60000 },
   MYTHOS_IDLE_SALIENCE:     { type: 'number', default: 0.3, min: 0, max: 1 },

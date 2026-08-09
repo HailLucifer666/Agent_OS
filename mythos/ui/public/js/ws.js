@@ -15,6 +15,39 @@ let reqCounter = 0;
 // page reload, since the original {type:'subscribe'} message was never resent.
 const activeSubscriptions = [];
 
+// Connection state, exposed via getState()/onStateChange(). Purely additive —
+// reconnect behaviour below is untouched. This exists because the socket used
+// to fail completely silently: with MYTHOS_AUTH_TOKEN configured the upgrade
+// was rejected outright (no cookie, no ?token=), and this file logged nothing,
+// exported nothing, and just kept retrying at up to 8s backoff forever. Every
+// WS-fed widget, the core orb, agent actions and token usage simply stopped
+// updating, which reads as "the dashboard is frozen", not "it is unauthorized".
+let wsState = 'idle'; // 'idle' | 'connecting' | 'open' | 'closed'
+let consecutiveFailures = 0;
+const stateHandlers = new Set();
+
+function setState(next) {
+  wsState = next;
+  const snapshot = { state: wsState, consecutiveFailures };
+  stateHandlers.forEach((fn) => {
+    try { fn(snapshot); } catch (_) { /* one bad listener must not break the socket */ }
+  });
+}
+
+export function getState() {
+  return { state: wsState, consecutiveFailures };
+}
+
+export function onStateChange(fn) {
+  stateHandlers.add(fn);
+  fn(getState());
+  return () => stateHandlers.delete(fn);
+}
+
+export function offStateChange(fn) {
+  stateHandlers.delete(fn);
+}
+
 function nextReqId() {
   reqCounter += 1;
   return `r${Date.now()}-${reqCounter}`;
@@ -41,10 +74,13 @@ function connect() {
   if (connecting || (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))) return;
   connecting = true;
   socket = new WebSocket(wsUrl());
+  setState('connecting');
 
   socket.addEventListener('open', () => {
     connecting = false;
     backoffMs = 500;
+    consecutiveFailures = 0;
+    setState('open');
     flushQueue();
     // FIX I: resubscribe every live subscription so a reconnect doesn't leave
     // the client deaf to 'tick'/'health'/'entity-state'/etc. broadcasts.
@@ -65,6 +101,8 @@ function connect() {
   socket.addEventListener('close', () => {
     connecting = false;
     socket = null;
+    consecutiveFailures += 1;
+    setState('closed');
     scheduleReconnect();
   });
 

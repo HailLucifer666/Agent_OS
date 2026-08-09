@@ -1,0 +1,53 @@
+/* status-banner.css — the persistent condition strip (js/status-banner.js).
+
+   Sits at the top edge, above the HUD but BELOW both the PIN screen (400) and
+   the token gate (410): when either of those is up they already say the same
+   thing more directly, and a strip floating over a modal reads as a bug. */
+
+.status-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, 94vw);
+  padding: 7px 14px;
+  border: 1px solid var(--status-warn);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  background: rgba(5, 8, 15, 0.92);
+  backdrop-filter: blur(8px);
+  font-size: 11px;
+  color: var(--status-warn);
+  z-index: 300;
+}
+
+/* Hidden rather than removed: it is one persistent live region, so a screen
+   reader keeps the same node under observation instead of losing it. */
+.status-banner-hidden {
+  display: none;
+}
+
+.status-banner-text {
+  word-break: break-word;
+}
+
+.status-banner-action {
+  flex: none;
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.status-banner-action:hover { color: var(--text); }
+
+.status-banner-auth {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}

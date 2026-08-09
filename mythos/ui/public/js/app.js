@@ -2,6 +2,12 @@
 // Voice initializes on first pointerdown (Chrome's user-gesture policy for
 // mic/AudioContext); everything else mounts immediately.
 
+// FIRST import on purpose — net-guard.js installs its window.fetch wrapper at
+// import time, and ES modules evaluate every import before the importing
+// module's body, so anything below that fetches (at module scope or later) is
+// covered. It turns a 401 on any /api/… call into a visible condition instead
+// of the null every call site already swallows.
+import './net-guard.js';
 import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance } from './ws.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
@@ -15,6 +21,8 @@ import { createCameraLoop } from './vision/camera.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
 import { mountPinLockScreen } from './pin/pin-lock-screen.js';
+import { mountAuthGate } from './auth/auth-gate.js';
+import { mountStatusBanner } from './status-banner.js';
 import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
 
@@ -25,6 +33,19 @@ const ctx = { subscribe, onRefresh };
 // itself once the entity reports alive (or after a hard timeout if the
 // server never answers) — see init-screen.js for the reveal timing.
 mountInitScreen({ subscribe });
+
+// MYTHOS_AUTH_TOKEN gate — mounted BEFORE the PIN screen because the PIN
+// screen's own GET /api/pin/status is itself behind the token gate: with a
+// token configured and no cookie, that call 401s and the PIN screen resolves
+// 'indeterminate' (fails open) without ever knowing whether a PIN exists.
+// Non-blocking and completely inert on a default install — it asks GET /health
+// first and does nothing at all when authRequired is false. See auth/auth-gate.js.
+mountAuthGate(document.getElementById('auth-root'));
+
+// Says out loud when the socket or an /api call has failed. Both conditions
+// were silent before, which is why an unauthenticated dashboard read as
+// "unresponsive" rather than "unauthenticated".
+mountStatusBanner(document.getElementById('status-banner-root'));
 
 // §7.3 local PIN lock — the enforcement point the backend never had. Mounted
 // here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status

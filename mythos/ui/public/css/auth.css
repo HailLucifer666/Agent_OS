@@ -1,0 +1,113 @@
+/* auth.css — the MYTHOS_AUTH_TOKEN prompt (js/auth/auth-gate.js).
+
+   Structure copies pin.css's ruleset under an .auth-* prefix rather than
+   sharing selectors with it: the two screens must be able to diverge (this one
+   takes a long opaque token, that one takes 4-12 digits) and, more importantly,
+   they can be live at the same moment. Consistent by copy, not coupled.
+
+   z-index 410 sits ABOVE pin.css's 400 deliberately: the PIN screen's own
+   /api/pin/status call is itself gated by the token, so the token must be
+   entered first or the PIN screen cannot even learn whether to lock. The gate
+   also marks #pin-root inert while it is up. */
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.92);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  z-index: 410;
+}
+
+.auth-modal {
+  width: min(420px, 92vw);
+  padding: 34px 28px 22px;
+  text-align: center;
+  border-color: var(--accent-dim);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.auth-orb {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: radial-gradient(circle at 35% 30%, rgba(79, 216, 255, 0.45), rgba(79, 216, 255, 0.06) 70%);
+}
+
+.auth-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.auth-note {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  margin: 0 0 18px;
+}
+
+.auth-note code {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.auth-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  text-align: left;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  background: var(--bg-hover);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.auth-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.auth-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.auth-submit {
+  padding: 9px 32px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.auth-submit:hover:not(:disabled) { color: var(--text); }
+.auth-submit:disabled { opacity: 0.55; cursor: default; }
+
+/* Reserves its own line so a server message appearing does not shift the
+   modal. Empty until the server actually says something. */
+.auth-message {
+  min-height: 16px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--status-warn);
+  word-break: break-word;
+}
