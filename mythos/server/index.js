@@ -1685,6 +1685,11 @@ function createServer(deps) {
   // used to bound the gmail suppression below, so a sensor batch arriving hours
   // later is never silently swallowed.
   const BOOT_GREETING_WINDOW_MS = 60000;
+  // How long after the first dashboard connection the greeting waits (see the
+  // arming site). A variable rather than a constant purely so a test can shorten
+  // it — the real 2.5s outlives a test file, and BUG-178's race is unobservable
+  // from outside without arming the actual timer.
+  let bootGreetingDelayMs = 2500;
   const LAST_BOOT_PATH = 'Identity/last-boot.json';
   const bootUpgrade = { upgraded: false, changes: [] };
   try {
@@ -2248,10 +2253,43 @@ function createServer(deps) {
     if (!bootGreetingFired) {
       bootGreetingFired = true;
       const greetTimer = setTimeout(() => {
+        // BUG-178: a voice node must not consume the greeting. Nodes share this
+        // /ws path and only reveal themselves via {type:'identify',role:'node'}
+        // AFTER the upgrade, so "the first connection this boot" is not the same
+        // question as "the dashboard" — and the answer is only available here, at
+        // fire time, not at the arming site above. A phone reconnecting at boot
+        // (the normal case per NodeLink.kt) won that race: the whole greeting
+        // went to the phone while the HUD connecting a second later got nothing,
+        // silently. Speaking through a phone IS a feature, but an election-gated
+        // one (nodeSpeechTarget: AETHER_NODE_AUDIO + an elected aetherOwner);
+        // picking a socket bypassed that gate entirely.
+        //
+        // Re-arming alone is NOT enough, and the first cut of this fix got that
+        // wrong — live-probed 2026-08-10. A dashboard that connected during the
+        // node's 2.5s window already saw bootGreetingFired === true and so never
+        // armed a timer of its own; re-arming at fire time is then too late for
+        // it and the greeting is lost by both devices. So look for a dashboard
+        // that is already connected and hand it over directly, and only re-arm
+        // when there is genuinely nobody to greet yet.
+        //
+        // Either way this stays one greeting per boot, never one per tab (the
+        // BUG-112 shape): the handover keeps the gate closed, and a re-armed gate
+        // is closed again by whichever dashboard connects next.
+        if (ws._mythosNodeId) {
+          const dashboard = [...wss.clients].find((c) => c.readyState === 1 && !c._mythosNodeId);
+          if (dashboard) {
+            logger.info('boot-greeting.rerouted-from-node', { nodeId: ws._mythosNodeId });
+            deliverBootGreeting(dashboard).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
+            return;
+          }
+          bootGreetingFired = false;
+          logger.info('boot-greeting.deferred-node-connection', { nodeId: ws._mythosNodeId });
+          return;
+        }
         // Deliver to THIS connection only — with two dashboard tabs open, a
         // broadcast greeting plays twice in overlap ("two voices").
         deliverBootGreeting(ws).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
-      }, 2500);
+      }, bootGreetingDelayMs);
       if (greetTimer.unref) greetTimer.unref();
     }
 
@@ -3383,6 +3421,12 @@ function createServer(deps) {
       // put the server into that state explicitly rather than by faking env.
       setBootGreetingDelivered: (v) => { bootGreetingDelivered = Boolean(v); },
       isBootGreetingDelivered: () => bootGreetingDelivered,
+      // BUG-178 test seams, same reasoning as setBootGreetingDelivered above:
+      // NODE_TEST_CONTEXT pre-fires the gate, so the connection race that bug is
+      // about cannot be reached from outside without re-arming it, and the real
+      // 2.5s delay outlives a test file.
+      rearmBootGreeting: () => { bootGreetingFired = false; bootGreetingDelivered = false; },
+      setBootGreetingDelayMs: (ms) => { bootGreetingDelayMs = Number(ms) || 0; },
       // Voice Nodes: proactive speech targets lastActiveWs, and a phone pushing
       // proximity telemetry several times a second must never become that
       // target. There is no other observable for it from outside.

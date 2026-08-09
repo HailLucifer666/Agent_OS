@@ -2681,6 +2681,34 @@ hole in BUG-099's capability half.
   list or the other. **Files:** `mythos/src/core/voice/live-tools.js`,
   `mythos/test/allowlist-reachability.test.js`.
 
+- **BUG-178 (the boot greeting went to whichever socket connected first, and a
+  phone node can be that socket):** FIXED, **LIVE-VERIFIED 2026-08-10** with a
+  headless probe against a real `src/main.js` boot (`boot-greeting.rerouted-from-node`,
+  every `live-audio-out` frame on the HUD, none on the node). Chasing "MYTHOS
+  never greets me on this machine". Voice nodes share the dashboard's `/ws` path
+  and only reveal themselves with `{type:'identify',role:'node'}` **after** the
+  upgrade, so the arming site's "first connection this boot" is not the same
+  question as "the dashboard" — and the answer only exists at fire time. A phone
+  reconnecting at boot (the normal case per `NodeLink.kt`) won that race and the
+  entire greeting was delivered to it, with no error and no log line. Speaking
+  through a phone is a real feature but an **election**-gated one
+  (`nodeSpeechTarget()` needs `AETHER_NODE_AUDIO` *and* an elected `aetherOwner`);
+  picking a socket bypassed that gate, so an unelected node captured it.
+  The greeting timer now skips a node connection. **The first cut of the fix was
+  wrong and the live probe is what caught it** — it only re-armed the gate, which
+  loses the greeting entirely when the dashboard connected *during* the node's
+  2.5s window (it had already seen `bootGreetingFired === true` and never armed a
+  timer of its own). It now hands over to an already-connected dashboard and
+  re-arms only when there is nobody to greet yet. Distinct from the
+  `MYTHOS_AUTH_TOKEN` branch — with a token configured, a browser-shaped upgrade
+  is refused `bad or missing token` (401) and there is no socket to greet at all;
+  the `mythos_token` exchange in `server/routes/auth.js` (commit `863f245`, not
+  tracked here under a BUG number) closed that one. Both branches were confirmed
+  live on 2026-08-10 and produce an identical symptom, so finding one is not
+  evidence the other is absent.
+  **Files:** `mythos/server/index.js`,
+  `mythos/test/bug-178-boot-greeting-node-race.test.js`.
+
 - **BUG-109 (`cua_get_window_state` rejects a string `window_id`):** FIXED.
   The model passed `window_id:"854628"` (numeric string); the truthy-string
   check skipped the pid-resolution fallback and forwarded the string to a
