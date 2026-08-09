@@ -77,38 +77,46 @@ isolation and catches this class of mistake before CI does.
 
 ## Building the desktop installer
 
-`npm run dist` (electron-builder --win) builds the packaged app. Two things
-are opt-in via environment variables — **never** via a tracked file:
+`npm run dist` (electron-builder --win) builds the packaged app. Because
+`build.publish` points at GitHub Releases, a build also produces the
+**`latest.yml`** metadata and `.blockmap` that electron-updater polls, and
+embeds `app-update.yml` in the packaged app — so the update check is live by
+default: a packaged app polls GitHub Releases for this repo
+(`HailLucifer666/Agent_OS`) and logs the outcome. Auto-update never
+auto-installs; it only checks and logs (`electron/main.js`'s
+`checkForUpdates()`), so a stale version is *reported*, never silently
+replaced.
+
+One thing is opt-in via an environment variable — **never** via a tracked file:
 
 - **Code signing** — set `CSC_LINK` (path or URL to a `.pfx`/`.p12`
   certificate) and `CSC_KEY_PASSWORD` (its passphrase) before running
   `npm run dist`. These are electron-builder's own standard env var names; no
   package.json change is needed to use them. With neither set, the build
   produces an **unsigned** installer — that is the default, working case, not
-  an error (`build.win.forceCodeSigning` is `false` on purpose).
-- **Update host** — `MYTHOS_UPDATE_URL` (a URL electron-updater can poll for
-  a generic-provider feed). With it unset, the packaged app logs "no update
-  host configured" once at startup and skips the check entirely — it does not
-  fail. `build.publish` stays `null` for the same reason: a plain build never
-  depends on a host existing. Auto-update never auto-installs; it only checks
-  and logs (`electron/main.js`'s `checkForUpdates()`).
+  an error (`build.win.forceCodeSigning` is `false` on purpose). An unsigned
+  build still *checks* for updates (a read against the releases API); what it
+  cannot do is verify a downloaded installer (see below).
 
 ### Publishing a release that the update check can actually see
 
-`MYTHOS_UPDATE_URL` is enough on the **client**: the feed URL is read at
-runtime, so an already-installed app needs no rebuild to start checking. It is
-**not** enough on the **release** side, and it is worth being blunt about that
-because the shape invites the wrong assumption:
-
-1. electron-updater polls the feed for a **`latest.yml`** metadata file (version,
-   file name, sha512, blockmap). electron-builder writes that file only when a
-   publish config exists — with `build.publish: null` a build produces the
-   `.exe` and its `.blockmap` and no `latest.yml` at all. So the release build
-   must set `build.publish` (`{"provider": "generic", "url": "…"}`) even if you
-   upload the artifacts by hand afterwards.
-2. Upload the installer, its `.blockmap`, and `latest.yml` together to that
-   URL. A `latest.yml` naming a file that is not beside it is how an update
-   check "succeeds" and then fails at download time.
+1. **Tag the release.** electron-builder's default publish policy is
+   `onTagOrDraft`: a plain `npm run dist` on an untagged commit builds the
+   artifacts and never attempts an upload. Publishing happens when the build
+   runs on a tagged commit with `GH_TOKEN` set, or explicitly with
+   `npx electron-builder --win --publish always`. `GH_TOKEN` comes from the
+   environment — never from a tracked file. The GitHub provider uploads the
+   installer, its `.blockmap`, and `latest.yml` together as a release; keep
+   them together, because a `latest.yml` naming a file that is not beside it
+   is how an update check "succeeds" and then fails at download time.
+2. **Bump `version` in package.json** for each release. electron-updater
+   compares semver: an installed app reports `update available — <new>`
+   whenever the newest release is newer than what it runs, and
+   `update not available` when it is not. (Live-verified 2026-08-10: a 0.1.0
+   build against a 0.1.1 feed logged `update available — 0.1.1`; the same
+   build against a same-version feed logged `already on the latest version`;
+   and with no `MYTHOS_UPDATE_URL` it polled the embedded GitHub config and
+   honestly reported no published versions.)
 3. **Sign the release build if you want the signature check to mean anything.**
    On Windows, electron-updater verifies a downloaded installer against the
    installed app's publisher name; an unsigned build has nothing to verify
@@ -116,6 +124,16 @@ because the shape invites the wrong assumption:
    Today the exposure is nil only because nothing downloads or installs
    automatically (`autoDownload` is `false`, `quitAndInstall` is never called).
    Do not enable automatic download before the build is signed.
+
+### Self-hosting instead of GitHub
+
+`MYTHOS_UPDATE_URL` is a **client-side override** for anyone who wants a
+self-hosted generic feed: the URL is read at runtime, so an already-installed
+app needs no rebuild to start checking it. Set it, and the packaged app polls
+`<url>/latest.yml` instead of the embedded GitHub config. That is client-side
+only — it does not change what the release side must publish, which is still
+the installer, its `.blockmap`, and `latest.yml` together on whatever host
+serves the URL.
 
 Neither variable is documented in `mythos/.env.example` — that file is for
 the MYTHOS *server's* provider keys (brain/STT/TTS), which are a different

@@ -24,15 +24,23 @@ test('electron-updater is a real (non-dev) dependency', () => {
     'electron-updater must be a runtime dependency so the packaged app can require() it');
 });
 
-test('build.publish is explicitly inert (no host chosen yet) rather than erroring a build', () => {
+test('build.publish targets GitHub Releases for this repo, and never carries secrets', () => {
   const { build } = loadPkg();
-  // null is electron-builder's own documented "no publishing configured" —
-  // a plain `npm run dist` build never depends on a host existing, and never
-  // fails to resolve one. Once a host is chosen, this is the value that
-  // changes — not electron/main.js, which reads the feed URL from
-  // MYTHOS_UPDATE_URL at runtime (see checkForUpdates() there).
-  assert.equal(build.publish, null,
-    'build.publish should stay null until an update host is actually chosen');
+  // The chosen host is GitHub Releases — the repo's home — so a plain
+  // `npm run dist` now also emits the `latest.yml` + blockmap that
+  // electron-updater polls, and embeds app-update.yml in the packaged app.
+  // Publishing itself still needs GH_TOKEN from the environment (never from
+  // this file) and electron-builder's default onTagOrDraft policy means a
+  // non-tag build never attempts an upload.
+  assert.ok(Array.isArray(build.publish),
+    'build.publish must be a publish-provider array now that a host is chosen');
+  const github = build.publish.find((p) => p && p.provider === 'github');
+  assert.ok(github, 'the chosen host is GitHub Releases (provider "github")');
+  assert.equal(github.owner, 'HailLucifer666', 'owner must match the repo remote');
+  assert.equal(github.repo, 'Agent_OS', 'repo must match the repo remote');
+  const serialized = JSON.stringify(build.publish);
+  assert.doesNotMatch(serialized, /(GH_TOKEN|token|password|secret|CSC_)/i,
+    'a publish config must never carry a credential — publishing reads GH_TOKEN from the environment');
 });
 
 test('build.win.forceCodeSigning is false — a missing cert must not break the build', () => {
@@ -69,11 +77,14 @@ function readMainJs() {
   return fs.readFileSync(path.join(REPO_ROOT, 'electron', 'main.js'), 'utf8');
 }
 
-test('electron/main.js wires an update check that is a no-op without a configured host', () => {
+test('electron/main.js wires the update check: packaged default, env override, never auto-installs', () => {
   const text = readMainJs();
   assert.match(text, /require\(['"]electron-updater['"]\)/, 'main.js must require electron-updater');
+  assert.match(text, /app\.isPackaged/,
+    'the check must be gated to packaged builds — a dev boot skips with one explicit log line instead of ' +
+    'electron-updater\'s unpackaged rejection');
   assert.match(text, /MYTHOS_UPDATE_URL/,
-    'the update host must come from an env var (MYTHOS_UPDATE_URL), not a hardcoded URL');
+    'the feed must stay overridable at runtime via MYTHOS_UPDATE_URL (self-hosted generic feeds)');
   assert.match(text, /autoDownload\s*=\s*false/,
     'auto-update must not silently download/install — see CLAUDE.md\'s honest-inert house style');
   assert.doesNotMatch(text, /autoUpdater\.quitAndInstall/,
