@@ -179,11 +179,21 @@ function cuaQueryTerms(query) {
 // Rank the play controls from a get_window_state elements array against the
 // query. Spotify's search page exposes one "Play <label>" button per result
 // row (tracks, playlists, albums, artists all mixed in one grid — confirmed
-// live: no section info survives into the accessibility tree). Score = query
-// terms matched in the label; ties break toward the SHORTER label (the bare
-// canonical track beats "<something> — <track>" compilation/playlist cards).
-// Selection alone cannot reliably separate a track from a same-named playlist,
-// so the caller click-verifies each candidate in order (see cuaPlayViaDriver).
+// live: no section info survives into the accessibility tree).
+//
+// Operator decision (2026-08-09, inc-1786236109564-1): take the literal first
+// result. Spotify emits its grid in visual order in the accessibility tree, so
+// first-in-tree IS Spotify's own top result — Spotify has already done the
+// relevance ranking upstream of this code. The old approach re-sorted by a
+// bag-of-words term count with a shorter-label tie-break, which routinely let
+// a short-labelled podcast episode or compilation outrank the real top track;
+// that was the "keeps scrolling and playing the wrong thing" bug. This
+// function now preserves ORIGINAL ELEMENT ORDER instead of re-sorting.
+//
+// The `score > 0` filter stays: it is the guard against a stale previous-query
+// results page still rendered when this runs (see the warm-up-retry comment
+// in cuaPlayViaDriver below) — a grid full of buttons that share zero terms
+// with the current query is not a valid result set, first-in-tree or not.
 function rankCuaPlayCandidates(elements, query) {
   if (!Array.isArray(elements)) return [];
   const playButtons = elements.filter(e =>
@@ -191,15 +201,9 @@ function rankCuaPlayCandidates(elements, query) {
   );
   const terms = cuaQueryTerms(query);
   if (!terms.length) return playButtons;
-  return playButtons
-    .map(b => ({
-      b,
-      score: terms.filter(t => (b.label || '').toLowerCase().includes(t)).length,
-      len: (b.label || '').length
-    }))
-    .filter(s => s.score > 0)
-    .sort((a, z) => (z.score - a.score) || (a.len - z.len))
-    .map(s => s.b);
+  return playButtons.filter(b =>
+    terms.some(t => (b.label || '').toLowerCase().includes(t))
+  );
 }
 
 // Read Spotify's window title via cua-driver — when a track is playing the
@@ -252,8 +256,11 @@ async function cuaPlayViaDriver(query) {
   // Click-verify loop (confirmed live 2026-07-17): selection alone can pick a
   // same-named playlist over the track, so after each click the window title
   // ("Artist - Track" while playing) is checked against the query; a mismatch
-  // moves on to the next-best candidate. Max 3 attempts keeps voice latency
-  // bounded (~15s worst case) while self-correcting the playlist-vs-track case.
+  // moves on to the next-best candidate. Candidates are now first-in-tree
+  // order (2026-08-09, inc-1786236109564-1) rather than a re-sort, so walking
+  // deep into the list is exactly the "keeps scrolling" symptom the operator
+  // reported — capped at 2 (the first result, plus one retry for a genuinely
+  // dead click) instead of 4, which roughly halves worst-case voice latency.
   // Strict-majority term match — anything laxer is fooled by the artist name
   // alone (live-confirmed twice: "Queen - Somebody To Love" passed for
   // "Bohemian Rhapsody Queen" at 1-of-3, and "The Weeknd - Cry For Me" passed
@@ -262,7 +269,7 @@ async function cuaPlayViaDriver(query) {
   // the playing window title ("Artist - Track") carries both artist and track,
   // so a correct play always clears this bar. (titleSatisfiesQuery below.)
   let lastClicked = null;
-  for (const target of candidates.slice(0, 4)) {
+  for (const target of candidates.slice(0, 2)) {
     const clickArgs = { pid: w.pid, window_id: w.window_id, element_index: target.element_index };
     let click = await cuaDriver.invoke('click', clickArgs);
     // Escalate to foreground on either signal (confirmed live against Spotify):
@@ -796,5 +803,5 @@ module.exports = {
   // WAVE 5 — exported for test/spotify-nowplaying-honesty.test.js. This predicate
   // IS the fix for the right-artist-wrong-song case, and verifying it needs no
   // live Spotify window, unlike the cua path around it.
-  _internal: { trackPortionMatches, titleSatisfiesQuery }
+  _internal: { trackPortionMatches, titleSatisfiesQuery, rankCuaPlayCandidates }
 };
