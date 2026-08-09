@@ -27,8 +27,32 @@ const DEFAULT_ALLOWLIST = [
   'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory',
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
-  'spotify_play','spotify_play_pause','spotify_next','spotify_volume','spotify_status',
-  'media_status','launch_app','focus_window','list_windows','close_window',
+  // spotify_previous was missing while spotify_next was present — "go back" /
+  // "last song" had no tool, the exact read/act-sibling asymmetry this list
+  // keeps being bitten by (whatsapp_send, ui_elements, cua_bring_to_front).
+  'spotify_play','spotify_play_pause','spotify_next','spotify_previous','spotify_volume','spotify_status',
+  // 2026-08-09 (inc-1786236236673-2): snap_window is T2, fully implemented from
+  // PowerShell (ShowWindow SW_MINIMIZE) up through effector and tier table, and
+  // was on NEITHER list — pure drift, not curation. With no minimize tool at all
+  // the Live model improvised `send_key win+down`, which reported success and
+  // did nothing. close_window was reachable the whole time, which is what made
+  // the gap look like a broken tool rather than a missing one. move_window is
+  // its exact-rectangle sibling and ships in the same commit for the same reason.
+  'media_status','launch_app','focus_window','list_windows','close_window','snap_window','move_window',
+  // "show desktop" / "minimize everything" — same window-management verb family,
+  // and the only tool that does it in one call.
+  'show_desktop',
+  // open_folder's own description says it "is the ONLY way to open a folder —
+  // never pass a path to launch_app". launch_app is reachable and this was not,
+  // so that instruction pointed at a tool the model could not call: the BUG-099
+  // "a hint naming an unreachable tool is not a remedy" shape.
+  'open_folder',
+  // System volume, act + read together. spotify_volume's description ends "For
+  // the SYSTEM volume use set_volume instead" and media_key's says "for an exact
+  // target level use set_volume" — two reachable tools handing the model an
+  // unreachable remedy. get_volume comes with it as the read oracle rather than
+  // staying exempt, per this list's own any-act-tool-ships-with-its-read-tool rule.
+  'set_volume','get_volume','media_key',
   // ui_elements is NOT optional next to ui_click. Withholding it (as this list did
   // until 2026-08-02) leaves the model holding ui_click(pid, elementPath) with no
   // way on earth to OBTAIN an elementPath — so it invents them. Every
@@ -89,20 +113,27 @@ const DEFAULT_ALLOWLIST = [
   'set_persona_level','ask_agent',
 ];
 
-// BUG-110: a T0/T1 (read-only or local-write, auto-allow) effector missing
+// BUG-110/BUG-177: a T0/T1/T2 (auto-allow) effector missing
 // from BOTH this list and DEFAULT_ALLOWLIST is a silent voice-reachability
-// gap of get_directions's exact shape -- test/bug-110-t0-t1-allowlist-reachability
-// .test.js fails loudly if one appears. Each group below is a deliberate
+// gap of get_directions's exact shape -- test/allowlist-reachability.test.js
+// fails loudly if one appears. Since 2026-08-09 that gate also covers T2 (see
+// BUG-177 / snap_window). Each group below is a deliberate
 // curation choice (the tool-count/accuracy tradeoff noted above), not an
 // oversight; promote an entry to DEFAULT_ALLOWLIST the day a session actually
 // needs it from voice.
 const VOICE_ALLOWLIST_EXEMPT = [
   // Sandboxed folder/file/clipboard reads -- desktop power-user surface, not
   // asked for in normal conversation; their write-side siblings are already T3.
-  'list_folder','read_file','search_files','clipboard_read',
+  // clipboard_write (T2) joins its read here for the same reason and to keep the
+  // pair symmetric: promoting one alone is what creates the gaps this file
+  // documents. (open_folder was in this family and was promoted on 2026-08-09 --
+  // see its comment in DEFAULT_ALLOWLIST.)
+  'list_folder','read_file','search_files','clipboard_read','clipboard_write',
   // Status/introspection singletons -- read_status/self_capabilities-style
   // summaries cover these; not a distinct spoken verb of their own.
-  'get_volume','mission_status','persona_status','self_capabilities',
+  // (get_volume left this group on 2026-08-09: it is set_volume's read oracle,
+  // and set_volume became reachable.)
+  'mission_status','persona_status','self_capabilities',
   // BUG-161: get_app_volume is the read oracle set_app_volume/spotify_volume
   // call internally to step a per-app level through a read-back. Neither of
   // its act-side siblings (set_app_volume, set_app_mute) is on the voice
@@ -110,7 +141,11 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // spotify_volume — so exempting it creates no read/act asymmetry of the
   // kind this repo has been bitten by. Promote all three together the day a
   // session actually asks to set a non-Spotify app's volume by voice.
-  'get_app_volume',
+  // set_app_volume/set_app_mute are the act siblings that comment already names.
+  // All three stay together: promoting one without the others is what creates a
+  // read/act asymmetry, and "turn Spotify down" reaches this machinery through
+  // spotify_volume today. System-wide volume is set_volume, which IS reachable.
+  'get_app_volume','set_app_volume','set_app_mute',
   // Loads a skill's guidance text from disk -- internal/debugging surface.
   'use_skill',
   // Not yet asked for in a live session; promote if usage shows up.
@@ -123,10 +158,29 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // MCP_SERVERS config; mcp_call_tool itself is T3 and correctly absent here.
   'mcp_list_servers','mcp_list_tools',
   // Open Knowledge Format bundle tools -- not a spoken verb.
-  'okf_list','okf_import',
-  // Android bridge (Task 10, step 6) -- debugging/status reads for an
-  // optional adapter, not yet part of the curated voice surface.
+  'okf_list','okf_import','okf_export',
+  // Android bridge (Task 10, step 6) -- debugging/status reads AND device
+  // controls for an optional adapter, not yet part of the curated voice surface.
+  // The whole group moves together the day the phone adapter is curated in.
   'phone_list_devices','phone_screenshot','phone_notifications','phone_contacts_search',
+  'phone_app_launch','phone_app_close','phone_wifi_toggle','phone_bluetooth_toggle','phone_hotspot_toggle',
+  // Artifact generation (image/deck/pdf/spreadsheet) -- long-running producers
+  // with their own HUD/Forge surface and their own artifact plumbing; a spoken
+  // "make me a deck" belongs to a goal/build flow, not a one-shot Live call.
+  // generate_image is the likeliest first promotion if a session asks for it.
+  'generate_image','generate_deck','generate_pdf','generate_spreadsheet',
+  // Desktop cosmetics -- not conversational.
+  'set_wallpaper',
+  // Wheel-scroll at a coordinate. click_at/see_and_click/ui_click cover the
+  // curated pointer surface; scrolling a results list by voice is precisely the
+  // wandering behaviour the 2026-08-09 Spotify incident was about, so this stays
+  // off the voice surface deliberately rather than by oversight.
+  'scroll_at',
+  // spotify_play already searches AND plays, and (since 2026-08-09) takes the
+  // literal first result. A bare search returns text the model would then have
+  // to act on in a second step -- the two-step dance is what produced the
+  // wrong-track probing, so the read half stays off voice on purpose.
+  'spotify_search',
   // Dashboard/system writes with their own UI (kanban/widgets/daily brief) --
   // reachable through the HUD; withheld from voice to keep the tool count down.
   'write_note','spawn_widget','manage_widget','ambient_awareness','daily_plan',

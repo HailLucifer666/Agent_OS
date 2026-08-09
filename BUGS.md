@@ -2666,7 +2666,20 @@ hole in BUG-099's capability half.
   `VOICE_ALLOWLIST_EXEMPT` list and gate test closing the CLASS: every T0/T1
   effector must now be in one list or the other, each entry commented.
   **Files:** `mythos/src/core/voice/live-tools.js`,
-  `mythos/test/bug-110-t0-t1-allowlist-reachability.test.js`.
+  `mythos/test/allowlist-reachability.test.js` (renamed off the bug number on
+  2026-08-09 when the gate was widened to T2 — see BUG-177).
+
+- **BUG-177 (`snap_window` exists but voice cannot reach it — BUG-110 one tier
+  up):** FIXED. On 2026-08-09 the operator asked by phone to minimize Spotify;
+  MYTHOS had no minimize tool on the Live surface at all, improvised
+  `send_key win+down`, reported success, and nothing happened — then logged its
+  own incident `inc-1786236236673-2`. `snap_window` is complete at every layer
+  (`Handle-SnapWindow` → `ShowWindow(SW_MINIMIZE)`, effector, `TIER_TABLE` T2)
+  and was on neither `DEFAULT_ALLOWLIST` nor `VOICE_ALLOWLIST_EXEMPT`. BUG-110's
+  gate could not see it because that gate only covered T0/T1. Widened the gate
+  to T2 (the last auto-allow tier) and triaged all 23 surfaced T2 tools into one
+  list or the other. **Files:** `mythos/src/core/voice/live-tools.js`,
+  `mythos/test/allowlist-reachability.test.js`.
 
 - **BUG-109 (`cua_get_window_state` rejects a string `window_id`):** FIXED.
   The model passed `window_id:"854628"` (numeric string); the truthy-string

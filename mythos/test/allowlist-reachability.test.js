@@ -15,6 +15,15 @@
 // exactly like this one -- the test fails loudly instead of waiting for the
 // next incident log to find it.
 //
+// 2026-08-09: extended to T2, and renamed off the bug number because the gate
+// is no longer about one bug. The T0/T1 gate was itself too narrow: snap_window
+// is T2, so "minimize Spotify" had no reachable tool at all, the Live model
+// improvised `send_key win+down`, and MYTHOS logged its own incident
+// (inc-1786236236673-2). Exactly BUG-110's shape, one tier up, and invisible to
+// BUG-110's own gate. T2 is the last tier that auto-allows within the default
+// autonomous ceiling; T3/T4 are confirm-gated and curated separately, so the
+// gate deliberately stops here.
+//
 // The hub-building block mirrors test/tier-table-conformance.test.js's
 // "mirrored boot" (kept as its own copy here, matching that file's own
 // precedent of not sharing a builder with test/bug-017-voice-catalog-drift.test.js
@@ -65,7 +74,7 @@ const { createAgentActions } = require('../src/core/effectors/agent-actions');
 const { createBuildRunner } = require('../src/core/effectors/build-runner');
 const { createGoalsMdBridge } = require('../src/core/effectors/goals');
 
-describe('BUG-110: every T0/T1 hub effector is voice-reachable or explicitly exempted', () => {
+describe('every auto-allow (T0/T1/T2) hub effector is voice-reachable or explicitly exempted', () => {
   let dir;
   let hub;
 
@@ -137,6 +146,12 @@ describe('BUG-110: every T0/T1 hub effector is voice-reachable or explicitly exe
       'get_directions is T0 read-only and registered, but absent from DEFAULT_ALLOWLIST');
   });
 
+  it('snap_window (the 2026-08-09 instance) is voice-reachable', () => {
+    assert.ok(DEFAULT_ALLOWLIST.includes('snap_window'),
+      'snap_window is T2 and fully implemented at every layer, but absent from DEFAULT_ALLOWLIST -- '
+      + 'so the Live model has no minimize/maximize tool and improvises send_key');
+  });
+
   it('every registered T0/T1 effector is in DEFAULT_ALLOWLIST or explicitly exempted', () => {
     const allow = new Set(DEFAULT_ALLOWLIST);
     const exempt = new Set(VOICE_ALLOWLIST_EXEMPT || []);
@@ -146,6 +161,17 @@ describe('BUG-110: every T0/T1 hub effector is voice-reachable or explicitly exe
       .sort();
     assert.deepEqual(gaps, [],
       'T0/T1 (read-only/local-write) tools unreachable from voice and not exempted: ' + gaps.join(', '));
+  });
+
+  it('every registered T2 effector is in DEFAULT_ALLOWLIST or explicitly exempted', () => {
+    const allow = new Set(DEFAULT_ALLOWLIST);
+    const exempt = new Set(VOICE_ALLOWLIST_EXEMPT || []);
+    const gaps = [...hub.effectors.keys()]
+      .filter((name) => tierOf(name) === 2)
+      .filter((name) => !allow.has(name) && !exempt.has(name))
+      .sort();
+    assert.deepEqual(gaps, [],
+      'T2 (auto-allow, world-changing but reversible) tools unreachable from voice and not exempted: ' + gaps.join(', '));
   });
 
   it('no name is listed in both DEFAULT_ALLOWLIST and VOICE_ALLOWLIST_EXEMPT (sanity)', () => {
