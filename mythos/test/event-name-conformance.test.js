@@ -205,6 +205,11 @@ const ALLOWED_EVENTS = new Set([
   'voice.live.state',
   'voice.live.interrupted',
   'voice.live.toolcancel',
+  // 2026-08-10: a quiet room closing its own Live socket at the idle-rotation
+  // ceiling. Deliberately NOT health.anomaly — it used to be, and because the
+  // immune system has no playbook for it, the explainer narrated a normal
+  // cost-saving close to the operator as a fault with an invented cause.
+  'voice.live.idle-closed',
 ]);
 
 // -- Static scan -------------------------------------------------------------

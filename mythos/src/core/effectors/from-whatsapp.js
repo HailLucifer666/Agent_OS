@@ -243,7 +243,7 @@ async function whatsapp_send({ to, text, send }) {
   }
 
   const wantDigits = recipient.number.replace(/\D/g, '');
-  const addressee = String(cbox.name || '') + '   ' + String(cbox.headerName || '');
+  const addressee = String(cbox.name || '') + '   ' + String(cbox.headerName || '');
   const seenDigits = addressee.replace(/\D/g, '');
   // A saved contact opens by NAME in the header ("Mom"), not by number, so accept
   // either. Digits are compared with the country code stripped as well, because

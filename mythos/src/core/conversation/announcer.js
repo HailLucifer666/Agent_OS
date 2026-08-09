@@ -12,6 +12,22 @@
 // injected speak() callback (server/index.js's proactiveSpeak). Per-event-key
 // deduplication prevents announcing the same event twice.
 
+// BUG-123 (AD-5) helpers, at module scope since 2026-08-10 so immune/explainer.js
+// can share them. They were factory-local when only onHealthAnomaly/
+// onHealthDiagnosed below used them; the explainer needed the identical
+// no-invented-cause wording and re-implementing it is how the two drift apart.
+// Both are pure — no closure state — so hoisting them changes nothing here.
+function describeCondition(p) {
+  var what = p.kind || p.syndrome || null;
+  var where = p.target && p.target !== what ? ' in ' + String(p.target) : '';
+  return (what ? String(what) : 'an unnamed condition') + where;
+}
+
+function honestCauseClause(p) {
+  if (!p.reason) return ' I do not yet know the cause.';
+  return ' Reported reason: ' + String(p.reason) + '.';
+}
+
 function createConversationAnnouncer({ bus, brain, config, speak }) {
   if (!bus) throw new Error('createConversationAnnouncer requires bus');
   if (!brain || typeof brain.think !== 'function') throw new Error('createConversationAnnouncer requires brain');
@@ -171,16 +187,8 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   // is the trade, and for "something is wrong with your system" it is the right
   // way round. onJobPerception/onGoalUpdate keep generate(): a build finishing
   // has no cause to invent.
-  function describeCondition(p) {
-    var what = p.kind || p.syndrome || null;
-    var where = p.target && p.target !== what ? ' in ' + String(p.target) : '';
-    return (what ? String(what) : 'an unnamed condition') + where;
-  }
-
-  function honestCauseClause(p) {
-    if (!p.reason) return ' I do not yet know the cause.';
-    return ' Reported reason: ' + String(p.reason) + '.';
-  }
+  // describeCondition / honestCauseClause now live at module scope — see the
+  // note above createConversationAnnouncer.
 
   function onHealthAnomaly(event) {
     var p = event.payload;
@@ -243,4 +251,9 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   return { start: start, stop: stop, isRecent: isRecent, markAnnounced: markAnnounced };
 }
 
-module.exports = { createConversationAnnouncer: createConversationAnnouncer };
+module.exports = {
+  createConversationAnnouncer: createConversationAnnouncer,
+  // AD-5 wording, shared with immune/explainer.js — see the note above the factory.
+  describeCondition: describeCondition,
+  honestCauseClause: honestCauseClause,
+};

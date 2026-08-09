@@ -176,6 +176,94 @@ test('ui_type into a console host (cmd.exe) is unverified, never graded a failur
   });
 });
 
+// ---------------------------------------------------------------------------
+// Failure mode E (BUG-066, second half) — 2026-08-10. Reproduced live twice in
+// vault/Audit/2026-08-09.jsonl: whatsapp_send refused with 'the text went to
+// "Chrome Legacy Window" (pid 15956), not the target (pid 15928)'. 15956 is
+// WhatsApp.Root's own msedgewebview2 child — same app, right window, text
+// actually typed. The caret comparison already knew this; the foreground
+// comparison did not.
+// ---------------------------------------------------------------------------
+
+test('ui_type accepts a WebView2 renderer child as the target app (typedIntoSameApp), instead of refusing a landed message', async () => {
+  await withMockedPcChild({
+    getStatus: () => ({ state: 'ONLINE' }),
+    sendCommand: async (cmdObj) => {
+      if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
+      if (cmdObj.cmd === 'ui_type') {
+        return {
+          ok: true,
+          result: {
+            typed: true,
+            length: 5,
+            typedIntoPid: 15956,                     // msedgewebview2 child
+            typedIntoTitle: 'Chrome Legacy Window',
+            typedIntoSameApp: true,                  // PS's Test-SameApp verdict
+            focusedPid: 15956,
+            caretSameApp: true,
+            mechanism: 'uia-valuepattern-setvalue',
+            readBack: 'confirmed',
+            readBackText: 'hello',
+          },
+        };
+      }
+      throw new Error('unexpected cmd: ' + cmdObj.cmd);
+    },
+  }, async (fromPc) => {
+    const result = await fromPc.ui_type({ text: 'hello', pid: 15928 }); // WhatsApp.Root
+    assert.equal(result.ok, true, 'a renderer child of the target is the target');
+    assert.ok(result.evidence, 'and the read-back oracle still supplies evidence');
+  });
+});
+
+test('ui_type still refuses a genuinely different app, even when the pid mismatch looks identical', async () => {
+  await withMockedPcChild({
+    getStatus: () => ({ state: 'ONLINE' }),
+    sendCommand: async (cmdObj) => {
+      if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
+      if (cmdObj.cmd === 'ui_type') {
+        return {
+          ok: true,
+          result: {
+            typed: true, length: 5,
+            typedIntoPid: 15956, typedIntoTitle: 'Brave',
+            typedIntoSameApp: false,           // unrelated process tree
+            readBack: 'confirmed', readBackText: 'hello',
+          },
+        };
+      }
+      throw new Error('unexpected cmd: ' + cmdObj.cmd);
+    },
+  }, async (fromPc) => {
+    const result = await fromPc.ui_type({ text: 'hello', pid: 15928 });
+    assert.equal(result.ok, false, 'same-app tolerance must not become "any window will do"');
+    assert.match(String(result.result || ''), /wrong window/i);
+  });
+});
+
+test('ui_type with no typedIntoSameApp field (older adapter) keeps the strict pid comparison', async () => {
+  await withMockedPcChild({
+    getStatus: () => ({ state: 'ONLINE' }),
+    sendCommand: async (cmdObj) => {
+      if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
+      if (cmdObj.cmd === 'ui_type') {
+        return {
+          ok: true,
+          result: {
+            typed: true, length: 5,
+            typedIntoPid: 15956, typedIntoTitle: 'Some Other Window',
+            readBack: 'confirmed', readBackText: 'hello',
+          },
+        };
+      }
+      throw new Error('unexpected cmd: ' + cmdObj.cmd);
+    },
+  }, async (fromPc) => {
+    const result = await fromPc.ui_type({ text: 'hello', pid: 15928 });
+    assert.equal(result.ok, false, 'absent verdict must not be read as permission');
+  });
+});
+
 test('ui_type into a normal (non-console) app is unaffected — a real mismatch still fails', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),

@@ -2468,6 +2468,19 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
 
         $result = @{ typed = $true; length = $text.Length; typedIntoPid = [int]$typedIntoPid; typedIntoTitle = $typedIntoTitle }
         $result.mechanism = $mechanism
+        # 2026-08-10 (BUG-066, second half). caretSameApp below fixed the CARET
+        # comparison for WebView2 apps; the FOREGROUND comparison in from-pc.js was
+        # left doing strict pid equality and fails the same way. Measured live in
+        # vault/Audit/2026-08-09.jsonl: two whatsapp_send attempts refused with
+        # 'the text went to "Chrome Legacy Window" (pid 15956), not the target
+        # (pid 15928)' — 15956 is WhatsApp.Root's own msedgewebview2 child, i.e.
+        # the same application, and the message really was typed in the right
+        # place. Same rule as caretSameApp: Test-SameApp is the only thing that
+        # knows a shell and its renderer child are one app, so that knowledge
+        # stays here and JS reads the verdict. Reported, not enforced.
+        if ($TargetPid -and $typedIntoPid) {
+            $result.typedIntoSameApp = [bool](Test-SameApp $typedIntoPid $TargetPid)
+        }
         if ($mechanismsTried.Count -gt 1) { $result.mechanismsTried = $mechanismsTried }
 
         # Whether the caret had to be placed, and how. This is the diagnostic that

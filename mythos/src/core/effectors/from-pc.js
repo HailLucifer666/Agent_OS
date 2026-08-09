@@ -732,7 +732,19 @@ async function ui_type({ text, pid, elementPath }) {
   if (res && res.ok && res.result && typeof res.result === 'object') {
     var landedPid = res.result.typedIntoPid;
     var landedTitle = String(res.result.typedIntoTitle || '');
-    if (targetPid && typeof landedPid === 'number' && landedPid !== targetPid) {
+    // 2026-08-10: strict pid equality here had the SAME WebView2 flaw the caret
+    // check below documents, and it was not theoretical — two whatsapp_send
+    // attempts in vault/Audit/2026-08-09.jsonl were refused with 'the text went
+    // to "Chrome Legacy Window" (pid 15956), not the target (pid 15928)'. 15956
+    // is WhatsApp.Root's own msedgewebview2 child: same application, right
+    // window, message actually typed. `typedIntoSameApp` is PS's Test-SameApp
+    // verdict on exactly that question (parentage in both directions), and it is
+    // absent from an older adapter or when the lookup failed — in which case the
+    // strict comparison below still applies, so this loosens nothing on its own.
+    var landedSameApp = res.result.typedIntoSameApp;
+    var landedElsewhere = (landedSameApp === false) ||
+      (landedSameApp === undefined && typeof landedPid === 'number' && landedPid !== targetPid);
+    if (targetPid && typeof landedPid === 'number' && landedPid > 0 && landedElsewhere) {
       return fail('Typed into the wrong window: the text went to "' + landedTitle +
         '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
     }

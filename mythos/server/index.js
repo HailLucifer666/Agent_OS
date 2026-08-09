@@ -2993,6 +2993,17 @@ function createServer(deps) {
               kind: 'voice-node-duplicate-identify',
               summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
               detail: { nodeId },
+              // 2026-08-10: `summary` is not a field the spoken path reads.
+              // immune/explainer.js narrates an unplaybooked anomaly from
+              // `target` + `reason` (AD-5 deterministic wording), so this fired
+              // repeatedly on 2026-08-09 and was announced as an unexplained
+              // fault — while the cause was written right here. Naming the
+              // benign case matters too: one phone reconnecting after a network
+              // drop produces this exactly like two misconfigured devices do,
+              // and the server genuinely cannot tell them apart.
+              target: nodeId,
+              reason: 'two open sockets claimed this voice node and the newer one won — ' +
+                'usually the same device reconnecting, but two devices sharing one node id look identical here',
             });
             // "Newer one wins" only ever applied to voiceNodes; the superseded
             // socket stayed open and kept receiving, because a reply goes to the

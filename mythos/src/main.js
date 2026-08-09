@@ -676,8 +676,26 @@ async function main() {
             // line, so this is visible the same way other boot-time failures
             // are — not swallowed.
             logger.error('aether.proxy.bind-failed', { error: err && err.message });
+            const failedPorts = (function() {
+              try { return scannerProxy.ports(); } catch (_) { return null; }
+            })();
             scannerProxy.stop();
-            bus.emit('health.anomaly', { kind: 'aether-proxy-bind-failed', error: err && err.message });
+            // 2026-08-10: `error` is not the field the spoken path reads.
+            // immune/explainer.js builds its sentence from `reason` (AD-5,
+            // deterministic wording shared with conversation/announcer.js), so
+            // this anomaly was announced to the operator as "I do not yet know
+            // the cause" while the cause was sitting right here in `error`.
+            // Carry both: `reason` for the sentence, `target` so the operator
+            // hears WHICH port range, since a bind failure is almost always
+            // another instance still holding it.
+            bus.emit('health.anomaly', {
+              kind: 'aether-proxy-bind-failed',
+              error: err && err.message,
+              reason: err && err.message,
+              target: failedPorts && failedPorts.length
+                ? 'ports ' + failedPorts.join(', ')
+                : 'the Aether proxy port range',
+            });
           }
         );
       }

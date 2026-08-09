@@ -112,6 +112,14 @@ function createLiveSession(deps) {
   let userText = '', assistantText = '';
   let closedByUs = false;
   let idleRotationsWithoutSpeech = 0;
+  // 2026-08-10: which serverContent fields this turn actually carried, by name.
+  // The vault says every Live turn since ~08-09 stored an EMPTY user transcript
+  // (21 of 21 on 08-10, 144 of 153 on 08-09, 51 of 147 on 08-07) while the reply
+  // was fine — so `inputTranscription` is either not arriving or not arriving
+  // before turnComplete resets the accumulator. Both are indistinguishable from
+  // the outside, and this repo has burned three sessions on plausible theories.
+  // One log line per turn naming the fields that DID arrive settles it.
+  let turnFrameFields = null;   // Set, lazily created
   // BUG-118 instrumentation. The operator heard MYTHOS speak its own private
   // reasoning as if it were the reply. The suspicion — NOT yet evidence — is
   // that those are modelTurn parts flagged `thought: true`, which this module
@@ -182,10 +190,20 @@ function createLiveSession(deps) {
     idleRotationsWithoutSpeech += 1;
     if (idleRotationsWithoutSpeech > MAX_IDLE_ROTATIONS_WITHOUT_SPEECH) {
       if (bus && typeof bus.emit === 'function') {
-        // BUG-124: turnId on every anomaly this module raises, so an anomaly can
-        // be joined to the turn it happened during.
-        bus.emit('health.anomaly', {
-          kind: 'live-idle-exhausted', rotations: idleRotationsWithoutSpeech, turnId: turnCounter,
+        // 2026-08-10: this used to be health.anomaly {kind:'live-idle-exhausted'},
+        // and that was the wrong channel. A quiet room closing its own socket is
+        // this ceiling WORKING, not a fault — but the immune system has no
+        // playbook for the kind, so it reached the healer's no-match path, and
+        // immune/explainer.js narrated it to the operator through proactive
+        // speech. The operator heard "something is misfiring while I'm idle,
+        // maybe a tool spinning its wheels and triggering a limit" during a
+        // session where nothing was spinning and no limit was hit.
+        // Observability is unchanged (same payload, still on the bus, still in
+        // the logs) — it simply is not a health event.
+        // BUG-124: turnId is still attached so this can be joined to the turn it
+        // happened during.
+        bus.emit('voice.live.idle-closed', {
+          rotations: idleRotationsWithoutSpeech, turnId: turnCounter,
         });
       }
       close('idle-timeout-exhausted');
@@ -351,6 +369,10 @@ function createLiveSession(deps) {
     // ---- serverContent: EVERY field, no else-if (see module header) ----
     const sc = msg.serverContent;
     if (sc) {
+      // See turnFrameFields' declaration — records WHICH fields arrived, never
+      // their contents (transcripts are operator speech; this log is not).
+      if (!turnFrameFields) turnFrameFields = new Set();
+      for (const k in sc) turnFrameFields.add(k);
       if (sc.inputTranscription && sc.inputTranscription.text) {
         userText += sc.inputTranscription.text;
         idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
@@ -427,7 +449,21 @@ function createLiveSession(deps) {
         logger.info('live.turn-parts', {
           turnId: turnCounter, textParts: turnTextParts, thoughtParts: turnThoughtParts,
           audioParts: turnAudioParts, reasoningStripped: turnReasoningStrips,
+          // 2026-08-10 — see turnFrameFields. `inputTranscription` missing from
+          // this list on a turn the operator demonstrably spoke in is the whole
+          // answer to the empty-user-text question.
+          scFields: turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '',
         });
+        turnFrameFields = null;
+        // 2026-08-10: a completed turn is proof the room is not empty, whether or
+        // not a user transcript arrived. This reset previously lived ONLY on
+        // inputTranscription (still there, still the earliest signal), so while
+        // transcripts were missing the idle counter never reset — the session
+        // crossed MAX_IDLE_ROTATIONS_WITHOUT_SPEECH and closed itself mid
+        // conversation, and the operator was told something was "misfiring while
+        // idle" during an active exchange. The quiet-room cost ceiling still
+        // works: no turns at all means nothing resets this.
+        idleRotationsWithoutSpeech = 0;
         // BUG-170: a turn that produced a reply the operator could READ but no
         // audio at all. The 2026-08-07 session had one, and it presents as
         // MYTHOS ignoring the operator — the HUD shows a reply, the room stays
@@ -440,6 +476,17 @@ function createLiveSession(deps) {
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });
+        } else if (!turn.userText && turn.assistantText && bus && typeof bus.emit === 'function') {
+          // 2026-08-10: half-blind, and it was silent until now. The check above
+          // only fires when BOTH sides are empty, so a turn that answered the
+          // operator while recording nothing they said passed as healthy — and
+          // that is precisely the shape the vault is full of. It is not cosmetic:
+          // this text is what episodic memory stores as the operator's words, so
+          // every one of these is a hole in what MYTHOS can later recall.
+          bus.emit('health.anomaly', {
+            kind: 'live-turn-no-user-transcript', turnId: turnCounter,
+            reason: 'the reply was transcribed but the operator\'s speech was not',
+          });
         }
         if (wasSilent) {
           logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });

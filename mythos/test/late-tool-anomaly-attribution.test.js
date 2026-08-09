@@ -85,14 +85,24 @@ describe('the explainer never invents a component', () => {
     assert.match(prompts[0], /list_windows/);
   });
 
-  test('the prompt forbids naming a component that was not supplied', async () => {
+  // 2026-08-10 — this test used to assert the prompt contained "do not name any
+  // tool, provider or subsystem that is not stated above". That guard was
+  // load-bearing while the model wrote the spoken sentence, and it was not
+  // enough: forbidden from naming a COMPONENT, the model invented a MECHANISM
+  // instead, and the operator was told "maybe a tool spinning its wheels and
+  // triggering a limit" about a deliberate idle close. The prompt no longer asks
+  // for prose at all, so the stronger property is now assertable — there is
+  // nothing in the response for the operator to hear.
+  test('the prompt asks for a remedy only, so there is no prose to fabricate', async () => {
     const { explainer, prompts } = capturedPrompt();
     await explainer._onHealed({ payload: {
       kind: 'some-anomaly', target: '', outcome: 'no-match', detail: {},
     } });
 
     assert.equal(prompts.length, 1);
-    assert.match(prompts[0], /do not name|never name/i,
-      'with no target the model must be told not to guess a component');
+    assert.match(prompts[0], /"remedy"/,
+      'the remedy menu is the only thing the brain is asked for');
+    assert.doesNotMatch(prompts[0], /explanation|likely cause|spoken sentence/i,
+      'asking a model to explain a bare anomaly kind is what produced an invented cause');
   });
 });

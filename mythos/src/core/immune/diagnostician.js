@@ -23,7 +23,12 @@ const SEVERITY = {
   // the healer had no playbook for it (the half-built learning loop), so the
   // signal died in the no-match path. Now both the severity and the healer's
   // recurring-failure-record playbook handle it.
-  'recurring-failure':  'major'
+  'recurring-failure':  'major',
+  // 2026-08-10: the entity answering the operator while storing nothing they
+  // said. Not cosmetic and not minor — episodic memory is what recall and
+  // session carryover read, so every occurrence is a permanent hole in what
+  // MYTHOS can remember of the conversation. live-session.js emits it.
+  'live-turn-no-user-transcript': 'major'
 };
 
 function severityOf(kind) {

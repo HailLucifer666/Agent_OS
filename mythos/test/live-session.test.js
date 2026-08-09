@@ -127,6 +127,92 @@ describe('live-session (Phase 1, V2 §6)', () => {
     session.close();
   });
 
+  // 2026-08-10. The vault's own numbers are the motivation: 21 of 21 Live turns
+  // on 08-10 and 144 of 153 on 08-09 stored an EMPTY operator transcript beside
+  // a perfectly good reply, and nothing fired, because the AD-6 check only
+  // covers a turn where BOTH sides are empty.
+  test('a turn that answers but records nothing the operator said is reported (half-blind, not healthy)', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const logged = [];
+    const { deps, sockets } = fakeDeps({
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+      logger: { warn() {}, info: (msg, fields) => logged.push({ msg, fields }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Alright, the recipe is staged.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+
+    const anomalies = busEvents.filter((e) => e.name === 'health.anomaly');
+    assert.equal(anomalies.length, 1, 'exactly one anomaly for a half-blind turn');
+    assert.equal(anomalies[0].payload.kind, 'live-turn-no-user-transcript');
+    assert.equal(anomalies[0].payload.turnId, 1, 'BUG-124: joinable to the turn it happened during');
+    assert.match(anomalies[0].payload.reason, /operator/,
+      'AD-5: the payload carries the reason, so the spoken line does not have to invent one');
+
+    // And the instrumentation that answers WHY: which serverContent fields the
+    // turn actually carried, by name. inputTranscription absent here is the
+    // whole finding.
+    const turnLine = logged.find((l) => l.msg === 'live.turn-parts');
+    assert.ok(turnLine, 'every turn logs live.turn-parts');
+    assert.match(turnLine.fields.scFields, /outputTranscription/);
+    assert.doesNotMatch(turnLine.fields.scFields, /inputTranscription/);
+    session.close();
+  });
+
+  // The bug behind the operator-facing symptom: told "something is misfiring
+  // while I'm supposedly idle" DURING an active exchange. The idle-rotation
+  // counter only ever reset on inputTranscription, so while transcripts were
+  // missing a busy session still counted as an empty room and closed itself.
+  test('a completed turn resets the idle-rotation ceiling even with no user transcript', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const { deps, sockets } = fakeDeps({
+      config: { LIVE_IDLE_TIMEOUT_MS: 12 },
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    // Three idle rotations — one short of the ceiling.
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      sockets[sockets.length - 1].simulateOpen();
+      sockets[sockets.length - 1].serverFrame({ setupComplete: {} });
+      await new Promise((r) => setImmediate(r));
+    }
+    // A real turn happens, transcribed on the reply side only — exactly the
+    // shape the vault is full of.
+    sockets[sockets.length - 1].serverFrame({
+      serverContent: { outputTranscription: { text: 'Playing it now.' }, turnComplete: true },
+    });
+    // Three more rotations must be allowed again, because the room is demonstrably
+    // not empty.
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+      sockets[sockets.length - 1].simulateOpen();
+      sockets[sockets.length - 1].serverFrame({ setupComplete: {} });
+      await new Promise((r) => setImmediate(r));
+    }
+    assert.ok(!busEvents.some((e) => e.name === 'voice.live.idle-closed'),
+      'a session that completed a turn must not be treated as an empty room');
+    assert.equal(sockets.length, 7);
+    session.close();
+  });
+
   test('interrupted emits voice.live.interrupted on the bus AND fires the direct per-session onInterrupted callback', async () => {
     // Phase 5 fix: the bus event alone is not connection-scoped — with 2+
     // concurrent Live sessions on the shared process bus, a bare
@@ -276,7 +362,7 @@ describe('live-session (Phase 1, V2 §6)', () => {
       await new Promise((r) => setImmediate(r));
     }
     assert.equal(sockets.length, 4, 'first 3 idle timeouts must still rotate (open, +3 rotations)');
-    assert.ok(!busEvents.some((e) => e.name === 'health.anomaly' && e.payload.kind === 'live-idle-exhausted'),
+    assert.ok(!busEvents.some((e) => e.name === 'voice.live.idle-closed'),
       'must not exhaust before the ceiling is actually crossed');
 
     // A real user word must reset the counter, not just delay it.
@@ -298,8 +384,13 @@ describe('live-session (Phase 1, V2 §6)', () => {
       if (last.readyState !== last.OPEN) { last.simulateOpen(); last.serverFrame({ setupComplete: {} }); }
       await new Promise((r) => setImmediate(r));
     }
-    assert.ok(busEvents.some((e) => e.name === 'health.anomaly' && e.payload.kind === 'live-idle-exhausted'),
+    assert.ok(busEvents.some((e) => e.name === 'voice.live.idle-closed'),
       'past the ceiling with zero speech, the session must settle CLOSED for real, not rotate forever');
+    // 2026-08-10: and it must NOT be a health event. A quiet room is not a
+    // fault, and while it was one the immune explainer narrated it aloud with an
+    // invented cause. This assertion is the regression guard for that.
+    assert.ok(!busEvents.some((e) => e.name === 'health.anomaly'),
+      'a quiet-room close must not be reported as a health anomaly');
     assert.equal(session.getState(), 'closed');
     session.close();
   });
