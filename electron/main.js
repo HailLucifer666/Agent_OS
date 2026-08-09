@@ -503,7 +503,19 @@ function syncVault(flag) {
       encoding: 'utf8',
       timeout: 15000,
       windowsHide: true,
-      env: { ...process.env, MYTHOS_VAULT_ROOT: vaultRoot },
+      // ELECTRON_RUN_AS_NODE is REQUIRED here, and its absence is not a subtle
+      // bug. In Electron, process.execPath is electron.exe — so without this the
+      // spawn launches a SECOND ELECTRON APP instead of running the script, which
+      // hangs until the timeout above kills it: 15 wasted seconds on every boot
+      // and the vault never syncs. Caught by actually booting the app on
+      // 2026-08-10 ("vault-sync --pull: did not finish — spawnSync ...
+      // electron.exe ETIMEDOUT"); the unit tests could not see it.
+      //
+      // This is the portable choice rather than looking for `node` on PATH: a
+      // packaged install is not guaranteed to have one, and electron.exe running
+      // as node always exists by definition. (child_process.fork, used for the
+      // server child, does this for us — spawnSync does not.)
+      env: { ...process.env, MYTHOS_VAULT_ROOT: vaultRoot, ELECTRON_RUN_AS_NODE: '1' },
     });
     const output = String(res.stdout || '').trim();
     if (output) for (const line of output.split('\n')) log(line);

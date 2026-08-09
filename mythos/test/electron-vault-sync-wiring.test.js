@@ -78,6 +78,18 @@ test('syncVault is time-boxed and cannot fail a boot', () => {
     'simply not happen');
 });
 
+test('the sync child runs as NODE, not as a second Electron app', () => {
+  const text = readMainJs();
+  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
+  // Found by booting the app, not by any unit test: process.execPath is
+  // electron.exe in Electron, so spawning it without ELECTRON_RUN_AS_NODE starts
+  // a whole second instance of MYTHOS instead of running the script. It then
+  // hangs until the timeout, costing 15s of every boot while the vault never
+  // syncs at all — a silent failure wearing a time-box as a disguise.
+  assert.match(fn, /ELECTRON_RUN_AS_NODE:\s*'1'/,
+    'without it, spawnSync(process.execPath) launches Electron again rather than running vault-sync.js');
+});
+
 test('syncVault resolves the vault root exactly as startChild does', () => {
   const text = readMainJs();
   const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
