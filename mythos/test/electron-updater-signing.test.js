@@ -155,3 +155,49 @@ test('the release-side requirement for a real update feed is documented, not ove
   assert.doesNotMatch(readMainJs(), /no code change, no rebuild/,
     'main.js must not claim MYTHOS_UPDATE_URL alone is sufficient — that is client-side only');
 });
+// Appended to mythos/test/electron-updater-signing.test.js — the update
+// NOTIFICATION. Source-shape assertions, which root CLAUDE.md establishes as
+// the only automated guard available for electron/main.js: unit tests inject
+// fakes and are therefore blind to load order, and "a slice is not verified
+// until the app actually starts".
+
+test('an available update is announced, not just logged into a file nobody opens', () => {
+  const text = readMainJs();
+  assert.match(text, /notifyUpdateAvailable\s*\(/,
+    'update-available must reach the operator somehow — a log line in userData is honest but invisible');
+  assert.match(text, /new Notification\(/,
+    'the announcement is a native OS notification (see the comment for why not a HUD toast)');
+});
+
+test('Notification is required at its use site, never destructured at module scope', () => {
+  const text = readMainJs();
+  // The exact shape that has already cost this repo a boot: a module-scope
+  // destructure of a ready-gated Electron export. `Notification` is one, so it
+  // must be required inside the function, like `screen`/`session`/`desktopCapturer`.
+  const moduleScopeRequire = /^const \{[^}]*\} = require\('electron'\);$/m.exec(text);
+  assert.ok(moduleScopeRequire, 'main.js should still have exactly one module-scope electron require to check');
+  assert.doesNotMatch(moduleScopeRequire[0], /\bNotification\b/,
+    'Notification is app.ready-gated — a module-scope property read throws before whenReady (root CLAUDE.md, Slice 5)');
+  assert.match(text, /const \{ Notification \} = require\('electron'\);/,
+    'it must be required at the use site instead');
+});
+
+test('the notification never claims something was downloaded or offers to install it', () => {
+  const text = readMainJs();
+  // CONTRIBUTING.md's release gate: do not enable automatic download before the
+  // build is signed, because an unsigned installer gives electron-updater
+  // nothing to verify against. So the notification must not imply either.
+  assert.doesNotMatch(text, /autoUpdater\.downloadUpdate/,
+    'nothing may start a download off the back of the notification while builds are unsigned');
+  assert.match(text, /Nothing has been downloaded/,
+    'the body must say plainly that nothing was downloaded, or the operator will assume it was');
+});
+
+test('a failed notification cannot take down the update check or boot', () => {
+  const text = readMainJs();
+  const fn = /function notifyUpdateAvailable\([\s\S]*?\n}/.exec(text);
+  assert.ok(fn, 'notifyUpdateAvailable must exist as a named function');
+  assert.match(fn[0], /try \{/, 'the whole body must be guarded');
+  assert.match(fn[0], /isSupported\(\)/,
+    'notifications are unsupported on some platforms/sessions — that is a log line, not a throw');
+});

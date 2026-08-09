@@ -98,6 +98,25 @@ One thing is opt-in via an environment variable — **never** via a tracked file
   build still *checks* for updates (a read against the releases API); what it
   cannot do is verify a downloaded installer (see below).
 
+### One command: `npm run release`
+
+`scripts/release.js <patch|minor|major|x.y.z>` does the whole sequence below in
+order, and refuses to start it unless every precondition holds — a dirty tree,
+the wrong branch, an unpushed or un-pulled commit, an existing tag, a missing
+`GH_TOKEN`, or a `build.publish` with no GitHub provider are all **blockers**,
+reported together rather than one failed attempt at a time. Half a release (a
+tag with no artifacts, artifacts with a stale version) is worse than none.
+
+It is a **dry run** until you pass `--yes`; without it, it prints the exact
+commands it would run. `--no-publish` builds and tags without uploading.
+
+Two things it warns about without blocking, because neither is fatal and both
+have bitten this project: an **unsigned** build (no `CSC_LINK`), and a `gh` CLI
+logged in as an account other than `build.publish`'s owner. `GH_TOKEN` is what
+actually authorizes the upload, so a mismatched `gh` login is only a problem if
+the token belongs to that same account — but discovering that after a full
+build is how an evening gets lost.
+
 ### Publishing a release that the update check can actually see
 
 1. **Tag the release.** electron-builder's default publish policy is

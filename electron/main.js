@@ -461,6 +461,99 @@ function stopChild() {
 //     explicit skip line instead of a confusing one on every dev boot.
 //   - The check must not take boot down with it — see the lazy-require note
 //     in the body below.
+// ---- vault sync (one brain across two machines) -------------------------------
+// Pull the other machine's memory before the server reads the vault; push this
+// machine's before quitting. mythos/scripts/vault-sync.js owns all of the git,
+// including the decision to do nothing.
+//
+// Three properties this wrapper must preserve, in order of importance:
+//
+//   1. It is OPT-IN. vault-sync no-ops in ~100ms unless the operator has run
+//      `--init` themselves, so the default install pays almost nothing and
+//      nobody's private conversation history starts leaving their machine
+//      because a boot sequence decided to.
+//   2. It never fails a boot or blocks a quit indefinitely. Time-boxed here as
+//      well as inside the script, and every non-zero outcome is a log line.
+//      Offline has to work; that is the whole point of sync-on-boot/quit rather
+//      than a live host.
+//   3. It is SYNCHRONOUS on purpose. On the boot side the child must not start
+//      reading the vault mid-merge; on the quit side Electron does not wait for
+//      async work in before-quit, so an await here would simply not happen.
+//
+// The 15s cap is the deliberate compromise: git against an unreachable host can
+// sit in DNS for far longer than its own network timeout, and a boot that hangs
+// is worse than a session whose memory arrives one launch late.
+function syncVault(flag) {
+  try {
+    const script = path.join(__dirname, '..', 'mythos', 'scripts', 'vault-sync.js');
+    if (!fs.existsSync(script)) return;
+    // The SAME four arguments startChild() passes, not a shortcut. Called with
+    // only explicitEnv, resolveVaultRoot path.join()s an undefined userDataDir
+    // and throws — which this function's own catch would swallow, so sync would
+    // silently never run on a default install (where MYTHOS_VAULT_ROOT is unset,
+    // i.e. everyone). The migration marker makes the second call a no-op.
+    const vaultRoot = resolveVaultRoot({
+      explicitEnv: process.env.MYTHOS_VAULT_ROOT,
+      oldVaultDir: OLD_VAULT_DIR,
+      userDataDir: app.getPath('userData'),
+      log,
+    });
+    const res = require('child_process').spawnSync(process.execPath, [script, flag], {
+      cwd: path.join(__dirname, '..', 'mythos'),
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+      env: { ...process.env, MYTHOS_VAULT_ROOT: vaultRoot },
+    });
+    const output = String(res.stdout || '').trim();
+    if (output) for (const line of output.split('\n')) log(line);
+    if (res.error) log(`vault-sync ${flag}: did not finish —`, res.error.message);
+  } catch (err) {
+    log(`vault-sync ${flag}: skipped —`, err && err.message);
+  }
+}
+
+// Say out loud that a newer version exists. Until now the only trace was a log
+// line in a file nobody opens, which is the "honest but invisible" failure mode:
+// a machine could sit versions behind and never mention it.
+//
+// A NATIVE notification rather than a HUD toast, deliberately. The HUD would
+// need a new main->renderer channel on the contextBridge, and that surface is
+// pinned to exactly four functions plus onHotkey by AD-8's regression gate
+// (mythos/test/electron-preload-surface.test.js) for a real reason: every
+// addition is another path out of the privileged process into remote-page
+// content. Widening a security invariant to deliver a nicety is the wrong
+// trade, and an OS notification is arguably better anyway — it shows up whether
+// or not the HUD window is focused.
+//
+// What it deliberately does NOT do is offer to install. autoDownload is false
+// and quitAndInstall is never called, because CONTRIBUTING.md's release gate
+// says not to enable automatic download before the build is signed: an unsigned
+// installer gives electron-updater nothing to verify against, so a compromised
+// host could serve any executable. So this points at the release page and lets
+// the operator decide.
+function notifyUpdateAvailable(version) {
+  try {
+    // Required at the use site, like `screen`/`session` elsewhere in this file:
+    // Notification is another ready-gated export, and this repo has already lost
+    // a boot to a module-scope property read of one (see root CLAUDE.md, Slice 5).
+    const { Notification } = require('electron');
+    if (!Notification.isSupported()) {
+      log('auto-update: desktop notifications unsupported here — the log line above is the only notice.');
+      return;
+    }
+    new Notification({
+      title: `MYTHOS ${version} is available`,
+      body: `You are running ${app.getVersion()}. Nothing has been downloaded — open the releases page to update.`,
+      silent: false,
+    }).show();
+  } catch (err) {
+    // A failed notification must never take down the update check, let alone
+    // boot. The log line is the fallback notice.
+    log('auto-update: could not show the update notification —', err && err.message);
+  }
+}
+
 function checkForUpdates() {
   if (!app.isPackaged) {
     log('auto-update: dev build — update check runs in packaged builds only; skipping.');
@@ -488,7 +581,9 @@ function checkForUpdates() {
     }
     autoUpdater.on('error', (err) => log('auto-update: check failed —', err && err.message));
     autoUpdater.on('update-available', (info) => {
-      log('auto-update: update available —', info && info.version, '(not downloaded automatically)');
+      const version = (info && info.version) || 'unknown';
+      log('auto-update: update available —', version, '(not downloaded automatically)');
+      notifyUpdateAvailable(version);
     });
     autoUpdater.on('update-not-available', () => log('auto-update: already on the latest version'));
     log(`auto-update: checking ${feedUrl ? `custom feed ${feedUrl}` : 'the embedded release feed (GitHub Releases)'}`);
@@ -514,6 +609,11 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // BEFORE startChild(), deliberately: the child constructs the memory facade
+    // over the vault as it boots, so a pull that lands afterwards would be read
+    // only on the NEXT launch — which is exactly the "the other machine's work is
+    // not here" complaint this exists to fix.
+    syncVault('--pull');
     startChild();
     checkForUpdates();
 
@@ -776,6 +876,10 @@ if (!gotLock) {
     mediaWindowController.closeMediaWindow();
     // null when the overlay is disabled (the default) or failed to construct.
     if (cursorOverlayController) cursorOverlayController.destroy();
+    // AFTER stopChild(), so the vault is not being written while it is committed.
+    // A half-written episodic line committed as "synced" is worse than a late push,
+    // and the push is idempotent: whatever misses this window goes next time.
+    syncVault('--push');
   });
 
   // globalShortcut registrations are process-wide OS claims; releasing them on

@@ -266,3 +266,22 @@ test('build.includeSubNodeModules is set (mythos/node_modules would otherwise be
     'node_modules directory regardless of the files allowlist — confirmed by ' +
     'a real build that shipped mythos/node_modules empty');
 });
+
+// The setup screen's server route (server/routes/setup.js) require()s
+// scripts/doctor.js at REQUEST time, so doctor must ship. Several sibling
+// scripts are deliberately excluded from the package (verify-*, sync-test-count,
+// graphify, e2e), and "exclude the dev scripts" is exactly the tidy-up that
+// would take doctor with them — at which point GET /api/setup/status 500s in a
+// packaged build and nowhere else. Dev runs read from the real tree and would
+// never show it.
+test('scripts/doctor.js ships — the setup route require()s it at runtime', () => {
+  const config = loadBuildConfig();
+  const excluded = (config.files || []).filter((p) => typeof p === 'string' && p.startsWith('!'));
+  for (const pattern of excluded) {
+    const body = pattern.slice(1);
+    assert.doesNotMatch(body, /^mythos\/scripts\{?,?\/?\*?\*?\/?\*?\}?$/,
+      `"${pattern}" would exclude the whole scripts directory, taking doctor.js with it`);
+    assert.notEqual(body.replace(/\{,\/\*\*\/\*\}$/, ''), 'mythos/scripts/doctor.js',
+      'doctor.js must not be excluded: server/routes/setup.js requires it at request time');
+  }
+});

@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron electron/main.js",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "release": "node scripts/release.js"
   },
   "dependencies": {
     "@ghostery/adblocker-electron": "^2.18.1",
