@@ -440,33 +440,33 @@ function stopChild() {
 }
 
 // ---- B6: update check (electron-updater) --------------------------------------
-// No auto-update host is chosen yet — the operator has neither bought a code-
-// signing cert nor picked an update host (see root CLAUDE.md's B6 note). So
-// this stays "honest-inert" (house style, see README's "Honest-inert by
-// design"): with no MYTHOS_UPDATE_URL, it logs and returns rather than
-// pretending to check.
+// The update host is GitHub Releases for this repo — build.publish in
+// package.json (provider "github", owner HailLucifer666, repo Agent_OS) is
+// embedded into a packaged build as app-update.yml, and the check below polls
+// the GitHub releases API for a newer version. That is the default: no env
+// needed. MYTHOS_UPDATE_URL remains a runtime override for anyone who wants a
+// self-hosted generic feed instead — when it is set, setFeedURL() points the
+// same check at that URL and bypasses the embedded config entirely (the
+// override is client-side only; it needs no rebuild, and it does not change
+// what the release side must publish — see CONTRIBUTING.md, "Building the
+// desktop installer").
 //
-// What setting MYTHOS_UPDATE_URL alone does and does NOT do — be precise here,
-// because the earlier draft of this comment overclaimed it. On the CLIENT it
-// needs no code change and no rebuild: the feed URL is read at runtime and
-// setFeedURL() below bypasses the packaged app-update.yml that build.publish:
-// null deliberately does not emit. On the RELEASE side it is not enough:
-// electron-builder only writes the `latest.yml` metadata a generic feed is
-// polled FOR when a publish config exists, so the release build must set
-// build.publish (and, for update-signature verification to mean anything, be
-// a signed build). That recipe lives in CONTRIBUTING.md, "Building the desktop
-// installer". build.publish stays null in the tracked config so that an
-// ordinary `npm run dist` never depends on a host existing.
-//
-// autoDownload stays false: a download that starts silently in the
-// background is the "auto-install without logging" failure this exists to
-// avoid; every step below is logged, and nothing calls quitAndInstall().
+// House rules that hold regardless of host:
+//   - autoDownload stays false: a download that starts silently in the
+//     background is the "auto-install without logging" failure this exists to
+//     avoid; every step below is logged, and nothing calls quitAndInstall().
+//   - Dev builds never check. electron-updater refuses to run unpackaged
+//     ("application is not packed and dev update config is not forced"), so
+//     gating on app.isPackaged turns that inevitable rejection into one
+//     explicit skip line instead of a confusing one on every dev boot.
+//   - The check must not take boot down with it — see the lazy-require note
+//     in the body below.
 function checkForUpdates() {
-  const feedUrl = String(process.env.MYTHOS_UPDATE_URL || '').trim();
-  if (!feedUrl) {
-    log('auto-update: no update host configured (MYTHOS_UPDATE_URL unset) — skipping check.');
+  if (!app.isPackaged) {
+    log('auto-update: dev build — update check runs in packaged builds only; skipping.');
     return;
   }
+  const feedUrl = String(process.env.MYTHOS_UPDATE_URL || '').trim();
   try {
     // Required HERE, not at module scope, and this is not a style preference.
     // electron-updater exports `autoUpdater` as a GETTER that constructs the
@@ -483,12 +483,15 @@ function checkForUpdates() {
     // more work into that constructor cannot take boot down with it.
     const { autoUpdater } = require('electron-updater');
     autoUpdater.autoDownload = false;
-    autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+    if (feedUrl) {
+      autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+    }
     autoUpdater.on('error', (err) => log('auto-update: check failed —', err && err.message));
     autoUpdater.on('update-available', (info) => {
       log('auto-update: update available —', info && info.version, '(not downloaded automatically)');
     });
     autoUpdater.on('update-not-available', () => log('auto-update: already on the latest version'));
+    log(`auto-update: checking ${feedUrl ? `custom feed ${feedUrl}` : 'the embedded release feed (GitHub Releases)'}`);
     autoUpdater.checkForUpdates().catch((err) => {
       log('auto-update: checkForUpdates rejected —', err && err.message);
     });
