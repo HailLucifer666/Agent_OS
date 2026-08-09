@@ -1,10 +1,5 @@
 package com.mythos.nodes.phone
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -20,22 +15,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.view.HapticFeedbackConstants
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -54,9 +50,10 @@ import androidx.compose.material3.Text
  * device on a kitchen counter is configured once and used a thousand times.
  *
  * The orb carries state through colour AND a word, never colour alone. Motion is
- * used only where it means something: breathing while idle (waiting), arcs
- * rotating while thinking (working), still when offline (nothing is happening) —
- * and all of it is dropped when the system asks for reduced motion.
+ * used only where it means something: breathing while idle (waiting), reacting to
+ * the actual audio while listening and speaking, contracted and spinning hard while
+ * thinking (working), still when offline (nothing is happening) — and all of it is
+ * dropped when the system asks for reduced motion.
  */
 @Composable
 fun TalkScreen(
@@ -65,6 +62,8 @@ fun TalkScreen(
     onHoldEnd: () -> Unit,
     onOpenSettings: () -> Unit,
     isConfigured: Boolean,
+    onApproval: (String, Boolean) -> Unit = { _, _ -> },
+    hapticsEnabled: Boolean = true,
 ) {
     val phase by VoiceNodeService.phase.collectAsState()
     val connection by VoiceNodeService.connection.collectAsState()
@@ -74,11 +73,30 @@ fun TalkScreen(
     val scanning by VoiceNodeService.scanning.collectAsState()
     val rejections by VoiceNodeService.rejections.collectAsState()
     val wakeStatus by VoiceNodeService.wakeStatus.collectAsState()
+    val wakeAvailable by VoiceNodeService.wakeAvailable.collectAsState()
     val micStatus by VoiceNodeService.micStatus.collectAsState()
     val linkError by VoiceNodeService.linkError.collectAsState()
     val wakeSuppressed by VoiceNodeService.wakeSuppressed.collectAsState()
+    val approval by VoiceNodeService.approval.collectAsState()
 
     val offline = connection != NodeLink.Status.CONNECTED
+
+    // The orb is sized from the screen rather than from a fixed number, because the
+    // same 220dp that read as a widget on a phone reads as a dot on a tablet. Both
+    // terms are load-bearing: width alone overflows a short screen in landscape,
+    // height alone leaves a tablet with a small orb in a wide field.
+    // 360x640 -> 269dp, 411x891 -> 353dp, tablet -> the 380dp cap.
+    //
+    // Nothing on this screen scrolls, deliberately. A verticalScroll parent would
+    // compete with the orb's own press-and-hold: past the drag threshold the
+    // scroller wins the pointer, tryAwaitRelease returns, and push-to-talk cuts out
+    // whenever a thumb moves a few pixels. Sizing to fit avoids that entirely — and
+    // the fractions leave enough slack for the reply and the status lines below.
+    val configuration = LocalConfiguration.current
+    val orbDiameter = minOf(
+        configuration.screenWidthDp.dp * 0.86f,
+        configuration.screenHeightDp.dp * 0.42f,
+    ).coerceIn(240.dp, 380.dp)
 
     // State -> (colour, word). The word is what a colour-blind operator, or anyone
     // glancing from across a room, actually reads.
@@ -90,6 +108,26 @@ fun TalkScreen(
         phase == VoiceNodeService.Phase.THINKING -> { orbColor = MythosTheme.Thinking; stateLabel = "THINKING" }
         phase == VoiceNodeService.Phase.SPEAKING -> { orbColor = MythosTheme.Speaking; stateLabel = "SPEAKING" }
         else -> { orbColor = MythosTheme.Accent; stateLabel = "READY" }
+    }
+
+    // One tick per state change, so a node on a counter can be felt as well as
+    // watched. Deliberately NOT a buzz that follows the voice: Android's vibrator
+    // is not a real-time stream, so tracking an envelope means re-issuing effects
+    // tens of times a second — battery cost, mushy on most motors, and audible as
+    // a rattle on cheap ones.
+    //
+    // Seeded with the current phase so entering the screen is silent, and skipped
+    // while offline so a flapping socket cannot buzz in someone's pocket. The
+    // remembered phase still advances when suppressed, or reconnecting would fire
+    // a tick for a transition that happened minutes ago.
+    val view = LocalView.current
+    var tickedPhase by remember { mutableStateOf(phase) }
+    LaunchedEffect(phase, offline, hapticsEnabled) {
+        if (phase == tickedPhase) return@LaunchedEffect
+        tickedPhase = phase
+        if (hapticsEnabled && !offline) {
+            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(MythosTheme.Bg)) {
@@ -110,13 +148,14 @@ fun TalkScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Orb(
+            SwarmOrb(
                 color = orbColor,
                 phase = phase,
                 offline = offline,
                 reduceMotion = reduceMotion,
                 enabled = isConfigured && !offline,
                 stateLabel = stateLabel,
+                diameter = orbDiameter,
                 onHoldStart = onHoldStart,
                 onHoldEnd = onHoldEnd,
             )
@@ -194,10 +233,17 @@ fun TalkScreen(
             // Hands-free state, in words. "off because there is no model" and
             // "listening" must never be the same silence — a wake word that
             // quietly never fires is the single worst failure mode available.
+            //
+            // Quiet when healthy, full contrast when not. The condition comes from
+            // the detector's own `isAvailable`, published as `wakeAvailable` — NOT
+            // from reading the label text, or a detector that rephrases its status
+            // could make itself invisible. A suppression count is also worth
+            // seeing, so it un-dims too.
             Spacer(Modifier.height(14.dp))
+            val wakeHealthy = wakeAvailable && wakeSuppressed == 0
             Text(
                 text = "wake: $wakeStatus" + if (wakeSuppressed > 0) " · $wakeSuppressed suppressed" else "",
-                color = MythosTheme.TextFaint,
+                color = MythosTheme.TextFaint.copy(alpha = if (wakeHealthy) 0.40f else 1f),
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.Center,
@@ -217,127 +263,88 @@ fun TalkScreen(
                 )
             }
         }
+
+        // Last, so it draws over everything: an approval is the only thing on
+        // this screen that MYTHOS is actually blocked on.
+        approval?.let { ApprovalSheet(it, onApproval) }
+    }
+}
+
+/**
+ * The tier-3/4 gate, full-screen because it is not a notification — MYTHOS is
+ * stopped until it is answered.
+ *
+ * Once `outcome` is set the sheet stays up, greyed, showing the word. It does
+ * NOT close on the tap: the server's `confirm-resolved` is what proves the reply
+ * landed, and a sheet that closes on the tap makes a silent no-op — a lapsed
+ * confirm, or one scoped to the desktop — look exactly like an approval.
+ */
+@Composable
+private fun ApprovalSheet(
+    approval: VoiceNodeService.Approval,
+    onApproval: (String, Boolean) -> Unit,
+) {
+    val settled = approval.outcome != null
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            // Opaque enough that the orb behind cannot be mistaken for the
+            // primary action, and it swallows taps aimed at the orb.
+            .background(MythosTheme.Bg.copy(alpha = 0.94f))
+            .pointerInput(Unit) { detectTapGestures { } }
+            .padding(horizontal = 28.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "TIER ${approval.tier} · APPROVAL",
+                color = if (settled) MythosTheme.TextFaint else MythosTheme.Danger,
+                fontSize = 11.sp,
+                letterSpacing = 2.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = approval.summary,
+                color = if (settled) MythosTheme.TextDim else MythosTheme.Text,
+                fontSize = 18.sp,
+                lineHeight = 26.sp,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(28.dp))
+
+            if (settled) {
+                Text(
+                    text = approval.outcome ?: "",
+                    color = MythosTheme.TextDim,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                Row(horizontalArrangement = Arrangement.Center) {
+                    ApprovalButton("Deny", MythosTheme.Danger) { onApproval(approval.id, false) }
+                    Spacer(Modifier.width(16.dp))
+                    ApprovalButton("Approve", MythosTheme.Accent) { onApproval(approval.id, true) }
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun Orb(
-    color: Color,
-    phase: VoiceNodeService.Phase,
-    offline: Boolean,
-    reduceMotion: Boolean,
-    enabled: Boolean,
-    stateLabel: String,
-    onHoldStart: () -> Unit,
-    onHoldEnd: () -> Unit,
-) {
-    val transition = rememberInfiniteTransition(label = "orb")
-
-    // Breathing only while genuinely idle and online. A pulsing orb during
-    // LISTENING would compete with the thing the operator is doing.
-    val breath by transition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (reduceMotion || offline || phase != VoiceNodeService.Phase.IDLE) 1f else 1.03f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(MythosTheme.DurBreathMs, easing = MythosTheme.Ease),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "breath",
-    )
-
-    val sweep by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = if (reduceMotion || offline) 0f else 360f,
-        animationSpec = infiniteRepeatable(animation = tween(2600), repeatMode = RepeatMode.Restart),
-        label = "sweep",
-    )
-
-    var pressed by remember { mutableStateOf(false) }
-    // The gesture reads this instead of capturing `enabled`, so the handler sees
-    // the current value without the modifier having to be re-keyed on it.
-    val enabledState = rememberUpdatedState(enabled)
-
+private fun ApprovalButton(label: String, color: Color, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .size(220.dp)
-            // Press feedback is opacity/scale only — nothing reflows under a thumb.
-            .scale(breath * if (pressed) 0.97f else 1f)
-            .semantics {
-                contentDescription = "Talk to MYTHOS. Current state: $stateLabel. " +
-                    "Press and hold to speak."
-            }
-            // Keyed on Unit, and `enabled` is read INSIDE the handler.
-            //
-            // This used to be pointerInput(enabled), where enabled folds in the
-            // socket status. A reconnect is the normal case on a phone, so a
-            // status flip mid-hold re-keyed the modifier, cancelled the coroutine
-            // while it was suspended in tryAwaitRelease(), and the lines after it
-            // never ran: onHoldEnd() was never called, the mic was never told to
-            // stop, and `pressed` stuck on. The gesture must not be at the mercy
-            // of the network.
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        if (!enabledState.value) return@detectTapGestures
-                        pressed = true
-                        try {
-                            onHoldStart()
-                            // Suspends until release, which is exactly push-to-talk:
-                            // the mic is open for as long as the finger is down.
-                            tryAwaitRelease()
-                        } finally {
-                            // Runs even if this gesture is cancelled, so the mic is
-                            // always told to close and the orb never sticks pressed.
-                            pressed = false
-                            onHoldEnd()
-                        }
-                    },
-                )
-            },
+            .height(MythosTheme.TouchTarget)
+            .clip(RoundedCornerShape(MythosTheme.RadiusSm))
+            .background(color.copy(alpha = 0.16f))
+            .semantics { contentDescription = label }
+            .pointerInput(Unit) { detectTapGestures(onTap = { onClick() }) }
+            .padding(horizontal = 26.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val r = size.minDimension / 2f
-            val center = Offset(size.width / 2f, size.height / 2f)
-
-            // Radial glow — the accent's --accent-glow, as light rather than a ring.
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(color.copy(alpha = 0.30f), Color.Transparent),
-                    center = center,
-                    radius = r,
-                ),
-                radius = r,
-                center = center,
-            )
-            // The core disc.
-            drawCircle(color = color.copy(alpha = 0.16f), radius = r * 0.52f, center = center)
-            drawCircle(
-                color = color,
-                radius = r * 0.52f,
-                center = center,
-                style = Stroke(width = 1.5.dp.toPx()),
-            )
-            // Two hairline arcs, offset so rotation is legible without being busy.
-            drawArc(
-                color = color.copy(alpha = 0.75f),
-                startAngle = sweep,
-                sweepAngle = 70f,
-                useCenter = false,
-                style = Stroke(width = 1.5.dp.toPx()),
-                topLeft = Offset(center.x - r * 0.80f, center.y - r * 0.80f),
-                size = androidx.compose.ui.geometry.Size(r * 1.60f, r * 1.60f),
-            )
-            drawArc(
-                color = color.copy(alpha = 0.35f),
-                startAngle = sweep + 180f,
-                sweepAngle = 40f,
-                useCenter = false,
-                style = Stroke(width = 1.dp.toPx()),
-                topLeft = Offset(center.x - r * 0.92f, center.y - r * 0.92f),
-                size = androidx.compose.ui.geometry.Size(r * 1.84f, r * 1.84f),
-            )
-        }
+        Text(text = label, color = color, fontSize = 15.sp, fontFamily = FontFamily.Monospace)
     }
 }
 

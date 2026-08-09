@@ -72,6 +72,22 @@ public object NodeMessages {
         return """{"type":"identify","role":"node","nodeId":"${jsonEscape(nodeId)}","caps":[$list]}"""
     }
 
+    /**
+     * Approve or decline a pending tier-3/4 action.
+     *
+     * THE FIELD IS `confirmId`, NOT `id`. The direction flips: MYTHOS broadcasts
+     * the request as `{"type":"confirm-request","payload":{"id":…}}` and reads
+     * the reply as `msg.confirmId` (server/index.js `handleConfirmReply`). A
+     * client that echoes the inbound name back destructures to `undefined`, and
+     * `leash.confirm.accept(undefined)` returns null — which was, until the
+     * `confirm-resolved` frame existed, a completely SILENT no-op. The sheet
+     * closes, the operator believes they approved, and the message is never
+     * sent. Nothing in a build or a green suite catches that, which is why the
+     * exact shape is pinned in NodeMessagesTest.
+     */
+    public fun confirmReply(confirmId: String, accept: Boolean): String =
+        """{"type":"confirm-reply","confirmId":"${jsonEscape(confirmId)}","accept":$accept}"""
+
     /** A transcribed utterance from this node's microphone. */
     public fun utterance(reqId: String, text: String): String =
         """{"type":"utterance","reqId":"${jsonEscape(reqId)}","text":"${jsonEscape(text)}"}"""

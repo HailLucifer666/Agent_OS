@@ -47,6 +47,28 @@ class NodeMessagesTest {
     }
 
     @Test
+    fun `a confirm reply names the field confirmId, not id`() {
+        // The single most expensive way to get this wrong. MYTHOS broadcasts the
+        // request as payload.id and reads the reply as msg.confirmId, so echoing
+        // the inbound name back destructures to undefined server-side and
+        // leash.confirm.accept(undefined) is a no-op that reports nothing. The
+        // approval sheet would close, the operator would believe they approved,
+        // and the message would never be sent — with a green build and a green
+        // suite. Hence an exact-string assertion rather than a shape check.
+        assertEquals(
+            """{"type":"confirm-reply","confirmId":"confirm-abc","accept":true}""",
+            NodeMessages.confirmReply("confirm-abc", true),
+        )
+        assertEquals(
+            """{"type":"confirm-reply","confirmId":"confirm-abc","accept":false}""",
+            NodeMessages.confirmReply("confirm-abc", false),
+        )
+        // `accept` must be a JSON boolean; "true" as a string is truthy in JS,
+        // so a quoted false would APPROVE what the operator denied.
+        assertFalse(NodeMessages.confirmReply("x", false).contains("\"false\""))
+    }
+
+    @Test
     fun `lost identify and utterance shapes`() {
         assertEquals("""{"type":"node-lost","nodeId":"desk-phone"}""", NodeMessages.lost("desk-phone"))
         assertEquals(

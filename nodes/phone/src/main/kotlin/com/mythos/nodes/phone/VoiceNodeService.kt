@@ -11,6 +11,9 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +45,23 @@ class VoiceNodeService : Service() {
 
     enum class Phase { IDLE, LISTENING, THINKING, SPEAKING }
 
+    /**
+     * A tier-3/4 action MYTHOS will not take without a human saying yes.
+     *
+     * `outcome` is null while the approval is still answerable and a word once it
+     * is not — the sheet greys out and says which, rather than leaving a live
+     * button over a confirm the server has already swept or given to someone
+     * else. That distinction is the whole point: a tap on a lapsed confirm is a
+     * silent no-op server-side, so the phone has to be the one that says so.
+     */
+    data class Approval(
+        val id: String,
+        val summary: String,
+        val tier: Int,
+        val expiresAtMs: Long,
+        val outcome: String? = null,
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var settings: NodeSettings
     private lateinit var link: NodeLink
@@ -72,6 +92,9 @@ class VoiceNodeService : Service() {
     @Volatile private var pendingReqId: String? = null
     private var deadlineJob: Job? = null
 
+    /** Runs the approval sheet's own clock — see armApprovalExpiry. */
+    private var approvalJob: Job? = null
+
     override fun onCreate() {
         super.onCreate()
         settings = NodeSettings(applicationContext)
@@ -94,6 +117,10 @@ class VoiceNodeService : Service() {
                 else if (_phase.value == Phase.SPEAKING) _phase.value = Phase.IDLE
                 wakeGate?.notePlaying(playing)
             }
+            // Lets the orb read the level of what is actually coming out of the
+            // speaker. Installed here rather than in the player's constructor so
+            // there is exactly one probe even if the service is recreated.
+            p.installOrbProbe()
         }
         mic = MicRecorder(settings)
         createChannel()
@@ -111,6 +138,11 @@ class VoiceNodeService : Service() {
         when (intent?.action) {
             ACTION_START_LISTENING -> { startListeningOnce(); return START_STICKY }
             ACTION_STOP_LISTENING -> { stopListening(); return START_STICKY }
+            ACTION_CONFIRM_REPLY -> {
+                val id = intent.getStringExtra(EXTRA_CONFIRM_ID)
+                if (!id.isNullOrEmpty()) answerApproval(id, intent.getBooleanExtra(EXTRA_ACCEPT, false))
+                return START_STICKY
+            }
         }
 
         // Android delivers onStartCommand for EVERY startService call, and
@@ -201,6 +233,10 @@ class VoiceNodeService : Service() {
         }
         detector = d
         _wakeStatus.value = d.statusLabel
+        // Published as well as the label so the UI can decide how loudly to show
+        // this WITHOUT pattern-matching the wording. A future detector that
+        // rephrases its status must not be able to make itself look healthy.
+        _wakeAvailable.value = d.isAvailable
         if (!d.isAvailable) return
 
         d.start {
@@ -357,6 +393,122 @@ class VoiceNodeService : Service() {
         mic?.stop() // ends readUntilStopped's loop; the job finishes on its own
     }
 
+    // ---- Approvals: the human half of the leash -----------------------------
+
+    /**
+     * Show a tier-3/4 approval and start its clock.
+     *
+     * MYTHOS already broadcast this request to every open socket, so the phone
+     * has been receiving it all along and dropping it on the floor. The clock is
+     * ours to run because the server never announces expiry: the confirm
+     * registry sweeps lapsed entries passively on the next `create`, so a late
+     * tap resolves nothing and — before `confirm-resolved` existed — said
+     * nothing either. `ttlMs` comes from the server when it sends one rather
+     * than being a second copy of LEASH_CONFIRM_TTL_MS here that drifts the
+     * moment it is configured.
+     */
+    private fun showApproval(msg: JSONObject) {
+        val payload = msg.optJSONObject("payload") ?: return
+        val id = payload.optString("id").takeIf { it.isNotEmpty() } ?: return
+        val ttl = payload.optLong("ttlMs", 0L).takeIf { it > 0L } ?: APPROVAL_TTL_FALLBACK_MS
+        val summary = payload.optString("summary").takeIf { it.isNotBlank() }
+            ?: payload.optString("tool").takeIf { it.isNotBlank() }
+            ?: "Approve this action?"
+        _approval.value = Approval(
+            id = id,
+            summary = summary,
+            tier = payload.optInt("tier", 0),
+            expiresAtMs = System.currentTimeMillis() + ttl,
+        )
+        // A counter-top node is usually face-down or across the room, and the
+        // sheet is silent. The Live model is told to say it needs approval, and
+        // when the turn came through Live that narration plays on the existing
+        // player — but a confirm raised by any other path speaks not a word, so
+        // there has to be a signal that does not depend on the model complying.
+        buzz()
+        armApprovalExpiry(id)
+    }
+
+    private fun armApprovalExpiry(id: String) {
+        approvalJob?.cancel()
+        approvalJob = scope.launch {
+            val current = _approval.value ?: return@launch
+            delay((current.expiresAtMs - System.currentTimeMillis()).coerceAtLeast(0L))
+            val still = _approval.value
+            if (still == null || still.id != id || still.outcome != null) return@launch
+            // Greyed out and named, NOT dismissed. A sheet that vanishes on its
+            // own is indistinguishable from one the operator's tap dismissed,
+            // and they would believe they approved it.
+            _approval.value = still.copy(outcome = "expired")
+        }
+    }
+
+    /** The operator's answer. Sending is all we do — the outcome comes back. */
+    fun answerApproval(id: String, accept: Boolean) {
+        val current = _approval.value
+        if (current != null && current.id == id && current.outcome != null) return
+        if (!link.sendConfirmReply(id, accept)) {
+            // The socket is down, so nothing was sent. Saying "denied" here would
+            // be a lie in the safe direction, but still a lie: the action is
+            // pending on the server and may yet be approved from the desktop.
+            _approval.value = current?.copy(outcome = "not sent — no link")
+            return
+        }
+        // Deliberately NOT closed here. The server's confirm-resolved is what
+        // says whether this actually landed, and a sheet that closes on the tap
+        // is exactly how a silent no-op reads as success.
+        _approval.value = current?.copy(outcome = "sending…")
+    }
+
+    /**
+     * The server resolved this confirm — by us, by the desktop, or by its TTL.
+     *
+     * 'not-permitted' is its own case and is not a failure of ours: tier 3/4
+     * confirms are scoped to the connection that raised them, so a confirm the
+     * DESKTOP triggered cannot be approved from the phone. Saying so beats a
+     * button that does nothing.
+     */
+    private fun resolveApproval(msg: JSONObject) {
+        val payload = msg.optJSONObject("payload") ?: return
+        val id = payload.optString("id")
+        val current = _approval.value ?: return
+        if (current.id != id) return
+        approvalJob?.cancel()
+        approvalJob = null
+        val outcome = when (payload.optString("outcome")) {
+            "accepted" -> "approved"
+            "rejected" -> "denied"
+            "expired" -> "expired"
+            "not-permitted" -> "approve this one on the device that asked"
+            else -> "closed"
+        }
+        _approval.value = current.copy(outcome = outcome)
+        approvalJob = scope.launch {
+            delay(APPROVAL_LINGER_MS)
+            if (_approval.value?.id == id) _approval.value = null
+        }
+    }
+
+    fun dismissApproval() {
+        approvalJob?.cancel()
+        approvalJob = null
+        _approval.value = null
+    }
+
+    /** Short, once. Vibration is a normal permission — no runtime prompt. */
+    private fun buzz() {
+        if (!settings.hapticsEnabled) return
+        runCatching {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                getSystemService(VibratorManager::class.java)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Vibrator::class.java)
+            }
+            vibrator?.vibrate(VibrationEffect.createOneShot(BUZZ_MS, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }
+
     /**
      * True when this frame belongs to a hold-to-talk turn we have already given
      * up on or never started.
@@ -488,6 +640,13 @@ class VoiceNodeService : Service() {
                         else -> _wakeSuppressed.value = _wakeSuppressed.value + 1
                     }
                 }
+                // MYTHOS will not take a tier-3/4 action without a human. The
+                // frame has always arrived here (it is broadcast to every open
+                // socket); until now the phone dropped it, which is why a
+                // WhatsApp message asked for from the phone could never be sent
+                // from the phone.
+                "confirm-request" -> showApproval(msg)
+                "confirm-resolved" -> resolveApproval(msg)
                 "identified" -> _identified.value = msg.optBoolean("ok", false)
             }
         }
@@ -560,6 +719,7 @@ class VoiceNodeService : Service() {
         link.disconnect()
         _phase.value = Phase.IDLE
         _scanning.value = false
+        OrbAudio.reset()
         scope.cancel()
     }
 
@@ -573,8 +733,25 @@ class VoiceNodeService : Service() {
          */
         private const val REPLY_TIMEOUT_MS = 45_000L
 
+        /**
+         * Only used if the operator answers an approval before the activity's
+         * binding has landed — the server's own TTL is the ceiling either way.
+         * Deliberately shorter than any plausible LEASH_CONFIRM_TTL_MS so the
+         * fallback can lapse EARLY (honest: "gone, ask again") rather than late
+         * (a live-looking button over a swept confirm).
+         */
+        private const val APPROVAL_TTL_FALLBACK_MS = 30_000L
+
+        /** How long a resolved sheet stays up, so the outcome can be read. */
+        private const val APPROVAL_LINGER_MS = 4_000L
+
+        private const val BUZZ_MS = 220L
+
         const val ACTION_START_LISTENING = "com.mythos.nodes.phone.START_LISTENING"
         const val ACTION_STOP_LISTENING = "com.mythos.nodes.phone.STOP_LISTENING"
+        const val ACTION_CONFIRM_REPLY = "com.mythos.nodes.phone.CONFIRM_REPLY"
+        const val EXTRA_CONFIRM_ID = "confirmId"
+        const val EXTRA_ACCEPT = "accept"
 
         private const val CHANNEL_ID = "mythos_node"
         private const val NOTIFICATION_ID = 3001
@@ -616,6 +793,12 @@ class VoiceNodeService : Service() {
         /** Verbatim in the UI — colour alone cannot say WHY hands-free is off. */
         val wakeStatus: StateFlow<String> = _wakeStatus.asStateFlow()
 
+        private val _wakeAvailable = MutableStateFlow(false)
+        /** Whether [wakeStatus] is reporting a working detector or a reason it is
+         *  not. The UI dims this line when healthy and restores it when not, and
+         *  that decision must come from here rather than from reading the label. */
+        val wakeAvailable: StateFlow<Boolean> = _wakeAvailable.asStateFlow()
+
         private val _wakeSuppressed = MutableStateFlow(0)
         /** Detections that did not become a turn: own playback, retrigger, or lost
          *  the arbitration. Visible so "it heard me and stayed quiet" is
@@ -627,5 +810,9 @@ class VoiceNodeService : Service() {
 
         private val _identified = MutableStateFlow(false)
         val identified: StateFlow<Boolean> = _identified.asStateFlow()
+
+        private val _approval = MutableStateFlow<Approval?>(null)
+        /** Non-null while a tier-3/4 action is waiting on the operator. */
+        val approval: StateFlow<Approval?> = _approval.asStateFlow()
     }
 }

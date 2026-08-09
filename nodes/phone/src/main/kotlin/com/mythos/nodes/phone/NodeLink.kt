@@ -216,6 +216,10 @@ class NodeLink(private val settings: NodeSettings) {
 
     fun sendStop(reqId: String): Boolean = send(NodeMessages.stop(reqId))
 
+    /** The operator's answer to a tier-3/4 approval. See NodeMessages.confirmReply. */
+    fun sendConfirmReply(confirmId: String, accept: Boolean): Boolean =
+        send(NodeMessages.confirmReply(confirmId, accept))
+
     fun disconnect() {
         closedByUs = true
         runCatching { webSocket?.close(1000, "node stopping") }

@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
             TalkScreen(
                 reduceMotion = reduceMotion,
                 isConfigured = configured,
+                hapticsEnabled = settings.hapticsEnabled,
                 onHoldStart = {
                     if (settings.hapticsEnabled) {
                         window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
@@ -76,6 +77,24 @@ class MainActivity : ComponentActivity() {
                     )
                 },
                 onOpenSettings = { showSettings = true },
+                onApproval = { id, accept ->
+                    // Same direct-then-Intent shape as hold-to-talk. The Intent
+                    // fallback matters here even though the activity is by
+                    // definition in front: the binding can still be in flight
+                    // right after a cold start, and losing an approval to that
+                    // race would look like the button doing nothing.
+                    val bound = boundService
+                    if (bound != null) {
+                        bound.answerApproval(id, accept)
+                    } else {
+                        startService(
+                            Intent(this, VoiceNodeService::class.java)
+                                .setAction(VoiceNodeService.ACTION_CONFIRM_REPLY)
+                                .putExtra(VoiceNodeService.EXTRA_CONFIRM_ID, id)
+                                .putExtra(VoiceNodeService.EXTRA_ACCEPT, accept),
+                        )
+                    }
+                },
             )
 
             if (showSettings) {

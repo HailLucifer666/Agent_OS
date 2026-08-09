@@ -111,10 +111,20 @@ class MicRecorder(private val settings: NodeSettings) {
     fun readUntilStopped(): ByteArray {
         val rec = record ?: return ByteArray(0)
         val out = ByteArrayOutputStream()
-        val buffer = ByteArray(4096)
+        // 20ms per read, not the obvious 4096 bytes.
+        //
+        // The captured audio is byte-identical either way — this size only decides
+        // how often the loop comes up for air. At 4096 bytes that is once every
+        // 128ms, so the orb's level would update about eight times a second, which
+        // is a slideshow rather than a visualiser. Computing sub-blocks from a big
+        // read does not help: they would all arrive at the same instant.
+        val buffer = ByteArray(READ_BYTES)
         while (recording) {
             val read = rec.read(buffer, 0, buffer.size)
-            if (read > 0) out.write(buffer, 0, read)
+            if (read > 0) {
+                out.write(buffer, 0, read)
+                OrbAudio.submitInput(rms16le(buffer, read))
+            }
             if (read < 0) break
             // A hard ceiling so a stuck button cannot grow an unbounded buffer and
             // then POST tens of megabytes.
@@ -125,6 +135,10 @@ class MicRecorder(private val settings: NodeSettings) {
 
     fun stop() {
         recording = false
+        // The orb must fall back to rest even if the read loop is blocked in
+        // AudioRecord.read at this instant — otherwise the last level before the
+        // release stays latched and the orb keeps reacting to a closed mic.
+        OrbAudio.submitInput(0f)
         val rec = record ?: return
         runCatching { rec.stop() }
         runCatching { rec.release() }
@@ -232,5 +246,7 @@ class MicRecorder(private val settings: NodeSettings) {
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
         /** ~60s of 16kHz mono PCM16. */
         private const val MAX_PCM_BYTES = SAMPLE_RATE * 2 * 60
+        /** 20ms of 16kHz mono PCM16 — a 50Hz level for the orb. */
+        private const val READ_BYTES = SAMPLE_RATE / 50 * 2
     }
 }
