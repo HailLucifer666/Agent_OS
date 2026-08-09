@@ -453,31 +453,25 @@
   }
 }
 
-/* 900 — two 400px gutters cannot both fit. Fold the right column onto the left
-   edge so no card is placed off-screen, and let a card use the full width. The
-   vertical stacking auto-layout computed still holds; only the side changes. */
+/* 900 — the two-gutter layout is dead here, so stop trying to preserve it.
+   Hand the cards to normal document flow, in one scroll column.
+
+   MEASURED, not reasoned: the first version of this tier folded the right
+   column onto the left edge and kept the absolute tops auto-layout had already
+   computed. That is worse than doing nothing — two independently-stacked
+   columns sharing one x-axis collide on nearly every card. At 820px it went
+   from 2 overlapping pairs to 11. Overlap is a vertical-stacking problem, and
+   only flow solves it, so the flow rules start at 900 rather than at 600.
+
+   #widget-root keeps hud.css's pointer-events:none so the HUD canvas behind it
+   stays reachable in the gaps; a pointer that lands on a card (which re-enables
+   its own pointer events) still scrolls this container, because scrolling
+   follows the hit-tested element's scrollable ancestors. */
 @media (max-width: 900px) {
-  .widget-card {
-    max-width: calc(100vw - 48px);
-    left: 24px !important;
-    right: auto !important;
-  }
-}
-
-/* 600 "narrow" — absolute placement stops meaning anything. auto-layout stacked
-   these against a tall desktop viewport, so at phone height they pile up and
-   run off the bottom whatever their left offset is. Hand what remains (see
-   widget-host.js's auto-hide, which already drops the non-essential cards at
-   exactly this width) to normal document flow, in one scroll column.
-
-   #widget-root keeps pointer-events:none so the HUD canvas behind it stays
-   reachable in the gaps; a touch that lands on a card (which re-enables its own
-   pointer events) still scrolls this container, because scrolling follows the
-   hit-tested element's scrollable ancestors. */
-@media (max-width: 600px) {
   #widget-root {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 12px;
     padding: 12px;
     overflow-y: auto;
@@ -490,8 +484,7 @@
     top: auto !important;
     right: auto !important;
     bottom: auto !important;
-    width: 100% !important;
-    max-width: 100% !important;
+    max-width: min(100%, 420px);
     /* Height is content again: a height written by the resize handle on a
        desktop would otherwise persist into a layout with no room for it. */
     height: auto !important;
@@ -506,13 +499,23 @@
     cursor: default;
   }
 
-  /* Dragging and resizing a full-width card in a flow column do nothing —
-     applyPos's inline styles are overridden above — so do not offer them. */
+  /* Dragging and resizing a card in a flow column do nothing — applyPos's
+     inline styles are overridden above — so do not offer them. */
   .widget-resize {
     display: none;
   }
+}
 
-  /* Per-widget desktop caps that would now truncate for no reason. */
+/* 600 "narrow" — same column, now full-bleed. widget-host.js already auto-hides
+   the non-essential cards at exactly this width, so what is left should use the
+   whole screen rather than sitting in a 420px gutter of its own. */
+@media (max-width: 600px) {
+  .widget-card {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* A desktop cap that would now truncate for no reason. */
   [data-widget-id="system"] {
     max-width: 100%;
   }
