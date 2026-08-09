@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.delay
 import kotlin.math.sin
 
 /**
@@ -45,7 +46,7 @@ import kotlin.math.sin
  *    the draw phase ever looks at. The loop writes one Int, the draw lambda reads
  *    it, and only the draw phase is invalidated.
  *  - The draw pass allocates nothing. Compose's `drawPoints` takes a `List<Offset>`,
- *    which at 1500 particles and 60fps is ~90,000 allocations a second and shows up
+ *    which at 2400 particles and 60fps is ~144,000 allocations a second and shows up
  *    immediately as jank. Particles are instead binned into [BUCKETS] preallocated
  *    `FloatArray`s and blitted through the framework canvas with one reused `Paint`
  *    per bin.
@@ -66,8 +67,7 @@ fun SwarmOrb(
     enabled: Boolean,
     stateLabel: String,
     diameter: Dp,
-    onHoldStart: () -> Unit,
-    onHoldEnd: () -> Unit,
+    onToggle: () -> Unit,
 ) {
     val swarm = remember { SwarmMath() }
     val envelope = remember { Envelope() }
@@ -150,48 +150,45 @@ fun SwarmOrb(
         onDispose { OrbAudio.reset() }
     }
 
+    // Driven by a tap, not by finger-down — a toggle has no "held" state to
+    // read, so the press feel is a short animation rather than a live signal.
     var pressed by remember { mutableStateOf(false) }
+    LaunchedEffect(pressed) {
+        if (pressed) {
+            delay(PRESS_PULSE_MS)
+            pressed = false
+        }
+    }
     // Read inside the handler rather than captured, so the modifier is never re-keyed
     // on it.
     val enabledState = rememberUpdatedState(enabled)
+    val listening = phase != VoiceNodeService.Phase.IDLE
 
     Box(
         modifier = Modifier
             // Sized by the caller from the space actually available. Note this is
-            // NOT in the pointerInput key below: re-keying the gesture on a size
-            // change would cancel a hold in progress.
+            // NOT in the pointerInput key below: re-keying the gesture mid-gesture
+            // would cancel a tap in progress.
             .size(diameter)
             .scale(if (pressed) 0.97f else 1f)
             .semantics {
                 contentDescription = "Talk to MYTHOS. Current state: $stateLabel. " +
-                    "Press and hold to speak."
+                    if (listening) "Tap to stop." else "Tap to start listening."
             }
             // Keyed on Unit, and `enabled` is read INSIDE the handler.
             //
             // This used to be pointerInput(enabled), where enabled folds in the
             // socket status. A reconnect is the normal case on a phone, so a
-            // status flip mid-hold re-keyed the modifier, cancelled the coroutine
-            // while it was suspended in tryAwaitRelease(), and the lines after it
-            // never ran: onHoldEnd() was never called, the mic was never told to
-            // stop, and `pressed` stuck on. The gesture must not be at the mercy
-            // of the network — nor of the orb's animation, which is why neither
-            // the phase nor the amplitude appears in this key either.
+            // status flip mid-gesture re-keyed the modifier and could cancel a tap
+            // already being recognised. The gesture must not be at the mercy of
+            // the network — nor of the orb's animation, which is why neither the
+            // phase nor the amplitude appears in this key either.
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onPress = {
+                    onTap = {
                         if (!enabledState.value) return@detectTapGestures
                         pressed = true
-                        try {
-                            onHoldStart()
-                            // Suspends until release, which is exactly push-to-talk:
-                            // the mic is open for as long as the finger is down.
-                            tryAwaitRelease()
-                        } finally {
-                            // Runs even if this gesture is cancelled, so the mic is
-                            // always told to close and the orb never sticks pressed.
-                            pressed = false
-                            onHoldEnd()
-                        }
+                        onToggle()
                     },
                 )
             },
@@ -208,13 +205,13 @@ fun SwarmOrb(
         val halfPx = remember(diameter, density) { with(density) { diameter.toPx() } / 2f }
         val ambientGlow = remember(color, halfPx) {
             Brush.radialGradient(
-                colors = listOf(color.copy(alpha = 0.24f), Color.Transparent),
+                colors = listOf(color.copy(alpha = 0.30f), Color.Transparent),
                 radius = halfPx * 1.05f,
             )
         }
         val coreGlow = remember(color, halfPx) {
             Brush.radialGradient(
-                colors = listOf(color.copy(alpha = 0.42f), Color.Transparent),
+                colors = listOf(color.copy(alpha = 0.55f), Color.Transparent),
                 radius = halfPx * 0.50f,
             )
         }
@@ -274,9 +271,15 @@ private fun DrawScope.drawSwarm(
     half: Float,
     amplitude: Float,
 ) {
-    val extent = SwarmMath.maxExtent(params)
+    // Scaled to the RESTING extent, not the loudest-possible one. Scaling to the
+    // maximum is the intuitive choice and it is wrong: it sizes the orb for a frame
+    // that occurs during a shout and leaves it drawing at ~60% of its box the rest
+    // of the time. A shout now overflows by roughly 15%, which is dim outer
+    // particles spilling past the layout bounds — far cheaper than a permanently
+    // undersized orb.
+    val extent = SwarmMath.restExtent(params)
     if (extent <= 0f) return
-    val scale = half * 0.90f / extent
+    val scale = half * SwarmMath.PROJECTION_FILL / extent
 
     binCount.fill(0)
 
@@ -415,3 +418,6 @@ private const val BLOOM_ALPHA = 0.11f
 
 /** A time far enough in that the static frame is not the seeded sphere. */
 private const val STATIC_TIME = 7.3f
+
+/** How long the tap's scale-down pulse lasts before easing back to rest. */
+private const val PRESS_PULSE_MS = 120L

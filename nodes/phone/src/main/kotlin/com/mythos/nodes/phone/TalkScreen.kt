@@ -45,9 +45,10 @@ import androidx.compose.material3.Text
 /**
  * The whole app: a black field, one orb, and what MYTHOS just said.
  *
- * One primary action per screen — press and hold the orb to talk. Everything else
- * (server, token, node id) is configuration and lives behind the gear, because a
- * device on a kitchen counter is configured once and used a thousand times.
+ * One primary action per screen — tap the orb to talk; tap again to stop.
+ * Everything else (server, token, node id) is configuration and lives behind
+ * the gear, because a device on a kitchen counter is configured once and used
+ * a thousand times.
  *
  * The orb carries state through colour AND a word, never colour alone. Motion is
  * used only where it means something: breathing while idle (waiting), reacting to
@@ -58,8 +59,7 @@ import androidx.compose.material3.Text
 @Composable
 fun TalkScreen(
     reduceMotion: Boolean,
-    onHoldStart: () -> Unit,
-    onHoldEnd: () -> Unit,
+    onToggle: () -> Unit,
     onOpenSettings: () -> Unit,
     isConfigured: Boolean,
     onApproval: (String, Boolean) -> Unit = { _, _ -> },
@@ -87,11 +87,11 @@ fun TalkScreen(
     // height alone leaves a tablet with a small orb in a wide field.
     // 360x640 -> 269dp, 411x891 -> 353dp, tablet -> the 380dp cap.
     //
-    // Nothing on this screen scrolls, deliberately. A verticalScroll parent would
-    // compete with the orb's own press-and-hold: past the drag threshold the
-    // scroller wins the pointer, tryAwaitRelease returns, and push-to-talk cuts out
-    // whenever a thumb moves a few pixels. Sizing to fit avoids that entirely — and
-    // the fractions leave enough slack for the reply and the status lines below.
+    // Nothing on this screen scrolls, deliberately. Now that the orb is a tap
+    // rather than a press-and-hold this matters less than it used to, but a
+    // verticalScroll parent still steals the pointer past its drag threshold,
+    // and sizing to fit avoids the question entirely — the fractions leave
+    // enough slack for the reply and the status lines below.
     val configuration = LocalConfiguration.current
     val orbDiameter = minOf(
         configuration.screenWidthDp.dp * 0.86f,
@@ -156,8 +156,7 @@ fun TalkScreen(
                 enabled = isConfigured && !offline,
                 stateLabel = stateLabel,
                 diameter = orbDiameter,
-                onHoldStart = onHoldStart,
-                onHoldEnd = onHoldEnd,
+                onToggle = onToggle,
             )
 
             Spacer(Modifier.height(24.dp))
@@ -175,7 +174,7 @@ fun TalkScreen(
             // What MYTHOS said. The reply is the content of this screen; everything
             // else is chrome.
             Text(
-                text = caption.ifEmpty { if (isConfigured) "Hold to talk" else "Set up this node to begin" },
+                text = caption.ifEmpty { if (isConfigured) "Tap to talk" else "Set up this node to begin" },
                 color = if (caption.isEmpty()) MythosTheme.TextFaint else MythosTheme.Text,
                 fontSize = if (caption.isEmpty()) 14.sp else 18.sp,
                 textAlign = TextAlign.Center,

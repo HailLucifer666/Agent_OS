@@ -85,6 +85,9 @@ class VoiceNodeService : Service() {
     /** Guards the one-time wiring in onStartCommand — see the comment there. */
     private var wired = false
 
+    /** The tap-to-toggle / auto-mode decision logic; see [AutoModeController]. */
+    private val autoModeController = AutoModeController()
+
     /** Foreground promotion is one-shot; see onStartCommand. */
     private var foregrounded = false
 
@@ -100,23 +103,14 @@ class VoiceNodeService : Service() {
         settings = NodeSettings(applicationContext)
         link = NodeLink(settings)
         player = SpeechPlayer(applicationContext).also { p ->
-            p.setListener { playing ->
-                // Playback state drives the orb, and Stage 4's wake-word
-                // suppression window will hang off exactly this signal: a phone
-                // that hears its own TTS would answer itself.
-                if (playing) _phase.value = Phase.SPEAKING
-                else if (_phase.value == Phase.SPEAKING) _phase.value = Phase.IDLE
-                // The gate measures its tail from the END of playback, so it needs
-                // the transition, not a poll.
-                wakeGate?.notePlaying(playing)
-            }
+            // Playback state drives the orb, and Stage 4's wake-word
+            // suppression window hangs off exactly this signal: a phone that
+            // hears its own TTS would answer itself. It is also, since Fix 5,
+            // the auto-mode re-arm signal — see onPlaybackStateChanged.
+            p.setListener { playing -> onPlaybackStateChanged(playing) }
         }
         livePlayer = LivePcmPlayer().also { p ->
-            p.setListener { playing ->
-                if (playing) _phase.value = Phase.SPEAKING
-                else if (_phase.value == Phase.SPEAKING) _phase.value = Phase.IDLE
-                wakeGate?.notePlaying(playing)
-            }
+            p.setListener { playing -> onPlaybackStateChanged(playing) }
             // Lets the orb read the level of what is actually coming out of the
             // speaker. Installed here rather than in the player's constructor so
             // there is exactly one probe even if the service is recreated.
@@ -136,6 +130,7 @@ class VoiceNodeService : Service() {
         }
 
         when (intent?.action) {
+            ACTION_TOGGLE_LISTENING -> { onToggle(); return START_STICKY }
             ACTION_START_LISTENING -> { startListeningOnce(); return START_STICKY }
             ACTION_STOP_LISTENING -> { stopListening(); return START_STICKY }
             ACTION_CONFIRM_REPLY -> {
@@ -255,6 +250,79 @@ class VoiceNodeService : Service() {
     // ---- Voice half: mic up, speech down -----------------------------------
 
     /**
+     * The orb was tapped. Fix 5: push-to-talk (press-and-hold) is gone —
+     * one tap arms auto mode and starts listening, a second tap while armed
+     * is a hard stop. [AutoModeController] owns the decision; this just
+     * carries it out.
+     */
+    fun onToggle() {
+        applyAutoModeCommand(autoModeController.onToggle())
+    }
+
+    /**
+     * The operator's explicit choice, mid-conversation: stop everything now.
+     * `bargeIn` already tells the server (`{"type":"stop"}`) and clears both
+     * players — it is skipped only when there is no in-flight turn to tell the
+     * server about, in which case there is still local playback to stop.
+     */
+    private fun hardStop() {
+        listenJob?.cancel()
+        listenJob = null
+        mic?.stop()
+        val outgoing = pendingReqId
+        if (outgoing != null) {
+            bargeIn(outgoing)
+        } else {
+            player?.stopAndClear()
+            livePlayer?.stopAndClear()
+        }
+        _phase.value = Phase.IDLE
+    }
+
+    /**
+     * Carries out whatever [AutoModeController] decided, then republishes its
+     * state for the orb.
+     *
+     * `listenJob` is nulled before a re-arm because [Command.START_LISTENING]
+     * can arrive from inside the very listenJob coroutine it would otherwise
+     * be guarded by (the no-speech path, below) — without this,
+     * startListeningOnce()'s `listenJob?.isActive == true` guard would see its
+     * own still-running job and silently refuse to re-arm.
+     */
+    private fun applyAutoModeCommand(command: AutoModeController.Command) {
+        when (command) {
+            AutoModeController.Command.START_LISTENING -> {
+                listenJob = null
+                startListeningOnce()
+            }
+            AutoModeController.Command.HARD_STOP -> hardStop()
+            AutoModeController.Command.NONE -> {}
+        }
+        _autoMode.value = autoModeController.autoMode
+    }
+
+    /**
+     * Shared by both players. Beyond the phase flip this already did, it is
+     * now also the auto-mode re-arm signal: re-arming on turn-complete alone
+     * would reopen the mic while MYTHOS is still speaking, and the phone
+     * transcribes its own TTS as the operator — proven in this repo's
+     * history. [AutoModeController] will not re-arm until BOTH the turn has
+     * completed and playback has actually stopped.
+     */
+    private fun onPlaybackStateChanged(playing: Boolean) {
+        if (playing) {
+            _phase.value = Phase.SPEAKING
+            autoModeController.onPlaybackStarted()
+        } else {
+            if (_phase.value == Phase.SPEAKING) _phase.value = Phase.IDLE
+            applyAutoModeCommand(autoModeController.onPlaybackFinished())
+        }
+        // The gate measures its tail from the END of playback, so it needs the
+        // transition, not a poll.
+        wakeGate?.notePlaying(playing)
+    }
+
+    /**
      * Capture one utterance, transcribe it, send it. Exposed as an action so the
      * UI, and later Stage 4's wake-word arbitration, are both just callers — no
      * restructuring needed when the wake word starts driving this.
@@ -303,6 +371,9 @@ class VoiceNodeService : Service() {
 
             if (!recorder.isUsable(pcm)) {
                 _phase.value = Phase.IDLE
+                // Auto mode's no-speech cap: a phone in a pocket must not hold
+                // the mic open against silence indefinitely.
+                applyAutoModeCommand(autoModeController.onNoSpeech())
                 return@launch
             }
             _phase.value = Phase.THINKING
@@ -312,6 +383,7 @@ class VoiceNodeService : Service() {
                 MicRecorder.Result.NoSpeech -> {
                     _lastError.value = "Didn't catch that"
                     _phase.value = Phase.IDLE
+                    applyAutoModeCommand(autoModeController.onNoSpeech())
                     return@launch
                 }
                 // Everything else is a fault worth naming. Saying "didn't catch
@@ -327,6 +399,7 @@ class VoiceNodeService : Service() {
             // reaches the brain.
             _lastHeard.value = text
             _lastError.value = null
+            autoModeController.onSpeechDetected()
             val reqId = "node-" + System.currentTimeMillis()
             // A fresh turn owns the speaker. Anything still queued belongs to a
             // reply we are no longer waiting for.
@@ -553,6 +626,7 @@ class VoiceNodeService : Service() {
                     if (reqId == pendingReqId) pendingReqId = null
                     msg.optString("say").takeIf { it.isNotBlank() }?.let { _caption.value = it }
                     if (player?.isPlaying != true) _phase.value = Phase.IDLE
+                    applyAutoModeCommand(autoModeController.onTurnComplete())
                 }
                 // ---- Gemini Live: the same brain the desktop app talks to ------
                 // Raw 24kHz PCM, no container, so it goes to LivePcmPlayer rather
@@ -573,6 +647,7 @@ class VoiceNodeService : Service() {
                     pendingReqId = null
                     noteReplyProgress()
                     if (livePlayer?.isPlaying != true) _phase.value = Phase.IDLE
+                    applyAutoModeCommand(autoModeController.onTurnComplete())
                 }
                 // Barge-in decided on the server (the model was interrupted).
                 "live-interrupted" -> livePlayer?.stopAndClear()
@@ -718,6 +793,7 @@ class VoiceNodeService : Service() {
         livePlayer?.release()
         link.disconnect()
         _phase.value = Phase.IDLE
+        _autoMode.value = false
         _scanning.value = false
         OrbAudio.reset()
         scope.cancel()
@@ -747,6 +823,7 @@ class VoiceNodeService : Service() {
 
         private const val BUZZ_MS = 220L
 
+        const val ACTION_TOGGLE_LISTENING = "com.mythos.nodes.phone.TOGGLE_LISTENING"
         const val ACTION_START_LISTENING = "com.mythos.nodes.phone.START_LISTENING"
         const val ACTION_STOP_LISTENING = "com.mythos.nodes.phone.STOP_LISTENING"
         const val ACTION_CONFIRM_REPLY = "com.mythos.nodes.phone.CONFIRM_REPLY"
@@ -761,6 +838,10 @@ class VoiceNodeService : Service() {
 
         private val _phase = MutableStateFlow(Phase.IDLE)
         val phase: StateFlow<Phase> = _phase.asStateFlow()
+
+        private val _autoMode = MutableStateFlow(false)
+        /** Whether a tap has armed continuous listening — see [AutoModeController]. */
+        val autoMode: StateFlow<Boolean> = _autoMode.asStateFlow()
 
         private val _caption = MutableStateFlow("")
         val caption: StateFlow<String> = _caption.asStateFlow()

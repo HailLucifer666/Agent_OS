@@ -61,19 +61,13 @@ class MainActivity : ComponentActivity() {
                 reduceMotion = reduceMotion,
                 isConfigured = configured,
                 hapticsEnabled = settings.hapticsEnabled,
-                onHoldStart = {
+                onToggle = {
                     if (settings.hapticsEnabled) {
                         window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     }
                     withService(
-                        { it.startListeningOnce() },
-                        VoiceNodeService.ACTION_START_LISTENING,
-                    )
-                },
-                onHoldEnd = {
-                    withService(
-                        { it.stopListening() },
-                        VoiceNodeService.ACTION_STOP_LISTENING,
+                        { it.onToggle() },
+                        VoiceNodeService.ACTION_TOGGLE_LISTENING,
                     )
                 },
                 onOpenSettings = { showSettings = true },
