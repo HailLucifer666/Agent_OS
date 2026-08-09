@@ -961,6 +961,13 @@ function createServer(deps) {
     cookieTtlMs: config.AUTH_SESSION_COOKIE_TTL_MS,
   });
 
+  // ---- /api/setup/status — what this machine is still missing ----
+  // The HUD cannot read process.env, so the first-run setup screen has no way to
+  // know which keys/models are absent without asking the server. Reports names
+  // and booleans only (AD-8) — see routes/setup.js for why that is safe to hand
+  // to the renderer, and test/setup-route.test.js for the canary that pins it.
+  require('./routes/setup').mountSetupRoutes(app, {});
+
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
   // engagements.js): list returns a JSON array OR {engagements:[...]}; get

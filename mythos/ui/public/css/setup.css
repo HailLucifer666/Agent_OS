@@ -1,0 +1,222 @@
+/* setup.css — the first-run setup screen (js/setup/setup-screen.js).
+
+   Same copy-not-couple relationship to auth.css that auth.css has to pin.css:
+   the two screens can be live in the same session (token first, then setup) and
+   must be free to diverge, since this one is a scrollable list of capability
+   gaps rather than a single field.
+
+   z-index 405 sits between pin.css's 400 and auth.css's 410. That order is not
+   cosmetic: the token gate has to be satisfied before GET /api/setup/status can
+   answer anything but 401, so it must paint on top of this one. */
+
+.setup-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.92);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  z-index: 405;
+}
+
+.setup-modal {
+  width: min(560px, 94vw);
+  /* A gap list can be long on a fresh machine; cap it and scroll inside the
+     modal rather than letting the page scroll behind the overlay. */
+  max-height: min(80vh, 720px);
+  overflow-y: auto;
+  padding: 30px 26px 18px;
+  border-color: var(--accent-dim);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.setup-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.setup-lede {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  margin: 0 0 18px;
+}
+
+.setup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.setup-row {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.setup-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setup-row-label {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.setup-badge {
+  flex: none;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.setup-badge-required {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.setup-row-why,
+.setup-row-fix,
+.setup-row-note {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 6px 0 0;
+}
+
+.setup-row-fix {
+  /* A command to run elsewhere, so it reads as one — monospace, selectable,
+     wrapping rather than clipped, and deliberately not styled as a button. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.setup-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.setup-field-label {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.setup-field-input {
+  min-width: 0;
+  padding: 7px 9px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.setup-field-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.setup-field-save {
+  padding: 7px 14px;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(79, 216, 255, 0.10);
+  border: 1px solid var(--accent-dim);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.setup-field-save:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.setup-field-status {
+  grid-column: 1 / -1;
+  min-height: 1em;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.setup-field-status.is-error {
+  color: var(--danger, #ff6b6b);
+}
+
+.setup-field.is-stored .setup-field-label {
+  color: var(--accent);
+}
+
+.setup-optional {
+  margin-top: 16px;
+}
+
+.setup-optional > summary {
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+.setup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.setup-restart-note {
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.setup-dismiss {
+  flex: none;
+  padding: 7px 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.setup-dismiss:hover {
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+
+@media (max-width: 520px) {
+  .setup-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -23,6 +23,7 @@ import { mountInitScreen } from './init-screen.js';
 import { mountPinLockScreen } from './pin/pin-lock-screen.js';
 import { mountAuthGate } from './auth/auth-gate.js';
 import { mountStatusBanner } from './status-banner.js';
+import { mountSetupScreen } from './setup/setup-screen.js';
 import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
 
@@ -46,6 +47,14 @@ mountAuthGate(document.getElementById('auth-root'));
 // were silent before, which is why an unauthenticated dashboard read as
 // "unresponsive" rather than "unauthenticated".
 mountStatusBanner(document.getElementById('status-banner-root'));
+
+// First-run setup — the answer to "this machine is a half-broken twin of the
+// other one". Asks GET /api/setup/status and paints ONLY when a REQUIRED gap
+// exists, so a fully wired install never sees it and an install with merely
+// optional gaps (no adb, no piper voice) is not nagged on every boot. Mounted
+// after the token gate because that status call is itself behind it: a 401 here
+// means "not authenticated yet", never "your install is incomplete".
+mountSetupScreen(document.getElementById('setup-root'));
 
 // §7.3 local PIN lock — the enforcement point the backend never had. Mounted
 // here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status

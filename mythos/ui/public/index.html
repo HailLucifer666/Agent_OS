@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/css/confirm.css" />
   <link rel="stylesheet" href="/css/pin.css" />
   <link rel="stylesheet" href="/css/auth.css" />
+  <link rel="stylesheet" href="/css/setup.css" />
   <link rel="stylesheet" href="/css/status-banner.css" />
   <link rel="stylesheet" href="/css/mic-settings.css" />
   <!-- NOVA view styles — CV byte-identical; the copied views depend on these class names -->
@@ -48,6 +49,10 @@
        Stacks above #pin-root: the PIN screen's own status call is itself
        gated by the token, so this must be satisfied first. -->
   <div id="auth-root"></div>
+  <!-- First-run setup: lists what this machine is still missing (keys, models,
+       binaries) and stores keys through the encrypted desktop key store. Sits
+       BELOW #auth-root, because its own status call is behind the token gate. -->
+  <div id="setup-root"></div>
   <!-- Persistent condition strip: says out loud when the socket has stopped
        reconnecting or an /api call came back 401, both of which were
        previously silent. -->

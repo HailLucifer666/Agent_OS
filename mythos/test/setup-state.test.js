@@ -1,0 +1,170 @@
+'use strict';
+
+// js/setup/setup-state.js — the pure decisions behind the first-run setup screen.
+//
+// The behaviours worth pinning are the ones that would make the screen either
+// dishonest or annoying, and both failure directions are easy to reintroduce:
+//   - painting "your install is incomplete" when the server merely did not
+//     answer, or when the real condition is "not authenticated yet";
+//   - opening itself for optional gaps, which trains the operator to dismiss it
+//     without reading, at which point it protects nothing;
+//   - saying "saved" in a way that implies a stored key is already live. It is
+//     not — keys reach the server child's env at fork().
+//
+// Run: cd mythos && node --test test/setup-state.test.js
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+// The module is browser ESM (it imports nothing, but it uses `export`), and this
+// suite is CJS. Rather than add a build step or a loader, evaluate the source
+// with its `export ` keywords stripped — the same trick the HUD's other pure-module
+// tests would need, and it keeps the module itself free of any test-shaped seam.
+const SRC = fs.readFileSync(
+  path.join(__dirname, '..', 'ui', 'public', 'js', 'setup', 'setup-state.js'),
+  'utf8'
+);
+const factory = new Function(`${SRC.replace(/^export /gm, '')}
+  return { deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult };`);
+const { deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult } = factory();
+
+const okBody = (rows) => ({
+  ok: true,
+  status: 200,
+  body: { needsSetup: rows.some((r) => !r.ok && r.required), keys: rows, assets: [], keyStoreNames: [] },
+});
+
+describe('deriveSetupNeed', () => {
+  it('opens for a required gap', () => {
+    const need = deriveSetupNeed({
+      status: okBody([{ id: 'brain', label: 'Brain', required: true, ok: false, detail: 'none of: GOOGLE_API_KEY' }]),
+    });
+    assert.equal(need.show, true);
+    assert.equal(need.reason, 'required-gaps');
+    assert.equal(need.requiredGaps.length, 1);
+  });
+
+  it('does NOT open for optional gaps alone — but still lists them once open', () => {
+    const need = deriveSetupNeed({
+      status: okBody([{ id: 'adb', label: 'adb', required: false, ok: false, detail: null }]),
+    });
+    assert.equal(need.show, false, 'a dashboard that nags about optional gaps every boot gets dismissed unread');
+    assert.equal(need.reason, 'complete');
+    assert.equal(need.optionalGaps.length, 1, 'and they are still available to show alongside a required one');
+  });
+
+  it('treats 401 as an auth condition, never as an incomplete install', () => {
+    const need = deriveSetupNeed({ status: { ok: false, status: 401, body: null } });
+    assert.equal(need.show, false);
+    assert.equal(need.reason, 'unauthenticated', 'the token gate owns this case and opens on its own');
+  });
+
+  it('an unreachable or unparseable server is indeterminate, and paints nothing', () => {
+    assert.deepEqual(deriveSetupNeed({ status: null }).reason, 'indeterminate');
+    assert.deepEqual(deriveSetupNeed({ status: { ok: true, status: 200, body: null } }).reason, 'indeterminate');
+    assert.deepEqual(deriveSetupNeed({ status: { ok: true, status: 200, body: { keys: 'nope' } } }).reason, 'indeterminate');
+    assert.equal(deriveSetupNeed({}).show, false, 'no probe at all must never paint');
+  });
+
+  it('a fully wired machine produces nothing', () => {
+    const need = deriveSetupNeed({ status: okBody([{ id: 'brain', label: 'Brain', required: true, ok: true }]) });
+    assert.equal(need.show, false);
+    assert.equal(need.reason, 'complete');
+  });
+});
+
+describe('extractKeyNames', () => {
+  it('reads the key names out of an unsatisfied anyOf row', () => {
+    assert.deepEqual(
+      extractKeyNames({ detail: 'none of: GOOGLE_API_KEY, GROQ_API_KEY' }),
+      ['GOOGLE_API_KEY', 'GROQ_API_KEY']
+    );
+  });
+
+  it('reads them out of a partially satisfied allOf row', () => {
+    assert.deepEqual(extractKeyNames({ detail: 'missing: GOOGLE_REFRESH_TOKEN' }), ['GOOGLE_REFRESH_TOKEN']);
+  });
+
+  it('yields nothing for an asset gap that names no keys', () => {
+    assert.deepEqual(extractKeyNames({ detail: 'no .onnx voices in models/piper' }), []);
+    assert.deepEqual(extractKeyNames({ detail: null }), []);
+    assert.deepEqual(extractKeyNames({}), []);
+  });
+
+  it('rejects anything that is not an env-var-shaped name', () => {
+    // Guards against turning a prose detail into an input box labelled with
+    // arbitrary server text.
+    assert.deepEqual(extractKeyNames({ detail: 'none of: not a key, GOOD_KEY' }), ['GOOD_KEY']);
+  });
+});
+
+describe('planGapActions', () => {
+  const keyGap = { id: 'brain', label: 'Brain', required: true, why: 'w', fix: 'f', detail: 'none of: GROQ_API_KEY' };
+  const assetGap = { id: 'adb', label: 'adb', required: false, why: 'w', fix: 'node scripts/setup-android.js --install', detail: null };
+
+  it('offers to store a key gap when the desktop key store is present', () => {
+    const [plan] = planGapActions([keyGap], true);
+    assert.equal(plan.action, 'store');
+    assert.deepEqual(plan.keyNames, ['GROQ_API_KEY']);
+  });
+
+  it('falls back to describing it in a plain browser tab, where there is no bridge', () => {
+    const [plan] = planGapActions([keyGap], false);
+    assert.equal(plan.action, 'describe',
+      'an input box that silently does nothing is worse than the instruction to edit .env');
+  });
+
+  it('always describes an asset gap — no input box can install adb', () => {
+    assert.equal(planGapActions([assetGap], true)[0].action, 'describe');
+  });
+});
+
+describe('validateKeyValue', () => {
+  it('rejects empty and whitespace-only input', () => {
+    assert.equal(validateKeyValue('GOOGLE_API_KEY', '').ok, false);
+    assert.equal(validateKeyValue('GOOGLE_API_KEY', '   ').ok, false);
+  });
+
+  it('rejects a multi-line paste, because it is usually the whole .env line', () => {
+    const res = validateKeyValue('GOOGLE_API_KEY', 'GOOGLE_API_KEY=abc\nGROQ_API_KEY=def');
+    assert.equal(res.ok, false);
+    assert.match(res.error, /more than one line/);
+  });
+
+  it('never echoes the value into the error text', () => {
+    const res = validateKeyValue('GOOGLE_API_KEY', 'CANARY\nSECRET');
+    assert.doesNotMatch(res.error, /CANARY/);
+  });
+
+  it('accepts an ordinary key', () => {
+    assert.equal(validateKeyValue('GOOGLE_API_KEY', 'AIza-not-a-real-key').ok, true);
+  });
+});
+
+describe('interpretStoreResult', () => {
+  it('says stored, and says it is not live until a restart', () => {
+    const res = interpretStoreResult({ ok: true });
+    assert.equal(res.stored, true);
+    assert.match(res.message, /[Rr]estart/,
+      'keys are read into the child env at fork() — implying otherwise is the dishonesty this screen exists to end');
+  });
+
+  it('shows the main process refusal verbatim', () => {
+    const res = interpretStoreResult({ ok: false, error: 'this key name is reserved (env-injection vector)' });
+    assert.equal(res.stored, false);
+    assert.match(res.message, /env-injection vector/, 'the main process is the authority; do not reword it');
+  });
+
+  it('reports a thrown IPC denial rather than swallowing it', () => {
+    const res = interpretStoreResult(null, 'mythos:set-key: denied — sender is not the HUD window');
+    assert.equal(res.stored, false);
+    assert.match(res.message, /denied/);
+  });
+
+  it('never claims success on an unrecognized answer', () => {
+    assert.equal(interpretStoreResult(undefined).stored, false);
+    assert.equal(interpretStoreResult({}).stored, false);
+  });
+});
