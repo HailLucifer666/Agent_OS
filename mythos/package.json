@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/main.js",
+    "doctor": "node scripts/doctor.js",
     "test": "node --test",
     "e2e": "node scripts/e2e/run-e2e.mjs"
   },
