@@ -18,6 +18,7 @@ import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
 import { decideVoiceTransport } from './voice/voice-transport.js';
 import { createCameraLoop } from './vision/camera.js';
+import { decideGestureMic } from './vision/gesture-mic.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
 import { mountPinLockScreen } from './pin/pin-lock-screen.js';
@@ -352,15 +353,49 @@ let camera = null;
 // Gesture -> action map. Confirm accept/reject reuse the LIVE modal buttons
 // (confirm-modal.js) — same code path as a human click, zero new approval
 // surface. Selectors return null harmlessly when no confirm is showing.
+// Timestamp of the last mic state change a gesture caused. Owned here rather
+// than inside decideGestureMic so that function stays pure — see
+// vision/gesture-mic.js for why the refractory window it feeds is load-bearing
+// (a hand held in frame re-fires every 2s and would otherwise flip the mic back).
+let lastGestureMicToggleAt = 0;
+
+// Open_Palm toggles the mic; Pointing_Up only ever unmutes it. The decision
+// lives in decideGestureMic() so it is testable without a DOM; this handler owns
+// only the side effects.
+function applyGestureMic(gesture) {
+  const plan = decideGestureMic({
+    gesture,
+    batchActive: Boolean(voice && voice.isActive()),
+    s2sActive: Boolean(s2s && s2s.isActive()),
+    now: Date.now(),
+    lastToggleAt: lastGestureMicToggleAt,
+  });
+  if (plan.action === 'none') return;
+  lastGestureMicToggleAt = Date.now();
+  if (plan.action === 'stop') {
+    // Whichever transport currently holds the mic (see toggleVoice) — the
+    // gesture has to be able to mute an S2S session too, not just the batch loop.
+    if (voice && voice.isActive()) voice.stop();
+    if (s2s && s2s.isActive()) s2s.stop();
+    mic.setCaption('🖐 mic muted by gesture', 'info');
+    return;
+  }
+  // Start goes through toggleVoice(), never voice.start()/s2s.start() directly:
+  // it owns the PIN gate refusal, the transport choice and the mic-exclusivity
+  // invariant. It is async and a gesture handler must not block, so this is
+  // deliberately fire-and-forget — but a rejection still has to be visible
+  // rather than an unhandled promise.
+  mic.setCaption('☝ mic on by gesture', 'info');
+  toggleVoice().catch((err) => {
+    mic.setCaption(`Could not open the mic: ${err && err.message ? err.message : err}`, 'error');
+  });
+}
+
 const GESTURE_ACTIONS = {
   Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
   Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
-  Open_Palm:   () => {
-    // Whichever transport currently holds the mic (see toggleVoice) — the
-    // gesture has to be able to mute an S2S session too, not just the batch loop.
-    if (voice && voice.isActive()) { voice.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); }
-    if (s2s && s2s.isActive()) { s2s.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); }
-  },
+  Open_Palm:   () => applyGestureMic('Open_Palm'),
+  Pointing_Up: () => applyGestureMic('Pointing_Up'),
   Victory:     () => describeScene('Describe what you see, briefly.'),
 };
 

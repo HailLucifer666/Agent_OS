@@ -7,16 +7,19 @@
 //
 // Debounce discipline (same principle as voice-loop's SPEECH_HOLD_TICKS):
 // a gesture must be the top result for GESTURE_HOLD_TICKS consecutive
-// detections to fire, then a per-gesture cooldown stops a held hand from
-// re-firing every frame.
+// detections to fire, and then cannot fire again until the hand leaves that
+// pose — one pose is one press, however long it is held. That state machine
+// lives in gesture-debounce.js, where node:test can reach it; this module owns
+// only the camera, the recogniser and the frame loop.
 
 import { FilesetResolver, GestureRecognizer } from '/vendor/mediapipe/vision_bundle.mjs';
+import { createGestureDebouncer } from './gesture-debounce.js';
 
 const WASM_BASE = '/vendor/mediapipe/wasm';
 const MODEL_URL = '/models/gesture_recognizer.task';
 const DETECT_INTERVAL_MS = 150;     // ~6-7 fps — plenty for hand poses, cheap on CPU
 const GESTURE_HOLD_TICKS = 3;       // ~450ms sustained before firing
-const GESTURE_COOLDOWN_MS = 2000;   // per-gesture refractory period after firing
+const GESTURE_COOLDOWN_MS = 2000;   // anti-flicker only (see gesture-debounce.js)
 const MIN_CONFIDENCE = 0.6;
 
 export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previewEl }) {
@@ -25,9 +28,10 @@ export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previ
   let video = null;          // <video> the recognizer reads from (mounted into previewEl if given)
   let recognizer = null;     // lazy-built once, reused across start/stop
   let detectTimer = null;
-  let holdGesture = null;    // gesture name currently being held
-  let holdCount = 0;
-  const lastFired = new Map(); // gesture name -> ts of last fire
+  const debouncer = createGestureDebouncer({
+    holdTicks: GESTURE_HOLD_TICKS,
+    cooldownMs: GESTURE_COOLDOWN_MS,
+  });
 
   function setState(s) { if (onState) onState(s); }
   function caption(text, kind) { if (onCaption) onCaption(text, kind); }
@@ -58,17 +62,8 @@ export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previ
 
     const name = top && top.score >= MIN_CONFIDENCE ? top.categoryName : null;
 
-    if (!name || name === 'None') { holdGesture = null; holdCount = 0; return; }
-    if (name !== holdGesture) { holdGesture = name; holdCount = 1; return; }
-    holdCount++;
-    if (holdCount < GESTURE_HOLD_TICKS) return;
-
-    const last = lastFired.get(name) || 0;
-    if (Date.now() - last < GESTURE_COOLDOWN_MS) return;
-    lastFired.set(name, Date.now());
-    holdGesture = null;
-    holdCount = 0;
-    if (onGesture) onGesture(name);
+    const fired = debouncer.observe(name, Date.now());
+    if (fired && onGesture) onGesture(fired);
   }
 
   // One JPEG frame from the live stream, base64 without the data: prefix —
@@ -141,8 +136,7 @@ export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previ
     // Same lesson as P15's mic fix: releasing the timer is NOT releasing the
     // hardware — stop the tracks or the camera light stays on forever.
     releaseStream();
-    holdGesture = null;
-    holdCount = 0;
+    debouncer.reset();
     setState('idle');
   }
 

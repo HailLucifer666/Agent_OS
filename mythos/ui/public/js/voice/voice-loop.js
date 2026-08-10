@@ -16,6 +16,7 @@
 
 import { utterance, stopRequest, sendMessage } from '../ws.js';
 import { getMicDeviceId, setMicDeviceId, buildAudioConstraints, micErrorMessage } from './mic-device.js';
+import { isVisionQuery } from './vision-trigger.js';
 // Static import is cheap: silero-vad.js only DEFINES functions at module
 // scope — it fetches onnxruntime-web and the ONNX model lazily, inside
 // ensureLoaded(), which is only ever called when VAD_ENGINE==='silero'. A HUD
@@ -75,8 +76,9 @@ const CLOSE_COMMANDS = [
 ];
 
 // Vision questions are intercepted before the brain, same as NAV_COMMANDS —
-// they need a camera frame attached, which only the client can do.
-const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
+// they need a camera frame attached, which only the client can do. The phrase
+// list moved to voice/vision-trigger.js (imported above) so it can be tested
+// without a browser; the interception point below is unchanged.
 
 // E2: Strip markdown, HTML, and control characters before passing text to TTS engines.
 // Without this, the browser SpeechSynthesis reads aloud "asterisk asterisk bold asterisk"
@@ -619,7 +621,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
     if (speakingText) stopSpeaking();    // barge-in: user talked over playback
     caption('» ' + command, 'heard');
-    if (VISION_TRIGGER.test(command) && onVisionQuery) {
+    if (isVisionQuery(command) && onVisionQuery) {
       onVisionQuery(command);
       return;
     }

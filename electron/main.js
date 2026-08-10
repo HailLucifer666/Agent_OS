@@ -119,8 +119,31 @@ const BIND = process.env.MYTHOS_BIND || '127.0.0.1';
 // Poll GET /health until the server answers { ok: true } before loading the
 // window — never load a dead URL. Bounded retries with backoff so a server that
 // never comes up fails loudly (via log()) instead of hanging.
-const PROBE_ATTEMPTS = 50;
+//
+// 50 attempts (10s) was NOT enough and produced the exact failure it exists to
+// prevent — reported from a real launch 2026-08-10, diagnosed from that run's
+// own child log:
+//
+//   08:12:40.188  config.loaded          (child process alive)
+//   08:12:45.751  edge-tts.started
+//   08:12:47.224  piper.started
+//   08:12:47.259  server.listening       <- FIRST moment a socket exists
+//
+// The child does not call app.listen() until the very END of its boot
+// (server/index.js), i.e. AFTER it spawns the edge-tts and piper sidecars — so
+// time-to-first-socket was ~11.5s from fork against a 10s budget. Every probe
+// was refused, and the window then loaded a port nothing was listening on
+// (Chromium: ERR_CONNECTION_REFUSED) in front of a server that went on to run
+// happily for another four minutes. So:
+//   - 150 attempts (30s) for the pre-window wait: the failing case was a WARM
+//     boot; a cold cache or slower disk exceeds 10s routinely.
+//   - and if even that expires, keep probing in the background and reload the
+//     window when the server does arrive (waitForLateReady below). Giving up
+//     permanently is what turned a slow boot into a dead HUD.
+const PROBE_ATTEMPTS = 150;
 const PROBE_INTERVAL_MS = 200;
+// Second-chance budget, spent only after PROBE_ATTEMPTS has already expired.
+const LATE_PROBE_ATTEMPTS = 300; // a further 60s at the same interval
 
 function probeHealth(host, port, attemptsLeft) {
   return new Promise((resolve) => {
@@ -148,6 +171,30 @@ function probeHealth(host, port, attemptsLeft) {
     };
     tryOnce();
   });
+}
+
+// Second chance for a server that is merely slow rather than dead. Called ONLY
+// after the pre-window budget expired and the window has already loaded (and
+// therefore failed to load) the URL — so its one job is to reload that window
+// if the server shows up late. Reuses probeHealth rather than opening a second
+// polling path: one probe implementation, one place for its semantics to live.
+//
+// It reloads instead of loadURL()ing so the window keeps whatever identity it
+// already has, and it checks isDestroyed() because the operator may well have
+// closed the error page while we were still waiting — reloading a destroyed
+// BrowserWindow throws.
+async function waitForLateReady() {
+  const startedAt = Date.now();
+  const ready = await probeHealth(BIND, PORT, LATE_PROBE_ATTEMPTS);
+  if (!mainWindow || mainWindow.isDestroyed()) return; // window closed while we waited
+  if (!ready) {
+    log(`mythos server still not ready after a further ${Date.now() - startedAt}ms — giving up on the `
+      + `automatic reload. Check the server log: ${childLogPath()}`);
+    return;
+  }
+  log(`mythos server became ready ${Date.now() - startedAt}ms late — reloading the window.`);
+  try { mainWindow.loadURL(`http://${BIND}:${PORT}`); }
+  catch (err) { log('late reload failed:', err && err.message); }
 }
 
 // ---- safeStorage-backed key store --------------------------------------------
@@ -793,13 +840,21 @@ if (!gotLock) {
       }
     }
 
+    const probeStartedAt = Date.now();
     const ready = await probeHealth(BIND, PORT, PROBE_ATTEMPTS);
-    if (!ready) {
-      // Server never came up. Fail loudly; loading a dead URL would show a
-      // broken Chromium error page with no diagnostic.
-      log(`mythos server did not become ready at http://${BIND}:${PORT} after ${PROBE_ATTEMPTS} probes. Server log: ${childLogPath()}`);
-      // Still create the window so the operator sees something; the renderer
-      // can surface its own error state. But log first so it's diagnosable.
+    if (ready) {
+      // Log the MEASURED wait, not just the fact of success: this is the only
+      // signal that boot is creeping toward the budget again, and it is what
+      // made the 2026-08-10 failure diagnosable after the fact.
+      log(`mythos server ready after ${Date.now() - probeStartedAt}ms at http://${BIND}:${PORT}`);
+    } else {
+      log(`mythos server did not become ready at http://${BIND}:${PORT} after ${PROBE_ATTEMPTS} probes `
+        + `(${Date.now() - probeStartedAt}ms). Still waiting in the background; server log: ${childLogPath()}`);
+      // Create the window anyway so the operator sees something — but DO NOT
+      // stop waiting. The window below will load a refused URL and show
+      // Chromium's error page; waitForLateReady() reloads it the moment the
+      // server answers, so a merely-slow boot self-heals instead of needing a
+      // manual relaunch.
     }
 
     mainWindow = new BrowserWindow({
@@ -819,6 +874,7 @@ if (!gotLock) {
       },
     });
     mainWindow.loadURL(`http://${BIND}:${PORT}`);
+    if (!ready) waitForLateReady();
 
     // Trap window.open(_blank) from the renderer so it never spawns an external
     // browser. Without this, the HUD's `window.open(url, '_blank')` (app.js,
