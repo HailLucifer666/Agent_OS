@@ -380,7 +380,10 @@ async function main() {
       hub.registerNamed('pipeline-effector', pipelineEffector);
 
       registerFromComputer(hub);
-      pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
+      // config + logger are for screen_look's vision call (effectors/vision-call.js):
+      // VISION_CALL_TIMEOUT_MS bounds it, and the logger is what emits the
+      // `vision.call` provider/model/ms line that did not exist before 2026-08-10.
+      pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs, config: config, logger: logger });
       // CUA driver tools (cua_list_windows / cua_bring_to_front / cua_get_window_state
       // / cua_click) — the Chromium-capable click path that complements pc-child's
       // ui_click (which fails on apps exposing no named UIA leaf: Spotify, YouTube
@@ -405,6 +408,7 @@ async function main() {
         agentActions: agentActionsEffector, buildRunner: buildRunner,
         probes: immune.probes, config: config, fs: memory.fs, bus: bus,
         goals: goals, // BUG-113: raw GoalSystem — read_status surfaces open commitments
+        logger: logger, // camera_look's `vision.call` instrumentation (vision-call.js)
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.
@@ -732,6 +736,12 @@ async function main() {
       // Wire camera_look — server-initiated frame capture from dashboard clients.
       if (dashboardWiring && typeof dashboardWiring.setCameraFrameProvider === 'function' && typeof serverHandle.requestCameraFrame === 'function') {
         dashboardWiring.setCameraFrameProvider(serverHandle.requestCameraFrame);
+      }
+      // camera_on — the confirm-gated opener for the camera camera_look reads
+      // from. Same request/ack round-trip; unwired means camera_on says it cannot
+      // reach a dashboard, which is the honest answer.
+      if (dashboardWiring && typeof dashboardWiring.setCameraPowerProvider === 'function' && typeof serverHandle.requestCameraPower === 'function') {
+        dashboardWiring.setCameraPowerProvider(serverHandle.requestCameraPower);
       }
       // REMEDIATION P1-5: wire close_panel — same server-initiated request/ack
       // round-trip pattern as camera_look above, so close_panel can report

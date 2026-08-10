@@ -23,6 +23,7 @@ const { effectorFromTool } = require('./adapter');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
+const { visionThink } = require('./vision-call');
 // BUG-113: surface open spoken commitments in read_status so "where are we
 // on X" is answerable from state instead of memory.
 const { listOpenCommitments } = require('./from-calendar');
@@ -54,6 +55,9 @@ function buildTools(ctx) {
   const probes = ctx.probes;
   const config = ctx.config;
   const fs = ctx.fs;
+  // Optional: absent in tests, and vision-call.js degrades to no instrumentation
+  // rather than throwing. It is the only logger this module uses.
+  const logger = ctx.logger;
   const goals = ctx.goals; // BUG-113: raw GoalSystem, optional — commitment ledger read in read_status
 
   // ---- navigate ----
@@ -784,35 +788,83 @@ function buildTools(ctx) {
     askAgentDispatch = fn;
   }
 
-  // ---- camera_look (server-initiated) ----
-  // Provider injected by server/index.js after WS is set up.
+  // ---- camera_look / camera_on (server-initiated) ----
+  // Providers injected by server/index.js after WS is set up.
   let cameraFrameProvider = null;
   function setCameraFrameProvider(fn) {
     cameraFrameProvider = fn;
   }
+  let cameraPowerProvider = null;
+  function setCameraPowerProvider(fn) {
+    cameraPowerProvider = fn;
+  }
+
+  // A WEBCAM FRAME HAS NO ORACLE, and that is the whole design constraint here.
+  // screen_look can be cross-checked against OCR of the same screenshot (see
+  // effectors/evidence.js) — which is the only thing that caught the vision model
+  // inventing "the user is holding a small dog" on 2026-08-10. Nothing equivalent
+  // exists for a camera frame: there is no second, independent reading of what a
+  // room looks like.
+  //
+  // So this tool reports PROVENANCE instead of asserting fact. The note travels in
+  // the result (the Live adapter passes results to the model through
+  // truncateForModel) and is deliberately NOT routed through the adapter's
+  // `unverified` channel: unverifiedNarration appends "Report only that it was
+  // attempted", which is correct for an act that may not have landed and wrong for
+  // a read — it would suppress the very description the operator asked for.
+  const CAMERA_LOOK_PROVENANCE =
+    'This is one vision model\'s reading of a SINGLE webcam frame and it cannot be '
+    + 'verified. Say what it LOOKED LIKE, not what is true, and offer to look again.';
 
   async function camera_look({ query }) {
     try {
       if (!cameraFrameProvider) return fail('Camera is not available — no dashboard is open or the camera is off.');
       var brain = (ctx && ctx.brain) || null;
       var b64 = await cameraFrameProvider();
-      if (!b64) return fail('Camera is off or no dashboard is open.');
+      // Distinguish the two: "no dashboard" is unfixable by the operator right
+      // now, "camera off" is one confirm away via camera_on. Saying so is what
+      // stops the model reaching for screen_look instead.
+      if (!b64) return fail('The camera is off (or no dashboard is open), so there is no frame to look at. Use camera_on to ask the operator to turn it on.');
       if (!brain || typeof brain.think !== 'function') {
-        return fail('Screenshot captured but no vision brain is available to describe it.');
+        return fail('Camera frame captured but no vision brain is available to describe it.');
       }
-      var result = await brain.think({
-        lane: 'vision',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: (query ? String(query).slice(0, 300) : 'Describe what is on this screen, briefly and concretely.') },
-            { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } }
-          ]
-        }],
+      var result = await visionThink(brain, {
+        prompt: query ? String(query).slice(0, 300) : 'Describe what is visible in this webcam frame, briefly and concretely.',
+        b64: b64,
+        mime: 'image/jpeg', // camera.js captures JPEG (canvas.toDataURL('image/jpeg'))
         source: 'camera-look',
+        timeoutMs: config && config.VISION_CALL_TIMEOUT_MS,
+        logger: logger,
       });
+      if (result.timedOut) return fail('The vision model did not answer in time — nothing was seen. Say so; do not describe anything.');
       if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the camera view.');
-      return ok({ description: String(result.content).trim().slice(0, 600) });
+      return ok({
+        description: String(result.content).trim().slice(0, 600),
+        source: 'webcam (one frame)',
+        confidence: 'unverified-vision',
+        note: CAMERA_LOOK_PROVENANCE,
+      });
+    } catch (err) {
+      return fail(String(err.message || err));
+    }
+  }
+
+  // Ask the operator's HUD to turn the camera on. T3 + NEVER_TRUSTABLE, so the
+  // operator has already confirmed by the time this runs — a misheard utterance
+  // cannot reach it. Reports the state the camera loop ACTUALLY reached; a
+  // permission denial or a failed gesture-model load comes back as on:false with
+  // the reason, never as a hopeful success.
+  async function camera_on() {
+    try {
+      if (!cameraPowerProvider) return fail('Cannot reach a dashboard to turn the camera on — no UI is connected.');
+      var res = await cameraPowerProvider();
+      if (!res) return fail('No dashboard answered the request to turn the camera on.');
+      if (!res.on) {
+        return fail(res.reason
+          ? 'The camera did not turn on: ' + String(res.reason).slice(0, 200)
+          : 'The camera did not turn on.');
+      }
+      return ok({ camera: 'on', state: res.state || 'watching', evidence: 'the dashboard reported the camera loop is ' + (res.state || 'watching') });
     } catch (err) {
       return fail(String(err.message || err));
     }
@@ -892,11 +944,16 @@ function buildTools(ctx) {
     { name: 'kanban_assemble', description: 'Run the planner agent to break a goal into several kanban cards.', params: { goal: 'string' }, danger: false, fn: kanban_assemble },
     { name: 'kanban_build_card', description: 'Run the builder agent on a kanban card, producing a deliverable.', params: { query: 'string' }, danger: false, fn: kanban_build_card },
     { name: 'ask_agent', description: 'Ask a specific agent seat a question and get a short reply.', params: { seat: 'string', prompt: 'string' }, danger: false, fn: ask_agent },
-    { name: 'camera_look', description: 'Capture a frame from the dashboard camera and describe what is visible. Use when you need to see the user, their environment, or objects they are showing.', params: { query: 'string (optional) — what specifically to look for' }, danger: false, fn: camera_look },
+    // The two descriptions below, and screen_look's in from-pc.js, are a matched
+    // set: on 2026-08-10 the model answered "what am I holding?" from a DESKTOP
+    // SCREENSHOT because nothing told it these are different eyes. Each now says
+    // what it is NOT, and names the other by name.
+    { name: 'camera_look', description: 'Look through the WEBCAM: capture one frame from the operator\'s camera and describe what is visible in the room — the operator themselves, their face, their surroundings, or an object they are holding up to the camera. This is NOT the computer screen; for anything displayed on the screen use screen_look instead. Requires the camera to be on — if it is off, use camera_on first. A single frame cannot be verified, so report what it LOOKED like and offer to look again.', params: { query: 'string (optional) — what specifically to look for' }, danger: false, fn: camera_look },
+    { name: 'camera_on', description: 'Ask the operator to turn their WEBCAM on, so camera_look can see. Use this when the operator asks whether you can see them and the camera is off. The operator must confirm, and they may decline — report honestly whether the camera actually came on. Does not capture or describe anything by itself.', params: {}, danger: true, fn: camera_on },
     { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];
 
-  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setCameraPowerProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -908,7 +965,8 @@ function registerFromDashboard(hub, ctx) {
   // Previously the injector was discarded here, leaving ask_agent permanently null.
   return {
     count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch,
-    setCameraFrameProvider: built.setCameraFrameProvider, setPlannerHandle: built.setPlannerHandle,
+    setCameraFrameProvider: built.setCameraFrameProvider,
+    setCameraPowerProvider: built.setCameraPowerProvider, setPlannerHandle: built.setPlannerHandle,
     setClosePanelProvider: built.setClosePanelProvider, setMediaWindowCloser: built.setMediaWindowCloser
   };
 }

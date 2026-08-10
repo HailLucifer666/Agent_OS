@@ -13,6 +13,7 @@ const { resolveSandboxed, open_folder } = require('./from-computer');
 // The evidence contract: a world-changing effector may only report ok:true with
 // proof from an oracle other than its own call. See evidence.js's header.
 const evidence = require('./evidence');
+const { visionThink } = require('./vision-call');
 
 function ok(result) {
   return { ok: true, result };
@@ -23,6 +24,10 @@ function fail(reason) {
 
 var brain = null;
 var vaultFs = null;
+// screen_look's vision call: instrumentation + the bound that stops a starved
+// free-tier provider holding a "quick look" for a minute (see vision-call.js).
+var pcLogger = null;
+var visionTimeoutMs = null;
 
 // FIX 1: last pid returned by a successful launch_app. ui_type/ui_click use
 // this as their default target when the caller (the planning LLM) omits pid,
@@ -427,17 +432,32 @@ async function screen_look({ query }) {
   if (!brain || typeof brain.think !== 'function') {
     return fail('Screenshot captured but no vision brain is available to describe it.');
   }
-  var result = await brain.think({
-    lane: 'vision',
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: (query ? String(query).slice(0, 300) : 'Describe what is on this screen, briefly and concretely.') },
-        { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } },
-      ],
-    }],
+  // The prompt states WHAT THE IMAGE IS, every time, regardless of what was
+  // asked. On 2026-08-10 the model called this tool with query "What is the user
+  // holding in the webcam frame?" — because camera_look was withheld from the
+  // voice allowlist and this was the only pair of eyes it could reach. A vision
+  // model handed a desktop screenshot and a leading question about a webcam
+  // answers the question: it said "a black smartphone", then "a small dog".
+  // Naming the image first is what makes that unanswerable instead of plausible.
+  var SCREEN_FRAMING =
+    'This image is a screenshot of the operator\'s COMPUTER SCREEN. It is not a '
+    + 'webcam or camera image: it does not show the operator, their face, their '
+    + 'hands, or anything they are holding. If the question asks about the '
+    + 'operator or the room rather than the screen, say that this is the screen '
+    + 'and you cannot see them in it. ';
+  var result = await visionThink(brain, {
+    prompt: SCREEN_FRAMING + (query
+      ? 'Question about the screen: ' + String(query).slice(0, 300)
+      : 'Describe what is on this screen, briefly and concretely.'),
+    b64: b64,
     source: 'screen-look',
+    timeoutMs: visionTimeoutMs,
+    logger: pcLogger,
   });
+  if (result.timedOut) {
+    return fail('The vision model did not answer in time, so the screen was not read. '
+      + 'Say that you could not see it; do not describe anything.');
+  }
   if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the screen.');
 
   // WAVE 4 — the tool that is supposed to catch the lie was itself lying.
@@ -1242,7 +1262,7 @@ const TOOLS = [
   { name: 'set_app_volume', description: 'Set ONE application\'s own volume (0-100) without touching the system master volume — the per-app sliders in the Windows Volume Mixer. Use for "turn Spotify down". Fails honestly if that app has no live audio session (i.e. it is not playing anything).', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process instead of matching by name', level: 'number - target volume 0-100' }, danger: false, fn: set_app_volume },
   { name: 'get_app_volume', description: 'Read the current per-app volume (0-100) and mute state of ONE application from its live audio session. Use before a relative change ("turn Spotify down a bit"). Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process' }, danger: false, fn: get_app_volume, needs_result: true },
   { name: 'set_app_mute', description: 'Mute or unmute the audio session of ONE application without touching the system master volume. Reads the mute state back as evidence. Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process', mute: 'boolean - true to mute, false to unmute (default true)' }, danger: false, fn: set_app_mute },
-  { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
+  { name: 'screen_look', description: 'Look at the COMPUTER SCREEN: take a screenshot of the primary display and describe it via a vision brain. This is NOT a camera — it cannot see the operator, their face, their hands, or an object they are holding up; for any of those use camera_look (and camera_on if the camera is off). Optionally pass a query to focus the description on part of the screen.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
@@ -1266,6 +1286,11 @@ const TOOLS = [
 function registerFromPc(hub, opts) {
   brain = (opts && opts.brain) || null;
   vaultFs = (opts && opts.fs) || null;
+  // Both optional: vision-call.js bounds with its own default when no config is
+  // supplied and skips instrumentation when no logger is. Tests construct this
+  // module without either.
+  pcLogger = (opts && opts.logger) || null;
+  visionTimeoutMs = (opts && opts.config && opts.config.VISION_CALL_TIMEOUT_MS) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }

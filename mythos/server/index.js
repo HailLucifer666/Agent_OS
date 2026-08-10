@@ -208,6 +208,37 @@ function createServer(deps) {
     });
   }
 
+  // Server-initiated camera POWER-ON, same request/ack shape as
+  // requestCameraFrame above. Exists because withholding the ability to ask is
+  // what produced the 2026-08-10 incident: with the camera off and no way to
+  // request it, "can you see me?" had no honest path at all, and the model
+  // substituted a desktop screenshot and described that instead.
+  //
+  // Three properties, in order of importance:
+  //   1. The HUD decides, not the server. It answers with the state the camera
+  //      loop ACTUALLY reached — getUserMedia can be denied and the gesture model
+  //      can fail to load, and both already return false from start(). A hopeful
+  //      `on: true` here would recreate the exact class of bug this whole change
+  //      is about.
+  //   2. camera_on is T3 + NEVER_TRUSTABLE (leash/tiers.js, leash/index.js), so
+  //      the operator has confirmed before this function is ever reached. Nothing
+  //      on the autonomous path can call it.
+  //   3. The timeout is longer than requestCameraFrame's 8s: this waits for the
+  //      permission prompt AND MediaPipe's first model load, which the frame
+  //      request never has to (by the time anything asks for a frame, the loop is
+  //      already warm). The HUD acks only once the loop reports 'watching', so a
+  //      camera_look issued immediately afterwards does not race the warm-up.
+  const pendingCameraPower = new Map(); // reqId -> { resolve, timer }
+  const CAMERA_POWER_TIMEOUT_MS = 20000;
+  function requestCameraPower() {
+    return new Promise(function(resolve) {
+      const id = 'campower-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      const timer = setTimeout(function() { pendingCameraPower.delete(id); resolve(null); }, CAMERA_POWER_TIMEOUT_MS);
+      pendingCameraPower.set(id, { resolve: resolve, timer: timer });
+      broadcastAll({ type: 'camera-power-request', reqId: id });
+    });
+  }
+
   // REMEDIATION P1-5: server-initiated close_panel ack, mirroring
   // requestCameraFrame's request/response shape exactly. close_panel used to
   // broadcast 'close-panel' fire-and-forget and immediately report
@@ -1666,7 +1697,36 @@ function createServer(deps) {
   // speech was silently dropped. Route it through proactiveSpeak() so the
   // immune system has a real voice for critical health events.
   bus.subscribe('action.speak-requested', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (!(e && e.payload && e.payload.text)) return;
+    // 2026-08-10: an UNPLAYBOOKED internal diagnostic must not interrupt a live
+    // conversation. That session heard, mid-exchange and five times over, "One of
+    // my internal checks has no automatic fix: live-turn-no-user-transcript" —
+    // every one of them a false alarm (fixed at source in
+    // src/core/voice/live-session.js), and none of them anything the operator
+    // could act on while talking.
+    //
+    // Deliberately NOT solved by softening the words. AD-5 (BUG-123) requires the
+    // real condition to be NAMED rather than narrated into invented prose, and
+    // test/bug-123-anomaly-honest-phrasing.test.js pins exactly that — so the slug
+    // is the honest part, not the defect. What was wrong was the timing.
+    //
+    // Scope is narrow on purpose: only payloads the explainer marks
+    // internalDiagnostic, and only while a Live session is actually open. Genuine
+    // critical health speech is untouched, and the anomaly still reaches the HUD,
+    // the log and the audit either way — this drops one spoken interruption, not
+    // the record of it.
+    if (e.payload.internalDiagnostic) {
+      const ws = lastActiveWs;
+      const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
+      if (live && live.isOpen()) {
+        logger.info('immune-explain.not-spoken-during-live', {
+          kind: e.payload.kind || null,
+          reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
+        });
+        return;
+      }
+    }
+    proactiveSpeak(e.payload.text);
   });
 
   // ---- Boot greeting (JARVIS-style) ----
@@ -2903,6 +2963,18 @@ function createServer(deps) {
         const p = pendingFrames.get(msg.frameReqId);
         if (p) { clearTimeout(p.timer); pendingFrames.delete(msg.frameReqId); p.resolve(String(msg.image || '') || null); }
       }
+      else if (msg.type === 'camera-power-ack') {
+        // The HUD reports the state the camera loop actually reached, plus a
+        // reason when it did not come on (permission denied, model load failed,
+        // no camera). Passed through verbatim so camera_on can say WHY rather
+        // than a bare failure — see requestCameraPower's contract above.
+        const p = pendingCameraPower.get(msg.reqId);
+        if (p) {
+          clearTimeout(p.timer);
+          pendingCameraPower.delete(msg.reqId);
+          p.resolve({ on: !!msg.on, state: String(msg.state || ''), reason: String(msg.reason || '') });
+        }
+      }
       else if (msg.type === 'duck-audio') {
         duckAudio().catch(function() {}); // best-effort — never let a duck failure break voice
       }
@@ -3427,7 +3499,7 @@ function createServer(deps) {
   // `ready` resolves once the ephemeral port is bound — httpServer.address() is
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
-    app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
+    app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestCameraPower, requestClosePanel,
     requestCloseMediaWindow, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: {

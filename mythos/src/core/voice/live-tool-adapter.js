@@ -122,6 +122,18 @@ function createLiveToolAdapter(deps) {
     // relaunch, from one operator request. Membership here is about DURATION,
     // per this list's own rule, and by that rule it always belonged.
     browser_switch: true,
+    // 2026-08-10 — the vision pair. By this list's own rule membership is about
+    // DURATION, and two real screen_look calls that session took 16s and 63s
+    // (audit: 09:53:47 -> 09:54:03, 09:51:40 -> 09:52:43) against a 1500ms ack
+    // deadline. The operator asked "can you see? you didn't answer", and the model
+    // — holding no answer and no instruction — invented one. Acking instantly with
+    // "say what you are DOING, do not claim completion" is the difference between
+    // "I'm looking now" and "you're holding a black smartphone".
+    //
+    // screen_read_text is deliberately NOT here: it returned in ~1s both times
+    // that session, and awaiting a fast read is strictly better than a two-step.
+    screen_look: true,
+    camera_look: true,
   };
 
   // BUG-128 — 2026-08-06: SLOW_TOOLS is a hand-maintained list, and the list is

@@ -120,6 +120,15 @@ function createLiveSession(deps) {
   // the outside, and this repo has burned three sessions on plausible theories.
   // One log line per turn naming the fields that DID arrive settles it.
   let turnFrameFields = null;   // Set, lazily created
+  // 2026-08-10: did WE start this turn? sendText() is how a [SYSTEM] late tool
+  // outcome and a proactive line are injected, and either one makes the model
+  // reply — a complete turn in which the operator never spoke and never should
+  // have been transcribed. Without this, those turns look identical to a turn
+  // where the operator DID speak and the transcript went missing, and the
+  // half-blind check below reported five false alarms in one six-minute
+  // conversation. Each one was then spoken aloud at the operator as a raw event
+  // name, mid-sentence, because unplaybooked anomalies get narrated.
+  let turnSystemInitiated = false;
   // BUG-118 instrumentation. The operator heard MYTHOS speak its own private
   // reasoning as if it were the reply. The suspicion — NOT yet evidence — is
   // that those are modelTurn parts flagged `thought: true`, which this module
@@ -453,6 +462,11 @@ function createLiveSession(deps) {
           // this list on a turn the operator demonstrably spoke in is the whole
           // answer to the empty-user-text question.
           scFields: turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '',
+          // Whether WE provoked this turn — the difference between "the operator
+          // spoke and we did not hear it" and "nobody spoke". Logged because
+          // reading the first as the second is what produced five false anomalies
+          // on 2026-08-10; next time the log says which kind a turn was.
+          systemInitiated: turnSystemInitiated,
         });
         turnFrameFields = null;
         // 2026-08-10: a completed turn is proof the room is not empty, whether or
@@ -476,18 +490,32 @@ function createLiveSession(deps) {
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });
-        } else if (!turn.userText && turn.assistantText && bus && typeof bus.emit === 'function') {
+        } else if (!turn.userText && turn.assistantText && !turnSystemInitiated
+                   && bus && typeof bus.emit === 'function') {
           // 2026-08-10: half-blind, and it was silent until now. The check above
           // only fires when BOTH sides are empty, so a turn that answered the
           // operator while recording nothing they said passed as healthy — and
           // that is precisely the shape the vault is full of. It is not cosmetic:
           // this text is what episodic memory stores as the operator's words, so
           // every one of these is a hole in what MYTHOS can later recall.
+          //
+          // ...but ONLY when the operator was expected to have spoken. Later the
+          // same day this fired 5 times in one six-minute conversation, every one
+          // of them a turn WE provoked (the proactive greeting, and replies to
+          // [SYSTEM] late tool outcomes) — turns 1, 3, 8, 13 and 15, exactly the
+          // turns whose scFields carried no inputTranscription because there was
+          // no operator utterance to transcribe. A monitor that cries wolf on a
+          // third of its samples trains everyone to ignore it, and this one is
+          // also SPOKEN ALOUD when unplaybooked, so it interrupted the very
+          // conversation it was misreporting. turnSystemInitiated is the guard;
+          // a genuinely unheard operator still fires.
           bus.emit('health.anomaly', {
             kind: 'live-turn-no-user-transcript', turnId: turnCounter,
             reason: 'the reply was transcribed but the operator\'s speech was not',
           });
         }
+        // Consumed: the next turn is operator-initiated until sendText says otherwise.
+        turnSystemInitiated = false;
         if (wasSilent) {
           logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });
           if (bus && typeof bus.emit === 'function') {
@@ -628,6 +656,11 @@ function createLiveSession(deps) {
   // mid-conversation per Google's guidance). Used for the post-confirm follow-up.
   function sendText(text) {
     if (state !== 'open') return false;
+    // Mark the turn this provokes as ours, so the half-blind transcript check
+    // does not accuse the operator of having spoken unheard (see
+    // turnSystemInitiated's declaration). Set before the send, not after: the
+    // reply can begin arriving synchronously on a fake socket in tests.
+    turnSystemInitiated = true;
     return sendRaw({ realtimeInput: { text: String(text) } });
   }
 

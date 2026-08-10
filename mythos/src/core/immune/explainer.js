@@ -123,7 +123,18 @@ function createExplainer({ bus, brain, memory, config, logger }) {
       var out = await explain(p);
       if (!out) return;
       log.info('immune-explain', { kind: p.kind, target: p.target, remedy: out.remedy });
-      bus.emit('action.speak-requested', { text: out.spoken });
+      // internalDiagnostic marks this as "an internal check with no automatic
+      // fix" — true of everything this module explains, by construction (it only
+      // subscribes to health.healed with outcome 'no-match'). server/index.js's
+      // action.speak-requested subscriber uses it to hold the spoken form back
+      // while a Live conversation is in progress; the anomaly still reaches the
+      // log, the audit and the HUD. Added after five of these interrupted a live
+      // exchange on 2026-08-10. `kind` rides along so the drop is diagnosable.
+      bus.emit('action.speak-requested', {
+        text: out.spoken,
+        kind: p.kind || null,
+        internalDiagnostic: true,
+      });
     } catch (err) {
       log.warn('immune-explain.failed', { error: err.message });
     }

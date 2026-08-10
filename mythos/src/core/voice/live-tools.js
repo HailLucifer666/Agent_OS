@@ -76,6 +76,25 @@ const DEFAULT_ALLOWLIST = [
   // generic form of the same job (reply into whatever chat app is already open).
   'whatsapp_send','whatsapp_contacts','whatsapp_contact_save','app_reply',
   'screen_look','screen_read_text','capture_screenshot',
+  // The webcam pair, promoted out of VOICE_ALLOWLIST_EXEMPT on 2026-08-10 after
+  // the incident that list's own comment invited ("promote if usage shows up").
+  //
+  // What withholding camera_look actually produced: the operator asked "can you
+  // see me?" and, with no camera tool in reach, the model called screen_look with
+  // query "Can I see the operator through the webcam?" — a DESKTOP capture aimed
+  // at a webcam question. It then described the HUD's own camera-preview panel
+  // inside that screenshot, concluded it could see the operator, contradicted its
+  // own correct "I can't get a live video feed" from thirty seconds earlier, and
+  // went on to invent "a black smartphone" and "a small dog" for "what am I
+  // holding?". Withholding a read tool did not make the model decline; it made it
+  // substitute the nearest reachable tool and narrate the result. Same lesson as
+  // browser_snapshot and whatsapp_send above, now with a camera attached.
+  //
+  // camera_on is the confirm-gated opener (T3, NEVER_TRUSTABLE — see leash/
+  // tiers.js and leash/index.js): "can you see me" with the camera off must be
+  // able to ASK, not silently fail. It can never auto-allow, so a misheard
+  // utterance cannot open a webcam.
+  'camera_look','camera_on',
   'browser_navigate','browser_click','browser_type','browser_get_text',
   // Snapshot-and-refs (2026-08-06). browser_snapshot is the READ half of every
   // browser interaction: the model takes a snapshot, sees the page as an
@@ -149,7 +168,9 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // Loads a skill's guidance text from disk -- internal/debugging surface.
   'use_skill',
   // Not yet asked for in a live session; promote if usage shows up.
-  'camera_look','timer_add','timer_cancel',
+  // (camera_look LEFT this group on 2026-08-10 — usage showed up, and what the
+  // model did instead of declining is documented at its DEFAULT_ALLOWLIST entry.)
+  'timer_add','timer_cancel',
   // Documents/code-search (§7.5, §7.11) -- opt-in power feature with its own
   // UI surface, not curated into the default voice set.
   'document_list','document_search','document_answer','document_ingest',

@@ -38,6 +38,14 @@ const TIER_TABLE = {
   'web_search':            0,  // read-only research — fetches public search results
   'web_fetch':             0,  // read-only fetch — retrieves public web page content
   'camera_look':           0,  // read-only — captures and describes camera frame
+  // Turning the CAMERA ON is not a read. It is T3-with-confirm and also
+  // NEVER_TRUSTABLE (leash/index.js), which together mean it can never
+  // auto-allow: not by operator-present trust, not by a session grant, not via
+  // TRUSTED_TOOLS. Added 2026-08-10 with camera_look's promotion to the voice
+  // allowlist — the point of that promotion is that "can you see me?" gets an
+  // honest path, and the point of this tier is that a MISHEARD "can you see me?"
+  // cannot open a webcam without the operator saying yes.
+  'camera_on':             3,
   'remember':              0,
   'forget_fact':           2,  // BUG-160 — deletes a durable memory: local write, reversible only by re-remembering, so a notch above remember
   'log_incident':          0,

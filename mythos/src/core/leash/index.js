@@ -150,7 +150,13 @@ function createLeash(deps) {
     kanban_assemble: 1, kanban_build_card: 1, start_project: 1, run_mission: 1,
     delete_file: 1, delete_goal: 1, delete_artifact: 1,
     reminder_approve_action: 1,
-    browser_evaluate: 1, kill_session: 1
+    browser_evaluate: 1, kill_session: 1,
+    // Opening the operator's camera. Not destructive, not outward-facing — but it
+    // turns on a sensor pointed at a person, and the trust list exists to skip
+    // confirms on things whose worst case is a wasted click. Its worst case is a
+    // misheard sentence filming a room, so it stays un-trustable by construction
+    // (see leash/tiers.js's camera_on entry).
+    camera_on: 1
   };
 
   // TRUSTED_TOOLS is parsed ONCE here so a bad entry is reported at boot rather

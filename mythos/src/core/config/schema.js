@@ -465,6 +465,15 @@ const SCHEMA = {
   // bounds the whole dispatch; ollama keep-alive for vision lane)
   CHAIN_ATTEMPT_TIMEOUT_MS:    { type: 'number', default: 30000, min: 1000 },
   VOICE_OLLAMA_KEEP_ALIVE:     { type: 'string', default: '10m' },
+  // Bound on ONE vision look (screen_look / camera_look), deliberately far below
+  // CHAIN_ATTEMPT_TIMEOUT_MS: that is 30s PER ATTEMPT across a seven-model lane,
+  // so a starved free-tier provider can hold a "quick look" past a minute — two
+  // real screen_look calls on 2026-08-10 took 16s and 63s while the operator was
+  // mid-sentence, which is how the model ended up narrating a guess. A look that
+  // outlives this fails honestly instead of arriving after the conversation has
+  // moved on. Raise it only if a slow provider is genuinely preferred to a
+  // truthful "I could not see it in time".
+  VISION_CALL_TIMEOUT_MS:      { type: 'number', default: 12000, min: 1000 },
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply

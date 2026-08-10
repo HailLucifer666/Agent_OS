@@ -170,6 +170,90 @@ describe('live-session (Phase 1, V2 §6)', () => {
     session.close();
   });
 
+  // ...and the other half, later the same day. The check above fired 5 times in
+  // one six-minute conversation (turns 1, 3, 8, 13, 15 of 16) and every one was a
+  // FALSE alarm: those turns were provoked by us — the proactive greeting and
+  // replies to [SYSTEM] late tool outcomes — so there was no operator utterance to
+  // transcribe. scFields carried no inputTranscription for exactly those turns,
+  // which is what proved it.
+  //
+  // It is not a cosmetic false positive. An unplaybooked anomaly gets SPOKEN, so
+  // each one interrupted the conversation it was misreporting to recite an event
+  // name at the operator. A monitor that cries wolf on a third of its samples
+  // teaches everyone to ignore the real one.
+  test('a turn WE provoked with sendText is not reported as half-blind (the operator never spoke)', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const logged = [];
+    const { deps, sockets } = fakeDeps({
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+      logger: { warn() {}, info: (msg, fields) => logged.push({ msg, fields }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    // Exactly what reportLateOutcome() and proactiveSpeak() do: inject text and
+    // let the model answer it.
+    session.sendText('[SYSTEM] screen_look finished. Result: {"description":"a screen"}');
+
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'I can see your screen now.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+
+    const anomalies = busEvents.filter((e) => e.name === 'health.anomaly');
+    assert.equal(anomalies.length, 0,
+      'a turn the operator was never expected to speak in is not evidence of a missing transcript');
+    // The log still says which kind of turn it was, so the next investigation does
+    // not have to infer it from scFields again.
+    const turnLine = logged.find((l) => l.msg === 'live.turn-parts');
+    assert.equal(turnLine.fields.systemInitiated, true);
+    session.close();
+  });
+
+  test('the NEXT turn after a system-initiated one is judged normally again', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const { deps, sockets } = fakeDeps({
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    session.sendText('[SYSTEM] something finished.');
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Noted.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+    // Turn two: nobody injected anything, so a missing user transcript IS the
+    // real bug again. The flag must not latch.
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Here you go.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+
+    const anomalies = busEvents.filter((e) => e.name === 'health.anomaly');
+    assert.equal(anomalies.length, 1, 'the suppression must apply to ONE turn, not latch for the session');
+    assert.equal(anomalies[0].payload.kind, 'live-turn-no-user-transcript');
+    assert.equal(anomalies[0].payload.turnId, 2);
+    session.close();
+  });
+
   // The bug behind the operator-facing symptom: told "something is misfiring
   // while I'm supposedly idle" DURING an active exchange. The idle-rotation
   // counter only ever reset on inputTranscription, so while transcripts were

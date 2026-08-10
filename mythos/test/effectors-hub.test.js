@@ -200,8 +200,12 @@ describe('gate: 100 registered count', () => {
     // + get_app_volume/set_app_mute (from-pc, BUG-161 2026-08-07 — the read
     // oracle and the mute flag for that same per-app audio session, so a
     // relative step ("turn Spotify down a bit") reads the real level first
-    // instead of firing global media keys and claiming success) = 102.
-    assert.equal(hub.count(), 102);
+    // instead of firing global media keys and claiming success) = 102,
+    // + camera_on (from-dashboard, 2026-08-10 — the confirm-gated opener for the
+    // webcam camera_look reads from. With the camera off and no way to ask for it,
+    // "can you see me?" had no honest path at all, and the model substituted a
+    // desktop screenshot and described that instead) = 103.
+    assert.equal(hub.count(), 103);
   });
 });
 

@@ -467,6 +467,40 @@ subscribe(['camera-frame-request'], (msg) => {
   if (image) sendMessage({ type: 'camera-frame', frameReqId: m.frameReqId, image: image });
 });
 
+// Server-initiated camera POWER-ON (camera_on, T3 — the operator has already
+// confirmed by the time this arrives; see leash/tiers.js). Answers with the state
+// the camera loop ACTUALLY reached, never a hopeful one: createCameraLoop().start()
+// returns false on permission denial and on a failed gesture-model load, and both
+// of those are things the operator needs told rather than papered over.
+//
+// This is the fix for the 2026-08-10 incident's dead end: with the camera off and
+// no way to ask for it, "can you see me?" had no honest path, and the model
+// substituted a desktop screenshot and described that instead.
+subscribe(['camera-power-request'], async (msg) => {
+  const m = msg.payload || msg;
+  const ack = (on, state, reason) =>
+    sendMessage({ type: 'camera-power-ack', reqId: m.reqId, on, state, reason: reason || '' });
+  // The PIN gate governs every sensor affordance, exactly as it does for the mic
+  // and every voice path (see toggleVoice) — a locked HUD must not open a camera.
+  if (isGateClosed(pinLockScreen.lockState())) {
+    ack(false, 'locked', 'the HUD is locked');
+    return;
+  }
+  const cam = ensureCamera();
+  if (cam.isActive()) { ack(true, 'watching', ''); return; }
+  try {
+    // start() resolves only once getUserMedia AND the MediaPipe model are ready
+    // and the detect loop is running, so acking on it means a camera_look issued
+    // immediately afterwards does not race the warm-up. It also emits its own
+    // caption on failure, so the operator sees why in the HUD too.
+    const started = await cam.start();
+    if (started && cam.isActive()) ack(true, 'watching', '');
+    else ack(false, 'off', 'the camera did not start — permission may have been denied, or no camera is available');
+  } catch (err) {
+    ack(false, 'error', (err && err.message) ? err.message : String(err));
+  }
+});
+
 // Chrome gesture policy: SpeechRecognition/AudioContext need a user gesture, so
 // the loop object is constructed on the FIRST pointerdown (any click) — but
 // listening still starts only when the user explicitly clicks the mic or orb.
