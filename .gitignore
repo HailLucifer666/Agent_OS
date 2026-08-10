@@ -148,3 +148,10 @@ nodes/.kotlin/
 .qoder/
 .zcode/
 /i-just-installed-the-virtual-sketch.md
+
+# Aether-BLE (HailLucifer666/Aether-BLE) — the BLE proximity mesh MYTHOS talks to
+# for nearest-device speech. Cloned project-local so the voice-node verifier can
+# drive the REAL aggregator.py, same convention as /Hermes Agent/ and
+# /Android Platform Tools/ above: a separate repo with its own history and its
+# own Python venv never belongs inside this one.
+/Aether-BLE/
