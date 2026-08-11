@@ -119,7 +119,7 @@ function evaluatePreflight(facts) {
   }
 
   if (!f.signing) {
-    warnings.push('CSC_LINK is not set — this will be an UNSIGNED build. Windows SmartScreen warns on install, and electron-updater cannot verify a downloaded installer (fine today: autoDownload is false and quitAndInstall is never called)');
+    warnings.push('CSC_LINK is not set — this will be an UNSIGNED build. Windows SmartScreen warns on install. Updates still install: electron-updater skips (does not fail) the signature check when app-update.yml has no publisherName, and the sha512 in latest.yml still gates integrity — see CONTRIBUTING.md for the risk that signing would close');
   }
 
   return { ok: blockers.length === 0, blockers, warnings };
