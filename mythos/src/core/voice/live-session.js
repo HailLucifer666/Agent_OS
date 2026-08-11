@@ -63,16 +63,32 @@ const CORRECTION_PLAN_RE = /Correction plan:\s*/i;
 // narration lead is often followed by more first-person self-talk before the
 // model finally addresses the operator — neither of which the labels above
 // remove on their own. Peel one leading sentence at a time (a numbered step,
-// or an "I ..." sentence) for as long as it has NOT addressed the operator
-// yet ("you"), and stop at the first sentence that has — that sentence is
-// the real reply, or the start of it, and must never be eaten by this.
+// or an "I ..." sentence).
+//
+// CRITICAL fix (2026-08-12 review): this used to stop ONLY when it found a
+// sentence addressing the operator ("you") — an unbounded loop with a
+// content-dependent exit. Most genuine replies never say "you" at all, so on
+// real input (a numbered recipe, an opinion with no direct address, a single
+// terse refusal) the loop ran off the end of the string and returned ''. The
+// call sites gate on `if (onTranscript && cleanedText)`, so an empty result
+// meant the reply never reached the operator — worse than the leak this
+// exists to silence.
+//
+// The "you" check is now an OPTIMISATION on top of a hard structural bound,
+// not the thing that makes this safe: this function is guaranteed to never
+// return an empty/whitespace string when given a non-empty one, because it
+// refuses to peel the last sentence remaining — whatever is left, once
+// peeling would leave nothing behind it, is kept as-is. stripReasoningLead's
+// own final check below is the second, independent layer of that guarantee.
 function peelContinuationSentences(text) {
   let rest = text.replace(/^\s+/, '');
   for (;;) {
     const m = /^(\d+\.[^.?!]*[.?!]|I\b[^.?!]*[.?!])\s*/.exec(rest);
     if (!m) break;
-    if (/\byou\b/i.test(m[1])) break; // addresses the operator — this is the reply
-    rest = rest.slice(m[0].length);
+    const remainder = rest.slice(m[0].length);
+    if (!remainder.trim()) break; // hard bound: never peel the last remaining sentence
+    if (/\byou\b/i.test(m[1])) break; // addresses the operator — treat this as the reply
+    rest = remainder;
   }
   return rest;
 }
@@ -84,21 +100,29 @@ function stripReasoningLead(text) {
   // Unchanged BUG-170 behaviour: a bare label at the very start. Strips only
   // the label — the content behind it is trusted as-is, never peeled further.
   const labelStripped = str.replace(REASONING_LABEL_RE, '');
-  if (labelStripped !== str) return labelStripped;
+  let candidate = labelStripped;
 
-  // Neither leak opened with a bare label, so find the LAST of the new
-  // 2026-08-12 markers and cut everything up to it, then peel any leading
-  // plan steps/self-talk that still haven't addressed the operator.
-  let lastEnd = -1;
-  const narrationMatch = NARRATION_LEAD_RE.exec(str);
-  if (narrationMatch) lastEnd = Math.max(lastEnd, narrationMatch[0].length);
-  const selfCorrectionMatch = SELF_CORRECTION_RE.exec(str);
-  if (selfCorrectionMatch) lastEnd = Math.max(lastEnd, selfCorrectionMatch.index + selfCorrectionMatch[0].length);
-  const correctionPlanMatch = CORRECTION_PLAN_RE.exec(str);
-  if (correctionPlanMatch) lastEnd = Math.max(lastEnd, correctionPlanMatch.index + correctionPlanMatch[0].length);
-  if (lastEnd === -1) return str; // no marker at all — an ordinary reply, untouched
+  if (labelStripped === str) {
+    // No bare label — find the LAST of the new 2026-08-12 markers and cut
+    // everything up to it, then peel any leading plan steps/self-talk that
+    // still haven't addressed the operator.
+    let lastEnd = -1;
+    const narrationMatch = NARRATION_LEAD_RE.exec(str);
+    if (narrationMatch) lastEnd = Math.max(lastEnd, narrationMatch[0].length);
+    const selfCorrectionMatch = SELF_CORRECTION_RE.exec(str);
+    if (selfCorrectionMatch) lastEnd = Math.max(lastEnd, selfCorrectionMatch.index + selfCorrectionMatch[0].length);
+    const correctionPlanMatch = CORRECTION_PLAN_RE.exec(str);
+    if (correctionPlanMatch) lastEnd = Math.max(lastEnd, correctionPlanMatch.index + correctionPlanMatch[0].length);
+    candidate = lastEnd === -1 ? str : peelContinuationSentences(str.slice(lastEnd));
+  }
 
-  return peelContinuationSentences(str.slice(lastEnd));
+  // CRITICAL fix (2026-08-12 review), second and independent layer of the
+  // same invariant: even a single marker that happens to consume the WHOLE
+  // string (e.g. the text is nothing but "Correction plan:") would otherwise
+  // return ''. A false positive that eats the entire reply is worse than the
+  // leak it was trying to silence, so fall back to the untouched original
+  // rather than hand the caller nothing to speak.
+  return candidate.trim() ? candidate : str;
 }
 
 function createLiveSession(deps) {
