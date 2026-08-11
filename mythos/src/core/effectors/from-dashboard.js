@@ -59,6 +59,10 @@ function buildTools(ctx) {
   // rather than throwing. It is the only logger this module uses.
   const logger = ctx.logger;
   const goals = ctx.goals; // BUG-113: raw GoalSystem, optional — commitment ledger read in read_status
+  // A4: identity module, optional — read_status surfaces its current persona
+  // levels (same accessor persona_status uses, effectors/from-persona.js) so
+  // "what's my humor level set at" is answerable without a separate tool.
+  const identity = ctx.identity;
 
   // ---- navigate ----
 
@@ -415,7 +419,14 @@ function buildTools(ctx) {
       // later — best-effort, never blocks status on a ledger read failure.
       let openCommitments = [];
       try { openCommitments = listOpenCommitments(goals) || []; } catch (_) {}
-      return ok({ status, recentJobs: jobs, openCommitments });
+      // A4: report the persona store's actual current levels — never a
+      // fabricated/default set. null when identity isn't available at all,
+      // never a stand-in numbers object.
+      let persona = null;
+      if (identity && typeof identity.getPersonaLevels === 'function') {
+        try { persona = identity.getPersonaLevels(); } catch (_) {}
+      }
+      return ok({ status, recentJobs: jobs, openCommitments, persona });
     } catch (err) {
       return fail(err.message);
     }

@@ -484,6 +484,7 @@ async function main() {
         probes: immune.probes, config: config, fs: memory.fs, bus: bus,
         goals: goals, // BUG-113: raw GoalSystem — read_status surfaces open commitments
         logger: logger, // camera_look's `vision.call` instrumentation (vision-call.js)
+        identity: identity, // A4: read_status surfaces current persona trait levels
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.
