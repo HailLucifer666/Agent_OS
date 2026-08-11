@@ -365,6 +365,18 @@ function createLeash(deps) {
       // (autonomous/cortex calls pass none) -> never matches any grant, which
       // is the desired containment — only the WS connection that actually
       // accepted the confirm gets the session grant.
+      //
+      // This read sits in the tier === 2 || 3 block now, but the WRITE side
+      // (confirmApi.accept() below) still requires TIER_TABLE[grantedTool] ===
+      // 3 before it will ever record a grant. That is deliberate, not
+      // leftover from before the tier-2 widening: session grants are staying
+      // T3-only until an operator decides otherwise, the same way T2's new
+      // reach into operator-present-trust was a decision, not a side effect.
+      // Every current SESSION_GRANTABLE entry is T3, so this read is
+      // unreachable-but-harmless for T2 today. If a T2 tool is ever added to
+      // SESSION_GRANTABLE, this read will start checking a grant accept()
+      // will never write — widen accept()'s tier check in the same change,
+      // or the new entry silently never grants.
       if (SESSION_GRANTABLE[toolName] && goalCtx && goalCtx.connectionId) {
         var sessionExpiry = sessionGrants.get(goalCtx.connectionId + ':' + toolName);
         if (sessionExpiry && Date.now() < sessionExpiry) {
@@ -403,6 +415,13 @@ function createLeash(deps) {
       // bare {tool, args} unchanged. One shape rule, both call sites.
       var granted = acceptedAction && acceptedAction.decision ? acceptedAction.decision : acceptedAction;
       var grantedTool = granted && granted.tool;
+      // TIER_TABLE[grantedTool] === 3 is deliberately NOT widened to 2 here
+      // even though check()'s read side above now sits in a tier === 2 || 3
+      // block. Session grants stay T3-only on purpose — that is an operator
+      // safety decision, not a gap this fix is meant to close. If a T2 tool
+      // is ever added to SESSION_GRANTABLE, this line must widen too, in the
+      // same change, or check() will spend forever looking for a grant this
+      // line will never write.
       if (grantedTool && connectionId &&
           SESSION_GRANTABLE[grantedTool] && TIER_TABLE[grantedTool] === 3) {
         // BUG-142: opportunistic eviction, piggybacked on the one path that grows

@@ -12,7 +12,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { makeLeash } = require('./helpers/leash-fixture');
 
-test('tier 2 above the ceiling reports a tier-2 reason, not tier-4', () => {
+test('tier 2 above the ceiling reports a tier-2 reason, not tier-4', function() {
   const leash = makeLeash({ AUTONOMOUS_MAX_TIER: 1 });
   const res = leash.check({ tool: 'media_key', args: { key: 'play_pause' } }, { goalId: null });
   assert.equal(res.allow, false);
@@ -21,7 +21,7 @@ test('tier 2 above the ceiling reports a tier-2 reason, not tier-4', () => {
   assert.equal(res.reason, 'tier-2-requires-confirm');
 });
 
-test('tier 2 auto-allows for a present operator when the tool is trusted', () => {
+test('tier 2 auto-allows for a present operator when the tool is trusted', function() {
   const leash = makeLeash({ AUTONOMOUS_MAX_TIER: 1, TRUSTED_TOOLS: 'media_key' });
   const res = leash.check(
     { tool: 'media_key', args: { key: 'play_pause' } },
@@ -29,10 +29,11 @@ test('tier 2 auto-allows for a present operator when the tool is trusted', () =>
   );
   assert.equal(res.allow, true);
   assert.equal(res.requireConfirm, false);
+  assert.equal(res.tier, 2);
   assert.equal(res.reason, 'operator-present-trusted');
 });
 
-test('tier 3 behaviour is unchanged', () => {
+test('tier 3 behaviour is unchanged', function() {
   const leash = makeLeash({ AUTONOMOUS_MAX_TIER: 1 });
   const res = leash.check({ tool: 'run_command', args: { cmd: 'dir' } }, { goalId: null });
   assert.equal(res.tier, 3);
