@@ -3480,13 +3480,20 @@ function createServer(deps) {
   });
 
   // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
+  // `unverified` is relayed alongside `ok` (Wave 0 evidence contract): the HUD
+  // must be able to draw "attempted, unconfirmed" as its own state. Dropping it
+  // here is what made the Agent Actions panel tick three ui_type calls that had
+  // typed nothing into a visibly empty Notepad.
+  //
+  // e.type is 'action.completed' | 'action.denied' | 'action.blocked'.
+  // Relaying only {tool, ok, ...} collapsed the last two into "failed" in the
+  // HUD, because they carry no `ok` at all. The state travels explicitly now.
   bus.subscribe('action.*', (e) => {
-    // `unverified` is relayed alongside `ok` (Wave 0 evidence contract): the HUD
-// must be able to draw "attempted, unconfirmed" as its own state. Dropping it
-    // here is what made the Agent Actions panel tick three ui_type calls that had
-    // typed nothing into a visibly empty Notepad.
+    const state = String(e.type || '').split('.')[1] || 'completed';
+    const tool = e.payload.tool || null;
+    if (!tool) logger.warn('action-relay.missing-tool', { state, reason: e.payload.reason });
     const payload = {
-      tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId,
+      tool, state, ok: e.payload.ok, goalId: e.payload.goalId,
       reason: e.payload.reason, unverified: e.payload.unverified,
     };
     pushReplay('action', payload);
