@@ -33,8 +33,7 @@ describe('BUG-170 — stripReasoningLead strips the label, never the reply', () 
   it('strips the labels actually observed leaking', () => {
     for (const lead of ['Reasoning: ', 'reasoning:', 'Thinking: ', 'THOUGHT: ', 'Chain-of-thought: ', '**Reasoning:** ']) {
       const r = stripReasoningLead(lead + 'the volume is now 40 percent');
-      assert.equal(r.stripped, true, 'must strip: ' + JSON.stringify(lead));
-      assert.equal(r.text, 'the volume is now 40 percent');
+      assert.equal(r, 'the volume is now 40 percent', 'must strip: ' + JSON.stringify(lead));
     }
   });
 
@@ -48,19 +47,18 @@ describe('BUG-170 — stripReasoningLead strips the label, never the reply', () 
     ];
     for (const text of keep) {
       const r = stripReasoningLead(text);
-      assert.equal(r.stripped, false, 'must NOT strip: ' + text);
-      assert.equal(r.text, text);
+      assert.equal(r, text, 'must NOT strip: ' + text);
     }
   });
 
   it('removes only the label, never the content behind it', () => {
     const r = stripReasoningLead('Reasoning: I should check the window title first.');
-    assert.equal(r.text, 'I should check the window title first.');
+    assert.equal(r, 'I should check the window title first.');
   });
 
   it('tolerates empty and non-string input', () => {
-    assert.deepEqual(stripReasoningLead(''), { text: '', stripped: false });
-    assert.deepEqual(stripReasoningLead(null), { text: null, stripped: false });
+    assert.equal(stripReasoningLead(''), '');
+    assert.equal(stripReasoningLead(null), null);
   });
 });
 

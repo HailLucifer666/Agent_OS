@@ -42,10 +42,63 @@ const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
 // frozen (spine §3) and an unknown setup field risks killing voice outright.
 const REASONING_LABEL_RE = /^[\s>*_#-]*(?:reasoning|thinking|thought|thoughts|chain[\s-]of[\s-]thought|internal(?:\s+monologue)?)[\s*_]*:[\s*_]*/i;
 
+// 2026-08-12: two more leaks reached speech in a single live session, and the
+// logs showed reasoningStripped: 0 on both turns — the label filter above
+// never fires on this shape, because there is no bare "Reasoning:"-style
+// label at all. Both leaks instead open with a third-person narration of the
+// request ("The user is asking..." / "The user asked...") and, in one of
+// them, a labelled correction/plan header before the real reply.
+//
+// The narration lead has no colon to stop at, so it consumes its own whole
+// sentence rather than just a label. Self-Correction:/Correction plan: are
+// colon-terminated labels like the ones above, so — same philosophy as
+// REASONING_LABEL_RE — only the label itself is cut; they are found anywhere
+// in the text (not anchored), matching the label BUG-118/BUG-170 already
+// tolerate appearing after other reasoning content, not only at position 0.
+const NARRATION_LEAD_RE = /^The user (?:is asking|asked)\b[^.?!]*[.?!]\s*/i;
+const SELF_CORRECTION_RE = /Self-Correction:\s*/i;
+const CORRECTION_PLAN_RE = /Correction plan:\s*/i;
+
+// A plan header is normally followed by its own numbered steps, and a
+// narration lead is often followed by more first-person self-talk before the
+// model finally addresses the operator — neither of which the labels above
+// remove on their own. Peel one leading sentence at a time (a numbered step,
+// or an "I ..." sentence) for as long as it has NOT addressed the operator
+// yet ("you"), and stop at the first sentence that has — that sentence is
+// the real reply, or the start of it, and must never be eaten by this.
+function peelContinuationSentences(text) {
+  let rest = text.replace(/^\s+/, '');
+  for (;;) {
+    const m = /^(\d+\.[^.?!]*[.?!]|I\b[^.?!]*[.?!])\s*/.exec(rest);
+    if (!m) break;
+    if (/\byou\b/i.test(m[1])) break; // addresses the operator — this is the reply
+    rest = rest.slice(m[0].length);
+  }
+  return rest;
+}
+
 function stripReasoningLead(text) {
-  if (!text) return { text: text, stripped: false };
-  const out = String(text).replace(REASONING_LABEL_RE, '');
-  return { text: out, stripped: out !== String(text) };
+  if (!text) return text;
+  const str = String(text);
+
+  // Unchanged BUG-170 behaviour: a bare label at the very start. Strips only
+  // the label — the content behind it is trusted as-is, never peeled further.
+  const labelStripped = str.replace(REASONING_LABEL_RE, '');
+  if (labelStripped !== str) return labelStripped;
+
+  // Neither leak opened with a bare label, so find the LAST of the new
+  // 2026-08-12 markers and cut everything up to it, then peel any leading
+  // plan steps/self-talk that still haven't addressed the operator.
+  let lastEnd = -1;
+  const narrationMatch = NARRATION_LEAD_RE.exec(str);
+  if (narrationMatch) lastEnd = Math.max(lastEnd, narrationMatch[0].length);
+  const selfCorrectionMatch = SELF_CORRECTION_RE.exec(str);
+  if (selfCorrectionMatch) lastEnd = Math.max(lastEnd, selfCorrectionMatch.index + selfCorrectionMatch[0].length);
+  const correctionPlanMatch = CORRECTION_PLAN_RE.exec(str);
+  if (correctionPlanMatch) lastEnd = Math.max(lastEnd, correctionPlanMatch.index + correctionPlanMatch[0].length);
+  if (lastEnd === -1) return str; // no marker at all — an ordinary reply, untouched
+
+  return peelContinuationSentences(str.slice(lastEnd));
 }
 
 function createLiveSession(deps) {
@@ -392,11 +445,11 @@ function createLiveSession(deps) {
         disarmTurnStall(); // BUG-131 — it IS answering
         // BUG-170: strip a leaked reasoning label only while this turn's reply
         // is still empty — see stripReasoningLead's note above.
-        const cleaned = assistantText ? { text: sc.outputTranscription.text, stripped: false }
-                                      : stripReasoningLead(sc.outputTranscription.text);
-        if (cleaned.stripped) noteReasoningStripped('outputTranscription', sc.outputTranscription.text);
-        assistantText += cleaned.text;
-        if (onTranscript && cleaned.text) onTranscript({ role: 'assistant', text: cleaned.text, final: false });
+        const rawOutputText = sc.outputTranscription.text;
+        const cleanedText = assistantText ? rawOutputText : stripReasoningLead(rawOutputText);
+        if (!assistantText && cleanedText !== rawOutputText) noteReasoningStripped('outputTranscription', rawOutputText);
+        assistantText += cleanedText;
+        if (onTranscript && cleanedText) onTranscript({ role: 'assistant', text: cleanedText, final: false });
       }
       const parts = (sc.modelTurn && sc.modelTurn.parts) || [];
       if (parts.length) disarmTurnStall(); // BUG-131 — audio or text is coming back
@@ -417,15 +470,14 @@ function createLiveSession(deps) {
           // BUG-170: the same start-of-turn strip as outputTranscription
           // above. assistantText is the position marker for both paths, so a
           // label arriving on either one is caught exactly once.
-          const cleanedPart = assistantText ? { text: p.text, stripped: false }
-                                            : stripReasoningLead(p.text);
-          if (cleanedPart.stripped) noteReasoningStripped('modelTurn.part', p.text);
+          const cleanedPart = assistantText ? p.text : stripReasoningLead(p.text);
+          if (!assistantText && cleanedPart !== p.text) noteReasoningStripped('modelTurn.part', p.text);
           // Kept separately from assistantText (which only outputTranscription
           // feeds) so the silent-turn check below knows whether the operator
           // was SHOWN a reply, regardless of which channel carried it.
-          turnPartText += cleanedPart.text;
-          if (onTranscript && cleanedPart.text) {
-            onTranscript({ role: 'assistant', text: cleanedPart.text, final: false });
+          turnPartText += cleanedPart;
+          if (onTranscript && cleanedPart) {
+            onTranscript({ role: 'assistant', text: cleanedPart, final: false });
           }
         }
       }
