@@ -12,8 +12,23 @@
 // which removes the specific trigger. And handleLiveToolCalls now suppresses a
 // repeat of a call.id it has already accepted, which closes the general hole for
 // every tool: a re-dispatched world-changing action is not a cosmetic problem.
-// Dedup is on the id alone — two genuine clicks on the same button carry
+// Dedup was on the id alone here — two genuine clicks on the same button carry
 // different ids, so an args-hash would eat legitimate repeated work.
+//
+// UPDATED — MYTHOS Installed-Build Repair Plan A3 (2026-08-12): id-only dedup
+// left a hole this file's own comment predicted was safe to leave: Gemini does
+// not only retry with a REUSED id, it also re-issues a call with a FRESH id
+// once the original already completed in milliseconds (4x open_web in 3s,
+// 13x set_persona_level in 1s — neither ever "still running" for the id guard
+// below to catch). live-tool-adapter.js now layers an ADDITIVE per-turn gate
+// keyed on name+JSON.stringify(args) on top of the id guard (see
+// test/live-duplicate-dispatch.test.js), exempting only a small allowlist of
+// idempotent reads. That gate now also covers "same tool, same args, fresh
+// id" for every non-exempt tool — including browser_click, which is why the
+// two tests below that pinned the OLD "an args-hash would eat legitimate
+// repeated work" boundary now assert the new, tighter behavior instead. The
+// id-based mechanism itself (still-running suppression, browser_switch as a
+// slow tool) is unchanged and still pinned by every other test in this file.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -65,23 +80,27 @@ describe('BUG-120 — the same call.id must never dispatch twice', () => {
     assert.notEqual(first.status, 'duplicate-suppressed', 'the first call is the real one');
   });
 
-  test('a DIFFERENT id for the same tool and args still runs — "click it again" is legitimate', async () => {
+  test('A3: a DIFFERENT id for the same tool and args is now caught by the per-turn signature gate', async () => {
     const { adapter, dispatched } = harness();
 
     await call(adapter, 'call-a', 'browser_click', { selector: '#play' });
     await call(adapter, 'call-b', 'browser_click', { selector: '#play' });
 
-    assert.deepEqual(dispatched, ['browser_click', 'browser_click'],
-      'dedup is on the id, never on an args hash');
+    // isDuplicateCall (the id guard this file pins) still lets a fresh id
+    // through on its own — this dispatched-once outcome comes from the
+    // ADDITIVE name+args gate layered on top of it, not from this guard.
+    assert.deepEqual(dispatched, ['browser_click'],
+      'the per-turn signature gate now suppresses a repeat even under a fresh id — see live-duplicate-dispatch.test.js');
   });
 
-  test('a call with no id is never suppressed — there is nothing to key on', async () => {
+  test('A3: a missing id no longer bypasses dedup — the signature gate keys on name+args, not id', async () => {
     const { adapter, dispatched } = harness();
 
     await call(adapter, undefined, 'browser_click', { selector: '#play' });
     await call(adapter, undefined, 'browser_click', { selector: '#play' });
 
-    assert.equal(dispatched.length, 2, 'a missing id must not collapse two distinct calls into one');
+    assert.equal(dispatched.length, 1,
+      'the id guard alone never had anything to key on here, but the signature gate does');
   });
 
   test('the suppressed repeat is not recorded as a second action in the turn', async () => {

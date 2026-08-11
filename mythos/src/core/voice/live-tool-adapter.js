@@ -218,6 +218,44 @@ function createLiveToolAdapter(deps) {
   // still gets its functionResponse either way (that send is unconditional).
   let turnGeneration = 0;
 
+  // BUG-120 follow-up — 2026-08-12: isDuplicateCall above only suppresses a
+  // repeat of the SAME call.id, and only while that id is still tracked. It
+  // has nothing to say about two calls that carry DIFFERENT ids but identical
+  // {name, args} — which is exactly what a live session produced: four
+  // open_web calls in three seconds (01:43:49-52, tripping the circuit
+  // breaker) and thirteen set_persona_level calls in one second (02:18:47).
+  // Every one of those completed in milliseconds, so there was never a
+  // "still running" window for the id-based guard to catch — by the time the
+  // repeat arrived under its fresh id, the earlier call had already resolved.
+  //
+  // This is a second, ADDITIVE gate — the call.id guard above stays exactly
+  // as it is. It is keyed on name+JSON.stringify(args) and scoped to the
+  // CURRENT turn only: the set is cleared whenever turnGeneration advances
+  // (onLiveTurnComplete), so a legitimate "do it again" request on a later
+  // turn is never blocked, matching isDuplicateCall's own id-reuse rule.
+  // Idempotent reads are exempt — repeating list_windows or read_status is
+  // harmless, so gating them would only add suppression risk for zero safety
+  // benefit; open_web and a persona write are not idempotent, and neither is
+  // anything else not on this list, so the default is to gate.
+  const IDEMPOTENT_READ_TOOLS = {
+    list_windows: true,
+    read_status: true,
+  };
+  let executedSignatureGeneration = turnGeneration;
+  let executedSignatures = new Set();
+
+  function isDuplicateSignature(name, args) {
+    if (IDEMPOTENT_READ_TOOLS[name]) return false;
+    if (executedSignatureGeneration !== turnGeneration) {
+      executedSignatureGeneration = turnGeneration;
+      executedSignatures = new Set();
+    }
+    const signature = `${name}:${JSON.stringify(args || {})}`;
+    if (executedSignatures.has(signature)) return true;
+    executedSignatures.add(signature);
+    return false;
+  }
+
   function sweepPendingConfirms() {
     if (livePendingConfirms.size === 0) return;
     const now = Date.now();
@@ -331,6 +369,23 @@ function createLiveToolAdapter(deps) {
           status: 'duplicate-suppressed',
           message: 'You already issued this exact call and it is still running. It was NOT run a second ' +
             'time. Wait for the original outcome and report that — do not claim anything happened yet.',
+        }});
+        continue;
+      }
+
+      // BUG-120 follow-up: same {name, args} already dispatched earlier THIS
+      // turn under a different call id, whether or not it has already
+      // resolved. Distinct log event name from the id-based guard above so
+      // the two triggers stay tellable apart in the log/anomaly stream; same
+      // status string, since both mean the same thing to the model: nothing
+      // ran a second time.
+      if (isDuplicateSignature(call.name, call.args || {})) {
+        logger.info('live.duplicate-tool-call-signature', { tool: call.name, args: call.args || {} });
+        responses.push({ id: call.id, name: call.name, response: {
+          status: 'duplicate-suppressed',
+          message: 'You already issued this exact call earlier in this turn. It was NOT run a second ' +
+            'time. If that call already finished, use its outcome; otherwise wait for it — do not claim ' +
+            'anything new happened.',
         }});
         continue;
       }
