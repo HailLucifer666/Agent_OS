@@ -122,6 +122,28 @@ test('electron/main.js downloads updates but installs only on an explicit operat
     'there must be an escape hatch that turns the whole thing off');
 });
 
+// Reported by the operator on v0.1.5: "it's taking me through that whole
+// installation process where it's asking me where you want to install this...
+// it does not mention updates." build.nsis is oneClick:false +
+// allowToChangeInstallationDirectory:true, so a NON-silent quitAndInstall shows
+// the full first-install wizard — which reads as "reinstall the whole app", the
+// exact experience in-app updates exist to end. /S reuses the recorded install
+// location and replaces the app in place; the modal above is what already asked
+// permission.
+test('an update installs silently — the setup wizard belongs to a fresh install, not an update', () => {
+  // Comment-stripped: main.js's prose NAMES quitAndInstall() several times to
+  // explain the policy, and a test that reads prose as code fails for the
+  // opposite of the reason it exists (same trap as release-script.test.js).
+  const code = readMainJs().split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const calls = code.match(/quitAndInstall\(([^)]*)\)/g) || [];
+  assert.ok(calls.length >= 2, 'both install paths (the modal and the HUD button) must be covered');
+  for (const call of calls) {
+    assert.match(call, /quitAndInstall\(true,\s*true\)/,
+      `every install path must pass isSilent=true and forceRunAfter=true — found ${call}. ` +
+      'isSilent=false shows the location-picker wizard with no mention of an update on it');
+  }
+});
+
 test('the update state reaches the HUD as strings on one named channel, and installing takes no renderer input', () => {
   const text = readMainJs();
   assert.match(text, /mythos:update-status/,
