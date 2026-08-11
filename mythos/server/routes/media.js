@@ -81,9 +81,14 @@ function mountMediaRoutes(app, deps) {
       if (!decision.allow) {
         return res.status(403).json({
           ok: false,
+          // error + reason carry the same value on purpose: `error` is the
+          // conventional key every other route's failure body uses,
+          // `reason` is what the plan asked this route to add. Keep both —
+          // a future cleanup that drops one silently breaks whichever
+          // client only reads the other.
           error: decision.reason,
           reason: decision.reason,
-          requireConfirm: Boolean(decision.requireConfirm),
+          requireConfirm: !!decision.requireConfirm,
         });
       }
       // AD-1: dispatchAction is always wired by the real server (server/index.js

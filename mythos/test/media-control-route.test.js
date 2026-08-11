@@ -9,11 +9,11 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const { mountMediaRoutes } = require('../server/routes/media');
 
-function appWith(leashResult, calls) {
+function appWith(leashResult, calls, dispatchResult) {
   const app = express();
   mountMediaRoutes(app, {
     leash: { check: (action, ctx) => { calls.push({ action, ctx }); return leashResult; } },
-    dispatchAction: async () => ({ ok: true }),
+    dispatchAction: async () => dispatchResult || { ok: true },
   });
   return app;
 }
@@ -46,6 +46,16 @@ test('a refusal returns its reason in the body', async () => {
   const app = appWith({ allow: false, requireConfirm: true, tier: 2, reason: 'tier-2-requires-confirm' }, calls);
   const res = await post(app, { key: 'next_track' });
   assert.equal(res.status, 403);
+  assert.equal(res.json.ok, false);
+  assert.equal(res.json.error, 'tier-2-requires-confirm');
   assert.equal(res.json.reason, 'tier-2-requires-confirm');
   assert.equal(res.json.requireConfirm, true);
+});
+
+test('a dispatch failure (breaker open, effector error) still returns 200 with ok:false — the widget depends on this contract', async () => {
+  const calls = [];
+  const app = appWith({ allow: true, tier: 2 }, calls, { ok: false, result: 'circuit-open' });
+  const res = await post(app, { key: 'play_pause' });
+  assert.equal(res.status, 200);
+  assert.equal(res.json.ok, false);
 });

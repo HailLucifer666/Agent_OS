@@ -63,13 +63,24 @@ export function mountMedia(el) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key }),
       });
-      if (res.ok) { setTimeout(load, 400); return; }
-      // A refused transport key used to render as a dead button: res.ok was
-      // false and the handler simply returned. Say what happened.
       const body = await res.json().catch(() => ({}));
-      statusEl.textContent = body.reason ? `blocked: ${body.reason}` : `blocked (HTTP ${res.status})`;
+      if (res.ok && body.ok !== false) { setTimeout(load, 400); return; }
+      if (res.ok) {
+        // HTTP 200 but the dispatch itself failed — breaker open, effector
+        // error. Not a policy refusal, so it does not say "blocked".
+        const detail = body.reason || body.error;
+        statusEl.textContent = detail ? `didn't take effect: ${detail}` : "didn't take effect";
+      } else if (res.status >= 500) {
+        // A server-side crash (e.g. the route's own catch, HTTP 502) is not
+        // a policy decision either — "blocked" would misname it.
+        statusEl.textContent = `request failed (HTTP ${res.status})`;
+      } else {
+        // A refused transport key used to render as a dead button: res.ok was
+        // false and the handler simply returned. Say what happened.
+        statusEl.textContent = body.reason ? `blocked: ${body.reason}` : `blocked (HTTP ${res.status})`;
+      }
       statusEl.classList.add('media-idle');
-    } catch (err) {
+    } catch {
       statusEl.textContent = 'control failed: no response from the server';
       statusEl.classList.add('media-idle');
     }
