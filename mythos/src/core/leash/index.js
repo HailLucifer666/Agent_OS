@@ -171,10 +171,10 @@ function createLeash(deps) {
     .forEach(function(name) {
       var why = null;
       if (NEVER_TRUSTABLE[name]) why = 'never-trustable: this tool sends, runs, deletes or executes arbitrary code';
-      else if (TIER_TABLE[name] !== 3) {
+      else if (TIER_TABLE[name] !== 2 && TIER_TABLE[name] !== 3) {
         why = TIER_TABLE[name] === undefined
           ? 'not a known tool — check the spelling against leash/tiers.js'
-          : 'not tier 3 (it is tier ' + TIER_TABLE[name] + ') — trust is T3-only';
+          : 'not tier 2 or 3 (it is tier ' + TIER_TABLE[name] + ') — trust is T2/T3-only';
       }
       if (why) {
         bus.emit('health.anomaly', {
@@ -194,11 +194,13 @@ function createLeash(deps) {
     return !!(ctx && ctx.connectionId && ctx.connectionId !== 'system');
   }
 
-  // TIER_TABLE[name] === 3 is required, mirroring the accept() wrapper below:
-  // T4 stays structurally ineligible, and an unknown tool that fell back to the
-  // T3 fail-safe never matches because it is not in the table at all.
+  // TIER_TABLE[name] === 2 or 3 is required (Tier 2 shares Tier 3's escape
+  // hatches — see the combined grant block below). T4 stays structurally
+  // ineligible, and an unknown tool that fell back to the T3 fail-safe never
+  // matches because it is not in the table at all.
   function isTrusted(name) {
-    return !!trustedTools[name] && !NEVER_TRUSTABLE[name] && TIER_TABLE[name] === 3;
+    return !!trustedTools[name] && !NEVER_TRUSTABLE[name] &&
+      (TIER_TABLE[name] === 2 || TIER_TABLE[name] === 3);
   }
 
   // Keyed by connectionId + ':' + tool (BUG-012 follow-up, security HIGH):
@@ -319,8 +321,13 @@ function createLeash(deps) {
     // untrusted text reaching the spec could steer it), and cortex/index.js
     // passes its own activeGoalId on every autonomous tick. See
     // test/leash-grant-scope.test.js.
-    if (tier === 3) {
-      var goal = (goalCtx && goalCtx.goalId) ? goals.get(goalCtx.goalId) : null;
+    // Tier 2 shares Tier 3's escape hatches. Before this, tier 2 matched no
+    // branch — not the ceiling allow above, not this block — and fell through
+    // to the T4 tail, which refused it with reason 'tier-4-always-confirm' and
+    // gave it no way to ever be granted. That is what made the media widget's
+    // buttons inert and made "play a song" confirm every single time.
+    if (tier === 2 || tier === 3) {
+      var goal = (tier === 3 && goalCtx && goalCtx.goalId) ? goals.get(goalCtx.goalId) : null;
       var goalGrant = (goal && goal.grants) ? goal.grants['3'] : undefined;
       // A legacy pre-scoping grant (bare `true` persisted by an older build) is
       // deliberately NOT honoured: there is no way to recover which tools the
@@ -365,8 +372,9 @@ function createLeash(deps) {
           return failClosedIfUnwritable(tier, sessionWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'session-granted' });
         }
       }
-      var confirm3Write = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'confirm', { reason: 'tier-3-requires-confirm' });
-      return failClosedIfUnwritable(tier, confirm3Write, { allow: false, requireConfirm: true, tier: tier, reason: 'tier-3-requires-confirm' });
+      var confirmReason = 'tier-' + tier + '-requires-confirm';
+      var confirmWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'confirm', { reason: confirmReason });
+      return failClosedIfUnwritable(tier, confirmWrite, { allow: false, requireConfirm: true, tier: tier, reason: confirmReason });
     }
 
     // 5. T4 -> always confirm, never cached
