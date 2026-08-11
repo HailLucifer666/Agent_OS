@@ -3479,17 +3479,27 @@ function createServer(deps) {
     broadcastAll({ type: 'perception', payload: { channel: p.channel, kind: p.kind, salience: p.salience, text: p.text || p.summary } });
   });
 
-  // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
-  // `unverified` is relayed alongside `ok` (Wave 0 evidence contract): the HUD
-  // must be able to draw "attempted, unconfirmed" as its own state. Dropping it
-  // here is what made the Agent Actions panel tick three ui_type calls that had
-  // typed nothing into a visibly empty Notepad.
+  // 'action.denied' | 'action.blocked' | 'action.completed' — the three real
+  // action-outcome events, exact strings from cortex/index.js. `unverified` is
+  // relayed alongside `ok` (Wave 0 evidence contract): the HUD must be able to
+  // draw "attempted, unconfirmed" as its own state. Dropping it here is what
+  // made the Agent Actions panel tick three ui_type calls that had typed
+  // nothing into a visibly empty Notepad.
   //
   // e.type is 'action.completed' | 'action.denied' | 'action.blocked'.
   // Relaying only {tool, ok, ...} collapsed the last two into "failed" in the
   // HUD, because they carry no `ok` at all. The state travels explicitly now.
+  //
+  // 'action.*' is a PREFIX glob (matchGlob in src/core/bus/index.js is
+  // startsWith), so it also catches 'action.speak-requested' — a fourth
+  // event, emitted by main.js's announcer shim and explainer.js, that has its
+  // own dedicated subscriber elsewhere in this file and carries no
+  // `tool`/`ok` at all. This relay is for outcome events only; anything else
+  // is ignored outright rather than painted as a nameless failed row and a
+  // false missing-tool warning.
   bus.subscribe('action.*', (e) => {
     const state = String(e.type || '').split('.')[1] || 'completed';
+    if (state !== 'completed' && state !== 'denied' && state !== 'blocked') return;
     const tool = e.payload.tool || null;
     if (!tool) logger.warn('action-relay.missing-tool', { state, reason: e.payload.reason });
     const payload = {
