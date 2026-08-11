@@ -71,8 +71,21 @@ function mountMediaRoutes(app, deps) {
     try {
       const key = req.body && req.body.key;
       if (!MEDIA_KEYS.includes(key)) return res.status(400).json({ ok: false, error: 'invalid media key' });
-      const decision = leash.check({ tool: 'media_key', args: { key } }, { goalId: null });
-      if (!decision.allow) return res.status(403).json({ ok: false, error: decision.reason });
+      // A click on the dashboard transport IS a present operator — the same
+      // standing as a voice turn. Without a connectionId the leash cannot
+      // apply operator-present trust and every button 403s in silence.
+      const decision = leash.check(
+        { tool: 'media_key', args: { key } },
+        { goalId: null, connectionId: 'dashboard-media-widget' },
+      );
+      if (!decision.allow) {
+        return res.status(403).json({
+          ok: false,
+          error: decision.reason,
+          reason: decision.reason,
+          requireConfirm: Boolean(decision.requireConfirm),
+        });
+      }
       // AD-1: dispatchAction is always wired by the real server (server/index.js
       // passes it into mountMediaRoutes' deps) — the raw effectors.invoke
       // fallback this used to have was dead in production and bypassed the

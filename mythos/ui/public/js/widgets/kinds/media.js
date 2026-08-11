@@ -53,17 +53,26 @@ export function mountMedia(el) {
   // One delegated listener for all 5 buttons — posts the key, then refreshes
   // shortly after so the widget reflects the new state fast (5s poll alone
   // would feel laggy right after a click).
-  controlsEl.addEventListener('click', (e) => {
+  controlsEl.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-key]');
     if (!btn) return;
     const key = btn.dataset.key;
-    fetch('/api/media/control', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key }),
-    }).then((res) => {
-      if (res.ok) setTimeout(load, 400);
-    }).catch(() => {});
+    try {
+      const res = await fetch('/api/media/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      if (res.ok) { setTimeout(load, 400); return; }
+      // A refused transport key used to render as a dead button: res.ok was
+      // false and the handler simply returned. Say what happened.
+      const body = await res.json().catch(() => ({}));
+      statusEl.textContent = body.reason ? `blocked: ${body.reason}` : `blocked (HTTP ${res.status})`;
+      statusEl.classList.add('media-idle');
+    } catch (err) {
+      statusEl.textContent = 'control failed: no response from the server';
+      statusEl.classList.add('media-idle');
+    }
   });
 
   async function load() {
