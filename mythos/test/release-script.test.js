@@ -186,7 +186,12 @@ describe('the release workflow', () => {
   });
 
   it('publishes with the repository-scoped token and asks for no more permission than it needs', () => {
-    const text = fs.readFileSync(WORKFLOW, 'utf8');
+    // Line endings normalised to \n before ANY regex runs. release.yml is CRLF on
+    // disk, so /\npermissions:\n/ below found nothing and this test reported "the
+    // workflow does not declare permissions" about a workflow that declares them
+    // on line 50 — a test failing for the opposite of the reason it exists, which
+    // is the same shape its own comments already complain about twice.
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
     assert.match(text, /GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/,
       'the built-in token is the entire reason this route needs no personal one');
     // Assert the GUARANTEE, not the comment layout: exactly one write scope, and

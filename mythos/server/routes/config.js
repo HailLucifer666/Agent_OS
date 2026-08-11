@@ -12,6 +12,9 @@
 const path = require('path');
 const fs = require('fs');
 const { novaGoalsStats } = require('./goals');
+const { SCHEMA } = require('../../src/core/config/schema');
+const { isSecretShaped } = require('../../src/core/config/settings-store');
+const { findModelFile } = require('../../src/core/setup/model-paths');
 
 function mountConfigRoutes(app, deps) {
   const { config, memory, goalsEffector, kanbanEffector, pipelineEffector } = deps;
@@ -49,16 +52,24 @@ function mountConfigRoutes(app, deps) {
   // wake word is silently dead and git shows nothing, because BOTH directories
   // are ignored. It does not self-heal. With this seam the test points at a
   // temp directory instead and cannot touch real models at all.
-  // Production passes nothing and gets the real path.
-  const wakewordModelsDir = deps.wakewordModelsDir
-    || path.join(__dirname, '..', '..', 'ui', 'public', 'models', 'wakeword');
+  // Production passes nothing and now searches every model directory instead of
+  // one hardcoded path — see the route below and core/setup/model-paths.js.
 
   app.get('/api/config/wakeword', (req, res) => {
-    const dir = wakewordModelsDir;
     const files = ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx'];
-    const modelsPresent = files.every((f) => {
-      try { return fs.statSync(path.join(dir, f)).size > 0; } catch { return false; }
-    });
+    // deps.wakewordModelsDir is the injected test seam and is honoured verbatim.
+    // With no seam, search BOTH the userData-scoped models directory and the
+    // install tree — installer parity (2026-08-11): the downloaders now write to
+    // userData (the install tree ships no models and every update replaces it), so
+    // checking only the install tree would report modelsPresent:false on exactly
+    // the machine that just installed the wake word. deriveWakewordDefaults reads
+    // the SAME rule via config/index.js's wakewordModelsPresent, so the flag and
+    // this route can still never disagree.
+    const modelsPresent = deps.wakewordModelsDir
+      ? files.every((f) => {
+        try { return fs.statSync(path.join(deps.wakewordModelsDir, f)).size > 0; } catch { return false; }
+      })
+      : files.every((f) => Boolean(findModelFile('wakeword', f)));
     res.json({ enabled: config.WAKEWORD_ENABLED, threshold: config.WAKEWORD_THRESHOLD, modelsPresent });
   });
 
@@ -87,6 +98,77 @@ function mountConfigRoutes(app, deps) {
         fps: config.LIVE_SCREEN_FPS,
         quality: config.LIVE_SCREEN_JPEG_QUALITY,
       },
+    });
+  });
+
+  // ---- /api/config/settings — every schema key, its effective value, and WHERE
+  // that value came from. ----
+  //
+  // INSTALLER PARITY (operator, 2026-08-11). The installed .exe and the dev run
+  // execute byte-identical code and behaved nothing alike, and it took two
+  // months to notice because nothing anywhere could answer "what is
+  // VOICE_S2S_ENABLED set to on this machine, and who set it". This route is
+  // that answer: the Settings panel renders it and scripts/parity-check.js
+  // asserts on it, so a future build's drift is a failed check rather than the
+  // operator re-testing every feature by hand.
+  //
+  // AD-8 HOLDS HERE. Secret-shaped keys report presence ONLY — never the value,
+  // not even truncated. test/anti-drift-no-key-to-client.test.js is the guard,
+  // and `redacted:true` is what the panel renders instead of an input box.
+  // identity is undefined in several test harnesses, and a missing dependency
+  // must read as "not known here", never as a fabricated ceiling.
+  function autonomySnapshot() {
+    const identity = deps.identity;
+    const configCeiling = config.AUTONOMOUS_MAX_TIER;
+    if (!identity || typeof identity.getMaxAutonomousTier !== 'function') {
+      return { effective: null, configCeiling, boundariesCeiling: null, source: 'unknown' };
+    }
+    const boundariesCeiling = identity.getMaxAutonomousTier();
+    return {
+      effective: Math.min(configCeiling, boundariesCeiling),
+      configCeiling,
+      boundariesCeiling,
+      source: typeof identity.boundariesSource === 'function' ? identity.boundariesSource() : 'unknown',
+    };
+  }
+
+  app.get('/api/config/settings', (req, res) => {
+    const origins = deps.configOrigins || {};
+    const keys = Object.keys(SCHEMA).sort().map((name) => {
+      const def = SCHEMA[name];
+      const secret = isSecretShaped(name);
+      const value = config[name];
+      return {
+        name,
+        type: def.type,
+        // The default is not a secret even for a secret-shaped key: the schema
+        // ships '' for all of them, and showing it is what makes "unset" legible.
+        default: def.default === undefined ? '' : String(def.default),
+        enum: def.enum || null,
+        required: def.required === true,
+        secret,
+        redacted: secret,
+        // presence, not value
+        set: secret ? (value !== undefined && String(value) !== '') : undefined,
+        value: secret ? undefined : (typeof value === 'boolean' ? value : String(value === undefined ? '' : value)),
+        // 'env' | 'config.json' | '.env' | 'voice-choice' | 'derived' | 'default'
+        origin: origins[name] || 'unknown',
+      };
+    });
+    res.json({
+      file: deps.settingsFile || null,
+      // The effective autonomy ceiling and its provenance — the exact fact whose
+      // invisibility let the approval-prompt incident survive a fresh install.
+      // leash/index.js gates on Math.min of the two ceilings, so both are
+      // reported rather than only the winner. `source` distinguishes a real
+      // boundaries.md from the tier-1 malformed fail-safe and from a fresh vault
+      // with no file (see core/identity/index.js init and boundaries-seed.js).
+      autonomy: autonomySnapshot(),
+      // Writing is the Electron main process's job (mythos:set-setting), not
+      // this server's — the same split keys.json already uses. A plain browser
+      // tab has no bridge, so the panel shows values read-only and says why.
+      writable: false,
+      keys,
     });
   });
 

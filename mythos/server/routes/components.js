@@ -19,9 +19,13 @@
 // downloads racing for the same models directory is how a half-written .onnx
 // happens, and a fire-and-forget 202 would leave the wizard guessing.
 //
-// Honesty: "installed" is never inferred from a zero exit code. The wizard
-// re-reads GET /api/setup/status (doctor's asset rows) afterwards, so a script
-// that exits 0 without producing the file reads as still missing.
+// Honesty: "installed" is never inferred from a zero exit code. This route now
+// re-reads doctor's asset rows ITSELF after each install, retries once if the
+// files are not there, and returns ok:false when a script exits 0 without
+// producing them (installAndVerify below). Before that, the only check happened
+// in the client afterwards — and on the operator's machine nothing checked at all:
+// install-selection.json recorded silero/wakeword/adb as wanted, the wizard's
+// Components step never completed, and the models directory did not exist.
 
 const path = require('path');
 const child_process = require('child_process');
@@ -84,10 +88,87 @@ function mountComponentsRoutes(app, deps) {
     const results = [];
     for (const component of resolved.components) {
       // eslint-disable-next-line no-await-in-loop
-      results.push(await runInstaller(component));
+      results.push(await installAndVerify(component));
     }
     res.json({ results });
   });
+
+  // Did this component's FILES actually appear? doctor's asset rows are the
+  // authority — the same rows GET /api/setup/components reports as `installed`.
+  //
+  // Installer parity (2026-08-11): this check is the whole point. The operator's
+  // install-selection.json recorded silero:true, wakeword:true and adb:true, and
+  // on disk resources/app.asar.unpacked/mythos/ui/public/models/ did not exist at
+  // all. Nothing had lied about a specific download — nobody had ever CHECKED.
+  // A component with no doctorId (autostart) is unobservable here, and says so
+  // rather than claiming success.
+  function verifyInstalled(component) {
+    if (!component.doctorId) return { observable: false, ok: null, detail: 'not observable from the asset report' };
+    let report;
+    try {
+      report = buildReport();
+    } catch (err) {
+      // Could not ask ≠ not installed. Reported as unknown, never as failure.
+      return { observable: false, ok: null, detail: 'asset report failed: ' + err.message };
+    }
+    const row = (report.assets || []).find((a) => a && a.id === component.doctorId);
+    if (!row) return { observable: false, ok: null, detail: `no asset row for ${component.doctorId}` };
+    return { observable: true, ok: row.ok === true, detail: row.detail || '' };
+  }
+
+  // Run the installer, then CHECK, and retry exactly once if the files are not
+  // there. One retry, not a loop: a transient network hiccup or a half-written
+  // file deserves a second attempt, and anything that fails twice is a real
+  // condition the operator needs to see rather than something to keep grinding at
+  // for fifteen more minutes.
+  // VERIFICATION ONLY EVER DEMOTES. A present file cannot promote a non-zero
+  // exit to success: an installer that produced its files AND failed still has
+  // something wrong with it, and reporting "ok" because the bytes happen to be on
+  // disk is how the operator stops reading these results. So:
+  //
+  //   ok = (exit code 0) AND (verified !== false)
+  //
+  // and the retry only fires when a SUCCESSFUL-looking run left nothing behind,
+  // which is the case worth a second attempt.
+  async function installAndVerify(component) {
+    const first = await runInstaller(component);
+    const firstVerify = verifyInstalled(component);
+
+    if (!firstVerify.observable) {
+      // Exit code is all we have. Say so explicitly rather than implying the
+      // files were checked.
+      return { ...first, verified: null, verifyDetail: firstVerify.detail, retried: false };
+    }
+    if (firstVerify.ok) {
+      return { ...first, verified: true, verifyDetail: firstVerify.detail, retried: false };
+    }
+    if (!first.ok) {
+      // The installer already told us it failed, and the files agree. Nothing to
+      // re-run blindly — its own last words are the actionable part.
+      return { ...first, verified: false, verifyDetail: firstVerify.detail, retried: false };
+    }
+
+    // Exited 0 and produced nothing. ONE retry — a transient network hiccup or a
+    // half-written file deserves a second attempt, and anything that fails twice
+    // is a real condition to surface rather than grind at for another 15 minutes.
+    const second = await runInstaller(component);
+    const secondVerify = verifyInstalled(component);
+    if (secondVerify.ok && second.ok) {
+      return { ...second, verified: true, verifyDetail: secondVerify.detail, retried: true };
+    }
+    // FAIL LOUDLY, including when the script exits 0 both times. An installer
+    // that reports success without producing its files is exactly what let
+    // install-selection.json claim three components had been handled.
+    return {
+      ...second,
+      ok: false,
+      verified: false,
+      retried: true,
+      verifyDetail: secondVerify.detail,
+      error: second.error
+        || `${component.label} ran twice and exited successfully, but its files are still missing on disk`,
+    };
+  }
 
   function runInstaller(component) {
     return new Promise((resolve) => {

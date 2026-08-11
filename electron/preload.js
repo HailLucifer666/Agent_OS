@@ -5,15 +5,24 @@
 // the privileged main process.
 //
 // AD-8 (V2 spine §1): "Secrets never reach the renderer." This preload exposes
-// a contextBridge surface of EXACTLY seven functions — getKeyNames, setKey,
-// hasKey, onHotkey, restartServer, onUpdateStatus and installUpdate — and
-// NOTHING that returns a key VALUE. Names, booleans, short strings (onHotkey,
-// onUpdateStatus) and status objects (restartServer, installUpdate) are the only
-// things that cross.
+// a contextBridge surface of EXACTLY nine functions — getKeyNames, setKey,
+// hasKey, onHotkey, restartServer, onUpdateStatus, installUpdate, getSettings
+// and setSetting — and NOTHING that returns a key VALUE. Names, booleans, short
+// strings (onHotkey, onUpdateStatus), status objects (restartServer,
+// installUpdate, setSetting) and NON-SECRET configuration (getSettings) are the
+// only things that cross.
 //
 // There is deliberately no getKey / getValue / read / secret function here.
 // That omission is the regression gate: mythos/test/anti-drift-no-key-to-client.test.js
 // asserts no such function exists on the exposed surface.
+//
+// WHY getSettings DOES return values, and why that is not an AD-8 breach:
+// config.json holds the ~140 non-secret schema keys a packaged install
+// previously had no way to set (see electron/main.js's settings IPC block and
+// mythos/src/core/config/settings-store.js). Secret-shaped names are refused on
+// write by settings-store.js AND filtered again in the main-process handler, so
+// no key value can be in what getSettings resolves to. Booleans and port
+// numbers are configuration, not credentials.
 
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -77,5 +86,21 @@ contextBridge.exposeInMainWorld('mythos', {
   // executable. Resolves to a status object; no key material, no paths.
   installUpdate: function installUpdate() {
     return ipcRenderer.invoke('mythos:install-update');
+  },
+  // getSettings() → { file, values:{KEY:"value"}, unknown[], dropped[], error }
+  // for the NON-SECRET config.json layer only. Takes no arguments: the file it
+  // reads is decided by the main process from app.getPath('userData'), so a
+  // renderer cannot point it at an arbitrary path. See the AD-8 note at the top
+  // of this file for why returning these values is in-bounds.
+  getSettings: function getSettings() {
+    return ipcRenderer.invoke('mythos:get-settings');
+  },
+  // setSetting(name, value) → { ok, needsRestart } | { ok:false, error }.
+  // The main process validates the name against the config SCHEMA and refuses
+  // secret-shaped names outright, so this cannot be used to smuggle a credential
+  // into plain-text storage or to inject an arbitrary env var into the server
+  // child. An empty-string value clears the key rather than storing ''.
+  setSetting: function setSetting(name, value) {
+    return ipcRenderer.invoke('mythos:set-setting', name, value);
   },
 });

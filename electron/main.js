@@ -22,7 +22,29 @@ const child_process = require('node:child_process');
 // checkForUpdates() below for why it is required lazily at its use site.
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
-const { resolveVaultRoot } = require('./vault-migration');
+const { resolveVaultRoot, adoptSiblingVault } = require('./vault-migration');
+const settingsStore = require('../mythos/src/core/config/settings-store');
+
+// ---- ONE app identity -----------------------------------------------------------
+// MUST be the first thing that runs, and specifically before ANY
+// app.getPath('userData') call — Electron caches the userData path on first use,
+// so a later setName is silently ignored.
+//
+// THE BUG (operator, 2026-08-11): package.json `name` is "agent-os" while
+// build.productName is "MYTHOS", and nothing called setName. Electron derives
+// userData from productName when packaged and from `name` otherwise, so the
+// operator's machine ended up with THREE independent brains and no migration
+// between them:
+//   %APPDATA%\Electron  — the dev run (`npm start`, Start Electron App.bat)
+//   %APPDATA%\agent-os  — the installed .exe
+//   %APPDATA%\MYTHOS    — where build/installer.nsh writes install-selection.json
+// The install's vault was therefore a second, empty brain: no
+// Identity/boundaries.md (which clamped the autonomy ceiling to Tier 1 and
+// produced the approval-prompt incident), no operator profile or style, no
+// contacts, and none of the 8 learned skills. Pinning the name to the product
+// name collapses all three onto one path; adoptSiblingVault (below, and in
+// ./vault-migration.js) carries an existing vault across on first boot.
+app.setName('MYTHOS');
 
 // Disable Chromium's background timer/media throttling process-wide. Pairs with
 // per-window backgroundThrottling:false below: the YouTube iframe's media
@@ -384,6 +406,66 @@ ipcMain.handle('mythos:restart-server', async (event) => {
   return { ok: true, restarting: true };
 });
 
+// ---- non-secret settings (config.json) ----------------------------------------
+// The counterpart to the key store above, and the other half of the installer-
+// parity fix. keys.json holds SECRETS, encrypted, and never comes back across
+// the bridge. config.json holds the ~140 non-secret schema keys the packaged
+// build previously had no way to set at all — VOICE_S2S_ENABLED,
+// VOICE_TTS_PROVIDER, WAKEWORD_ENABLED, AUTONOMOUS_MAX_TIER, the AETHER_*/
+// HERMES_* block, the local tool paths. Plain text on purpose: it is read by the
+// forked server through MYTHOS_SETTINGS_PATH, and settings-store.js refuses to
+// write a secret-shaped key into it.
+//
+// Same directory as keys.json, for the same reason: userData is OS-managed,
+// survives reinstall and update, and needs no write access to the install tree.
+function settingsPath() {
+  return path.join(app.getPath('userData'), 'config.json');
+}
+
+// Reading is a value-returning channel, which the key store deliberately does
+// NOT have (AD-8). That is not a contradiction: these keys are non-secret by
+// construction, and settings-store.js's own secret filter is applied again here
+// so a hand-written secret in config.json still never reaches the renderer.
+ipcMain.handle('mythos:get-settings', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:get-settings: denied — sender is not the HUD window');
+  }
+  const read = settingsStore.readSettings({ settingsPath: settingsPath() });
+  const values = {};
+  for (const [name, value] of Object.entries(read.values)) {
+    if (settingsStore.isSecretShaped(name)) continue; // presence is the server's story to tell
+    values[name] = value;
+  }
+  return {
+    file: read.file,
+    values,
+    unknown: read.unknown,
+    dropped: read.dropped,
+    error: read.error || null,
+  };
+});
+
+ipcMain.handle('mythos:set-setting', async (event, name, value) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:set-setting: denied — sender is not the HUD window');
+  }
+  // The name lands verbatim in the child's env at fork() (startChild below), so
+  // the env-injection denylist that guards mythos:set-key guards this too. In
+  // practice no schema key collides with it, which is exactly why the check must
+  // be here rather than assumed.
+  if (typeof name === 'string' && ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
+    return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
+  }
+  const res = settingsStore.writeSetting({ name, value, settingsPath: settingsPath() });
+  if (!res.ok) return res;
+  // Deliberately does NOT restart the server. The wizard/panel calls
+  // mythos:restart-server once, after a batch of edits — one re-fork for ten
+  // changed keys, not ten. Saying "saved" while the running child still has the
+  // old value is the same dishonesty interpretStoreResult already refuses, so
+  // the flag is returned rather than hidden.
+  return { ok: true, needsRestart: true, cleared: res.cleared === true };
+});
+
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
 // its bus.subscribe('ui.open-web', ...) handler) into a real second
@@ -464,12 +546,34 @@ function startChild() {
     explicitEnv: process.env.MYTHOS_VAULT_ROOT,
     oldVaultDir: OLD_VAULT_DIR,
     userDataDir: app.getPath('userData'),
+    // Installer parity: before falling back to the install-tree vault, look for
+    // a vault this machine already has under a SIBLING userData name. See
+    // app.setName at the top of this file for how three of them came to exist,
+    // and adoptSiblingVault in ./vault-migration.js for how one is chosen.
+    siblingUserDataNames: ['agent-os', 'Electron'],
     log,
   });
 
   child = child_process.fork(SERVER_ENTRY, [], {
     cwd: MYTHOS_DIR, // .browser-agent.pid etc. still resolve to mythos/
-    env: { ...process.env, ...decryptedKeysForChild(), MYTHOS_VAULT_ROOT: vaultRoot },
+    env: {
+      ...process.env,
+      ...decryptedKeysForChild(),
+      MYTHOS_VAULT_ROOT: vaultRoot,
+      // Installer parity — where the child reads its non-secret settings.
+      // Injected rather than derived server-side because only the main process
+      // knows Electron's userData path; settings-store.js falls back to a file
+      // beside the vault when this is absent (headless/Docker/tests).
+      MYTHOS_SETTINGS_PATH: settingsPath(),
+      // Downloaded model weights (wake word, Silero VAD, Piper voices) and the
+      // adb platform-tools. userData for the same three reasons as everything
+      // else here: writable without elevation, survives an update, survives a
+      // reinstall. The install tree can do none of those — build.files excludes
+      // mythos/ui/public/models entirely, and an update replaces the tree.
+      // See mythos/src/core/setup/model-paths.js.
+      MYTHOS_MODELS_DIR: path.join(app.getPath('userData'), 'models'),
+      MYTHOS_TOOLS_DIR: path.join(app.getPath('userData'), 'tools'),
+    },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });
   if (childLogStream) {
@@ -572,6 +676,7 @@ function syncVault(flag) {
       explicitEnv: process.env.MYTHOS_VAULT_ROOT,
       oldVaultDir: OLD_VAULT_DIR,
       userDataDir: app.getPath('userData'),
+      siblingUserDataNames: ['agent-os', 'Electron'], // same list startChild passes
       log,
     });
     const res = require('child_process').spawnSync(process.execPath, [script, flag], {

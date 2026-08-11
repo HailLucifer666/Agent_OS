@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron electron/main.js",
     "dist": "electron-builder --win",
+    "parity-check": "node mythos/scripts/parity-check.js",
     "release": "node scripts/release.js"
   },
   "dependencies": {

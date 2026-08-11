@@ -143,7 +143,14 @@ function getStatus() {
   return { state, mode, hint, cdpUrl, pageCount };
 }
 
-async function connect(url) {
+// connect(url, {quiet})
+//
+// `quiet` suppresses ONLY the failure log line, never the state change or the
+// hint — getStatus() still reports the failure verbatim, so nothing becomes
+// invisible. It exists for the auto-connect poller, whose repeated failure is a
+// standing condition rather than news; see startAutoConnect's backoff below.
+async function connect(url, opts) {
+  const quiet = Boolean(opts && opts.quiet);
   // FIX-1: join an in-flight connect instead of racing chromium.connectOverCDP
   // a second time.
   if (connectingPromise) return connectingPromise;
@@ -193,7 +200,9 @@ async function connect(url) {
       state = 'OFFLINE';
       hint = 'CDP connect failed: ' + err.message;
       browser = null;
-      log.warn('browser-agent connect failed', { error: err.message });
+      // The hint above is always set, so a quiet failure is still fully
+      // reportable through getStatus() — only the log line is withheld.
+      if (!quiet) log.warn('browser-agent connect failed', { error: err.message });
       return false;
     } finally {
       connectingPromise = null;
@@ -284,15 +293,78 @@ async function ensureOnline(opts) {
 // timer is unref'd so it never keeps the process alive on its own.
 let autoConnectTimer = null;
 
+// ---- poller backoff (operator, 2026-08-11) -------------------------------------
+//
+// THE LOG SPAM: on the installed build, mythos-server.log carried
+// "browser-agent connect failed … ECONNREFUSED 127.0.0.1:9222" every 15 seconds,
+// forever, each with a full Playwright stack. No debug browser was running and
+// none was going to be — the operator had not asked for one — so this was 5,760
+// stack traces a day burying every real line in the file, on the one machine
+// where a diagnosable log mattered most.
+//
+// The poller's BEHAVIOUR is right and stays: it must keep watching, because a
+// debug Chrome the operator starts by hand ten minutes from now should be picked
+// up without a restart, and it must never launch a browser itself.
+//
+// So this changes the CADENCE and the VOLUME, not the semantics:
+//   - the interval timer still ticks at intervalMs (setInterval, unref'd — the
+//     FIX-5 contract), but an attempt is only made every `factor` ticks;
+//   - `factor` doubles after each failure up to MAX_BACKOFF_FACTOR, so a
+//     15s poller settles at one attempt every 8 minutes;
+//   - the FIRST failure logs at warn, with its message. Subsequent failures are
+//     quiet, and reaching the ceiling logs one info heartbeat so "MYTHOS is still
+//     watching for a debug browser" stays visible without being loud;
+//   - everything resets the moment a connect succeeds, so a browser that appears
+//     late is still picked up promptly afterwards.
+//
+// On-demand launch (ensureOnline/launchLocal/browser_launch_debug) is untouched:
+// it never went through this poller.
+const MAX_BACKOFF_FACTOR = 32;
+
+let autoConnectTicks = 0;      // ticks since the last attempt
+let autoConnectFactor = 1;     // attempt every N ticks
+let autoConnectFailures = 0;   // consecutive failures, for the log policy
+let autoConnectAtCeiling = false;
+
+function resetAutoConnectBackoff() {
+  autoConnectTicks = 0;
+  autoConnectFactor = 1;
+  autoConnectFailures = 0;
+  autoConnectAtCeiling = false;
+}
+
 function startAutoConnect(url, intervalMs, onOnline) {
   stopAutoConnect();
   if (!url || !intervalMs || intervalMs <= 0) return;
+  resetAutoConnectBackoff();
   autoConnectTimer = setInterval(function () {
     if (intentionalDisconnect) return;
     if (state === 'ONLINE' || state === 'CONNECTING') return;
-    connect(url).then(function (ok) {
-      if (ok && typeof onOnline === 'function') {
-        try { onOnline(); } catch (_) { /* best-effort */ }
+
+    autoConnectTicks += 1;
+    if (autoConnectTicks < autoConnectFactor) return; // backing off
+    autoConnectTicks = 0;
+
+    // quiet:true from the second failure onwards — connect() would otherwise
+    // log its own warn (with the Playwright stack) on every single attempt.
+    connect(url, { quiet: autoConnectFailures > 0 }).then(function (ok) {
+      if (ok) {
+        resetAutoConnectBackoff();
+        if (typeof onOnline === 'function') {
+          try { onOnline(); } catch (_) { /* best-effort */ }
+        }
+        return;
+      }
+      autoConnectFailures += 1;
+      if (autoConnectFactor < MAX_BACKOFF_FACTOR) {
+        autoConnectFactor = Math.min(autoConnectFactor * 2, MAX_BACKOFF_FACTOR);
+      } else if (!autoConnectAtCeiling) {
+        autoConnectAtCeiling = true;
+        log.info('browser-agent auto-connect backed off to its slowest cadence — still watching for a debug browser', {
+          url,
+          everyMs: intervalMs * MAX_BACKOFF_FACTOR,
+          failures: autoConnectFailures,
+        });
       }
     }).catch(function () {
       // FIX-5: defensive only — connect() always resolves (true/false), never
@@ -309,6 +381,7 @@ function stopAutoConnect() {
     clearInterval(autoConnectTimer);
     autoConnectTimer = null;
   }
+  resetAutoConnectBackoff();
 }
 
 async function disconnect() {

@@ -34,7 +34,12 @@ const path = require('path');
 
 const PACKAGE_VERSION = '0.0.30'; // pinned — see the sourcing note above
 const MODEL_URL = `https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@${PACKAGE_VERSION}/dist/silero_vad_v5.onnx`;
-const OUT_DIR = path.join(__dirname, '..', 'ui', 'public', 'models', 'silero');
+// Installer parity (2026-08-11) — same reasoning as setup-wakeword.js: the
+// install tree is excluded from build.files and replaced by every update, so a
+// model written there is either absent or destined to disappear. See
+// src/core/setup/model-paths.js.
+const { modelWriteDir } = require('../src/core/setup/model-paths');
+const OUT_DIR = modelWriteDir('silero');
 const OUT_FILE = 'silero_vad.onnx';
 const MIN_BYTES = 500 * 1024; // sanity floor — the real file is ~2.2MB; a truncated/failed download is far smaller
 

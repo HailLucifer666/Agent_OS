@@ -257,7 +257,12 @@ describe('POST /api/setup/components/install', () => {
   it('spawns the allowlisted script for each id, never a request string', async () => {
     const launched = [];
     const s = await serve({
-      buildReport: report,
+      // A report where silero IS installed, i.e. the install worked. The route
+      // now verifies against doctor's asset rows after every install (installer
+      // parity, 2026-08-11), so the shared `report` fixture — which says silero is
+      // missing — would correctly report a failed install and this test would be
+      // asserting the wrong thing about spawn.
+      buildReport: () => ({ assets: [{ id: 'silero', ok: true }] }),
       probeWsl: () => true,
       installSelection: { readInstallSelection: () => ({ found: false, reason: 'absent' }) },
       spawn: fakeSpawn(launched, 0),
@@ -265,8 +270,10 @@ describe('POST /api/setup/components/install', () => {
     try {
       const res = await request(s.port, 'POST', '/api/setup/components/install', { ids: ['silero'] });
       assert.equal(res.status, 200);
-      assert.deepEqual(res.body.results, [{ id: 'silero', ok: true, code: 0, error: '' }]);
-      assert.equal(launched.length, 1);
+      assert.deepEqual(res.body.results, [
+        { id: 'silero', ok: true, code: 0, error: '', verified: true, verifyDetail: '', retried: false },
+      ]);
+      assert.equal(launched.length, 1, 'a verified install must not be retried');
       assert.equal(launched[0].cmd, process.execPath, 'the interpreter is ours, not the caller\'s');
       assert.match(launched[0].args[0], /setup-silero\.js$/);
     } finally { await s.close(); }
@@ -299,6 +306,65 @@ describe('POST /api/setup/components/install', () => {
       assert.equal(res.body.results[0].ok, false);
       assert.match(res.body.results[0].error, /installer said something/,
         'a generic "install failed" is never actionable');
+    } finally { await s.close(); }
+  });
+
+  it('retries ONCE when the installer exits 0 but produces nothing, then fails loudly', async () => {
+    // Installer parity (2026-08-11). This is the shape that let the operator's
+    // install-selection.json record silero/wakeword/adb as handled while
+    // resources/app.asar.unpacked/mythos/ui/public/models/ did not exist: a
+    // zero exit code was the only thing anyone checked.
+    const launched = [];
+    const s = await serve({
+      buildReport: () => ({ assets: [{ id: 'silero', ok: false }] }),
+      probeWsl: () => true,
+      installSelection: { readInstallSelection: () => ({ found: false, reason: 'absent' }) },
+      spawn: fakeSpawn(launched, 0),
+    });
+    try {
+      const res = await request(s.port, 'POST', '/api/setup/components/install', { ids: ['silero'] });
+      assert.equal(launched.length, 2, 'exactly one retry — not zero, and not a loop');
+      const row = res.body.results[0];
+      assert.equal(row.ok, false, 'exit code 0 with no files on disk is NOT a successful install');
+      assert.equal(row.verified, false);
+      assert.equal(row.retried, true);
+      assert.match(row.error, /files are still missing on disk/);
+    } finally { await s.close(); }
+  });
+
+  it('does not retry, and does not claim success, when the installer itself failed', async () => {
+    // Verification only ever DEMOTES. Files that happen to be present cannot
+    // promote a non-zero exit to ok:true — an installer that produced its files
+    // and still failed has something wrong with it, and the operator needs to see
+    // that rather than a green row.
+    const launched = [];
+    const s = await serve({
+      buildReport: () => ({ assets: [{ id: 'wakeword', ok: true }] }),
+      probeWsl: () => true,
+      installSelection: { readInstallSelection: () => ({ found: false, reason: 'absent' }) },
+      spawn: fakeSpawn(launched, 1),
+    });
+    try {
+      const res = await request(s.port, 'POST', '/api/setup/components/install', { ids: ['wakeword'] });
+      assert.equal(launched.length, 1, 'a self-reported failure needs no blind re-run');
+      assert.equal(res.body.results[0].ok, false);
+      assert.match(res.body.results[0].error, /installer said something/);
+    } finally { await s.close(); }
+  });
+
+  it('reports verified:null for a component doctor cannot observe (autostart)', async () => {
+    const s = await serve({
+      buildReport: () => ({ assets: [] }),
+      probeWsl: () => true,
+      installSelection: { readInstallSelection: () => ({ found: false, reason: 'absent' }) },
+      spawn: fakeSpawn([], 0),
+    });
+    try {
+      const res = await request(s.port, 'POST', '/api/setup/components/install', { ids: ['autostart'] });
+      const row = res.body.results[0];
+      assert.equal(row.ok, true, 'the exit code is all there is, and it succeeded');
+      assert.equal(row.verified, null, 'unobservable must never be reported as verified');
+      assert.match(row.verifyDetail, /not observable/);
     } finally { await s.close(); }
   });
 

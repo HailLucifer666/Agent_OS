@@ -10,6 +10,7 @@ const { createLifecycle } = require('./core/lifecycle');
 const { createMemory } = require('./core/memory');
 const { createBrain } = require('./core/brain');
 const { createIdentity } = require('./core/identity');
+const { seedBoundaries } = require('./core/identity/boundaries-seed');
 const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
@@ -100,13 +101,27 @@ async function main() {
   // mythos/.env whenever MYTHOS is launched from anywhere other than the
   // mythos/ directory itself (a service, a shortcut, `node src/main.js` from
   // the repo root, etc.), degrading providers/adapters with no error.
+  //
+  // INSTALLER PARITY (operator, 2026-08-11): mythos/.env is excluded from
+  // package.json build.files, so in the packaged .exe this load finds nothing
+  // and ~140 keys fall to their schema defaults — the root cause behind all
+  // four incidents logged on the freshly installed build (volume oscillation,
+  // Tier-2 approval prompts, dead wake word, the wrong TTS voice). The remedy
+  // is a second config source a packaged install CAN write:
+  // core/config/settings-store.js. For config.json to be able to outrank .env,
+  // loadConfig has to know which keys exist ONLY because of this load — so
+  // snapshot the environment before it and diff afterwards. process.env still
+  // ends up carrying .env exactly as before, so every direct process.env
+  // reader elsewhere in the tree is untouched.
+  const envKeysBeforeDotenv = new Set(Object.keys(process.env));
   try { process.loadEnvFile(path.join(__dirname, '..', '.env')); } catch (_) {}
+  const envFileKeys = new Set(Object.keys(process.env).filter((k) => !envKeysBeforeDotenv.has(k)));
 
   // Render / cloud injects PORT; promote it to MYTHOS_PORT if not explicitly set.
   if (!process.env.MYTHOS_PORT && process.env.PORT) process.env.MYTHOS_PORT = process.env.PORT;
 
   // Step 1: Config
-  const configResult = loadConfig();
+  const configResult = loadConfig({ envFileKeys });
   if (!configResult.ok) {
     console.error('Config errors:', configResult.errors.join(', '));
     process.exit(1);
@@ -127,6 +142,43 @@ async function main() {
     storm: { windowMs: 1000, maxPerWindow: config.BUS_STORM_MAX }
   });
   logger.info('bus.created', bus.stats());
+
+  // The settings overlay reports itself ONCE, here, now that there is a bus to
+  // report on. A key the operator typed into config.json that MYTHOS does not
+  // recognise is otherwise the quietest possible failure: the file looks right,
+  // the value is never applied, and nothing anywhere says so. Same for a file
+  // that failed to parse — settings-store.js deliberately treats that as empty
+  // rather than fatal, which is only defensible if it is also loud.
+  if (configResult.settingsError) {
+    logger.warn('config.settings.unreadable', { file: configResult.settingsFile, error: configResult.settingsError });
+    bus.emit('health.anomaly', {
+      kind: 'config-settings-unreadable',
+      file: configResult.settingsFile,
+      detail: configResult.settingsError,
+    });
+  }
+  if (configResult.settingsUnknown.length || configResult.settingsDropped.length) {
+    logger.warn('config.settings.ignored', {
+      file: configResult.settingsFile,
+      unknown: configResult.settingsUnknown,
+      dropped: configResult.settingsDropped,
+    });
+    bus.emit('health.anomaly', {
+      kind: 'config-settings-ignored',
+      file: configResult.settingsFile,
+      unknown: configResult.settingsUnknown,
+      dropped: configResult.settingsDropped,
+    });
+  }
+  logger.info('config.settings.loaded', {
+    file: configResult.settingsFile,
+    // Which layer won, counted. A packaged install reporting "config.json: 0"
+    // is the parity failure this whole change exists to make visible.
+    origins: Object.values(configResult.origins).reduce((acc, o) => {
+      acc[o] = (acc[o] || 0) + 1;
+      return acc;
+    }, {}),
+  });
 
   // Step 4: Ensure vault directories
   const vaultDirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints'];
@@ -301,10 +353,33 @@ async function main() {
       // leash, cortex) sees a brain wired with real persona injection. memory's
       // own internal `brain` reference (captured by value when createMemory()
       // ran) is unaffected and keeps working exactly as before.
+      // Installer parity (2026-08-11): seed Identity/boundaries.md BEFORE
+      // identity.init() reads it. A fresh install has no boundaries file, and
+      // identity.init() used to treat absent as malformed — clamping the
+      // autonomy ceiling to tier 1 so every Tier-2 tool asked for approval,
+      // which is exactly what the operator's new install did while dev did not.
+      // The seed writes the operator's OWN configured ceiling and never touches
+      // an existing file; see core/identity/boundaries-seed.js for why the write
+      // lives in its own module rather than in identity/ or memory/identity.js.
+      const seeded = seedBoundaries({ fs: memory.fs, config, logger });
+      if (seeded.status === 'failed') {
+        // Not fatal. identity.init()'s absent-file branch still applies the
+        // configured ceiling; the vault is just read-only for this file.
+        logger.warn('identity.boundaries.seed-failed', { error: seeded.error });
+      }
       identity = createIdentity({ bus, config, fs: memory.fs, identityStore: memory.identity });
       await identity.init();
       brain = createBrain({ config, bus, identity });
-      logger.info('identity.ready', {});
+      // The effective autonomy ceiling and WHERE it came from, at boot, in the
+      // log. leash/index.js takes the most restrictive of the two numbers below,
+      // and nothing anywhere used to say what they were — so a ceiling silently
+      // clamped to 1 looked exactly like MYTHOS being cautious.
+      logger.info('identity.ready', {
+        maxAutonomousTier: Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier()),
+        configCeiling: config.AUTONOMOUS_MAX_TIER,
+        boundariesCeiling: identity.getMaxAutonomousTier(),
+        boundariesSource: identity.boundariesSource(),
+      });
     }},
 
     { name: 'goals', fail: 'degraded', fn: async function() {
@@ -706,6 +781,10 @@ async function main() {
 
       serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
+        // Installer parity — which layer set each key, for /api/config/settings
+        // and scripts/parity-check.js. See src/core/config/settings-store.js.
+        configOrigins: configResult.origins,
+        settingsFile: configResult.settingsFile,
         pinLock: pinLock,
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,

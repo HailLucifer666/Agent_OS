@@ -114,17 +114,132 @@ function migrateVault({ src, dest, markerPath, log = () => {} }) {
   return { status: 'migrated' };
 }
 
+// ---- sibling userData adoption (installer parity, 2026-08-11) ------------------
+//
+// app.setName('MYTHOS') (electron/main.js) collapses what used to be three
+// separate userData directories onto one. It does NOT move the data that is
+// already in the other two, and on the operator's machine that data is the
+// entire difference between the two runs:
+//
+//   %APPDATA%\Electron  the dev run — Identity/boundaries.md, operator-profile,
+//                       operator-style, Contacts/contacts.json, 8 learned Skills
+//   %APPDATA%\agent-os  the installed .exe — a second, near-empty brain
+//   %APPDATA%\MYTHOS    the new canonical name (and where the NSIS installer
+//                       already wrote install-selection.json)
+//
+// A missing Identity/boundaries.md is not cosmetic: identity/index.js clamps the
+// autonomy ceiling to Tier 1 when it cannot read that file, which is why the
+// installed build asked for approval on every Tier-2 tool while dev never did.
+//
+// "Richest" = most files, ties broken by bytes. Crude on purpose — it only has
+// to separate a real months-old vault from an empty or one-session one, and a
+// heuristic that can be read off two integers is one the operator can check in
+// the log. EVERY decision is logged, including the candidates NOT chosen.
+function rankVaultCandidates(candidates, statsOf = dirStats) {
+  const scored = [];
+  for (const dir of candidates) {
+    if (!isNonEmptyDir(dir)) { scored.push({ dir, present: false, files: 0, bytes: 0 }); continue; }
+    try {
+      const s = statsOf(dir);
+      scored.push({ dir, present: true, files: s.files, bytes: s.bytes });
+    } catch (err) {
+      scored.push({ dir, present: false, files: 0, bytes: 0, error: err.message });
+    }
+  }
+  const usable = scored.filter((c) => c.present && c.files > 0);
+  usable.sort((a, b) => (b.files - a.files) || (b.bytes - a.bytes));
+  return { ranked: scored, winner: usable[0] || null };
+}
+
+// adoptSiblingVault({dest, siblingDirs, markerPath, log}) -> {status, from?, ...}
+//
+//   'already-done'   marker present — never runs twice.
+//   'dest-non-empty' this install already has its own vault; nothing to adopt.
+//   'no-candidate'   no sibling vault has anything in it (a genuinely new machine).
+//   'adopted'        copied + verified from the richest sibling.
+//   'failed'         copy/verify failed; the marker is NOT written, so the next
+//                    boot retries, and the source is untouched either way.
+function adoptSiblingVault({ dest, siblingDirs = [], markerPath, log = () => {} }) {
+  if (fs.existsSync(markerPath)) return { status: 'already-done' };
+
+  if (isNonEmptyDir(dest)) {
+    writeMarker(markerPath, { status: 'dest-non-empty', at: new Date().toISOString() }, log);
+    return { status: 'dest-non-empty' };
+  }
+
+  const { ranked, winner } = rankVaultCandidates(siblingDirs);
+  for (const c of ranked) {
+    log(`vault-adopt: candidate ${c.dir} — ${c.present ? `${c.files} files/${c.bytes}B` : 'absent or empty'}`
+      + `${c.error ? ` (${c.error})` : ''}${winner && c.dir === winner.dir ? '  <-- richest, adopting' : ''}`);
+  }
+
+  if (!winner) {
+    log('vault-adopt: no sibling vault found — this is a fresh brain.');
+    writeMarker(markerPath, { status: 'no-candidate', candidates: siblingDirs, at: new Date().toISOString() }, log);
+    return { status: 'no-candidate' };
+  }
+
+  const result = copyAndVerify(winner.dir, dest);
+  if (!result.ok) {
+    log(`vault-adopt: FAILED — ${result.error} — ${winner.dir} left untouched`);
+    try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) { /* best-effort cleanup */ }
+    return { status: 'failed', error: result.error, from: winner.dir };
+  }
+
+  log(`vault-adopt: OK — adopted ${winner.dir} -> ${dest} (${winner.files} files; source left in place)`);
+  writeMarker(markerPath, {
+    status: 'adopted', from: winner.dir, to: dest, files: winner.files, bytes: winner.bytes,
+    candidates: ranked.map(({ dir, present, files, bytes }) => ({ dir, present, files, bytes })),
+    at: new Date().toISOString(),
+  }, log);
+  return { status: 'adopted', from: winner.dir, files: winner.files };
+}
+
 // Resolve MYTHOS_VAULT_ROOT for the forked server child.
 //
 // Explicit env ALWAYS wins and skips migration entirely — the operator's own
 // .env, or render.yaml's MYTHOS_VAULT_ROOT=/data/vault, is a deliberate
 // choice this module must never second-guess.
-function resolveVaultRoot({ explicitEnv, oldVaultDir, userDataDir, log = () => {} }) {
+//
+// Order matters. The install-tree vault (oldVaultDir) is checked FIRST because
+// that migration predates this one and its marker may already be written; a
+// sibling userData vault is only adopted when the canonical vault is still
+// empty afterwards. Both are one-time and both refuse to overwrite.
+function resolveVaultRoot({ explicitEnv, oldVaultDir, userDataDir, siblingUserDataNames = [], log = () => {} }) {
   if (explicitEnv) return explicitEnv;
   const dest = path.join(userDataDir, 'vault');
   const markerPath = path.join(userDataDir, 'vault-migration.json');
   migrateVault({ src: oldVaultDir, dest, markerPath, log });
+
+  if (siblingUserDataNames.length) {
+    // Siblings live beside this app's own userData directory — %APPDATA%\<name> —
+    // so derive them from userDataDir's parent rather than reading APPDATA.
+    // That keeps the module free of platform assumptions and testable with a
+    // plain tmpdir, like the rest of this file.
+    const parent = path.dirname(userDataDir);
+    const siblingDirs = siblingUserDataNames
+      .map((name) => path.join(parent, name, 'vault'))
+      .filter((dir) => path.resolve(dir) !== path.resolve(dest));
+    adoptSiblingVault({
+      dest,
+      siblingDirs,
+      // Its OWN marker. Sharing vault-migration.json would mean the install-tree
+      // migration's "no-source" marker (written on every fresh install) also
+      // suppressed sibling adoption forever — which is precisely the case this
+      // exists for.
+      markerPath: path.join(userDataDir, 'vault-adopt.json'),
+      log,
+    });
+  }
   return dest;
 }
 
-module.exports = { migrateVault, resolveVaultRoot, isNonEmptyDir, dirStats, copyAndVerify };
+module.exports = {
+  migrateVault,
+  resolveVaultRoot,
+  adoptSiblingVault,
+  rankVaultCandidates,
+  isNonEmptyDir,
+  dirStats,
+  copyAndVerify,
+};

@@ -57,6 +57,10 @@ function createIdentity({ bus, config, fs, identityStore }) {
   var self = null;        // cached self.md content: { purpose, values, persona }
   var boundaries = null;  // cached boundaries.md content: { deny, max_autonomous_tier, allowed_dirs }
   var levels = null;      // cached persona levels: { humor, warmth, ... }
+  // Which of the three boundary conditions init() resolved: the file was read,
+  // the file was absent (configured ceiling applies), or the file was present
+  // but malformed (§11 tier-1 fail-safe). See init() and boundariesSource().
+  var boundariesSource = 'unloaded';
 
   // REMEDIATION P3-9 (2026-07-29 audit): identity-class claims (the
   // operator's name, or what to call them) are uniquely dangerous — this is
@@ -166,6 +170,13 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // Read-only. No writeText/writeJSON/appendLine/removeFile call anywhere
   // in this function or this file targets BOUNDARIES_PATH.
   function loadBoundaries() {
+    // ABSENT IS NOT MALFORMED (installer parity, 2026-08-11). See init() below
+    // for the incident: a fresh install has no boundaries file, and treating
+    // that as corruption clamped the autonomy ceiling to tier 1 so every Tier-2
+    // tool asked for approval. `present` is what lets init() tell the two apart.
+    // Read-only — fs.exists, like fs.readText, never writes.
+    var present = false;
+    try { present = fs.exists(BOUNDARIES_PATH); } catch (_) { present = false; }
     var raw = fs.readText(BOUNDARIES_PATH, '');
     var deny = [];
     var denyRe = /^deny:\s*(.+)$/gm;
@@ -184,7 +195,7 @@ function createIdentity({ bus, config, fs, identityStore }) {
       }
     }
 
-    return { deny: deny, max_autonomous_tier: max_autonomous_tier, allowed_dirs: allowed_dirs };
+    return { deny: deny, max_autonomous_tier: max_autonomous_tier, allowed_dirs: allowed_dirs, present: present };
   }
 
   return {
@@ -193,12 +204,55 @@ function createIdentity({ bus, config, fs, identityStore }) {
       boundaries = loadBoundaries();
       levels = loadLevels();
 
-      // Validate boundaries — malformed → fail-safe (exact event/kind strings below,
-      // copied verbatim from §11 — do not paraphrase)
-      if (typeof boundaries.max_autonomous_tier !== 'number') {
+      // Validate boundaries. ABSENT and MALFORMED are different conditions and
+      // get different answers (installer parity, 2026-08-11).
+      //
+      // THE INCIDENT: the freshly installed MYTHOS.exe asked for approval on
+      // every Tier-2 tool; the dev run with byte-identical code never did.
+      // app.setName was missing from electron/main.js, so the install's vault
+      // was a different, empty directory with no Identity/boundaries.md at all.
+      // loadBoundaries() read '' from the missing file, the tier parsed as
+      // undefined, this branch called that malformed, clamped the ceiling to 1,
+      // and leash/index.js's Math.min(config, identity) pinned every check to
+      // tier 1 regardless of what the operator had configured.
+      //
+      // MALFORMED (file present, tier unparseable) keeps the §11 fail-safe
+      // verbatim — clamp to 1 plus the exact critical anomaly. A corrupt or
+      // tampered boundaries file must never be able to widen the ceiling, and
+      // test/identity-boundaries-failsafe-contract.test.js holds that shut.
+      //
+      // ABSENT (no file) is a fresh vault, not corruption. The configured
+      // ceiling applies and the anomaly is a distinct, non-critical kind so it
+      // is not confused with tampering. src/core/identity/boundaries-seed.js
+      // normally writes the file during boot before this runs, so reaching this
+      // branch means the seed could not write (read-only vault) — degraded, and
+      // worth saying so, but not a reason to silently narrow the operator's own
+      // ceiling to 1.
+      boundariesSource = 'file';
+      if (!boundaries.present) {
+        var configured = Number(config && config.AUTONOMOUS_MAX_TIER);
+        boundaries.max_autonomous_tier = Number.isInteger(configured) ? configured : 1;
+        boundariesSource = 'absent-config-ceiling';
+        bus.emit('health.anomaly', {
+          kind: 'identity-boundaries-absent',
+          severity: 'warning',
+          detail: 'no Identity/boundaries.md — using the configured AUTONOMOUS_MAX_TIER',
+          max_autonomous_tier: boundaries.max_autonomous_tier,
+        });
+      } else if (typeof boundaries.max_autonomous_tier !== 'number') {
         boundaries.max_autonomous_tier = 1;
+        boundariesSource = 'malformed-failsafe';
         bus.emit('health.anomaly', { kind: 'identity-boundaries-malformed', severity: 'critical' });
       }
+    },
+
+    // WHERE the autonomy ceiling came from: 'file' | 'absent-config-ceiling' |
+    // 'malformed-failsafe'. Exposed so the HUD can render the effective ceiling
+    // and its source. The whole reason the approval-prompt incident survived a
+    // fresh install unnoticed is that this was invisible everywhere — the
+    // operator could see the prompts but not the clamp that caused them.
+    boundariesSource() {
+      return boundariesSource;
     },
 
     // exact name/arity from §11 — do not paraphrase

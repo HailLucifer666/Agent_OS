@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node src/main.js",
     "doctor": "node scripts/doctor.js",
+    "parity-check": "node scripts/parity-check.js",
     "vault-sync": "node scripts/vault-sync.js",
     "test": "node --test",
     "e2e": "node scripts/e2e/run-e2e.mjs"

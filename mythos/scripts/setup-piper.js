@@ -38,7 +38,16 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE = 'https://huggingface.co/rhasspy/piper-voices/resolve/main';
-const OUT_DIR = process.env.PIPER_MODEL_DIR || path.join(__dirname, '..', 'models', 'piper');
+// Installer parity (2026-08-11): prefer the userData-scoped models directory, so
+// a ~60MB voice download survives an update instead of being replaced with the
+// install tree. PIPER_MODEL_DIR still wins outright, and a dev checkout with no
+// Electron around keeps using the historical mythos/models/piper so existing
+// voices are not orphaned. piper-child.js resolves reads the same way.
+const { userDataModelsDir } = require('../src/core/setup/model-paths');
+const LEGACY_PIPER_DIR = path.join(__dirname, '..', 'models', 'piper');
+const userModels = userDataModelsDir();
+const OUT_DIR = process.env.PIPER_MODEL_DIR
+  || (userModels ? path.join(userModels, 'piper') : LEGACY_PIPER_DIR);
 // A medium voice is ~60MB; a truncated download is orders of magnitude smaller.
 const MIN_ONNX_BYTES = 10 * 1024 * 1024;
 const MIN_JSON_BYTES = 500;

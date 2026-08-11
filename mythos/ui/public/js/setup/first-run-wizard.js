@@ -32,6 +32,14 @@ const INERT_SELECTOR = '#hud-canvas, #core-orb, #hud-a11y-root, #widget-root, #o
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome' },
+  // SECOND, before anything is typed by hand (installer parity, 2026-08-11). The
+  // operator's fresh install had none of the ~140 non-secret keys that only ever
+  // lived in mythos/.env, and none of the identity files that only ever lived in
+  // the dev run's vault — which was a different directory entirely, because
+  // electron/main.js never called app.setName. Offering the import BEFORE the key
+  // and component steps means the rest of the wizard starts from what the operator
+  // already has rather than from schema defaults.
+  { id: 'import', title: 'Import' },
   { id: 'lock', title: 'Local lock' },
   { id: 'brain', title: 'Provider keys' },
   { id: 'components', title: 'Components' },
@@ -59,6 +67,9 @@ export function mountFirstRunWizard(root, opts) {
   // landed rather than what was ticked.
   const componentsInstalled = new Set();
   let pinWasSet = false;
+  // Whether the operator imported from an existing MYTHOS on this run, so the
+  // finish step can say that the restart is what makes those settings live.
+  let importedFromExisting = false;
   let index = 0;
   // The voice picker mounted on the finish step, and the things that must run
   // once the server child has actually restarted (the picker asks the server what
@@ -111,7 +122,7 @@ export function mountFirstRunWizard(root, opts) {
     const frag = document.createDocumentFragment();
     frag.append(
       h('h2', 'wiz-step-title', 'Finish setting up MYTHOS'),
-      h('p', 'wiz-lede', 'Nothing is configured on this machine yet. Four short steps: a local PIN, at least one LLM provider key, whatever optional capabilities you want, then a restart so the server picks it all up.'),
+      h('p', 'wiz-lede', 'Nothing is configured on this machine yet. Five short steps: bring an existing MYTHOS across if you have one, a local PIN, at least one LLM provider key, whatever optional capabilities you want, then a restart so the server picks it all up.'),
     );
 
     const list = h('ul', 'wiz-facts');
@@ -122,6 +133,118 @@ export function mountFirstRunWizard(root, opts) {
     ];
     for (const text of facts) list.appendChild(h('li', null, text));
     frag.appendChild(list);
+    return frag;
+  }
+
+  // ---- import from an existing MYTHOS ---------------------------------------
+  // Installer parity (2026-08-11). The operator installed MYTHOS.exe and got a
+  // second, empty brain: ~140 non-secret keys at their schema defaults (mythos/.env
+  // is excluded from package.json build.files, and it was the ONLY place that ever
+  // set VOICE_S2S_ENABLED, VOICE_TTS_PROVIDER, WAKEWORD_ENABLED, the AETHER_*/
+  // HERMES_* block and the local tool paths), and a vault with no
+  // Identity/boundaries.md, no operator profile or style, no contacts and none of
+  // the 8 learned skills. Four incidents in under two minutes followed.
+  //
+  // The scan is read-only, nothing is copied over an existing file, and no secret
+  // VALUE is ever carried — secrets go in the encrypted key store, and their names
+  // are listed here so the operator knows what they still have to re-enter.
+  function stepImport() {
+    const frag = document.createDocumentFragment();
+    frag.append(h('h2', 'wiz-step-title', 'Bring your existing setup across'));
+    const lede = h('p', 'wiz-lede', 'Looking for another MYTHOS on this machine…');
+    frag.appendChild(lede);
+
+    const list = h('ul', 'wiz-cards');
+    const status = h('p', 'wiz-restart-status');
+    status.setAttribute('role', 'status');
+    frag.append(list, status);
+
+    (async () => {
+      let payload = null;
+      try {
+        const res = await doFetch('/api/setup/import/scan', { headers: { Accept: 'application/json' } });
+        if (res.ok) payload = await res.json();
+      } catch { /* handled below */ }
+
+      if (!payload || !Array.isArray(payload.sources)) {
+        // Never a guess: an unanswered probe says so and offers nothing to press.
+        lede.textContent = 'The server did not answer the scan, so nothing is offered here. You can skip this step.';
+        return;
+      }
+      if (!payload.sources.length) {
+        lede.textContent = 'No other MYTHOS installation or source checkout was found on this machine. Nothing to import — skip ahead.';
+        return;
+      }
+
+      lede.textContent = 'These were found on this machine. Importing copies non-secret settings and the files that '
+        + 'shape who MYTHOS is (boundaries, your profile and style, contacts, learned skills). Nothing already set here is overwritten.';
+
+      for (const source of payload.sources) {
+        const card = h('li', 'wiz-card');
+        const head = h('div', 'wiz-card-head');
+        head.append(h('span', 'wiz-card-label', source.label));
+        head.appendChild(h('span', 'wiz-badge', `${source.settingsCount} setting(s)`));
+        if (source.vault) head.appendChild(h('span', 'wiz-badge', `${source.vault.identity.length} identity file(s)`));
+        card.append(head, h('p', 'wiz-card-why', source.dir));
+
+        if (source.secrets.length) {
+          // NAMES, never values. This is the honest half of the import: these are
+          // the credentials the operator still has to type in on the next step.
+          card.appendChild(h('p', 'wiz-card-fix',
+            `Not imported (secrets belong in the encrypted key store): ${source.secrets.join(', ')}`));
+        }
+        if (source.unknown.length) {
+          card.appendChild(h('p', 'wiz-card-fix',
+            `Ignored, not settings MYTHOS recognises: ${source.unknown.slice(0, 6).join(', ')}`));
+        }
+
+        const rowStatus = h('p', 'wiz-comp-status');
+        rowStatus.setAttribute('role', 'status');
+        const importBtn = h('button', 'wiz-primary', 'Import from here');
+        importBtn.type = 'button';
+        importBtn.addEventListener('click', async () => {
+          importBtn.disabled = true;
+          rowStatus.classList.remove('is-error');
+          rowStatus.textContent = 'importing…';
+          let result = null;
+          let failure = '';
+          try {
+            const res = await doFetch('/api/setup/import', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({ dir: source.dir }),
+            });
+            const parsed = await res.json().catch(() => null);
+            if (res.ok && parsed) result = parsed;
+            else failure = (parsed && parsed.error) || `the server refused the import (HTTP ${res.status})`;
+          } catch (err) {
+            failure = (err && err.message) || 'the request never completed';
+          }
+
+          if (!result) {
+            rowStatus.textContent = failure;
+            rowStatus.classList.add('is-error');
+            importBtn.disabled = false;
+            return;
+          }
+          const settingsCount = result.settings ? result.settings.imported.length : 0;
+          const vaultCount = result.vault ? result.vault.copied.length : 0;
+          const skipped = (result.settings ? result.settings.skipped.length : 0)
+            + (result.vault ? result.vault.skipped.length : 0);
+          // "Imported" is not "in effect": settings reach the server in its env at
+          // fork() time, exactly like keys. The finish step performs that restart.
+          rowStatus.textContent = `Imported ${settingsCount} setting(s) and ${vaultCount} identity file(s)`
+            + (skipped ? `; ${skipped} skipped because they are already set here.` : '.')
+            + ' They take effect at the restart on the last step.';
+          importedFromExisting = true;
+          renderFooter();
+        });
+
+        card.append(importBtn, rowStatus);
+        list.appendChild(card);
+      }
+    })();
+
     return frag;
   }
 
@@ -394,10 +517,37 @@ export function mountFirstRunWizard(root, opts) {
     summary.appendChild(h('li', null, pinWasSet
       ? 'A PIN is set — it is asked for the next time the HUD opens.'
       : 'No PIN was set. Anyone at this keyboard can use the HUD.'));
+    if (importedFromExisting) {
+      summary.appendChild(h('li', null,
+        'Settings and identity files were imported from an existing MYTHOS. Like keys, the settings reach the server at the restart below.'));
+    }
     frag.appendChild(summary);
 
     const verdict = wizardCanFinish(catalog, storedThisRun);
     if (!verdict.ok) frag.appendChild(h('p', 'wiz-warn', verdict.reason));
+
+    // The way into every OTHER setting (installer parity, 2026-08-11). Until this
+    // existed, a packaged install had no UI at all for a non-secret schema key —
+    // the wizard's key store only ever handled provider API keys, and mythos/.env
+    // does not ship. ~140 keys were unreachable, which is what left the install
+    // running on defaults it never told anyone about.
+    const settingsBtn = h('button', 'wiz-secondary', 'Open all settings…');
+    settingsBtn.type = 'button';
+    settingsBtn.addEventListener('click', async () => {
+      settingsBtn.disabled = true;
+      try {
+        const mod = await import('./settings-panel.js');
+        mod.mountSettingsPanel(document.body, {
+          fetchImpl: doFetch,
+          bridge,
+          onClose: () => { settingsBtn.disabled = false; },
+        });
+      } catch (err) {
+        settingsBtn.disabled = false;
+        frag.appendChild(h('p', 'wiz-warn', `The settings panel could not be opened: ${(err && err.message) || 'unknown error'}`));
+      }
+    });
+    frag.appendChild(settingsBtn);
 
     frag.appendChild(h('p', 'wiz-lede', 'Keys are handed to the server when its process starts, so a key stored a moment ago is not live yet. Restarting the server child applies them without closing the HUD.'));
 
@@ -446,6 +596,7 @@ export function mountFirstRunWizard(root, opts) {
 
   const RENDERERS = {
     welcome: stepWelcome,
+    import: stepImport,
     lock: stepLock,
     brain: stepBrain,
     components: stepComponents,

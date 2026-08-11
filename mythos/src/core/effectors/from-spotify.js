@@ -200,10 +200,86 @@ function rankCuaPlayCandidates(elements, query) {
     e && (e.role || '').toLowerCase() === 'button' && /^play\b/i.test(e.label || '')
   );
   const terms = cuaQueryTerms(query);
-  if (!terms.length) return playButtons;
-  return playButtons.filter(b =>
-    terms.some(t => (b.label || '').toLowerCase().includes(t))
-  );
+  const matched = terms.length
+    ? playButtons.filter(b => terms.some(t => (b.label || '').toLowerCase().includes(t)))
+    : playButtons;
+  return rejectAlternateVersions(matched, query).candidates;
+}
+
+// ---- alternate-version filter (operator, 2026-08-11, incident 2) ----------------
+//
+// THE INCIDENT: on the newly installed build, "play Highway to Hell" played the
+// LIVE version instead of the studio original. Nothing about the install caused
+// it — the same thing can happen in dev. Since commit e1bd8f2 the play path takes
+// the first accessibility-tree result unconditionally, and when Spotify's own top
+// result for a query is a live cut, a live cut is what plays.
+//
+// OPERATOR'S DECISION, and the whole scope of this change: add a NEGATIVE filter
+// only. Do NOT restore the term-count re-ranking e1bd8f2 removed — that re-sort
+// is what let a short-labelled podcast episode or compilation outrank the real
+// top track ("keeps scrolling and playing the wrong thing"), and it stays gone.
+// Relative order is untouched here; entries are only ever REMOVED.
+//
+// THE UNLESS-THE-OPERATOR-ASKED RULE matters as much as the filter. "play the
+// live version of Highway to Hell" must still work, so a pattern whose own word
+// appears in the utterance is not applied at all. Anything else would be MYTHOS
+// overriding a request it understood perfectly.
+//
+// FAIL-OPEN. If every candidate is filtered out, the unfiltered list is returned
+// and the fallback is logged. A query whose only results are live cuts (a live
+// album, a bootleg-only track) must still play something rather than reporting
+// "no play control found", which would read as a broken integration.
+const ALTERNATE_VERSION_PATTERNS = [
+  // Each entry: the word(s) that disqualify a candidate, and the word(s) in the
+  // operator's own utterance that re-enable it. Deliberately narrow and literal
+  // — a fuzzy version-detector would start rejecting real track titles.
+  { id: 'live', label: /\b(live|en\s+vivo|en\s+directo)\b/i, allowIf: /\b(live|en\s+vivo|en\s+directo|concert|unplugged)\b/i },
+  { id: 'remaster', label: /\bremaster(ed)?\b/i, allowIf: /\bremaster(ed)?\b/i },
+  { id: 'karaoke', label: /\bkaraoke\b/i, allowIf: /\bkaraoke\b/i },
+  { id: 'cover', label: /\bcover\b/i, allowIf: /\bcover\b/i },
+  { id: 'tribute', label: /\btribute\b/i, allowIf: /\btribute\b/i },
+  { id: 'sped-up', label: /\b(sped[\s-]?up|speed[\s-]?up|slowed)\b/i, allowIf: /\b(sped[\s-]?up|speed[\s-]?up|slowed)\b/i },
+  { id: 'instrumental', label: /\binstrumental\b/i, allowIf: /\binstrumental\b/i },
+];
+
+// rejectAlternateVersions(candidates, query) ->
+//   {candidates, rejected:[{label,pattern}], fellBack:bool}
+//
+// Exported through _internal for test/spotify-rank-candidates.test.js. Pure: the
+// only side effect is the fallback log line, which exists because a silent
+// fallback would look identical to the filter never having run.
+function rejectAlternateVersions(candidates, query) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  const utterance = String(query || '');
+  // Only the patterns the operator did NOT ask for are in play.
+  const active = ALTERNATE_VERSION_PATTERNS.filter(p => !p.allowIf.test(utterance));
+  if (!active.length || !list.length) return { candidates: list, rejected: [], fellBack: false };
+
+  const rejected = [];
+  const kept = list.filter((c) => {
+    // The a11y label is "Play <title> <artist/album>" — one string carrying both
+    // the title and the album, which is why a single test covers "title or album"
+    // without a second field to read.
+    // `label` on the cua-driver a11y path, `name` on the older pc-child
+    // ui_elements path (searchAndPlay). Both carry "<title> <artist/album>" in
+    // one string, which is why a single test covers "title or album" here.
+    const label = String((c && (c.label || c.name)) || '');
+    const hit = active.find(p => p.label.test(label));
+    if (hit) { rejected.push({ label, pattern: hit.id }); return false; }
+    return true;
+  });
+
+  if (!kept.length) {
+    console.warn('[spotify] every result matched an alternate-version pattern ('
+      + rejected.map(r => r.pattern).join(', ')
+      + ') for query "' + utterance + '" — falling back to Spotify\'s own first result');
+    return { candidates: list, rejected, fellBack: true };
+  }
+  if (rejected.length) {
+    console.warn('[spotify] skipped ' + rejected.length + ' alternate-version result(s) for query "'
+      + utterance + '": ' + rejected.map(r => r.pattern + ' → ' + r.label).join('; '));
+  }
+  return { candidates: kept, rejected, fellBack: false };
 }
 
 // Read Spotify's window title via cua-driver — when a track is playing the
@@ -417,6 +493,13 @@ async function searchAndPlay({ query, pid }) {
     return enterResult;
   }
 
+  // Same alternate-version filter the cua-driver path applies (operator,
+  // 2026-08-11, incident 2: "play Highway to Hell" played the live cut). Applied
+  // BEFORE scoring rather than after, so a live version cannot win the score and
+  // then be dropped, leaving the Enter-key fallback to play it anyway. Fails open
+  // when every result is a live/remaster cut — see rejectAlternateVersions.
+  const playable = rejectAlternateVersions(trackItems, query).candidates;
+
   // Try to find best match using the full query
   const queryLower = query.toLowerCase();
   // Remove common filler words
@@ -428,7 +511,7 @@ async function searchAndPlay({ query, pid }) {
   let bestMatch = null;
   let bestScore = 0;
 
-  for (const item of trackItems) {
+  for (const item of playable) {
     if (!item.name) continue;
     const nameLower = item.name.toLowerCase();
     let score = 0;
@@ -803,5 +886,5 @@ module.exports = {
   // WAVE 5 — exported for test/spotify-nowplaying-honesty.test.js. This predicate
   // IS the fix for the right-artist-wrong-song case, and verifying it needs no
   // live Spotify window, unlike the cua path around it.
-  _internal: { trackPortionMatches, titleSatisfiesQuery, rankCuaPlayCandidates }
+  _internal: { trackPortionMatches, titleSatisfiesQuery, rankCuaPlayCandidates, rejectAlternateVersions }
 };

@@ -26,6 +26,7 @@ import { mountAuthGate } from './auth/auth-gate.js';
 import { mountStatusBanner } from './status-banner.js';
 import { mountUpdateBanner } from './update-banner.js';
 import { mountSetupScreen } from './setup/setup-screen.js';
+import { mountComponentBanner } from './setup/component-banner.js';
 import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
 
@@ -68,6 +69,16 @@ mountUpdateBanner(document.getElementById('status-banner-root'));
 // never asked for a key at all. setupScreen.open() is the manual route back in
 // (the key button in the compose bar).
 const setupScreen = mountSetupScreen(document.getElementById('setup-root'));
+
+// Says out loud when a component the operator ASKED FOR during install is not
+// actually on disk (installer parity, 2026-08-11). The installer recorded
+// silero/wakeword/adb as wanted, downloaded none of them, and said nothing — so
+// the wake word was simply dead and the only symptom was that "hey jarvis" did
+// nothing. Paints nothing on a fully-installed machine, and nothing at all on an
+// indeterminate probe. See setup/component-banner.js.
+mountComponentBanner(document.getElementById('status-banner-root'), {
+  onOpenSetup: () => { try { setupScreen.open(); } catch (_) { /* screen not mountable here */ } },
+});
 
 // §7.3 local PIN lock — the enforcement point the backend never had. Mounted
 // here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status

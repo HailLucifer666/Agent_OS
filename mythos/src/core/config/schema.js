@@ -585,6 +585,31 @@ const SCHEMA = {
   // (V2 §16). See .env.example for the full story on each key, including the
   // voice choice.
   VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
+
+  // ---- record-window volume ducking, and its anti-feedback bounds ----
+  //
+  // ADDED TO THE SCHEMA 2026-08-11 (installer parity). All five were
+  // `Number(process.env.X) || default` inside server/index.js, which put them
+  // OUTSIDE the config schema — and therefore outside userData/config.json, the
+  // only place a packaged install can put a setting. So the exact bounds that stop
+  // the volume feedback loop could not be tuned on the build that reported the
+  // loop. Defaults are transcribed from those expressions unchanged, so .env and
+  // every existing deployment behave identically. See server/index.js's duckAudio
+  // comment for what each one does and the incident that produced them.
+  //
+  // An operator on VOICE_S2S_ENABLED (the dev configuration, and the derived
+  // default when a Google key is present) never reaches this code at all — Live
+  // duplex has no record-window ducking.
+  DUCK_VOLUME_LEVEL:           { type: 'number', default: 15, min: 0, max: 100 },
+  DUCK_MIN_HOLD_MS:            { type: 'number', default: 800, min: 0 },
+  DUCK_COOLDOWN_MS:            { type: 'number', default: 1200, min: 0 },
+  // Consecutive mic-hot windows that ended with no utterance dispatched before
+  // ducking backs off entirely. A window that heard nobody was not a person.
+  DUCK_FALSE_MAX:              { type: 'number', default: 2, min: 1 },
+  DUCK_SUPPRESS_MS:            { type: 'number', default: 30000, min: 0 },
+  // Restores the volume even if the client never sends unduck (dropped
+  // connection, crash). In the schema for the same reason as the four above.
+  UNDUCK_SAFETY_MS:            { type: 'number', default: 15000, min: 1000 },
   GEMINI_LIVE_MODEL:           { type: 'string', default: 'models/gemini-3.1-flash-live-preview' },
   // Aoede | Kore | Leda | Zephyr | Puck | Charon — Aoede kept as default (see
   // .env.example): auditioning by ear across all six needs a human with

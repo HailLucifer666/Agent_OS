@@ -27,11 +27,17 @@ const { createBus } = require('../src/core/bus');
 // original P0-3 contract (duck to 15, restore the ORIGINAL level, never
 // re-capture a ducked level), which is unchanged; the bounds are shortened here
 // so these stay millisecond-scale unit assertions. The hysteresis itself has its
-// own file, test/duck-hysteresis.test.js. createServer() reads these at call
-// time, and node:test gives every test file its own process, so setting them at
-// module scope affects nothing else.
-process.env.DUCK_MIN_HOLD_MS = '20';
-process.env.DUCK_COOLDOWN_MS = '20';
+// own file, test/duck-hysteresis.test.js.
+//
+// CHANGED 2026-08-11 (installer parity): these were set on process.env at module
+// scope. server/index.js now reads the ducking bounds from CONFIG, because
+// env-only keys are outside the config schema and therefore cannot be set in a
+// packaged install at all — the bounds that stop the volume feedback loop were
+// untunable on the very build that reported the loop. They are supplied through
+// baseDeps' config below instead, which is also a truer statement of what these
+// tests exercise.
+const SHORT_HOLD_MS = 20;
+const SHORT_COOLDOWN_MS = 20;
 
 const { createServer } = require('../server');
 
@@ -42,7 +48,15 @@ function fakeFs() {
 function baseDeps(bus, overrides) {
   return Object.assign({
     bus,
-    config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000 },
+    config: {
+      MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3,
+      ACTION_TIMEOUT_MS: 30000,
+      // Shortened so these stay millisecond-scale unit assertions; the duck TARGET
+      // (15) is the P0-3 contract this file is actually about and is left at its
+      // real default.
+      DUCK_MIN_HOLD_MS: SHORT_HOLD_MS,
+      DUCK_COOLDOWN_MS: SHORT_COOLDOWN_MS,
+    },
     logger: { info() {}, warn() {}, error() {} },
     memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() },
     goalsEffector: { listGoals: () => [], stats: () => ({ total: 0, done: 0, active: 0 }) },

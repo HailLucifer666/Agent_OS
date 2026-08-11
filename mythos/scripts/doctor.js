@@ -42,6 +42,13 @@ const REPO_ROOT = path.resolve(MYTHOS_DIR, '..');
 const silero = require('./setup-silero.js');
 const wakeword = require('./setup-wakeword.js');
 const android = require('./setup-android.js');
+const { findModelFile, userDataModelsDir } = require('../src/core/setup/model-paths');
+
+// Does this directory hold at least one .onnx voice? Mirrors piper-child.js's own
+// test so the two never disagree about "installed".
+function dirHasOnnx(dir) {
+  try { return fs.readdirSync(dir).some((f) => f.endsWith('.onnx')); } catch { return false; }
+}
 
 // ---- environment ------------------------------------------------------------
 // Same convention as src/main.js: .env is loaded into process.env, and a real
@@ -71,11 +78,19 @@ function keyStoreNames() {
   // Resolved from the environment (never a hardcoded user path) and treated as
   // absent rather than fatal when it is not there, because a headless install
   // has no Electron store at all.
-  // TWO product names, both real: Electron names userData after build.productName
-  // ("MYTHOS") in a packaged build, and after package.json's `name` ("agent-os")
-  // in an unpackaged dev run. Checking only one silently reports "no key store"
-  // on whichever install the operator is actually using.
-  const products = ['MYTHOS', 'agent-os'];
+  // THREE product names, all real on a machine with any history. Checking only
+  // one silently reports "no key store" on whichever install the operator is
+  // actually using.
+  //
+  // CORRECTED 2026-08-11 (installer parity): this used to say userData is
+  // "MYTHOS in a packaged build and agent-os in an unpackaged dev run", which is
+  // backwards and misses a third directory. electron/main.js never called
+  // app.setName, so Electron used package.json's `name` ("agent-os") for the
+  // PACKAGED app and the literal "Electron" for a dev run out of node_modules,
+  // while build.productName ("MYTHOS") is only what NSIS wrote to. main.js now
+  // pins app.setName('MYTHOS'), so new runs of both use the first name here; the
+  // other two remain because existing machines still hold keys under them.
+  const products = ['MYTHOS', 'agent-os', 'Electron'];
   const candidates = [];
   for (const product of products) {
     if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, product, 'keys.json'));
@@ -151,11 +166,22 @@ function fileAtLeast(file, minBytes) {
 }
 
 function assetChecks() {
-  const wakewordDir = path.join(MYTHOS_DIR, 'ui', 'public', 'models', 'wakeword');
+  // Installer parity (2026-08-11): search EVERY model directory, not just the
+  // install tree. The downloaders now write to a userData-scoped directory
+  // (mythos/ui/public/models is excluded from build.files and is replaced by
+  // every update), so a hardcoded install-tree path would report "missing" on
+  // exactly the machine that just installed the models — and this report is what
+  // the wizard's Components step trusts to decide whether an install worked.
+  // See src/core/setup/model-paths.js.
   const missingWakeword = wakeword.REQUIRED_ASSETS
-    .filter((name) => !fileAtLeast(path.join(wakewordDir, name), 100 * 1024));
+    .filter((name) => !findModelFile('wakeword', name));
 
-  const piperDir = process.env.PIPER_MODEL_DIR || path.join(MYTHOS_DIR, 'models', 'piper');
+  const userModels = userDataModelsDir();
+  const legacyPiperDir = path.join(MYTHOS_DIR, 'models', 'piper');
+  // Same order piper-child.js's defaultModelDir() applies, so doctor and the
+  // runtime can never disagree about where the voices are.
+  const piperDir = process.env.PIPER_MODEL_DIR
+    || (userModels && dirHasOnnx(path.join(userModels, 'piper')) ? path.join(userModels, 'piper') : legacyPiperDir);
   let piperVoices = [];
   try {
     piperVoices = fs.readdirSync(piperDir).filter((f) => f.endsWith('.onnx'));

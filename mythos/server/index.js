@@ -26,6 +26,12 @@ const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispat
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
 const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
+// Installer parity (2026-08-11): do not DECLARE a tool whose adapter or
+// credentials do not exist on this machine — the fresh install fired
+// gmail_unread/media_status/spotify_status against neither. See tool-capability.js.
+const { buildCapabilitySnapshot } = require('../src/core/voice/tool-capability');
+// Where downloaded model weights live now that the install tree cannot hold them.
+const { userDataModelsDir } = require('../src/core/setup/model-paths');
 const {
   createLiveToolAdapter, SYSTEM_NOTICE_PREFIX, LIVE_SYSTEM_NOTICE_INSTRUCTION,
 } = require('../src/core/voice/live-tool-adapter');
@@ -38,6 +44,12 @@ const { createLatencyTracker } = require('../src/core/voice/latency-tracker');
 const skillsLoader = require('../src/core/skills/loader');
 // createNewsFeed moved to routes/news.js (W9 god-file decomposition).
 const pcChild = require('../adapters/pc-child');
+// Read-only status singletons for the Live capability snapshot above. Requiring
+// an adapter module starts nothing — each one only spawns on its explicit
+// start*/connect call, which main.js owns.
+const browserAgentAdapter = require('../adapters/browser-agent');
+const cuaDriverAdapter = require('../adapters/cua-driver');
+const androidChildAdapter = require('../adapters/android-child');
 const version = require('../src/core/identity/version');
 const { isProviderDown } = require('../src/core/immune/probes');
 const { createPinSessionStore } = require('../src/core/security/pin-session');
@@ -274,8 +286,11 @@ function createServer(deps) {
   // captures and restores the real pre-duck level (server/index.js duckAudio/
   // unduckAudio), so these only control the duck TARGET and the fallback timer.
   // Defaults unchanged (15 / 15000). Verify live before altering restore logic.
-  const DUCK_VOLUME_LEVEL = Number(process.env.DUCK_VOLUME_LEVEL) || 15;
-  const UNDUCK_SAFETY_MS = Number(process.env.UNDUCK_SAFETY_MS) || 15000; // restore even if the client never sends unduck (dropped connection, crash)
+  // From config, not process.env, for the reason spelled out at DUCK_MIN_HOLD_MS
+  // below: a key read straight from the environment cannot be set in a packaged
+  // install at all. Default unchanged (15).
+  const DUCK_VOLUME_LEVEL = Number(config.DUCK_VOLUME_LEVEL) || 15;
+  const UNDUCK_SAFETY_MS = Number(config.UNDUCK_SAFETY_MS) || 15000; // restore even if the client never sends unduck (dropped connection, crash)
   // HYSTERESIS (operator, 2026-08-11). Ducking is self-cancelling with media
   // playing: the duck quiets the room, the RMS VAD then sees silence and stops
   // recording, the unduck restores full volume, and the music immediately
@@ -301,10 +316,23 @@ function createServer(deps) {
   // without an utterance being dispatched was not a person. Two of those in a row
   // and ducking backs off entirely for DUCK_SUPPRESS_MS — the loop stops instead
   // of merely slowing down. A single real utterance clears the count.
-  const DUCK_MIN_HOLD_MS = Number(process.env.DUCK_MIN_HOLD_MS) || 800;
-  const DUCK_COOLDOWN_MS = Number(process.env.DUCK_COOLDOWN_MS) || 1200;
-  const DUCK_FALSE_MAX = Number(process.env.DUCK_FALSE_MAX) || 2;
-  const DUCK_SUPPRESS_MS = Number(process.env.DUCK_SUPPRESS_MS) || 30000;
+  // Read from CONFIG, not straight from process.env (installer parity,
+  // 2026-08-11). These four were `Number(process.env.X) || default`, which means
+  // they were invisible to the config schema and therefore unsettable from
+  // userData/config.json — the only place a PACKAGED install can put a setting.
+  // So the very bounds that stop the volume feedback loop could not be tuned on
+  // the build that reported the loop. Found by scripts/parity-check.js naming them
+  // as "not reported by /api/config/settings"; now in schema.js with these exact
+  // defaults, so .env keeps working and config.json works too.
+  // The `|| default` is kept for one specific reason: several tests construct
+  // createServer with a hand-built partial `config` object rather than a validated
+  // one, and an undefined here would silently become NaN in every comparison
+  // below — a hysteresis that never engages, with no error anywhere. The defaults
+  // are the same values schema.js now carries.
+  const DUCK_MIN_HOLD_MS = Number(config.DUCK_MIN_HOLD_MS) || 800;
+  const DUCK_COOLDOWN_MS = Number(config.DUCK_COOLDOWN_MS) || 1200;
+  const DUCK_FALSE_MAX = Number(config.DUCK_FALSE_MAX) || 2;
+  const DUCK_SUPPRESS_MS = Number(config.DUCK_SUPPRESS_MS) || 30000;
   let preDuckVolume = null;
   let unduckSafetyTimer = null;
   let duckedAt = 0;          // when the current duck started
@@ -960,6 +988,32 @@ function createServer(deps) {
 
   app.use(gzipTextAssets);
 
+  // Downloaded model weights, from the userData-scoped models directory.
+  //
+  // MOUNTED BEFORE ui/public ON PURPOSE, and this mount is what actually makes
+  // the wake word work in a packaged install. The browser-side loaders fetch
+  // '/models/wakeword/*.onnx' (ui/public/js/voice/wakeword.js) and
+  // '/models/silero/silero_vad.onnx' (voice/silero-vad.js) over HTTP — so a
+  // weight file that is not SERVED is a weight file that does not exist, however
+  // correctly it was downloaded. package.json build.files excludes
+  // mythos/ui/public/models, and scripts/setup-wakeword.js / setup-silero.js now
+  // write to userData instead (the install tree is replaced by every update), so
+  // without this mount the download would succeed and the feature would still be
+  // dead. The ui/public mount below still serves a dev checkout's own models.
+  const userModelsDir = userDataModelsDir();
+  if (userModelsDir) {
+    app.use('/models', express.static(userModelsDir, {
+      // Content-addressed in practice: these files are pinned release assets that
+      // only change when a downloader is re-run, and they are multi-megabyte.
+      etag: true, lastModified: true, maxAge: IMMUTABLE_MAX_AGE, immutable: true, setHeaders: immutableHeaders,
+      // A missing file must fall through to the ui/public mount below, not 404
+      // here — that is how a machine holding its models in the OLD location keeps
+      // working with no migration step.
+      fallthrough: true,
+    }));
+    logger.info('models.served', { dir: userModelsDir });
+  }
+
   app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), {
     etag: true, lastModified: true, maxAge: 0, setHeaders: appAssetHeaders,
   }));
@@ -1027,6 +1081,16 @@ function createServer(deps) {
     // that test no longer has to move the operator's real models aside; see
     // the comment at the resolution site for the EPERM data-loss it prevents.
     wakewordModelsDir: deps.wakewordModelsDir,
+    // Installer parity — loadConfig's origin map (src/core/config/index.js) so
+    // /api/config/settings can report which layer set each key. Undefined in
+    // tests and any caller that did not thread it through; the route then says
+    // origin:'unknown' rather than guessing.
+    configOrigins: deps.configOrigins,
+    settingsFile: deps.settingsFile,
+    // For /api/config/settings' autonomy block — the effective ceiling and
+    // whether it came from a real boundaries.md, a fresh vault, or the tier-1
+    // malformed fail-safe. Already a createServer dep; passed through, not new.
+    identity,
   });
 
   // ---- /api/media — Windows SMTC now-playing (W9: extracted to routes/media.js) ----
@@ -1098,6 +1162,12 @@ function createServer(deps) {
   // allowlist mapping an id to a fixed script + argv, so no request string ever
   // reaches spawn(). See routes/components.js. ----
   require('./routes/components').mountComponentsRoutes(app, {});
+
+  // ---- /api/setup/import — bring configuration and identity across from an
+  // existing MYTHOS on this machine. The scan is read-only and the import writes
+  // only what the operator confirms; secret values are never carried. See
+  // routes/import-existing.js and src/core/setup/import-existing.js. ----
+  require('./routes/import-existing').mountImportRoutes(app, { config, logger });
 
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
@@ -2366,11 +2436,40 @@ function createServer(deps) {
         });
       }
       if (!liveSession) {
-        const { declarations, withheld } = buildFunctionDeclarations(effectors, {
+        const { declarations, withheld, unavailable } = buildFunctionDeclarations(effectors, {
           allowlist: String(config.LIVE_TOOL_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
+          // Do not declare a tool whose machinery is absent on this machine.
+          // The freshly installed build fired gmail_unread / media_status /
+          // spotify_status before the operator had spoken, against credentials
+          // and adapters the install does not have. Built HERE, per session, not
+          // at boot: an adapter that comes online later must become declarable
+          // on the next session without a restart. See core/voice/tool-capability.js.
+          capability: buildCapabilitySnapshot({
+            config,
+            // The adapter modules are singletons holding their own connection
+            // state, and pc-child is already require()d at the top of this file
+            // for exactly that reason. getStatus() is a pure read; requiring
+            // these starts nothing.
+            adapters: {
+              browser: browserAgentAdapter,
+              cua: cuaDriverAdapter,
+              pcChild,
+              android: androidChildAdapter,
+            },
+          }),
           log: (m) => logger.info('live-tools', { detail: m }),
         });
         if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
+        // Logged as its own event, not folded into the line above: "withheld by
+        // curation" and "withheld because this machine cannot do it" are
+        // different findings and only one of them is a setup problem.
+        if (unavailable && unavailable.length) {
+          logger.warn('live-tools.unavailable', {
+            count: unavailable.length,
+            tools: unavailable.map((u) => u.name),
+            reasons: [...new Set(unavailable.map((u) => u.reason))],
+          });
+        }
         liveSession = createLiveSession({
           // liveConfigNow() carries a voice picked in the HUD since boot.
           // live-session.js reads GEMINI_LIVE_VOICE ONCE, at construction

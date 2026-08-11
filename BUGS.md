@@ -9,7 +9,16 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-07 (later) — BUG-175/176 in the LAST section: the wake
+Last updated: 2026-08-11 - BUG-179..BUG-184 in the LAST section: the installer
+shipped byte-identical code and none of the configuration. Four incidents on a
+fresh install, all fixed and verified for two months on the dev run, traced to
+two root causes: mythos/.env is the only config source and is not packaged, and
+three userData directories with no migration between them. There is now a
+settings layer a packaged install can write, one app identity, and
+`npm run parity-check` so a future build is verified mechanically instead of by
+re-testing every feature by hand. Baseline 3745 tests, 3744 pass, 0 fail, 1 skip.
+
+Previous entry: 2026-08-07 (later) — BUG-175/176 in the LAST section: the wake
 word was DEAF, not mute (openWakeWord's `spec/10 + 2` mel transform was missing,
 measured 0.0073 -> 0.998 on a real spoken "hey jarvis"), and the dashboard was
 curated to nine cards whose positions are now MEASURED rather than declared.
@@ -4669,3 +4678,243 @@ blocks in `widgets-ported.test.js`, `manage-widget.test.js`,
 
 **NOT VERIFIED:** rendering below 1920px wide. The clamp path is unit-tested
 but has not been looked at in a real browser at, say, 1366x768.
+
+---
+
+## Session (2026-08-11) — BUG-179..BUG-184: the installer shipped the code and none of the configuration
+
+**The report.** The operator installed the newly built `MYTHOS.exe`, ran it for
+under two minutes, and it logged four incidents into
+`%APPDATA%\agent-os\vault\Incidents\2026-08-11.jsonl` — every one of which had
+been fixed and verified during two months of work on the Electron dev run:
+
+1. system volume slammed between 100% and 15% with no operator intent;
+2. Spotify played the live version of "Highway to Hell", not the studio original;
+3. Tier-1/Tier-2 approval prompts fired although autonomy was configured not to
+   require them;
+4. the wake word was dead.
+
+Plus, from `%APPDATA%\agent-os\mythos-server.log`: `browser-agent connect
+failed …ECONNREFUSED 127.0.0.1:9222` every 15 seconds forever, and boot-time
+unprompted tool batches (`media_status`, `spotify_status`, `gmail_unread`)
+against adapters and credentials the install does not have.
+
+**THE CODE WAS NOT THE PROBLEM, and that is the finding.** A file-by-file hash
+comparison of the installed `app.asar` + `app.asar.unpacked` against the working
+tree showed all 409 files under `mythos/**` byte-identical, including that day's
+uncommitted voice work. Nothing was missing from the package except two files
+edited 26 minutes after the build (`electron/main.js`, `electron/preload.js`).
+
+The entire regression surface was **runtime configuration and vault state that
+the installer had no way to receive.** Four incidents that each looked like a
+separate bug were four symptoms of two root causes.
+
+### BUG-179 — `mythos/.env` is the only config source, and it is not shipped
+
+`package.json` `build.files` excludes `mythos/.env`, and `mythos/src/main.js`
+loaded configuration from exactly that one file. So ~140 schema keys silently
+fell back to their defaults in the install, and **there was no UI anywhere in the
+packaged build to set a non-secret key** — the first-run wizard's key store only
+ever exposed provider API keys. Dev's `.env` was the only place that ever set
+`VOICE_S2S_ENABLED=true`, `VOICE_TTS_PROVIDER=gemini`, `WAKEWORD_ENABLED=true`,
+the `AETHER_*`/`HERMES_*` block, the Gmail OAuth triple and the local tool paths.
+
+**FIXED.** New `mythos/src/core/config/settings-store.js` — a flat
+`{KEY:"value"}` JSON at `<userData>/config.json`, injected into the server child
+as `MYTHOS_SETTINGS_PATH`. Precedence, applied in `loadConfig` and asserted by
+test: `process.env` > `userData/config.json` > `mythos/.env` > schema default.
+Unknown keys are dropped and reported once on `health.anomaly` rather than
+sitting in the file looking applied; secret-shaped keys are refused on write and
+stay in the encrypted key store. `loadConfig` now also returns an **origin map**
+(`env` / `config.json` / `.env` / `voice-choice` / `derived` / `default`), served
+by `GET /api/config/settings`, because "VOICE_S2S_ENABLED is false" and
+"VOICE_S2S_ENABLED is false because nothing ever set it" are different problems
+and only the second one says what to do. Reachable from the HUD via a new
+Settings panel (`ui/public/js/setup/settings-panel*.js`) over two new
+main-process IPC channels, plus a wizard **Import** step and
+`src/core/setup/import-existing.js` that carries a dev checkout's non-secret keys
+and identity files across — scanning read-only, never overwriting, never moving a
+secret value.
+
+### BUG-180 — three userData directories, no migration (the empty second brain)
+
+`package.json` `name` is `agent-os`, `build.productName` is `MYTHOS`, and nothing
+called `app.setName`. So Electron derived userData from `name` for the packaged
+app and from the literal `Electron` for a dev run, while NSIS wrote to
+`productName`:
+
+    %APPDATA%\Electron   the dev run
+    %APPDATA%\agent-os   the installed .exe
+    %APPDATA%\MYTHOS     install-selection.json
+
+The install's vault was therefore a second, independent brain with none of dev's
+`Identity/boundaries.md`, `operator-profile.txt`, `operator-style.txt`,
+`Contacts/contacts.json` or 8 learned `Skills/*.md`.
+
+**FIXED.** `electron/main.js` calls `app.setName('MYTHOS')` before any
+`getPath('userData')`, and `electron/vault-migration.js` gained
+`adoptSiblingVault` — on first boot, if the canonical vault is empty, it ranks
+`%APPDATA%\{agent-os,Electron}\vault` by file count then bytes, copies the
+richest, verifies, and writes its OWN marker (sharing the install-tree
+migration's marker would have let that migration's `no-source` entry suppress
+adoption forever on every fresh install). Every candidate considered is logged,
+including the ones rejected. `install-selection.js` and `doctor.js` had the
+mapping **backwards** in their comments — corrected, with `Electron` added to
+both path lists. `build/installer.nsh` needed no change: it was writing
+`$APPDATA\MYTHOS` correctly all along; the app was the wrong half.
+
+### BUG-181 — a missing `boundaries.md` was read as a corrupt one (incident 3)
+
+`identity/index.js` `init()` forced `boundaries.max_autonomous_tier = 1` and
+emitted `identity-boundaries-malformed` whenever the tier did not parse — and a
+file that does not exist reads as `''`, which does not parse. `leash/index.js`
+takes `Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier())`, so
+the ceiling was pinned to 1 regardless of configuration and every Tier-2 tool
+asked for approval.
+
+**FIXED.** Absent and malformed are now different conditions. Absent → the
+configured ceiling applies, with a distinct non-critical
+`identity-boundaries-absent` anomaly; malformed → the §11 fail-safe is unchanged,
+clamp to 1 plus the exact critical anomaly (both contract tests still green).
+New `src/core/identity/boundaries-seed.js` writes a commented `boundaries.md` at
+the operator's own configured ceiling during boot, from its own module because
+two contract tests correctly forbid `identity/index.js` and `memory/identity.js`
+from writing that path at all. The effective ceiling and its source are now in
+the boot log, in `GET /api/config/settings`, and in the Settings panel — the
+clamp can never be invisible again.
+
+### BUG-182 — models were delivered to a directory that does not ship (incident 4)
+
+The wake-word detector bug was already fixed (BUG-175) and
+`deriveWakewordDefaults` arms `WAKEWORD_ENABLED` as soon as the weights are on
+disk. **Delivery** was broken three ways: the models live under
+`mythos/ui/public/models`, which `build.files` excludes, so a packaged install has
+no models directory at all; the installer recorded `silero:true, wakeword:true,
+adb:true` and fetched nothing; and even a successful download wrote into the
+install tree, which an update replaces wholesale — so every upgrade would have
+silently un-installed the wake word again.
+
+**FIXED.** New `src/core/setup/model-paths.js`: downloaders write to a
+userData-scoped models directory (`MYTHOS_MODELS_DIR`, injected by Electron),
+readers search userData first and the install tree second so an existing machine
+needs no migration, and a zero-byte file counts as absent because that is what a
+failed download leaves behind. `server/index.js` now SERVES that directory at
+`/models` ahead of `ui/public` — the browser-side loaders fetch weights over
+HTTP, so an unserved weight file does not exist however correctly it downloaded.
+`setup-android.js` moves platform-tools to `MYTHOS_TOOLS_DIR` for the same
+update-survival reason. `POST /api/setup/components/install` now verifies each
+install against doctor's asset rows, retries exactly once when a script exits 0
+having produced nothing, and returns `ok:false` when it fails twice —
+verification only ever DEMOTES, so files that happen to be present can never
+promote a failed installer to green. A standing HUD banner
+(`ui/public/js/setup/component-banner.js`) names any component that was selected
+during setup and is not on disk. `scripts/setup-piper.js` **already existed** —
+the plan's claim that it was missing was stale.
+
+### BUG-183 — 92 tools declared to the Live model, regardless of whether they can run
+
+`voice/live-tools.js` declared its curated allowlist unconditionally. Curation
+answers "is this a spoken verb?"; nothing answered "does the machinery behind
+this exist here?". So a fresh install declared Gmail tools with no OAuth, phone
+tools with no adb and browser tools with no CDP, and the model called them
+before the operator had spoken.
+
+**FIXED.** New `src/core/voice/tool-capability.js` gates each declaration on a
+per-session capability snapshot (credentials present / adapter online / a device
+actually attached), and the withheld-for-unavailable set is logged SEPARATELY
+from the withheld-by-allowlist set — one is a curation decision to revisit, the
+other is a machine that needs setting up, and merging them is how a missing adb
+reads as somebody's choice. Deliberately narrow: any tool no rule names is
+available, and an adapter that cannot be asked counts as available, because
+wrongly withholding a working tool makes the model improvise with the nearest
+reachable one, which is the failure mode half of that file's comments are about.
+
+### BUG-184 — the CDP poller logged a full stack every 15 seconds, forever
+
+5,760 stack traces a day on the one machine where a diagnosable log mattered
+most, for a debug browser the operator had not asked for.
+
+**FIXED.** `startAutoConnect` keeps its `setInterval` (and its unref contract)
+but only attempts every `factor` ticks, doubling to a 32x ceiling — a 15s poller
+settles at one attempt every 8 minutes. The first failure logs at warn with its
+message; the rest are quiet; reaching the ceiling logs one info heartbeat so
+"still watching for a debug browser" stays visible without being loud. Everything
+resets on a successful connect. On-demand launch is untouched, and `getStatus()`
+still reports every failure verbatim — only the log line is withheld.
+
+### Incident 1 (the volume loop) — no new code, and why
+
+Both halves had already landed the same day: ducking hysteresis in
+`server/index.js` and the S2S parity derivation in `voice-defaults.js`
+(`deriveLiveVoiceDefaults` turns Live on when a Google key is present, which
+keeps the run off the ducking path entirely). The incident predates that build.
+What was missing was a way for the packaged install to be ON that path at all,
+which is BUG-179. **Still to be confirmed on the installed build** — see the
+manual smoke list below; nothing here claims it fixed.
+
+### Deliberately NOT changed
+
+- `live.reasoning-stripped … spokenAnyway:true` — honest and documented; the
+  audio has already played by the time the strip is detected.
+- the 12s `vision.call` bound — added deliberately after the webcam incident.
+- Spotify result re-ranking — the operator's decision was a **negative filter
+  only**. `rejectAlternateVersions` skips live / remaster / karaoke / cover /
+  tribute / sped-up / instrumental candidates **unless the operator's own
+  utterance contains that word**, preserves relative order, keeps the
+  2-candidate probe cap, and falls OPEN (with a log line) when every candidate is
+  filtered — a track that only exists as a live cut must still play. The
+  term-count re-sort that `e1bd8f2` removed stays removed.
+- bundling edge-tts (LGPLv3, deliberately BYO).
+
+### The guard, so this is never re-tested by hand again
+
+`npm run parity-check` (`mythos/scripts/parity-check.js`) attaches to a running
+server and asserts, as named machine-checked facts: the effective value AND
+origin of every parity-critical key; that no config file contributed zero keys;
+the effective autonomy ceiling versus the configured one and its source; the
+wake-word and Silero weights as files; that the TTS chain resolves to a provider
+which exists on this machine; and that the vault holds `boundaries.md`, the
+operator profile and style, contacts and at least one learned skill. Exit
+non-zero with a named list on any failure; an unanswerable check reports
+indeterminate rather than failing. Run it against both the dev run and the
+install — the two reports must match.
+
+**The parity check found a sixth defect on its very first live run, which is the
+point of it.** `DUCK_VOLUME_LEVEL`, `DUCK_MIN_HOLD_MS`, `DUCK_COOLDOWN_MS`,
+`DUCK_FALSE_MAX`, `DUCK_SUPPRESS_MS` and `UNDUCK_SAFETY_MS` were read as
+`Number(process.env.X) || default` inside `server/index.js`, i.e. **outside the
+config schema** — so the exact bounds that stop the volume feedback loop could not
+be set in a packaged install at all, on the build that reported the loop. They are
+now schema keys with the same defaults, read from `config`, and
+`test/duck-hysteresis.test.js` sets them through config rather than through the
+environment. The check also asked for `/api/health` instead of `/health` and
+reported the 404 as a failure — fixed.
+
+**Live-verified.** Against a server booted with those seven keys supplied ONLY by
+a `config.json` (no `.env` entry for any of them) and an empty vault, all 23
+checks pass and the exit code is 0: `boundaries.md` was seeded at 1001B, the
+autonomy source reads `file` with effective ceiling 2 matching the configured 2,
+and every parity key reports `origin: config.json`. That is a packaged-shaped
+configuration reproducing the dev run, measured rather than asserted.
+
+`test/packaged-config-parity.test.js` is the unit-level equivalent and **is the
+test that would have caught every item above**: it loads config with no `.env`
+and a representative `config.json` and asserts the effective values equal the dev
+run's, including one case that pins the original bug (no config file at all →
+Live off, wake word off, both at `origin:'default'`).
+
+Baseline after this work: **3745 tests, 3744 pass, 0 fail, 1 skip.** Two
+pre-existing test defects were fixed on the way, both failing for the opposite
+of the reason they exist: `release-script.test.js` regexed `\npermissions:\n`
+against a CRLF file and reported that a workflow declaring permissions on line
+50 did not declare them, and `spotify-rank-candidates.test.js` had "Live" in an
+order-preservation fixture.
+
+**NOT VERIFIED — needs the operator on the installed build**, in this order:
+launch → the wizard's Components step completes and verifies → say the wake word
+→ ask for a Tier-2 action and get no approval prompt → "play Highway to Hell" and
+hear the studio version → play music and hold a Live conversation for two
+minutes, then check `%APPDATA%\MYTHOS\vault\Audit\*.jsonl` for
+`actor:'voice-ducking'` rows (expected: zero) and `Incidents\*.jsonl` (expected:
+empty). The four incidents in `Incidents/2026-08-11.jsonl` stay OPEN until that
+pass runs.

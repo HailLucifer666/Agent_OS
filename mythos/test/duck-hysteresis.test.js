@@ -56,6 +56,18 @@ function deps(bus, spy) {
     config: {
       MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3,
       ACTION_TIMEOUT_MS: 30000,
+      // CHANGED 2026-08-11 (installer parity): the ducking bounds now come from
+      // CONFIG, not straight from process.env. They were env-only, which put them
+      // outside the config schema and therefore outside userData/config.json — the
+      // only place a packaged install can set anything. So the bounds that stop the
+      // volume feedback loop could not be tuned on the build that reported the loop.
+      // These tests set them here now, which is also a truer description of what
+      // they are exercising: the hysteresis, not the env-reading mechanism.
+      DUCK_VOLUME_LEVEL: 15,
+      DUCK_MIN_HOLD_MS: HOLD_MS,
+      DUCK_COOLDOWN_MS: COOLDOWN_MS,
+      DUCK_FALSE_MAX: 2,
+      DUCK_SUPPRESS_MS: 30000,
     },
     logger: { info() {}, warn() {}, error() {} },
     memory: {
@@ -103,8 +115,6 @@ function setLevels(calls) {
 }
 
 test('a duck/unduck storm with no speech backs off instead of ping-ponging', async () => {
-  process.env.DUCK_MIN_HOLD_MS = String(HOLD_MS);
-  process.env.DUCK_COOLDOWN_MS = String(COOLDOWN_MS);
   const c = await connect();
   try {
     // Twenty cycles at the rate the operator's log shows — the VAD arming on
@@ -124,15 +134,11 @@ test('a duck/unduck storm with no speech backs off instead of ping-ponging', asy
       + 'got: ' + JSON.stringify(levels));
     assert.equal(levels[levels.length - 1], 100, 'the volume must be left restored, never stuck at the duck level');
   } finally {
-    delete process.env.DUCK_MIN_HOLD_MS;
-    delete process.env.DUCK_COOLDOWN_MS;
     await c.close();
   }
 });
 
 test('a window that DID produce speech never counts against the back-off', async () => {
-  process.env.DUCK_MIN_HOLD_MS = String(HOLD_MS);
-  process.env.DUCK_COOLDOWN_MS = String(COOLDOWN_MS);
   const c = await connect();
   try {
     // Three real turns: duck, speak, restore — repeatedly. Ducking must survive
@@ -148,15 +154,11 @@ test('a window that DID produce speech never counts against the back-off', async
     const ducks = setLevels(c.spy.calls).filter((l) => l === 15).length;
     assert.equal(ducks, 3, 'a real conversation must keep getting its ducking — got ' + ducks);
   } finally {
-    delete process.env.DUCK_MIN_HOLD_MS;
-    delete process.env.DUCK_COOLDOWN_MS;
     await c.close();
   }
 });
 
 test('a short utterance still gets its volume back — the restore is deferred, never dropped', async () => {
-  process.env.DUCK_MIN_HOLD_MS = String(HOLD_MS);
-  process.env.DUCK_COOLDOWN_MS = String(COOLDOWN_MS);
   const c = await connect();
   try {
     c.duck();
@@ -167,15 +169,11 @@ test('a short utterance still gets its volume back — the restore is deferred, 
     await sleep(HOLD_MS + 120);
     assert.deepEqual(setLevels(c.spy.calls), [15, 100], 'the deferred restore must actually fire');
   } finally {
-    delete process.env.DUCK_MIN_HOLD_MS;
-    delete process.env.DUCK_COOLDOWN_MS;
     await c.close();
   }
 });
 
 test('after the cooldown a genuine second utterance ducks again', async () => {
-  process.env.DUCK_MIN_HOLD_MS = String(HOLD_MS);
-  process.env.DUCK_COOLDOWN_MS = String(COOLDOWN_MS);
   const c = await connect();
   try {
     c.duck();
@@ -187,8 +185,6 @@ test('after the cooldown a genuine second utterance ducks again', async () => {
     assert.deepEqual(setLevels(c.spy.calls), [15, 100, 15],
       'hysteresis must not disable ducking — a real second turn still ducks');
   } finally {
-    delete process.env.DUCK_MIN_HOLD_MS;
-    delete process.env.DUCK_COOLDOWN_MS;
     await c.close();
   }
 });

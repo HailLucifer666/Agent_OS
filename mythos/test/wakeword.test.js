@@ -163,11 +163,28 @@ test('with no wakewordModelsDir injected, the route resolves the real models pat
   assert.equal(viaDefault.body.modelsPresent, viaExplicit.body.modelsPresent,
     'the default fallback must read the same directory as the real path');
 
+  // Source shape, UPDATED 2026-08-11 (installer parity). This used to require a
+  // literal ui/public/models/wakeword path in routes/config.js. That path is now
+  // only ONE of the directories searched: the downloaders write to a
+  // userData-scoped models directory instead, because mythos/ui/public/models is
+  // excluded from package.json build.files (a packaged install has no models
+  // directory at all) and the install tree is replaced by every update. Pinning
+  // the literal path would now pin the bug.
+  //
+  // What still has to hold is the same thing that assertion was standing in for:
+  // the seam is a fallback and not a requirement, and the fallback resolves
+  // through the shared resolver rather than inventing a path of its own.
   const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'config.js'), 'utf8');
-  assert.match(source, /deps\.wakewordModelsDir\s*\n?\s*\|\|/,
-    'routes/config.js must fall back when the dep is absent, not require it');
-  assert.match(source, /'ui',\s*'public',\s*'models',\s*'wakeword'/,
-    'the fallback must resolve the real ui/public/models/wakeword path');
+  assert.match(source, /deps\.wakewordModelsDir/,
+    'routes/config.js must still honour the injected seam, not ignore it');
+  assert.match(source, /findModelFile\('wakeword'/,
+    'with no seam the route must search every model directory via core/setup/model-paths.js');
+
+  // And the resolver's install-tree entry must still BE ui/public/models, which is
+  // what keeps the behavioural half above from agreeing for the wrong reason.
+  const { INSTALL_TREE_MODELS_DIR } = require('../src/core/setup/model-paths');
+  assert.equal(path.resolve(INSTALL_TREE_MODELS_DIR), path.resolve(path.join(__dirname, '..', 'ui', 'public', 'models')));
+  assert.equal(path.resolve(realDir), path.resolve(path.join(INSTALL_TREE_MODELS_DIR, 'wakeword')));
 });
 
 describe('scripts/setup-wakeword.js resolveAssetUrls (pure, no network)', () => {

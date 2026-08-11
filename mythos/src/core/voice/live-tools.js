@@ -10,6 +10,7 @@
 // for reasons nobody can see.
 
 const { buildCatalogFromHub } = require('./voice-agent');
+const { checkToolCapability } = require('./tool-capability');
 
 // Function-calling accuracy degrades with very large tool sets, and MYTHOS registers 107.
 // This is the curated high-traffic default; override with LIVE_TOOL_ALLOWLIST.
@@ -283,24 +284,52 @@ function toDeclaration(entry) {
   return decl;
 }
 
+// buildFunctionDeclarations(hub, {allowlist, capability, log})
+//
+// `capability` is an optional snapshot from core/voice/tool-capability.js. When
+// present, a tool whose MACHINERY is absent on this machine is withheld even
+// though it is allowlisted — see that file for the incident (a fresh install
+// firing gmail_unread with no OAuth keys, phone tools with no adb, browser tools
+// with no CDP, all before the operator had spoken). Omitting it keeps the exact
+// pre-existing behaviour, which is what every test and every headless caller that
+// has no adapters to report gets.
 function buildFunctionDeclarations(hub, opts) {
   const options = opts || {};
   const catalog = buildCatalogFromHub(hub);
   const allow = options.allowlist && options.allowlist.length
     ? new Set(options.allowlist)
     : new Set(DEFAULT_ALLOWLIST);
+  const snapshot = options.capability || null;
 
-  const declared = [], withheld = [];
+  const declared = [], withheld = [], unavailable = [];
   for (const entry of catalog) {
     if (!entry || !entry.name) continue;
-    if (allow.has(entry.name)) declared.push(toDeclaration(entry));
-    else withheld.push(entry.name);
+    if (!allow.has(entry.name)) { withheld.push(entry.name); continue; }
+    if (snapshot) {
+      const cap = checkToolCapability(entry.name, snapshot);
+      if (!cap.ok) { unavailable.push({ name: entry.name, rule: cap.rule, reason: cap.reason }); continue; }
+    }
+    declared.push(toDeclaration(entry));
   }
   // AD-5 in spirit: a silent cap reads as full coverage. Say what was withheld.
+  //
+  // The two lists are logged SEPARATELY because they mean opposite things:
+  // `withheld` is a curation decision about this list, and `unavailable` is a
+  // machine that is not set up. Merging them is how a missing adb would read as
+  // "someone chose not to expose the phone tools".
   if (options.log && withheld.length) {
     options.log(`live-tools: declared ${declared.length}, withheld ${withheld.length} — ${withheld.join(', ')}`);
   }
-  return { declarations: declared, withheld };
+  if (options.log && unavailable.length) {
+    options.log(`live-tools: withheld ${unavailable.length} allowlisted tool(s) as UNAVAILABLE on this machine — `
+      + unavailable.map((u) => `${u.name} (${u.reason})`).join('; '));
+  }
+  return { declarations: declared, withheld, unavailable };
 }
 
-module.exports = { buildFunctionDeclarations, DEFAULT_ALLOWLIST, VOICE_ALLOWLIST_EXEMPT, _internal: { parseParam, toDeclaration } };
+module.exports = {
+  buildFunctionDeclarations,
+  DEFAULT_ALLOWLIST,
+  VOICE_ALLOWLIST_EXEMPT,
+  _internal: { parseParam, toDeclaration },
+};

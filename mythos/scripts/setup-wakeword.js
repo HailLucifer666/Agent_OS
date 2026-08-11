@@ -22,7 +22,14 @@ const path = require('path');
 const REPO = 'dscripka/openWakeWord';
 const RELEASES_API_URL = `https://api.github.com/repos/${REPO}/releases`;
 const REQUIRED_ASSETS = ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx'];
-const OUT_DIR = path.join(__dirname, '..', 'ui', 'public', 'models', 'wakeword');
+// Installer parity (2026-08-11): write to the userData-scoped model directory
+// when one is known, NOT into the install tree. The install tree is excluded from
+// package.json build.files (so a packaged install has no models directory at all)
+// and is replaced wholesale by an update — which would silently un-install these
+// weights and take the wake word with them on every upgrade.
+// See src/core/setup/model-paths.js for the full resolution order.
+const { modelWriteDir } = require('../src/core/setup/model-paths');
+const OUT_DIR = modelWriteDir('wakeword');
 const MIN_BYTES = 100 * 1024; // sanity floor — a truncated/failed download is far smaller than this
 
 // Pure, network-free: given a parsed GitHub "list releases" API response,

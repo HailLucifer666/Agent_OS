@@ -10,10 +10,25 @@
 // visible.
 //
 // Path resolution copies doctor.js's keyStoreNames() idiom deliberately, for the
-// same reason it exists there: Electron's userData is %APPDATA%\<productName>,
-// which is "MYTHOS" in a packaged build and "agent-os" in an unpackaged dev run,
-// and checking only one silently reports "no selection" on whichever install the
-// operator is actually using. Never a hardcoded user path.
+// same reason it exists there: check every userData name MYTHOS has ever used,
+// because checking only one silently reports "no selection" on whichever install
+// the operator is actually using. Never a hardcoded user path.
+//
+// CORRECTED 2026-08-11 (installer parity). This comment used to say userData is
+// "MYTHOS in a packaged build and agent-os in an unpackaged dev run". That was
+// backwards AND incomplete, and believing it is part of why the installed build
+// running on a second, empty brain went unnoticed. What actually happened:
+// electron/main.js never called app.setName, so Electron fell back to
+// package.json's `name` ("agent-os") for the PACKAGED app and to the literal
+// "Electron" for a dev run out of node_modules — while build.productName
+// ("MYTHOS") is what NSIS used for install-selection.json. Three directories,
+// none of them the one this file's author expected:
+//   %APPDATA%\Electron   the dev run (npm start / Start Electron App.bat)
+//   %APPDATA%\agent-os   the installed .exe
+//   %APPDATA%\MYTHOS     the installer's own write target
+// electron/main.js now calls app.setName('MYTHOS') so both runs land on MYTHOS,
+// matching the installer. The other two names stay in the list below because
+// existing machines still have data under them.
 //
 // Failure policy: absent, unreadable, corrupt, or wrong-shaped all return
 // {found:false}. That is NOT the same as "selected nothing" — mergeComponentState
@@ -25,7 +40,10 @@ const os = require('os');
 const path = require('path');
 
 const FILE = 'install-selection.json';
-const PRODUCTS = ['MYTHOS', 'agent-os'];
+// Canonical first, then the two legacy names in the order they are likely to
+// hold real data. 'Electron' was missing entirely until 2026-08-11, which is
+// exactly the dev-run directory this file most needed to find.
+const PRODUCTS = ['MYTHOS', 'agent-os', 'Electron'];
 
 function candidatePaths(env, homedir) {
   const e = env || {};

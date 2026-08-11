@@ -87,10 +87,15 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       assert.ok(exposedApi && typeof exposedApi === 'object', 'surface object must be exposed');
 
       // EXACT surface shape — sorted deep-equal, no more, no fewer.
+      // getSettings/setSetting were added by the installer-parity work
+      // (2026-08-11): the packaged build had no way to set a NON-SECRET schema
+      // key, which is what left ~140 keys at their defaults in the install. They
+      // carry configuration, never credentials — settings-store.js refuses
+      // secret-shaped names and the main-process handler filters them again.
       assert.deepEqual(
         Object.keys(exposedApi).sort(),
-        ['getKeyNames', 'hasKey', 'installUpdate', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey'],
-        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/restartServer/onUpdateStatus/installUpdate',
+        ['getKeyNames', 'getSettings', 'hasKey', 'installUpdate', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey', 'setSetting'],
+        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/restartServer/onUpdateStatus/installUpdate/getSettings/setSetting',
       );
 
       // restartServer() → ipcRenderer.invoke('mythos:restart-server'), no args.
