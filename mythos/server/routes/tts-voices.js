@@ -30,6 +30,11 @@ const {
 } = require('../../src/core/config/voice-choice');
 const { readVoiceChoice, writeVoiceChoice } = require('../../src/core/config/voice-choice-store');
 
+// The reverse of SHORT_NAME (full provider name -> short token). VOICE_TTS_CHAIN
+// is written in short tokens (providers/tts.js's BY_NAME keys); chainAfter()
+// needs to go both ways, so it is built once here rather than re-derived per call.
+const FULL_NAME = Object.fromEntries(Object.entries(SHORT_NAME).map(([full, short]) => [short, full]));
+
 // One sentence. Gemini TTS measures ~3.9s/sentence and is metered, so a sample is
 // deliberately a sample — an operator auditioning eight voices should not be
 // billed for eight paragraphs.
@@ -49,6 +54,33 @@ function currentDefault(config, chain) {
   const firstInChain = (chain && chain.chainNames && chain.chainNames[0]) || null;
   const provider = activeName || firstInChain || 'edge-tts';
   return { provider, voice: voiceFor({ name: provider }, config) || null };
+}
+
+// The tail of the configured chain AFTER `provider`, as full provider names
+// (e.g. 'kokoro-tts') so callers can round-trip through SHORT_NAME/byShort the
+// same way the rest of this file already does. Pure — no I/O, no config
+// mutation — so an explicit fallback audition is easy to reason about.
+//
+// `provider` NOT FOUND in the chain returns an empty tail (no fallback), not
+// "the whole chain" and not "an error". The chain is the operator's own
+// ordering of engines they trust for THIS session; a provider absent from it
+// (VOICE_TTS_CHAIN edited by hand, or a provider the picker never put there)
+// has no defined position relative to it, so there is no ordering to walk.
+// Guessing a fallback order would risk auditioning an engine the operator
+// never asked to test right now — silence is the safer failure.
+//
+// Duplicates are collapsed (parseChain does the same for the live chain; this
+// reads VOICE_TTS_CHAIN directly rather than through parseChain, so it repeats
+// that de-dupe rather than assuming it) so 'gemini,gemini,kokoro' still yields
+// exactly ['kokoro-tts'].
+function chainAfter(chainCsv, provider) {
+  const shorts = [];
+  for (const s of String(chainCsv || 'edge').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)) {
+    if (shorts.indexOf(s) === -1) shorts.push(s);
+  }
+  const at = shorts.indexOf(SHORT_NAME[provider]);
+  if (at === -1) return [];
+  return shorts.slice(at + 1).map((s) => FULL_NAME[s]).filter(Boolean);
 }
 
 function mountTtsVoiceRoutes(app, deps) {
@@ -178,6 +210,61 @@ function mountTtsVoiceRoutes(app, deps) {
       res.json({ mime: mod.mime || 'audio/mpeg', audioB64: Buffer.from(audio).toString('base64'), provider, voice });
     } catch (err) {
       log.warn('tts.audition-failed', { provider, voice, error: err.message });
+
+      // A quota refusal is not a broken engine — it is a wait. Give the
+      // operator the one fact they can act on (retry in N seconds) instead of
+      // Google's billing URLs, and offer a local voice meanwhile.
+      const quota = /\b429\b|exceeded your current quota/i.test(err.message);
+      const retryMatch = err.message.match(/retry in ([\d.]+)s/i);
+      const retryAfterSec = retryMatch ? Math.ceil(Number(retryMatch[1])) : null;
+
+      // Only an explicit fallback request walks the chain — a preview must
+      // never silently audition a DIFFERENT voice than the one clicked unless
+      // the caller asked for it. And it must not reuse an ALREADY-ABORTED
+      // signal: the timeout fires at AUDITION_TIMEOUT_MS and req.on('close')
+      // aborts ctrl the instant the operator navigates away, so if ctrl is
+      // aborted here the request's whole time budget is already spent, or
+      // nobody is listening for the response — either way a fallback attempt
+      // would fail (or succeed) for nobody. Reusing ctrl.signal when it is
+      // still live is deliberate, not an oversight: primary and fallback share
+      // ONE 15s budget, which is the same "never hold the socket open forever"
+      // guarantee AUDITION_TIMEOUT_MS already promised for a single attempt.
+      if (body.allowFallback && !ctrl.signal.aborted) {
+        const next = chainAfter(config.VOICE_TTS_CHAIN, provider);
+        for (const candidate of next) {
+          const mod2 = byShort(SHORT_NAME[candidate]);
+          if (!mod2) continue;
+          let up = false;
+          try { up = Boolean(await mod2.isAvailable()); } catch { up = false; }
+          if (!up) continue;
+          const voice2 = voiceFor(mod2, config);
+          try {
+            const audio2 = await mod2.synthesize({ text, voice: voice2, signal: ctrl.signal });
+            if (audio2 && audio2.length) {
+              return res.json({
+                mime: mod2.mime || 'audio/mpeg',
+                audioB64: Buffer.from(audio2).toString('base64'),
+                provider: candidate,
+                voice: voice2,
+                fellBackFrom: provider,
+              });
+            }
+          } catch (err2) {
+            log.warn('tts.audition-fallback-failed', { provider: candidate, error: err2.message });
+          }
+        }
+      }
+
+      if (quota) {
+        return res.status(429).json({
+          error: retryAfterSec
+            ? `${provider} is out of quota — retry in about ${retryAfterSec}s, or preview a local voice.`
+            : `${provider} is out of quota — preview a local voice instead.`,
+          retryAfterSec,
+          provider,
+          voice,
+        });
+      }
       res.status(502).json({ error: `${provider} could not speak that sample: ` + err.message });
     } finally {
       clearTimeout(timer);

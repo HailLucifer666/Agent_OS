@@ -86,7 +86,7 @@ export function createVoicePicker(container, opts) {
       const res = await doFetch('/api/tts/audition', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider, voice, text: SAMPLE_TEXT }),
+        body: JSON.stringify({ provider, voice, text: SAMPLE_TEXT, allowFallback: true }),
       });
       const body = await res.json().catch(() => null);
       if (!res.ok || !body || !body.audioB64) {
@@ -96,7 +96,12 @@ export function createVoicePicker(container, opts) {
       if (disposed) return;
       sample = new Audio('data:' + (body.mime || 'audio/mpeg') + ';base64,' + body.audioB64);
       sample.play().catch(() => setStatus('The browser refused to play that sample.', true));
-      setStatus('');
+      // A fallback means the operator did NOT hear the voice they clicked —
+      // say so plainly, never let them think gemini-tts spoke when kokoro-tts
+      // did.
+      setStatus(body.fellBackFrom
+        ? `Previewed with ${body.provider} — ${body.fellBackFrom} is out of quota.`
+        : '');
     } catch (err) {
       setStatus('The server did not answer: ' + ((err && err.message) || 'unknown error'), true);
     } finally {
