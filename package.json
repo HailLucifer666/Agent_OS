@@ -1,6 +1,6 @@
 {
   "name": "agent-os",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -73,7 +73,8 @@
       {
         "provider": "github",
         "owner": "HailLucifer666",
-        "repo": "Agent_OS"
+        "repo": "Agent_OS",
+        "releaseType": "release"
       }
     ]
   }

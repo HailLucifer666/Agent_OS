@@ -98,6 +98,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish always
 
+      # v0.1.4 shipped as a DRAFT and no installed app was ever offered it: the
+      # workflow went green, the assets uploaded, and the release was invisible to
+      # electron-updater (its GitHub provider reads PUBLISHED releases; a draft is
+      # not one) and to any read-only token, so it looked like nothing had been
+      # published at all. build.publish now sets releaseType:release, and this step
+      # is the belt to that braces — it fails loudly rather than letting a green
+      # run mean nothing again.
+      - name: Confirm the release is published, not a draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $isDraft = (gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          Write-Host "tag=$tag isDraft=$isDraft"
+          if ($isDraft -eq 'true') {
+            Write-Host "::error::$tag is a DRAFT release - electron-updater cannot see it, so no installed app would ever be offered this version"
+            exit 1
+          }
+
       # Proof, not assumption: latest.yml is the file the updater actually polls,
       # and a release without it is one where every client reports "no update"
       # forever while the installer sits right there.

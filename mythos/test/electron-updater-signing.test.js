@@ -38,6 +38,14 @@ test('build.publish targets GitHub Releases for this repo, and never carries sec
   assert.ok(github, 'the chosen host is GitHub Releases (provider "github")');
   assert.equal(github.owner, 'HailLucifer666', 'owner must match the repo remote');
   assert.equal(github.repo, 'Agent_OS', 'repo must match the repo remote');
+  // v0.1.4 (2026-08-11) went green and shipped NOTHING anyone could install:
+  // electron-builder's GitHub publisher defaults to releaseType 'draft', and
+  // electron-updater only ever sees PUBLISHED releases. The failure was silent in
+  // both directions — the workflow logged "creating GitHub release", and a
+  // read-only token reported no releases at all.
+  assert.equal(github.releaseType, 'release',
+    'releaseType must be explicit: the default is "draft", and a draft release is one every ' +
+    'installed app reports "no update" against, forever');
   const serialized = JSON.stringify(build.publish);
   assert.doesNotMatch(serialized, /(GH_TOKEN|token|password|secret|CSC_)/i,
     'a publish config must never carry a credential — publishing reads GH_TOKEN from the environment');
