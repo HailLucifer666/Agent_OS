@@ -77,7 +77,22 @@ function readMainJs() {
   return fs.readFileSync(path.join(REPO_ROOT, 'electron', 'main.js'), 'utf8');
 }
 
-test('electron/main.js wires the update check: packaged default, env override, never auto-installs', () => {
+// REVERSED 2026-08-11 (operator): this used to assert autoDownload === false and
+// that quitAndInstall appeared nowhere, on the stated grounds that an unsigned
+// build "gives electron-updater nothing to verify against". Reading
+// node_modules/electron-updater rather than repeating the claim:
+//   * NsisUpdater.verifySignature() RETURNS NULL — passes — when app-update.yml
+//     carries no publisherName (out/NsisUpdater.js:84-99). Unsigned means the
+//     signature check is skipped, not failed, so refusing to download bought no
+//     verification at all; it only cost every release a manual reinstall.
+//   * DownloadedUpdateHelper still hashes the download and compares it to the
+//     sha512 in latest.yml, fetched from GitHub over HTTPS. Tampering in transit
+//     fails today, signed or not.
+// The residual risk — a compromised release host serving a validly-hashed
+// installer — is accepted, not disproven: anyone able to publish a release on
+// this public repo can already publish the source. A cert would still close it.
+// What must NOT regress is the operator's consent, so that is what is pinned.
+test('electron/main.js downloads updates but installs only on an explicit operator action', () => {
   const text = readMainJs();
   assert.match(text, /require\(['"]electron-updater['"]\)/, 'main.js must require electron-updater');
   assert.match(text, /app\.isPackaged/,
@@ -85,10 +100,33 @@ test('electron/main.js wires the update check: packaged default, env override, n
     'electron-updater\'s unpackaged rejection');
   assert.match(text, /MYTHOS_UPDATE_URL/,
     'the feed must stay overridable at runtime via MYTHOS_UPDATE_URL (self-hosted generic feeds)');
-  assert.match(text, /autoDownload\s*=\s*false/,
-    'auto-update must not silently download/install — see CLAUDE.md\'s honest-inert house style');
-  assert.doesNotMatch(text, /autoUpdater\.quitAndInstall/,
-    'nothing should force-install an update without an explicit, logged operator action');
+  assert.match(text, /autoDownload\s*=\s*true/,
+    'downloading in the background is the whole point — a notice-only updater made every fix a reinstall');
+  assert.match(text, /autoInstallOnAppQuit\s*=\s*false/,
+    'quitting must never become an install: an operator who closes the app would return to a version ' +
+    'they never agreed to');
+  assert.match(text, /autoUpdater\.quitAndInstall|updaterRef\.quitAndInstall/,
+    'the update must actually be installable from inside the app');
+  assert.match(text, /showMessageBox/,
+    'quitAndInstall must be gated behind a modal choice — a notification is dismissable by accident, ' +
+    'and this one exits the app');
+  assert.match(text, /MYTHOS_AUTO_UPDATE/,
+    'there must be an escape hatch that turns the whole thing off');
+});
+
+test('the update state reaches the HUD as strings on one named channel, and installing takes no renderer input', () => {
+  const text = readMainJs();
+  assert.match(text, /mythos:update-status/,
+    'the HUD renders an Update button, so main must push the updater state to it (js/update-banner.js)');
+  assert.match(text, /ipcMain\.handle\('mythos:install-update'/,
+    'the HUD button needs a channel to install through');
+  const handler = /ipcMain\.handle\('mythos:install-update'[\s\S]*?\n\}\);/.exec(text);
+  assert.ok(handler, 'the install handler must exist');
+  assert.match(handler[0], /isHudContents\(event\.sender\)/,
+    'only the real HUD window may trigger an install — media-window.js loads caller-supplied URLs ' +
+    'through the same preload (see the B2/H6 comment in main.js)');
+  assert.doesNotMatch(handler[0], /event,\s*\w+/,
+    'the handler must not accept a renderer-supplied argument: which version is installed is main-process state');
 });
 
 // electron-updater exports `autoUpdater` as a getter that CONSTRUCTS the
@@ -182,15 +220,19 @@ test('Notification is required at its use site, never destructured at module sco
     'it must be required at the use site instead');
 });
 
-test('the notification never claims something was downloaded or offers to install it', () => {
+test('the notification says what is actually happening and never installs by itself', () => {
   const text = readMainJs();
-  // CONTRIBUTING.md's release gate: do not enable automatic download before the
-  // build is signed, because an unsigned installer gives electron-updater
-  // nothing to verify against. So the notification must not imply either.
-  assert.doesNotMatch(text, /autoUpdater\.downloadUpdate/,
-    'nothing may start a download off the back of the notification while builds are unsigned');
-  assert.match(text, /Nothing has been downloaded/,
-    'the body must say plainly that nothing was downloaded, or the operator will assume it was');
+  // It used to have to say "Nothing has been downloaded". Now something IS being
+  // downloaded, so the body must say THAT — and must still promise that nothing
+  // installs without being asked, which promptInstall() is what keeps true.
+  assert.match(text, /Downloading it in the background/,
+    'the body must describe the real behaviour; the old "nothing has been downloaded" is now a lie');
+  assert.match(text, /you will be asked before anything is installed/i,
+    'the operator must be told the install is still their call');
+  const notify = /function notifyUpdateAvailable\([\s\S]*?\n}/.exec(text);
+  assert.ok(notify, 'notifyUpdateAvailable must exist');
+  assert.doesNotMatch(notify[0], /quitAndInstall/,
+    'the notification path must not be able to install anything on its own');
 });
 
 test('a failed notification cannot take down the update check or boot', () => {

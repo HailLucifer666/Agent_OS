@@ -209,6 +209,24 @@ test('build.files still includes the files the packaged app needs to run', () =>
     path.join(REPO_ROOT, 'electron', 'preload.js'),
     path.join(REPO_ROOT, 'mythos', 'src', 'main.js'),
     path.join(REPO_ROOT, 'mythos', 'server', 'index.js'),
+    // Added after the dev-vs-installer parity audit (2026-08-11). Each of these
+    // is something the packaged app CALLS at runtime, and each sits next to a
+    // path that is deliberately excluded — one careless widening of a "!" line
+    // takes a working feature out of the installer silently, which is the exact
+    // failure this whole file exists to make loud.
+    path.join(REPO_ROOT, 'mythos', 'package.json'),                              // the server child's own manifest
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'doctor.js'),                      // /api/setup/status + the wizard's whole key/asset report
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-wakeword.js'),              // components step: wake-word weights
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-silero.js'),                // components step: VAD weights
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-android.js'),               // components step: adb
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-autostart.js'),             // components step: start at sign-in
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-hermes.js'),                // components step: build engine
+    path.join(REPO_ROOT, 'mythos', 'services', 'piper-server.py'),               // the ONE sidecar script that may ship (piper is MIT; edge-tts is not)
+    path.join(REPO_ROOT, 'mythos', 'adapters', 'pc-child', 'ps-automation.ps1'), // desktop control — doctor marks it REQUIRED
+    path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'index.html'),                // the HUD itself
+    path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'js', 'voice', 'voice-picker.js'),
+    path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'css', 'voice-picker.css'),
+    path.join(REPO_ROOT, 'mythos', 'src', 'core', 'config', 'voice-choice.js'),  // the picked voice must survive packaging
   ];
   for (const target of mustInclude) {
     assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);

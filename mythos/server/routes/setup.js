@@ -41,6 +41,11 @@ function mountSetupRoutes(app, deps) {
     // added to doctor's report (a path, a hostname, one day a value) then has to
     // be added here on purpose to reach the renderer, instead of arriving by
     // accident the moment doctor grows.
+    // keyNames comes from doctor's own requirement table (anyOf/allOf) — NAMES
+    // only, which AD-8 already permits (the same class of data as keyStoreNames
+    // below). Before this field the client recovered them by regexing doctor's
+    // prose `detail` ("none of: A, B"), so a reworded sentence produced a gap row
+    // with no input box at all. An asset row has no keys and yields [].
     const project = (row) => ({
       id: row.id,
       label: row.label,
@@ -49,6 +54,7 @@ function mountSetupRoutes(app, deps) {
       detail: row.detail || null,
       why: row.why,
       fix: row.fix,
+      keyNames: Array.isArray(row.keyNames) ? row.keyNames.slice() : [],
     });
 
     res.json({

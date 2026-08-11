@@ -5,9 +5,11 @@
 // the privileged main process.
 //
 // AD-8 (V2 spine §1): "Secrets never reach the renderer." This preload exposes
-// a contextBridge surface of EXACTLY four functions — getKeyNames, setKey,
-// hasKey, and onHotkey — and NOTHING that returns a key VALUE. Names, booleans,
-// and (for onHotkey) a short action string are the only things that cross.
+// a contextBridge surface of EXACTLY seven functions — getKeyNames, setKey,
+// hasKey, onHotkey, restartServer, onUpdateStatus and installUpdate — and
+// NOTHING that returns a key VALUE. Names, booleans, short strings (onHotkey,
+// onUpdateStatus) and status objects (restartServer, installUpdate) are the only
+// things that cross.
 //
 // There is deliberately no getKey / getValue / read / secret function here.
 // That omission is the regression gate: mythos/test/anti-drift-no-key-to-client.test.js
@@ -45,5 +47,35 @@ contextBridge.exposeInMainWorld('mythos', {
     ipcRenderer.on('mythos:hotkey', function (_event, action) {
       callback(String(action || ''));
     });
+  },
+  // restartServer() → { ok, restarting } — re-forks the server child so keys
+  // stored through setKey() above reach it (they are injected into the child env
+  // at fork() and never afterwards; see electron/main.js decryptedKeysForChild).
+  // Takes no arguments and returns no key material: a status object only, which
+  // is why it does not widen the AD-8 surface.
+  restartServer: function restartServer() {
+    return ipcRenderer.invoke('mythos:restart-server');
+  },
+  // onUpdateStatus(cb) → cb(state, version) whenever the auto-updater's state
+  // changes ('idle' | 'available' | 'downloading' | 'ready' | 'error'), so the
+  // HUD can render an Update button instead of the operator finding out from an
+  // OS notification they may never see.
+  //
+  // Built exactly like onHotkey above and for the same reason: one named
+  // channel, no channel parameter, and both payload fields re-derived as plain
+  // strings here rather than forwarded — a structured event is the shape that
+  // could carry something secret into a renderer that also loads remote pages.
+  onUpdateStatus: function onUpdateStatus(callback) {
+    if (typeof callback !== 'function') return;
+    ipcRenderer.on('mythos:update-status', function (_event, state, version) {
+      callback(String(state || ''), String(version || ''));
+    });
+  },
+  // installUpdate() → { ok, installing, state, version }. Takes NO arguments on
+  // purpose: which version gets installed is decided by the main process from
+  // state it owns, so a renderer (or a page loaded in one) cannot nominate an
+  // executable. Resolves to a status object; no key material, no paths.
+  installUpdate: function installUpdate() {
+    return ipcRenderer.invoke('mythos:install-update');
   },
 });

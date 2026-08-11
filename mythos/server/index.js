@@ -14,6 +14,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
+const { mountTtsVoiceRoutes } = require('./routes/tts-voices');
 const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
@@ -275,8 +276,50 @@ function createServer(deps) {
   // Defaults unchanged (15 / 15000). Verify live before altering restore logic.
   const DUCK_VOLUME_LEVEL = Number(process.env.DUCK_VOLUME_LEVEL) || 15;
   const UNDUCK_SAFETY_MS = Number(process.env.UNDUCK_SAFETY_MS) || 15000; // restore even if the client never sends unduck (dropped connection, crash)
+  // HYSTERESIS (operator, 2026-08-11). Ducking is self-cancelling with media
+  // playing: the duck quiets the room, the RMS VAD then sees silence and stops
+  // recording, the unduck restores full volume, and the music immediately
+  // re-arms the mic. The operator's installed build logged 58 set_volume calls
+  // in one session doing exactly that — it described it as the volume being a
+  // "ping-pong ball", and the entity itself filed an incident calling it a
+  // "volume control feedback loop".
+  //
+  // Two bounds break the cycle without touching the VAD or the duck depth:
+  //   DUCK_MIN_HOLD_MS  — once ducked, stay ducked this long. An unduck arriving
+  //                       sooner is deferred, not dropped, so a genuinely short
+  //                       utterance still restores; it just does not flap.
+  //   DUCK_COOLDOWN_MS  — after restoring, ignore a re-duck for this long. This
+  //                       is the half that matters: the re-trigger is the music
+  //                       coming back up, and it arrives within milliseconds.
+  // Both env-overridable in the same style as DUCK_VOLUME_LEVEL above. Note that
+  // an operator running with VOICE_S2S_ENABLED (the dev configuration, and now
+  // the derived default when a Google key is present) never reaches this code at
+  // all — Live duplex has no record-window ducking.
+  // Hysteresis alone only RATE-LIMITS the loop (measured: a storm collapses from
+  // dozens of cycles to one per hold+cooldown), so it is paired below with the
+  // one signal that actually classifies the trigger: a mic-hot window that ends
+  // without an utterance being dispatched was not a person. Two of those in a row
+  // and ducking backs off entirely for DUCK_SUPPRESS_MS — the loop stops instead
+  // of merely slowing down. A single real utterance clears the count.
+  const DUCK_MIN_HOLD_MS = Number(process.env.DUCK_MIN_HOLD_MS) || 800;
+  const DUCK_COOLDOWN_MS = Number(process.env.DUCK_COOLDOWN_MS) || 1200;
+  const DUCK_FALSE_MAX = Number(process.env.DUCK_FALSE_MAX) || 2;
+  const DUCK_SUPPRESS_MS = Number(process.env.DUCK_SUPPRESS_MS) || 30000;
   let preDuckVolume = null;
   let unduckSafetyTimer = null;
+  let duckedAt = 0;          // when the current duck started
+  let lastUnduckAt = 0;      // when the last restore completed
+  let pendingUnduckTimer = null;
+  let utteranceSinceDuck = false;  // did this mic-hot window produce a real turn?
+  let falseDuckCycles = 0;
+  let duckSuppressedUntil = 0;
+  // Called from the WS 'utterance' handler: proof that the window that just
+  // ducked was a person talking, not the speakers.
+  function noteUtteranceHeard() {
+    utteranceSinceDuck = true;
+    falseDuckCycles = 0;
+    duckSuppressedUntil = 0;
+  }
   // AD-1: these three calls used to go straight to the effector hub's
   // invoke() method, bypassing the single execution surface (dispatchAction,
   // defined below —
@@ -285,12 +328,25 @@ function createServer(deps) {
   // dispatched action, tagged channel:'voice-ducking' so it's distinguishable
   // from an operator-driven volume change.
   async function duckAudio() {
-    if (preDuckVolume !== null) return; // already ducked
+    if (preDuckVolume !== null) {
+      // Already ducked, and a fresh mic-hot window means the operator is still
+      // talking — cancel any deferred restore rather than letting it fire mid-
+      // utterance.
+      if (pendingUnduckTimer) { clearTimeout(pendingUnduckTimer); pendingUnduckTimer = null; }
+      return;
+    }
+    // Inside the cooldown this duck request is almost certainly the media we
+    // just un-ducked re-triggering the VAD, not a person. Refuse it.
+    if (lastUnduckAt && (Date.now() - lastUnduckAt) < DUCK_COOLDOWN_MS) return;
+    // Backed off after repeated windows that produced no speech at all.
+    if (duckSuppressedUntil && Date.now() < duckSuppressedUntil) return;
     if (!effectors || typeof effectors.invoke !== 'function') return;
     try {
       const current = await dispatchAction({ tool: 'get_volume', args: {} }, { tier: 0, channel: 'voice-ducking' });
       if (!current.ok || !current.result || typeof current.result.level !== 'number') return;
       preDuckVolume = current.result.level;
+      duckedAt = Date.now();
+      utteranceSinceDuck = false;
       await dispatchAction({ tool: 'set_volume', args: { level: DUCK_VOLUME_LEVEL } }, { tier: 2, channel: 'voice-ducking' });
       clearTimeout(unduckSafetyTimer);
       unduckSafetyTimer = setTimeout(function() { unduckAudio(); }, UNDUCK_SAFETY_MS);
@@ -301,8 +357,42 @@ function createServer(deps) {
   }
   async function unduckAudio() {
     if (preDuckVolume === null) return;
+    // Hold the duck for its minimum window. Deferred, never dropped: the timer
+    // below performs the same restore once the window closes, so a one-word
+    // utterance still gets its volume back — just not fast enough to bounce.
+    const heldFor = Date.now() - duckedAt;
+    if (heldFor < DUCK_MIN_HOLD_MS) {
+      if (pendingUnduckTimer) return;   // a restore is already scheduled
+      pendingUnduckTimer = setTimeout(function() {
+        pendingUnduckTimer = null;
+        unduckAudio().catch(function() {});
+      }, DUCK_MIN_HOLD_MS - heldFor);
+      // unref: a pending restore must never be the reason the process stays
+      // alive at shutdown (the same courtesy the rest of the server's timers
+      // extend). The volume is restored on the next boot's duck cycle anyway,
+      // and UNDUCK_SAFETY_MS still covers a dropped connection.
+      if (typeof pendingUnduckTimer.unref === 'function') pendingUnduckTimer.unref();
+      return;
+    }
+    if (pendingUnduckTimer) { clearTimeout(pendingUnduckTimer); pendingUnduckTimer = null; }
+    // Classify the window that just closed. No utterance means the VAD armed on
+    // something that was not a person — with music playing, that is the loop.
+    if (!utteranceSinceDuck) {
+      falseDuckCycles++;
+      if (falseDuckCycles >= DUCK_FALSE_MAX && !duckSuppressedUntil) {
+        duckSuppressedUntil = Date.now() + DUCK_SUPPRESS_MS;
+        logger.warn('audio-duck-suppressed', {
+          cycles: falseDuckCycles,
+          forMs: DUCK_SUPPRESS_MS,
+          note: 'mic-hot windows keep closing with no speech — ducking is arming on playback, not on you',
+        });
+      }
+    } else {
+      falseDuckCycles = 0;
+    }
     const restoreLevel = preDuckVolume;
     preDuckVolume = null;
+    lastUnduckAt = Date.now();
     clearTimeout(unduckSafetyTimer);
     if (!effectors || typeof effectors.invoke !== 'function') return;
     try {
@@ -999,6 +1089,16 @@ function createServer(deps) {
   // to the renderer, and test/setup-route.test.js for the canary that pins it.
   require('./routes/setup').mountSetupRoutes(app, {});
 
+  // ---- /api/setup/components — the optional components the installer's own
+  // component page recorded a choice for (build/installer.nsh writes
+  // %APPDATA%\MYTHOS\install-selection.json; the wizard pre-checks exactly
+  // those). The installs run HERE rather than in NSIS so progress, failure and
+  // retry are visible in the app instead of happening behind a copy-files
+  // progress bar. IDs only over the wire — src/core/setup/components.js is the
+  // allowlist mapping an id to a fixed script + argv, so no request string ever
+  // reaches spawn(). See routes/components.js. ----
+  require('./routes/components').mountComponentsRoutes(app, {});
+
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
   // engagements.js): list returns a JSON array OR {engagements:[...]}; get
@@ -1045,6 +1145,82 @@ function createServer(deps) {
     }
   });
 
+  // ONE VOICE PER SESSION. The chain resolves once and sticks, so the boot greeting,
+  // every proactive announcement and every batch reply all come from the SAME engine
+  // — the operator must never hear the voice change partway through a session. It
+  // only moves on a real provider failure, and then stays moved (see providers/tts.js).
+  // synthesize() returns { audio, mime, provider }: the engines emit different
+  // containers (edge=MP3, gemini/piper=WAV) so the mime travels PER CHUNK.
+  // Test-only seam, undefined in production (same shape as createLiveSocket
+  // below): lets a test drive synthesis timing, which is the only way to observe
+  // a reply that is still IN FLIGHT. With the real chain unavailable, every chunk
+  // is emitted in one synchronous burst, so "mid-reply" — the entire premise of
+  // the Stage 5 handoff — cannot be expressed at all.
+  //
+  // Named `ttsChain`, NOT `tts`, deliberately. Several existing test files already
+  // pass a `tts:` dep that this file has never read, so those objects are inert
+  // fakes missing most of the chain's surface (chainNames, synthesize). Honouring
+  // `deps.tts` here activated all of them at once and broke 21 tests that had
+  // nothing to do with this feature. Left inert rather than "fixed": making them
+  // real would change what those tests exercise, which is their authors' call.
+  //
+  // SWAPPABLE, as of the HUD voice picker (2026-08-11). The chain object itself
+  // parses VOICE_TTS_CHAIN once at construction and can never be re-pointed, so
+  // "apply the newly picked voice without a restart" has to mean "build a NEW
+  // chain and hand it to whoever asks next". That is all setTtsChain does.
+  //
+  // The one-voice guarantee survives because each speak path captures
+  // currentTts() ONCE at the top of its turn (see sendSpokenReply,
+  // proactiveSpeak and the vision path) and uses that same object for every
+  // chunk. A swap therefore lands on the NEXT reply — the one in flight finishes
+  // in the voice it started in, which is the only reading of "immediate" that
+  // does not mean "change voice mid-sentence". Nothing here touches a turn's
+  // AbortController, so barge-in is unaffected, and no provider holds per-chain
+  // state that would need tearing down (kokoro's model cache is a module-level
+  // singleton, the rest are stateless HTTP wrappers).
+  let ttsChainRef = deps.ttsChain || createTtsChain({ config, logger });
+  function currentTts() { return ttsChainRef; }
+  function setTtsChain(next) {
+    if (!next) return;
+    ttsChainRef = next;
+    logger.info('tts.chain-swapped', { chain: next.chainNames.join(',') });
+  }
+  logger.info('tts.chain', { chain: ttsChainRef.chainNames.join(',') });
+
+  // A voice picked in the HUD has to reach BOTH speech paths. The TTS chain is
+  // rebuilt by the route below; Gemini Live reads GEMINI_LIVE_VOICE once when a
+  // session is constructed, so it gets the override at that moment instead
+  // (liveConfigNow, used at createLiveSession). Sessions already open keep the
+  // voice they opened with — the same rule as a reply already in flight — so
+  // setLiveVoice closes them and lets liveForSpeech() reopen on the next turn.
+  let liveVoiceOverride = null;
+  function liveConfigNow() {
+    return liveVoiceOverride ? { ...config, GEMINI_LIVE_VOICE: liveVoiceOverride } : config;
+  }
+  function setLiveVoice(voice) {
+    liveVoiceOverride = voice || null;
+    let closed = 0;
+    // `wss` is created further down; this only ever runs from an HTTP request,
+    // long after boot.
+    try {
+      wss.clients.forEach((client) => {
+        const session = (typeof client.getLiveSession === 'function') ? client.getLiveSession() : null;
+        if (session && typeof session.isOpen === 'function' && session.isOpen()) {
+          try { session.close('voice-changed'); closed++; } catch (_) { /* already closing */ }
+        }
+      });
+    } catch (_) { /* no server yet — nothing open to reopen */ }
+    if (closed) logger.info('live.voice-changed', { voice: liveVoiceOverride, sessionsClosed: closed });
+    return closed;
+  }
+
+  // Mounted HERE, between the chain holder it depends on and the /api 404
+  // catch-all below. Either side of that pair is wrong: above, currentTts does
+  // not exist yet; below, every request to it answers "No such route".
+  mountTtsVoiceRoutes(app, {
+    config, logger, getTts: currentTts, setTts: setTtsChain, setLiveVoice, expensiveLimit,
+  });
+
   // Unknown /api routes answer honest JSON (the byte-identical NOVA views probe a
   // few NOVA-era routes — /api/kanban/assemble, /api/pipeline/:id/execute — whose
   // backing now lives in P7 effectors, not this REST surface; see ROADMAP.md P9).
@@ -1079,26 +1255,7 @@ function createServer(deps) {
   let resolveReady;
   const ready = new Promise((resolve) => { resolveReady = resolve; });
 
-  // ONE VOICE PER SESSION. The chain resolves once and sticks, so the boot greeting,
-  // every proactive announcement and every batch reply all come from the SAME engine
-  // — the operator must never hear the voice change partway through a session. It
-  // only moves on a real provider failure, and then stays moved (see providers/tts.js).
-  // synthesize() returns { audio, mime, provider }: the engines emit different
-  // containers (edge=MP3, gemini/piper=WAV) so the mime travels PER CHUNK.
-  // Test-only seam, undefined in production (same shape as createLiveSocket
-  // below): lets a test drive synthesis timing, which is the only way to observe
-  // a reply that is still IN FLIGHT. With the real chain unavailable, every chunk
-  // is emitted in one synchronous burst, so "mid-reply" — the entire premise of
-  // the Stage 5 handoff — cannot be expressed at all.
-  //
-  // Named `ttsChain`, NOT `tts`, deliberately. Several existing test files already
-  // pass a `tts:` dep that this file has never read, so those objects are inert
-  // fakes missing most of the chain's surface (chainNames, synthesize). Honouring
-  // `deps.tts` here activated all of them at once and broke 21 tests that had
-  // nothing to do with this feature. Left inert rather than "fixed": making them
-  // real would change what those tests exercise, which is their authors' call.
-  const tts = deps.ttsChain || createTtsChain({ config, logger });
-  logger.info('tts.chain', { chain: tts.chainNames.join(',') });
+
   const httpServer = app.listen(PORT, BIND, () => {
     logger.info('server.listening', { url: `http://${BIND}:${PORT}`, bind: BIND });
     resolveReady();
@@ -1550,9 +1707,12 @@ function createServer(deps) {
       return;
     }
     sendOut({ type: 'proactive-speech', reqId, text, speak });
+    // Captured ONCE for this announcement. A voice picked mid-announcement lands
+    // on the next one rather than halfway through this one.
+    const activeChain = currentTts();
     let ttsUp = false;
     try {
-      ttsUp = await tts.isAvailable();
+      ttsUp = await activeChain.isAvailable();
     } catch (err) {
       // The availability probe itself can throw (network error hitting the TTS
       // endpoint, provider init failure). Previously this rejected out of
@@ -1598,7 +1758,7 @@ function createServer(deps) {
         let chunkMime;
         if (ttsUp) {
           try {
-            const out = await tts.synthesize({ text: textChunks[i], signal: ctrl.signal });
+            const out = await activeChain.synthesize({ text: textChunks[i], signal: ctrl.signal });
             audioB64 = out.audio.toString('base64');
             chunkMime = out.mime;
           } catch (err) {
@@ -2212,7 +2372,13 @@ function createServer(deps) {
         });
         if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
         liveSession = createLiveSession({
-          config, bus, logger, spend, breakers: effectors.breakers,
+          // liveConfigNow() carries a voice picked in the HUD since boot.
+          // live-session.js reads GEMINI_LIVE_VOICE ONCE, at construction
+          // (:82), so a session built from the frozen boot config would keep
+          // speaking in the old voice while every other surface had switched —
+          // the picker would look broken precisely for the operator who is
+          // using Live, which is now the default whenever a Google key exists.
+          config: liveConfigNow(), bus, logger, spend, breakers: effectors.breakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
           // buildSetup() calls it fresh on every open()/reconnect so the local
@@ -2389,7 +2555,11 @@ function createServer(deps) {
         try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
         return;
       }
-      const ttsUp = await tts.isAvailable();
+      // Captured ONCE for this reply — see currentTts()/setTtsChain(). Every
+      // chunk below comes from this object even if the operator picks a new
+      // voice mid-reply; the new one starts at the next reply.
+      const activeChain = currentTts();
+      const ttsUp = await activeChain.isAvailable();
       // ALWAYS split, even with TTS down. This used to be `ttsUp ? split : []`,
       // which contradicted the comment directly above and truncated the entity's
       // speech: with no chunks the client fell through to speaking the WHOLE
@@ -2427,7 +2597,7 @@ function createServer(deps) {
             // sentence per utterance instead of one utterance per reply.
             if (ttsUp) {
               try {
-                const out = await tts.synthesize({ text: chunks[i], signal: ctrl.signal });
+                const out = await activeChain.synthesize({ text: chunks[i], signal: ctrl.signal });
                 audioB64 = out.audio.toString('base64');
                 chunkMime = out.mime;
               } catch (err) {
@@ -2672,7 +2842,10 @@ function createServer(deps) {
         }
         const text = String(msg.text || 'Describe what you see, briefly.').slice(0, 500);
 
-        const ttsUp = await tts.isAvailable();
+        // Captured ONCE for this vision answer, same rule as the other two speak
+        // paths — every streamed sentence below comes from this chain object.
+        const activeChain = currentTts();
+        const ttsUp = await activeChain.isAvailable();
         const streamer = createSentenceStreamer();
         // The third synthesis site. It streams sentences as the vision model
         // produces them, so it needs the same routing decision as the other two
@@ -2694,7 +2867,7 @@ function createServer(deps) {
             let audioB64 = null;
         let chunkMime;
             try {
-              const out = await tts.synthesize({ text: spoken });
+              const out = await activeChain.synthesize({ text: spoken });
               audioB64 = out.audio.toString('base64');
               chunkMime = out.mime;
             } catch (err) {
@@ -2918,6 +3091,10 @@ function createServer(deps) {
       // (VOICE_UNIFIED_LIVE_VOICE); the batch fallback below is unchanged and
       // still runs whenever a Live session genuinely isn't available.
       if (msg.type === 'utterance') {
+        // Proof that the mic-hot window that ducked the speakers was a person.
+        // See duckAudio/unduckAudio: two windows in a row WITHOUT this and
+        // ducking backs off, because the trigger was playback, not speech.
+        noteUtteranceHeard();
         // A voice node that cannot RENDER Live's audio must not be routed into
         // it. Live's reply leaves as 'live-audio-out' frames on this socket, and
         // a client with no case for them discards them silently while the ack

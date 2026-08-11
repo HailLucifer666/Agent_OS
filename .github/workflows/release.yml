@@ -20,10 +20,20 @@ name: release
 # WHAT IT DELIBERATELY DOES NOT DO: sign the build. CSC_LINK/CSC_KEY_PASSWORD are
 # not referenced here, because a certificate does not belong in repository secrets
 # on a project that has not decided how it handles signing yet (CONTRIBUTING.md's
-# release gate). Unsigned means Windows SmartScreen warns on install and
-# electron-updater cannot verify a downloaded installer — which is survivable only
-# because autoDownload is false and quitAndInstall is never called. Do not enable
-# automatic download before this is signed.
+# release gate). Unsigned means Windows SmartScreen warns on install.
+#
+# It does NOT mean updates are unverified, which is what this comment used to say
+# (and what kept auto-download switched off until 2026-08-11). electron-updater's
+# NsisUpdater.verifySignature() returns null — passes — when app-update.yml has no
+# publisherName, so on an unsigned build the signature check is skipped rather
+# than failed; and DownloadedUpdateHelper still hashes every download against the
+# sha512 in latest.yml, fetched from GitHub over HTTPS. So the app now downloads
+# automatically and installs on an operator click (electron/main.js).
+#
+# The risk actually left open is a COMPROMISED RELEASE HOST serving a
+# validly-hashed installer. That is accepted, not solved: anyone who can publish a
+# release on this public repo can already publish the source it is built from.
+# Signing plus publisher-name pinning is what would close it — still worth buying.
 
 on:
   push:

@@ -109,7 +109,15 @@ describe('GET /api/setup/status', () => {
     try {
       const res = await get(s.port, '/api/setup/status');
       const row = res.body.keys[0];
-      assert.deepEqual(Object.keys(row).sort(), ['detail', 'fix', 'id', 'label', 'ok', 'required', 'why']);
+      // keyNames joined this list with the first-run wizard: it is the row's own
+      // `anyOf` list, i.e. env-var NAMES, the same class of data keyStoreNames
+      // already returns. The client used to recover them by regexing doctor's
+      // prose `detail`, so a reworded sentence produced a key row with no input.
+      assert.deepEqual(Object.keys(row).sort(), ['detail', 'fix', 'id', 'keyNames', 'label', 'ok', 'required', 'why']);
+      assert.ok(Array.isArray(row.keyNames), 'keyNames must always be an array, [] for an asset row');
+      for (const name of row.keyNames) {
+        assert.match(name, /^[A-Za-z0-9_]{1,64}$/, 'keyNames carries env-var names, never values or prose');
+      }
     } finally { await s.close(); }
   });
 

@@ -207,6 +207,45 @@
 .compose-mic-settings-btn svg { width: 16px; height: 16px; }
 .compose-mic-settings-btn:hover { color: var(--text-dim); }
 
+/* Voice button (speaker — which voice the entity SPEAKS in, as opposed to the
+   gear beside it, which is the mic it LISTENS with). Same 34px circle idiom. */
+.compose-voice-settings-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.compose-voice-settings-btn svg { width: 16px; height: 16px; }
+.compose-voice-settings-btn:hover { color: var(--text-dim); }
+
+/* Setup button (provider keys + local PIN) — same 34px circle idiom as the gear
+   and cam buttons on purpose, so the pill keeps one rhythm instead of growing a
+   differently-shaped control. */
+.compose-setup-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.compose-setup-btn svg { width: 16px; height: 16px; }
+.compose-setup-btn:hover { color: var(--text-dim); }
+
 /* Send button (right side of pill) */
 .compose-send-btn {
   flex-shrink: 0;

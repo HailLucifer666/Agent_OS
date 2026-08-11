@@ -9,6 +9,14 @@ const MIC_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const GEAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const SEND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 const CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`;
+// Setup (provider keys + local PIN). The first-run wizard had no entry point at
+// all once dismissed, so "I signed up for a provider, where do I put the key?"
+// had no answer inside the product. Same 34px circle idiom as the gear/cam.
+const KEY_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 20 3"/><path d="m17 5 3 3"/><path d="m15 7 3 3"/></svg>`;
+// Voice (which voice the entity SPEAKS in — the mic gear beside it is about the
+// microphone it LISTENS with; the two are deliberately separate buttons because
+// they answer opposite questions). Same 34px circle idiom as the rest.
+const SPEAKER_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`;
 
 const HINTS = [
   'What can you do?',
@@ -18,7 +26,7 @@ const HINTS = [
   'Check the weather',
 ];
 
-export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings }) {
+export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings, onVoiceSettings, onSetup }) {
   const root = document.getElementById('compose-bar');
 
   // xss-safe: static template, no interpolation
@@ -30,6 +38,8 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
       <button class="compose-mic-settings-btn" id="compose-mic-settings-btn" aria-label="Microphone settings" title="Mic device + test">${GEAR_SVG}</button>
       <input class="compose-input" id="compose-input" type="text" placeholder="Ask MYTHOS anything\u2026" autocomplete="off" aria-label="Message MYTHOS" />
       <button class="compose-cam-btn cam-idle" id="compose-cam-btn" aria-label="Toggle camera" title="Toggle camera">${CAM_SVG}</button>
+      <button class="compose-voice-settings-btn" id="compose-voice-settings-btn" aria-label="Voice: choose which voice MYTHOS speaks in" title="Choose the speaking voice">${SPEAKER_SVG}</button>
+      <button class="compose-setup-btn" id="compose-setup-btn" aria-label="Setup: provider keys and local PIN" title="Provider keys + PIN">${KEY_SVG}</button>
       <button class="compose-send-btn" id="compose-send-btn" aria-label="Send message">${SEND_SVG}</button>
       <canvas class="compose-wave-line" id="compose-wave" width="240" height="4"></canvas>
     </div>
@@ -40,6 +50,8 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   const input = document.getElementById('compose-input');
   const camBtn = document.getElementById('compose-cam-btn');
   const micSettingsBtn = document.getElementById('compose-mic-settings-btn');
+  const voiceSettingsBtn = document.getElementById('compose-voice-settings-btn');
+  const setupBtn = document.getElementById('compose-setup-btn');
   const sendBtn = document.getElementById('compose-send-btn');
   const captionEl = document.getElementById('compose-caption');
   const waveEl = document.getElementById('compose-wave');
@@ -124,6 +136,17 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Mic settings panel (device picker + live level meter)
   micSettingsBtn.addEventListener('click', () => {
     if (onMicSettings) onMicSettings();
+  });
+
+  // Voice panel (which voice the entity speaks in + a sample of each).
+  voiceSettingsBtn.addEventListener('click', () => {
+    if (onVoiceSettings) onVoiceSettings();
+  });
+
+  // Setup wizard (provider keys + local PIN). The only in-product route back to
+  // it after first run — see setup/first-run-wizard.js.
+  setupBtn.addEventListener('click', () => {
+    if (onSetup) onSetup();
   });
 
   // Keyboard shortcut: "/" focuses the input (like YouTube, GitHub)

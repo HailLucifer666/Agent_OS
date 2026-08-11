@@ -5,6 +5,22 @@
 // Consolidates: breaker check → effectors.invoke → episodic write → budget debit → event emit.
 // Prevents drift between the two dispatch surfaces.
 
+// Channels whose actions are PLUMBING, not experience. They still get a full
+// audit row — the audit trail is what an investigation reads — but they are kept
+// out of episodic memory, which is what the brain recalls when composing a
+// reply.
+//
+// WHY (operator, 2026-08-11): the packaged build ducked system volume at every
+// mic-hot boundary, which with music playing oscillated — 58 set_volume rows in
+// one session, all channel:'voice-ducking'. Each one was also an episodic entry,
+// and server/index.js recalls the 12 most relevant recent memories per turn, so
+// those rows crowded out everything else. The entity then answered "how's it
+// going" with "Volume's at 15 now" and, asked about it, said "because you keep
+// setting it there" — it was reading its own microphone plumbing as if it were
+// something the operator had done. Hysteresis (server/index.js) stops the
+// oscillation; this stops the plumbing from being remembered as events at all.
+const INTERNAL_CHANNELS = new Set(['voice-ducking']);
+
 function humanizeArgs(args) {
   const entries = Object.entries(args || {});
   if (!entries.length) return '';
@@ -55,8 +71,10 @@ async function dispatchAction(decision, ctx) {
   // — audit/episodic previously recorded neither, only ever the tool+outcome.
   const traceId = ctx.traceId || null;
 
-  // 3. Record outcome in episodic memory
-  if (memory && memory.episodic && typeof memory.episodic.write === 'function') {
+  // 3. Record outcome in episodic memory — unless this channel is plumbing
+  // (see INTERNAL_CHANNELS above; the audit write below is unconditional).
+  const isInternal = INTERNAL_CHANNELS.has(ctx.channel);
+  if (!isInternal && memory && memory.episodic && typeof memory.episodic.write === 'function') {
     try {
       await memory.episodic.write({
         kind: 'action', channel: ctx.channel || 'cortex',

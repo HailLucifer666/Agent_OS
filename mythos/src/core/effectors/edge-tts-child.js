@@ -44,6 +44,24 @@ function createEdgeTtsChild({ logger }) {
   function start() {
     if (process.env.EDGE_TTS_AUTOSTART === 'false') return false;
     if (process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT) return false;
+
+    // THE PACKAGED BUILD HAS NO SCRIPT TO RUN. package.json build.files excludes
+    // services/edge-tts-server.py on purpose (edge-tts is LGPLv3 BYO and its
+    // upstream endpoint is personal-use only — see THIRD_PARTY_NOTICES.md), so
+    // in an installed MYTHOS this path does not exist. Without this check the
+    // detector below still found a system python, spawned it against a missing
+    // file, and got exit code 2 three times in a row — the operator's own
+    // install log for 2026-08-11 reads "[edge-tts] child crashed 3 times, giving
+    // up", which describes a crash where the truth is "this build does not ship
+    // that engine". Say the true thing once and start nothing.
+    if (!fs.existsSync(TTS_SCRIPT)) {
+      logger.warn('edge-tts.script-missing', {
+        path: TTS_SCRIPT,
+        note: 'this build does not ship edge-tts (BYO, LGPLv3) — the TTS chain uses its next provider',
+      });
+      return false;
+    }
+
     const port = process.env.EDGE_TTS_PORT || '5050';
 
     // Detect python (try "python" then "python3"). shell:false — the exe

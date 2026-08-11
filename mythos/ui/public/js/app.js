@@ -24,6 +24,7 @@ import { mountInitScreen } from './init-screen.js';
 import { mountPinLockScreen } from './pin/pin-lock-screen.js';
 import { mountAuthGate } from './auth/auth-gate.js';
 import { mountStatusBanner } from './status-banner.js';
+import { mountUpdateBanner } from './update-banner.js';
 import { mountSetupScreen } from './setup/setup-screen.js';
 import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
@@ -49,13 +50,24 @@ mountAuthGate(document.getElementById('auth-root'));
 // "unresponsive" rather than "unauthenticated".
 mountStatusBanner(document.getElementById('status-banner-root'));
 
+// Says out loud when a new version has downloaded, with a button that installs
+// it. No-ops in a browser tab (no window.mythos, therefore no updater).
+mountUpdateBanner(document.getElementById('status-banner-root'));
+
 // First-run setup — the answer to "this machine is a half-broken twin of the
 // other one". Asks GET /api/setup/status and paints ONLY when a REQUIRED gap
 // exists, so a fully wired install never sees it and an install with merely
 // optional gaps (no adb, no piper voice) is not nagged on every boot. Mounted
 // after the token gate because that status call is itself behind it: a 401 here
 // means "not authenticated yet", never "your install is incomplete".
-mountSetupScreen(document.getElementById('setup-root'));
+// On a machine where NOTHING is configured yet (no stored key, no PIN) this
+// opens the first-run wizard instead of the gap list, and it now RETRIES the
+// status probe: in the packaged .exe the window loads before the fork()ed server
+// child is listening, so the single boot-time probe used to resolve
+// 'indeterminate' and the screen was never shown again — a fresh install was
+// never asked for a key at all. setupScreen.open() is the manual route back in
+// (the key button in the compose bar).
+const setupScreen = mountSetupScreen(document.getElementById('setup-root'));
 
 // §7.3 local PIN lock — the enforcement point the backend never had. Mounted
 // here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status
@@ -184,6 +196,15 @@ const compose = createComposeBar({
     const v = ensureVoice();
     overlays.openPanel('mic-settings', { voice: { setMicDevice: (id) => v.setMicDevice(id), getMicDevice: () => v.getMicDevice() } });
   },
+  // Which voice the entity SPEAKS in — audition each, keep one. Owns no state
+  // here: the panel reads /api/tts/voices and writes /api/tts/voice, and the
+  // server rebuilds its chain so the next reply already uses the new voice.
+  onVoiceSettings: () => {
+    overlays.openPanel('voice-settings');
+  },
+  // Provider keys + local PIN, on demand. Re-probes /api/setup/status first so
+  // the wizard reflects what the server sees now, not what it saw at boot.
+  onSetup: () => setupScreen.open(),
 });
 
 // mic indicator API still used by some caption calls below — keep a shim.

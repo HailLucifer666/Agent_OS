@@ -193,11 +193,10 @@ function assetChecks() {
       ok: piperVoices.length > 0,
       detail: piperVoices.length ? `${piperVoices.length} voice(s) in ${piperDir}` : `no .onnx voices in ${piperDir}`,
       why: 'the last link of VOICE_TTS_CHAIN; without it a network failure means no speech at all',
-      // NOT setup-piper.js: that script does not exist in this repo even though
-      // effectors/piper-child.js prints it as its install hint. Naming a command
-      // that cannot be run is exactly the dishonesty this report is for.
-      fix: 'download a piper voice .onnx + .onnx.json into ' + piperDir +
-        '  (note: piper-child.js advertises scripts/setup-piper.js, which does NOT exist here)',
+      // setup-piper.js genuinely exists as of 2026-08-11 (it did not for months,
+      // which is why this row used to spell out that the advertised command was
+      // fictional). Verified by pointing at the file, not by memory.
+      fix: 'node scripts/setup-piper.js --install   (installs into ' + piperDir + ')',
     },
     {
       id: 'hermes',
@@ -332,6 +331,13 @@ function evaluateKeyChecks() {
         : (check.allOf ? `missing: ${missing.join(', ')}` : `none of: ${names.join(', ')}`),
       why: check.why,
       fix: check.fix,
+      // The requirement's key names, structured. `detail` above is prose for a
+      // human terminal; the setup screen needs the list itself, and used to
+      // recover it by regexing that prose — so a reworded sentence produced a
+      // key row with no input box and no way to fix the gap it was reporting.
+      // Names only: this whole file is forbidden from touching a value (AD-8),
+      // and test/setup-route.test.js pins that a planted canary cannot appear.
+      keyNames: names.slice(),
     };
   });
 }

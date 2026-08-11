@@ -19,6 +19,20 @@ const assert = require('node:assert/strict');
 const WebSocket = require('ws');
 const path = require('path');
 const { createBus } = require('../src/core/bus');
+
+// HYSTERESIS (2026-08-11): duckAudio/unduckAudio now hold a duck for
+// DUCK_MIN_HOLD_MS and refuse a re-duck for DUCK_COOLDOWN_MS, because with media
+// playing the two ends fed each other — the operator's installed build logged 58
+// set_volume calls in one session. The behaviour asserted in THIS file is the
+// original P0-3 contract (duck to 15, restore the ORIGINAL level, never
+// re-capture a ducked level), which is unchanged; the bounds are shortened here
+// so these stay millisecond-scale unit assertions. The hysteresis itself has its
+// own file, test/duck-hysteresis.test.js. createServer() reads these at call
+// time, and node:test gives every test file its own process, so setting them at
+// module scope affects nothing else.
+process.env.DUCK_MIN_HOLD_MS = '20';
+process.env.DUCK_COOLDOWN_MS = '20';
+
 const { createServer } = require('../server');
 
 function fakeFs() {
@@ -61,72 +75,66 @@ function makeVolumeEffectors(startingLevel) {
   };
 }
 
-test('duck-audio lowers volume and unduck-audio restores the ORIGINAL level', async () => {
+// Every case below closes the socket and stops the server in a `finally`. That
+// is not tidiness: an assertion that throws used to skip the two cleanup lines
+// at the end of the test, leaving a listening HTTP server and an open WS in the
+// process — so node:test could never exit and a single failed assertion here
+// hung the ENTIRE suite instead of reporting one red test (cost: ~40 minutes of
+// bisecting a "hang" that was really a failure, 2026-08-11).
+async function withServer(effectors, fn) {
   const bus = createBus({ historySize: 50 });
-  const vol = makeVolumeEffectors(80);
-  const server = createServer(baseDeps(bus, { effectors: vol.effectors }));
-
+  const server = createServer(baseDeps(bus, { effectors }));
   await server.ready;
-  const addr = server.httpServer.address();
-  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  const ws = new WebSocket(`ws://127.0.0.1:${server.httpServer.address().port}/ws`);
   await new Promise((resolve) => ws.on('open', resolve));
+  try {
+    return await fn(ws);
+  } finally {
+    ws.close();
+    await server.stop();
+  }
+}
 
-  ws.send(JSON.stringify({ type: 'duck-audio' }));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(vol.getLevel(), 15, 'volume must be ducked to the low level');
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  ws.send(JSON.stringify({ type: 'unduck-audio' }));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(vol.getLevel(), 80, 'volume must be restored to the ORIGINAL pre-duck level, not a hardcoded default');
+test('duck-audio lowers volume and unduck-audio restores the ORIGINAL level', async () => {
+  const vol = makeVolumeEffectors(80);
+  await withServer(vol.effectors, async (ws) => {
+    ws.send(JSON.stringify({ type: 'duck-audio' }));
+    await settle(100);
+    assert.equal(vol.getLevel(), 15, 'volume must be ducked to the low level');
 
-  ws.close();
-  await server.stop();
+    ws.send(JSON.stringify({ type: 'unduck-audio' }));
+    await settle(100);
+    assert.equal(vol.getLevel(), 80, 'volume must be restored to the ORIGINAL pre-duck level, not a hardcoded default');
+  });
 });
 
 test('a second duck (e.g. barge-in re-arming) does not overwrite the real original level', async () => {
-  const bus = createBus({ historySize: 50 });
   const vol = makeVolumeEffectors(60);
-  const server = createServer(baseDeps(bus, { effectors: vol.effectors }));
+  await withServer(vol.effectors, async (ws) => {
+    ws.send(JSON.stringify({ type: 'duck-audio' }));
+    await settle(60);
+    ws.send(JSON.stringify({ type: 'duck-audio' })); // second duck while already ducked
+    await settle(60);
+    ws.send(JSON.stringify({ type: 'unduck-audio' }));
+    await settle(100);
 
-  await server.ready;
-  const addr = server.httpServer.address();
-  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
-  await new Promise((resolve) => ws.on('open', resolve));
-
-  ws.send(JSON.stringify({ type: 'duck-audio' }));
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  ws.send(JSON.stringify({ type: 'duck-audio' })); // second duck while already ducked
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  ws.send(JSON.stringify({ type: 'unduck-audio' }));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  assert.equal(vol.getLevel(), 60, 'restoring must use the ORIGINAL 60, not the ducked 15 a naive re-save would have captured');
-  // get_volume should only have been called once (the first duck) — the
-  // second duck must be a no-op, confirmed by call count.
-  const getVolumeCalls = vol.calls.filter((c) => c.tool === 'get_volume').length;
-  assert.equal(getVolumeCalls, 1, 'a second duck while already ducked must not re-read/re-save volume');
-
-  ws.close();
-  await server.stop();
+    assert.equal(vol.getLevel(), 60, 'restoring must use the ORIGINAL 60, not the ducked 15 a naive re-save would have captured');
+    // get_volume should only have been called once (the first duck) — the
+    // second duck must be a no-op, confirmed by call count.
+    const getVolumeCalls = vol.calls.filter((c) => c.tool === 'get_volume').length;
+    assert.equal(getVolumeCalls, 1, 'a second duck while already ducked must not re-read/re-save volume');
+  });
 });
 
 test('unduck with nothing ducked is a harmless no-op (does not call set_volume)', async () => {
-  const bus = createBus({ historySize: 50 });
   const vol = makeVolumeEffectors(50);
-  const server = createServer(baseDeps(bus, { effectors: vol.effectors }));
-
-  await server.ready;
-  const addr = server.httpServer.address();
-  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
-  await new Promise((resolve) => ws.on('open', resolve));
-
-  ws.send(JSON.stringify({ type: 'unduck-audio' }));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  assert.equal(vol.calls.length, 0, 'an unduck with no prior duck must not touch volume at all');
-
-  ws.close();
-  await server.stop();
+  await withServer(vol.effectors, async (ws) => {
+    ws.send(JSON.stringify({ type: 'unduck-audio' }));
+    await settle(100);
+    assert.equal(vol.calls.length, 0, 'an unduck with no prior duck must not touch volume at all');
+  });
 });
 
 test('duck-audio degrades silently when get_volume fails (PC automation offline)', async () => {
@@ -135,18 +143,10 @@ test('duck-audio degrades silently when get_volume fails (PC automation offline)
     breakers: new Map(), effectors: new Map(),
     invoke: async (tool) => (tool === 'get_volume' ? { ok: false, result: 'PC automation is OFFLINE' } : { ok: false, result: 'n/a' }),
   };
-  const server = createServer(baseDeps(bus, { effectors }));
-
-  await server.ready;
-  const addr = server.httpServer.address();
-  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
-  await new Promise((resolve) => ws.on('open', resolve));
-
-  // Must not throw / crash the connection.
-  ws.send(JSON.stringify({ type: 'duck-audio' }));
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(ws.readyState, WebSocket.OPEN, 'a failed duck must not break the WS connection');
-
-  ws.close();
-  await server.stop();
+  await withServer(effectors, async (ws) => {
+    // Must not throw / crash the connection.
+    ws.send(JSON.stringify({ type: 'duck-audio' }));
+    await settle(100);
+    assert.equal(ws.readyState, WebSocket.OPEN, 'a failed duck must not break the WS connection');
+  });
 });

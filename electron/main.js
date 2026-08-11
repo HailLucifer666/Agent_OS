@@ -355,6 +355,35 @@ ipcMain.handle('mythos:has-key', async (event, name) => {
   return Object.prototype.hasOwnProperty.call(loadStore(), name);
 });
 
+// mythos:restart-server — re-fork the server child so keys stored a moment ago
+// actually reach it.
+//
+// Why this exists: decryptedKeysForChild() runs inside startChild(), i.e. the
+// decrypted values are injected into the child's env at fork() time and never
+// afterwards. So a key saved through the setup screen was genuinely stored and
+// genuinely not in effect, and the only remedy the product offered was "restart
+// MYTHOS" — a full app relaunch for what is a child-process concern. The first-
+// run wizard's last step calls this instead.
+//
+// Killing the child is enough: its 'exit' handler (startChild) already re-forks
+// with backoff, and a fresh fork re-reads the key store. No new lifecycle path,
+// so nothing else has to learn about this one. Carries the same HUD-only sender
+// check as the key channels — a page that could trigger server restarts at will
+// would have a cheap denial-of-service.
+ipcMain.handle('mythos:restart-server', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:restart-server: denied — sender is not the HUD window');
+  }
+  if (child) {
+    stopChild();     // kill(); the exit handler re-forks on the backoff floor
+    return { ok: true, restarting: true };
+  }
+  // No child right now: either it is mid-restart already or it never started.
+  // startChild() no-ops when one exists, so this is safe either way.
+  startChild();
+  return { ok: true, restarting: true };
+});
+
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
 // its bus.subscribe('ui.open-web', ...) handler) into a real second
@@ -585,12 +614,10 @@ function syncVault(flag) {
 // trade, and an OS notification is arguably better anyway — it shows up whether
 // or not the HUD window is focused.
 //
-// What it deliberately does NOT do is offer to install. autoDownload is false
-// and quitAndInstall is never called, because CONTRIBUTING.md's release gate
-// says not to enable automatic download before the build is signed: an unsigned
-// installer gives electron-updater nothing to verify against, so a compromised
-// host could serve any executable. So this points at the release page and lets
-// the operator decide.
+// What it does NOT do is install. It says a download has STARTED; the restart
+// prompt in checkForUpdates()'s update-downloaded handler is the only thing that
+// installs, and only on a click. See that function's header for why downloading
+// automatically is defensible on an unsigned build and what is still missing.
 function notifyUpdateAvailable(version) {
   try {
     // Required at the use site, like `screen`/`session` elsewhere in this file:
@@ -603,7 +630,7 @@ function notifyUpdateAvailable(version) {
     }
     new Notification({
       title: `MYTHOS ${version} is available`,
-      body: `You are running ${app.getVersion()}. Nothing has been downloaded — open the releases page to update.`,
+      body: `You are running ${app.getVersion()}. Downloading it in the background — you will be asked before anything is installed.`,
       silent: false,
     }).show();
   } catch (err) {
@@ -613,9 +640,105 @@ function notifyUpdateAvailable(version) {
   }
 }
 
+// How often a long-running install re-asks the feed. The boot check alone means
+// a machine left running for a week never sees a release.
+const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+// ---- update state, mirrored into the HUD ---------------------------------------
+// The operator asked for a visible control ("a UI that says Update, and clicking
+// it updates"), not only an OS notification that can be missed while the window
+// is focused. So the main process keeps one small state value and pushes it to
+// the HUD, which renders js/update-banner.js.
+//
+// This is the SECOND main->renderer channel on the AD-8 preload surface (after
+// mythos:hotkey), and it is deliberately shaped like that one: two plain strings,
+// re-derived in preload.js rather than forwarded, so nothing structured — and
+// therefore nothing secret — can ride the event into a renderer that also loads
+// remote pages. See electron/preload.js and
+// mythos/test/electron-preload-surface.test.js, which pins the whole surface.
+const UPDATE_STATES = ['idle', 'available', 'downloading', 'ready', 'error'];
+let updaterRef = null;               // set once checkForUpdates() has built one
+let updateState = { state: 'idle', version: '' };
+
+function setUpdateState(state, version) {
+  // A typo'd state would render as a banner the HUD has no copy for, i.e. a
+  // silent blank. Fail loudly into the log and keep the last known good state.
+  if (UPDATE_STATES.indexOf(state) === -1) {
+    log('auto-update: refusing an unknown update state', String(state));
+    return;
+  }
+  updateState = { state, version: String(version || '') };
+  sendUpdateState();
+}
+
+function sendUpdateState() {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('mythos:update-status', updateState.state, updateState.version);
+  } catch (err) {
+    // A dead/reloading webContents is not an error worth taking anything down for.
+    log('auto-update: could not push status to the HUD —', err && err.message);
+  }
+}
+
+// The HUD's Update button. Takes no arguments: what it does is decided HERE from
+// state the main process owns, never from anything the renderer says — a
+// renderer-supplied version or path would be a way for a page to choose what
+// gets executed.
+ipcMain.handle('mythos:install-update', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:install-update: denied — sender is not the HUD window');
+  }
+  if (updateState.state === 'ready' && updaterRef) {
+    log('auto-update: installing', updateState.version, '(HUD button) and restarting');
+    setImmediate(() => {
+      try { updaterRef.quitAndInstall(false, true); } catch (err) {
+        log('auto-update: quitAndInstall failed —', err && err.message);
+      }
+    });
+    return { ok: true, installing: true, state: updateState.state, version: updateState.version };
+  }
+  // Not downloaded yet: nudge a check rather than pretending. The banner keeps
+  // showing whatever the events say next.
+  if (updaterRef && (updateState.state === 'idle' || updateState.state === 'error')) {
+    updaterRef.checkForUpdates().catch((err) => log('auto-update: manual check rejected —', err && err.message));
+  }
+  return { ok: true, installing: false, state: updateState.state, version: updateState.version };
+});
+
+// WHY THIS DOWNLOADS AND INSTALLS NOW (operator, 2026-08-11), reversing the
+// "notify only, never auto-download" gate that CONTRIBUTING.md and
+// .github/workflows/release.yml still describe as the state of the world:
+//
+// Every fix had to be shipped as a full manual installer run. The gate existed
+// because the build is unsigned, and the stated reasoning was that
+// electron-updater "has nothing to verify against". Two things about that,
+// verified in node_modules rather than assumed:
+//
+//   * NsisUpdater.verifySignature() returns null — i.e. PASSES — when
+//     app-update.yml carries no publisherName (out/NsisUpdater.js:84-99). On an
+//     unsigned build the signature check is SKIPPED, not failed. Refusing to
+//     auto-download bought no signature verification; it only cost releases.
+//   * Integrity is still enforced regardless of signing: DownloadedUpdateHelper
+//     hashes the downloaded file and compares it to the sha512 in latest.yml,
+//     which is fetched from GitHub over HTTPS. A tampered download fails.
+//
+// What signing WOULD add is protection against a compromised release host
+// serving a validly-hashed malicious installer. That risk is accepted here, not
+// disproven: this feed is the project's own public GitHub Releases, and anyone
+// who can publish a release there can already publish the source this app is
+// built from. A cert is still worth buying — see CONTRIBUTING.md's release gate.
+//
+// Installing remains the operator's click (autoInstallOnAppQuit stays false),
+// because a desktop assistant that restarts itself mid-sentence is its own bug.
+// MYTHOS_AUTO_UPDATE=off disables the whole thing.
 function checkForUpdates() {
   if (!app.isPackaged) {
     log('auto-update: dev build — update check runs in packaged builds only; skipping.');
+    return;
+  }
+  if (String(process.env.MYTHOS_AUTO_UPDATE || '').trim().toLowerCase() === 'off') {
+    log('auto-update: disabled by MYTHOS_AUTO_UPDATE=off; skipping.');
     return;
   }
   const feedUrl = String(process.env.MYTHOS_UPDATE_URL || '').trim();
@@ -634,23 +757,88 @@ function checkForUpdates() {
     // host is actually configured, and a future version of the library moving
     // more work into that constructor cannot take boot down with it.
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = false;
+    updaterRef = autoUpdater;
+    autoUpdater.autoDownload = true;
+    // The one thing that must stay false: quitting must never become an install.
+    // An operator who closes the app to do something else would come back to a
+    // different version they never agreed to.
+    autoUpdater.autoInstallOnAppQuit = false;
     if (feedUrl) {
       autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
     }
-    autoUpdater.on('error', (err) => log('auto-update: check failed —', err && err.message));
+    autoUpdater.on('error', (err) => {
+      log('auto-update: check failed —', err && err.message);
+      setUpdateState('error', updateState.version);
+    });
     autoUpdater.on('update-available', (info) => {
       const version = (info && info.version) || 'unknown';
-      log('auto-update: update available —', version, '(not downloaded automatically)');
+      log('auto-update: update available —', version, '— downloading in the background');
+      setUpdateState('downloading', version);
       notifyUpdateAvailable(version);
     });
-    autoUpdater.on('update-not-available', () => log('auto-update: already on the latest version'));
+    autoUpdater.on('update-not-available', () => {
+      log('auto-update: already on the latest version');
+      setUpdateState('idle', '');
+    });
+    // Percent only, and only on whole-percent boundaries: this log is a file the
+    // operator reads after the fact, not a progress bar.
+    let lastPercent = -1;
+    autoUpdater.on('download-progress', (p) => {
+      const percent = Math.floor((p && p.percent) || 0);
+      if (percent === lastPercent) return;
+      lastPercent = percent;
+      if (percent % 10 === 0) log('auto-update: download-progress', `${percent}%`);
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      const version = (info && info.version) || 'unknown';
+      log('auto-update: downloaded', version, '— asking the operator to restart');
+      setUpdateState('ready', version);
+      promptInstall(autoUpdater, version);
+    });
     log(`auto-update: checking ${feedUrl ? `custom feed ${feedUrl}` : 'the embedded release feed (GitHub Releases)'}`);
-    autoUpdater.checkForUpdates().catch((err) => {
+    const check = () => autoUpdater.checkForUpdates().catch((err) => {
       log('auto-update: checkForUpdates rejected —', err && err.message);
     });
+    check();
+    // unref()'d: a pending timer must never be the reason the process refuses to
+    // exit when every window is gone.
+    const timer = setInterval(check, UPDATE_RECHECK_MS);
+    if (typeof timer.unref === 'function') timer.unref();
   } catch (err) {
     log('auto-update: setup failed —', err && err.message);
+  }
+}
+
+// The install gate. A modal dialog rather than a notification, because this one
+// has consequences (the app exits and the NSIS installer runs) and a
+// notification is dismissable by accident.
+//
+// quitAndInstall(isSilent=false, forceRunAfter=true): show the installer's own
+// progress, and come back up afterwards. Silent would leave the operator staring
+// at nothing for ~20s wondering what happened. The server child is killed by the
+// existing before-quit handler, so there is no extra teardown here.
+function promptInstall(autoUpdater, version) {
+  try {
+    const { dialog } = require('electron');
+    dialog.showMessageBox({
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'MYTHOS update ready',
+      message: `MYTHOS ${version} is ready to install.`,
+      detail: 'Restarting takes about half a minute. Your vault, keys and PIN are untouched by an update.',
+    }).then(({ response }) => {
+      if (response !== 0) {
+        log('auto-update: operator chose Later — it will be offered again on the next launch.');
+        return;
+      }
+      log('auto-update: installing', version, 'and restarting');
+      autoUpdater.quitAndInstall(false, true);
+    }).catch((err) => log('auto-update: install prompt failed —', err && err.message));
+  } catch (err) {
+    // A dialog that cannot be shown must not lose the download or kill the app.
+    log('auto-update: could not ask about installing —', err && err.message);
   }
 }
 
@@ -875,6 +1063,12 @@ if (!gotLock) {
     });
     mainWindow.loadURL(`http://${BIND}:${PORT}`);
     if (!ready) waitForLateReady();
+
+    // Replay the current update state to a freshly-loaded HUD. Events fire on
+    // the main process's own schedule — a download can finish before the window
+    // exists, and the HUD reloads on every server restart — so without this the
+    // banner would only ever appear if the timing happened to line up.
+    mainWindow.webContents.on('did-finish-load', () => sendUpdateState());
 
     // Trap window.open(_blank) from the renderer so it never spawns an external
     // browser. Without this, the HUD's `window.open(url, '_blank')` (app.js,

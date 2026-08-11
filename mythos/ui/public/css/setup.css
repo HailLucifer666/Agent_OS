@@ -220,3 +220,297 @@
     align-items: stretch;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   First-run wizard (js/setup/first-run-wizard.js)
+
+   Deliberately NOT a new visual language: same glass panel, same --accent, same
+   fadeInUp as the gap screen above and as pin.css, so the first thing a new
+   operator ever sees already looks like the HUD they are about to use. What it
+   adds over the gap list is structure — a step rail, a scrolling body, and a
+   fixed footer — because it is a flow rather than a report.
+
+   z-index 406: one above .setup-overlay (405) so a manually reopened wizard
+   stacks over a gap screen that may still be painted, and still below auth.css
+   (410), which must be satisfied before /api/setup/status answers anything.
+   --------------------------------------------------------------------------- */
+
+.wiz-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.94);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+  z-index: 406;
+}
+
+.wiz-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 94vw);
+  max-height: min(86vh, 780px);
+  padding: 0;
+  border-color: var(--accent-dim);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.78);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.wiz-header {
+  padding: 22px 26px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.wiz-title {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* The rail is an <ol>: the steps have a real order, and a screen reader should
+   hear it as one. aria-current="step" marks the live one (set in JS). */
+.wiz-rail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+}
+
+.wiz-dot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.wiz-dot-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  font-size: 10px;
+  line-height: 1;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/* State is carried by BOTH the ring colour and the label weight — never colour
+   alone, so the current step survives a colour-blind reading and a greyscale
+   screen-share. */
+.wiz-dot.is-current { color: var(--text); }
+.wiz-dot.is-current .wiz-dot-mark { border-color: var(--accent); color: var(--accent); }
+.wiz-dot.is-current .wiz-dot-label { font-weight: 600; }
+.wiz-dot.is-done .wiz-dot-mark { border-color: var(--status-ok); color: var(--status-ok); }
+
+.wiz-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 20px 26px 8px;
+}
+
+.wiz-step-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.wiz-lede {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 62ch;
+}
+
+.wiz-warn {
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--status-warn);
+  border: 1px solid var(--status-warn);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 95, 102, 0.08);
+}
+
+.wiz-facts {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.wiz-empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--status-ok);
+}
+
+.wiz-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wiz-card {
+  padding: 13px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.wiz-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.wiz-card-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.wiz-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.wiz-badge-ok { color: var(--status-ok); border-color: var(--status-ok); }
+.wiz-badge-gap { color: var(--status-degraded); border-color: var(--status-degraded); }
+.wiz-badge-required { color: var(--status-warn); border-color: var(--status-warn); }
+
+.wiz-card-why,
+.wiz-card-note,
+.wiz-card-fix {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+/* A fix line is a command to type, not a control to press — monospace says so
+   without pretending to be clickable. */
+.wiz-card-fix {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  overflow-wrap: anywhere;
+}
+
+.wiz-more { margin-top: 14px; }
+
+.wiz-more > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.wiz-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 26px 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* "Do this later" sits hard left, away from the two navigation buttons: it is
+   the one action that abandons the flow, and it should not be adjacent to the
+   button the operator taps repeatedly. */
+.wiz-later { margin-right: auto; }
+
+.wiz-primary,
+.wiz-ghost {
+  min-height: 34px;
+  padding: 8px 16px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+
+.wiz-primary {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+}
+
+.wiz-primary:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+
+.wiz-ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--hairline);
+}
+
+.wiz-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--accent-dim); }
+.wiz-primary:disabled,
+.wiz-ghost:disabled { opacity: 0.5; cursor: default; }
+
+.wiz-restart-status {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.wiz-restart-status.is-error { color: var(--status-warn); }
+
+/* Respect the operator's motion setting: the entry animation is decoration, the
+   content is the point. */
+@media (prefers-reduced-motion: reduce) {
+  .wiz-modal { animation: none; }
+}
+
+/* Components step — checkbox rows reuse .wiz-card, so the step reads as the same
+   surface as the provider list rather than a second design. */
+.wiz-check {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.wiz-check:disabled { cursor: default; opacity: 0.5; }
+.wiz-check:disabled + .wiz-card-label { opacity: 0.6; }
+.wiz-card-head label.wiz-card-label { cursor: pointer; }
+
+/* Per-row install state. Lives under its own card so a failure sits next to the
+   thing that failed, never only in a summary line at the bottom. */
+.wiz-comp-status {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--status-ok);
+}
+
+.wiz-comp-status.is-error { color: var(--status-warn); }
+
+.wiz-manual { margin-top: 18px; }

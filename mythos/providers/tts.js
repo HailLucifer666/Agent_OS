@@ -158,4 +158,55 @@ function createTtsChain({ config, logger } = {}) {
   };
 }
 
-module.exports = { selectTts, mimeFor, voiceFor, createTtsChain, parseChain };
+// What this machine could speak with, for the HUD's voice picker.
+//
+// Walks the WHOLE registry, not the configured chain: the question the picker
+// asks is "what can I choose from", which is independent of what is active or
+// default right now. An engine that is not installed still appears, with
+// available:false — the operator needs to see that piper exists and is missing,
+// not have it silently absent as though it were never an option.
+//
+// Every probe is wrapped. A dead sidecar or a provider that throws yields
+// available:false / voices:[] rather than failing the whole listing, and
+// listVoices() is only called for an engine that reported available — asking a
+// missing engine for its catalogue answers nothing and, for kokoro, would mean
+// pulling a model down just to populate a dropdown.
+// The four engines answer in three different shapes: gemini returns bare
+// strings, the edge/piper sidecars return {id,name,language,gender} rows, kokoro
+// returns {id,label}. Flatten to one {id,label} shape here so the picker never
+// has to know which engine it is rendering.
+function normalizeVoice(v) {
+  if (typeof v === 'string') return { id: v, label: v };
+  if (!v || typeof v !== 'object') return null;
+  const id = v.id || v.name || v.voice || v.short_name || v.shortName;
+  if (!id) return null;
+  const label = v.label || v.name || id;
+  const detail = [v.language, v.gender].filter(Boolean).join(' · ');
+  return detail ? { id: String(id), label: String(label), detail } : { id: String(id), label: String(label) };
+}
+
+async function listEngines() {
+  const entries = Object.entries(BY_NAME);
+  return Promise.all(entries.map(async ([short, provider]) => {
+    let available = false;
+    try { available = Boolean(await provider.isAvailable()); } catch { available = false; }
+    let voices = [];
+    if (available && typeof provider.listVoices === 'function') {
+      try {
+        const raw = (await provider.listVoices()) || [];
+        voices = raw.map(normalizeVoice).filter(Boolean);
+      } catch { voices = []; }
+    }
+    return { provider: provider.name, short, available, voices };
+  }));
+}
+
+// Direct access for the audition route, which synthesizes a sample with an
+// explicitly chosen engine+voice and must NOT go through a chain — resolving a
+// chain would probe, cache and stick a provider as a side effect of pressing
+// play on a sample.
+function providerByShortName(short) {
+  return BY_NAME[String(short || '').trim().toLowerCase()] || null;
+}
+
+module.exports = { selectTts, mimeFor, voiceFor, createTtsChain, parseChain, listEngines, providerByShortName };

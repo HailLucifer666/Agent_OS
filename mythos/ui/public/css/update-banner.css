@@ -1,0 +1,55 @@
+/* update-banner.css — the "an update is ready" strip (js/update-banner.js).
+
+   Bottom edge, not top: status-banner.css already owns the top strip for
+   connectivity/auth faults, and the two can be true at once. Same z-index band
+   (300) so it stays below the PIN screen (400) and the token gate (410) — an
+   update offer floating over a locked screen would read as a bug. */
+
+.update-banner {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, 94vw);
+  padding: 7px 14px;
+  border: 1px solid var(--accent-dim);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: rgba(5, 8, 15, 0.92);
+  backdrop-filter: blur(8px);
+  font-size: 11px;
+  color: var(--accent);
+  z-index: 300;
+}
+
+/* Hidden rather than removed, like status-banner: one persistent live region a
+   screen reader keeps under observation instead of losing. */
+.update-banner-hidden {
+  display: none;
+}
+
+.update-banner-text {
+  word-break: break-word;
+}
+
+.update-banner-error {
+  border-color: var(--status-warn);
+  color: var(--status-warn);
+}
+
+.update-banner-action {
+  flex: none;
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.update-banner-action:hover { color: var(--text); }
+.update-banner-action[disabled] { opacity: 0.6; cursor: default; }

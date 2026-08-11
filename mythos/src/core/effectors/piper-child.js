@@ -65,7 +65,11 @@ function createPiperChild({ logger, config }) {
     if (!hasVoices(modelDir)) {
       logger.warn('piper.no-voices', {
         dir: modelDir,
-        hint: 'node mythos/scripts/setup-piper.js --install',
+        // True again as of 2026-08-11: this hint named a script that did not
+        // exist for months (doctor.js documented the lie rather than repeat it).
+        // scripts/setup-piper.js now exists and the wizard's Components step
+        // runs it, so all three places finally agree.
+        hint: 'node mythos/scripts/setup-piper.js --install  (or the Components step in setup)',
         note: 'piper offline — TTS chain will use the next provider',
       });
       return false;

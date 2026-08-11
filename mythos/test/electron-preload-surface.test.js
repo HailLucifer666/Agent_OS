@@ -3,8 +3,24 @@
 // test/electron-preload-surface.test.js — §14 phase-8 gate (V2 spine).
 //
 // Asserts the Electron preload's contextBridge surface is EXACTLY
-// { getKeyNames, setKey, hasKey } — no more, no fewer — and that each
-// function forwards to its named IPC channel with the right args.
+// { getKeyNames, setKey, hasKey, onHotkey, restartServer, onUpdateStatus,
+// installUpdate } — no more, no fewer — and that each function forwards to its
+// named IPC channel with the right args.
+//
+// restartServer was added with the first-run wizard: a key stored via setKey()
+// only reaches the server at fork(), so the wizard's last step re-forks the
+// child. It takes no arguments and resolves to a status object, which is why it
+// can join this surface without weakening AD-8 (the sibling gate,
+// anti-drift-no-key-to-client.test.js, still forbids anything value-shaped).
+//
+// onUpdateStatus/installUpdate were added 2026-08-11 with in-app updates, after
+// the operator asked for a visible "Update" control rather than an OS
+// notification that is easy to miss. Same reasoning, and the two properties that
+// keep them AD-8-safe are asserted below: onUpdateStatus subscribes to ONE named
+// channel and re-derives both payload fields as plain strings (nothing
+// structured crosses), and installUpdate takes NO arguments — which version is
+// installed is decided in the main process, so a page loaded in a renderer
+// cannot nominate an executable.
 //
 // Method: the repo's require-cache module-stubbing idiom (see
 // test/from-calendar-google.test.js lines ~94-111), generalised so it works
@@ -49,7 +65,7 @@ function installElectronStub(stubExports) {
 }
 
 describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
-  it('exposes exactly { getKeyNames, setKey, hasKey, onHotkey }, each forwarding to its named IPC channel', async () => {
+  it('exposes exactly { getKeyNames, setKey, hasKey, onHotkey, restartServer, onUpdateStatus, installUpdate }, each forwarding to its named IPC channel', async () => {
     let exposedName = null;
     let exposedApi = null;
     const invokeCalls = [];
@@ -73,8 +89,19 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // EXACT surface shape — sorted deep-equal, no more, no fewer.
       assert.deepEqual(
         Object.keys(exposedApi).sort(),
-        ['getKeyNames', 'hasKey', 'onHotkey', 'setKey'],
-        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey',
+        ['getKeyNames', 'hasKey', 'installUpdate', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey'],
+        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/restartServer/onUpdateStatus/installUpdate',
+      );
+
+      // restartServer() → ipcRenderer.invoke('mythos:restart-server'), no args.
+      // The no-args part is the assertion that matters: a channel that accepted
+      // a caller-supplied payload would be a way for the renderer to influence
+      // how the privileged main process re-forks the server.
+      await exposedApi.restartServer();
+      assert.deepEqual(
+        invokeCalls[invokeCalls.length - 1],
+        ['mythos:restart-server'],
+        'restartServer must invoke channel mythos:restart-server with no arguments',
       );
 
       // setKey(name, value) → ipcRenderer.invoke('mythos:set-key', name, value)
@@ -123,6 +150,32 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // registering a second listener.
       exposedApi.onHotkey('not-a-function');
       assert.equal(onCalls.length, 1);
+
+      // installUpdate() → ipcRenderer.invoke('mythos:install-update'), NO args.
+      // The no-args part is the security property: the main process decides what
+      // gets installed from state it owns. A version/path argument here would let
+      // a page in the renderer choose an executable.
+      await exposedApi.installUpdate();
+      assert.deepEqual(
+        invokeCalls[invokeCalls.length - 1],
+        ['mythos:install-update'],
+        'installUpdate must invoke channel mythos:install-update with no arguments',
+      );
+
+      // onUpdateStatus(cb) — the second and last main->renderer listener, built
+      // like onHotkey: one named channel, payload re-derived as plain strings.
+      const statuses = [];
+      exposedApi.onUpdateStatus((state, version) => statuses.push([state, version]));
+      assert.equal(onCalls.length, 2, 'onUpdateStatus must subscribe to exactly one further channel');
+      assert.equal(onCalls[1].channel, 'mythos:update-status');
+      onCalls[1].handler({ senderId: 1 }, 'ready', '0.1.5');
+      assert.deepEqual(statuses[0], ['ready', '0.1.5']);
+      onCalls[1].handler({}, { leak: 'a-secret-object' }, { leak: 'another-secret' });
+      assert.equal(typeof statuses[1][0], 'string');
+      assert.equal(typeof statuses[1][1], 'string');
+      assert.doesNotMatch(statuses[1].join('|'), /secret/, 'object payloads must not leak their contents');
+      exposedApi.onUpdateStatus('not-a-function');
+      assert.equal(onCalls.length, 2, 'a non-function argument must be ignored, not registered');
     } finally {
       restore();
     }
