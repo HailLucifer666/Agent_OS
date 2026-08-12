@@ -931,6 +931,40 @@ function notifyUpdateAvailable(version) {
   }
 }
 
+// Say out loud that an update FINISHED. Until now a completed update was as
+// silent as an incomplete one — the only trace was "the update to X
+// completed" inside main.log. Fires once, from unfinishedUpdate()'s success
+// branch at the next boot after the handover, so it lands the moment the
+// operator is back at a working app rather than trying to survive across the
+// installer's own process teardown.
+//
+// A native Notification for the same reason notifyUpdateAvailable() is one:
+// it is immune to the update-not-available handler's setUpdateState('idle',
+// '') firing ~1s after boot and clobbering the HUD's 'incomplete'/'ready'
+// banner state (see whenReady() below) — a banner-based success message
+// would be erased before most operators could read it.
+function notifyUpdateCompleted(version, releaseNotes) {
+  try {
+    // Required at the use site — see notifyUpdateAvailable() above for why.
+    const { Notification } = require('electron');
+    if (!Notification.isSupported()) {
+      log('auto-update: desktop notifications unsupported here — the log line above is the only notice.');
+      return;
+    }
+    let body = `MYTHOS updated to ${version}.`;
+    if (releaseNotes) body += ` What's new: ${releaseNotes}`;
+    new Notification({
+      title: `MYTHOS updated to ${version}`,
+      body,
+      silent: false,
+    }).show();
+  } catch (err) {
+    // A failed notification must never take down boot. The log line is the
+    // fallback notice.
+    log('auto-update: could not show the update-completed notification —', err && err.message);
+  }
+}
+
 // How often a long-running install re-asks the feed. The boot check alone means
 // a machine left running for a week never sees a release.
 const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
@@ -1211,20 +1245,31 @@ function updateAttemptPath() {
   return path.join(app.getPath('userData'), 'update-attempt.json');
 }
 
-function recordUpdateAttempt(version) {
+// releaseNotes travels with the attempt (not just the version) so that a
+// completion notification on the NEXT boot — a fresh process, after
+// updateReleaseNotes has been reinitialized to its module-load default — can
+// still say what changed. Sanitized already (captureReleaseNotes ran on the
+// update-available/update-downloaded events); stored as plain text.
+function recordUpdateAttempt(version, releaseNotes) {
   try {
     fs.writeFileSync(updateAttemptPath(), JSON.stringify({
       version: String(version || ''),
       from: app.getVersion(),
       at: new Date().toISOString(),
+      releaseNotes: String(releaseNotes || ''),
     }, null, 2));
   } catch (err) {
     log('auto-update: could not record the update attempt —', err && err.message);
   }
 }
 
-// Returns the version that failed to install, or null. Clears the file either
-// way: one report per attempt, never a banner that cannot be dismissed.
+// Reads the attempt file left by recordUpdateAttempt() and reports what
+// happened to it. Returns null when there is nothing to report (no attempt
+// file, or an unreadable/versionless one); otherwise a plain, JSON-
+// serializable object — {completed, version, from, releaseNotes} — since a
+// later task forwards this exact shape to the server child as JSON. Clears
+// the file either way: one report per attempt, never a banner that cannot be
+// dismissed.
 function unfinishedUpdate() {
   const file = updateAttemptPath();
   let record = null;
@@ -1237,12 +1282,14 @@ function unfinishedUpdate() {
   try { fs.unlinkSync(file); } catch { /* already gone */ }
   const target = record && String(record.version || '');
   if (!target) return null;
+  const from = String((record && record.from) || '');
+  const releaseNotes = String((record && record.releaseNotes) || '');
   if (target === app.getVersion()) {
     log('auto-update: the update to', target, 'completed');
-    return null;
+    return { completed: true, version: target, from, releaseNotes };
   }
   log('auto-update: the last update to', target, 'did NOT complete — still running', app.getVersion());
-  return target;
+  return { completed: false, version: target, from, releaseNotes };
 }
 
 // $PLUGINSDIR — where the old uninstaller renames the install tree to — is
@@ -1318,7 +1365,10 @@ const { awaitChildExit } = require('./child-exit');
 // nothing of ours is left inside the install tree.
 async function beginInstall(autoUpdater, version) {
   isQuitting = true; // stops the child's exit handler from scheduling a restart
-  recordUpdateAttempt(version);
+  // Same match-by-version guard promptInstall() uses for the same reason: notes
+  // captured for a superseded update must never be attributed to this one.
+  const notesForThisVersion = updateReleaseNotes.version === version ? updateReleaseNotes.notes : '';
+  recordUpdateAttempt(version, notesForThisVersion);
   rescueToolDirs();
   // Captured BEFORE stopChild(), which nulls the module-level reference.
   const dyingChild = child;
@@ -1419,8 +1469,16 @@ if (!gotLock) {
     // Before checkForUpdates(), so the log reads in the order things happened.
     // A later 'available'/'ready' from the check legitimately supersedes this
     // banner — that one is more actionable, and the log keeps the evidence.
-    const failedUpdate = unfinishedUpdate();
-    if (failedUpdate) setUpdateState('incomplete', failedUpdate);
+    const lastUpdate = unfinishedUpdate();
+    if (lastUpdate) {
+      if (lastUpdate.completed) {
+        // A banner would be clobbered by the ~1s-later update-not-available
+        // handler (see notifyUpdateCompleted()'s header) — a notification isn't.
+        notifyUpdateCompleted(lastUpdate.version, lastUpdate.releaseNotes);
+      } else {
+        setUpdateState('incomplete', lastUpdate.version);
+      }
+    }
     checkForUpdates();
 
     // --- Microphone permission for the HUD's getUserMedia() -----------------

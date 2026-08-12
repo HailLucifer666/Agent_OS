@@ -325,6 +325,74 @@ test('an update attempt is recorded before the handover and read on the next boo
     'and surface through the existing update-status banner path');
 });
 
+// ---- A3: the success path -----------------------------------------------------
+//
+// A2/the earlier A3 baseline stopped at "the update to X completed" being a
+// line in main.log nobody reads outside a support request. These pin the new
+// contract: recordUpdateAttempt() carries the sanitized release notes across
+// the relaunch, unfinishedUpdate() reports {completed, version, from,
+// releaseNotes} instead of a bare version-or-null, and a completed update
+// fires a native notification (immune to the update-not-available race that
+// clobbers the HUD banner ~1s after boot — see CLAUDE.md/root plan).
+
+test('recordUpdateAttempt carries the sanitized release notes across the relaunch', () => {
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function recordUpdateAttempt(');
+  assert.ok(start !== -1, 'recordUpdateAttempt must exist');
+  const body = code.slice(start, code.indexOf('\n}', start));
+  assert.ok(/releaseNotes/.test(body),
+    'the persisted JSON must include releaseNotes — otherwise a completion notification on the '
+    + 'next boot (a fresh process, module state reset) has no notes to show');
+
+  const begin = code.indexOf('function beginInstall(');
+  const install = code.slice(begin, code.indexOf('\n}', begin));
+  const recordAt = install.indexOf('recordUpdateAttempt(');
+  assert.ok(recordAt !== -1, 'beginInstall must still call recordUpdateAttempt');
+  const call = install.slice(recordAt, install.indexOf(')', recordAt) + 1);
+  assert.match(call, /recordUpdateAttempt\([^,]+,\s*\S/,
+    'the call site must now pass a second (release notes) argument, not just the version');
+});
+
+test('unfinishedUpdate returns a plain, serializable {completed, version, from, releaseNotes} object', () => {
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function unfinishedUpdate(');
+  assert.ok(start !== -1, 'unfinishedUpdate must exist');
+  const body = code.slice(start, code.indexOf('function ', start + 10));
+
+  assert.ok(/return\s*\{\s*completed:\s*true/.test(body),
+    'the success branch must return an object literal with completed:true — a later task (B1) '
+    + 'forwards this exact shape to the server child as JSON, so it must stay a plain object, '
+    + 'never a bare boolean/string/class instance');
+  assert.ok(/return\s*\{\s*completed:\s*false/.test(body),
+    'the incomplete branch must return completed:false in the same shape');
+  assert.ok(/\bfrom\b/.test(body) && /releaseNotes/.test(body),
+    'both branches must surface from/releaseNotes — from is already persisted in the attempt '
+    + 'file and must not be re-derived');
+  assert.ok(/'auto-update: the update to', target, 'completed'/.test(body),
+    'the success branch must still log "completed"');
+});
+
+test('a completed update fires a native notification, not a banner (the idle-clobber race)', () => {
+  const code = codeOnly(readMainJs());
+  assert.ok(/function notifyUpdateCompleted\(/.test(code), 'notifyUpdateCompleted must exist');
+  const fn = /function notifyUpdateCompleted\([\s\S]*?\n}/.exec(code);
+  assert.ok(fn, 'notifyUpdateCompleted must be extractable as one function body');
+  assert.match(fn[0], /new Notification\(/,
+    'must use a native Notification, immune to the update-not-available handler clobbering the '
+    + "HUD's 'incomplete'/'ready' banner state ~1s after boot");
+  assert.match(fn[0], /try \{/, 'the whole body must be guarded — a failed notification must not take down boot');
+  assert.match(fn[0], /isSupported\(\)/, 'notifications are unsupported on some platforms — log, do not throw');
+
+  const ready = code.slice(code.indexOf('app.whenReady().then'));
+  const lastUpdateAt = ready.indexOf('unfinishedUpdate()');
+  const completedAt = ready.indexOf('notifyUpdateCompleted(');
+  const checkAt = ready.indexOf('checkForUpdates()');
+  assert.ok(lastUpdateAt !== -1 && completedAt !== -1 && checkAt !== -1,
+    'boot must read unfinishedUpdate() and call notifyUpdateCompleted() on its completed branch');
+  assert.ok(lastUpdateAt < completedAt && completedAt < checkAt,
+    'notifyUpdateCompleted must run between reading the attempt and re-checking for a newer update');
+});
+
 test("'incomplete' is an accepted update state end to end", () => {
   const code = codeOnly(readMainJs());
   const states = code.slice(code.indexOf('const UPDATE_STATES'), code.indexOf('let updaterRef'));
