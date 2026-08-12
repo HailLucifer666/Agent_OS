@@ -101,6 +101,51 @@ async function cua_bring_to_front(params) {
 // already exposes, rather than adding a new driver call shape.
 var SEE_AND_CLICK_HINT = ' If this keeps failing, use see_and_click — it finds a control by its on-screen text and clicks it, with no window_id or element path needed.';
 
+// Live session 2026-08-12: pid 1738 matched no live process, and the fabricated
+// window_id "artifact-window-1738" (numbers borrowed from the same bogus pid)
+// matched no live window either. Both failures just said "not found" -- nothing
+// the model could act on. The follow-up call then omitted pid entirely, which
+// the FIRST error had explicitly required, and that "missing pid" error said
+// only "missing pid", dropping the live-pid guidance the first error had
+// already surfaced.
+//
+// Fix: every "target not found" / "target missing" failure below names the
+// live windows (pid + title) so the model can pick a real one, capped at
+// WINDOW_LIST_CAP so a machine with hundreds of windows never dumps them all
+// into the model's context. lastKnownWindows is a module-level cache of the
+// most recent live-window snapshot (from any cua_list_windows call, direct or
+// internal) specifically so that guidance survives into a LATER call's error
+// even when that later call is a local validation failure with no driver call
+// of its own to fetch a fresh list from.
+var WINDOW_LIST_CAP = 10;
+var lastKnownWindows = null;
+
+function formatWindowList(windows) {
+  var list = windows || [];
+  if (!list.length) return 'No live windows were found.';
+  var shown = list.slice(0, WINDOW_LIST_CAP);
+  var text = shown.map(function (w) { return 'pid ' + w.pid + ' ("' + (w.title || '') + '")'; }).join(', ');
+  var extra = list.length - shown.length;
+  return 'Live windows: ' + text + (extra > 0 ? (', +' + extra + ' more') : '') + '.';
+}
+
+// Guidance for a LOCAL validation failure (no driver call happened this time) --
+// falls back to whatever live-window snapshot a previous call already cached,
+// rather than silently dropping the guidance a prior error surfaced.
+function windowGuidance() {
+  if (lastKnownWindows && lastKnownWindows.length) return formatWindowList(lastKnownWindows);
+  return 'Call cua_list_windows to see what is currently open.';
+}
+
+async function fetchAndCacheWindows() {
+  var lw = await cua_list_windows();
+  if (!lw.ok) return null;
+  var sc = (lw.result && typeof lw.result === 'object' && lw.result.structuredContent) || {};
+  var windows = sc.windows || [];
+  lastKnownWindows = windows;
+  return windows;
+}
+
 async function resolveWindowIdForPid(pid) {
   var lw = await cua_list_windows();
   if (!lw.ok) {
@@ -108,13 +153,14 @@ async function resolveWindowIdForPid(pid) {
   }
   var sc = (lw.result && typeof lw.result === 'object' && lw.result.structuredContent) || {};
   var windows = sc.windows || [];
+  lastKnownWindows = windows;
   var candidates = windows.filter(function (w) { return w && Number(w.pid) === Number(pid); });
-  if (!candidates.length) return { ok: true, window: null };
+  if (!candidates.length) return { ok: true, window: null, windows: windows };
   // list_windows only ever returns top-level windows (see file header), so
   // there is no separate visible/top-level flag to prefer on — the tie-break
   // that remains is a non-empty title, per the recorded incident.
   var withTitle = candidates.filter(function (w) { return w.title; });
-  return { ok: true, window: withTitle[0] || candidates[0] };
+  return { ok: true, window: withTitle[0] || candidates[0], windows: windows };
 }
 
 // get_window_state returns the UIA accessibility tree as structured elements —
@@ -124,6 +170,7 @@ async function cua_get_window_state(params) {
   if (!requireOnline()) return offlineFail();
   var p = params || {};
   var windowId = coerceWindowId(p.window_id);
+  var resolvedWindows = null; // reused for failure-message guidance so a failed call never fetches list_windows twice
 
   if (!windowId && p.pid !== undefined && p.pid !== null) {
     var resolved = await resolveWindowIdForPid(p.pid);
@@ -132,14 +179,22 @@ async function cua_get_window_state(params) {
         ' — ' + resolved.errText + '.' + SEE_AND_CLICK_HINT);
     }
     if (!resolved.window) {
-      return fail('cua_get_window_state: no cua window found for pid ' + p.pid + '.' + SEE_AND_CLICK_HINT);
+      return fail('cua_get_window_state: no cua window found for pid ' + p.pid + '.' + SEE_AND_CLICK_HINT +
+        ' ' + formatWindowList(resolved.windows));
     }
     windowId = resolved.window.window_id;
+    resolvedWindows = resolved.windows;
+  }
+
+  if ((windowId === undefined || windowId === null) && (p.pid === undefined || p.pid === null)) {
+    return fail('cua_get_window_state requires pid or window_id to identify which window to read. ' + windowGuidance());
   }
 
   var r = await cuaDriver.invoke('get_window_state', { pid: p.pid, window_id: windowId });
   if (!r || !r.ok) {
-    return fail(cuaErrText(r && r.result, 'cua-driver get_window_state failed') + SEE_AND_CLICK_HINT);
+    var guidanceWindows = resolvedWindows || await fetchAndCacheWindows();
+    return fail(cuaErrText(r && r.result, 'cua-driver get_window_state failed') + SEE_AND_CLICK_HINT +
+      (guidanceWindows ? ' ' + formatWindowList(guidanceWindows) : ''));
   }
   return ok(r.result);
 }
@@ -199,6 +254,9 @@ async function cua_click(params) {
   if (p.element_index === undefined && p.element_index !== null) {
     return fail('cua_click requires element_index (from cua_get_window_state). For a raw coordinate click use click_at instead.');
   }
+  if ((p.pid === undefined || p.pid === null) && !p.window_id) {
+    return fail('cua_click requires pid or window_id to identify which window to click in. ' + windowGuidance());
+  }
 
   var key = clickCacheKey(p);
   if (clickLabelCache.has(key)) {
@@ -219,7 +277,10 @@ async function cua_click(params) {
     // Retry in foreground delivery mode — Chromium sometimes drops background clicks.
     r = await cuaDriver.invoke('click', Object.assign({}, clickArgs, { delivery_mode: 'foreground' }));
   }
-  if (!r || !r.ok) return fail(cuaErrText(r && r.result, 'cua-driver click failed'));
+  if (!r || !r.ok) {
+    var guidanceWindows = await fetchAndCacheWindows();
+    return fail(cuaErrText(r && r.result, 'cua-driver click failed') + (guidanceWindows ? ' ' + formatWindowList(guidanceWindows) : ''));
+  }
 
   // First time this key has ever been clicked — seed the cache once so a
   // future repeat has a real label to compare against.
