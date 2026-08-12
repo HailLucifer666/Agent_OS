@@ -1,9 +1,21 @@
 // conversation.js — E4: Scrollable chat transcript panel.
 // Accumulates user queries and MYTHOS replies in real time.
-// Also fetches recent conversation history from the server on mount.
+//
+// F7: on mount, also renders the WHOLE session (not just what has streamed
+// over WS since the panel opened) by fetching session.json's rolling window
+// + today's episodic conversation log and merging them via
+// transcript-model.js's pure mergeTranscript(). That fetch target
+// (CONVERSATION_HISTORY_ENDPOINT below) does not exist on the server yet —
+// server/index.js is out of scope for this change — so this degrades
+// exactly to the previous WS-only behavior until that route is added; it
+// never throws and never blocks live rendering.
 import { subscribe } from '/js/ws.js';
+import { buildTranscript } from '/js/views/transcript-model.js';
 
 const MAX_MESSAGES = 200;
+// Expected to return { session: <session.json text>, episodic: <today's
+// Episodic/<date>.jsonl text> }. See the header comment above.
+const CONVERSATION_HISTORY_ENDPOINT = '/api/conversation/history';
 
 export async function render(mount) {
   // xss-safe: static template, no interpolation
@@ -81,6 +93,25 @@ export async function render(mount) {
     streamingEl = null;
     streamingText = '';
   }
+
+  // F7: load the merged full-session transcript once, before live WS
+  // messages start appending. Best-effort — any failure (endpoint missing,
+  // bad JSON, network error) just leaves the panel showing only what
+  // streams in live from here, exactly like before this change.
+  async function loadFullSessionHistory() {
+    try {
+      const res = await fetch(CONVERSATION_HISTORY_ENDPOINT);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const transcript = buildTranscript(payload.session, payload.episodic);
+      transcript.forEach((m) => {
+        if (m.role === 'user' || m.role === 'assistant') addMessage(m.role, m.text);
+      });
+    } catch (_err) {
+      // Best-effort — see header comment.
+    }
+  }
+  loadFullSessionHistory();
 
   // Subscribe to WS messages that carry conversation content
   const unsub = subscribe(['utterance', 'speech-chunk', 'done', 'proactive-speech'], (msg) => {

@@ -252,6 +252,30 @@
 .compose-setup-btn svg { width: 16px; height: 16px; }
 .compose-setup-btn:hover { color: var(--text-dim); }
 
+/* Transcript toggle (full-session chat log) — same 34px circle idiom as the
+   gear/cam/setup buttons on purpose, so the pill's icon rhythm stays one
+   size instead of growing a differently-shaped control per feature (F7). */
+.compose-transcript-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.compose-transcript-btn svg { width: 16px; height: 16px; }
+.compose-transcript-btn:hover { color: var(--text-dim); }
+.compose-transcript-btn.transcript-open {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* Send button (right side of pill) */
 .compose-send-btn {
   flex-shrink: 0;

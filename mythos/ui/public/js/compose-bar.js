@@ -17,6 +17,9 @@ const KEY_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 // microphone it LISTENS with; the two are deliberately separate buttons because
 // they answer opposite questions). Same 34px circle idiom as the rest.
 const SPEAKER_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`;
+// Transcript toggle (F7 — the full-session chat panel). Opens/closes the
+// 'conversation' overlay panel. Same 34px circle idiom as the rest.
+const TRANSCRIPT_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 
 const HINTS = [
   'What can you do?',
@@ -38,7 +41,7 @@ export function captionFor(state) {
   return { text: s.text, kind: s.kind || 'heard' };
 }
 
-export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings, onVoiceSettings, onSetup }) {
+export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings, onVoiceSettings, onSetup, onTranscript }) {
   const root = document.getElementById('compose-bar');
 
   // xss-safe: static template, no interpolation
@@ -51,6 +54,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
       <input class="compose-input" id="compose-input" type="text" placeholder="Ask MYTHOS anything\u2026" autocomplete="off" aria-label="Message MYTHOS" />
       <button class="compose-cam-btn cam-idle" id="compose-cam-btn" aria-label="Toggle camera" title="Toggle camera">${CAM_SVG}</button>
       <button class="compose-voice-settings-btn" id="compose-voice-settings-btn" aria-label="Voice: choose which voice MYTHOS speaks in" title="Choose the speaking voice">${SPEAKER_SVG}</button>
+      <button class="compose-transcript-btn" id="compose-transcript-btn" aria-label="Toggle the full conversation transcript" title="Full conversation transcript" aria-pressed="false">${TRANSCRIPT_SVG}</button>
       <button class="compose-setup-btn" id="compose-setup-btn" aria-label="Setup: provider keys and local PIN" title="Provider keys + PIN">${KEY_SVG}</button>
       <button class="compose-send-btn" id="compose-send-btn" aria-label="Send message">${SEND_SVG}</button>
       <canvas class="compose-wave-line" id="compose-wave" width="240" height="4"></canvas>
@@ -63,6 +67,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   const camBtn = document.getElementById('compose-cam-btn');
   const micSettingsBtn = document.getElementById('compose-mic-settings-btn');
   const voiceSettingsBtn = document.getElementById('compose-voice-settings-btn');
+  const transcriptBtn = document.getElementById('compose-transcript-btn');
   const setupBtn = document.getElementById('compose-setup-btn');
   const sendBtn = document.getElementById('compose-send-btn');
   const captionEl = document.getElementById('compose-caption');
@@ -155,6 +160,13 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     if (onVoiceSettings) onVoiceSettings();
   });
 
+  // Full conversation transcript (F7) — the compose bar only raises the
+  // click; the caller owns open/close state (mirrors onCamToggle/
+  // onMicSettings) and syncs the icon back via setTranscriptOpen().
+  transcriptBtn.addEventListener('click', () => {
+    if (onTranscript) onTranscript();
+  });
+
   // Setup wizard (provider keys + local PIN). The only in-product route back to
   // it after first run — see setup/first-run-wizard.js.
   setupBtn.addEventListener('click', () => {
@@ -233,11 +245,20 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Sync camera button state from app.js's ensureCamera()
   function setCamState(s) { camBtn.className = `compose-cam-btn cam-${s}`; }
 
+  // Sync transcript button state from whoever owns the panel's open/close
+  // (mirrors setCamState above). Reflected as both a class (visual) and
+  // aria-pressed (a11y) rather than compose-bar guessing panel state itself.
+  function setTranscriptOpen(isOpen) {
+    transcriptBtn.classList.toggle('transcript-open', !!isOpen);
+    transcriptBtn.setAttribute('aria-pressed', isOpen ? 'true' : 'false');
+  }
+
   return {
     setVoiceState,
     setCaption,
     setActivity,
     setCamState,
+    setTranscriptOpen,
     focus: () => input.focus(),
     element: root,
   };
