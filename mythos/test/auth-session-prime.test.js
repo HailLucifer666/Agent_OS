@@ -44,7 +44,14 @@ const vm = require('node:vm');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const MAIN_PATH = path.join(REPO_ROOT, 'electron', 'main.js');
-const MAIN = fs.readFileSync(MAIN_PATH, 'utf8');
+// Line endings normalized on read. The assertions below locate a function body
+// with indexOf('\n}\n'), and this repo has core.autocrlf=true with no
+// .gitattributes — so the moment git rewrites the working copy (a merge, a
+// branch switch), main.js becomes CRLF, that indexOf returns -1, the extracted
+// body is the empty string, and the test fails claiming the function logs
+// nothing. It reads as a security regression in the token-priming path and is
+// purely a checkout artefact: the file in the index is LF either way.
+const MAIN = fs.readFileSync(MAIN_PATH, 'utf8').replace(/\r\n/g, '\n');
 
 // ---------------------------------------------------------------------------
 // Extraction: pull one function's exact source text out of main.js by

@@ -38,6 +38,14 @@ test('build.publish targets GitHub Releases for this repo, and never carries sec
   assert.ok(github, 'the chosen host is GitHub Releases (provider "github")');
   assert.equal(github.owner, 'HailLucifer666', 'owner must match the repo remote');
   assert.equal(github.repo, 'Agent_OS', 'repo must match the repo remote');
+  // v0.1.4 (2026-08-11) went green and shipped NOTHING anyone could install:
+  // electron-builder's GitHub publisher defaults to releaseType 'draft', and
+  // electron-updater only ever sees PUBLISHED releases. The failure was silent in
+  // both directions — the workflow logged "creating GitHub release", and a
+  // read-only token reported no releases at all.
+  assert.equal(github.releaseType, 'release',
+    'releaseType must be explicit: the default is "draft", and a draft release is one every ' +
+    'installed app reports "no update" against, forever');
   const serialized = JSON.stringify(build.publish);
   assert.doesNotMatch(serialized, /(GH_TOKEN|token|password|secret|CSC_)/i,
     'a publish config must never carry a credential — publishing reads GH_TOKEN from the environment');
@@ -112,6 +120,28 @@ test('electron/main.js downloads updates but installs only on an explicit operat
     'and this one exits the app');
   assert.match(text, /MYTHOS_AUTO_UPDATE/,
     'there must be an escape hatch that turns the whole thing off');
+});
+
+// Reported by the operator on v0.1.5: "it's taking me through that whole
+// installation process where it's asking me where you want to install this...
+// it does not mention updates." build.nsis is oneClick:false +
+// allowToChangeInstallationDirectory:true, so a NON-silent quitAndInstall shows
+// the full first-install wizard — which reads as "reinstall the whole app", the
+// exact experience in-app updates exist to end. /S reuses the recorded install
+// location and replaces the app in place; the modal above is what already asked
+// permission.
+test('an update installs silently — the setup wizard belongs to a fresh install, not an update', () => {
+  // Comment-stripped: main.js's prose NAMES quitAndInstall() several times to
+  // explain the policy, and a test that reads prose as code fails for the
+  // opposite of the reason it exists (same trap as release-script.test.js).
+  const code = readMainJs().split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const calls = code.match(/quitAndInstall\(([^)]*)\)/g) || [];
+  assert.ok(calls.length >= 2, 'both install paths (the modal and the HUD button) must be covered');
+  for (const call of calls) {
+    assert.match(call, /quitAndInstall\(true,\s*true\)/,
+      `every install path must pass isSilent=true and forceRunAfter=true — found ${call}. ` +
+      'isSilent=false shows the location-picker wizard with no mention of an update on it');
+  }
 });
 
 test('the update state reaches the HUD as strings on one named channel, and installing takes no renderer input', () => {

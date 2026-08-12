@@ -876,7 +876,7 @@ ipcMain.handle('mythos:install-update', async (event) => {
   if (updateState.state === 'ready' && updaterRef) {
     log('auto-update: installing', updateState.version, '(HUD button) and restarting');
     setImmediate(() => {
-      try { updaterRef.quitAndInstall(false, true); } catch (err) {
+      try { updaterRef.quitAndInstall(true, true); } catch (err) {
         log('auto-update: quitAndInstall failed —', err && err.message);
       }
     });
@@ -997,9 +997,22 @@ function checkForUpdates() {
 // has consequences (the app exits and the NSIS installer runs) and a
 // notification is dismissable by accident.
 //
-// quitAndInstall(isSilent=false, forceRunAfter=true): show the installer's own
-// progress, and come back up afterwards. Silent would leave the operator staring
-// at nothing for ~20s wondering what happened. The server child is killed by the
+// quitAndInstall(isSilent=TRUE, forceRunAfter=true): install without the setup
+// wizard, then relaunch.
+//
+// isSilent was false for exactly one release, and the operator caught what that
+// meant: build.nsis is oneClick:false + allowToChangeInstallationDirectory:true,
+// so a non-silent run shows the FULL first-install wizard — licence page,
+// "where do you want to install this", the lot — with no mention of an update
+// anywhere on it. That is indistinguishable from being asked to reinstall the
+// app from scratch, which is the exact experience in-app updates exist to end.
+// Silent passes /S to the same NSIS installer, which reads the existing install
+// location from the registry and replaces the app in place; forceRunAfter brings
+// MYTHOS back up. The dialog above is what asks permission — the installer does
+// not need to ask a second time.
+//
+// The manual .exe still shows the wizard, and should: that is a fresh install,
+// where choosing a location is the point. The server child is killed by the
 // existing before-quit handler, so there is no extra teardown here.
 function promptInstall(autoUpdater, version) {
   try {
@@ -1017,8 +1030,8 @@ function promptInstall(autoUpdater, version) {
         log('auto-update: operator chose Later — it will be offered again on the next launch.');
         return;
       }
-      log('auto-update: installing', version, 'and restarting');
-      autoUpdater.quitAndInstall(false, true);
+      log('auto-update: installing', version, 'silently and restarting');
+      autoUpdater.quitAndInstall(true, true);
     }).catch((err) => log('auto-update: install prompt failed —', err && err.message));
   } catch (err) {
     // A dialog that cannot be shown must not lose the download or kill the app.
