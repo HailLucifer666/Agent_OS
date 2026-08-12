@@ -32,6 +32,57 @@
 ; app.getPath('userData') resolves for productName MYTHOS, which is where the
 ; key store and the vault already live, and it survives an uninstall/reinstall.
 
+; UNINSTALLER FILE REMOVAL — customRemoveFiles (uninstaller pass only).
+;
+; Consumed by app-builder-lib/templates/nsis/uninstaller.nsh (~line 144):
+; when this macro is defined it REPLACES both the ${isUpdated} per-file rename
+; dance (un.atomicRMDir, which renames every file one at a time into
+; $PLUGINSDIR\old-install) and the plain `RMDir /r $INSTDIR` of a normal
+; uninstall — there is no fallback delete after it, so this macro alone must
+; remove $INSTDIR in both cases. The $APPDATA keep-user-data behaviour
+; (deleteAppDataOnUninstall:false) lives in a separate, later block of
+; uninstaller.nsh and is untouched.
+;
+; WHY IT EXISTS (operator, 2026-08-13): in-app updates 0.1.6 → 0.1.7 failed
+; three times. The default un.atomicRMDir aborts the whole pass on a single
+; locked file (AV scan, slow handle release), and the new installer's
+; uninstallOldVersion retries the entire uninstaller only 5× at 1s before
+; rolling the update back. This macro retries the removal itself, and on
+; final failure defers the stragglers to reboot instead of failing the
+; update. Deliberate behaviour change: a stubbornly locked file no longer
+; aborts the update — it leaves a stale old file beside the new install
+; until the next reboot, which beats a rolled-back update.
+;
+; Native NSIS only (no LogicLib) — include ordering of the sharedHeader vs
+; multiUser.nsh makes ${If} unreliable here; same reason
+; customPageAfterChangeDir below does its own local includes.
+!ifdef BUILD_UNINSTALLER
+!macro customRemoveFiles
+  Var /GLOBAL removeFilesTries
+  StrCpy $removeFilesTries 0
+
+  removeFilesRetry:
+    ClearErrors
+    RMDir /r "$INSTDIR"
+    IfErrors 0 removeFilesDone
+
+    IntOp $removeFilesTries $removeFilesTries + 1
+    IntCmp $removeFilesTries 5 removeFilesGiveUp removeFilesWait removeFilesGiveUp
+
+    removeFilesWait:
+      DetailPrint "MYTHOS uninstall: files in $INSTDIR still in use, retrying ($removeFilesTries/5)..."
+      Sleep 1000
+      Goto removeFilesRetry
+
+  removeFilesGiveUp:
+    DetailPrint "MYTHOS uninstall: some files still locked; scheduling removal on next reboot."
+    ClearErrors
+    RMDir /r /REBOOTOK "$INSTDIR"
+
+  removeFilesDone:
+!macroend
+!endif ; BUILD_UNINSTALLER (customRemoveFiles)
+
 ; BUILD_UNINSTALLER GUARD — the whole body below is installer-only.
 ;
 ; electron-builder compiles this same include twice: once for the installer and
