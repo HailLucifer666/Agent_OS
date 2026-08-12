@@ -935,6 +935,28 @@ function notifyUpdateAvailable(version) {
 // a machine left running for a week never sees a release.
 const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
 
+// Lives in ./release-notes.js for the same reason child-exit.js does: main.js
+// requires `electron` and can only ever be source-shape asserted by node --test,
+// so the actual normalizing/sanitizing logic needs to live somewhere callable.
+const { sanitizeReleaseNotes } = require('./release-notes');
+
+// The release notes for whichever version is currently in flight. Kept
+// separate from updateState (below) because it is read by version, not by
+// state: promptInstall() only trusts these notes when updateReleaseNotes.version
+// still matches the version it is about to show a dialog for, so notes from a
+// stale/superseded update can never bleed into the wrong dialog.
+let updateReleaseNotes = { version: '', notes: '' };
+
+// Captures and sanitizes releaseNotes off an electron-updater UpdateInfo. Safe
+// to call from both update-available and update-downloaded — whichever fires
+// last for a given version wins, and that's fine since both carry the same
+// UpdateInfo for that version.
+function captureReleaseNotes(info) {
+  const version = (info && info.version) || '';
+  const notes = sanitizeReleaseNotes(info && info.releaseNotes);
+  updateReleaseNotes = { version: String(version), notes };
+}
+
 // ---- update state, mirrored into the HUD ---------------------------------------
 // The operator asked for a visible control ("a UI that says Update, and clicking
 // it updates"), not only an OS notification that can be missed while the window
@@ -1071,6 +1093,7 @@ function checkForUpdates() {
     autoUpdater.on('update-available', (info) => {
       const version = (info && info.version) || 'unknown';
       log('auto-update: update available —', version, '— downloading in the background');
+      captureReleaseNotes(info);
       setUpdateState('downloading', version);
       notifyUpdateAvailable(version);
     });
@@ -1091,6 +1114,7 @@ function checkForUpdates() {
     autoUpdater.on('update-downloaded', (info) => {
       const version = (info && info.version) || 'unknown';
       log('auto-update: downloaded', version, '— asking the operator to restart');
+      captureReleaseNotes(info);
       setUpdateState('ready', version);
       promptInstall(autoUpdater, version);
     });
@@ -1333,6 +1357,16 @@ async function beginInstall(autoUpdater, version) {
 function promptInstall(autoUpdater, version) {
   try {
     const { dialog } = require('electron');
+    let detail = 'This window will close and the installer will run WITHOUT a progress bar — that is normal.\n\n'
+      + 'It usually takes under a minute, but an upgrade from an older build can take considerably longer '
+      + 'while it replaces the installed files. MYTHOS reopens by itself when it finishes.\n\n'
+      + 'Your vault, keys and PIN are untouched by an update.';
+    // Only trust updateReleaseNotes when its version matches the one this
+    // dialog is about — otherwise notes captured for a superseded update could
+    // show up attached to the wrong version's install prompt.
+    if (updateReleaseNotes.version === version && updateReleaseNotes.notes) {
+      detail += `\n\nWhat's new in ${version}: ${updateReleaseNotes.notes}`;
+    }
     dialog.showMessageBox({
       type: 'info',
       buttons: ['Restart now', 'Later'],
@@ -1344,10 +1378,7 @@ function promptInstall(autoUpdater, version) {
       // eighty on the 0.1.7 upgrade (see beginInstall above), and a wrong ETA on
       // a silent install is what turns a working update into "the app is dead".
       // Say what the operator will actually see: nothing.
-      detail: 'This window will close and the installer will run WITHOUT a progress bar — that is normal.\n\n'
-        + 'It usually takes under a minute, but an upgrade from an older build can take considerably longer '
-        + 'while it replaces the installed files. MYTHOS reopens by itself when it finishes.\n\n'
-        + 'Your vault, keys and PIN are untouched by an update.',
+      detail,
     }).then(({ response }) => {
       if (response !== 0) {
         log('auto-update: operator chose Later — it will be offered again on the next launch.');
