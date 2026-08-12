@@ -134,6 +134,14 @@ async function main() {
   // Step 2: Logger
   const logger = createLogger(config.LOG_LEVEL);
   logger.info('config.loaded', { name: config.MYTHOS_NAME, port: config.MYTHOS_PORT });
+  // Started as early as there is a logger to report through, because the stall
+  // being chased (see loop-lag.js) happened right after boot — a probe armed at
+  // the END of boot would have missed the only window that matters. Silent on a
+  // healthy run; not started under node --test, where an unref'd interval in
+  // every boot-spawning test buys nothing.
+  if (!process.env.NODE_TEST_CONTEXT) {
+    require('./core/loop-lag').startLoopLagProbe({ logger });
+  }
 
   // Step 3: Bus
   const bus = createBus({

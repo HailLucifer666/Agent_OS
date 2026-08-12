@@ -737,7 +737,14 @@ function stopChild() {
 // is worse than a session whose memory arrives one launch late.
 function syncVault(flag) {
   try {
-    const script = path.join(__dirname, '..', 'mythos', 'scripts', 'vault-sync.js');
+    // MYTHOS_DIR, not a raw path.join(__dirname, '..', 'mythos'): in a packaged
+    // build the raw path lands inside app.asar, and a spawned child process can
+    // neither read a script from an archive nor use one as its cwd — spawnSync
+    // fails ENOENT for both --pull and --push. The existsSync guard below does
+    // NOT catch it, because Electron's asar-patched fs reads through the archive
+    // happily while the fresh OS process cannot. Same reason SERVER_ENTRY and
+    // MYTHOS_DIR are translated at the top of this file.
+    const script = path.join(MYTHOS_DIR, 'scripts', 'vault-sync.js');
     if (!fs.existsSync(script)) return;
     // The SAME four arguments startChild() passes, not a shortcut. Called with
     // only explicitEnv, resolveVaultRoot path.join()s an undefined userDataDir
@@ -752,7 +759,7 @@ function syncVault(flag) {
       log,
     });
     const res = require('child_process').spawnSync(process.execPath, [script, flag], {
-      cwd: path.join(__dirname, '..', 'mythos'),
+      cwd: MYTHOS_DIR,
       encoding: 'utf8',
       timeout: 15000,
       windowsHide: true,

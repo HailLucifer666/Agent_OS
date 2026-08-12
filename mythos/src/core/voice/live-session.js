@@ -197,6 +197,16 @@ function createLiveSession(deps) {
   // the outside, and this repo has burned three sessions on plausible theories.
   // One log line per turn naming the fields that DID arrive settles it.
   let turnFrameFields = null;   // Set, lazily created
+  // 2026-08-12: how many mic frames WE put on the wire during this turn. scFields
+  // above records what the server sent back; this records what we sent up, and
+  // only the pair is diagnostic. Every turn logged so far carried no
+  // inputTranscription AND systemInitiated:true — which is equally consistent
+  // with "the operator never spoke" and "the operator spoke and no audio left the
+  // browser" (a stuck captureSuspended, a worklet that stopped firing, a mic that
+  // opened on the wrong device). Those need opposite fixes, and this repo has
+  // already spent three sessions on plausible theories about this exact bug.
+  // A count, not the audio: nothing about what was said is recorded here.
+  let turnAudioIn = 0;
   // 2026-08-10: did WE start this turn? sendText() is how a [SYSTEM] late tool
   // outcome and a proactive line are injected, and either one makes the model
   // reply — a complete turn in which the operator never spoke and never should
@@ -538,6 +548,11 @@ function createLiveSession(deps) {
           // this list on a turn the operator demonstrably spoke in is the whole
           // answer to the empty-user-text question.
           scFields: turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '',
+          // audioIn:0 on a turn the operator spoke in means the browser never sent
+          // the mic — look at s2s-bridge.js (captureSuspended, the worklet, the
+          // device). A healthy count with no inputTranscription in scFields means
+          // the audio went up and came back untranscribed — look upstream.
+          audioIn: turnAudioIn,
           // Whether WE provoked this turn — the difference between "the operator
           // spoke and we did not hear it" and "nobody spoke". Logged because
           // reading the first as the second is what produced five false anomalies
@@ -562,7 +577,7 @@ function createLiveSession(deps) {
         const shownText = (turn.assistantText || turnPartText).trim();
         const wasSilent = !!shownText && turnAudioParts === 0;
         turnTextParts = 0; turnThoughtParts = 0; turnAudioParts = 0;
-        turnReasoningStrips = 0; turnPartText = '';
+        turnReasoningStrips = 0; turnPartText = ''; turnAudioIn = 0;
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });
@@ -652,6 +667,10 @@ function createLiveSession(deps) {
 
   function sendAudio(base64Pcm16k) {
     if (state !== 'open') return false;
+    // See turnAudioIn's declaration: the missing half of the empty-operator-
+    // transcript question. scFields already says whether inputTranscription
+    // arrived; this says whether we ever gave the model anything to transcribe.
+    turnAudioIn += 1;
     armIdle();
     return sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64Pcm16k } } });
   }
