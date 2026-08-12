@@ -18,15 +18,21 @@
 
 // Pure view model, so the wording and the button's meaning can be tested without
 // a DOM or an Electron main process (test/update-banner-model.test.js).
-export function updateBannerModel(state, version) {
+export function updateBannerModel(state, version, percent) {
   const v = String(version || '').trim();
   const named = v ? `MYTHOS ${v}` : 'A new MYTHOS';
   switch (state) {
     case 'available':
-    case 'downloading':
+    case 'downloading': {
       // No button: there is nothing to install yet, and a button that silently
       // does nothing is worse than no button.
-      return { hidden: false, text: `${named} is downloading…`, action: null, tone: 'info' };
+      // percent is an optional third param: existing 2-arg callers (and the
+      // 'available' state, which has no progress yet) still render the plain
+      // "downloading…" text with no percent suffix.
+      const pct = Number(percent);
+      const suffix = state === 'downloading' && Number.isFinite(pct) && pct > 0 ? ` ${Math.floor(pct)}%` : '';
+      return { hidden: false, text: `${named} is downloading…${suffix}`, action: null, tone: 'info' };
+    }
     case 'ready':
       return { hidden: false, text: `${named} is ready to install.`, action: 'Restart & update', tone: 'ready' };
     case 'incomplete':
@@ -65,11 +71,11 @@ export function mountUpdateBanner(root, opts) {
   banner.appendChild(button);
   root.appendChild(banner);
 
-  let current = { state: 'idle', version: '' };
+  let current = { state: 'idle', version: '', percent: 0 };
   let busy = false;
 
   function render() {
-    const model = updateBannerModel(current.state, current.version);
+    const model = updateBannerModel(current.state, current.version, current.percent);
     banner.classList.toggle('update-banner-hidden', model.hidden);
     banner.classList.toggle('update-banner-ready', model.tone === 'ready');
     banner.classList.toggle('update-banner-error', model.tone === 'error');
@@ -95,8 +101,8 @@ export function mountUpdateBanner(root, opts) {
     render();
   });
 
-  api.onUpdateStatus((state, version) => {
-    current = { state, version };
+  api.onUpdateStatus((state, version, percent) => {
+    current = { state, version, percent };
     // A new state supersedes an in-flight click: an error after "Try again"
     // must re-enable the button.
     if (state !== 'ready') busy = false;

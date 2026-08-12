@@ -17,10 +17,13 @@
 // the operator asked for a visible "Update" control rather than an OS
 // notification that is easy to miss. Same reasoning, and the two properties that
 // keep them AD-8-safe are asserted below: onUpdateStatus subscribes to ONE named
-// channel and re-derives both payload fields as plain strings (nothing
+// channel and re-derives all payload fields as plain primitives (nothing
 // structured crosses), and installUpdate takes NO arguments — which version is
 // installed is decided in the main process, so a page loaded in a renderer
-// cannot nominate an executable.
+// cannot nominate an executable. onUpdateStatus's callback gained a third
+// argument, percent, when live download progress started reaching the HUD —
+// still a plain primitive (coerced with Number()), never forwarded as an
+// object.
 //
 // Method: the repo's require-cache module-stubbing idiom (see
 // test/from-calendar-google.test.js lines ~94-111), generalised so it works
@@ -168,17 +171,27 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       );
 
       // onUpdateStatus(cb) — the second and last main->renderer listener, built
-      // like onHotkey: one named channel, payload re-derived as plain strings.
+      // like onHotkey: one named channel, payload re-derived as plain
+      // primitives. The callback is now a 3-tuple: state, version, percent —
+      // the live-download-percent addition.
       const statuses = [];
-      exposedApi.onUpdateStatus((state, version) => statuses.push([state, version]));
+      exposedApi.onUpdateStatus((state, version, percent) => statuses.push([state, version, percent]));
       assert.equal(onCalls.length, 2, 'onUpdateStatus must subscribe to exactly one further channel');
       assert.equal(onCalls[1].channel, 'mythos:update-status');
-      onCalls[1].handler({ senderId: 1 }, 'ready', '0.1.5');
-      assert.deepEqual(statuses[0], ['ready', '0.1.5']);
-      onCalls[1].handler({}, { leak: 'a-secret-object' }, { leak: 'another-secret' });
-      assert.equal(typeof statuses[1][0], 'string');
-      assert.equal(typeof statuses[1][1], 'string');
-      assert.doesNotMatch(statuses[1].join('|'), /secret/, 'object payloads must not leak their contents');
+      onCalls[1].handler({ senderId: 1 }, 'ready', '0.1.5', 0);
+      assert.deepEqual(statuses[0], ['ready', '0.1.5', 0]);
+
+      // percent must be coerced to a number so an object slipped into that
+      // slot can never reach the renderer as an object (AD-8 applies to
+      // inbound events too), and a real numeric percent must forward intact.
+      onCalls[1].handler({ senderId: 1 }, 'downloading', '0.1.6', 42);
+      assert.deepEqual(statuses[1], ['downloading', '0.1.6', 42]);
+
+      onCalls[1].handler({}, { leak: 'a-secret-object' }, { leak: 'another-secret' }, { leak: 'a-third-secret' });
+      assert.equal(typeof statuses[2][0], 'string');
+      assert.equal(typeof statuses[2][1], 'string');
+      assert.equal(typeof statuses[2][2], 'number', 'a non-number percent must coerce to a number, never forward as an object');
+      assert.doesNotMatch(statuses[2].slice(0, 2).join('|'), /secret/, 'object payloads must not leak their contents');
       exposedApi.onUpdateStatus('not-a-function');
       assert.equal(onCalls.length, 2, 'a non-function argument must be ignored, not registered');
     } finally {

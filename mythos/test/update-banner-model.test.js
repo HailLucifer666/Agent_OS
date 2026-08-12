@@ -46,6 +46,23 @@ describe('updateBannerModel', () => {
     }
   });
 
+  it('shows the live download percent when one is given', () => {
+    const m = updateBannerModel('downloading', '0.1.10', 42);
+    assert.equal(m.hidden, false);
+    assert.equal(m.action, null, 'still no button — a percent does not mean the file is on disk');
+    assert.match(m.text, /0\.1\.10/, 'the version must still be named');
+    assert.match(m.text, /42%/, 'the live percent must appear in the text');
+  });
+
+  it('renders exactly as before when no percent is given (2-arg callers)', () => {
+    // Existing callers pass only (state, version). percent must be a fully
+    // optional third param: no '%' text and no crash from the missing arg.
+    const m = updateBannerModel('downloading', '0.1.10');
+    assert.equal(m.hidden, false);
+    assert.doesNotMatch(m.text, /%/, 'a 2-arg call must not render a percent it was never given');
+    assert.match(m.text, /downloading…$/, 'text must be unchanged from before the percent addition');
+  });
+
   it('offers the install only once the file is on disk, and says it restarts', () => {
     const m = updateBannerModel('ready', '0.1.5');
     assert.equal(m.hidden, false);

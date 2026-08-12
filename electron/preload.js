@@ -8,7 +8,8 @@
 // a contextBridge surface of EXACTLY nine functions — getKeyNames, setKey,
 // hasKey, onHotkey, restartServer, onUpdateStatus, installUpdate, getSettings
 // and setSetting — and NOTHING that returns a key VALUE. Names, booleans, short
-// strings (onHotkey, onUpdateStatus), status objects (restartServer,
+// strings/numbers (onHotkey, onUpdateStatus — the latter now three plain
+// primitives: state, version, percent), status objects (restartServer,
 // installUpdate, setSetting) and NON-SECRET configuration (getSettings) are the
 // only things that cross.
 //
@@ -65,19 +66,22 @@ contextBridge.exposeInMainWorld('mythos', {
   restartServer: function restartServer() {
     return ipcRenderer.invoke('mythos:restart-server');
   },
-  // onUpdateStatus(cb) → cb(state, version) whenever the auto-updater's state
-  // changes ('idle' | 'available' | 'downloading' | 'ready' | 'error'), so the
-  // HUD can render an Update button instead of the operator finding out from an
-  // OS notification they may never see.
+  // onUpdateStatus(cb) → cb(state, version, percent) whenever the auto-updater's
+  // state changes ('idle' | 'available' | 'downloading' | 'ready' | 'error' |
+  // 'incomplete'), so the HUD can render an Update button instead of the
+  // operator finding out from an OS notification they may never see. percent is
+  // only meaningful while state is 'downloading'; every other state resets it to
+  // 0 in the main process (see setUpdateState in electron/main.js).
   //
   // Built exactly like onHotkey above and for the same reason: one named
-  // channel, no channel parameter, and both payload fields re-derived as plain
-  // strings here rather than forwarded — a structured event is the shape that
-  // could carry something secret into a renderer that also loads remote pages.
+  // channel, no channel parameter, and all three payload fields re-derived as
+  // plain primitives here rather than forwarded — a structured event is the
+  // shape that could carry something secret into a renderer that also loads
+  // remote pages.
   onUpdateStatus: function onUpdateStatus(callback) {
     if (typeof callback !== 'function') return;
-    ipcRenderer.on('mythos:update-status', function (_event, state, version) {
-      callback(String(state || ''), String(version || ''));
+    ipcRenderer.on('mythos:update-status', function (_event, state, version, percent) {
+      callback(String(state || ''), String(version || ''), Number(percent) || 0);
     });
   },
   // installUpdate() → { ok, installing, state, version }. Takes NO arguments on

@@ -952,23 +952,26 @@ const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
 // operator got no hint of before 2026-08-13.
 const UPDATE_STATES = ['idle', 'available', 'downloading', 'ready', 'error', 'incomplete'];
 let updaterRef = null;               // set once checkForUpdates() has built one
-let updateState = { state: 'idle', version: '' };
+let updateState = { state: 'idle', version: '', percent: 0 };
 
-function setUpdateState(state, version) {
+function setUpdateState(state, version, percent) {
   // A typo'd state would render as a banner the HUD has no copy for, i.e. a
   // silent blank. Fail loudly into the log and keep the last known good state.
   if (UPDATE_STATES.indexOf(state) === -1) {
     log('auto-update: refusing an unknown update state', String(state));
     return;
   }
-  updateState = { state, version: String(version || '') };
+  // percent defaults to 0, so every non-downloading transition (available,
+  // ready, error, idle, incomplete) auto-resets it rather than leaking the
+  // last download's progress into an unrelated state.
+  updateState = { state, version: String(version || ''), percent: Number(percent) || 0 };
   sendUpdateState();
 }
 
 function sendUpdateState() {
   try {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.webContents.send('mythos:update-status', updateState.state, updateState.version);
+    mainWindow.webContents.send('mythos:update-status', updateState.state, updateState.version, updateState.percent);
   } catch (err) {
     // A dead/reloading webContents is not an error worth taking anything down for.
     log('auto-update: could not push status to the HUD —', err && err.message);
@@ -1082,6 +1085,7 @@ function checkForUpdates() {
       const percent = Math.floor((p && p.percent) || 0);
       if (percent === lastPercent) return;
       lastPercent = percent;
+      setUpdateState('downloading', updateState.version, percent);
       if (percent % 10 === 0) log('auto-update: download-progress', `${percent}%`);
     });
     autoUpdater.on('update-downloaded', (info) => {
