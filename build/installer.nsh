@@ -55,12 +55,6 @@ Var SelAdb
 Var SelAutostart
 Var WslPresent
 
-!macro customPageAfterChangeDir
-  !include LogicLib.nsh
-  !include nsDialogs.nsh
-
-  Page custom mythosComponentsPage mythosComponentsLeave
-
 ; ---- already-installed detection (operator, 2026-08-12) ----------------------
 ;
 ; "When updating, it's asking me for the same things — the phone install, the
@@ -125,6 +119,18 @@ Var FoundAdb
     StrCpy $FoundAdb "1"
   ${EndIf}
 !macroend
+
+; DetectComponents is defined ABOVE this macro, not inside it. NSIS cannot
+; define a macro inside a macro ("can't define a macro inside a macro!"), and
+; when it was nested here the whole installer build aborted — producing a 222 KB
+; stub .exe instead of a real installer, with the failure only visible in the
+; NSIS output. That is why the 2026-08-12 21:08 build never yielded an
+; installer at all. Nothing else about the page changed.
+!macro customPageAfterChangeDir
+  !include LogicLib.nsh
+  !include nsDialogs.nsh
+
+  Page custom mythosComponentsPage mythosComponentsLeave
 
 Function mythosComponentsPage
   !insertmacro MUI_HEADER_TEXT "Choose components" \

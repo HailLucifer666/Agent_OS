@@ -266,6 +266,34 @@ describe('3. the installer looks before it asks', () => {
     for (const use of uses) assert.ok(use > def, 'every use must follow the definition');
   });
 
+  it('defines no macro inside another macro — NSIS forbids it and fails the whole build', () => {
+    // Measured 2026-08-12: DetectComponents was defined INSIDE
+    // customPageAfterChangeDir, so every installer build died with "can't
+    // define a macro inside a macro!" — and the failure mode is the dangerous
+    // kind. electron-builder still exited 0 and still left a file called
+    // "MYTHOS Setup 0.1.7.exe" in dist/, except it was a 222 KB stub instead of
+    // a ~320 MB installer. A release script that trusts the exit code would
+    // have published it. The macro-order test above passed throughout.
+    const lines = nsh.split('\n');
+    let openLine = 0;
+    let openName = '';
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const start = /^!macro\s+(\S+)/.exec(line);
+      if (start) {
+        assert.equal(openLine, 0,
+          `!macro ${start[1]} on line ${i + 1} is nested inside !macro ${openName} (line ${openLine}) — ` +
+          'NSIS cannot define a macro inside a macro, and the build failure produces a stub .exe, not an error');
+        openLine = i + 1;
+        openName = start[1];
+      } else if (/^!macroend\b/.test(line)) {
+        openLine = 0;
+        openName = '';
+      }
+    }
+    assert.equal(openLine, 0, `!macro ${openName} (line ${openLine}) is never closed with !macroend`);
+  });
+
   it('stays inside the BUILD_UNINSTALLER guard — the uninstaller pass has no pages', () => {
     const guard = nsh.indexOf('!ifndef BUILD_UNINSTALLER');
     assert.ok(guard > 0);
