@@ -26,6 +26,17 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// escapeHtml() above does NOT escape `"` — textContent/innerHTML round-tripping
+// never needs to, because it is encoding for TEXT position. Interpolating its
+// output into an ATTRIBUTE is therefore a break-out: one double quote in the
+// value ends the attribute and everything after it is parsed as markup. This
+// repo has shipped that bug before (the HUD's markdown link renderer, fixed with
+// safeHref on 2026-08-02), and this file was doing it again at three
+// interpolations of engagement.id/status. Mirrors overlay-manager.js's escapeAttr.
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, '&quot;');
+}
+
 // safeHref — duplicated verbatim from components/engagement/SpecPreviewCard.js
 // (which owns the canonical copy and the tests). escapeHtml() above leaves `"`
 // intact, so without this an LLM-authored spec containing
@@ -76,7 +87,12 @@ function filterMatches(engagement) {
   }
   if (state.filter === 'recent') {
     // Recent = completed within 24h or blocked/failed
-    if (REPAIRING.includes(engagement.status)) return true;
+    // `REPAIRING.includes(...)` here was a ReferenceError waiting to happen —
+    // there is no such binding, only the string in ACTIVE_STATES. It never fired
+    // because renderFilterChips() was never called, so state.filter could never
+    // leave 'active'; painting the chips (see render()) would have crashed the
+    // panel on the first click. Fixed 2026-08-13 with the comparison it meant.
+    if (engagement.status === 'REPAIRING') return true;
     if (engagement.status === 'COMPLETED') {
       const completedAt = engagement.completion?.completedAt || engagement.updatedAt;
       return completedAt && (Date.now() - completedAt < 24 * 3600 * 1000);
@@ -104,8 +120,8 @@ function renderListItem(engagement) {
   const time = formatItemTime(engagement);
 
   return `
-    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeHtml(engagement.id)}">
-      <div class="engag-status-dot status-${escapeHtml(engagement.status)}"></div>
+    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeAttr(engagement.id)}">
+      <div class="engag-status-dot status-${escapeAttr(engagement.status)}"></div>
       <div class="engag-list-item-main">
         <div class="engag-list-item-name">${escapeHtml(name)}</div>
         <div class="engag-list-item-sub">${escapeHtml(sub)}</div>
@@ -156,7 +172,7 @@ function formatItemTime(engagement) {
 function renderFilterChips() {
   const activeCount = state.engagements.filter((e) => ACTIVE_STATES.includes(e.status)).length;
   const recentCount = state.engagements.filter((e) => {
-    if (REPAIRING.includes(e.status)) return true;
+    if (e.status === 'REPAIRING') return true; // see filterMatches — same fix
     if (e.status === 'COMPLETED') {
       const completedAt = e.completion?.completedAt || e.updatedAt;
       return completedAt && (Date.now() - completedAt < 24 * 3600 * 1000);
@@ -204,7 +220,7 @@ function renderDetailHeader(engagement) {
     <div class="engag-detail-header">
       <div class="engag-detail-header-name">${escapeHtml(name)}</div>
       <div class="engag-detail-header-status">
-        <span class="engag-status-dot status-${escapeHtml(engagement.status)}"></span>
+        <span class="engag-status-dot status-${escapeAttr(engagement.status)}"></span>
         <span>${escapeHtml(statusLabel(engagement.status))}</span>
       </div>
       <div class="engag-detail-header-meta">${escapeHtml(meta)}</div>
@@ -341,7 +357,7 @@ function renderVerificationsTabContent(engagement) {
       ${allChecks.map((check, idx) => {
         const status = check.ok ? 'passed' : 'failed';
         return `
-        <div class="engag-check-card status-${status}" role="listitem" aria-label="Verification check: ${escapeHtml(check.type)} — ${status}">
+        <div class="engag-check-card status-${status}" role="listitem" aria-label="Verification check: ${escapeAttr(check.type)} — ${status}">
           <div class="engag-check-card-header">
             <div class="engag-check-card-icon" aria-hidden="true">${check.ok ? '✓' : '✗'}</div>
             <div class="engag-check-card-info">
@@ -540,6 +556,15 @@ function startPolling() {
 // ============================================ */
 
 function renderListAndDetail() {
+  // The Active/Recent/Completed chips: #engag-filters exists in the panel markup
+  // and its click handler is registered in render(), but nothing ever filled the
+  // container — renderFilterChips() was defined and never called, so the filter
+  // UI was invisible and state.filter could never leave 'active'. Painted here so
+  // it re-renders with the counts on every state change (2026-08-13).
+  // xss-safe: counts are numbers, filter names are literals.
+  const filtersEl = document.getElementById('engag-filters');
+  if (filtersEl) filtersEl.innerHTML = renderFilterChips();
+
   const listEl = document.getElementById('engag-list');
   // xss-safe: static template, no interpolation
   if (listEl) listEl.innerHTML = renderList();

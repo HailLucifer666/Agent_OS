@@ -158,10 +158,18 @@ test('beginInstall stops the child and WAITS for it before handing over', () => 
   assert.ok(begin !== -1, 'beginInstall must be async — it waits for the child to exit');
   const body = code.slice(begin, code.indexOf('\n}', begin));
 
+  // The child reference must be CAPTURED before stopChild(), which nulls the
+  // module-level one. Waiting on `child` after stopChild() resolves instantly
+  // and waits for nothing — a version of this function shipped that way for
+  // twenty minutes on 2026-08-13, with the order assertions below still green.
+  const captureAt = body.indexOf('const dyingChild = child');
   const stopAt = body.indexOf('stopChild()');
-  const awaitAt = body.indexOf('awaitChildExit(');
+  const awaitAt = body.indexOf('awaitChildExit(dyingChild');
   const installAt = body.indexOf('quitAndInstall');
-  assert.ok(stopAt !== -1 && awaitAt !== -1, 'it must stop the child and wait for its exit');
+  assert.ok(captureAt !== -1 && captureAt < stopAt,
+    'the child must be captured BEFORE stopChild() nulls it');
+  assert.ok(stopAt !== -1 && awaitAt !== -1,
+    'it must stop the child and wait for THAT child, not the nulled module-level one');
   assert.ok(stopAt < awaitAt && awaitAt < installAt,
     'stopChild -> awaitChildExit -> quitAndInstall, in that order: the child is forked from '
     + 'process.execPath and its cwd is inside the install tree, so while it lives the uninstaller '
@@ -170,14 +178,20 @@ test('beginInstall stops the child and WAITS for it before handing over', () => 
     'isQuitting must be set BEFORE stopChild, or the exit handler reschedules the child');
 });
 
-test('a stubborn child cannot block an update either', () => {
+test('the wait itself lives where it can be tested for real', () => {
+  // awaitChildExit is NOT inline in main.js, deliberately. main.js requires
+  // `electron`, so node --test can only assert its SHAPE — and shape assertions
+  // did not catch the first version reading the module-level `child` that
+  // stopChild() had just nulled, which made it resolve instantly and wait for
+  // nothing while every order assertion here stayed green. The behaviour is
+  // pinned in test/electron-child-exit.test.js against a fake child.
   const code = codeOnly(readMainJs());
-  const start = code.indexOf('function awaitChildExit(');
-  assert.ok(start !== -1, 'awaitChildExit must exist');
-  const body = code.slice(start, code.indexOf('\nfunction ', start + 10));
-  assert.ok(/SIGKILL/.test(body), 'the deadline must escalate to SIGKILL');
-  assert.ok(/resolve\(\)/.test(body),
-    'and resolve anyway — waiting forever would trade a failed update for a hung one');
+  assert.ok(/require\('\.\/child-exit'\)/.test(code),
+    'main.js must take the wait from ./child-exit, which node --test can require directly');
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'electron', 'child-exit.js')),
+    'and that module must exist');
+  assert.ok(fs.existsSync(path.join(REPO_ROOT, 'mythos', 'test', 'electron-child-exit.test.js')),
+    'with a behavioural test — the whole reason it was extracted');
 });
 
 test('the child is never restarted during shutdown', () => {

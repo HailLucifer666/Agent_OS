@@ -26,7 +26,19 @@ const DEFAULT_ALLOWLIST = [
   // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
   // before — and it is what made Incidents/ a place reports went to die.
   'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory',
+  // 2026-08-13: timer_add/timer_cancel joined this line from
+  // VOICE_ALLOWLIST_EXEMPT. They were exempt as "not yet asked for in a live
+  // session" — but commit 0bd8408 then rewrote reminder_add's description to say
+  // "Do NOT use this for a timer ... use timer_add for those instead; it rings,
+  // this tool never does", and timer_add's to say "Use this — never
+  // reminder_add — for ANY 'set a timer for N minutes'". On the voice surface
+  // timer_add did not exist, so a spoken "set a timer for 5 minutes" reached a
+  // model that had been told the only tool it could see was the wrong one. This
+  // list's own rule (a read/act pair is promoted together, never split) applies
+  // just as much to a pair where one tool's description mandates the other:
+  // naming an unreachable tool is not a remedy, it is a dead end with a hint.
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
+  'timer_add','timer_cancel',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   // spotify_previous was missing while spotify_next was present — "go back" /
   // "last song" had no tool, the exact read/act-sibling asymmetry this list
@@ -168,10 +180,10 @@ const VOICE_ALLOWLIST_EXEMPT = [
   'get_app_volume','set_app_volume','set_app_mute',
   // Loads a skill's guidance text from disk -- internal/debugging surface.
   'use_skill',
-  // Not yet asked for in a live session; promote if usage shows up.
-  // (camera_look LEFT this group on 2026-08-10 — usage showed up, and what the
-  // model did instead of declining is documented at its DEFAULT_ALLOWLIST entry.)
-  'timer_add','timer_cancel',
+  // (timer_add/timer_cancel LEFT this group on 2026-08-13 — not because usage
+  // showed up, but because reminder_add's description now redirects the model to
+  // timer_add by name, and it was not reachable. See their DEFAULT_ALLOWLIST
+  // entry. camera_look left the same group on 2026-08-10.)
   // Documents/code-search (§7.5, §7.11) -- opt-in power feature with its own
   // UI surface, not curated into the default voice set.
   'document_list','document_search','document_answer','document_ingest',

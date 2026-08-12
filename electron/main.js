@@ -1224,21 +1224,16 @@ function pointInstallerTempAtInstallVolume() {
 // Wait for the server child to actually be gone. Resolves as soon as it exits;
 // after the deadline it escalates to SIGKILL and resolves anyway, because a
 // stubborn child must not be able to block an update either.
-function awaitChildExit(timeoutMs) {
-  return new Promise((resolve) => {
-    const pending = child;
-    if (!pending) return resolve();
-    let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
-    pending.once('exit', finish);
-    setTimeout(() => {
-      if (done) return;
-      log('auto-update: the server child did not exit in', timeoutMs + 'ms — killing it');
-      try { pending.kill('SIGKILL'); } catch { /* already gone */ }
-      finish();
-    }, timeoutMs).unref?.();
-  });
-}
+// Takes the child EXPLICITLY rather than reading the module-level `child`,
+// because stopChild() sets that to null — reading it here resolved instantly and
+// waited for nothing, which is the whole point of this function. Caught by
+// re-reading the handover rather than by a test, so the test below now pins the
+// argument (2026-08-13).
+// Lives in ./child-exit.js so node --test can exercise it for real: main.js
+// requires `electron` and can therefore only ever be source-shape asserted, and
+// source-shape assertions did NOT catch this function resolving instantly when
+// it read the module-level `child` that stopChild() had just nulled.
+const { awaitChildExit } = require('./child-exit');
 
 // THE HANDOVER, in order. Order is the whole correctness of this function.
 //
@@ -1268,8 +1263,10 @@ async function beginInstall(autoUpdater, version) {
   isQuitting = true; // stops the child's exit handler from scheduling a restart
   recordUpdateAttempt(version);
   rescueToolDirs();
+  // Captured BEFORE stopChild(), which nulls the module-level reference.
+  const dyingChild = child;
   stopChild();
-  await awaitChildExit(3000);
+  await awaitChildExit(dyingChild, 3000, log);
   // AFTER the child is gone, for the reason before-quit already documents: a
   // half-written episodic line committed as "synced" is worse than a late push.
   // Here rather than in before-quit, because in before-quit it runs INSIDE the
