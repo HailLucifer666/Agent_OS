@@ -39,6 +39,11 @@ function fail(reason) {
   return { ok: false, result: reason };
 }
 
+// E5: bytes -> GB rounded to 2dp, for read_system_specs' human-readable fields.
+function bytesToGB(bytes) {
+  return Math.round((bytes / (1024 * 1024 * 1024)) * 100) / 100;
+}
+
 // Finds the best case-insensitive substring match for `query` against a list of items,
 // using `getText(item)` to extract the comparable text. Returns { item, index } or null.
 function findByQuery(items, query, getText) {
@@ -67,6 +72,11 @@ function buildTools(ctx) {
   // levels (same accessor persona_status uses, effectors/from-persona.js) so
   // "what's my humor level set at" is answerable without a separate tool.
   const identity = ctx.identity;
+  // E5: injected like every other collaborator above (DI convention) so
+  // read_system_specs' os.cpus()/loadavg() reads are deterministic in tests
+  // instead of depending on the real host. ctx.os is absent in production —
+  // falls back to the real module.
+  const os = ctx.os || require('os');
 
   // ---- navigate ----
 
@@ -487,6 +497,43 @@ function buildTools(ctx) {
     } catch (err) {
       return fail(err.message);
     }
+  }
+
+  // E5: the model had no tool for "what are your specs" — screen_look
+  // (from-pc.js) has no targeting param at all and always screenshots the
+  // primary display, so it was never a targeting bug, it was a missing
+  // capability. CPU/RAM facts already exist inside MYTHOS via os.cpus()/
+  // totalmem()/freemem() (server/routes/system.js), but that endpoint is
+  // DELIBERATELY STATEFUL (cpuDeltaPercent consumes an accumulated window —
+  // see the comment block at the top of that file) so this tool does NOT
+  // call it and does NOT reuse cpuDeltaPercent. It is a stateless read of
+  // static/instantaneous os facts only.
+  //
+  // No CPU utilisation percentage is reported, ever: a single os.cpus() read
+  // gives average-since-boot (times are cumulative counters since boot), which
+  // looks like a live percent and is not one. Omitted rather than estimated.
+  async function read_system_specs() {
+    const cpus = os.cpus() || [];
+    const totalMemoryBytes = os.totalmem();
+    const freeMemoryBytes = os.freemem();
+    // os.loadavg() returns [0,0,0] on Windows — a fake reading, not a real
+    // one. Honest-inert contract: unavailable, never a plausible-looking
+    // number.
+    const loadavg = os.platform() === 'win32' ? 'unavailable' : os.loadavg();
+    return ok({
+      cpuModel: cpus[0] ? cpus[0].model : 'unavailable',
+      logicalCores: cpus.length,
+      arch: os.arch(),
+      platform: os.platform(),
+      osRelease: os.release(),
+      totalMemoryBytes,
+      totalMemoryGB: bytesToGB(totalMemoryBytes),
+      freeMemoryBytes,
+      freeMemoryGB: bytesToGB(freeMemoryBytes),
+      processUptimeSeconds: process.uptime(),
+      hostUptimeSeconds: os.uptime(),
+      loadAverage: loadavg
+    });
   }
 
   // C1: job.status (BUG-016) still means "the job ran to completion" — that
@@ -1009,6 +1056,7 @@ function buildTools(ctx) {
     // read-class tool below — previously dead metadata (adapter.js dropped
     // the field before it reached voice-agent.js), now actually enforced.
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status, needs_result: true },
+    { name: 'read_system_specs', description: 'Read THIS machine\'s hardware/OS facts: CPU model, core count, total/free memory (bytes and GB), arch, platform, OS release, and process/host uptime. This is how you answer "what are your specs" / "how much RAM do you have" / "what CPU is this" — do NOT use screen_look for that, it only screenshots whatever is on the display and cannot read hardware facts. Never returns a CPU usage percentage (a single reading cannot give one honestly) and reports load average as unavailable on platforms where the OS does not provide a real one.', params: {}, danger: false, fn: read_system_specs, needs_result: true },
     { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch, needs_result: true },
     { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); }, needs_result: true },
     { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research. job.status only means the job ran to completion, NOT that it is a finished/working build — always check completionStatus ("done" vs "needs-work") before telling the operator a build is done; "needs-work" means the review rejected it or a fallback engine produced it, even though job.status reads "done".', params: { jobId: 'string (optional)' }, danger: false, fn: job_status, needs_result: true },

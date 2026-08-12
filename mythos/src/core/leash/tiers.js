@@ -9,6 +9,12 @@ const TIER_TABLE = {
   'navigate':              0,
   'close_panel':           0,
   'read_status':           0,
+  // E5: a stateless os.cpus()/totalmem() read of THIS host. Same tier as
+  // read_status — it reads, it cannot act, and it touches nothing outside
+  // the process. Without an entry here the leash's unknown-tool fail-safe
+  // gates it at T3, which would put a confirm prompt in front of "how much
+  // RAM does this machine have".
+  'read_system_specs':     0,
   'job_status':            0,
   'list_goals':            0,
   'pipeline_status':       0,

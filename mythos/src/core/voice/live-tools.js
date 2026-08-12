@@ -15,7 +15,7 @@ const { checkToolCapability } = require('./tool-capability');
 // Function-calling accuracy degrades with very large tool sets, and MYTHOS registers 107.
 // This is the curated high-traffic default; override with LIVE_TOOL_ALLOWLIST.
 const DEFAULT_ALLOWLIST = [
-  'navigate','close_panel','read_status','open_web',
+  'navigate','close_panel','read_status','read_system_specs','open_web',
   'create_goal','list_goals','toggle_goal','delete_goal',
   'capture_idea','pipeline_status','pipeline_advance',
   'kanban_status','kanban_add_card','kanban_move_card',

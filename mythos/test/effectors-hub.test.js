@@ -204,8 +204,13 @@ describe('gate: 100 registered count', () => {
     // + camera_on (from-dashboard, 2026-08-10 — the confirm-gated opener for the
     // webcam camera_look reads from. With the camera off and no way to ask for it,
     // "can you see me?" had no honest path at all, and the model substituted a
-    // desktop screenshot and described that instead) = 103.
-    assert.equal(hub.count(), 103);
+    // desktop screenshot and described that instead) = 103,
+    // + read_system_specs (from-dashboard, E5 2026-08-12 — CPU/RAM already
+    // existed at GET /api/system and the dashboard widget rendered them, but
+    // NO tool exposed any of it, so screen_look was the model's only option
+    // and it screenshotted a screen that happened to be showing MYTHOS's own
+    // dashboard) = 104.
+    assert.equal(hub.count(), 104);
   });
 });
 
