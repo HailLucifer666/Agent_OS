@@ -323,12 +323,58 @@ function buildTools(ctx) {
 
   // ---- open_artifact ----
 
-  async function open_artifact({ path, title }) {
+  // C5 (46-finding voice-session audit, 2026-08-12): MYTHOS called
+  // pipeline_status four times, had the real artifact path in hand, and then
+  // asked open_artifact to open two filenames that never existed — blaming
+  // the pipeline for "erroneous data" it had itself fabricated. Two fixes:
+  //   1. jobId resolves the path server-side (below) so the model never
+  //      retypes a filename it was already given.
+  //   2. A wrong `path` now fails with a message naming the real path(s)
+  //      recorded on known jobs, instead of repeating advice ("call
+  //      pipeline_status") the model had already followed.
+  // Known artifacts come ONLY from buildRunner's own job records — never
+  // from joining caller input onto a directory — so this cannot become a
+  // path-traversal primitive.
+  function knownArtifactPaths() {
+    if (!buildRunner || typeof buildRunner.listJobs !== 'function') return [];
+    return buildRunner.listJobs()
+      .filter((j) => j && j.artifact && j.artifact.path)
+      .sort((a, b) => (b.finishedAt || b.createdAt || 0) - (a.finishedAt || a.createdAt || 0))
+      .map((j) => j.artifact.path);
+  }
+
+  function unknownPathMessage(rawPath) {
+    const known = knownArtifactPaths();
+    if (!known.length) {
+      return `Artifact does not exist: ${rawPath}. Call pipeline_status or job_status to get a real artifact path before opening one.`;
+    }
+    if (known.length === 1) {
+      return `Unknown artifact path: ${rawPath}. Artifact does not exist. The most recent job's artifact is ${known[0]}.`;
+    }
+    // Several jobs have artifacts — naming just the newest would be a guess
+    // as wrong as the model's own fabrication. List them all instead.
+    return `Unknown artifact path: ${rawPath}. Artifact does not exist. Known job artifacts (most recent first): ${known.join(', ')}.`;
+  }
+
+  async function open_artifact({ path, jobId, title }) {
     try {
-      if (!path || !String(path).trim()) {
-        return fail('An artifact path is required.');
+      let rawPath;
+      if (jobId) {
+        if (!buildRunner || typeof buildRunner.getJob !== 'function') {
+          return fail('No build runner is available to resolve jobId.');
+        }
+        const job = buildRunner.getJob(jobId);
+        if (!job) return fail(`No job found with id ${jobId}.`);
+        if (!job.artifact || !job.artifact.path) {
+          return fail(`Job ${jobId} has no artifact yet (status: ${job.status}).`);
+        }
+        rawPath = String(job.artifact.path).trim();
+      } else {
+        if (!path || !String(path).trim()) {
+          return fail('An artifact path or jobId is required.');
+        }
+        rawPath = String(path).trim();
       }
-      const rawPath = String(path).trim();
       // Reject shell metacharacters — this path becomes part of a shell command
       // (cmd /c start on Windows, xdg-open on Linux). Without this, an LLM or
       // attacker who controls the path can inject commands (&, |, ;, backticks,
@@ -353,7 +399,7 @@ function buildTools(ctx) {
         // check, so a fabricated slug ("opened:true" for a file that was
         // never built) looked identical to a real success.
         if (!fs || typeof fs.exists !== 'function' || !fs.exists(vaultRelPath)) {
-          return fail(`Artifact does not exist: ${rawPath}. Call pipeline_status or job_status to get a real artifact path before opening one.`);
+          return fail(unknownPathMessage(rawPath));
         }
         targetUrl = vaultUrl(vaultRelPath, config);
         // REMEDIATION P1-6 (incident 2026-07-29, live smoke-test): the file
@@ -935,7 +981,7 @@ function buildTools(ctx) {
     { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s), floating widgets (search/weather/flights/image cards spawned by open_web), AND the Electron media window if one is open (e.g. a YouTube video that will not stop with standard playback controls). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed/mediaWindowClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
     { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
-    { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline.', params: { path: 'string', title: 'string (optional)' }, danger: false, fn: open_artifact },
+    { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline. Prefer jobId (from pipeline_status/job_status) over path — it resolves the real artifact path server-side, so you never have to retype a filename. A wrong path fails with the real path(s) named in the error.', params: { path: 'string (optional if jobId given)', jobId: 'string (optional) - resolves the path from the job record instead of retyping it', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     // REMEDIATION P3-8: needs_result:true added to every status/check/list/
     // read-class tool below — previously dead metadata (adapter.js dropped
