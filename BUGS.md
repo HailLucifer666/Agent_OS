@@ -9,7 +9,25 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-11 - BUG-179..BUG-184 in the LAST section: the installer
+Last updated: 2026-08-12 - a 45-minute operator session on the INSTALLED build
+(the packaging fixes from the 2026-08-11 entry below did ship), findings
+A1..A26 in the new final section. Two same-symptom/different-cause recurrences
+worth flagging up front: the media transport buttons were dead again, but this
+time because the leash refused `media_key` as Tier 2 with
+`tier-4-always-confirm` and the widget silently discarded the 403 — not the
+`SendVkKey`/SendInput failure BUG-042 already fixed (see that entry's new
+cross-reference note); and the Gemini TTS quota BUGS.md already logged
+unfixed (2026-08-07's "free tier is 10 requests/day" entry) finally got a
+fix for the audition/preview route specifically. Six items are fixed and
+unit-tested on this branch (leash Tier-2 gate, the media widget's silent
+403, the `✗ ?` action-relay row, the gesture-model packaging, the voice
+audition quota/fallback, the sticky caption); the rest of A1-A26 are recorded
+open, none operator-verified on the installed build. Only one fact here was
+checked against a real artifact rather than a unit test: `npm run dist`
+produced an asar containing `gesture_recognizer.task`. Baseline 3795 tests,
+3794 pass, 0 fail, 1 skip.
+
+Previous entry: 2026-08-11 - BUG-179..BUG-184 in the LAST section: the installer
 shipped byte-identical code and none of the configuration. Four incidents on a
 fresh install, all fixed and verified for two months on the dev run, traced to
 two root causes: mythos/.env is the only config source and is not packaged, and
@@ -78,7 +96,7 @@ Maintainer: update this file as issues are resolved. Strike through the status.
 
 Four live-reported dashboard defects, each root-caused (4 parallel read-only investigations + live probes) then fixed:
 
-- **BUG-042 (media controls dead):** ✅ FIXED + LIVE-VERIFIED. Media widget play/pause/next/prev/volume did nothing. Wiring (frontend `/api/media/control` → `routes/media.js` → `media_key` effector → pc-child) was byte-correct; the break was the execution boundary — `Send-VkKey` in `ps-automation.ps1` injected global media VK codes via `SendInput` and discarded the return count, so `Handle-MediaKey` always reported `sent:$true` even when the OS silently dropped the input (UIPI/foreground/integrity — a fragility this repo already documents). Read path (`media_status`) worked because it never touches `SendInput`. **Fix:** route transport (play/pause/next/prev) through the SAME `GlobalSystemMediaTransportControlsSession` the read path uses — `TryTogglePlayPauseAsync`/`TrySkipNextAsync`/`TrySkipPreviousAsync` via `Await-WinRTOperation` — so control is direct and foreground-independent; keep volume keys on VK injection but capture the `SendInput` count and report an honest failure on 0. Live-verified against running Spotify: `next_track` changed the title (A PERFECT WORLD → PIECES), `play_pause` froze then resumed the position oracle. Note: the widget's ▶/⏸ flag can lag one 5s poll (SMTC PlaybackStatus latency) — cosmetic, not a control bug.
+- **BUG-042 (media controls dead):** ✅ FIXED + LIVE-VERIFIED. Media widget play/pause/next/prev/volume did nothing. Wiring (frontend `/api/media/control` → `routes/media.js` → `media_key` effector → pc-child) was byte-correct; the break was the execution boundary — `Send-VkKey` in `ps-automation.ps1` injected global media VK codes via `SendInput` and discarded the return count, so `Handle-MediaKey` always reported `sent:$true` even when the OS silently dropped the input (UIPI/foreground/integrity — a fragility this repo already documents). Read path (`media_status`) worked because it never touches `SendInput`. **Fix:** route transport (play/pause/next/prev) through the SAME `GlobalSystemMediaTransportControlsSession` the read path uses — `TryTogglePlayPauseAsync`/`TrySkipNextAsync`/`TrySkipPreviousAsync` via `Await-WinRTOperation` — so control is direct and foreground-independent; keep volume keys on VK injection but capture the `SendInput` count and report an honest failure on 0. Live-verified against running Spotify: `next_track` changed the title (A PERFECT WORLD → PIECES), `play_pause` froze then resumed the position oracle. Note: the widget's ▶/⏸ flag can lag one 5s poll (SMTC PlaybackStatus latency) — cosmetic, not a control bug. **2026-08-12 recurrence note:** the media transport buttons went dead again in a later live session, same symptom, a completely different root cause — this fix's SMTC transport path was never touched. That time the leash was refusing `media_key` outright as Tier 2 (`tier-4-always-confirm`) and the widget was silently swallowing the 403, so nothing ever reached SMTC. See the 2026-08-12 session's A21/A26 for the fix (`d5a870e`, `a57e5fd`, `5dfcfc2`) — do not read this entry's "LIVE-VERIFIED" as covering that failure mode.
 - **BUG-006 (YouTube "Video unavailable"):** ✅ enhanced (see full entry below). Root cause of "most videos fail": the video was chosen as the first search hit with ZERO embeddability check, and most YouTube videos have embedding disabled by the uploader. **Fix:** `from-dashboard.js` now pulls 6 candidates and pre-checks each via YouTube's keyless oEmbed endpoint, embedding the first that allows it; if none do, it opens the real youtube.com page in a browser tab (always plays). `web-panel.js` also catches the player's `onError` postMessage → auto-opens the real tab. Combined with the earlier `enablejsapi=1` + `listening` handshake fix.
 - **BUG-043 (weather wrong location):** ✅ FIXED (auto-detect). "Brisbane/Australia" was NOT hardcoded (zero repo hits) — `weather.js` used only `navigator.geolocation` (desktop → unreliable network/IP location) and showed no city name. **Fix:** keep geolocation as primary but reverse-geocode the coords to a city name (BigDataCloud, keyless) and always display it; on denial/timeout, fall back to IP geolocation (ipapi.co → ip-api.com, keyless) which returns city directly; Kolkata constant only as last resort. Shows a real city name every launch. Honest caveat: if the machine's public IP itself geolocates wrong (VPN), both sources may agree on the wrong city — but the visible name now makes that obvious.
 - **BUG-044 (widget resize doesn't scale content):** ✅ FIXED. `makeResizable` set width/height on `.widget-card`, but the card was a plain block capped at `max-width:260px` with a non-filling `.widget-body`, so the frame grew while content stayed put. **Fix (`widgets.css`):** `.widget-card` becomes a flex column with a raised max-width; `.widget-body` gets `flex:1; min-height:0; overflow:auto` so content fills/scrolls with the frame; removed fixed `max-height` caps on feed/news lists so they use the resized space.
@@ -1803,6 +1821,19 @@ Options, operator's call: put `edge` first in `VOICE_TTS_CHAIN` (local,
 unmetered, consistent — costs the Gemini voice), or supply a paid Google key.
 Leaving it as-is means one nice-sounding reply per session followed by a
 different voice.
+
+**2026-08-12 update:** this same quota (the log line above, `WARN
+tts.provider-failed gemini-tts: 429 ... limit: 10`) was observed again, this
+time hitting the new voice-audition/preview route (`POST /api/tts/audition`)
+rather than the live sticky chain — clicking a Gemini voice in the picker to
+preview it returned a raw ~400-character Google billing-URL dump instead of
+an actionable message, and there was no way to hear a fallback voice from the
+audition button itself. That quota was known and left unfixed for this route.
+**Fixed** by `6b41db1` on the fix-approval-gate-and-packaging branch: a 429 now
+reports one short retry-after sentence, and an explicit `allowFallback` flag
+lets the audition walk the rest of the configured chain instead of just
+failing. Unit-tested (`test/tts-audition-route.test.js`); the sticky-chain
+quota behaviour described above is unchanged and still the operator's call.
 
 ### Two-brain provider key — ⚠️ OPERATOR ACTION REQUIRED
 
@@ -4918,3 +4949,162 @@ minutes, then check `%APPDATA%\MYTHOS\vault\Audit\*.jsonl` for
 `actor:'voice-ducking'` rows (expected: zero) and `Incidents\*.jsonl` (expected:
 empty). The four incidents in `Incidents/2026-08-11.jsonl` stay OPEN until that
 pass runs.
+
+**2026-08-12 update on "ask for a Tier-2 action and get no approval prompt":**
+a live session on the installed build hit exactly this — `media_key` (Tier 2)
+was refused outright instead of prompting for approval. Root cause: the leash
+had no dedicated Tier-2 branch and fell into the Tier-4 always-confirm tail
+(`tier-4-always-confirm`), which for a UI-originated call with no confirm
+surface reads as a flat denial, not a prompt. **Fixed on the
+fix-approval-gate-and-packaging branch** (`d5a870e` gives Tier 2 its own
+branch; `a57e5fd`/`5dfcfc2` make the widget surface the refusal/dispatch
+failure instead of a dead button) and unit-tested. Still **NOT
+operator-verified on the installed build** — say exactly that, not "closed":
+nobody has re-run the manual smoke list above against this fix yet.
+
+---
+
+## Session (2026-08-12) — installed-build operator session: A1..A26, C4
+
+A 45-minute operator session on the INSTALLED build (the packaging fixes from
+the 2026-08-11 session above did ship and were in this build) surfaced 26
+findings, lettered A1..A26, plus one feature request, C4. This section records
+all of them and reconciles with what this registry already said before
+inventing anything new.
+
+### Reconciliation with the 2026-08-11 incidents
+
+Four incidents were left open in `Incidents/2026-08-11.jsonl` at the end of
+that session (volume loop, wrong Spotify track, tier approvals, wake word).
+This branch touches exactly one of the four:
+
+- **Tier approvals** — touched and fixed. See the update immediately above
+  this section, attached to the 2026-08-11 tail's own "NOT VERIFIED" bullet:
+  the leash's Tier-2 gate (`d5a870e`) and the widget's silent-403 fix
+  (`a57e5fd`/`5dfcfc2`) are exactly A21/A26 below.
+- **Volume loop** — NOT touched here. Already recorded above as "no new code,
+  and why": both halves (ducking hysteresis, S2S parity derivation) had
+  already landed before this session; still awaiting the operator smoke-test
+  pass on the installed build.
+- **Wrong Spotify track** — NOT touched here. No code in this branch reaches
+  Spotify result ranking or playback selection.
+- **Wake word** — NOT touched here for the *detection* defect (BUG-175/176
+  already fixed the deaf mel transform). This branch's gesture-model fix
+  (A25) is a webcam feature packaged in the same installer, not a wake-word
+  change.
+
+### Fixed on this branch (fix-approval-gate-and-packaging), unit-tested only
+
+- **A21 / A26 (first bullet) — the leash Tier-2 gate.** `media_key` (and any
+  other Tier-2 tool called from a UI surface with no confirm channel) fell
+  into the Tier-4 always-confirm tail and was denied outright instead of
+  being auto-allowed or prompting. Tier 2 now has its own branch in the leash
+  (`d5a870e`); `b1ed58c`'s follow-up documents why session grants stay
+  Tier-3-only so a future reader does not "fix" that back into the same hole.
+- **A26 (second bullet) — the media widget's silent failure.** The dashboard
+  transport buttons went dead with no explanation: the widget discarded a 403
+  refusal and a 200-with-`ok:false` dispatch failure alike, rendering as a
+  dead button. `a57e5fd` passes operator presence into the leash check and
+  surfaces refusals in the widget; `5dfcfc2` surfaces dispatch failures (not
+  just leash refusals) the same way. See also this session's own new finding
+  on `media.js`'s dead-code detail suffix, below — the surfacing is real, the
+  detail text it tries to append currently never fires.
+- **A14 — the `✗ ?` action row.** Denials and breaker blocks carried no `ok`
+  field at all, so `!p.ok` painted them with the same faint failure glyph as
+  a genuine tool crash, and a payload shaped differently than
+  `{tool, args}` produced no `tool` field, printing a literal `?`. Fixed by
+  relaying an explicit `state` (`19c441c`, `35e1e43`) and giving `glyphFor` a
+  fourth, dedicated "refused" state (`⊘`) that is never confused with
+  "failed" (`✗`). See `test/actions-widget-glyph.test.js`, and this branch's
+  commit `aad0de9` (deferred review cleanup) which additionally pins the
+  relay's state whitelist against the widget's glyph branches so the two
+  cannot silently drift on a fourth outcome state.
+- **A25 — the gesture model was excluded from the installer.** MediaPipe's
+  `gesture_recognizer.task` lives under `ui/public/models`, which
+  `build.files` never packaged, so webcam gestures never worked in an install
+  even though the code path was correct. Fixed by `ecb6e47`. See the licence
+  note below — packaging it was a deliberate risk decision, not an oversight.
+- **A24 — voice audition quota and no local fallback.** Clicking a Gemini
+  voice to preview it returned a ~400-character Google billing-URL dump on a
+  429, and there was no way to hear a fallback voice from the audition button
+  itself. Fixed by `6b41db1`: a short retry-after sentence on quota refusal,
+  and an explicit `allowFallback` flag that walks the rest of the configured
+  chain. This branch's deferred-cleanup commit (`aad0de9`) additionally
+  simplified `chainAfter`/removed the redundant `FULL_NAME` reverse map and
+  added coverage for its duplicate-collapsing and empty-chain branches (both
+  were implemented but untested before this pass).
+- **A22b — the sticky voice caption.** The HUD caption did not clear at turn
+  end, so the last thing spoken stayed on screen looking current indefinitely.
+  Fixed by `50618b3`: clears on turn end and shows an idle hint instead of a
+  stale sentence.
+
+All six are unit-tested (`node --test`, green) and NONE has been re-verified
+by an operator against the installed build — the manual smoke-test debt from
+the 2026-08-11 session (see above) has not shrunk, it has grown a sixth item.
+
+### Explicitly still OPEN — no fix on this branch
+
+- **A2-A5** — hermes build engine has no credentials configured; the
+  self-healer's "healed" claim is cosmetic (nothing verifies the target
+  condition actually changed); a failed-review artifact shipped anyway; the
+  landing-page content rubric was applied to a game (wrong rubric for the
+  artifact type).
+- **A8** — internal reasoning leaked into speech. (Note: a related but
+  distinct reasoning-leak defect on a different code path was fixed on this
+  same working branch by the OTHER session — commits `edf9a5f`/`9a3c8d3` — not
+  this plan's work; do not credit this plan for it, and do not assume it
+  closes A8 without checking whether it is the same leak path.)
+- **A18** — the voice pipeline drops the user's transcript, observed 17 times
+  in the 45-minute session.
+- **A20** — the edge-tts script is missing from the packaged build; the
+  browser-agent's CDP connect is refused in a 15-second retry loop; a burst of
+  `ws-upgrade-rejected` events.
+- **C4** — the requested chat-panel rebuild (a feature request, not a defect).
+- **Also open, unelaborated in this pass** (present on the operator's list,
+  not diagnosed or touched here): A1, A6, A7, A9-A13, A15-A17, A19, A23.
+
+### Two more findings, not on the operator's list, found while fixing A26
+
+- `mythos/server/routes/media.js`'s `/api/media/control` POST returns HTTP 200
+  with `{ok:false}` on a dispatch failure (line `res.json({ ok: !!result.ok })`
+  — no `reason`, no `error`, nothing else). The widget (`media.js`) now
+  surfaces that as "didn't take effect", which is correct, but the code that
+  tries to append a detail — `body.reason || body.error` — is currently dead:
+  neither field is ever present on that specific 200 response. (The leash's
+  403-denial path a few lines earlier in the same route DOES send both
+  `reason` and `error`, and that detail text does work for a policy refusal —
+  only the post-dispatch 200 path is silent.) Left as-is; flagging it so the
+  next person who wants that detail to actually appear knows dispatchAction's
+  failure reason needs to travel into that response body.
+- `mythos/ui/public/js/views/backend-terminal.js` (line 142-143) still has
+  the exact `c.ok ? 'OK' : 'FAIL'` / `c.tool || '?'` pattern that A14's fix
+  replaced in `actions.js`. It is a debug view, not a widget, and was
+  deliberately left out of scope for this pass — it renders a different data
+  shape (raw command results, not action-outcome events) and conflating the
+  two fixes would have been speculative.
+
+### The gesture-model licence decision, recorded plainly
+
+`mythos/ui/public/models/gesture_recognizer.task` (MediaPipe's bundled gesture
+model weights, 8.4MB) had its licence terms checked in a 2026-08-04 audit
+(Step 6.6) and found unverified — the Apache-2.0 licence above it covers the
+runtime code, not this specific model artifact, and no separate model-card
+terms were confirmed. That audit excluded the file from the installer as a
+licensing hold. On 2026-08-12 the repo owner made an explicit decision to ship
+it anyway, accepting the unverified-licence risk so webcam gesture recognition
+works in the installed build (this is A25's fix, `ecb6e47`). The licence
+question itself is NOT resolved by this decision — `mythos/THIRD_PARTY_NOTICES.md`
+records both the unverified status and the explicit ship-anyway decision, so
+neither is silently lost.
+
+### What is actually verified here, versus unit-tested only
+
+Exactly one fact in this session's work has been checked against a real,
+built artifact: `npm run dist` produced an asar containing
+`gesture_recognizer.task` (PRESENT). Everything else recorded as "fixed" in
+this section — the leash Tier-2 gate, the media widget surfacing, the action
+relay's state vocabulary, the TTS audition quota/fallback, the sticky
+caption — is unit-tested (green under `node --test`) and has NOT been
+checked by an operator against the installed build. Read every "Fixed" above
+as "fixed and unit-verified," never as "live-verified," unless this section
+is updated again after an actual operator pass.
