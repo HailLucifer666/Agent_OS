@@ -378,6 +378,23 @@ function createLiveToolAdapter(deps) {
             kind: 'live-tool-outcome-late-for-turn', tool: entry.tool, target: entry.tool,
           });
         }
+        // G3: dropping this from the audit is correct — it belongs to a turn
+        // that has closed and must not be misattributed to whatever turn is
+        // running now. But the outcome was being dropped from the MODEL too,
+        // and that part was never deliberate: the functionResponse for this
+        // call still goes out below, addressed to a turn Gemini has already
+        // closed, i.e. into a channel with no addressee. So the model was left
+        // never learning what happened, which is precisely the condition the
+        // BUG-128 root-cause note blames for it reissuing the same batch under
+        // fresh call ids.
+        //
+        // A 'started' placeholder is deliberately NOT announced: its real
+        // outcome arrives later through reportLateOutcome, which does its own
+        // announcing, so sending "outcome pending" here would be noise ahead
+        // of the answer.
+        if (!entry.started) {
+          sendSystemNotice(entry.summary, entry.ok ? 'Report this to the operator accurately.' : NO_SUCCESS_CLAIM);
+        }
         return;
       }
       liveTurnActions.push(entry);
@@ -565,10 +582,21 @@ function createLiveToolAdapter(deps) {
       verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
     }
     liveTurnActions.push({ tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict });
+    sendSystemNotice(verdict, instruction);
+  }
 
+  // The one way to reach a model whose turn has already closed. A
+  // functionResponse is addressed to a specific turn, so once that turn ends
+  // there is no addressee left and the outcome is simply lost; injected text
+  // is the only channel that still lands (see the wire-protocol note at
+  // SYSTEM_NOTICE_PREFIX — there is no system role after setup, so this
+  // arrives attributed to the user role, which is exactly why the prefix has
+  // to make it self-describing).
+  function sendSystemNotice(verdict, instruction) {
     const liveSession = getLiveSession ? getLiveSession() : null;
-    if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as confirms
+    if (!liveSession || !liveSession.isOpen()) return false; // best-effort, same as confirms
     liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`);
+    return true;
   }
 
   // Hook the EXISTING confirm-accept path so an approval/rejection feeds the
