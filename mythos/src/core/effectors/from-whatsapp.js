@@ -40,6 +40,7 @@
 
 const { effectorFromTool } = require('./adapter');
 const fromPc = require('./from-pc');
+const { formatOutgoingMessage } = require('./message-format');
 
 function ok(result) {
   return { ok: true, result };
@@ -77,14 +78,25 @@ const MAX_MESSAGE_CHARS = 2000;
 let vaultFs = null;
 let logger = null;
 
-// E.164-ish: digits with an optional leading +. Deliberately the same shape
-// from-android.js's sanitizePhoneNumber accepts, so a number that works for the
-// phone bridge works here too.
+// Strict E.164: a leading '+', a non-zero country-code digit, then enough
+// digits to make a real international number (8-15 digits total after the
+// '+', per ITU-T E.164). The '+' is REQUIRED here, unlike from-android.js's
+// sanitizePhoneNumber (which is deliberately lenient because it feeds a shell
+// token, not a dialable identifier) — this number goes straight into
+// whatsapp://send?phone=<number>, so a bare national number with no country
+// code must be refused rather than silently dialed as if it had one. This does
+// NOT catch a country code that was dropped but left a plausible-length number
+// behind (that is a semantic error, not a shape error); it only rejects
+// strings that are not E.164-shaped at all.
+const E164_RE = /^\+[1-9]\d{7,14}$/;
+
 function sanitizeNumber(raw) {
   const cleaned = String(raw || '').replace(/[^\d+]/g, '');
-  if (!/^\+?\d{3,15}$/.test(cleaned)) return null;
-  return cleaned;
+  return E164_RE.test(cleaned) ? cleaned : null;
 }
+
+const E164_SHAPE_HINT = 'E.164 form: a "+", then digits only, starting with a non-zero digit, ' +
+  '8-15 digits total (e.g. +15551234567).';
 
 // Collapse whitespace and drop control characters, then cap length. The text is
 // typed through SendInput as Unicode, so there is no shell to escape for — but a
@@ -139,8 +151,16 @@ function resolveRecipient(to) {
   const wanted = String(to || '').trim();
   if (!wanted) return { error: 'Who should I message? Give a contact name or a phone number.' };
 
-  const direct = sanitizeNumber(wanted);
-  if (direct && /\d{3,}/.test(wanted.replace(/[^\d]/g, ''))) return { number: direct };
+  // A string with a '+' or 3+ digits was meant as a phone number, not a
+  // contact name — resolve it as a number (strictly) rather than falling
+  // through to the name lookup below, which would misreport a malformed
+  // number as "not in my contact list" and hide the actual problem (shape).
+  const digitCount = wanted.replace(/[^\d]/g, '').length;
+  if (wanted.includes('+') || digitCount >= 3) {
+    const direct = sanitizeNumber(wanted);
+    if (direct) return { number: direct };
+    return { error: '"' + wanted + '" is not a phone number I can use. Give it in ' + E164_SHAPE_HINT };
+  }
 
   const contacts = loadContacts();
   const names = Object.keys(contacts);
@@ -186,7 +206,17 @@ async function whatsapp_send({ to, text, send }) {
   const recipient = resolveRecipient(to);
   if (recipient.error) return fail(recipient.error);
 
-  const message = sanitizeMessage(text);
+  // F6: a list-shaped body ("Groceries: milk, eggs, bread") is reformatted
+  // before it reaches sanitizeMessage. itemJoiner is ', ' rather than the
+  // default '\n' — sanitizeMessage's whitespace collapse (a newline mid-type
+  // submits WhatsApp's composer early, see its comment below) would flatten
+  // real line breaks back into unpunctuated spaces, so a newline-joined list
+  // would lose its structure the moment it reached that step. A comma-joined
+  // rendering survives the collapse untouched and still turns an already-
+  // bulleted/newline list ("- milk\n- eggs\n- bread", the shape that produced
+  // the wall-of-text incident) into one clean, readable line instead of the
+  // dash-soup that collapse alone leaves behind.
+  const message = sanitizeMessage(formatOutgoingMessage(text, { itemJoiner: ', ' }));
   if (!message) return fail('What should the message say?');
 
   const label = recipient.name ? recipient.name + ' (' + recipient.number + ')' : recipient.number;
@@ -338,16 +368,25 @@ async function whatsapp_contacts() {
 // conversation — the operator hit this trying to message someone who simply
 // wasn't in the file. Writes the documented object shape, so this can never be
 // the thing that puts an array back on disk.
+// 2026-08-12: dispatched on intent as {number: "", name: ""} before the
+// operator had actually given a name or number — the tool went ahead and
+// failed opaquely several steps in (an unwritable-vault message, or a
+// generic "not a phone number" for an empty string) instead of naming what
+// was actually missing. Validate both arguments before touching the vault at
+// all: the message here is read by the MODEL, not spoken to the operator, so
+// it says exactly which field to ask for rather than a human-friendly excuse.
 async function whatsapp_contact_save({ name, number }) {
   const label = String(name || '').trim();
-  if (!label) return fail('What name should I save them under?');
+  if (!label) return fail('Ask the operator for the missing name before calling this.');
+  const rawNumber = String(number == null ? '' : number).trim();
+  if (!rawNumber) return fail('Ask the operator for the missing number before calling this.');
+
   if (!vaultFs || typeof vaultFs.writeJSON !== 'function') {
     return fail('The vault is not writable, so I cannot save contacts right now.');
   }
   const e164 = sanitizeNumber(number);
   if (!e164) {
-    return fail('"' + String(number || '') + '" is not a phone number I can use. ' +
-      'Give it in full international form, like +15551234567.');
+    return fail('"' + String(number || '') + '" is not a phone number I can use. Give it in ' + E164_SHAPE_HINT);
   }
 
   const contacts = loadContacts();
