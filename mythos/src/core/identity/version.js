@@ -16,15 +16,27 @@ var fs = require('fs');
 var path = require('path');
 var { execFileSync } = require('child_process');
 
+// The APP's package.json (repo root, and the asar root in a packaged build) —
+// four levels up from src/core/identity, which is the same depth in both
+// layouts. mythos/package.json is the fallback, not the preference: it carries
+// its own independent version (0.1.0 for months) while the version the operator
+// installs, the installer names, and the auto-updater compares is the root one.
+// Reading the inner file made the running app report v0.1.0 on /api/status
+// while it was a 0.1.6 install — found 2026-08-12 wiring the HUD badge.
+var APP_PKG_PATH = path.join(__dirname, '..', '..', '..', '..', 'package.json');
 var PKG_PATH = path.join(__dirname, '..', '..', '..', 'package.json');
 
-function readPackageVersion() {
+function readVersionFrom(file) {
   try {
-    var pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
-    return pkg.version || 'unknown';
+    var pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return pkg.version || null;
   } catch (_) {
-    return 'unknown';
+    return null;
   }
+}
+
+function readPackageVersion() {
+  return readVersionFrom(APP_PKG_PATH) || readVersionFrom(PKG_PATH) || 'unknown';
 }
 
 // Run a git command, return trimmed stdout or null on any failure.
@@ -74,6 +86,16 @@ function getVersion() {
   cached = {
     version: readPackageVersion(),
     gitRef: captureGitRef(),
+    // Set by electron/main.js from the asar's mtime; '' in dev and headless,
+    // where gitRef above is already the sharper answer. This is what tells two
+    // builds of the same version apart — the exact confusion that cost the
+    // operator an evening on 2026-08-12, debugging an install a day older than
+    // the fixes it was believed to carry.
+    buildTime: process.env.MYTHOS_BUILD_TIME || '',
+    // Whether this process is running out of a packaged install at all. Derived
+    // from the build stamp rather than guessed, so a dev checkout never claims
+    // to be a build.
+    packaged: !!process.env.MYTHOS_BUILD_TIME,
     bootDate: new Date().toISOString(),
     recentChanges: captureRecentChanges(15),
   };

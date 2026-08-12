@@ -1092,9 +1092,20 @@ function createServer(deps) {
       // BUG-111: surface real Gmail triage poll count so quota burn is visible
       // instead of inferred after the fact — null when the sensor never ran
       // (unconfigured, or GMAIL_TRIAGE_MODE:'off').
+      // Build identity, for the HUD's version badge. recentChanges is
+      // deliberately NOT included — it is a 15-commit git log, this endpoint is
+      // polled, and the badge needs four short fields.
+      let build = null;
+      try {
+        const v = version.getVersion();
+        build = { version: v.version, gitRef: v.gitRef, buildTime: v.buildTime, packaged: v.packaged };
+      } catch (err) {
+        logger.warn('status.version-read-failed', { error: err.message });
+      }
       res.json(Object.assign({}, status, {
         voiceLatency: voiceLatencyTracker.stats(),
         gmailTriagePollCount: gmailPollCountGetter ? gmailPollCountGetter() : null,
+        build,
       }));
     } catch (err) {
       res.status(500).json({ error: err.message });

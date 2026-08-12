@@ -115,6 +115,20 @@ function toRealPathIfPackaged(p) {
   return p.split(`${path.sep}app.asar${path.sep}`).join(`${path.sep}app.asar.unpacked${path.sep}`);
 }
 
+// When was this build made? See MYTHOS_BUILD_TIME at the fork below for why the
+// version string cannot answer that. The asar's own mtime is the one build
+// identifier every packaged install carries without a build-time codegen step,
+// and process.resourcesPath is only meaningful when packaged. Best-effort: a
+// missing/unreadable archive returns '' and the badge falls back to the version.
+function buildTimeISO() {
+  if (!app.isPackaged) return '';
+  try {
+    return fs.statSync(path.join(process.resourcesPath, 'app.asar')).mtime.toISOString();
+  } catch (_) {
+    return '';
+  }
+}
+
 // ---- resolved paths / ports (never hardcoded) ---------------------------------
 // The Electron app ships as <repo>/electron/, so the server entry is two levels
 // up under mythos/. path.resolve keeps this correct regardless of where the
@@ -645,6 +659,15 @@ function startChild() {
       // See mythos/src/core/setup/model-paths.js.
       MYTHOS_MODELS_DIR: path.join(app.getPath('userData'), 'models'),
       MYTHOS_TOOLS_DIR: path.join(app.getPath('userData'), 'tools'),
+      // WHICH BUILD IS THIS. A packaged install ships no .git, so
+      // identity/version.js can only report the package.json version — and the
+      // operator spent 2026-08-12 with four different 0.1.4 builds, an install
+      // a day older than the fixes it was supposed to contain, and no way to
+      // tell from inside the app. The version alone cannot answer it; a build
+      // timestamp can. Derived, never hardcoded: the mtime of the archive this
+      // code is running out of. Empty string in dev (no asar), where
+      // version.js's git path already gives a better answer.
+      MYTHOS_BUILD_TIME: buildTimeISO(),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });

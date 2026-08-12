@@ -26,6 +26,7 @@ import { mountPinLockScreen } from './pin/pin-lock-screen.js';
 import { mountAuthGate } from './auth/auth-gate.js';
 import { mountStatusBanner } from './status-banner.js';
 import { mountUpdateBanner } from './update-banner.js';
+import { mountVersionBadge } from './version-badge.js';
 import { mountSetupScreen } from './setup/setup-screen.js';
 import { mountComponentBanner } from './setup/component-banner.js';
 import { isGateClosed } from './pin/pin-gate.js';
@@ -55,6 +56,7 @@ mountStatusBanner(document.getElementById('status-banner-root'));
 // Says out loud when a new version has downloaded, with a button that installs
 // it. No-ops in a browser tab (no window.mythos, therefore no updater).
 mountUpdateBanner(document.getElementById('status-banner-root'));
+mountVersionBadge(document.getElementById('version-badge'));
 
 // First-run setup — the answer to "this machine is a half-broken twin of the
 // other one". Asks GET /api/setup/status and paints ONLY when a REQUIRED gap

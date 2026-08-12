@@ -1,0 +1,28 @@
+/* version-badge.css — the build identity label (js/version-badge.js).
+
+   Bottom-left corner, deliberately dim: it must be findable when the question
+   "which build is this?" comes up, and invisible the rest of the time. No
+   pointer events at all — it is a label, and a corner element that swallowed
+   clicks would sit on top of the HUD canvas for no reason. */
+
+#version-badge {
+  position: fixed;
+  bottom: 6px;
+  left: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim, rgba(160, 180, 200, 0.55));
+  background: rgba(5, 8, 15, 0.55);
+  /* Below the status strip (300), the PIN screen (400) and the token gate
+     (410): every one of those is more important than knowing the version. */
+  z-index: 120;
+  pointer-events: none;
+  user-select: text;
+}
+
+#version-badge:hover {
+  color: var(--text-primary, rgba(210, 225, 240, 0.9));
+}

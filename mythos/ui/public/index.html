@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="/css/setup.css" />
   <link rel="stylesheet" href="/css/status-banner.css" />
   <link rel="stylesheet" href="/css/update-banner.css" />
+  <link rel="stylesheet" href="/css/version-badge.css" />
   <link rel="stylesheet" href="/css/mic-settings.css" />
   <link rel="stylesheet" href="/css/voice-picker.css" />
   <!-- NOVA view styles — CV byte-identical; the copied views depend on these class names -->
@@ -59,6 +60,9 @@
        reconnecting or an /api call came back 401, both of which were
        previously silent. -->
   <div id="status-banner-root"></div>
+  <!-- Which build is this. Stays empty until /api/status answers; see
+       js/version-badge.js for why the version number alone is not enough. -->
+  <div id="version-badge" hidden></div>
   <!-- Compose bar — multimodal input surface (text + voice). Replaces the bare mic ring. -->
   <div id="compose-bar" role="search" aria-label="MYTHOS input"></div>
   <!-- Legacy mic indicator — kept hidden for backward compat; compose bar renders its own voice button -->
