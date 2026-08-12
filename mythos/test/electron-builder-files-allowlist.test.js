@@ -136,7 +136,7 @@ test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', () 
 // these files are absent on a fresh clone too, and the setup scripts exist
 // precisely to fetch them per machine.
 
-test('build.files excludes gesture_recognizer.task — the one committed model, licence UNVERIFIED', () => {
+test('build.files ships gesture_recognizer.task — licence hold lifted by explicit repo-owner decision', () => {
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
   const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'gesture_recognizer.task');
@@ -144,15 +144,29 @@ test('build.files excludes gesture_recognizer.task — the one committed model, 
   // Step 6.6's licence audit (2026-08-04) established that this 8.4MB MediaPipe
   // weight file is the ONLY third-party model binary actually tracked in git —
   // every other model is gitignored and fetched per-machine — and that its
-  // licence is NOT established. MediaPipe's *code* is Apache-2.0, but the
-  // model artifact's terms are separate and were not confirmed; the developer
+  // licence was NOT established. MediaPipe's *code* is Apache-2.0, but the
+  // model artifact's terms are separate and were never confirmed; the developer
   // docs page covers page content (CC BY 4.0) and code samples (Apache-2.0),
   // neither of which is the binary. That is the same code-licence-vs-weights
-  // trap that openWakeWord's CC BY-NC-SA weights set. Until the model card
-  // resolves it, it stays out of a shippable installer. THIRD_PARTY_NOTICES.md
-  // documents @mediapipe/tasks-vision but not this file.
-  assert.equal(isIncluded(filterFn, target), false,
-    'gesture_recognizer.task must stay out of the installer while its model licence is unverified');
+  // trap that openWakeWord's CC BY-NC-SA weights set, and it remains true and
+  // unresolved today. The blanket "!mythos/ui/public/models{,/**/*}" exclusion
+  // was the mechanism of that hold, keeping this one file out alongside the
+  // gitignored per-machine weights it shares a directory with.
+  //
+  // On 2026-08-12 the repo owner was told plainly that shipping this file
+  // means packaging a third-party binary whose licence is on record as
+  // unverified, and decided explicitly to ship it anyway so webcam gesture
+  // recognition works in the installed build (camera.js loads it from
+  // /models/gesture_recognizer.task; without it the MediaPipe WASM runtime
+  // packages fine but the model itself 404s). package.json now carries a
+  // later, more specific positive pattern
+  // ("mythos/ui/public/models/gesture_recognizer.task") that re-includes just
+  // this file — electron-builder's last-match-wins semantics mean the
+  // blanket exclusion still keeps every other model (silero, wakeword, piper,
+  // kokoro) out. THIRD_PARTY_NOTICES.md now documents this file's licence
+  // status alongside @mediapipe/tasks-vision.
+  assert.equal(isIncluded(filterFn, target), true,
+    'gesture_recognizer.task must ship in the installer per the 2026-08-12 repo-owner decision to accept the unverified-licence risk');
 });
 
 test('build.files excludes the Silero VAD weights (gitignored, but present on disk)', (t) => {

@@ -61,6 +61,30 @@ Licensed under the Apache License, Version 2.0
 - Vendored via npm, served locally at `/vendor/mediapipe` — never loaded from
   a CDN. (Predates this file; documented here for completeness.)
 
+### gesture_recognizer.task (bundled model weight — licence UNVERIFIED)
+
+- **Project:** https://github.com/google-ai-edge/mediapipe (MediaPipe Gesture
+  Recognizer task)
+- **Artifact:** `mythos/ui/public/models/gesture_recognizer.task`, an 8.4MB
+  MediaPipe gesture-recognition model bundle loaded by
+  `ui/public/js/vision/camera.js` at runtime. It is the only third-party model
+  binary committed to this repo — every other model (silero, wakeword, piper,
+  kokoro, whisper) is gitignored and fetched per-machine by a setup script.
+- **License: UNVERIFIED as of 2026-08-12.** The library code above it is
+  Apache-2.0, but that licence covers the *code*, not this *model artifact* —
+  the same code-licence-vs-weights distinction that applies to openWakeWord's
+  CC BY-NC-SA weights elsewhere in this file. MediaPipe's developer docs page
+  covers page content (CC BY 4.0) and code samples (Apache-2.0), neither of
+  which is the binary itself, and no separate model-card terms for this file
+  have been confirmed.
+- A 2026-08-04 licence audit (Step 6.6) found this and excluded the file from
+  the installer as a licensing hold. On 2026-08-12 the repo owner made an
+  explicit decision to ship it anyway, accepting the unverified-licence risk
+  so webcam gesture recognition works in the installed build; the exclusion
+  was removed by a later, more specific `package.json` `build.files` pattern.
+  This entry records that the licence question itself remains open — the
+  decision was to ship despite it, not to resolve it.
+
 ## Kokoro-82M (offline TTS — providers/kokoro-tts.js)
 
 - **Project:** https://github.com/hexgrad/kokoro (weights/model card:

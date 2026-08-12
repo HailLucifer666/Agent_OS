@@ -39,6 +39,7 @@
       "!mythos/.env",
       "!mythos/services/edge-tts-server.py",
       "!mythos/ui/public/models{,/**/*}",
+      "mythos/ui/public/models/gesture_recognizer.task",
       "!mythos/models{,/**/*}",
       "!**/.cache{,/**/*}",
       "!mythos/test{,/**/*}",
