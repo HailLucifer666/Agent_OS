@@ -116,7 +116,14 @@ function baseDeps(bus, overrides) {
   return merged;
 }
 
-function waitFor(fn, timeoutMs = 3000) {
+// 15s, not 3s. This polls every 10ms and resolves the instant the condition
+// holds, so the ceiling costs nothing on the happy path — it only bounds the
+// FAILURE case. At 3s it blocked a commit once and then passed clean on a
+// quiet re-run: the suite starts a real server and a real WS here, and under
+// full-suite parallelism that boot does not reliably finish inside 3s. A
+// deadline sized for an idle machine turns load into a fake test failure,
+// which is worse than useless — it trains you to re-run instead of read.
+function waitFor(fn, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     (function check() {
