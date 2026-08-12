@@ -211,11 +211,20 @@ function adoptSiblingVault({ dest, siblingDirs = [], markerPath, log = () => {} 
 // symptom the operator actually sees. config.json (non-secret settings) is
 // orphaned by exactly the same rename.
 //
-// SAFE TO COPY, and this is the part worth stating: keys.json is encrypted with
-// safeStorage, i.e. DPAPI on Windows. DPAPI is scoped to the WINDOWS USER, not
-// to a directory or an application, so a file copied between two userData
-// directories of the same user still decrypts. Nothing is re-encrypted here and
-// no plaintext is ever produced by this module.
+// COPYING IS NOT ENOUGH, and the original version of this comment said it was:
+// "keys.json is encrypted with safeStorage, i.e. DPAPI on Windows; DPAPI is
+// scoped to the WINDOWS USER, so a file copied between two userData directories
+// of the same user still decrypts." True of raw DPAPI, false of Electron.
+// Chromium's OSCrypt encrypts values with a per-PROFILE AES-256-GCM key held in
+// that profile's `Local State` (os_crypt.encrypted_key, itself DPAPI-wrapped),
+// so ciphertext does NOT move between userData directories. Measured 2026-08-13:
+// the adopted %APPDATA%\MYTHOS\keys.json was byte-identical to its source and
+// every key logged `safeStorage: failed to decrypt` on every boot — the wizard
+// kept asking and STT stayed dead.
+//
+// This module is still copy-only: nothing is re-encrypted here and no plaintext
+// is ever produced by it. The re-encryption step lives in
+// ./keystore-recrypt.js, which main.js runs immediately after this adoption.
 //
 // Deliberately NOT the same marker as the vault: a fresh install writes the
 // vault markers immediately, and sharing one would suppress this forever.

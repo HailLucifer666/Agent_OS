@@ -23,6 +23,7 @@ const child_process = require('node:child_process');
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
 const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = require('./vault-migration');
+const { recryptForeignStore } = require('./keystore-recrypt');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
 // ---- ONE app identity -----------------------------------------------------------
@@ -660,6 +661,34 @@ function startChild() {
     siblingUserDataNames: ['agent-os', 'Electron'],
     log,
   });
+
+  // ...and the adoption ALONE is not enough (operator, 2026-08-13). keys.json
+  // was copied across on 2026-08-12 and the wizard still asked for all 9 keys,
+  // because safeStorage's ciphertext is per-PROFILE, not per-Windows-user:
+  // Chromium's OSCrypt key lives in each profile's `Local State`. So the copy
+  // could only ever deliver blobs THIS profile cannot decrypt — measured as
+  // `safeStorage: failed to decrypt "<name>"` for every key, every boot, which
+  // is also why Groq STT had no key and health reported stt-failed.
+  // recryptForeignStore re-encrypts them under this profile's key, using the
+  // source profile's Local State key (read-only) to recover the plaintext. It
+  // skips anything that already decrypts, so it is safe to run on every boot.
+  // Never fatal: the app already boots with zero keys, so a recovery failure
+  // must land in the log, not in the operator's face.
+  try {
+    const recrypt = recryptForeignStore({
+      userDataDir: app.getPath('userData'),
+      siblingProfileDirs: ['agent-os', 'Electron']
+        .map((name) => path.join(path.dirname(app.getPath('userData')), name)),
+      safeStorage,
+      log,
+    });
+    if (recrypt.recovered.length || recrypt.failed.length) {
+      log(`keystore-recrypt: ${recrypt.recovered.length} recovered, ${recrypt.failed.length} unrecoverable, `
+        + `${recrypt.skipped.length} already usable`);
+    }
+  } catch (err) {
+    log('keystore-recrypt: recovery pass failed (continuing):', err && err.message);
+  }
 
   const vaultRoot = resolveVaultRoot({
     explicitEnv: process.env.MYTHOS_VAULT_ROOT,
