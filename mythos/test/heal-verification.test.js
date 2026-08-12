@@ -120,6 +120,73 @@ describe('heal-verification (Task C2) — a heal must hold before it is reported
     healer.stop();
   });
 
+  it('reports heal-failed for a recurrence at exactly cooldownMs (review fix: boundary must not fall through to a fresh apply)', async function() {
+    // Regression for the reviewed defect: VERIFIED_PLAYBOOK's cooldownMs and
+    // verifyMs are both 60000, deliberately (mirrors build-engine-reprobe).
+    // A recurrence landing at exactly cooldownMs used to miss the
+    // `ts - lastFired < cooldownMs` cooldown branch entirely (60000 < 60000
+    // is false), fall into the "brand new heal" branch, and silently
+    // overwrite the still-pending, still-failed verification with no
+    // heal-failed ever emitted. Recurrence must now be caught regardless of
+    // where it lands relative to cooldownMs.
+    var bus = fakeBus();
+    var memory = fakeMemory();
+    var tick = 3000000;
+    var healer = createHealer({
+      bus: bus, memory: memory, playbooks: [VERIFIED_PLAYBOOK],
+      getCortex: fakeCortex, getGoals: function() { return null; },
+      now: function() { return tick; }
+    });
+    healer.start();
+
+    bus.emit('health.diagnosed', { kind: 'test-anomaly', target: null });
+    await sleep(10);
+    assert.equal(healedEvents(bus)[0].payload.outcome, 'verifying');
+
+    tick += 60000; // exactly cooldownMs / verifyMs after the first fire
+    bus.emit('health.diagnosed', { kind: 'test-anomaly', target: null });
+    await sleep(10);
+
+    var healed = healedEvents(bus);
+    assert.equal(healed.length, 2, 'the recurrence must produce its own health.healed event, not silently replace the pending one');
+    assert.equal(healed[1].payload.outcome, 'heal-failed', 'a recurrence at exactly cooldownMs must still be caught as a recurrence');
+
+    var writes = memory._auditWrites();
+    assert.equal(writes[writes.length - 1].outcome, 'heal-failed');
+
+    healer.stop();
+  });
+
+  it('reports heal-failed for a recurrence at cooldownMs + 1 (review fix: past the boundary too)', async function() {
+    var bus = fakeBus();
+    var memory = fakeMemory();
+    var tick = 4000000;
+    var healer = createHealer({
+      bus: bus, memory: memory, playbooks: [VERIFIED_PLAYBOOK],
+      getCortex: fakeCortex, getGoals: function() { return null; },
+      now: function() { return tick; }
+    });
+    healer.start();
+
+    bus.emit('health.diagnosed', { kind: 'test-anomaly', target: null });
+    await sleep(10);
+    assert.equal(healedEvents(bus)[0].payload.outcome, 'verifying');
+
+    tick += 60001; // one past cooldownMs / verifyMs — fully outside cooldown
+    bus.emit('health.diagnosed', { kind: 'test-anomaly', target: null });
+    await sleep(10);
+
+    var healed = healedEvents(bus);
+    assert.equal(healed.length, 2, 'the recurrence must produce its own health.healed event, not silently replace the pending one');
+    assert.equal(healed[1].payload.outcome, 'heal-failed', 'a recurrence past cooldownMs must still be caught as a recurrence, not treated as a fresh independent heal');
+    assert.notEqual(healed[1].payload.outcome, 'applied');
+
+    var writes = memory._auditWrites();
+    assert.equal(writes[writes.length - 1].outcome, 'heal-failed');
+
+    healer.stop();
+  });
+
   it('a genuinely successful heal is still reported healed once the verification window passes with no recurrence', async function() {
     var bus = fakeBus();
     var memory = fakeMemory();

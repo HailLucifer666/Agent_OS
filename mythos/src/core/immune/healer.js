@@ -19,13 +19,29 @@
 // re-application for.
 const BUILD_ENGINE_VERIFY_MS = 60000;
 
+// Task C2 review follow-up: probe-provider (used by rotate-nim-key below) is
+// structurally the same defect as reprobe-build-engine — registry.refresh()
+// returns { ok: true, result: { probedAt } } unconditionally; probedAt is a
+// timestamp, not an online/down verdict, so ok:true is no more proof nim
+// actually came back than reprobe-build-engine's ok:true was proof Hermes
+// did. There is no logged incident giving an observed recurrence window for
+// this one (unlike build-engine-reprobe's four-repeats-in-a-minute), so this
+// reuses the playbook's own cooldownMs as the verification window — same
+// reasoning as build-engine-reprobe, just without evidence to justify a
+// different number.
+const PROVIDER_ROTATE_VERIFY_MS = 60000;
+
 const SEED_PLAYBOOKS = [
   {
     id: 'rotate-nim-key',
     title: 'NVIDIA provider key rotation',
     when: { kind: 'provider-down', target: { eq: 'nim' } },
     then: [{ do: 'probe-provider', args: { provider: 'nim', rotateKey: true } }],
-    cooldownMs: 60000
+    cooldownMs: 60000,
+    // Task C2: probe-provider's ok:true is not proof nim is back — see the
+    // comment above. Hold the claim open for verifyMs, same mechanism as
+    // build-engine-reprobe.
+    verifyMs: PROVIDER_ROTATE_VERIFY_MS
   },
   {
     id: 'stall-restart',
@@ -337,17 +353,25 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
   // can advance the verification window without a real sleep.
   const nowFn = typeof now === 'function' ? now : Date.now;
   // Task C2: playbook.id -> { verifyAt, appliedAt, kind, target, detail, title, actions }.
-  // A heal that has been applied but not yet confirmed lives here until either
-  // checkVerifications() finds no recurrence past verifyAt (-> 'applied'), or
-  // onDiagnosed sees the same playbook's cooldown re-tripped while an entry is
-  // still here, which IS the recurrence signal (-> 'heal-failed').
+  // A heal that has been applied but not yet confirmed lives here until
+  // either checkVerifications() finds no recurrence past verifyAt
+  // (-> 'applied'), or onDiagnosed sees ANY further diagnosis matching this
+  // playbook while the entry is still here — that presence, not cooldown
+  // arithmetic, IS the recurrence signal (-> 'heal-failed').
   const pendingVerifications = {};
   var restoreTimer = null;
 
   // Task C2: resolve any pending verification whose window has closed with no
-  // recurrence. Called from the 60s restore tick and exposed via _internal so
-  // tests can resolve it on demand against an injected clock instead of a
-  // real wait.
+  // recurrence. Exposed via _internal so tests can resolve it on demand
+  // against an injected clock instead of a real wait — calling it directly
+  // is exact. In production it only runs off the 60s restore tick below,
+  // which is NOT aligned to any individual verifyAt, so a genuine heal can
+  // sit confirmed-but-unannounced for up to one full tick after its window
+  // closes (worst case ~2x verifyMs elapsed before 'applied' is emitted).
+  // It can never resolve early — a real recurrence is still caught the
+  // instant it arrives, via onDiagnosed's pendingVerifications check above,
+  // not via this tick — so the slop only delays good news, never permits a
+  // false one.
   function checkVerifications() {
     var ts = nowFn();
     Object.keys(pendingVerifications).forEach(function(playbookId) {
@@ -399,38 +423,46 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
     } else {
       playbookId = playbook.id;
       const ts = nowFn();
-      const lastFired = lastFiredAt[playbook.id] || 0;
-      if (playbook.cooldownMs > 0 && ts - lastFired < playbook.cooldownMs) {
-        // Task C2: this diagnosis landing on cooldown WHILE a heal for this
-        // exact playbook is still pending verification is the recurrence
-        // itself — the anomaly the healer just claimed to fix is still
-        // firing. Correct the earlier claim now rather than waiting out the
-        // rest of the window.
-        if (pendingVerifications[playbook.id]) {
-          outcome = 'heal-failed';
-          detail = { reason: 'anomaly-recurred-during-verification', recurredAfterMs: ts - pendingVerifications[playbook.id].appliedAt };
-          delete pendingVerifications[playbook.id];
-        } else {
+      // Task C2 fix (review): recurrence MUST be detected directly off
+      // pendingVerifications, never inferred from cooldown arithmetic.
+      // verifyMs and cooldownMs happen to be equal for build-engine-reprobe,
+      // which made "recurs while on cooldown" look like a valid stand-in for
+      // "recurs while a heal is unverified" — but a recurrence landing at or
+      // after exactly cooldownMs falls out of the cooldown branch, was
+      // treated as a brand-new independent heal attempt, and silently
+      // overwrote the still-pending (and in fact failed) verification with
+      // no heal-failed ever emitted for it. Checking pendingVerifications
+      // first, unconditionally, makes "a pending verification plus any
+      // further diagnosis of that playbook's anomaly IS the recurrence" the
+      // explicit invariant — true no matter how cooldownMs and verifyMs
+      // relate to each other.
+      if (pendingVerifications[playbook.id]) {
+        outcome = 'heal-failed';
+        detail = { reason: 'anomaly-recurred-during-verification', recurredAfterMs: ts - pendingVerifications[playbook.id].appliedAt };
+        delete pendingVerifications[playbook.id];
+      } else {
+        const lastFired = lastFiredAt[playbook.id] || 0;
+        if (playbook.cooldownMs > 0 && ts - lastFired < playbook.cooldownMs) {
           outcome = 'cooldown';
           detail = { remainingMs: playbook.cooldownMs - (ts - lastFired) };
-        }
-      } else {
-        lastFiredAt[playbook.id] = ts;
-        const applied = await applyPlaybook(playbook, diagnosis);
-        if (applied.outcome === 'applied' && playbook.verifyMs) {
-          // Task C2: an action reporting ok:true is not proof the anomaly is
-          // gone (see reprobe-build-engine's own comment) — hold the claim
-          // open until verifyMs passes with no recurrence.
-          pendingVerifications[playbook.id] = {
-            appliedAt: ts, verifyAt: ts + playbook.verifyMs,
-            kind: diagnosis.kind, target: diagnosis.target, detail: applied.detail,
-            title: playbook.title || null, actions: playbook.then.map(function(s) { return s.do; })
-          };
-          outcome = 'verifying';
-          detail = applied.detail;
         } else {
-          outcome = applied.outcome;
-          detail = applied.detail;
+          lastFiredAt[playbook.id] = ts;
+          const applied = await applyPlaybook(playbook, diagnosis);
+          if (applied.outcome === 'applied' && playbook.verifyMs) {
+            // Task C2: an action reporting ok:true is not proof the anomaly
+            // is gone (see reprobe-build-engine's own comment) — hold the
+            // claim open until verifyMs passes with no recurrence.
+            pendingVerifications[playbook.id] = {
+              appliedAt: ts, verifyAt: ts + playbook.verifyMs,
+              kind: diagnosis.kind, target: diagnosis.target, detail: applied.detail,
+              title: playbook.title || null, actions: playbook.then.map(function(s) { return s.do; })
+            };
+            outcome = 'verifying';
+            detail = applied.detail;
+          } else {
+            outcome = applied.outcome;
+            detail = applied.detail;
+          }
         }
       }
     }
