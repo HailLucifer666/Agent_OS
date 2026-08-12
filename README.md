@@ -9,7 +9,7 @@
 <br/>
 
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-3839%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
+[![Tests](https://img.shields.io/badge/tests-3837%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9?style=for-the-badge)](ROADMAP.md)
 [![Effectors](https://img.shields.io/badge/effectors-167%20tools-eab308?style=for-the-badge)](#-167-tool-effectors)
 [![Deploy](https://img.shields.io/badge/deploy-render-4fc08d?style=for-the-badge&logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
