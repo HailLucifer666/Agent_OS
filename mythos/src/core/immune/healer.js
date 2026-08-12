@@ -5,6 +5,20 @@
 // producers (probes.js, watchdog.js) are allowed — expected — to re-emit the same
 // anomaly on every poll; cooldown is what keeps that from becoming a heal storm.
 
+// Task C2 (2026-08-12 live-session finding): reprobe-build-engine's own comment
+// says it is "Always ok:true — the action's job is to re-probe and report, not
+// to guarantee Hermes comes back online". That is exactly the effector-reports-
+// success-without-an-oracle defect dispatch-action.js's evidence contract
+// already rejects everywhere else — 'healed: build-engine-failed' was
+// announced at 01:05:05 and 02:24:22 while the identical anomaly kept firing
+// for another minute (four recurrences each) because the real cause
+// (a missing OPENAI_API_KEY) was nothing a reprobe could fix. 60000ms matches
+// that observed recurrence window (all four repeats landed inside the same
+// minute) and is deliberately equal to this playbook's own cooldownMs below,
+// so a verification never outlives the window the cooldown already blocks
+// re-application for.
+const BUILD_ENGINE_VERIFY_MS = 60000;
+
 const SEED_PLAYBOOKS = [
   {
     id: 'rotate-nim-key',
@@ -72,7 +86,11 @@ const SEED_PLAYBOOKS = [
     title: 'build-engine reprobe',
     when: { kind: 'build-engine-failed' },
     then: [{ do: 'reprobe-build-engine' }],
-    cooldownMs: 60000
+    cooldownMs: 60000,
+    // Task C2: reprobe-build-engine cannot prove the anomaly is actually
+    // gone (see comment above) — hold the claim open for verifyMs before
+    // reporting 'applied'. See createHealer()'s onDiagnosed/checkVerifications.
+    verifyMs: BUILD_ENGINE_VERIFY_MS
   },
   // Learning loop closure: reflection.js:215 emits 'recurring-failure' when
   // reflectOnActions spots a repeated failure mode in the action trace. Before
@@ -309,13 +327,45 @@ function buildActions({ getCortex, getGoals, memory }) {
 // Healer
 // ---------------------------------------------------------------------------
 
-function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, playbooks }) {
+function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, playbooks, now }) {
   if (!bus) throw new Error('createHealer requires bus');
 
   const ACTIONS = buildActions({ getCortex: getCortex, getGoals: getGoals, memory: memory });
   const activePlaybooks = playbooks || SEED_PLAYBOOKS;
   const lastFiredAt = {}; // playbook.id -> ts
+  // Task C2: injected clock (mirrors planner/daily.js's nowFn seam) so tests
+  // can advance the verification window without a real sleep.
+  const nowFn = typeof now === 'function' ? now : Date.now;
+  // Task C2: playbook.id -> { verifyAt, appliedAt, kind, target, detail, title, actions }.
+  // A heal that has been applied but not yet confirmed lives here until either
+  // checkVerifications() finds no recurrence past verifyAt (-> 'applied'), or
+  // onDiagnosed sees the same playbook's cooldown re-tripped while an entry is
+  // still here, which IS the recurrence signal (-> 'heal-failed').
+  const pendingVerifications = {};
   var restoreTimer = null;
+
+  // Task C2: resolve any pending verification whose window has closed with no
+  // recurrence. Called from the 60s restore tick and exposed via _internal so
+  // tests can resolve it on demand against an injected clock instead of a
+  // real wait.
+  function checkVerifications() {
+    var ts = nowFn();
+    Object.keys(pendingVerifications).forEach(function(playbookId) {
+      var pending = pendingVerifications[playbookId];
+      if (pending.verifyAt > ts) return;
+      delete pendingVerifications[playbookId];
+      bus.emit('health.healed', {
+        playbookId: playbookId, kind: pending.kind, target: pending.target, outcome: 'applied', detail: pending.detail,
+        title: pending.title, actions: pending.actions
+      });
+      if (memory && memory.audit && typeof memory.audit.write === 'function') {
+        memory.audit.write({
+          actor: 'healer', decision: 'heal', tool: null, playbookId: playbookId,
+          kind: pending.kind, target: pending.target, outcome: 'applied', detail: pending.detail
+        });
+      }
+    });
+  }
 
   async function applyPlaybook(playbook, diagnosis) {
     let outcome = 'applied';
@@ -348,16 +398,40 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
       playbookId = null;
     } else {
       playbookId = playbook.id;
-      const now = Date.now();
+      const ts = nowFn();
       const lastFired = lastFiredAt[playbook.id] || 0;
-      if (playbook.cooldownMs > 0 && now - lastFired < playbook.cooldownMs) {
-        outcome = 'cooldown';
-        detail = { remainingMs: playbook.cooldownMs - (now - lastFired) };
+      if (playbook.cooldownMs > 0 && ts - lastFired < playbook.cooldownMs) {
+        // Task C2: this diagnosis landing on cooldown WHILE a heal for this
+        // exact playbook is still pending verification is the recurrence
+        // itself — the anomaly the healer just claimed to fix is still
+        // firing. Correct the earlier claim now rather than waiting out the
+        // rest of the window.
+        if (pendingVerifications[playbook.id]) {
+          outcome = 'heal-failed';
+          detail = { reason: 'anomaly-recurred-during-verification', recurredAfterMs: ts - pendingVerifications[playbook.id].appliedAt };
+          delete pendingVerifications[playbook.id];
+        } else {
+          outcome = 'cooldown';
+          detail = { remainingMs: playbook.cooldownMs - (ts - lastFired) };
+        }
       } else {
-        lastFiredAt[playbook.id] = now;
+        lastFiredAt[playbook.id] = ts;
         const applied = await applyPlaybook(playbook, diagnosis);
-        outcome = applied.outcome;
-        detail = applied.detail;
+        if (applied.outcome === 'applied' && playbook.verifyMs) {
+          // Task C2: an action reporting ok:true is not proof the anomaly is
+          // gone (see reprobe-build-engine's own comment) — hold the claim
+          // open until verifyMs passes with no recurrence.
+          pendingVerifications[playbook.id] = {
+            appliedAt: ts, verifyAt: ts + playbook.verifyMs,
+            kind: diagnosis.kind, target: diagnosis.target, detail: applied.detail,
+            title: playbook.title || null, actions: playbook.then.map(function(s) { return s.do; })
+          };
+          outcome = 'verifying';
+          detail = applied.detail;
+        } else {
+          outcome = applied.outcome;
+          detail = applied.detail;
+        }
       }
     }
 
@@ -436,6 +510,9 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
           });
         }
       });
+      // Task C2: same TTL-tick pattern, resolving any heal that has held its
+      // verification window with no recurrence.
+      checkVerifications();
     }, 60000);
     if (restoreTimer.unref) restoreTimer.unref();
   }
@@ -447,7 +524,10 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
 
   return {
     start: start, stop: stop,
-    _internal: { ACTIONS: ACTIONS, lastFiredAt: lastFiredAt, applyPlaybook: applyPlaybook }
+    _internal: {
+      ACTIONS: ACTIONS, lastFiredAt: lastFiredAt, applyPlaybook: applyPlaybook,
+      pendingVerifications: pendingVerifications, checkVerifications: checkVerifications
+    }
   };
 }
 

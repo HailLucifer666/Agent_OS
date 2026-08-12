@@ -587,7 +587,13 @@ describe('immune/healer — cooldown + actions', function() {
     }
     assert.equal(healed.length, 1);
     assert.equal(healed[0].payload.playbookId, 'build-engine-reprobe');
-    assert.equal(healed[0].payload.outcome, 'applied');
+    // Task C2: reprobe-build-engine's own ok:true is not proof Hermes is
+    // actually back — it reports ONLINE/OFFLINE, it does not guarantee
+    // ONLINE. The healer now holds this claim open as 'verifying' rather
+    // than announcing 'applied' the instant the probe returns, so a heal
+    // cannot be reported before it has held for verifyMs with no recurrence
+    // (see heal-verification.test.js for the full hold/confirm/fail cycle).
+    assert.equal(healed[0].payload.outcome, 'verifying', 'a reprobe result is held for verification, not announced healed on the spot');
     assert.ok(healed[0].payload.detail && (healed[0].payload.detail.state === 'ONLINE' || healed[0].payload.detail.state === 'OFFLINE'),
       'must report a definite re-probed state, not silence');
 
