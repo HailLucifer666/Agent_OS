@@ -41,7 +41,13 @@ function createJobSensor({ bus, buildRunner }) {
       // BUG-016: include review verdict and issues so announcer can notify the user
       // if a build completed but failed review (as opposed to build execution failure)
       reviewVerdict: job.reviewVerdict || null,
-      reviewIssues: job.reviewIssues || null
+      reviewIssues: job.reviewIssues || null,
+      // C1: include the engine so the announcer can also degrade a build
+      // that came from the fallback engine, not just one the reviewer
+      // rejected — job.engine is stamped by build-runner.js's pump() before
+      // run() ever returns (see completion-status.js for why both signals
+      // matter).
+      engine: job.engine || null
     });
   }
 

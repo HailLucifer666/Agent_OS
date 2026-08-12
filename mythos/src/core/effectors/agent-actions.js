@@ -138,6 +138,7 @@ function extractJsonBlock(raw) {
 }
 
 var riskClassifierLib = require('./risk-classifier');
+var completionStatusLib = require('./completion-status');
 
 function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, buildEngine, webSearch, webFetch, browserAgent, evidenceValidator, bus }) {
   if (!fs || typeof fs.writeText !== 'function' || typeof fs.exists !== 'function') {
@@ -623,6 +624,17 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           if (review.visualDescription) shipMeta.visualReview = review.visualDescription;
         }
 
+        // C1: evidence.pass used to mean only "the gate phases ran", which a
+        // human reads as "the thing works" — those are different facts, and
+        // job -531 shipped exactly that gap (reviewStatus:'failed',
+        // evidence.pass:true). The completion payload folds in BOTH the
+        // review verdict and whether the content actually came from the real
+        // build engine, so nothing downstream can announce this as done.
+        var completion = completionStatusLib.deriveCompletionPayload({
+          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine
+        });
+        shipMeta.status = completion.status;
+
         // P23: Evidence validator — external gate that blocks ship if required
         // phases are missing evidence. Cannot be bypassed by the agent.
         if (evidenceValidator) {
@@ -633,7 +645,11 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           if (!evidence.pass) {
             throw new Error('evidence gate blocked ship: ' + evidence.missing.join('; '));
           }
-          shipMeta.evidence = { pass: true, phases: riskClassifierLib.gatePath(risk) };
+          // C1: the validator only proves the required PHASES ran — it says
+          // nothing about whether review approved the result or whether the
+          // real engine produced it. pass here is the completion payload's,
+          // not the validator's, so a failed review can never read as passed.
+          shipMeta.evidence = { pass: completion.evidence.pass, phases: riskClassifierLib.gatePath(risk) };
         }
 
         // BUG-016 FIX: Only move to 'shipped' when review passed. If review failed,
@@ -798,6 +814,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           patchMeta.reviewStatus = 'approved';
           if (review.visualDescription) patchMeta.visualReview = review.visualDescription;
         }
+        // C1: same rule as executePipelineCard's shipMeta — a failed review,
+        // or content that came from the fallback engine rather than the real
+        // one, must never read as a finished build downstream.
+        patchMeta.status = completionStatusLib.deriveCompletionPayload({
+          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine
+        }).status;
         kanban.patchCard(card.id, patchMeta);
         return { artifact: artifact, review: review, researchStatus: researchStatus };
       }

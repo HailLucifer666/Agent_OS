@@ -12,6 +12,8 @@
 // injected speak() callback (server/index.js's proactiveSpeak). Per-event-key
 // deduplication prevents announcing the same event twice.
 
+var completionStatusLib = require('../effectors/completion-status');
+
 // BUG-123 (AD-5) helpers, at module scope since 2026-08-10 so immune/explainer.js
 // can share them. They were factory-local when only onHealthAnomaly/
 // onHealthDiagnosed below used them; the explainer needed the identical
@@ -101,16 +103,32 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
       artifactName = parts[parts.length - 1] || 'your build';
     }
 
-    // BUG-016: Check if the review failed — if so, announce issues instead of success
-    if (p.reviewVerdict === 'reject' && Array.isArray(p.reviewIssues) && p.reviewIssues.length > 0) {
-      var issueList = p.reviewIssues.slice(0, 3).join('; '); // Limit to first 3 issues
+    // BUG-016 / C1: never announce a build as done when the review rejected
+    // it OR when the content came from the fallback engine rather than the
+    // real one (job -531: reviewStatus:'failed' + evidence.pass:true was
+    // announced as finished — evidence.pass meant "the phases ran", not "it
+    // works"). Both signals go through the same completion rule the ship
+    // path (agent-actions.js) already uses, so the two surfaces cannot drift.
+    var completion = completionStatusLib.deriveCompletionPayload({
+      reviewStatus: p.reviewVerdict === 'reject' ? 'failed' : 'approved',
+      buildEngine: p.engine
+    });
+    if (completion.status === 'needs-work') {
+      var reasonBits = [];
+      if (p.reviewVerdict === 'reject' && Array.isArray(p.reviewIssues) && p.reviewIssues.length > 0) {
+        reasonBits.push('the review found issues: ' + p.reviewIssues.slice(0, 3).join('; ')); // Limit to first 3 issues
+      }
+      if (p.engine === 'brain-fallback' || p.engine === 'fallback') {
+        reasonBits.push('it was produced by the fallback engine, not the real one, so it is not confirmed working');
+      }
+      var reasonText = reasonBits.length ? reasonBits.join('; ') : 'it did not pass review';
       generate(
-        'A build job completed but the review found issues that need fixing. ' +
-        'Artifact: ' + artifactName + '. Issues: ' + issueList +
+        'A build job completed but is NOT a finished build — it needs attention. ' +
+        'Artifact: ' + artifactName + '. Reason: ' + reasonText +
         '. Say one natural sentence informing the operator that the build has issues needing attention. ' +
         'Do not say "finished" or "done" — say something like "completed but needs your attention" or "found some issues". ' +
         'Be helpful, not robotic.',
-        artifactName + ' completed but review found issues that need attention.'
+        artifactName + ' completed but needs your attention: ' + reasonText + '.'
       ).then(function(text) {
         if (!DRYRUN) speak(text);
         bus.emit('conversation.announced', { key: key, text: text, kind: 'job-done-with-issues' });
