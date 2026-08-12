@@ -20,6 +20,12 @@
   pointer-events: auto;
 }
 
+/* Idle hint (turn ended, nothing being said) — reduced opacity so it reads
+   as an affordance ("click to talk") rather than as leftover output. */
+#compose-bar .mic-caption[data-kind="idle"] {
+  opacity: 0.55;
+}
+
 /* Example prompt chips — show when input is empty and conversation hasn't
    started. flex-wrap: nowrap + a horizontal scroll (masked at the edges)
    keeps this to one quiet row instead of wrapping into a cluttered block. */

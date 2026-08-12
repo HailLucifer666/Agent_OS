@@ -26,6 +26,18 @@ const HINTS = [
   'Check the weather',
 ];
 
+// Pure: phase + text -> what the strip should read. Exported for node:test.
+// An ended turn returns the idle hint rather than the last phrase \u2014 a stale
+// utterance sitting above the chat button reads as state, not as history.
+export const IDLE_CAPTION = "Say 'Hey MYTHOS' to activate";
+
+export function captionFor(state) {
+  const s = state || {};
+  if (s.phase === 'error') return { text: s.text || 'something went wrong', kind: 'error' };
+  if (s.phase === 'idle' || !s.text) return { text: IDLE_CAPTION, kind: 'idle' };
+  return { text: s.text, kind: s.kind || 'heard' };
+}
+
 export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings, onVoiceSettings, onSetup }) {
   const root = document.getElementById('compose-bar');
 
@@ -170,19 +182,28 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Every voice/build/mission status string already funnels through this one
   // function, so it's also the one place that needs to feed #hud-status-live
   // (one of exactly two aria-live regions in the HUD) — no new call sites.
+  //
+  // Routed through captionFor() so "turn ended" (kind: 'idle', or the old
+  // empty-text clear) resolves to the idle hint instead of a blank strip —
+  // that hint reads as an affordance, not as leftover output. It deliberately
+  // does NOT reach statusLiveEl: build/mission status strings funnel through
+  // this same function on every turn, and announcing "Say 'Hey MYTHOS' to
+  // activate" to a screen reader after every single utterance would be an
+  // accessibility regression, not a fix.
   const statusLiveEl = document.getElementById('hud-status-live');
   function setCaption(text, kind) {
     // xss-safe: static template, no interpolation
-    if (!text) { captionEl.innerHTML = ''; return; }
+    const phase = kind === 'idle' ? 'idle' : kind === 'error' ? 'error' : undefined;
+    const result = captionFor({ phase, text, kind });
     let captionDiv = captionEl.querySelector('.mic-caption');
     if (!captionDiv) {
       captionDiv = document.createElement('div');
       captionDiv.className = 'mic-caption';
       captionEl.appendChild(captionDiv);
     }
-    captionDiv.textContent = text;
-    captionDiv.setAttribute('data-kind', kind || 'info');
-    if (statusLiveEl) statusLiveEl.textContent = text;
+    captionDiv.textContent = result.text;
+    captionDiv.setAttribute('data-kind', result.kind);
+    if (statusLiveEl && result.kind !== 'idle') statusLiveEl.textContent = result.text;
   }
 
   // Waveform passthrough

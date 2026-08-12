@@ -541,6 +541,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     if (speakSession !== session) return;
     if (doneReceived && (lastChunkPlayed || chunkQueue.length === 0) && !playing) {
       stopSpeaking();
+      // Task 6: the reply just finished playing — clear the caption back to
+      // the idle hint instead of leaving the spoken phrase on screen forever.
+      caption('', 'idle');
       finishTurn();
     }
   }
@@ -577,6 +580,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     const finish = () => {
       if (speakSession !== session) return;
       stopSpeaking();
+      // Task 6: same clear-on-finish as maybeFinishTurn() above, for the
+      // non-chunked (speechSynthesis fallback) reply path.
+      caption('', 'idle');
       finishTurn();
     };
     if (window.speechSynthesis && !disposed) {
