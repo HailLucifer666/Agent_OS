@@ -61,3 +61,41 @@ describe('identity/version', () => {
     }
   });
 });
+
+// ---- the packaged-build hole (2026-08-13) -----------------------------------
+//
+// The 2026-08-12 fix above reads the repo-root package.json by walking four
+// directories up from src/core/identity. In a PACKAGED build that resolves to
+// resources/app.asar.unpacked/package.json — and build.files unpacks only
+// mythos/** and node_modules, so the file is not there. The walk therefore fell
+// straight back through to mythos/package.json and the HUD badge on a real 0.1.7
+// install read "v0.1.0" (operator screenshot). The path walk cannot be made
+// right, because in a packaged build the answer simply is not on disk next to
+// this file: electron/main.js injects app.getVersion() instead.
+describe('identity/version — packaged builds', () => {
+  it('prefers the injected MYTHOS_APP_VERSION over either package.json', () => {
+    const prev = process.env.MYTHOS_APP_VERSION;
+    try {
+      process.env.MYTHOS_APP_VERSION = '9.9.9';
+      const v = version.refresh();
+      assert.equal(v.version, '9.9.9',
+        'app.getVersion() is the number the installer names and the updater compares');
+      assert.notEqual(v.version, innerVersion, 'and it must not fall back to mythos/package.json');
+    } finally {
+      if (prev === undefined) delete process.env.MYTHOS_APP_VERSION;
+      else process.env.MYTHOS_APP_VERSION = prev;
+      version.refresh();
+    }
+  });
+
+  it('falls back to the repo-root package.json when nothing is injected (dev/headless)', () => {
+    const prev = process.env.MYTHOS_APP_VERSION;
+    delete process.env.MYTHOS_APP_VERSION;
+    try {
+      assert.equal(version.refresh().version, appVersion);
+    } finally {
+      if (prev !== undefined) process.env.MYTHOS_APP_VERSION = prev;
+      version.refresh();
+    }
+  });
+});

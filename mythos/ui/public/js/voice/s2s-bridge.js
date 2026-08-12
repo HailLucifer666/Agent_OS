@@ -257,7 +257,11 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
       captureNode.connect(mutedGain);
       mutedGain.connect(audioCtx.destination);
     } catch (err) {
-      console.warn('[s2s] failed to start capture:', err);
+      // Same reasoning as wakeword.js/voice-loop.js: name + AudioContext state,
+      // because addModule()'s message is identical for every failure cause.
+      console.warn('[s2s] failed to start capture:',
+        (err && err.name) || 'Error', (err && err.message) || err,
+        `[ctx.state=${audioCtx && audioCtx.state} sampleRate=${audioCtx && audioCtx.sampleRate}]`);
       setState('disabled');
       await stop();
       return false;

@@ -35,7 +35,16 @@ function readVersionFrom(file) {
   }
 }
 
+// MYTHOS_APP_VERSION is injected by electron/main.js from app.getVersion(), and
+// it wins over both files because in a PACKAGED build neither file is the right
+// answer: APP_PKG_PATH resolves to resources/app.asar.unpacked/package.json,
+// which does not exist (build.files unpacks only mythos/** and node_modules), so
+// the walk fell through to mythos/package.json and a 0.1.7 install reported
+// v0.1.0 in the HUD badge (operator, 2026-08-13). The path walk stays as the
+// fallback for dev/headless runs, where it resolves to the real repo root.
 function readPackageVersion() {
+  var injected = process.env.MYTHOS_APP_VERSION;
+  if (injected) return injected;
   return readVersionFrom(APP_PKG_PATH) || readVersionFrom(PKG_PATH) || 'unknown';
 }
 

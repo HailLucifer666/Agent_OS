@@ -394,6 +394,11 @@ async function primeAuthSession(win, token, port) {
 // ---- child lifecycle ----------------------------------------------------------
 let child = null;
 let mainWindow = null;
+// True once we are on the way out (quit, or an update handover). Read by the
+// child's exit handler, which must not resurrect the server while the app is
+// shutting down — during an update that respawned child lands inside the very
+// directory the installer is renaming. See beginInstall().
+let isQuitting = false;
 
 // security-reviewer B2/H6 (2026-08-08): the key-store IPC channels below used to
 // answer ANY sender holding a contextBridge handle to this preload — including
@@ -696,6 +701,18 @@ function startChild() {
       // code is running out of. Empty string in dev (no asar), where
       // version.js's git path already gives a better answer.
       MYTHOS_BUILD_TIME: buildTimeISO(),
+      // WHICH VERSION IS THIS. identity/version.js used to derive it by walking
+      // four directories up from src/core/identity to reach the app's
+      // package.json — which resolves to resources/app.asar.unpacked/package.json
+      // in a packaged build, and THAT FILE DOES NOT EXIST: build.files only
+      // unpacks mythos/** and node_modules. So it silently fell through to
+      // mythos/package.json, whose version has been 0.1.0 for months, and the
+      // HUD badge on a 0.1.7 install read "v0.1.0" (operator, 2026-08-13).
+      // app.getVersion() reads the asar's own package.json through Electron:
+      // the same number the installer names, the updater compares, and the
+      // release asset carries. Injected rather than resolved, for the same
+      // reason as MYTHOS_BUILD_TIME above — only the main process can know it.
+      MYTHOS_APP_VERSION: app.getVersion(),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });
@@ -725,6 +742,16 @@ function startChild() {
   backoffIndex = 0;
 
   child.on('exit', (code, signal) => {
+    // NEVER restart while we are shutting down. Without this guard, stopChild()
+    // during a quit scheduled a FRESH server child 1s later — a new MYTHOS.exe
+    // whose cwd is inside resources/app.asar.unpacked/mythos, which is exactly
+    // the directory the updater's uninstaller is trying to rename. That is one
+    // of the three things that made every 0.1.7 update fail (see beginInstall).
+    if (isQuitting) {
+      log(`mythos child exited (code=${code} signal=${signal}) during shutdown — not restarting.`);
+      child = null;
+      return;
+    }
     // Record the dead child, then restart with backoff. Full immune-announcer
     // wiring is out of scope for this slice — just don't swallow the crash.
     log(`mythos child exited (code=${code} signal=${signal}); restarting in ` +
@@ -929,10 +956,11 @@ ipcMain.handle('mythos:install-update', async (event) => {
   }
   if (updateState.state === 'ready' && updaterRef) {
     log('auto-update: installing', updateState.version, '(HUD button) and restarting');
+    // beginInstall is async (it waits for the server child to actually exit
+    // before handing over), so failures arrive as a rejection, not a throw.
     setImmediate(() => {
-      try { beginInstall(updaterRef, updateState.version); } catch (err) {
-        log('auto-update: quitAndInstall failed —', err && err.message);
-      }
+      beginInstall(updaterRef, updateState.version)
+        .catch((err) => log('auto-update: quitAndInstall failed —', err && err.message));
     });
     return { ok: true, installing: true, state: updateState.state, version: updateState.version };
   }
@@ -1160,9 +1188,94 @@ function unfinishedUpdate() {
   return target;
 }
 
-function beginInstall(autoUpdater, version) {
+// $PLUGINSDIR — where the old uninstaller renames the install tree to — is
+// derived from %TEMP%, and electron-updater spawns the installer with
+// `env: undefined` (electron-updater/out/BaseUpdater.js), so it inherits ours.
+// That matters because the uninstaller's "atomic" update path is a per-file
+// Rename into $PLUGINSDIR\old-install: on the SAME volume that is instant and
+// genuinely atomic, but when %TEMP% is on C: and the install is on D: every
+// single file is copied across, and copied back again if anything goes wrong.
+// That is where the 40-minute update with no window came from — and it also
+// makes the whole update depend on the system drive having room for a second
+// copy of the app. Point TEMP at a scratch dir on the install's own volume.
+//
+// Derived from process.resourcesPath, never hardcoded (AD-7). Best-effort: if it
+// cannot be created, the ordinary (slow) %TEMP% path still works.
+function pointInstallerTempAtInstallVolume() {
+  if (!app.isPackaged || !process.resourcesPath) return;
+  try {
+    // BESIDE the install dir, never inside it. $PLUGINSDIR is created under
+    // %TEMP%, and the uninstaller renames every entry of $INSTDIR into
+    // $PLUGINSDIR\old-install — so a scratch dir inside $INSTDIR would contain
+    // the destination it is being moved into. Same volume is all that is needed
+    // for the rename to stay a rename.
+    // <install>/resources -> <install> -> <install>/../MYTHOS-update-temp
+    const installRoot = path.dirname(process.resourcesPath);
+    const scratch = path.join(path.dirname(installRoot), 'MYTHOS-update-temp');
+    fs.mkdirSync(scratch, { recursive: true });
+    process.env.TEMP = scratch;
+    process.env.TMP = scratch;
+    log('auto-update: installer TEMP ->', scratch, '(same volume as the install: rename, not copy)');
+  } catch (err) {
+    log('auto-update: could not redirect the installer TEMP —', err && err.message, '— continuing on %TEMP%');
+  }
+}
+
+// Wait for the server child to actually be gone. Resolves as soon as it exits;
+// after the deadline it escalates to SIGKILL and resolves anyway, because a
+// stubborn child must not be able to block an update either.
+function awaitChildExit(timeoutMs) {
+  return new Promise((resolve) => {
+    const pending = child;
+    if (!pending) return resolve();
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    pending.once('exit', finish);
+    setTimeout(() => {
+      if (done) return;
+      log('auto-update: the server child did not exit in', timeoutMs + 'ms — killing it');
+      try { pending.kill('SIGKILL'); } catch { /* already gone */ }
+      finish();
+    }, timeoutMs).unref?.();
+  });
+}
+
+// THE HANDOVER, in order. Order is the whole correctness of this function.
+//
+// WHY (operator, 2026-08-13, after three failed 0.1.7 updates): the installer
+// died every time on "Failed to uninstall old application files ...: 2". That 2
+// is the OLD uninstaller's exit code. On an update it does not delete files — it
+// renames each one into $PLUGINSDIR\old-install (app-builder-lib's
+// templates/nsis/uninstaller.nsh, the ${isUpdated} branch), and a SINGLE failed
+// rename makes it restore everything and Abort. The installer retries that 5
+// times, one second apart, then gives up and rolls back — which is why the app
+// always came back looking fine on the old version.
+//
+// Every one of those renames was racing us, because quitAndInstall() spawns the
+// installer FIRST and quits the app AFTER, and the uninstaller skips its
+// "is the app running?" check entirely in silent mode. Our shutdown then took
+// far longer than its ~5s retry budget and actively held the tree open:
+//   - before-quit ran syncVault('--push'), a BLOCKING spawnSync with a 15s
+//     timeout, whose cwd is inside resources/app.asar.unpacked/mythos — and a
+//     process's current directory cannot be renamed;
+//   - the server child's exit handler restarted it 1s later (no quitting guard),
+//     spawning a fresh MYTHOS.exe inside the tree mid-shutdown;
+//   - that child is forked from process.execPath, so it holds MYTHOS.exe itself.
+//
+// So: do all of it here, while we still own the clock, and only hand over once
+// nothing of ours is left inside the install tree.
+async function beginInstall(autoUpdater, version) {
+  isQuitting = true; // stops the child's exit handler from scheduling a restart
   recordUpdateAttempt(version);
   rescueToolDirs();
+  stopChild();
+  await awaitChildExit(3000);
+  // AFTER the child is gone, for the reason before-quit already documents: a
+  // half-written episodic line committed as "synced" is worse than a late push.
+  // Here rather than in before-quit, because in before-quit it runs INSIDE the
+  // uninstaller's retry window and is the single biggest thing that blew it.
+  syncVault('--push');
+  pointInstallerTempAtInstallVolume();
   autoUpdater.quitAndInstall(true, true);
 }
 
@@ -1211,7 +1324,10 @@ function promptInstall(autoUpdater, version) {
         return;
       }
       log('auto-update: installing', version, 'silently and restarting');
-      beginInstall(autoUpdater, version);
+      // Returned, not fire-and-forget: beginInstall is async, and a rejection
+      // inside it must reach the .catch below rather than becoming an unhandled
+      // rejection that loses the update silently.
+      return beginInstall(autoUpdater, version);
     }).catch((err) => log('auto-update: install prompt failed —', err && err.message));
   } catch (err) {
     // A dialog that cannot be shown must not lose the download or kill the app.
@@ -1522,6 +1638,8 @@ if (!gotLock) {
   });
 
   app.on('before-quit', () => {
+    const handedOverToInstaller = isQuitting; // beginInstall() already did all of this
+    isQuitting = true;
     stopChild();
     mediaWindowController.closeMediaWindow();
     // null when the overlay is disabled (the default) or failed to construct.
@@ -1529,6 +1647,16 @@ if (!gotLock) {
     // AFTER stopChild(), so the vault is not being written while it is committed.
     // A half-written episodic line committed as "synced" is worse than a late push,
     // and the push is idempotent: whatever misses this window goes next time.
+    //
+    // SKIPPED during an update handover, and that is the point: this is a
+    // BLOCKING spawnSync with a 15s timeout (see syncVault), while the NSIS
+    // uninstaller that is already running gives the whole app ~5s to let go of
+    // its files. Running it here is what made every 0.1.7 update fail. On that
+    // path beginInstall() has already pushed, with the clock still ours.
+    if (handedOverToInstaller) {
+      log('auto-update: skipping the before-quit vault push — beginInstall already pushed.');
+      return;
+    }
     syncVault('--push');
   });
 

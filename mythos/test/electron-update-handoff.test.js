@@ -140,6 +140,116 @@ test('the rescued tools land where MYTHOS_TOOLS_DIR already points', () => {
     'an existing userData copy must never be clobbered by an older in-tree one');
 });
 
+// ---- the ordered handover (2026-08-13) ---------------------------------------
+//
+// Three 0.1.7 updates failed with "Failed to uninstall old application files
+// ...: 2". That 2 is the OLD uninstaller's exit code: on an update it renames
+// each file of the install tree into $PLUGINSDIR\old-install, and one failed
+// rename makes it restore everything and Abort. The installer retries 5 times,
+// ~1s apart, then rolls back — so the app came back on the old version looking
+// perfectly healthy, which is why it read as success three times over.
+//
+// Every rename was racing our own shutdown, and each of the three assertions
+// below pins one of the three things that made us lose that race.
+
+test('beginInstall stops the child and WAITS for it before handing over', () => {
+  const code = codeOnly(readMainJs());
+  const begin = code.indexOf('async function beginInstall(');
+  assert.ok(begin !== -1, 'beginInstall must be async — it waits for the child to exit');
+  const body = code.slice(begin, code.indexOf('\n}', begin));
+
+  const stopAt = body.indexOf('stopChild()');
+  const awaitAt = body.indexOf('awaitChildExit(');
+  const installAt = body.indexOf('quitAndInstall');
+  assert.ok(stopAt !== -1 && awaitAt !== -1, 'it must stop the child and wait for its exit');
+  assert.ok(stopAt < awaitAt && awaitAt < installAt,
+    'stopChild -> awaitChildExit -> quitAndInstall, in that order: the child is forked from '
+    + 'process.execPath and its cwd is inside the install tree, so while it lives the uninstaller '
+    + 'cannot rename either');
+  assert.ok(/isQuitting = true/.test(body.slice(0, stopAt)),
+    'isQuitting must be set BEFORE stopChild, or the exit handler reschedules the child');
+});
+
+test('a stubborn child cannot block an update either', () => {
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function awaitChildExit(');
+  assert.ok(start !== -1, 'awaitChildExit must exist');
+  const body = code.slice(start, code.indexOf('\nfunction ', start + 10));
+  assert.ok(/SIGKILL/.test(body), 'the deadline must escalate to SIGKILL');
+  assert.ok(/resolve\(\)/.test(body),
+    'and resolve anyway — waiting forever would trade a failed update for a hung one');
+});
+
+test('the child is never restarted during shutdown', () => {
+  const code = codeOnly(readMainJs());
+  const handler = code.slice(code.indexOf("child.on('exit'"), code.indexOf('function stopChild('));
+  const guardAt = handler.indexOf('if (isQuitting)');
+  const restartAt = handler.indexOf('setTimeout(startChild');
+  assert.ok(guardAt !== -1, 'the exit handler must check isQuitting');
+  assert.ok(restartAt !== -1 && guardAt < restartAt,
+    'the guard must come BEFORE the restart timer: stopChild() during a quit used to schedule a '
+    + 'fresh MYTHOS.exe 1s later, inside the very directory the installer was renaming');
+  assert.ok(/return;/.test(handler.slice(guardAt, restartAt)), 'and it must return, not fall through');
+});
+
+test('before-quit does not repeat the blocking vault push during an update', () => {
+  const code = codeOnly(readMainJs());
+  const body = code.slice(code.indexOf("app.on('before-quit'"), code.indexOf("app.on('will-quit'"));
+  const guardAt = body.indexOf('handedOverToInstaller');
+  const pushAt = body.lastIndexOf("syncVault('--push')");
+  assert.ok(guardAt !== -1 && pushAt !== -1 && guardAt < pushAt,
+    'before-quit must skip the push when beginInstall already did it — it is a BLOCKING spawnSync '
+    + 'with a 15s timeout, and the uninstaller only waits ~5s for us to let go');
+  assert.ok(/return;/.test(body.slice(guardAt, pushAt)), 'the guard must return before the push');
+
+  // And the push must still happen on the install path — just earlier, where it
+  // is not inside the uninstaller's retry window.
+  const begin = code.indexOf('async function beginInstall(');
+  const install = code.slice(begin, code.indexOf('\n}', begin));
+  assert.ok(install.indexOf("syncVault('--push')") !== -1
+    && install.indexOf("syncVault('--push')") < install.indexOf('quitAndInstall'),
+    'beginInstall must push before quitAndInstall, so no update loses the vault');
+});
+
+test("the installer's TEMP is moved onto the install volume", () => {
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function pointInstallerTempAtInstallVolume(');
+  assert.ok(start !== -1, 'the redirect must exist');
+  const body = code.slice(start, code.indexOf('\nfunction ', start + 10));
+  assert.ok(/process\.env\.TEMP =/.test(body) && /process\.env\.TMP =/.test(body),
+    'both TEMP and TMP — electron-updater spawns the installer with env: undefined, so it '
+    + 'inherits ours, and $PLUGINSDIR follows');
+  assert.ok(/process\.resourcesPath/.test(body),
+    'derived from the running install, never a hardcoded path (AD-7)');
+  assert.ok(/path\.dirname\(installRoot\)/.test(body),
+    'the scratch dir must sit BESIDE the install dir, not inside it: the uninstaller renames every '
+    + 'entry of $INSTDIR into $PLUGINSDIR\\old-install, so a scratch dir inside $INSTDIR would '
+    + 'contain its own destination');
+  assert.ok(/try/.test(body) && /catch/.test(body),
+    'best-effort: a failed redirect must fall back to %TEMP%, not block the update');
+
+  const begin = code.indexOf('async function beginInstall(');
+  const install = code.slice(begin, code.indexOf('\n}', begin));
+  assert.ok(install.indexOf('pointInstallerTempAtInstallVolume()') !== -1
+    && install.indexOf('pointInstallerTempAtInstallVolume()') < install.indexOf('quitAndInstall'),
+    'and it must run before the installer is spawned, or it changes nothing');
+});
+
+test('the app version is injected into the child, not derived from a path', () => {
+  const code = codeOnly(readMainJs());
+  assert.ok(/MYTHOS_APP_VERSION: app\.getVersion\(\)/.test(code),
+    'a packaged build has no resources/app.asar.unpacked/package.json, so identity/version.js '
+    + 'fell through to mythos/package.json and a 0.1.7 install reported v0.1.0 in the HUD badge');
+
+  const version = fs.readFileSync(
+    path.join(REPO_ROOT, 'mythos', 'src', 'core', 'identity', 'version.js'), 'utf8');
+  const fn = version.slice(version.indexOf('function readPackageVersion('));
+  const envAt = fn.indexOf('MYTHOS_APP_VERSION');
+  const fileAt = fn.indexOf('readVersionFrom(');
+  assert.ok(envAt !== -1 && envAt < fileAt,
+    'the injected version must be preferred over both file lookups');
+});
+
 test('an in-tree HERMES_HOME is called out rather than silently defeating the rescue', () => {
   // Measured on the operator's machine, 2026-08-13: a user-level HERMES_HOME
   // pointing into resources/app.asar.unpacked outranks MYTHOS_TOOLS_DIR in

@@ -676,7 +676,13 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     } catch (err) {
       // Worklet not supported or module failed to load — degrade to no pre-roll
       // (the old behavior: first 1-3 words may be clipped, but capture works).
-      console.warn('[voice] preroll worklet unavailable, capturing without pre-roll:', err);
+      // Context, not just the message: addModule() reports every cause as the
+      // same "Unable to load a worklet's module", so err alone cannot tell a 404
+      // from an AudioContext whose render thread never started (see the same
+      // note in wakeword.js, operator 2026-08-13).
+      console.warn('[voice] preroll worklet unavailable, capturing without pre-roll:',
+        (err && err.name) || 'Error', (err && err.message) || err,
+        `[ctx.state=${audioCtx && audioCtx.state} sampleRate=${audioCtx && audioCtx.sampleRate}]`);
       prerollNode = null;
     }
     return stream;

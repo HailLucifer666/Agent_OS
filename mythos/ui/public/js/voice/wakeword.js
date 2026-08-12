@@ -284,7 +284,20 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       }
     });
     const source = audioCtx.createMediaStreamSource(stream);
-    await audioCtx.audioWorklet.addModule('/js/voice/wakeword-worklet.js');
+    // addModule() rejects with the same generic "Unable to load a worklet's
+    // module" for every cause — a 404, a script that throws, or an AudioContext
+    // whose render thread never started. On a packaged 0.1.7 install that message
+    // was the whole diagnosis available, and it was not enough: the file serves
+    // HTTP 200 as application/javascript and contains no import, so the fetch was
+    // never the problem (operator, 2026-08-13). Re-throw with the state that
+    // actually distinguishes the causes.
+    try {
+      await audioCtx.audioWorklet.addModule('/js/voice/wakeword-worklet.js');
+    } catch (err) {
+      const detail = `${err && err.name ? err.name : 'Error'}: ${err && err.message ? err.message : String(err)}`
+        + ` [ctx.state=${audioCtx.state} sampleRate=${audioCtx.sampleRate} baseLatency=${audioCtx.baseLatency}]`;
+      throw new Error(`addModule(wakeword-worklet) failed — ${detail}`);
+    }
     workletNode = new AudioWorkletNode(audioCtx, 'wakeword-frame-processor');
     workletNode.port.onmessage = (e) => {
       if (!e.data || e.data.type !== 'frame') return;
