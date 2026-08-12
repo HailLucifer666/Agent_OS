@@ -32,9 +32,22 @@ function setBackgroundInert(isInert) {
   }
 }
 
-export function createOverlayManager(root) {
+// opts.onChange(panelId, isOpen) fires whenever a panel opens or closes, by ANY
+// route — the header ×, the backdrop, Escape/closeTop, closeAll, or a tool call.
+// A chat-bar button that reflects a panel's open state (F7's transcript toggle)
+// cannot be kept honest from its own click handler alone: every one of those
+// other routes closes the panel without the button ever hearing about it, and
+// the button then reports aria-pressed="true" over a panel that is gone.
+export function createOverlayManager(root, opts) {
+  const onChange = (opts && typeof opts.onChange === 'function') ? opts.onChange : null;
   const open = new Map(); // panelId -> { el, cleanup }
   let zTop = 100;
+
+  function notifyChange(panelId, isOpen) {
+    if (!onChange) return;
+    // A listener throwing must never leave a panel half-closed.
+    try { onChange(panelId, isOpen); } catch { /* observer errors are not the HUD's problem */ }
+  }
 
   function close(panelId) {
     const entry = open.get(panelId);
@@ -46,6 +59,7 @@ export function createOverlayManager(root) {
     entry.el.remove();
     if (entry.mutating) emitRefresh(panelId);
     if (open.size === 0) setBackgroundInert(false);
+    notifyChange(panelId, false);
   }
 
   // REMEDIATION P1-5: return how many panels were actually closed — close_panel
@@ -103,6 +117,10 @@ export function createOverlayManager(root) {
     const entry = { el, cleanup: null, mutating: panel.mutating };
     open.set(panelId, entry);
     setBackgroundInert(true); // no-op if already set from an earlier open panel
+    // Announced here, before the awaited render below — the panel IS open at
+    // this point (it is in the map and on screen as 'Loading…'), and a render
+    // that throws still leaves it open showing its failure message.
+    notifyChange(panelId, true);
 
     try {
       const mod = await panel.loader();

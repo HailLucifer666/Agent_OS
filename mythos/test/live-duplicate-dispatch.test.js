@@ -103,6 +103,31 @@ describe('A3 — a repeated {name, args} is suppressed within a turn even after 
     assert.notEqual(second.status, 'duplicate-suppressed');
   });
 
+  test('click tools are exempt — a repeated click at identical coords is a real workflow, not a duplicate', async () => {
+    const { adapter, dispatched } = harness();
+
+    // Double-click, and paging a list by hitting the same "next" button twice.
+    await call(adapter, 'call-c1', 'click_at', { x: 400, y: 300 });
+    const second = await call(adapter, 'call-c2', 'click_at', { x: 400, y: 300 });
+    await call(adapter, 'call-c3', 'ui_click', { pid: 1234, elementPath: ['Next'] });
+    await call(adapter, 'call-c4', 'ui_click', { pid: 1234, elementPath: ['Next'] });
+    await call(adapter, 'call-c5', 'browser_click', { selector: '#next' });
+    await call(adapter, 'call-c6', 'browser_click', { selector: '#next' });
+
+    assert.equal(dispatched.length, 6, 'every click must run — suppressing the second breaks paging and double-click');
+    assert.notEqual(second.status, 'duplicate-suppressed');
+  });
+
+  test('the carve-out is clicks only — typing the same text twice is still suppressed', async () => {
+    const { adapter, dispatched } = harness();
+
+    await call(adapter, 'call-t1', 'ui_type', { pid: 1234, text: 'hello' });
+    const second = await call(adapter, 'call-t2', 'ui_type', { pid: 1234, text: 'hello' });
+
+    assert.equal(dispatched.length, 1, 'duplicate typing has a real failure mode a click does not');
+    assert.equal(second.status, 'duplicate-suppressed');
+  });
+
   test('the signature set clears on the next turn — a repeat request later is legitimate', async () => {
     const { adapter, dispatched } = harness();
 

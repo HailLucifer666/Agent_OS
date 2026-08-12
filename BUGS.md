@@ -5308,3 +5308,71 @@ pixel-reading fallback - MYTHOS should never OCR itself for data it owns.
 the 2026-08-04 audit and has been copied forward unchecked since. It matters
 because installer growth was one side of the ship / do-not-ship licence
 tradeoff, and the real cost is negligible.
+
+## Session (2026-08-12, later) — BUG-185/186: the chat panel opened onto nothing
+
+Both found the way the plan said packaging defects get found — by opening the
+thing in a real browser (headless Edge via `playwright-core`, driving the HUD on
+127.0.0.1:4478 with a `mythos_token` cookie). Neither was visible to the test
+suite, which was green at 3963/0 across both defects. F7 shipped 154 lines of
+tests for the transcript *model* and none for the panel.
+
+### BUG-185 — the full-session transcript rendered nothing over a 26-turn session
+
+The F7 panel opened and said *"No conversation yet — start speaking to see the
+transcript"* while `vault/Conversation/session.json` held **26 turns**. No console
+error, no failed request, HTTP 200 from `/api/conversation/history`.
+
+**Root cause: a type mismatch across the wire, swallowed by a defensive catch.**
+The route builds its `session` field with `memory.fs.readJSON()`, so the client
+receives a **parsed object**. `conversation.js` passes `payload.session` straight
+into `buildTranscript()`, which did `JSON.parse(sessionJsonText)` — and
+`JSON.parse` of an object stringifies it to `"[object Object]"` and throws. The
+`catch` that exists for genuinely corrupt session JSON treated that as corruption
+and fell back to an empty rolling window, discarding the **entire session half**
+of the transcript. The episodic half survived, which is why the panel was not
+merely broken but *plausibly* empty: today's Episodic log happened to hold zero
+`kind:'conversation'` rows (4 rows: 2 `action`, 2 `proactive-speech`), so the
+correct render for the episodic half really was nothing.
+
+Every existing `buildTranscript` test passed a `JSON.stringify(...)` string —
+the one shape production never sends. That is the whole reason this shipped.
+
+**FIXED.** `buildTranscript` accepts a parsed object or raw text. Four new tests
+in `chat-panel-transcript.test.js` pin the parsed-object path, the string path
+(so the fix cannot regress the other direction), object+episodic de-duplication,
+and degradation on a non-JSON value. **Live-verified:** 16 rows render.
+
+Adjacent, NOT fixed and not new: every rendered row is `role:'assistant'`. That
+is the write-site gap `transcript-model.js`'s own header documents — a turn with
+no operator utterance throws inside `onLiveTurnComplete`'s episodic write and is
+swallowed — compounded by the open "Live turns store no user text" defect. The
+transcript is now showing that honestly instead of hiding it behind an empty
+panel.
+
+### BUG-186 — a toggle that could not toggle, and lied about its state
+
+The same button, two defects, both structural rather than cosmetic:
+
+1. `onTranscript` only ever called `overlays.openPanel('conversation')`.
+   `openPanel` on an already-open panel is a `focus()`, so the second click did
+   nothing observable — a dead button, on a control whose title says "Toggle".
+2. `setTranscriptOpen()` was implemented in `compose-bar.js`, exported, and
+   **called from nowhere.** `aria-pressed` stayed `"false"` for the entire
+   session with the panel open on screen. Measured, not inferred: `aria-pressed`
+   read `"false"` immediately after a click that rendered the panel.
+
+**FIXED**, and deliberately not from the click handler. The button cannot stay
+honest that way: the header ×, the backdrop, Escape/`closeTop`, `closeAll` and a
+`close_panel` tool call all close the panel without the button hearing about it.
+`createOverlayManager` now takes an optional `onChange(panelId, isOpen)`, fired
+in `close()` (which every close route delegates to) and in `openPanel()` right
+after the panel enters the map. A throwing listener is caught so it can never
+leave a panel half-closed.
+
+**Live-verified across all six states** — initial, open, second-click close,
+reopen, header ×, Escape. `panels`, `aria-pressed`, the `transcript-open` class
+and the rendered row count agree at every step, with zero page errors.
+`test/chat-panel-toggle.test.js` pins it by source shape, which is the only
+automated guard available in a no-build ES-module tree with no jsdom — the same
+limitation `test/electron-cursor-overlay.test.js` records.

@@ -260,10 +260,31 @@ function createLiveToolAdapter(deps) {
     list_windows: true,
     read_status: true,
   };
+  // Operator decision (2026-08-12): clicks are exempt too, for the opposite
+  // reason to the reads above. A click is not idempotent — it is *legitimately
+  // repeatable at identical coordinates*: double-click, paging a list by
+  // hitting the same "next" button, retrying a control that did not take.
+  // Every one of those is a repeated {name, args} within one turn, so the
+  // signature gate suppressed the second half of a real workflow and reported
+  // it to the model as a duplicate. Wrongly suppressing is worse than wrongly
+  // allowing (same rule the unserializable-arg branch below follows), and a
+  // click is local, reversible and operator-present — it is the class the
+  // leash already auto-allows as `operator-present-trusted`.
+  // Not extended to send_key/browser_press_key: repeat keystrokes are equally
+  // legitimate, but they were not part of the decision and typing has a
+  // real duplicate-text failure mode a click does not.
+  const REPEATABLE_CLICK_TOOLS = {
+    ui_click: true,
+    click_at: true,
+    see_and_click: true,
+    cua_click: true,
+    browser_click: true,
+  };
   const executedSignatures = new Set();
 
   function isDuplicateSignature(generation, name, args) {
     if (IDEMPOTENT_READ_TOOLS[name]) return false;
+    if (REPEATABLE_CLICK_TOOLS[name]) return false;
     if (generation !== turnGeneration) return false;
     let signature;
     try {

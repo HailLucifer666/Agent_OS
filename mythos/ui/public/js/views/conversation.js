@@ -4,17 +4,22 @@
 // F7: on mount, also renders the WHOLE session (not just what has streamed
 // over WS since the panel opened) by fetching session.json's rolling window
 // + today's episodic conversation log and merging them via
-// transcript-model.js's pure mergeTranscript(). That fetch target
-// (CONVERSATION_HISTORY_ENDPOINT below) does not exist on the server yet —
-// server/index.js is out of scope for this change — so this degrades
-// exactly to the previous WS-only behavior until that route is added; it
-// never throws and never blocks live rendering.
+// transcript-model.js's pure mergeTranscript(). The fetch stays best-effort —
+// it never throws and never blocks live rendering, so any failure degrades to
+// the previous WS-only behavior.
+//
+// The route DOES exist now (server/index.js's /api/conversation/history); this
+// comment claimed it did not, which is how the real defect below stayed hidden.
+// It returns `session` as a PARSED OBJECT (memory.fs.readJSON), not raw text —
+// buildTranscript used to JSON.parse it, throw, and silently drop the whole
+// session half of the transcript. See transcript-model.js's buildTranscript.
 import { subscribe } from '/js/ws.js';
 import { buildTranscript } from '/js/views/transcript-model.js';
 
 const MAX_MESSAGES = 200;
-// Expected to return { session: <session.json text>, episodic: <today's
-// Episodic/<date>.jsonl text> }. See the header comment above.
+// Returns { session: <parsed Conversation/session.json>, episodic: <today's
+// Episodic/<date>.jsonl RAW TEXT> } — the two halves are deliberately
+// asymmetric on the wire; see the header comment above.
 const CONVERSATION_HISTORY_ENDPOINT = '/api/conversation/history';
 
 export async function render(mount) {

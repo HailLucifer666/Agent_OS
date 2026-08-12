@@ -19,6 +19,7 @@ import { createVoiceLoop } from './voice/voice-loop.js';
 import { decideVoiceTransport } from './voice/voice-transport.js';
 import { createCameraLoop } from './vision/camera.js';
 import { decideGestureMic } from './vision/gesture-mic.js';
+import { canGestureAccept } from './vision/gesture-confirm.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
 import { mountPinLockScreen } from './pin/pin-lock-screen.js';
@@ -157,7 +158,17 @@ fetch('/api/config/s2s')
   .catch(() => {});
 
 // overlays
-const overlays = createOverlayManager(document.getElementById('overlay-root'));
+const overlays = createOverlayManager(document.getElementById('overlay-root'), {
+  // Keep the chat bar's transcript toggle honest about the panel's real state:
+  // the × button, the backdrop, Escape and a close_panel tool call all close it
+  // without going through onTranscript below. `compose` is created further down
+  // this file, and a panel can open before that (a routed WS frame), so this
+  // guards rather than assuming.
+  onChange: (panelId, isOpen) => {
+    if (panelId !== 'conversation') return;
+    if (compose && typeof compose.setTranscriptOpen === 'function') compose.setTranscriptOpen(isOpen);
+  },
+});
 
 // core orb mounts first — hud-canvas's ctx needs orb.flashAction for its
 // per-action-type color relay (pure reorder, no visual side effect: DOM
@@ -220,8 +231,12 @@ const compose = createComposeBar({
   // registry as 'conversation' all along — but nothing on the chat bar opened
   // it, so the operator's only view of the session was whatever few turns the
   // compose caption happened to be showing.
+  // It is a toggle (aria-pressed, "Toggle the full conversation transcript"),
+  // so a second click has to close it — before this it re-opened, which
+  // overlay-manager treats as a focus() and looks like a dead button.
   onTranscript: () => {
-    overlays.openPanel('conversation');
+    if (overlays.isOpen('conversation')) overlays.close('conversation');
+    else overlays.openPanel('conversation');
   },
 });
 
@@ -435,7 +450,21 @@ const GESTURE_ACTIONS = {
   // fires confirm-modal.js's listener, so the audit trail can tell a gesture
   // accept apart from a human click on the same button — see that listener
   // for why the click event itself carries no such distinction on its own.
-  Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.dataset.mythosSurface = 'gesture'; b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
+  // The tier ceiling (vision/gesture-confirm.js) is checked BEFORE the tag and
+  // the click, so a refused gesture leaves no data-mythos-surface behind for a
+  // later real human click to inherit. A refusal has to be spoken in the caption
+  // or a held thumbs-up looks like the camera simply stopped working.
+  Thumb_Up:    () => {
+    const b = document.querySelector('.confirm-accept');
+    if (!b) return;
+    if (!canGestureAccept(b.dataset.mythosTier)) {
+      mic.setCaption(`👍 ignored — tier ${b.dataset.mythosTier || '?'} needs a real click`, 'error');
+      return;
+    }
+    b.dataset.mythosSurface = 'gesture';
+    b.click();
+    mic.setCaption('👍 approved by gesture', 'reply');
+  },
   Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
   Open_Palm:   () => applyGestureMic('Open_Palm'),
   Pointing_Up: () => applyGestureMic('Pointing_Up'),

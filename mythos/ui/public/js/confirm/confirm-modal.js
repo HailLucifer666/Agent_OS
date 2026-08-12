@@ -41,7 +41,14 @@ export function mountConfirmModal(root, opts) {
     `;
     // textContent, not innerHTML — the summary embeds tool args (untrusted data).
     overlay.querySelector('.confirm-summary').textContent = payload.summary || payload.tool || 'Confirm action?';
-    overlay.querySelector('.confirm-accept').addEventListener('click', (ev) => {
+    // The tier travels on the button itself so app.js's Thumb_Up handler — which
+    // only ever sees `document.querySelector('.confirm-accept')` — can refuse to
+    // approve a high tier by gesture. It reads the raw payload value, not the
+    // rendered 'TIER ?' text, so canGestureAccept() sees a real absent tier as
+    // absent and fails closed rather than parsing a placeholder.
+    const accept = overlay.querySelector('.confirm-accept');
+    if (payload.tier !== undefined && payload.tier !== null) accept.dataset.mythosTier = String(payload.tier);
+    accept.addEventListener('click', (ev) => {
       // G4 (unattributable-consent finding): a real human click and app.js's
       // Thumb_Up gesture handler both fire this SAME 'click' event (it calls
       // .confirm-accept.click(), a genuine synchronous DOM click) — nothing

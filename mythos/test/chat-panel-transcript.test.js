@@ -132,6 +132,64 @@ test('a malformed JSONL line does not throw and does not silently drop the rest 
   assert.ok(transcript.some((m) => m.text === 'Second reply'));
 });
 
+// The wire shape. /api/conversation/history builds `session` with
+// memory.fs.readJSON(), so it arrives at buildTranscript as a PARSED OBJECT,
+// and conversation.js passes payload.session straight in. Every buildTranscript
+// test above hands it a JSON *string* — which is exactly why the panel shipped
+// showing "No conversation yet" over a 26-turn session.json: JSON.parse() of an
+// object stringifies to "[object Object]", throws, and the corrupt-JSON catch
+// dropped the entire session half without a console error. Found by opening the
+// panel in a real browser on 2026-08-12, not by any test.
+test('buildTranscript accepts a PARSED session object — the shape the server actually sends', async () => {
+  const session = {
+    turns: [
+      { role: 'system', content: 'you are MYTHOS' },
+      { role: 'user', content: 'play something' },
+      { role: 'assistant', content: 'Playing now.' },
+    ],
+    savedAt: 1700000000000,
+  };
+
+  const transcript = mod.buildTranscript(session, '');
+
+  assert.equal(transcript.length, 3, 'the session half must survive — all three turns');
+  assert.deepEqual(
+    transcript.map((m) => m.role),
+    ['system', 'user', 'assistant'],
+    'roles are preserved verbatim; conversation.js is what filters system rows out of the render',
+  );
+  assert.ok(transcript.every((m) => m.source === 'session'));
+});
+
+test('buildTranscript still accepts raw session TEXT — the object fix must not break the string path', async () => {
+  const transcript = mod.buildTranscript(
+    JSON.stringify({ turns: [{ role: 'user', content: 'still works' }] }),
+    '',
+  );
+  assert.equal(transcript.length, 1);
+  assert.equal(transcript[0].text, 'still works');
+});
+
+test('a parsed session object merges and de-duplicates against episodic exactly as the string form does', async () => {
+  const session = { turns: [{ role: 'user', content: 'ping' }, { role: 'assistant', content: 'pong' }] };
+  const jsonl = JSON.stringify(episodicRow({ ts: 500, text: 'ping', reply: 'pong', turnId: 't1' }));
+
+  const transcript = mod.buildTranscript(session, jsonl);
+
+  assert.equal(transcript.length, 2, 'the same turn from both halves is one pair, not two');
+  assert.ok(transcript.every((m) => m.source === 'episodic'), 'the timestamped half wins the match');
+});
+
+test('a non-object, non-JSON session value still degrades to the episodic half', async () => {
+  for (const bad of [null, undefined, '', 'not json at all', 0]) {
+    const transcript = mod.buildTranscript(
+      bad,
+      JSON.stringify(episodicRow({ ts: 900, text: 'q', reply: 'a', turnId: 't' })),
+    );
+    assert.equal(transcript.length, 2, `episodic must survive a ${JSON.stringify(bad)} session`);
+  }
+});
+
 test('repeated identical phrases are matched positionally, not collapsed by a naive key', async () => {
   const sessionData = {
     turns: [
