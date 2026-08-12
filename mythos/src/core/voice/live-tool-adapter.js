@@ -33,6 +33,10 @@ const { createHash } = require('crypto');
 
 const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
+// B3 (2026-08-12 diagnosis, G4): reuse voice-agent.js's own NEGATIVE_RE rather
+// than keep a second, driftable copy of the same regex in this module.
+const { NEGATIVE_RE } = require('./voice-agent');
+
 // BUG-117 — 2026-08-05: MYTHOS blamed the operator for messages the pipeline
 // injected itself ("you said the click failed"). It is not the model being
 // careless: the frozen Gemini Live wire protocol (V2 spine §3) has NO
@@ -610,10 +614,69 @@ function createLiveToolAdapter(deps) {
     liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`);
   }
 
+  // B3 — 2026-08-12 diagnosis (G4): a show_desktop confirm was created and
+  // completed via a UI accept-click 13 seconds later, in the same session the
+  // operator said "No" out loud. It was not a race MYTHOS lost — nothing was
+  // listening for the "No" at all. resolveSpokenConfirm (voice-agent.js) only
+  // ever consults armedSpokenConfirms, and only SEND_TOOLS (whatsapp_send,
+  // gmail_send) ever arm one via isOperatorInitiatedSend(); show_desktop,
+  // launch_app, media_key, and every other T2+ tool land here instead, in
+  // livePendingConfirms, with no equivalent path to a spoken cancel.
+  //
+  // Rejects ALL pending confirms, not just the most recent. Live can have more
+  // than one outstanding at once (each gets its own confirm-request broadcast
+  // to every open surface, per bus.subscribe('confirm-request') in
+  // server/index.js), and the plan's own bias applies here too: a false-
+  // positive cancel is recoverable (the operator just re-asks), whereas
+  // leaving a confirm alive that the operator believes they already declined
+  // is not. NEGATIVE_RE is intentionally left unanchored (it also matches
+  // "wait", "hold on", or a "no" buried mid-sentence like "no, the other
+  // file") — same reasoning: over-cancelling is the safe direction to err in,
+  // so this does not narrow the existing matcher to reduce false positives.
+  //
+  // AFFIRMATIVE_RE is deliberately NOT consulted here and never will be: the
+  // plan is explicit that widening voice-accept to cover confirms it was never
+  // armed for is how an execution gets approved by accident. This path can
+  // only ever narrow the world (cancel), never widen it (run).
+  function rejectPendingConfirmsOnNegative(text) {
+    if (livePendingConfirms.size === 0) return;
+    if (!NEGATIVE_RE.test(String(text || ''))) return;
+
+    const cancelledNames = [];
+    for (const [id, entry] of livePendingConfirms) {
+      // Security-review fix parity (line ~429): mirror the connectionId
+      // fallback used at confirm.create() time, or a reject issued with an
+      // undefined connectionId would mismatch the 'system'-scoped entry and
+      // silently do nothing.
+      leash.confirm.reject(id, connectionId || 'system');
+      liveTurnActions.push({
+        tool: entry.name, ok: false,
+        summary: `${entry.name} cancelled — the operator said no.`,
+      });
+      cancelledNames.push(entry.name);
+    }
+    livePendingConfirms.clear();
+
+    const liveSession = getLiveSession ? getLiveSession() : null;
+    if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as resolveLiveConfirm
+    const names = cancelledNames.join(', ');
+    liveSession.sendText(
+      `${SYSTEM_NOTICE_PREFIX} The operator said no. Cancelled: ${names}. ` +
+      `Do NOT run ${cancelledNames.length === 1 ? 'that action' : 'those actions'} — ` +
+      'tell the operator plainly what was cancelled.',
+    );
+  }
+
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
   // shape handleUtterance already uses, so recall/audit stay consistent
   // whether a turn came through the batch or Live path.
   function onLiveTurnComplete({ userText, assistantText, turnId }) {
+    // B3 — before any of this turn's ORDINARY handling (history append,
+    // episodic write, reflection), a spoken "no" cancels whatever is pending.
+    // Doing this first means the cancellation itself lands in liveTurnActions
+    // before the splice a few lines down captures this turn's actions.
+    rejectPendingConfirmsOnNegative(userText);
+
     // Atomic snapshot+clear (splice, not read-then-`.length=0`), and advance
     // the generation BEFORE anything else runs — any commitAction() call that
     // was mid-flight for this now-closing turn sees the new generation and

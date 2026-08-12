@@ -28,6 +28,13 @@ const { truncateAtSentenceBoundary } = require('../effectors/voice');
 const MAX_ITERATIONS = Number(process.env.VOICE_MAX_TOOL_ITERATIONS) || 4;
 const MAX_SAY_CHARS = Number(process.env.VOICE_MAX_SAY_CHARS) || 800;
 
+// B3: hoisted to module scope (was local to createVoiceAgent's WAVE 8 block)
+// so live-tool-adapter.js can require and reuse the SAME pattern for its own
+// pending confirms instead of maintaining a second, driftable copy. It does
+// not depend on any closure variable (config, connectionId, ...), so hoisting
+// changes nothing about how it behaves inside createVoiceAgent below.
+const NEGATIVE_RE = /\b(?:no|nope|don'?t|do not|stop|cancel|nevermind|never mind|wait|hold on|abort|scratch that)\b/i;
+
 // Self-awareness: version + recent git changes, captured once per process.
 // Injected into every voice prompt so the model can answer "what version are
 // you" / "what's new" / "what changed" honestly from real data.
@@ -593,7 +600,8 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // and the tempting alternative is a test named "expires" that proves nothing.
   const SPOKEN_CONFIRM_TTL_MS = (config && config.VOICE_SPOKEN_CONFIRM_TTL_MS) || 60000;
   const AFFIRMATIVE_RE = /^(?:ok(?:ay)?|yes|yeah|yep|yup|sure|do it|go|go ahead|send|send it|send that|confirm(?:ed)?|affirmative|please do)\b[\s.!]*$/i;
-  const NEGATIVE_RE = /\b(?:no|nope|don'?t|do not|stop|cancel|nevermind|never mind|wait|hold on|abort|scratch that)\b/i;
+  // NEGATIVE_RE now lives at module scope (see top of file) — kept referenced
+  // under its original name here so every line below is unchanged.
 
   // One armed confirm per connection. A second send supersedes the first rather
   // than queueing: two pending "say send" prompts is how the wrong message gets
@@ -860,6 +868,9 @@ module.exports = {
   CATALOG,
   MAX_ITERATIONS,
   buildCatalogFromHub,
+  // B3: exported so live-tool-adapter.js's spoken-negative-cancels-confirm
+  // path reuses this exact matcher instead of a second, driftable copy.
+  NEGATIVE_RE,
   // RULES (not OUTPUT_CONTRACT — Live's tool-calling is native functionDeclarations,
   // not the batch path's embedded-JSON contract) is reused by
   // live-session.js's buildLiveSystemInstruction() (V2 §11 row 5, Phase 5).
