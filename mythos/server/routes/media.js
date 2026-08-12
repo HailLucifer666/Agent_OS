@@ -74,6 +74,14 @@ function mountMediaRoutes(app, deps) {
       // A click on the dashboard transport IS a present operator — the same
       // standing as a voice turn. Without a connectionId the leash cannot
       // apply operator-present trust and every button 403s in silence.
+      //
+      // CAUTION: this connectionId is a synthetic constant, not a real WS
+      // session — every request through this route shares the one identity.
+      // That is fine for operator-present trust, which only asks "is a human
+      // here". It is NOT a scope. If media_key (or anything else reachable
+      // here) is ever added to SESSION_GRANTABLE, a grant recorded against
+      // this literal would apply to EVERY request hitting this route rather
+      // than to one operator's session — thread a real connection id first.
       const decision = leash.check(
         { tool: 'media_key', args: { key } },
         { goalId: null, connectionId: 'dashboard-media-widget' },
