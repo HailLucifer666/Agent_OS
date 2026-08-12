@@ -2135,7 +2135,14 @@ function createServer(deps) {
   // Calendar reminders — proactive speech when a reminder fires due.
   bus.subscribe('reminder.due', (e) => {
     if (e && e.payload && e.payload.text) {
-      proactiveSpeak('Reminder: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) });
+      // F2 (2026-08-12, G5 diagnosis): 'Reminder: <text>' reads exactly like an
+      // instruction to CREATE a reminder, not a report that one already fired.
+      // On the Live path this notice necessarily arrives as user-role
+      // realtimeInput (BUG-117 — no system channel exists), so a model reading
+      // "Reminder: walk the dog" as the operator's own words called
+      // reminder_add on it — the reminder re-created itself, 9 seconds later.
+      // This wording is self-describing as a completed event instead.
+      proactiveSpeak('This reminder has just fired and is now complete: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) });
     }
   });
 

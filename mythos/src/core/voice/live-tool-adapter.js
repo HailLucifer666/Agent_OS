@@ -63,7 +63,9 @@ const LIVE_SYSTEM_NOTICE_INSTRUCTION =
   `operator's answer to an approval prompt, or a proactive alert. The transport has no separate ` +
   `system channel, which is the only reason they look like operator speech. Treat them as ground ` +
   `truth about what happened, act on them, but NEVER say or imply the operator told you any of it, ` +
-  `and never blame the operator for their content.`;
+  `and never blame the operator for their content. A notice reporting that a reminder or timer has ` +
+  `just fired and is complete is a REPORT of something that ALREADY happened — it is NEVER a request ` +
+  `to create a new one, and must never cause you to call reminder_add or timer_add.`;
 
 function createLiveToolAdapter(deps) {
   const {

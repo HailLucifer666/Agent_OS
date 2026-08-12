@@ -132,6 +132,10 @@ function createCalendarEffector({ fs, bus, goals }) {
     };
     reminders.push(record);
     save(reminders);
+    // F2: lets reminder-sensor's precise wake timer reschedule immediately
+    // instead of waiting for its safety-poll cadence to notice a reminder
+    // that was added while it was idle — see sensors/reminder-sensor.js.
+    if (bus) bus.emit('calendar.reminder-added', { id: record.id, dueAt: record.dueAt });
     var result = { reminder: record };
     if (action && !actionApproved) {
       result.needsApproval = true;
@@ -341,11 +345,11 @@ async function calendarUpcoming(args, ctx) {
 function buildCalendarTools(ctx) {
   var cal = createCalendarEffector(ctx);
   return [
-    { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires. OMIT this entirely for a plain reminder; do not pass an empty object' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
+    { name: 'reminder_add', description: 'Set a reminder to be told about a note or task at a later time — silent, no audible alert. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Do NOT use this for a timer/countdown/alarm ("set a timer for N minutes", "wake me in an hour") — use timer_add for those instead; it rings, this tool never does. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires. OMIT this entirely for a plain reminder; do not pass an empty object' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
     { name: 'reminder_list', description: 'List upcoming reminders. Shows all pending reminders with their scheduled times and text.', params: {}, danger: false, fn: async function(args) { return cal.listReminders(args); }, needs_result: true },
     { name: 'reminder_cancel', description: 'Cancel a pending reminder by its ID or text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'reminder_approve_action', description: 'Approve, once, the outward-facing action attached to a reminder (e.g. a scheduled WhatsApp send) so it can fire later without asking again. Match by reminder ID or text.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.approveReminderAction(args); } },
-    { name: 'timer_add', description: 'Set a timer that rings an audible alert when it goes off (in addition to speaking). Use for "set a timer for N minutes" style requests, not date-based reminders.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) { return cal.addReminder({ text: (args && args.label) || 'Timer', when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true }); } },
+    { name: 'timer_add', description: 'Set a TIMER: it rings an audible alert AND speaks when it goes off. Use this — never reminder_add — for ANY "set a timer for N minutes", "countdown", or "alarm" request; those are timers, not date-based reminders, and only this tool rings.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) { return cal.addReminder({ text: (args && args.label) || 'Timer', when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true }); } },
     { name: 'timer_cancel', description: 'Cancel a pending timer by its label/text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'calendar_upcoming', description: 'List upcoming events from the connected Google Calendar (read-only). Requires GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN to be configured — degrades honestly with a clear setup message otherwise.', params: { max: 'number (optional) - max events to return, default 10' }, danger: false, fn: async function(args) { return calendarUpcoming(args, ctx); }, needs_result: true },
   ];

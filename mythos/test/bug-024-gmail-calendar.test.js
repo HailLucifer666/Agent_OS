@@ -103,7 +103,11 @@ describe('BUG-024: gmail tools return a clean config error when Google creds are
 });
 
 describe('BUG-024: reminder-sensor polls calendar.fireDueReminders() periodically', () => {
-  it('emits reminder.due for a past-due reminder on the first tick, marks it fired, and does not re-fire', (t) => {
+  it('emits reminder.due for a past-due reminder immediately on start, marks it fired, and does not re-fire', (t) => {
+    // F2 (2026-08-12, G5 diagnosis): waiting for the first interval tick before
+    // ever checking was ITSELF the up-to-30s lateness bug — an already-overdue
+    // reminder must fire the instant the sensor starts, not wait out a poll
+    // cycle it has no reason to wait for. See reminder-sensor.js.
     t.mock.timers.enable({ apis: ['setInterval'] });
 
     const bus = fakeBus();
@@ -116,12 +120,9 @@ describe('BUG-024: reminder-sensor polls calendar.fireDueReminders() periodicall
     const sensor = createReminderSensor({ calendar, bus });
 
     sensor.start();
-    assert.equal(bus._lastEvent('reminder.due'), null, 'should not fire before the first interval tick');
-
-    t.mock.timers.tick(30000);
 
     const evt = bus._lastEvent('reminder.due');
-    assert.ok(evt, 'expected reminder.due to have been emitted');
+    assert.ok(evt, 'an already-overdue reminder must fire immediately on start, not wait for a poll tick');
     assert.equal(evt.payload.id, 'rem-a');
     assert.equal(evt.payload.text, 'stand up');
 

@@ -155,6 +155,11 @@ const ALLOWED_EVENTS = new Set([
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
 
+  // calendar.* — F2 (2026-08-12): lets reminder-sensor's due-time wake timer
+  // reschedule the instant a reminder is created, instead of waiting for its
+  // safety-poll cadence to notice one added while it was idle.
+  'calendar.reminder-added',
+
   // gmail.* (Item 7 — Gmail unread triage sensor, mirrors reminder-sensor)
   'gmail.unread-batch',
 
