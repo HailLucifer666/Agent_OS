@@ -136,7 +136,14 @@ test('an update installs silently — the setup wizard belongs to a fresh instal
   // opposite of the reason it exists (same trap as release-script.test.js).
   const code = readMainJs().split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
   const calls = code.match(/quitAndInstall\(([^)]*)\)/g) || [];
-  assert.ok(calls.length >= 2, 'both install paths (the modal and the HUD button) must be covered');
+  // Both install paths (the modal and the HUD button) now funnel through
+  // beginInstall(), which is the ONE quitAndInstall call site — that funnel is
+  // what makes the pre-install handover (moving the tool dirs out of the tree,
+  // recording the attempt) impossible to have on one path and not the other.
+  // See test/electron-update-handoff.test.js, which pins the funnel itself.
+  assert.ok(calls.length >= 1, 'there must be an install path at all');
+  assert.ok((code.match(/beginInstall\(/g) || []).length >= 3,
+    'both install paths must reach it: the definition plus the modal and the HUD button');
   for (const call of calls) {
     assert.match(call, /quitAndInstall\(true,\s*true\)/,
       `every install path must pass isSilent=true and forceRunAfter=true — found ${call}. ` +

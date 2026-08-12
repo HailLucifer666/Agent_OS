@@ -73,9 +73,37 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 //   2. the child writes to its own log file, not the inherited pipe (see
 //      startChild). The parent's stdout/stderr are left untouched for `npm
 //      start` from a terminal, where they're useful.
+// ---- main.log ----------------------------------------------------------------
+// stderr is written to a pipe nobody reads when the app is launched by
+// double-click, so until 2026-08-13 a GUI-launched main process left NO evidence
+// of anything: "it opens and closes immediately" had to be diagnosed from file
+// timestamps, and a 40-minute silent update was indistinguishable from a dead
+// app. Every line now also lands in <userData>/logs/main.log.
+//
+// Truncate-at-a-cap rather than rotation: one file, no machinery, and the lines
+// that matter are the recent ones. userData (not the install tree) for the same
+// reason as everything else here — writable without elevation, survives updates.
+const MAIN_LOG_MAX_BYTES = 2 * 1024 * 1024;
+let mainLogPath = null;
+function mainLogFile() {
+  if (mainLogPath) return mainLogPath;
+  // Safe before app.whenReady() (unlike `screen`/`powerMonitor`), and safe here
+  // specifically because app.setName('MYTHOS') runs at the top of this file.
+  const dir = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  mainLogPath = path.join(dir, 'main.log');
+  return mainLogPath;
+}
 function log(...args) {
   const line = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ') + '\n';
   try { process.stderr.write(line); } catch { /* broken pipe in GUI mode — swallow */ }
+  try {
+    const file = mainLogFile();
+    try {
+      if (fs.statSync(file).size > MAIN_LOG_MAX_BYTES) fs.truncateSync(file, 0);
+    } catch { /* first write — no file to cap yet */ }
+    fs.appendFileSync(file, line);
+  } catch { /* a log that cannot be written must never take the app down */ }
 }
 function safeStringify(v) {
   try { return v instanceof Error ? v.message : JSON.stringify(v); } catch { return String(v); }
@@ -863,7 +891,10 @@ const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
 // therefore nothing secret — can ride the event into a renderer that also loads
 // remote pages. See electron/preload.js and
 // mythos/test/electron-preload-surface.test.js, which pins the whole surface.
-const UPDATE_STATES = ['idle', 'available', 'downloading', 'ready', 'error'];
+// 'incomplete': the previous launch handed over to the installer and the version
+// did not change (see unfinishedUpdate()). News, not a fault — but news the
+// operator got no hint of before 2026-08-13.
+const UPDATE_STATES = ['idle', 'available', 'downloading', 'ready', 'error', 'incomplete'];
 let updaterRef = null;               // set once checkForUpdates() has built one
 let updateState = { state: 'idle', version: '' };
 
@@ -899,7 +930,7 @@ ipcMain.handle('mythos:install-update', async (event) => {
   if (updateState.state === 'ready' && updaterRef) {
     log('auto-update: installing', updateState.version, '(HUD button) and restarting');
     setImmediate(() => {
-      try { updaterRef.quitAndInstall(true, true); } catch (err) {
+      try { beginInstall(updaterRef, updateState.version); } catch (err) {
         log('auto-update: quitAndInstall failed —', err && err.message);
       }
     });
@@ -1016,6 +1047,103 @@ function checkForUpdates() {
   }
 }
 
+// ---- the handover to the installer -------------------------------------------
+// Everything that must happen before NSIS takes the machine over. BOTH install
+// paths (the dialog below and the HUD's Update button) call beginInstall(), so
+// the two cannot drift apart.
+//
+// WHY (operator, 2026-08-13): the 0.1.7 update was accepted and the app never
+// came back — white icon, dead double-click, for 40+ minutes. Nothing was
+// corrupt. The installer was still running, because the ≤0.1.6 layout put the
+// Hermes Python venv INSIDE the install tree: ~17.6k files / ~1 GB that NSIS must
+// delete before it can extract a ~1.2 GB payload. A silent install shows no
+// window and no progress bar, so a working install looks exactly like a dead app.
+//
+// Moving the tool trees out first turns that delete into a directory rename, and
+// puts them where 0.1.7 wants them anyway: <userData>/tools is what
+// MYTHOS_TOOLS_DIR points at (see startChild), what setup-hermes.js and
+// setup-android.js write to, and what build/installer.nsh probes when it decides
+// a component is "already installed".
+//
+// IT CAN LEGITIMATELY FAIL, and must then get out of the way. A rename across
+// volumes throws EXDEV — an install on D: with userData on C: is a real layout on
+// this operator's machine — and copying a gigabyte here would freeze the main
+// process with the window already closing. Rescuing the tools is an optimisation.
+// Blocking an update is not an option, so every failure logs and installs anyway.
+const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
+
+function rescueToolDirs() {
+  if (!app.isPackaged) return; // a dev run has no install tree for NSIS to delete
+  const src = path.join(process.resourcesPath || '', 'app.asar.unpacked');
+  const dest = path.join(app.getPath('userData'), 'tools');
+  for (const name of RESCUABLE_TOOL_DIRS) {
+    try {
+      const from = path.join(src, name);
+      const to = path.join(dest, name);
+      if (!fs.existsSync(from)) continue;
+      if (fs.existsSync(to)) {
+        // Already migrated. Never clobber the userData copy with an older
+        // in-tree one — the installer deleting the stale duplicate is correct.
+        log('auto-update: tools —', name, 'already lives in userData; leaving the in-tree copy to the installer');
+        continue;
+      }
+      fs.mkdirSync(dest, { recursive: true });
+      fs.renameSync(from, to);
+      log('auto-update: tools — moved', name, 'out of the install tree to', to);
+    } catch (err) {
+      log('auto-update: tools — could not move', name, '—', err && err.message, '— installing anyway (this will be slow)');
+    }
+  }
+}
+
+// An update that never completes used to be silent on the next launch: the app
+// came back on the old version and said nothing. This file is written before the
+// handover and read (then cleared) on the next boot — if it is still there and
+// the version has not moved, the install did not happen.
+function updateAttemptPath() {
+  return path.join(app.getPath('userData'), 'update-attempt.json');
+}
+
+function recordUpdateAttempt(version) {
+  try {
+    fs.writeFileSync(updateAttemptPath(), JSON.stringify({
+      version: String(version || ''),
+      from: app.getVersion(),
+      at: new Date().toISOString(),
+    }, null, 2));
+  } catch (err) {
+    log('auto-update: could not record the update attempt —', err && err.message);
+  }
+}
+
+// Returns the version that failed to install, or null. Clears the file either
+// way: one report per attempt, never a banner that cannot be dismissed.
+function unfinishedUpdate() {
+  const file = updateAttemptPath();
+  let record = null;
+  try {
+    if (!fs.existsSync(file)) return null;
+    record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    log('auto-update: update-attempt.json is unreadable —', err && err.message);
+  }
+  try { fs.unlinkSync(file); } catch { /* already gone */ }
+  const target = record && String(record.version || '');
+  if (!target) return null;
+  if (target === app.getVersion()) {
+    log('auto-update: the update to', target, 'completed');
+    return null;
+  }
+  log('auto-update: the last update to', target, 'did NOT complete — still running', app.getVersion());
+  return target;
+}
+
+function beginInstall(autoUpdater, version) {
+  recordUpdateAttempt(version);
+  rescueToolDirs();
+  autoUpdater.quitAndInstall(true, true);
+}
+
 // The install gate. A modal dialog rather than a notification, because this one
 // has consequences (the app exits and the NSIS installer runs) and a
 // notification is dismissable by accident.
@@ -1047,14 +1175,21 @@ function promptInstall(autoUpdater, version) {
       cancelId: 1,
       title: 'MYTHOS update ready',
       message: `MYTHOS ${version} is ready to install.`,
-      detail: 'Restarting takes about half a minute. Your vault, keys and PIN are untouched by an update.',
+      // Measured, not guessed: "about half a minute" was wrong by a factor of
+      // eighty on the 0.1.7 upgrade (see beginInstall above), and a wrong ETA on
+      // a silent install is what turns a working update into "the app is dead".
+      // Say what the operator will actually see: nothing.
+      detail: 'This window will close and the installer will run WITHOUT a progress bar — that is normal.\n\n'
+        + 'It usually takes under a minute, but an upgrade from an older build can take considerably longer '
+        + 'while it replaces the installed files. MYTHOS reopens by itself when it finishes.\n\n'
+        + 'Your vault, keys and PIN are untouched by an update.',
     }).then(({ response }) => {
       if (response !== 0) {
         log('auto-update: operator chose Later — it will be offered again on the next launch.');
         return;
       }
       log('auto-update: installing', version, 'silently and restarting');
-      autoUpdater.quitAndInstall(true, true);
+      beginInstall(autoUpdater, version);
     }).catch((err) => log('auto-update: install prompt failed —', err && err.message));
   } catch (err) {
     // A dialog that cannot be shown must not lose the download or kill the app.
@@ -1082,6 +1217,11 @@ if (!gotLock) {
     // not here" complaint this exists to fix.
     syncVault('--pull');
     startChild();
+    // Before checkForUpdates(), so the log reads in the order things happened.
+    // A later 'available'/'ready' from the check legitimately supersedes this
+    // banner — that one is more actionable, and the log keeps the evidence.
+    const failedUpdate = unfinishedUpdate();
+    if (failedUpdate) setUpdateState('incomplete', failedUpdate);
     checkForUpdates();
 
     // --- Microphone permission for the HUD's getUserMedia() -----------------

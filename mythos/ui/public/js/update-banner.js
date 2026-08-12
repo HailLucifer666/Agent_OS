@@ -29,6 +29,11 @@ export function updateBannerModel(state, version) {
       return { hidden: false, text: `${named} is downloading…`, action: null, tone: 'info' };
     case 'ready':
       return { hidden: false, text: `${named} is ready to install.`, action: 'Restart & update', tone: 'ready' };
+    case 'incomplete':
+      // The previous launch handed over to the installer and came back on the
+      // same version. Retryable through the same button as 'error': installUpdate()
+      // in a non-ready state nudges a re-check.
+      return { hidden: false, text: `${named} did not finish installing.`, action: 'Try again', tone: 'error' };
     case 'error':
       // Retryable: main.js re-checks when installUpdate() is called in a
       // non-ready state, so the button is honest.
