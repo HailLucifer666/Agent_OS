@@ -290,6 +290,65 @@ function decryptedKeysForChild() {
 // themselves in .env — we deliberately do NOT inject it as one of "our" keys,
 // so it never appears in getKeyNames()/hasKey() and is never echoed anywhere.
 
+// ---- Task D4: the app authenticates itself ------------------------------------
+// Whatever the source (keys.json via decryptedKeysForChild(), or a plain .env
+// MYTHOS_AUTH_TOKEN for headless/Docker), the main process already holds the
+// same value it forks into the child's env (startChild() below) — the server
+// it is about to talk to trusts exactly that secret. Reading it back here adds
+// no new exposure: this function returns nothing to the renderer and adds no
+// preload channel; it only lets the main process present a credential it
+// already possesses. Same precedence as startChild()'s env merge, so this can
+// never disagree with what the server itself will accept.
+function resolveAuthTokenForPriming() {
+  return decryptedKeysForChild().MYTHOS_AUTH_TOKEN || process.env.MYTHOS_AUTH_TOKEN || '';
+}
+
+// The app holds its own credential (see resolveAuthTokenForPriming above).
+// Asking the operator to paste it back after every restart is asking a human
+// to be a password manager for a secret the process already has. A loopback
+// install has no token at all (/health reports authRequired:false) and never
+// reaches past the first line — untouched, per AD-8.
+//
+// A failure here (bad token, rate limit, combined-PIN 409, server not up yet)
+// must still land the operator on the existing gate with the server's
+// verbatim message: nothing is swallowed, and nothing beyond a status code is
+// ever logged — the token itself must never reach a URL, a log line, or an
+// error message.
+async function primeAuthSession(win, token, port) {
+  if (!token) return;
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+  } catch (err) {
+    // Connection refused (server not up yet) etc. — never fatal; the operator
+    // still sees the ordinary gate, and waitForLateReady() already covers the
+    // "server was late" race for the window itself.
+    log('auth.session-prime: request failed —', err && err.message);
+    return;
+  }
+  if (!res.ok) {
+    log('auth.session-prime: exchange failed, status', res.status);
+    return;
+  }
+  const setCookie = res.headers.get('set-cookie') || '';
+  const value = (/mythos_token=([^;]+)/.exec(setCookie) || [])[1];
+  if (!value) {
+    log('auth.session-prime: 200 response carried no mythos_token cookie');
+    return;
+  }
+  await win.webContents.session.cookies.set({
+    url: `http://127.0.0.1:${port}`,
+    name: 'mythos_token',
+    value,
+    httpOnly: true,
+    sameSite: 'lax',
+  });
+}
+
 // ---- child lifecycle ----------------------------------------------------------
 let child = null;
 let mainWindow = null;
@@ -1166,6 +1225,12 @@ if (!gotLock) {
         backgroundThrottling: false,
       },
     });
+    // Task D4: prime the HUD's own session BEFORE the first load, so a
+    // configured deployment never shows the paste-the-token gate on a normal
+    // restart. A no-op when there's no token to present (see
+    // resolveAuthTokenForPriming/primeAuthSession above), and never fatal —
+    // a failed prime just leaves the existing gate exactly as it was.
+    await primeAuthSession(mainWindow, resolveAuthTokenForPriming(), PORT);
     mainWindow.loadURL(`http://${BIND}:${PORT}`);
     if (!ready) waitForLateReady();
 
