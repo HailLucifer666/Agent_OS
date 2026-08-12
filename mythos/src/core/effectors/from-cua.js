@@ -144,6 +144,51 @@ async function cua_get_window_state(params) {
   return ok(r.result);
 }
 
+// Live session 2026-08-12: cua_click({pid: 2736, element_index: 10}) fired
+// twice and hit "What's New" both times, after the operator said the first
+// click was wrong — the model just retried the exact same args. Guard against
+// that by remembering the resolved label of the last click at a given
+// (pid/window, element_index) and refusing an identical repeat unless a fresh
+// resolve shows the index now maps to something else (UI moved on).
+//
+// Cache lives module-level, keyed by pid (falling back to window_id when no
+// pid is given) plus element_index — deliberately not per-turn, since this
+// effector has no visibility into turn boundaries. Bounded by a simple FIFO
+// size cap (CLICK_LABEL_CACHE_MAX) rather than any close/turn-based eviction,
+// per the "keep it simple" guidance — a size cap alone is enough to stop
+// unbounded growth across a long-running session.
+var CLICK_LABEL_CACHE_MAX = 200;
+var clickLabelCache = new Map(); // key -> label (string) | null
+
+function clickCacheKey(p) {
+  var winPart = (p.pid !== undefined && p.pid !== null)
+    ? ('pid:' + p.pid)
+    : ('wid:' + coerceWindowId(p.window_id));
+  return winPart + ':idx:' + p.element_index;
+}
+
+function cacheClickLabel(key, label) {
+  if (!clickLabelCache.has(key) && clickLabelCache.size >= CLICK_LABEL_CACHE_MAX) {
+    var oldestKey = clickLabelCache.keys().next().value;
+    clickLabelCache.delete(oldestKey);
+  }
+  clickLabelCache.set(key, label);
+}
+
+// Re-reads the live element tree via the same pid/window_id resolution
+// cua_get_window_state already does, and returns the label currently at
+// element_index (or null if nothing resolves there anymore).
+async function resolveClickedLabel(p) {
+  var stateRes = await cua_get_window_state({ pid: p.pid, window_id: p.window_id });
+  if (!stateRes.ok) return { ok: false, label: null };
+  var sc = (stateRes.result && typeof stateRes.result === 'object' && stateRes.result.structuredContent) || {};
+  var elements = sc.elements || [];
+  var match = elements.filter(function (e) { return e && Number(e.element_index) === Number(p.element_index); })[0];
+  if (!match) return { ok: true, label: null };
+  var label = match.label !== undefined ? match.label : match.name;
+  return { ok: true, label: label === undefined ? null : label };
+}
+
 // Element-addressed click — the load-bearing tool. element_index points into
 // the tree cua_get_window_state returns. delivery_mode:'foreground' escalates a
 // background click to a foreground one if the first attempt didn't land (mirrors
@@ -154,6 +199,20 @@ async function cua_click(params) {
   if (p.element_index === undefined && p.element_index !== null) {
     return fail('cua_click requires element_index (from cua_get_window_state). For a raw coordinate click use click_at instead.');
   }
+
+  var key = clickCacheKey(p);
+  if (clickLabelCache.has(key)) {
+    var cachedLabel = clickLabelCache.get(key);
+    var resolved = await resolveClickedLabel(p);
+    if (resolved.ok && resolved.label !== null && resolved.label === cachedLabel) {
+      return fail('cua_click refused: element_index ' + p.element_index + ' still resolves to "' + cachedLabel +
+        '" — the same control your previous click already hit there. Re-check cua_get_window_state and pick a different element_index.');
+    }
+    // Label changed (or could not be resolved) — not the same wrong click. Let it through
+    // and refresh the cache so the NEXT repeat compares against current reality.
+    cacheClickLabel(key, resolved.ok ? resolved.label : cachedLabel);
+  }
+
   var clickArgs = { pid: p.pid, window_id: coerceWindowId(p.window_id), element_index: p.element_index };
   var r = await cuaDriver.invoke('click', clickArgs);
   if ((!r || !r.ok) && p.foreground !== false) {
@@ -161,6 +220,13 @@ async function cua_click(params) {
     r = await cuaDriver.invoke('click', Object.assign({}, clickArgs, { delivery_mode: 'foreground' }));
   }
   if (!r || !r.ok) return fail(cuaErrText(r && r.result, 'cua-driver click failed'));
+
+  // First time this key has ever been clicked — seed the cache once so a
+  // future repeat has a real label to compare against.
+  if (!clickLabelCache.has(key)) {
+    var seeded = await resolveClickedLabel(p);
+    cacheClickLabel(key, seeded.ok ? seeded.label : null);
+  }
   return ok(r.result);
 }
 
