@@ -5108,3 +5108,203 @@ caption — is unit-tested (green under `node --test`) and has NOT been
 checked by an operator against the installed build. Read every "Fixed" above
 as "fixed and unit-verified," never as "live-verified," unless this section
 is updated again after an actual operator pass.
+
+---
+
+## Diagnosis verdicts (2026-08-12, workstream G + E5)
+
+Six faults from the installed-build session were symptom-certain but
+mechanism-unknown, so each got a read-only investigation ending in a written
+verdict instead of a speculative patch. **Four of the six contradicted the
+hypothesis the repair plan had written down.** That is the whole value of having
+run them before writing the fixes, and it is why these verdicts are recorded
+here rather than only implied by the commits that follow from them.
+
+Every verdict separates what was PROVEN from source, what is INFERRED, and what
+remains UNKNOWN without a live capture. Nothing here is operator-verified
+against the installed build.
+
+### G1 - two voices spoke at once (A.1)
+
+**The plan's hypothesis is wrong.** It expected the TTS chain to fall through
+under the Gemini quota and two *providers* to speak the same turn.
+`providers/tts.js` `synthesize()` walks the chain per-chunk and strictly
+sequentially: no audio reaches the client until one provider resolves with
+non-empty bytes. A mid-chain failover therefore changes voice *between* chunks,
+in order. It cannot make two providers speak one chunk. It can produce an
+audible voice *change* mid-reply, since `active` is sticky once it advances -
+plausibly mis-read as "two voices" if overlap and sequence were not
+distinguished.
+
+The real mechanism is BUG-060's, already half-fixed: local-TTS chunks emitted
+while a Live session is open, so Live's PCM and the local audio play together.
+That fix gates `proactiveSpeak()` and `sendSpokenReply()` - but
+**`handleVisionQuery()` in `server/index.js` has no Live check at all** and
+emits `speech-chunk` frames unconditionally. Client-side there is no cross-guard
+either: `pcm-player.js` and `voice-loop.js`'s chunk queue are independent
+playback engines with no knowledge of each other.
+
+**Check first, before any code change:** whether the installed build predates
+the BUG-060 fix. Packaging drift is this whole plan's premise, and a stale
+packaged `server/index.js` would explain the incident with no new mechanism at
+all.
+
+### G2 - user transcript dropped on most turns (A.3)
+
+**The cheapest hypothesis is dead on inspection.** `inputAudioTranscription: {}`
+and `outputAudioTranscription: {}` are both requested on every session open in
+`live-session.js` `buildSetup()`, matching the frozen wire protocol in the V2
+spine verbatim. This is not a config bug.
+
+The real shape is a late-frame race. `userText`/`assistantText` are plain
+closure variables with **no generation tag**, reset synchronously the instant
+`turnComplete` appears in any frame. Nothing proves an `inputTranscription`
+frame cannot arrive in a later frame, after that reset. Meanwhile
+`live-tool-adapter.js` already implements a `turnGeneration` guard for exactly
+this "late frame after the turn closed" class - the transcript path simply never
+got the same treatment. That asymmetry is the strongest evidence for the race,
+and it explains why BUG-124 and BUG-131 both stalled at "instrumented, not
+root-caused". A roughly 20-of-N hit rate also fits a race; a config fault would
+be 0% or 100%.
+
+**The ASR language drift (A.4) is NOT fixable at this layer — checked, closed.**
+G2 observed that no `languageCode` is set anywhere (a repo-wide grep returns zero
+hits) and proposed pinning one as a cheap one-line fix. That proposal was wrong,
+and it is recorded here so nobody spends a second session re-deriving it.
+
+The field does not exist. Google's canonical proto
+(`google/ai/generativelanguage/v1beta/generative_service.proto`, the exact
+`v1beta` package `live-session.js`'s `WS_URL` targets) declares:
+
+```
+message AudioTranscriptionConfig {}
+```
+
+An empty message, zero fields. The official API reference states the same in
+words: "This type has no fields." Both `inputAudioTranscription` and
+`outputAudioTranscription` reference that one empty type. The only
+language-shaped field anywhere nearby is `translationConfig.targetLanguageCode`,
+which belongs to the separate live-translation feature this repo does not use.
+Google's own `adk-python` issue #5542 reports exactly this drift from other
+users — English speech transcribed as Hindi, Spanish, Japanese — and is an open
+*request* for such a field, confirming it is absent rather than merely
+undocumented. It also records that `generationConfig.speechConfig.languageCode`
+(the output-voice language) does not constrain input transcription either, so
+that is not a workaround worth testing.
+
+So `inputAudioTranscription: {}` is already maximally correct for this API
+version, the V2 spine's §3 shape is accurate rather than a placeholder, and
+there is nothing to configure. The drift is real and remains **open with no
+client-side remedy**; the only routes are an upstream API change or a different
+ASR path entirely. Do not "fix" this by inventing a key — an unrecognised field
+in the frozen `setup` frame risks the API rejecting it and killing every voice
+session, turning a cosmetic transcript bug into a total outage.
+
+`live-turn-silent` is a different anomaly and must not be conflated with this
+one: it means visible reply text with zero audio parts, an output-audio failure,
+not an input-transcript gap.
+
+### G3 - late tool outcomes (A.5) and duplicate dispatch (A.10)
+
+**The plan assumed one shared mechanism; only half holds.** Causation is proven
+for the earlier BUG-128 incident by this repo's own root-cause note: the turn
+closed before the `toolResponse` went back, Gemini never saw an answer, and it
+reissued under fresh call ids. It is not established for the 2026-08-12 storm -
+those calls completed in milliseconds, well inside `TOOL_ACK_DEADLINE_MS`, so
+they never raced the turn boundary. The strongest counter-evidence is the A3 fix
+commit's own message. The 01:43 anomaly payloads do not exist anywhere in this
+repo, so whether those late outcomes were even `open_web` is unknown and
+unrecoverable from source.
+
+**A3 does not leave the model empty-handed** - a worry worth recording as
+checked and dismissed. Both suppression branches always push an informative
+`duplicate-suppressed` response telling the model to await the original's
+outcome, computed synchronously in the same invocation. And the `myGeneration`
+snapshot added in `52257d1` means the gate stops consulting the signature set
+once its batch's turn has closed, so it can never suppress a repeat whose
+original might be the lost one.
+
+**The real remaining gap:** a late outcome is correctly dropped from the audit,
+but its `functionResponse` still goes out addressed to a turn Gemini has already
+closed - into a channel with no addressee. The fix already exists in that file
+(`reportLateOutcome`'s `[SYSTEM]`-prefixed `sendText`, used for `SLOW_TOOLS`);
+the late-drop path should route through it too.
+
+### G4 - the accepted confirm (B.3)
+
+**No consent bug.** A spoken "No" could not have accepted anything:
+`show_desktop` is Tier 2 and is not in `SEND_TOOLS`, so it never arms the
+spoken-confirm path at all. There was no path, not even a wrong one.
+`AFFIRMATIVE_RE` is fully anchored, so "No" cannot match it even as a substring,
+and `NEGATIVE_RE` is tested first regardless. Cross-connection accept is closed:
+every reachable create-site passes a real connection id, and `accept()` is
+single-use. The `Thumb_Up` gesture auto-accept path exists but was physically
+impossible that night, because the gesture model was not in the build.
+
+The accept was therefore almost certainly a genuine click that coincided with
+the operator speaking. **But that cannot be proven, and that is itself the
+finding:** `dispatchAction` writes `actor: ctx.channel`, a hardcoded
+per-code-path literal (`'confirm-accept'`), never a surface or connection
+identifier. This incident is unattributable in principle. The audit row needs to
+record which surface resolved a confirm.
+
+**Consequence of shipping the gesture model (A25, `ecb6e47`):** the `Thumb_Up`
+auto-accept in `ui/public/js/app.js` calls `.confirm-accept.click()` on
+recognition alone, with no second step. It was inert while the model was
+missing. It is now live in the installer, so a false-positive gesture silently
+approves a leash confirm. This needs an explicit decision, and it is a
+consent-surface change that arrived as a side effect of a packaging fix.
+
+### G5 - the 11-22s reminder lag (F.4)
+
+**The plan's framing invited the reflex fix; the verdict rules it out.** The
+delay is the poll interval and nothing else. `sensors/reminder-sensor.js` was a
+fixed 30s `setInterval` anchored to boot, so a reminder's `dueAt` lands at an
+arbitrary phase inside that window, giving a uniform 0-30s detection delay. 11s
+and 22s are two phase offsets in one cycle. There is no turn-boundary gate, no
+debounce and no queue anywhere between `fireDueReminders()` and
+`liveSession.sendText()` - so "deliver without waiting for a turn boundary" was
+already true, and there was no gate to remove.
+
+Shortening the poll would only narrow the window. The fix, landed as `0bd8408`,
+schedules against each reminder's actual `dueAt` and keeps a coarse poll purely
+as a safety net for clock jumps and missed reschedules.
+
+**The re-creation bug** (01:36:05 fire, then `reminder_add` at 01:36:14) has its
+own mechanism: the notice was built as `'Reminder: ' + text`, which is literally
+request-shaped, and Gemini's wire protocol necessarily attributes injected text
+to the *user* role, because no system-role channel exists after setup. BUG-117's
+`SYSTEM_NOTICE_PREFIX` makes the notice self-describing, but its instruction is
+generic and never says that a firing is not a request. Both halves are fixed in
+`0bd8408`.
+
+### E5 - screen_look cannot read system specs
+
+**Not a targeting bug.** `screen_look` has no targeting parameter at all -
+`from-pc.js` calls `delegate({cmd:'screen_look'})` with no target field, and the
+schema takes only an optional `query`. It always captures the whole primary
+display. The two tests that look relevant, bug-108 and bug-126, pin
+`screen_read_text`'s *optional* pid scoping, not this.
+
+The defect is the plan's stronger claim, confirmed: CPU and RAM already live
+inside MYTHOS's own server (`os.cpus()`/`os.totalmem()` in
+`server/routes/system.js`, served at `GET /api/system`, rendered by the
+dashboard's own system widget) - and **no tool exposes any of it to the model.**
+`read_status` returns `{status, recentJobs, openCommitments, persona}` and
+nothing host-related. Nothing wraps `/api/system`. `manage_widget` and
+`spawn_widget` are layout-only.
+
+So the model did not choose badly among options; `screen_look` was its only
+option, and it screenshotted a screen that was showing MYTHOS's own dashboard.
+The fix is capability, not targeting: expose the data through a tool, and tell
+`screen_look`'s description not to be used for system specs. Explicitly no
+pixel-reading fallback - MYTHOS should never OCR itself for data it owns.
+
+### Standing correction: the gesture model's size
+
+`gesture_recognizer.task` is described as "8.4MB" in this file, in
+`THIRD_PARTY_NOTICES.md`, and in the packaging test's comment. It is
+**197,121 bytes, about 192 KB** - roughly 44x smaller. The figure originated in
+the 2026-08-04 audit and has been copied forward unchecked since. It matters
+because installer growth was one side of the ship / do-not-ship licence
+tradeoff, and the real cost is negligible.
