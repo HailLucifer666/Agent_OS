@@ -195,8 +195,15 @@ export function checkpointReply(id, accept, feedback) {
   sendMessage({ type: 'checkpoint-reply', id, accept, feedback });
 }
 
-export function confirmReply(confirmId, accept) {
-  sendMessage({ type: 'confirm-reply', confirmId, accept });
+// G4: `surface` names which UI surface resolved this confirm — 'click' for a
+// real pointer on the Approve button, 'gesture' for the Thumb_Up handler that
+// synthesizes that click. Without it every accept looked identical in the
+// audit no matter what produced it, which is what made the 2026-08-12 incident
+// unattributable in principle. Omitted rather than defaulted when the caller
+// does not know: the server records 'unknown', because inventing an
+// attribution is the exact defect being fixed here.
+export function confirmReply(confirmId, accept, surface) {
+  sendMessage({ type: 'confirm-reply', confirmId, accept, ...(surface ? { surface } : {}) });
 }
 
 // Register a reply handler for a server-initiated reqId (proactive speech).

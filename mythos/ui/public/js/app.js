@@ -216,6 +216,13 @@ const compose = createComposeBar({
   // Provider keys + local PIN, on demand. Re-probes /api/setup/status first so
   // the wizard reflects what the server sees now, not what it saw at boot.
   onSetup: () => setupScreen.open(),
+  // F7: the full-session transcript. The panel is not new — it has been in the
+  // registry as 'conversation' all along — but nothing on the chat bar opened
+  // it, so the operator's only view of the session was whatever few turns the
+  // compose caption happened to be showing.
+  onTranscript: () => {
+    overlays.openPanel('conversation');
+  },
 });
 
 // mic indicator API still used by some caption calls below — keep a shim.
@@ -424,7 +431,11 @@ function applyGestureMic(gesture) {
 }
 
 const GESTURE_ACTIONS = {
-  Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
+  // G4: tag the button with the real origin BEFORE the synchronous .click()
+  // fires confirm-modal.js's listener, so the audit trail can tell a gesture
+  // accept apart from a human click on the same button — see that listener
+  // for why the click event itself carries no such distinction on its own.
+  Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.dataset.mythosSurface = 'gesture'; b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
   Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
   Open_Palm:   () => applyGestureMic('Open_Palm'),
   Pointing_Up: () => applyGestureMic('Pointing_Up'),

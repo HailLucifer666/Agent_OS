@@ -41,8 +41,20 @@ export function mountConfirmModal(root, opts) {
     `;
     // textContent, not innerHTML — the summary embeds tool args (untrusted data).
     overlay.querySelector('.confirm-summary').textContent = payload.summary || payload.tool || 'Confirm action?';
-    overlay.querySelector('.confirm-accept').addEventListener('click', () => {
-      confirmReply(payload.id, true);
+    overlay.querySelector('.confirm-accept').addEventListener('click', (ev) => {
+      // G4 (unattributable-consent finding): a real human click and app.js's
+      // Thumb_Up gesture handler both fire this SAME 'click' event (it calls
+      // .confirm-accept.click(), a genuine synchronous DOM click) — nothing
+      // about the event itself tells the two apart. app.js tags the button
+      // with data-mythos-surface='gesture' immediately before calling
+      // .click(); since click() dispatches synchronously, that attribute is
+      // already set by the time this listener runs. Read + clear it here so
+      // a later, unrelated human click on the (re-created, per-showModal)
+      // button never inherits a stale tag.
+      const target = ev.currentTarget;
+      const surface = target.dataset.mythosSurface === 'gesture' ? 'gesture' : 'click';
+      delete target.dataset.mythosSurface;
+      confirmReply(payload.id, true, surface);
       closeModal();
     });
     overlay.querySelector('.confirm-reject').addEventListener('click', () => {

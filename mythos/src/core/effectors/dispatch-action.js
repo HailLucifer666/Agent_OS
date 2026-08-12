@@ -197,6 +197,23 @@ async function dispatchAction(decision, ctx) {
         // specific turn (voice reqId / confirmId / cortex tick) that caused it.
         actor: ctx.channel || 'cortex',
         traceId: traceId,
+        // G4 (unattributable-consent finding): actor above is a hardcoded
+        // per-code-path literal (server/index.js's handleConfirmReply always
+        // passes channel: 'confirm-accept'), so every accept looked identical
+        // in the audit no matter which surface produced it — a spoken "no"
+        // could not have caused an accept (show_desktop isn't in SEND_TOOLS,
+        // AFFIRMATIVE_RE/NEGATIVE_RE are anchored and reject-checked first,
+        // and accept() is single-use per confirm), but that could not be
+        // PROVEN from the audit trail either. `surface` carries the actual
+        // client-reported origin of a confirm-reply ('click' vs 'gesture'),
+        // defaulting to 'unknown' for anything that didn't report one — never
+        // 'click', which would be inventing an attribution, the exact defect
+        // this fixes. `acceptedScope` records which of the two accept()
+        // scopes tried in handleConfirmReply actually resolved the confirm
+        // ('connection' vs the T0-T2-only 'system' fallback), which is
+        // material to attribution and was previously indistinguishable too.
+        surface: ctx.surface || 'unknown',
+        acceptedScope: ctx.acceptedScope || undefined,
       });
     } catch (_) {}
   }

@@ -1057,6 +1057,34 @@ function createServer(deps) {
   let gmailPollCountGetter = null;
   function setGmailPollCountGetter(fn) { gmailPollCountGetter = typeof fn === 'function' ? fn : null; }
 
+  // F7: the two halves of the session transcript, for the conversation panel.
+  // vault/Conversation/session.json is a ROLLING WINDOW (HISTORY_MAX_TURNS,
+  // and it is dropped entirely once HISTORY_IDLE_TTL_MS passes), so it alone
+  // shows only the last few turns — which is exactly the complaint. The day's
+  // Episodic jsonl carries the rest. They overlap, so the client merges and
+  // de-duplicates them (ui/public/js/views/transcript-model.js); this route
+  // deliberately does no merging of its own, keeping that logic in one
+  // unit-tested place rather than reimplemented on both sides of the wire.
+  //
+  // Raw text, not parsed: the jsonl may contain a torn final line if the
+  // process died mid-write, and the client's parser already skips unparseable
+  // lines without dropping the rest of the file. Parsing here would mean
+  // choosing between throwing away a good file for one bad line, or
+  // duplicating that tolerance.
+  app.get('/api/conversation/history', (req, res) => {
+    // Today only. The panel is a SESSION transcript, not an archive, and
+    // reading the whole Episodic directory would grow unbounded with vault
+    // age for a view that shows one day.
+    const today = new Date().toISOString().slice(0, 10);
+    let session = null;
+    let episodic = '';
+    try { session = memory.fs.readJSON('Conversation/session.json', null); } catch (_) { /* no vault, or unreadable */ }
+    try { episodic = (memory.fs.readLines('Episodic/' + today + '.jsonl') || []).filter(Boolean).join('\n'); } catch (_) { /* no file yet today */ }
+    // Each half degrades on its own: a missing session.json still yields the
+    // episodic history, and vice versa. The panel renders whatever arrives.
+    res.json({ session: session, episodic: episodic });
+  });
+
   app.get('/api/status', async (req, res) => {
     try {
       const status = await probes.getStatus();
@@ -1886,6 +1914,11 @@ function createServer(deps) {
       // primary (and originally only) caller is unaffected.
       channel: ctx.channel || 'voice',
       traceId: ctx.traceId || null,
+      // G4: which surface (click/gesture/unknown) produced this dispatch, and
+      // which confirm.accept() scope resolved it (connection/system) — see
+      // handleConfirmReply and dispatch-action.js's audit write.
+      surface: ctx.surface,
+      acceptedScope: ctx.acceptedScope,
     });
   }
 
@@ -2948,10 +2981,27 @@ function createServer(deps) {
         }
         const text = String(msg.text || 'Describe what you see, briefly.').slice(0, 500);
 
+        // BUG-060, third site (vault/Incidents/2026-07-31.jsonl): proactiveSpeak()
+        // and sendSpokenReply() are already guarded against emitting edge-tts
+        // speech-chunk audio while a Gemini Live session is open on this
+        // connection — Live's own PCM playback IS the entity's voice, and
+        // stacking edge-tts on top of it is the "two voices" bug. This path had
+        // no such check. Resolved the same way sendSpokenReply() does.
+        // NOTE: this closes a real hole in THIS source file. It does not
+        // establish that the installed/packaged build the operator was running
+        // even contains the BUG-060 fix — packaging drift is this whole repair
+        // plan's premise, and a stale packaged server/index.js would explain the
+        // original incident with no new mechanism at all.
+        const liveSession = (typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
+        const liveOpen = !!(liveSession && liveSession.isOpen());
+
         // Captured ONCE for this vision answer, same rule as the other two speak
         // paths — every streamed sentence below comes from this chain object.
+        // ttsUp forced false when Live is open: onToken below becomes undefined,
+        // so the streamer/enqueueChunk machinery is never invoked and no
+        // speech-chunk is ever synthesized or sent for this turn.
         const activeChain = currentTts();
-        const ttsUp = await activeChain.isAvailable();
+        const ttsUp = liveOpen ? false : await activeChain.isAvailable();
         const streamer = createSentenceStreamer();
         // The third synthesis site. It streams sentences as the vision model
         // produces them, so it needs the same routing decision as the other two
@@ -3015,6 +3065,17 @@ function createServer(deps) {
           });
         } catch (_) { /* best-effort */ }
 
+        if (liveOpen) {
+          // Mirror proactiveSpeak's Live-open branch exactly: never emit
+          // speech-chunk edge-tts audio on top of Live's own PCM playback.
+          // The final `done` still carries the caption so the HUD shows the
+          // answer, marked chunked so the client finishes the turn silently
+          // instead of speaking the reply again locally.
+          liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${say}`);
+          send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: true });
+          activeSpeech.delete(msg.reqId);
+          return;
+        }
         if (ttsUp) {
           const tail = streamer.flush();
           if (tail) enqueueChunk(tail);
@@ -3059,6 +3120,10 @@ function createServer(deps) {
 
     async function handleConfirmReply(msg) {
       const { confirmId, accept } = msg;
+      // G4: which surface produced this reply. Old clients (pre-dating this
+      // field) send nothing here — recorded as 'unknown', never defaulted to
+      // 'click', which would invent an attribution nobody can vouch for.
+      const surface = (typeof msg.surface === 'string' && msg.surface) ? msg.surface : 'unknown';
       if (!accept) {
         // B3: Audit-log the rejection for security accountability.
         // Peek BEFORE reject — once rejected, the entry is deleted and peek() returns null.
@@ -3096,10 +3161,14 @@ function createServer(deps) {
       // T3/T4 actions require the originating connection to approve — prevents
       // any local WS client from approving dangerous actions (browser_evaluate, etc.)
       let action = leash.confirm.accept(confirmId, connectionId);
+      // G4: which of the two accept() scopes actually resolved this confirm —
+      // material to attribution, and previously indistinguishable in the audit.
+      let acceptedScope = action ? 'connection' : null;
       if (!action) {
         const tier = typeof leash.confirm.peekTier === 'function' ? leash.confirm.peekTier(confirmId) : null;
         if (tier === null || tier <= 2) {
           action = leash.confirm.accept(confirmId, 'system');
+          if (action) acceptedScope = 'system';
         }
       }
       if (!action) {
@@ -3120,7 +3189,7 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId });
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
         // S2S (Phase 5): feed the real outcome back to the Live session as a
         // realtimeInput text turn, so the model reports what ACTUALLY
         // happened (AD-4) rather than whatever it assumed while waiting. A
