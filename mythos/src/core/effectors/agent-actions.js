@@ -92,32 +92,15 @@ var BUILDER_PREAMBLE = [
   '\nTask: '
 ].join(' ');
 
-var REVIEWER_PREAMBLE = [
-  'You are the Kanban Reviewer agent. Review the deliverable below against its task.',
-  'You are thorough and honest — you never rubber-stamp. Check ALL of these:',
-  '1. Does the deliverable actually fulfil the task? Is it complete and self-contained?',
-  '2. Does the title use words from the task spec (not an invented brand name)?',
-  '3. Is the content topically related to the task (not a generic template)?',
-  '4. Are there placeholder texts, fake testimonials, or fabricated statistics?',
-  '5. Does it match any design requirements (dark theme, animations, etc.) from the spec?',
-  // The reviewer approved a news digest carrying a pricing table and ISO/SOC2
-  // badge carousel (2026-07-31) — it was checking for MISSING content, never for
-  // content nobody asked for.
-  '6. Does it contain sections the task never asked for — pricing tiers, certification or',
-  '   security badges, testimonials, team bios? Extra sections are a defect, not a bonus:',
-  '   flag each one.',
-  'Respond with ONLY a JSON object, no commentary, no markdown fence:',
-  '{"verdict": "approve" | "reject", "issues": ["specific issue 1", ...], "notes": "1-2 sentences"}'
-].join(' ');
-
-var REALITY_CHECK_PREAMBLE = [
-  'You are the Reality Checker. Verify that content in the deliverable is factually accurate',
-  'and not hallucinated. Flag: invented brand names, fabricated testimonials/quotes, made-up',
-  'statistics, generic marketing copy that has nothing to do with the task topic. If the',
-  'deliverable is about topic X but contains content about topic Y, flag it as off-topic.',
-  'Respond with ONLY a JSON object:',
-  '{"verdict": "approve" | "reject", "issues": ["specific problem 1", ...]}'
-].join(' ');
+// C3: the reviewer/reality-checker preambles used to be one hardcoded pair
+// applied to every artifact — including a landing-page checklist ("pricing
+// tiers, certification and security badges, testimonials, team bios") graded
+// onto a Snake game and a mythology visualisation. review-rubric.js now
+// selects the reviewer criteria by artifact type and requires every
+// [reality] finding to cite the artifact text it's about; see that file for
+// the full incident writeup.
+var reviewRubric = require('./review-rubric');
+var REALITY_CHECK_PREAMBLE = reviewRubric.REALITY_CHECK_PREAMBLE;
 
 var VISUAL_VERIFY_PREAMBLE = [
   'You are verifying a built web page by looking at a screenshot of the rendered result.',
@@ -422,6 +405,10 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     var specText = card.text
       ? card.text
       : card.title + (card.detail ? ' — ' + card.detail : '');
+    // C3: no artifact "type" field exists on the card — classify from the
+    // spec text that's already there so the reviewer isn't grading a game
+    // or visualisation against a landing-page checklist.
+    var artifactType = reviewRubric.classifyArtifactType(specText);
 
     // 1. Visual verification (if browser is online)
     var visual = await verifyBuildVisually(artifact.path, specText);
@@ -439,7 +426,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           lane: 'simple',
           persona: personas.loadPersona('reviewer'),
           messages: [{ role: 'user', content:
-            REVIEWER_PREAMBLE +
+            reviewRubric.buildReviewerPreamble(artifactType) +
             '\n\nTASK: ' + specText +
             '\n\nDELIVERABLE (truncated to 16000 chars):\n' + content.slice(0, 16000)
           }],
@@ -467,7 +454,10 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         });
         if (realityResult && !realityResult.offline && realityResult.parsed) {
           if (realityResult.parsed.verdict === 'reject') {
-            var rcIssues = Array.isArray(realityResult.parsed.issues) ? realityResult.parsed.issues : [];
+            // C3: an uncited [reality] claim is dropped, not surfaced — see
+            // review-rubric.js's filterRealityFindings for why (the Space
+            // Grotesk false positive).
+            var rcIssues = reviewRubric.filterRealityFindings(realityResult.parsed.issues, content);
             allIssues = allIssues.concat(rcIssues.map(function(i) { return '[reality] ' + i; }));
           }
         }
@@ -845,11 +835,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     var content = fs.readText(rel, '');
     if (!content) throw new Error('artifact file missing or empty: ' + rel);
 
+    var specText = card.title + (card.detail ? ' — ' + card.detail : '');
     var job = enqueueOrThrow({
       kind: 'kanban-review',
       goalId: goalId,
-      prompt: REVIEWER_PREAMBLE +
-        '\n\nTASK: ' + card.title + (card.detail ? ' — ' + card.detail : '') +
+      prompt: reviewRubric.buildReviewerPreamble(reviewRubric.classifyArtifactType(specText)) +
+        '\n\nTASK: ' + specText +
         '\n\nDELIVERABLE (truncated to 16000 chars):\n' + content.slice(0, 16000),
       persona: personas.loadPersona('reviewer'),
       run: async function(raw) {
