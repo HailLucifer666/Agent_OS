@@ -7,8 +7,44 @@ var effectorFromTool = require('./adapter').effectorFromTool;
 
 var _adapter = null;
 
+// D3 — the authenticated account's own address, resolved once per session
+// via the Gmail profile (not a config key) and reused so "me" never triggers
+// a network call on every send/draft.
+var _selfEmail = null;
+
 function ok(data) { return { ok: true, result: data }; }
 function fail(msg) { return { ok: false, result: { error: msg } }; }
+
+// A recipient of "me" (or an omitted one) means "the authenticated account".
+function isSelfRecipient(to) {
+  var t = (to || '').trim();
+  return !t || t.toLowerCase() === 'me';
+}
+
+// Resolve "me"/empty into a real address via the Gmail profile *before* the
+// caller composes anything with it. Never guesses — an unresolvable "me"
+// fails with a message naming exactly what's missing, so the model can ask
+// the operator instead of forwarding a literal "me" to Gmail (which is what
+// produced "Invalid To header" after a full body had already been drafted).
+async function resolveRecipient(to, adapter) {
+  if (!isSelfRecipient(to)) return { ok: true, address: to.trim() };
+  if (_selfEmail) return { ok: true, address: _selfEmail };
+  if (!adapter || typeof adapter.getProfile !== 'function') {
+    return { ok: false, error: 'Could not resolve "me" to an address — no Gmail profile lookup is available. Specify an explicit recipient email.' };
+  }
+  var profile;
+  try {
+    profile = await adapter.getProfile();
+  } catch (err) {
+    return { ok: false, error: 'Could not resolve "me" — the Gmail profile lookup failed: ' + (err.message || err) };
+  }
+  var address = profile && profile.emailAddress;
+  if (!address) {
+    return { ok: false, error: 'Could not resolve "me" — the Gmail profile did not return an email address.' };
+  }
+  _selfEmail = address;
+  return { ok: true, address: address };
+}
 
 function buildTools(ctx) {
   var logger = (ctx && ctx.logger) || { warn: function() {} };
@@ -58,12 +94,15 @@ function buildTools(ctx) {
 
   async function gmail_send(args) {
     try {
-      var to = (args && args.to) || '';
+      var toRaw = (args && args.to) || '';
       var subject = (args && args.subject) || '';
       var body = (args && args.body) || '';
-      if (!to || !subject || !body) return fail('gmail_send requires to, subject, and body.');
+      if (!subject || !body) return fail('gmail_send requires to, subject, and body.');
       var a = ensureAdapter();
       if (!a) return fail('Gmail is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.');
+      var recipient = await resolveRecipient(toRaw, a);
+      if (!recipient.ok) return fail(recipient.error);
+      var to = recipient.address;
       await a.send({ to: to, subject: subject, body: body, html: args.html || null });
       return ok({ sent: true, to: to, subject: subject });
     } catch (err) {
@@ -89,7 +128,7 @@ function buildTools(ctx) {
   var TOOLS = [
     { name: 'gmail_unread', description: 'List unread emails in the inbox.', params: { max: 'number (optional, default 10)' }, danger: false, fn: gmail_unread, needs_result: true },
     { name: 'gmail_read', description: 'Read a full email by its ID (obtained from gmail_unread).', params: { id: 'string — email message ID' }, danger: false, fn: gmail_read, needs_result: true },
-    { name: 'gmail_send', description: 'Send an email. Use only when the operator explicitly asks.', params: { to: 'string', subject: 'string', body: 'string' }, danger: true, fn: gmail_send },
+    { name: 'gmail_send', description: 'Send an email. Use only when the operator explicitly asks.', params: { to: 'string — email address, or "me"/omitted for the authenticated account', subject: 'string', body: 'string' }, danger: true, fn: gmail_send },
     { name: 'gmail_draft', description: 'Save an email as a draft without sending.', params: { to: 'string', subject: 'string', body: 'string' }, danger: false, fn: gmail_draft },
   ];
 

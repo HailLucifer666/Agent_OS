@@ -164,6 +164,15 @@ function createGoogleAdapter(opts) {
       return gmailRequest('/drafts', 'POST', { message: { raw: Buffer.from(raw).toString('base64') } });
     },
     /**
+     * D3 — Fetch the authenticated Gmail account's own profile. Used to
+     * resolve "me" as a gmail_send/gmail_draft recipient without ever
+     * guessing an address. Returns { emailAddress, messagesTotal,
+     * threadsTotal, historyId } (Gmail API's native profile shape).
+     */
+    getProfile: function() {
+      return gmailRequest('/profile', 'GET');
+    },
+    /**
      * §7.6 — List upcoming events on the primary calendar, soonest first.
      * Returns array of { id, title, start, end, location }. Read-only
      * (calendar.readonly scope) — never creates/modifies events.
