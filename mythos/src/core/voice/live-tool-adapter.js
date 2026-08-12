@@ -33,6 +33,10 @@ const { createHash } = require('crypto');
 
 const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
+// F3: detector-only sibling of the unverified/started evidence discipline
+// above — see claim-check.js for the full contract.
+const { detectUnbackedClaims } = require('./claim-check');
+
 // B3 (2026-08-12 diagnosis, G4): reuse voice-agent.js's own NEGATIVE_RE rather
 // than keep a second, driftable copy of the same regex in this module.
 const { NEGATIVE_RE } = require('./voice-agent');
@@ -685,6 +689,23 @@ function createLiveToolAdapter(deps) {
     // routes itself to health.anomaly instead of the array below.
     turnGeneration += 1;
     const actionsThisTurn = liveTurnActions.splice(0, liveTurnActions.length);
+
+    // F3 — a promised action is either performed or retracted. Detect-only:
+    // this reports a mismatch on the health.anomaly stream, it never rewrites
+    // or suppresses assistantText (that stays exactly what the model said and
+    // what the operator hears). Same field names as every other anomaly
+    // emitted in this file (kind/tool/target) — no parallel shape.
+    if (assistantText && bus && typeof bus.emit === 'function') {
+      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn);
+      for (const claim of unbackedClaims) {
+        bus.emit('health.anomaly', {
+          kind: 'claimed-action-not-taken',
+          tool: claim.category, target: claim.category,
+          claim: claim.phrase, candidateTools: claim.candidateTools,
+        });
+      }
+    }
+
     // BUG-120 follow-up: the per-turn signature set owns exactly the same
     // lifetime as liveTurnActions above, so it is cleared right here instead
     // of lazily on next use — a set that only resets when something happens
@@ -701,12 +722,24 @@ function createLiveToolAdapter(deps) {
     // AD-4: the model's spoken claim is NOT the record. Outcomes are.
     const actionSummary = summarizeActionsForResult(actionsThisTurn);
     if (actionSummary) historyAppend('system', actionSummary);
+    // A turn can legitimately arrive with no operator utterance: a proactive
+    // turn speaks first, and G2 established that a late inputTranscription
+    // frame can land after the accumulators were already reset, leaving
+    // userText undefined on a turn that really did have speech. Both were
+    // calling .slice() unguarded below, inside a try/catch that swallows
+    // everything — so the TypeError took the WHOLE episodic write down with
+    // it and the turn vanished from memory entirely, silently. That is the
+    // worst possible interaction with G2: the turns most likely to lose their
+    // transcript are exactly the turns whose record we most need afterwards.
+    // The record is written either way now, with the missing half empty.
+    const userSaid = typeof userText === 'string' ? userText : '';
+    const assistantSaid = typeof assistantText === 'string' ? assistantText : '';
     try {
       memory.episodic.write({
         kind: 'conversation', tick: memory.working.tick,
-        summary: 'User: ' + userText.slice(0, 100) + ' | MYTHOS: ' + assistantText.slice(0, 100),
+        summary: 'User: ' + userSaid.slice(0, 100) + ' | MYTHOS: ' + assistantSaid.slice(0, 100),
         detail: {
-          role: 'user', text: userText.slice(0, 2000), reply: assistantText.slice(0, 1000),
+          role: 'user', text: userSaid.slice(0, 2000), reply: assistantSaid.slice(0, 1000),
           // BUG-124: prefer the session's real monotonic turn number when the
           // transport supplies one. A timestamp identifies WHEN, which is what
           // made a misalignment report impossible to chase — two records a few
