@@ -75,8 +75,13 @@ test('sanitizeReleaseNotes: HTML tags are stripped', () => {
 });
 
 test('sanitizeReleaseNotes: all 5 standard HTML entities are decoded', () => {
-  const result = sanitizeReleaseNotes('Bug &amp; fix: &lt;input&gt; &quot;quoted&quot; &amp; it&#39;s done');
-  assert.equal(result, 'Bug & fix: <input> "quoted" & it\'s done');
+  // &gt; before &lt; deliberately, so the decoded text never contains a
+  // "<...>" span (the second tag-strip pass, added for the entity-encoded-tag
+  // fix below, would otherwise remove it as a decoded tag rather than leaving
+  // it as plain text — which is correct: an entity-decoded "<input>" is
+  // exactly as tag-shaped as a literal one, so it must not survive either).
+  const result = sanitizeReleaseNotes('Bug &amp; fix: &gt;5 users &amp; &lt;3 admins &quot;quoted&quot; &amp; it&#39;s done');
+  assert.equal(result, 'Bug & fix: >5 users & <3 admins "quoted" & it\'s done');
 });
 
 test('sanitizeReleaseNotes: whitespace (newlines, tabs, repeats) collapses to single spaces', () => {
@@ -88,6 +93,16 @@ test('sanitizeReleaseNotes: caps at 500 characters', () => {
   const long = 'x'.repeat(1000);
   const result = sanitizeReleaseNotes(long);
   assert.equal(result.length, 500);
+});
+
+test('sanitizeReleaseNotes: entity-encoded tags do not survive as literal tags (Medium finding on f6975ce)', () => {
+  // Decoding entities AFTER the first tag-strip pass can reconstruct a literal
+  // tag that was entity-encoded and therefore invisible to that first pass —
+  // e.g. "&lt;script&gt;" has no literal '<' at strip time, so it passed
+  // through, then decoded into a real "<script>" in what is documented as
+  // tag-free plain text.
+  const result = sanitizeReleaseNotes('&lt;script&gt;alert(1)&lt;/script&gt;');
+  assert.doesNotMatch(result, /<[^>]*>/, `output must contain no literal tags, got: ${result}`);
 });
 
 test('sanitizeReleaseNotes: array shape is normalized BEFORE HTML/entity handling', () => {

@@ -52,13 +52,19 @@ function sanitizeReleaseNotes(raw) {
     if (typeof text !== 'string' || text.length === 0) return '';
 
     // Strip HTML tags (release notes commonly arrive as an HTML fragment from
-    // GitHub's release body).
+    // GitHub's release body). Done both BEFORE and AFTER entity decoding: an
+    // entity-encoded tag (e.g. "&lt;script&gt;") has no literal angle bracket
+    // at this first pass, so it survives untouched — decoding below would then
+    // reconstruct a literal tag in what is supposed to be tag-free output. The
+    // second pass catches exactly that reconstruction.
     text = text.replace(/<[^>]*>/g, ' ');
 
     // Decode the 5 standard HTML entities.
     for (const [pattern, replacement] of HTML_ENTITIES) {
       text = text.replace(pattern, replacement);
     }
+
+    text = text.replace(/<[^>]*>/g, ' ');
 
     // Collapse whitespace (newlines, tabs, repeated spaces) into single spaces.
     text = text.replace(/\s+/g, ' ').trim();
