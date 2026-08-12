@@ -30,11 +30,6 @@ const {
 } = require('../../src/core/config/voice-choice');
 const { readVoiceChoice, writeVoiceChoice } = require('../../src/core/config/voice-choice-store');
 
-// The reverse of SHORT_NAME (full provider name -> short token). VOICE_TTS_CHAIN
-// is written in short tokens (providers/tts.js's BY_NAME keys); chainAfter()
-// needs to go both ways, so it is built once here rather than re-derived per call.
-const FULL_NAME = Object.fromEntries(Object.entries(SHORT_NAME).map(([full, short]) => [short, full]));
-
 // One sentence. Gemini TTS measures ~3.9s/sentence and is metered, so a sample is
 // deliberately a sample — an operator auditioning eight voices should not be
 // billed for eight paragraphs.
@@ -56,10 +51,13 @@ function currentDefault(config, chain) {
   return { provider, voice: voiceFor({ name: provider }, config) || null };
 }
 
-// The tail of the configured chain AFTER `provider`, as full provider names
-// (e.g. 'kokoro-tts') so callers can round-trip through SHORT_NAME/byShort the
-// same way the rest of this file already does. Pure — no I/O, no config
-// mutation — so an explicit fallback audition is easy to reason about.
+// The tail of the configured chain AFTER `provider`, as SHORT tokens (the
+// same tokens VOICE_TTS_CHAIN is written in, and the same tokens byShort()
+// takes) — callers no longer need to round-trip through FULL_NAME/SHORT_NAME
+// to get back to a short token for byShort(); every provider module already
+// exposes its own full name via `.name`, which is what the response needs.
+// Pure — no I/O, no config mutation — so an explicit fallback audition is
+// easy to reason about.
 //
 // `provider` NOT FOUND in the chain returns an empty tail (no fallback), not
 // "the whole chain" and not "an error". The chain is the operator's own
@@ -72,7 +70,7 @@ function currentDefault(config, chain) {
 // Duplicates are collapsed (parseChain does the same for the live chain; this
 // reads VOICE_TTS_CHAIN directly rather than through parseChain, so it repeats
 // that de-dupe rather than assuming it) so 'gemini,gemini,kokoro' still yields
-// exactly ['kokoro-tts'].
+// exactly ['kokoro'].
 function chainAfter(chainCsv, provider) {
   const shorts = [];
   for (const s of String(chainCsv || 'edge').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)) {
@@ -80,7 +78,7 @@ function chainAfter(chainCsv, provider) {
   }
   const at = shorts.indexOf(SHORT_NAME[provider]);
   if (at === -1) return [];
-  return shorts.slice(at + 1).map((s) => FULL_NAME[s]).filter(Boolean);
+  return shorts.slice(at + 1);
 }
 
 function mountTtsVoiceRoutes(app, deps) {
@@ -232,7 +230,7 @@ function mountTtsVoiceRoutes(app, deps) {
       if (body.allowFallback && !ctrl.signal.aborted) {
         const next = chainAfter(config.VOICE_TTS_CHAIN, provider);
         for (const candidate of next) {
-          const mod2 = byShort(SHORT_NAME[candidate]);
+          const mod2 = byShort(candidate);
           if (!mod2) continue;
           let up = false;
           try { up = Boolean(await mod2.isAvailable()); } catch { up = false; }
@@ -244,13 +242,13 @@ function mountTtsVoiceRoutes(app, deps) {
               return res.json({
                 mime: mod2.mime || 'audio/mpeg',
                 audioB64: Buffer.from(audio2).toString('base64'),
-                provider: candidate,
+                provider: mod2.name,
                 voice: voice2,
                 fellBackFrom: provider,
               });
             }
           } catch (err2) {
-            log.warn('tts.audition-fallback-failed', { provider: candidate, error: err2.message });
+            log.warn('tts.audition-fallback-failed', { provider: mod2.name, error: err2.message });
           }
         }
       }
@@ -272,4 +270,4 @@ function mountTtsVoiceRoutes(app, deps) {
   });
 }
 
-module.exports = { mountTtsVoiceRoutes, MAX_AUDITION_CHARS, DEFAULT_SAMPLE, currentDefault };
+module.exports = { mountTtsVoiceRoutes, MAX_AUDITION_CHARS, DEFAULT_SAMPLE, currentDefault, chainAfter };

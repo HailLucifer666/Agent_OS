@@ -3486,9 +3486,11 @@ function createServer(deps) {
   // made the Agent Actions panel tick three ui_type calls that had typed
   // nothing into a visibly empty Notepad.
   //
-  // e.type is 'action.completed' | 'action.denied' | 'action.blocked'.
-  // Relaying only {tool, ok, ...} collapsed the last two into "failed" in the
-  // HUD, because they carry no `ok` at all. The state travels explicitly now.
+  // Relaying only {tool, ok, ...} collapsed denied/blocked into "failed" in
+  // the HUD, because they carry no `ok` at all. The state travels explicitly
+  // now, and test/actions-widget-glyph.test.js pins this exact vocabulary
+  // against ui/public/js/widgets/kinds/actions.js's glyphFor() so the two
+  // sides cannot silently drift apart on a fourth outcome state.
   //
   // 'action.*' is a PREFIX glob (matchGlob in src/core/bus/index.js is
   // startsWith), so it also catches 'action.speak-requested' — a fourth
@@ -3500,8 +3502,13 @@ function createServer(deps) {
   bus.subscribe('action.*', (e) => {
     const state = String(e.type || '').split('.')[1] || 'completed';
     if (state !== 'completed' && state !== 'denied' && state !== 'blocked') return;
+    // `undefined` deliberately coerces to `null` here (not left as-is): the
+    // payload is JSON.stringified over the wire, which drops `undefined`
+    // keys entirely but keeps `null` ones — this keeps the `tool` key always
+    // present on the client so `p.tool || '(unnamed action)'` sees a stable
+    // shape instead of the key vanishing when `tool` is absent.
     const tool = e.payload.tool || null;
-    if (!tool) logger.warn('action-relay.missing-tool', { state, reason: e.payload.reason });
+    if (!tool) logger.warn('action-relay.missing-tool', { state, reason: e.payload.reason, goalId: e.payload.goalId });
     const payload = {
       tool, state, ok: e.payload.ok, goalId: e.payload.goalId,
       reason: e.payload.reason, unverified: e.payload.unverified,

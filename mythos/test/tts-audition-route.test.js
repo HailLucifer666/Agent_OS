@@ -20,7 +20,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const http = require('http');
 
-const { mountTtsVoiceRoutes, MAX_AUDITION_CHARS, DEFAULT_SAMPLE } = require('../server/routes/tts-voices');
+const { mountTtsVoiceRoutes, MAX_AUDITION_CHARS, DEFAULT_SAMPLE, chainAfter } = require('../server/routes/tts-voices');
 
 function fakeProvider(name, opts = {}) {
   const p = {
@@ -228,5 +228,23 @@ describe('POST /api/tts/audition', () => {
       assert.equal(status, 429);
       assert.equal(piper.calls.length, 0);
     } finally { await s.close(); }
+  });
+});
+
+// chainAfter — deferred Task 5 review item: the duplicate-collapsing and the
+// empty/all-comma-chain branches were implemented but untested.
+describe('chainAfter (deferred coverage)', () => {
+  it('collapses duplicates before walking the tail', () => {
+    // 'gemini,gemini,kokoro' must still yield exactly ['kokoro'], not
+    // ['gemini', 'kokoro'] or a duplicated tail.
+    assert.deepEqual(chainAfter('gemini,gemini,kokoro', 'gemini-tts'), ['kokoro']);
+  });
+
+  it('an empty chain has no tail for any provider', () => {
+    assert.deepEqual(chainAfter('', 'gemini-tts'), []);
+  });
+
+  it('an all-comma (no real tokens) chain has no tail for any provider', () => {
+    assert.deepEqual(chainAfter(',,,', 'gemini-tts'), []);
   });
 });
