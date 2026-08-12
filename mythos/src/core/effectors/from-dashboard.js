@@ -27,6 +27,10 @@ const { visionThink } = require('./vision-call');
 // BUG-113: surface open spoken commitments in read_status so "where are we
 // on X" is answerable from state instead of memory.
 const { listOpenCommitments } = require('./from-calendar');
+// C1: job_status is the pull-side counterpart of the announcer's push-side
+// fix — same defect (a review-failed or fallback-engine build reading as
+// "done"), arriving by voice query instead of by proactive speech.
+const { deriveCompletionPayload } = require('./completion-status');
 
 function ok(result, uiActions) {
   return uiActions ? { ok: true, result, uiActions } : { ok: true, result };
@@ -485,16 +489,34 @@ function buildTools(ctx) {
     }
   }
 
+  // C1: job.status (BUG-016) still means "the job ran to completion" — that
+  // claim is unchanged and correct even when the review failed. completionStatus
+  // is the separate "is this actually a finished, working build" fact the
+  // announcer already derives (reviewVerdict + engine); job_status is the
+  // on-demand/pull path for the same question the announcer answers by push,
+  // so it gets the same derived field rather than leaving the model to infer
+  // it from the raw job (which it was not doing — no prompt anywhere told it
+  // reviewVerdict/engine mattered). A shallow copy — the live job record in
+  // buildRunner's map is never mutated.
+  function withCompletionStatus(job) {
+    if (!job) return job;
+    var reviewStatus = job.reviewVerdict === 'reject' ? 'failed'
+      : job.reviewVerdict === 'approve' ? 'approved'
+      : undefined;
+    var completion = deriveCompletionPayload({ reviewStatus: reviewStatus, buildEngine: job.engine });
+    return Object.assign({}, job, { completionStatus: completion.status });
+  }
+
   function job_status({ jobId }) {
     try {
       if (jobId) {
         const job = buildRunner.getJob(jobId);
         if (!job) return fail(`No job found with id ${jobId}.`);
-        return ok({ job });
+        return ok({ job: withCompletionStatus(job) });
       }
       const jobs = buildRunner.listJobs();
       const last = jobs[jobs.length - 1] || null;
-      return ok({ job: last });
+      return ok({ job: withCompletionStatus(last) });
     } catch (err) {
       return fail(err.message);
     }
@@ -989,7 +1011,7 @@ function buildTools(ctx) {
     { name: 'read_status', description: 'Read live status of all agents/providers and recent jobs.', params: {}, danger: false, fn: read_status, needs_result: true },
     { name: 'web_fetch', description: 'Fetch text content from a URL (real internet access). Returns the page text (HTML stripped, truncated to ~4000 chars). Use for research, news, documentation, or any real-time data.', params: { url: 'string - the http(s) URL to fetch' }, danger: false, fn: web_fetch, needs_result: true },
     { name: 'web_search', description: 'Search the web for real-time information. Returns titles, URLs, and snippets. Use for research, news, or any question requiring current data.', params: { query: 'string - the search query', maxResults: 'number (optional, default 5)' }, danger: false, fn: async function(args) { return web_search(Object.assign({}, args, { bus: ctx.bus })); }, needs_result: true },
-    { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false, fn: job_status, needs_result: true },
+    { name: 'job_status', description: 'Check the status of a build job (most recent if jobId omitted). Result includes the artifact path when done and researchStatus (grounded/skipped/not-required) indicating whether the build used live web research. job.status only means the job ran to completion, NOT that it is a finished/working build — always check completionStatus ("done" vs "needs-work") before telling the operator a build is done; "needs-work" means the review rejected it or a fallback engine produced it, even though job.status reads "done".', params: { jobId: 'string (optional)' }, danger: false, fn: job_status, needs_result: true },
     { name: 'create_goal', description: 'Create a new goal.', params: { text: 'string', category: 'string (optional)' }, danger: false, fn: create_goal },
     { name: 'propose_goal', description: 'Propose a new goal for operator acceptance (does NOT auto-activate — creates a status:proposed goal the operator accepts via the dashboard).', params: { text: 'string', category: 'string (optional)', reason: 'string (optional — why this goal is worth pursuing)', drive: 'string (optional — curiosity or user-service, default curiosity)', priority: 'number (optional 0..1)' }, danger: false, fn: propose_goal },
     { name: 'list_goals', description: 'List all goals.', params: {}, danger: false, fn: list_goals, needs_result: true },

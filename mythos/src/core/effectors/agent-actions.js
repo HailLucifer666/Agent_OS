@@ -642,10 +642,14 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           shipMeta.evidence = { pass: completion.evidence.pass, phases: riskClassifierLib.gatePath(risk) };
         }
 
-        // BUG-016 FIX: Only move to 'shipped' when review passed. If review failed,
-        // move back to 'execute' with failure metadata so the user can see issues
-        // and take action, rather than silently advancing to shipped.
-        if (reviewed) {
+        // BUG-016 FIX / C1: only move to 'shipped' — the one stage pipeline.js's
+        // STAGES treats as finished — when the completion payload actually says
+        // done. Gating on `reviewed` alone let a fallback-engine build with an
+        // approving review land in 'shipped' while shipMeta.status stayed
+        // 'needs-work': simultaneously "finished" and "needs work" on the same
+        // card. completion.status already folds in reviewStatus AND engine, so
+        // it is the single source of truth for this transition.
+        if (completion.status === 'done') {
           pipeline.moveCard(card.id, 'shipped', shipMeta);
         } else {
           pipeline.moveCard(card.id, 'execute', shipMeta);

@@ -179,6 +179,18 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
 
     try {
       var result = await generate(prompt, 'build-runner:' + job.id);
+      // C1 NOTE: the literal 'brain' here is NOT one of the values
+      // completion-status.js treats as a fallback engine (only 'brain-fallback'
+      // and the legacy 'fallback' are). That is deliberate today — it is
+      // reachable only from test harnesses that construct this runner with a
+      // bare `brain` and no `buildEngine` at all (main.js:415-416 always wires
+      // a real buildEngine in production, so 'brain' cannot occur there), and
+      // several existing tests (e.g. bug-016-failed-review-not-shipped.test.js's
+      // approve case) rely on that plain-brain path reaching 'shipped' on an
+      // approving review. If a future change makes 'brain' reachable in
+      // production, completion-status.js's deriveCompletionPayload() must gain
+      // an explicit branch for it — do not assume it is covered by the existing
+      // 'brain-fallback'/'fallback' check.
       job.engine = (result && result.engine) || (hasEngine ? 'hermes' : 'brain');
 
       if (!result || result.offline) {

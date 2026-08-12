@@ -30,6 +30,13 @@
 // both the shipping path (agent-actions.js, which sets reviewStatus) and the
 // spoken/HUD path (conversation/announcer.js, which only has reviewVerdict)
 // can share one rule instead of drifting.
+//
+// NOT TREATED AS FALLBACK: build-runner.js can also stamp job.engine === 'brain'
+// (no buildEngine wired at all — test harnesses only, see build-runner.js's
+// comment at the job.engine assignment). That is deliberately excluded here —
+// several existing tests rely on a plain-brain build with an approving review
+// reaching 'shipped'. If 'brain' ever becomes reachable in production, this
+// function needs an explicit decision for it, not a silent fall-through to 'done'.
 function deriveCompletionPayload({ reviewStatus, buildEngine } = {}) {
   var isFallbackEngine = buildEngine === 'brain-fallback' || buildEngine === 'fallback';
   var needsWork = reviewStatus === 'failed' || isFallbackEngine;
