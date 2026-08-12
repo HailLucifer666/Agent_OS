@@ -39,13 +39,25 @@ var TYPE_KEYWORDS = {
 // game/visualisation are checked ahead of landing-page regardless).
 var TYPE_ORDER = ['game', 'visualisation', 'landing-page'];
 
+// Narrow negation guard: "this is NOT a landing page" contains the exact
+// substring "landing page" and would otherwise reclassify the artifact as
+// the one type this task exists to stop mis-grading. Only the immediate
+// 30 chars before the match are checked for a trailing negator — this is
+// deliberately cheap plain-substring matching, not a real classifier, and
+// won't catch negation further back in the sentence.
+function isNegatedMatch(text, matchIndex) {
+  var before = text.slice(Math.max(0, matchIndex - 30), matchIndex);
+  return /\b(not|isn't|is not|no|n't)\s+(a\s+|an\s+|the\s+)?$/.test(before);
+}
+
 function classifyArtifactType(specText) {
   var text = String(specText || '').toLowerCase();
   for (var i = 0; i < TYPE_ORDER.length; i++) {
     var type = TYPE_ORDER[i];
     var keywords = TYPE_KEYWORDS[type];
     for (var j = 0; j < keywords.length; j++) {
-      if (text.indexOf(keywords[j]) !== -1) return type;
+      var idx = text.indexOf(keywords[j]);
+      if (idx !== -1 && !isNegatedMatch(text, idx)) return type;
     }
   }
   return 'generic';
@@ -94,33 +106,65 @@ var REALITY_CHECK_PREAMBLE = [
     '"issues": [{"claim": "specific problem", "citation": "exact quote from the deliverable"}]}'
 ].join(' ');
 
+// A model quoting from the artifact routinely differs from the file in ways
+// that are semantically identical — different case, collapsed/re-indented
+// whitespace, HTML entities (&amp;/&quot;/&#39;) versus their literal
+// characters. Comparing raw strings counted every one of those as "citation
+// not found" and would have quietly dropped most real findings — the
+// citation requirement neutering the checker instead of grounding it, which
+// is invisible because it looks exactly like "no problems found". Fold case,
+// collapse whitespace, and decode the entities most likely to appear in
+// rendered HTML before comparing; a citation that genuinely isn't in the
+// artifact is still dropped.
+function normalizeForMatch(str) {
+  return String(str)
+    .toLowerCase()
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, '\'')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Drop any reality finding whose citation is missing, or does not actually
 // appear in the artifact text. An unsupported [reality] claim (e.g. "Space
 // Grotesk is not a real font") is a hallucination about a hallucination —
 // worse than no finding at all, because the operator has no way to tell a
 // real catch from a fabricated one apart from every other [reality] line.
 // Dropped rather than surfaced, per the same best-effort discipline the
-// caller already applies to the checker call itself; logged so the drop is
-// still visible when debugging the checker's behaviour.
+// caller already applies to the checker call itself. Logged both per-finding
+// (for debugging a specific drop) and as a per-review count (so a review
+// that drops everything — the signal an over-strict matcher would produce —
+// is visible at a glance instead of reading as a clean pass).
 function filterRealityFindings(issues, content) {
-  var haystack = String(content || '');
+  var haystack = normalizeForMatch(content);
   var list = Array.isArray(issues) ? issues : [];
   var kept = [];
+  var droppedCount = 0;
   for (var i = 0; i < list.length; i++) {
     var entry = list[i];
     var isObject = entry && typeof entry === 'object';
     var claim = isObject ? entry.claim : entry;
     var citation = isObject ? entry.citation : null;
-    if (!claim || typeof claim !== 'string') continue;
+    if (!claim || typeof claim !== 'string') { droppedCount++; continue; }
     if (!citation || typeof citation !== 'string' || !citation.trim()) {
       console.warn('[reality-check] dropped uncited finding: ' + claim);
+      droppedCount++;
       continue;
     }
-    if (haystack.indexOf(citation.trim()) === -1) {
+    var normalizedCitation = normalizeForMatch(citation);
+    if (!normalizedCitation || haystack.indexOf(normalizedCitation) === -1) {
       console.warn('[reality-check] dropped finding whose citation is not in the artifact: ' + claim);
+      droppedCount++;
       continue;
     }
     kept.push(claim);
+  }
+  if (droppedCount > 0) {
+    console.warn('[reality-check] dropped ' + droppedCount + ' of ' + list.length + ' finding(s) this review (uncited or unverifiable)');
   }
   return kept;
 }
