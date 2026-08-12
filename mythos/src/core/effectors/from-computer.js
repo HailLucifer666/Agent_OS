@@ -121,7 +121,19 @@ function resolveSandboxed(raw) {
     }
 
     const roots = allowedRoots();
-    const outside = { ok: false, reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.` };
+    // `rule`/`allowedRoots` are carried alongside the prose `reason` only for
+    // THIS failure (outside the allowlist) — every other resolveSandboxed()
+    // caller (list_folder, read_file, ...) still reads .reason as a plain
+    // string and is unaffected. open_folder uses the structured fields below
+    // so a refusal is a fact the operator can act on rather than "a mystery":
+    // narrating a fixed rule as unexplained was the actual bug (2026-08-12,
+    // 02:21:27 — the allowlist refusal was explained as a mystery, not a rule).
+    const outside = {
+      ok: false,
+      reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.`,
+      rule: 'outside-allowed-roots',
+      allowedRoots: roots,
+    };
     // Lexical containment first (cheap, no fs access)...
     if (!comparableRoots().some((root) => containedIn(resolved, root))) return outside;
     // ...then the real-path check, so a junction/symlink planted inside an
@@ -153,7 +165,16 @@ function resolveSandboxed(raw) {
 async function open_folder({ path: rawPath }) {
   if (!rawPath) return fail('A folder path is required.');
   const sandboxed = resolveSandboxed(rawPath);
-  if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (!sandboxed.ok) {
+    // Carry the rule and the allowed roots as fields the model can act on
+    // (e.g. "open X inside <one of allowedRoots>"), not only prose it has to
+    // parse back apart — see the WAVE comment above resolveSandboxed's
+    // `outside` object for why this is open_folder-specific.
+    if (sandboxed.rule) {
+      return fail({ error: sandboxed.reason, rule: sandboxed.rule, allowedRoots: sandboxed.allowedRoots });
+    }
+    return fail(sandboxed.reason);
+  }
   try {
     if (!fs.existsSync(sandboxed.resolved)) return fail(`Folder not found: ${sandboxed.resolved}`);
     let stat;
