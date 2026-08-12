@@ -14,6 +14,49 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
+// F4: iterative two-row Levenshtein — no recursion, no per-character
+// allocation. Mirrors effectors/hub.js's own editDistance(), but duplicated
+// here (rather than imported) because this check runs BEFORE the hub's
+// invoke() call and must not depend on the hub's internals.
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  var prev = new Array(b.length + 1);
+  var cur = new Array(b.length + 1);
+  for (var j = 0; j <= b.length; j++) prev[j] = j;
+  for (var i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (var k = 1; k <= b.length; k++) {
+      var cost = a.charCodeAt(i - 1) === b.charCodeAt(k - 1) ? 0 : 1;
+      cur[k] = Math.min(cur[k - 1] + 1, prev[k] + 1, prev[k - 1] + cost);
+    }
+    for (var m = 0; m <= b.length; m++) prev[m] = cur[m];
+  }
+  return prev[b.length];
+}
+
+// F4: the model invoked google_news_fetch (never a real tool) and the
+// RC#2 pre-flight check below said only "unknown-effector" — nothing
+// naming google_search_fetch or google_calendar_fetch as real neighbours.
+// Bounded edit distance over the registered names, closest first; a
+// confidently wrong suggestion is worse than none, so anything past a
+// third of the candidate's length is dropped rather than offered.
+function nearestEffectorNames(name, registeredNames, limit) {
+  var wanted = String(name || '').toLowerCase();
+  if (!wanted) return [];
+  var scored = [];
+  for (var i = 0; i < registeredNames.length; i++) {
+    var candidate = registeredNames[i];
+    var lower = candidate.toLowerCase();
+    var d = editDistance(wanted, lower);
+    var threshold = Math.max(2, Math.floor(lower.length / 3));
+    if (d <= threshold) scored.push({ name: candidate, score: d });
+  }
+  scored.sort(function(x, y) { return x.score - y.score || x.name.length - y.name.length; });
+  return scored.slice(0, limit || 3).map(function(s) { return s.name; });
+}
+
 function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   if (!leash || typeof leash.check !== 'function') {
     throw new Error('createCortex requires a leash with a check() method — fail-closed gating cannot be skipped');
@@ -269,7 +312,19 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     if (effectors && typeof effectors.count === 'function' && decision && decision.tool) {
       var regMap = effectors.effectors;
       if (regMap && typeof regMap.has === 'function' && !regMap.has(decision.tool)) {
-        bus.emit('action.completed', { tool: decision.tool, ok: false, goalId: working.activeGoalId, reason: 'unknown-effector' });
+        // F4: this check runs before the hub's own invoke() is ever called,
+        // so the hub's own BUG-076/Wave-6 suggestion machinery never sees
+        // this call — compute the same kind of near-match here instead of
+        // leaving the model with a bare, un-actionable failure.
+        var registeredNames = typeof regMap.keys === 'function' ? Array.from(regMap.keys()) : [];
+        var near = nearestEffectorNames(decision.tool, registeredNames, 3);
+        var message = 'unknown-effector' + (near.length
+          ? ': no tool named "' + decision.tool + '". Did you mean ' + near.join(', ') + '?'
+          : ': no tool named "' + decision.tool + '".');
+        bus.emit('action.completed', {
+          tool: decision.tool, ok: false, goalId: working.activeGoalId,
+          reason: 'unknown-effector', suggestions: near, message: message
+        });
         return;
       }
     }
