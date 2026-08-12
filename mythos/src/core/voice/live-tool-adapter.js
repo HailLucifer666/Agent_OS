@@ -230,27 +230,42 @@ function createLiveToolAdapter(deps) {
   //
   // This is a second, ADDITIVE gate — the call.id guard above stays exactly
   // as it is. It is keyed on name+JSON.stringify(args) and scoped to the
-  // CURRENT turn only: the set is cleared whenever turnGeneration advances
-  // (onLiveTurnComplete), so a legitimate "do it again" request on a later
-  // turn is never blocked, matching isDuplicateCall's own id-reuse rule.
-  // Idempotent reads are exempt — repeating list_windows or read_status is
-  // harmless, so gating them would only add suppression risk for zero safety
-  // benefit; open_web and a persona write are not idempotent, and neither is
-  // anything else not on this list, so the default is to gate.
+  // CURRENT turn only: the set is cleared explicitly in onLiveTurnComplete,
+  // right next to the liveTurnActions splice that already owns "what happens
+  // at turn end", so a legitimate "do it again" request on a later turn is
+  // never blocked, matching isDuplicateCall's own id-reuse rule. Idempotent
+  // reads are exempt — repeating list_windows or read_status is harmless, so
+  // gating them would only add suppression risk for zero safety benefit;
+  // open_web and a persona write are not idempotent, and neither is anything
+  // else not on this list, so the default is to gate.
+  //
+  // The caller passes the SAME per-batch generation snapshot commitAction()
+  // uses (myGeneration, not the live turnGeneration) — a call belonging to a
+  // batch whose turn has already closed gets the same treatment a late
+  // outcome gets from commitAction: it neither consults nor mutates the
+  // CURRENT turn's set, so a turn boundary landing mid-batch can never wipe
+  // out signatures another call in that same (now-stale) batch already
+  // recorded.
   const IDEMPOTENT_READ_TOOLS = {
     list_windows: true,
     read_status: true,
   };
-  let executedSignatureGeneration = turnGeneration;
-  let executedSignatures = new Set();
+  const executedSignatures = new Set();
 
-  function isDuplicateSignature(name, args) {
+  function isDuplicateSignature(generation, name, args) {
     if (IDEMPOTENT_READ_TOOLS[name]) return false;
-    if (executedSignatureGeneration !== turnGeneration) {
-      executedSignatureGeneration = turnGeneration;
-      executedSignatures = new Set();
+    if (generation !== turnGeneration) return false;
+    let signature;
+    try {
+      signature = `${name}:${JSON.stringify(args || {})}`;
+    } catch (err) {
+      // A non-serialisable arg must degrade this ONE call, not the whole
+      // batch — same defensive-by-default convention truncateForModel below
+      // already follows. Wrongly suppressing a call is worse than wrongly
+      // allowing one, so this fails open: not a duplicate.
+      logger.warn('live.duplicate-signature-unserializable', { tool: name, error: err.message });
+      return false;
     }
-    const signature = `${name}:${JSON.stringify(args || {})}`;
     if (executedSignatures.has(signature)) return true;
     executedSignatures.add(signature);
     return false;
@@ -379,7 +394,7 @@ function createLiveToolAdapter(deps) {
       // the two triggers stay tellable apart in the log/anomaly stream; same
       // status string, since both mean the same thing to the model: nothing
       // ran a second time.
-      if (isDuplicateSignature(call.name, call.args || {})) {
+      if (isDuplicateSignature(myGeneration, call.name, call.args || {})) {
         logger.info('live.duplicate-tool-call-signature', { tool: call.name, args: call.args || {} });
         responses.push({ id: call.id, name: call.name, response: {
           status: 'duplicate-suppressed',
@@ -605,6 +620,11 @@ function createLiveToolAdapter(deps) {
     // routes itself to health.anomaly instead of the array below.
     turnGeneration += 1;
     const actionsThisTurn = liveTurnActions.splice(0, liveTurnActions.length);
+    // BUG-120 follow-up: the per-turn signature set owns exactly the same
+    // lifetime as liveTurnActions above, so it is cleared right here instead
+    // of lazily on next use — a set that only resets when something happens
+    // to read it is a set that might never reset at all.
+    executedSignatures.clear();
 
     if (userText) historyAppend('user', userText);
     if (assistantText) historyAppend('assistant', assistantText);
