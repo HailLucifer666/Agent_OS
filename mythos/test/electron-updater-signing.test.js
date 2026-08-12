@@ -125,12 +125,24 @@ test('electron/main.js downloads updates but installs only on an explicit operat
 // Reported by the operator on v0.1.5: "it's taking me through that whole
 // installation process where it's asking me where you want to install this...
 // it does not mention updates." build.nsis is oneClick:false +
-// allowToChangeInstallationDirectory:true, so a NON-silent quitAndInstall shows
+// allowToChangeInstallationDirectory:true, so a NON-silent quitAndInstall showed
 // the full first-install wizard — which reads as "reinstall the whole app", the
-// exact experience in-app updates exist to end. /S reuses the recorded install
-// location and replaces the app in place; the modal above is what already asked
-// permission.
-test('an update installs silently — the setup wizard belongs to a fresh install, not an update', () => {
+// exact experience in-app updates exist to end.
+//
+// SILENT WAS THE WRONG CURE, and this test used to pin it (operator,
+// 2026-08-13). /S suppresses every page including the PROGRESS BAR, and this
+// installer takes minutes — 8+ on the 0.1.8 -> 0.1.9 upgrade. The operator
+// clicked "Restart now", saw the installer window flash for a second, and then
+// had no window and no progress for eight minutes. The update had actually
+// succeeded; nothing said so, so it read as a dead app.
+//
+// The wizard was never caused by visibility, only by the PAGES. Those are now
+// suppressed one by one — the template guards its licence and directory pages
+// with skipPageIfUpdated, and build/installer.nsh guards this repo's component
+// page on ${isUpdated} — so an update can be visible without being a wizard.
+// What is asserted here is therefore the inverse of what it once was.
+// See test/update-visible-and-restarts.test.js for the rest of that fix.
+test('an update shows its progress bar, and still no wizard page', () => {
   // Comment-stripped: main.js's prose NAMES quitAndInstall() several times to
   // explain the policy, and a test that reads prose as code fails for the
   // opposite of the reason it exists (same trap as release-script.test.js).
@@ -145,10 +157,18 @@ test('an update installs silently — the setup wizard belongs to a fresh instal
   assert.ok((code.match(/beginInstall\(/g) || []).length >= 3,
     'both install paths must reach it: the definition plus the modal and the HUD button');
   for (const call of calls) {
-    assert.match(call, /quitAndInstall\(true,\s*true\)/,
-      `every install path must pass isSilent=true and forceRunAfter=true — found ${call}. ` +
-      'isSilent=false shows the location-picker wizard with no mention of an update on it');
+    assert.match(call, /quitAndInstall\(false,\s*true\)/,
+      `every install path must pass isSilent=false and forceRunAfter=true — found ${call}. ` +
+      'isSilent=true hides the progress bar too, which is what made an 8-minute update look like a dead app');
   }
+  // The half of the original guarantee that still holds: an update must not put
+  // a wizard page on screen. The page that could is this repo's own, and it is
+  // guarded inside its page function (a raw `Page custom` ignores the
+  // template's skipPageIfUpdated).
+  const nsh = fs.readFileSync(path.join(__dirname, '..', '..', 'build', 'installer.nsh'), 'utf8');
+  const page = nsh.slice(nsh.indexOf('Function mythosComponentsPage'));
+  assert.match(page.slice(0, page.indexOf('nsDialogs::Create')), /\$\{If\} \$\{isUpdated\}[\s\S]{0,80}Abort/,
+    'the component page must abort on an update, or a visible install becomes the reinstall wizard again');
 });
 
 test('the update state reaches the HUD as strings on one named channel, and installing takes no renderer input', () => {

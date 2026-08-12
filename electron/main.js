@@ -1263,6 +1263,47 @@ function recordUpdateAttempt(version, releaseNotes) {
   }
 }
 
+// PEEK at the attempt file — deliberately WITHOUT clearing it, unlike
+// unfinishedUpdate() below.
+//
+// WHY (operator, 2026-08-13): the 0.1.9 install ran for 8+ minutes, and for all
+// of that time the install tree was being rewritten underneath a MYTHOS.exe
+// that anything could still launch — a desktop shortcut, an autostart entry, a
+// leftover relaunch. Measured on that machine: an instance was running at
+// 04:09:54 while the installer was still writing at 04:10:26 and 04:14:15. An
+// app booted mid-install forks its server from inside the very directory NSIS
+// is renaming and, worse, holds the single-instance lock — so the installer's
+// own relaunch afterwards quits immediately and silently. That is the "I
+// clicked restart and nothing ever happened" report.
+//
+// Returns the in-flight attempt, or null. Two guards keep this from ever
+// bricking a launch, which matters more than the case it prevents:
+//   - AGE: a marker older than the window below is stale, not an install in
+//     progress. A crashed installer must never make the app refuse to start.
+//   - VERSION: if we are already the version the attempt was for, it landed.
+const UPDATE_IN_FLIGHT_MS = 15 * 60 * 1000;
+
+function updateAttemptInFlight() {
+  try {
+    const file = updateAttemptPath();
+    if (!fs.existsSync(file)) return null;
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const target = String((record && record.version) || '');
+    if (!target || target === app.getVersion()) return null;
+    const startedAt = Date.parse((record && record.at) || '');
+    if (!Number.isFinite(startedAt)) return null;
+    const age = Date.now() - startedAt;
+    if (age < 0 || age > UPDATE_IN_FLIGHT_MS) return null;
+    return { version: target, ageMs: age };
+  } catch (err) {
+    // Unreadable means "no idea", and the safe answer to that is to let the app
+    // start. Silence is the wrong default elsewhere in this repo; here it is
+    // the one that cannot lock the operator out.
+    log('auto-update: could not read the update attempt —', err && err.message);
+    return null;
+  }
+}
+
 // Reads the attempt file left by recordUpdateAttempt() and reports what
 // happened to it. Returns null when there is nothing to report (no attempt
 // file, or an unreadable/versionless one); otherwise a plain, JSON-
@@ -1380,26 +1421,48 @@ async function beginInstall(autoUpdater, version) {
   // uninstaller's retry window and is the single biggest thing that blew it.
   syncVault('--push');
   pointInstallerTempAtInstallVolume();
-  autoUpdater.quitAndInstall(true, true);
+  // isSilent=FALSE (operator, 2026-08-13). See promptInstall's header for the
+  // full reasoning: silent was chosen to avoid the wizard, and it worked — the
+  // 0.1.9 update installed correctly — but it also meant an 8-minute install
+  // with NO window, no progress bar and no popup, which is indistinguishable
+  // from a dead update. The wizard pages are now suppressed at their source
+  // (build/installer.nsh guards its component page on ${isUpdated}; the
+  // template already guards the licence and directory pages), so a non-silent
+  // update shows only the progress bar it should always have shown.
+  autoUpdater.quitAndInstall(false, true);
 }
 
 // The install gate. A modal dialog rather than a notification, because this one
 // has consequences (the app exits and the NSIS installer runs) and a
 // notification is dismissable by accident.
 //
-// quitAndInstall(isSilent=TRUE, forceRunAfter=true): install without the setup
-// wizard, then relaunch.
+// quitAndInstall(isSilent=FALSE, forceRunAfter=true): show the installer's own
+// progress bar, no wizard pages, then relaunch.
 //
-// isSilent was false for exactly one release, and the operator caught what that
-// meant: build.nsis is oneClick:false + allowToChangeInstallationDirectory:true,
-// so a non-silent run shows the FULL first-install wizard — licence page,
-// "where do you want to install this", the lot — with no mention of an update
-// anywhere on it. That is indistinguishable from being asked to reinstall the
-// app from scratch, which is the exact experience in-app updates exist to end.
-// Silent passes /S to the same NSIS installer, which reads the existing install
-// location from the registry and replaces the app in place; forceRunAfter brings
-// MYTHOS back up. The dialog above is what asks permission — the installer does
-// not need to ask a second time.
+// THE HISTORY, because both settings have now been wrong in production:
+//
+// isSilent was false for one release and the operator caught what that meant:
+// build.nsis is oneClick:false + allowToChangeInstallationDirectory:true, so a
+// non-silent run showed the FULL first-install wizard — licence page, "where do
+// you want to install this", and this repo's own component page — with no
+// mention of an update anywhere on it. Indistinguishable from being asked to
+// reinstall from scratch.
+//
+// So it went silent, and silent was wrong in the other direction (2026-08-13):
+// /S suppresses EVERY page, and this installer takes minutes — measured at 8+
+// on the 0.1.8 -> 0.1.9 upgrade. The operator clicked "Restart now", saw the
+// installer window flash for about a second before NSIS hides it, and then had
+// no window, no progress and no popup for eight minutes. The update in fact
+// succeeded; nothing on screen said so, so it read as a dead app.
+//
+// The real fault was never the visibility — it was the pages. Those are now
+// suppressed individually: the template already guards its licence and
+// directory pages with skipPageIfUpdated, and build/installer.nsh now guards
+// this repo's component page on ${isUpdated} the way a raw `Page custom`
+// requires. What is left for an update is MUI_PAGE_INSTFILES — a titled
+// window with a live progress bar — and the finish page, whose run-MYTHOS
+// checkbox is on by default. The dialog above is what asks permission; the
+// installer still does not ask a second time.
 //
 // The manual .exe still shows the wizard, and should: that is a fresh install,
 // where choosing a location is the point. The server child is killed by the
@@ -1407,9 +1470,10 @@ async function beginInstall(autoUpdater, version) {
 function promptInstall(autoUpdater, version) {
   try {
     const { dialog } = require('electron');
-    let detail = 'This window will close and the installer will run WITHOUT a progress bar — that is normal.\n\n'
-      + 'It usually takes under a minute, but an upgrade from an older build can take considerably longer '
-      + 'while it replaces the installed files. MYTHOS reopens by itself when it finishes.\n\n'
+    let detail = 'This window will close and the MYTHOS installer will take over, showing a progress bar.\n\n'
+      + 'Replacing the installed files can take several minutes — the last upgrade took about eight. '
+      + 'You will not be asked anything: no licence page, no install location, no component list. '
+      + 'MYTHOS reopens by itself when the progress bar finishes.\n\n'
       + 'Your vault, keys and PIN are untouched by an update.';
     // Only trust updateReleaseNotes when its version matches the one this
     // dialog is about — otherwise notes captured for a superseded update could
@@ -1424,17 +1488,18 @@ function promptInstall(autoUpdater, version) {
       cancelId: 1,
       title: 'MYTHOS update ready',
       message: `MYTHOS ${version} is ready to install.`,
-      // Measured, not guessed: "about half a minute" was wrong by a factor of
-      // eighty on the 0.1.7 upgrade (see beginInstall above), and a wrong ETA on
-      // a silent install is what turns a working update into "the app is dead".
-      // Say what the operator will actually see: nothing.
+      // Measured, not guessed, and re-measured after each failure: "about half
+      // a minute" was wrong by a factor of eighty on the 0.1.7 upgrade, and the
+      // 0.1.9 one took 8 minutes (see beginInstall above). A wrong ETA is what
+      // turns a working update into "the app is dead", so quote the real one and
+      // describe exactly what will be on screen.
       detail,
     }).then(({ response }) => {
       if (response !== 0) {
         log('auto-update: operator chose Later — it will be offered again on the next launch.');
         return;
       }
-      log('auto-update: installing', version, 'silently and restarting');
+      log('auto-update: installing', version, '(progress bar, no wizard pages) and restarting');
       // Returned, not fire-and-forget: beginInstall is async, and a rejection
       // inside it must reach the .catch below rather than becoming an unhandled
       // rejection that loses the update silently.
@@ -1446,6 +1511,41 @@ function promptInstall(autoUpdater, version) {
   }
 }
 
+// Bring a window to the actual foreground on Windows.
+//
+// A bare focus() is not enough and this repo has already learned that twice:
+// Windows' foreground lock refuses a focus request from a process that does not
+// own the foreground, silently (see mythos/adapters/CLAUDE.md's focus_window
+// entry). It bites hardest in the two places the operator noticed:
+//
+//   - after an update, where NSIS starts us via StdUtils.ExecShellAsUser — a
+//     launch with no foreground rights at all, so the window came up behind
+//     everything and the update read as "nothing happened";
+//   - clicking the desktop shortcut while MYTHOS is already running, where the
+//     second instance quits and the primary's focus() was denied.
+//
+// The alwaysOnTop pulse is the documented way through it: setting always-on-top
+// puts the window above the foreground window without needing foreground
+// rights, and dropping it immediately afterwards leaves the z-order intact
+// without pinning the window over everything else forever.
+function raiseWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.setAlwaysOnTop(true);
+    win.setAlwaysOnTop(false);
+    win.focus();
+    // Only on Windows: steal:true is a no-op elsewhere and macOS treats it as
+    // an activation policy change, which is not what this is for.
+    if (process.platform === 'win32') app.focus({ steal: true });
+  } catch (err) {
+    // Never fatal. A window we could not raise is still a window the operator
+    // can click in the taskbar; a throw here would take the boot down with it.
+    log('raiseWindow: could not bring the window forward —', err && err.message);
+  }
+}
+
 // ---- single instance + window ------------------------------------------------
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -1453,13 +1553,45 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+    // raiseWindow, not a bare focus(): the operator reported clicking the
+    // desktop shortcut and having nothing happen at all, which is exactly what
+    // a foreground-lock-denied focus() looks like from the outside.
+    raiseWindow(mainWindow);
   });
 
   app.whenReady().then(async () => {
+    // BEFORE anything touches the install tree: is an installer rewriting it
+    // right now? (See updateAttemptInFlight for the measurement behind this.)
+    // Starting here would fork a server out of a directory being renamed and
+    // take the single-instance lock the installer's own relaunch needs.
+    //
+    // Asked, not enforced. The operator is the one who can see whether an
+    // installer window is on screen, and a wrong guess here must never be the
+    // reason MYTHOS will not open — so "Open anyway" is always available and
+    // the marker expires on its own.
+    const inFlight = updateAttemptInFlight();
+    if (inFlight) {
+      const seconds = Math.round(inFlight.ageMs / 1000);
+      log(`auto-update: an install of ${inFlight.version} started ${seconds}s ago and has not completed — asking before booting`);
+      const { dialog } = require('electron');
+      const choice = dialog.showMessageBoxSync({
+        type: 'warning',
+        buttons: ['Wait for it', 'Open anyway'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'MYTHOS is updating',
+        message: `MYTHOS ${inFlight.version} is being installed.`,
+        detail: 'The installer is still replacing files. MYTHOS opens by itself when its progress bar '
+          + 'finishes — starting a second copy now can make the update fail.\n\n'
+          + 'If you are sure the installer is no longer running, open anyway.',
+      });
+      if (choice === 0) {
+        log('auto-update: operator chose to wait for the installer — quitting this launch');
+        app.quit();
+        return;
+      }
+      log('auto-update: operator opened anyway during an in-flight install');
+    }
     // BEFORE startChild(), deliberately: the child constructs the memory facade
     // over the vault as it boots, so a pull that lands afterwards would be read
     // only on the NEXT launch — which is exactly the "the other machine's work is
@@ -1686,6 +1818,17 @@ if (!gotLock) {
     await primeAuthSession(mainWindow, resolveAuthTokenForPriming(), PORT);
     mainWindow.loadURL(`http://${BIND}:${PORT}`);
     if (!ready) waitForLateReady();
+
+    // The launch that follows an update has no foreground rights (NSIS starts
+    // us through StdUtils.ExecShellAsUser), so without this the new build comes
+    // up BEHIND whatever the operator was doing — which, after a multi-minute
+    // install with the app gone, is indistinguishable from the update having
+    // failed. --updated is passed by the installer's StartApp macro; gating on
+    // it keeps every ordinary launch untouched.
+    if (process.argv.includes('--updated')) {
+      log('auto-update: relaunched by the installer — bringing the window to the front');
+      raiseWindow(mainWindow);
+    }
 
     // Replay the current update state to a freshly-loaded HUD. Events fire on
     // the main process's own schedule — a download can finish before the window

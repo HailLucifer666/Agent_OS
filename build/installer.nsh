@@ -184,6 +184,26 @@ Var FoundAdb
   Page custom mythosComponentsPage mythosComponentsLeave
 
 Function mythosComponentsPage
+  ; NEVER show this page on an update (operator, 2026-08-13). The template
+  ; guards its OWN pages this way — assistedInstaller.nsh puts
+  ; `!insertmacro skipPageIfUpdated` before the licence page and
+  ; MUI_PAGE_DIRECTORY — but that macro works by defining
+  ; MUI_PAGE_CUSTOMFUNCTION_PRE, which a raw `Page custom` ignores. So the
+  ; guard has to live here, in the page's own function, where an Abort is what
+  ; skips the page.
+  ;
+  ; Without it, this page was the reason a non-silent update looked like a
+  ; fresh install, which is why the update path was made silent — and a silent
+  ; 8-minute install is what showed the operator nothing at all and read as a
+  ; dead update. Guarded, a non-silent update shows only the progress bar.
+  ;
+  ; Skipping changes no install behaviour: customInstall below already handles
+  ; empty $Sel* variables by DETECTING what is on disk first, which is exactly
+  ; the path a silent update has always taken.
+  ${If} ${isUpdated}
+    Abort
+  ${EndIf}
+
   !insertmacro MUI_HEADER_TEXT "Choose components" \
     "Pick what MYTHOS should set up on first launch. Anything already on this machine is shown as installed and left alone."
 
