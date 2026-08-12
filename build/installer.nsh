@@ -61,9 +61,74 @@ Var WslPresent
 
   Page custom mythosComponentsPage mythosComponentsLeave
 
+; ---- already-installed detection (operator, 2026-08-12) ----------------------
+;
+; "When updating, it's asking me for the same things — the phone install, the
+; Hermes install. Those are already installed."
+;
+; They were, and this page asked anyway: every checkbox above was hardcoded
+; checked or unchecked and nothing ever looked at the disk. On an update that is
+; not merely noise — accepting the pre-checked boxes re-downloads assets that are
+; already present.
+;
+; WHERE TO LOOK. These are exactly the paths electron/main.js injects as
+; MYTHOS_MODELS_DIR and MYTHOS_TOOLS_DIR (<userData>/models, <userData>/tools),
+; and $APPDATA\MYTHOS is what app.getPath('userData') resolves to for
+; productName MYTHOS — the same reasoning the install-selection.json write at the
+; bottom of this file already documents. If those move, this moves with them.
+;
+; Hermes is checked in three places because it has three legitimate homes: the
+; userData one setup-hermes.js writes to now, the HERMES_HOME the operator may
+; have set (this machine has it as a user env var), and the in-tree location
+; every install before 2026-08-12 used.
+;
+; DETECTED MEANS UNCHECKED AND DISABLED, not hidden: "Silero VAD — already
+; installed" is information; a silently missing row reads as a downgrade.
+
+Var FoundSilero
+Var FoundWakeword
+Var FoundHermes
+Var FoundAdb
+
+!macro DetectComponents
+  StrCpy $FoundSilero "0"
+  StrCpy $FoundWakeword "0"
+  StrCpy $FoundHermes "0"
+  StrCpy $FoundAdb "0"
+
+  ${If} ${FileExists} "$APPDATA\MYTHOS\models\silero\silero_vad.onnx"
+    StrCpy $FoundSilero "1"
+  ${EndIf}
+
+  ; All three assets or nothing — WAKEWORD_ENABLED cannot arm on a partial set,
+  ; so a half-downloaded directory must still offer the download (doctor.js's
+  ; wakeword row applies the same all-or-nothing rule).
+  ${If} ${FileExists} "$APPDATA\MYTHOS\models\wakeword\melspectrogram.onnx"
+  ${AndIf} ${FileExists} "$APPDATA\MYTHOS\models\wakeword\embedding_model.onnx"
+  ${AndIf} ${FileExists} "$APPDATA\MYTHOS\models\wakeword\hey_jarvis_v0.1.onnx"
+    StrCpy $FoundWakeword "1"
+  ${EndIf}
+
+  ${If} ${FileExists} "$APPDATA\MYTHOS\tools\Hermes Agent\hermes-agent\venv\Scripts\hermes.exe"
+    StrCpy $FoundHermes "1"
+  ${ElseIf} ${FileExists} "$INSTDIR\resources\app.asar.unpacked\Hermes Agent\hermes-agent\venv\Scripts\hermes.exe"
+    StrCpy $FoundHermes "1"
+  ${Else}
+    ReadEnvStr $0 "HERMES_HOME"
+    ${If} $0 != ""
+    ${AndIf} ${FileExists} "$0\hermes-agent\venv\Scripts\hermes.exe"
+      StrCpy $FoundHermes "1"
+    ${EndIf}
+  ${EndIf}
+
+  ${If} ${FileExists} "$APPDATA\MYTHOS\tools\Android Platform Tools\platform-tools\adb.exe"
+    StrCpy $FoundAdb "1"
+  ${EndIf}
+!macroend
+
 Function mythosComponentsPage
   !insertmacro MUI_HEADER_TEXT "Choose components" \
-    "Pick what MYTHOS should set up on first launch. Everything here is optional and can be changed later from the app."
+    "Pick what MYTHOS should set up on first launch. Anything already on this machine is shown as installed and left alone."
 
   nsDialogs::Create 1018
   Pop $ComponentsDialog
@@ -71,16 +136,31 @@ Function mythosComponentsPage
     Abort
   ${EndIf}
 
+  !insertmacro DetectComponents
+
   ; Defaults: the two small voice assets are checked because the voice loop
   ; degrades noticeably without them; the large or environment-dependent ones
-  ; are not, so nobody gets a surprise 60 MB download or a WSL install.
-  ${NSD_CreateCheckbox} 0 0u 100% 12u "Silero VAD  (~2 MB) — voice turn-taking"
-  Pop $CbSilero
-  ${NSD_Check} $CbSilero
+  ; are not, so nobody gets a surprise 60 MB download or a WSL install. Anything
+  ; already on disk overrides that and is left unchecked + disabled.
+  ${If} $FoundSilero == "1"
+    ${NSD_CreateCheckbox} 0 0u 100% 12u "Silero VAD — already installed"
+    Pop $CbSilero
+    EnableWindow $CbSilero 0
+  ${Else}
+    ${NSD_CreateCheckbox} 0 0u 100% 12u "Silero VAD  (~2 MB) — voice turn-taking"
+    Pop $CbSilero
+    ${NSD_Check} $CbSilero
+  ${EndIf}
 
-  ${NSD_CreateCheckbox} 0 15u 100% 12u 'Wake word "hey jarvis"  (~4 MB)'
-  Pop $CbWakeword
-  ${NSD_Check} $CbWakeword
+  ${If} $FoundWakeword == "1"
+    ${NSD_CreateCheckbox} 0 15u 100% 12u 'Wake word "hey jarvis" — already installed'
+    Pop $CbWakeword
+    EnableWindow $CbWakeword 0
+  ${Else}
+    ${NSD_CreateCheckbox} 0 15u 100% 12u 'Wake word "hey jarvis"  (~4 MB)'
+    Pop $CbWakeword
+    ${NSD_Check} $CbWakeword
+  ${EndIf}
 
   ; No Piper checkbox on purpose: scripts/setup-piper.js does not exist in this
   ; repo (doctor.js's piper row says so explicitly). A checkbox that cannot act
@@ -99,7 +179,11 @@ Function mythosComponentsPage
     StrCpy $WslPresent "0"
   ${EndIf}
 
-  ${If} $WslPresent == "1"
+  ${If} $FoundHermes == "1"
+    ${NSD_CreateCheckbox} 0 30u 100% 12u "Hermes build agent — already installed"
+    Pop $CbHermes
+    EnableWindow $CbHermes 0
+  ${ElseIf} $WslPresent == "1"
     ${NSD_CreateCheckbox} 0 30u 100% 12u "Hermes build agent (installs into WSL)"
     Pop $CbHermes
   ${Else}
@@ -108,8 +192,14 @@ Function mythosComponentsPage
     EnableWindow $CbHermes 0
   ${EndIf}
 
-  ${NSD_CreateCheckbox} 0 45u 100% 12u "Phone control via adb  (~15 MB)"
-  Pop $CbAdb
+  ${If} $FoundAdb == "1"
+    ${NSD_CreateCheckbox} 0 45u 100% 12u "Phone control via adb — already installed"
+    Pop $CbAdb
+    EnableWindow $CbAdb 0
+  ${Else}
+    ${NSD_CreateCheckbox} 0 45u 100% 12u "Phone control via adb  (~15 MB)"
+    Pop $CbAdb
+  ${EndIf}
 
   ${NSD_CreateCheckbox} 0 60u 100% 12u "Start MYTHOS when I sign in"
   Pop $CbAutostart
@@ -172,9 +262,25 @@ FunctionEnd
   ; empty (the page can be skipped by the updater path). Empty strings would
   ; produce invalid JSON, so fall back to the page's own defaults rather than
   ; writing a file that reads as "install nothing".
+  ;
+  ; THE UPDATE PATH IS THE ONE THAT BIT (operator, 2026-08-12). This is where an
+  ; update actually decides what the wizard will offer, and the fallback wrote
+  ; silero:true / wakeword:true unconditionally — so every silent update queued a
+  ; re-download of assets already on disk, no page shown, nothing asked. Detect
+  ; first, then default: anything found stays false because it does not need
+  ; installing, not because it is unwanted.
   ${If} $SelSilero == ""
-    StrCpy $SelSilero "true"
-    StrCpy $SelWakeword "true"
+    !insertmacro DetectComponents
+    ${If} $FoundSilero == "1"
+      StrCpy $SelSilero "false"
+    ${Else}
+      StrCpy $SelSilero "true"
+    ${EndIf}
+    ${If} $FoundWakeword == "1"
+      StrCpy $SelWakeword "false"
+    ${Else}
+      StrCpy $SelWakeword "true"
+    ${EndIf}
     StrCpy $SelPiper "false"
     StrCpy $SelHermes "false"
     StrCpy $SelAdb "false"

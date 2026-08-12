@@ -22,7 +22,7 @@ const child_process = require('node:child_process');
 // checkForUpdates() below for why it is required lazily at its use site.
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
-const { resolveVaultRoot, adoptSiblingVault } = require('./vault-migration');
+const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = require('./vault-migration');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
 // ---- ONE app identity -----------------------------------------------------------
@@ -601,6 +601,19 @@ function startChild() {
   // the child never even sees the install-tree default. Explicit env (the
   // operator's own .env, render.yaml's /data/vault) always wins inside
   // resolveVaultRoot and skips migration entirely.
+  // The vault is not the only thing the app.setName('MYTHOS') rename orphaned:
+  // keys.json and config.json sit directly in userData, so the operator's real
+  // key store stayed at %APPDATA%\agent-os\keys.json while this build read
+  // %APPDATA%\MYTHOS\keys.json and reported every provider key missing — which
+  // is why a fresh install re-ran the setup wizard over a machine that had been
+  // configured for weeks. Must happen BEFORE decryptedKeysForChild() in the fork
+  // below, or the adopted keys would first reach the child one launch late.
+  adoptSiblingUserDataFiles({
+    userDataDir: app.getPath('userData'),
+    siblingUserDataNames: ['agent-os', 'Electron'],
+    log,
+  });
+
   const vaultRoot = resolveVaultRoot({
     explicitEnv: process.env.MYTHOS_VAULT_ROOT,
     oldVaultDir: OLD_VAULT_DIR,

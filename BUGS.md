@@ -5376,3 +5376,94 @@ and the rendered row count agree at every step, with zero page errors.
 `test/chat-panel-toggle.test.js` pins it by source shape, which is the only
 automated guard available in a no-build ES-module tree with no jsdom — the same
 limitation `test/electron-cursor-overlay.test.js` records.
+
+## Session (2026-08-12, later still) — BUG-187/188/189: a reinstall asked for everything it already had
+
+Two operator reports, one root shape: **state that lives where an update erases
+it, or under a name the app stopped reading.** Nothing here was found by
+reasoning about the code — each was measured on the operator's own machine.
+
+> "Every time after a fresh install it is giving the prompt to store the API keys."
+> "When updating it's asking me for the same things — the phone install, the
+> Hermes install. Those are already installed."
+
+### BUG-187 — the key store was orphaned by the userData rename
+
+`app.setName('MYTHOS')` moved `app.getPath('userData')` from `%APPDATA%\agent-os`
+to `%APPDATA%\MYTHOS`. `adoptSiblingVault` (BUG-180) carries the **vault** across
+those siblings. `keys.json` is not in the vault — it sits directly in userData
+(`main.js`'s `storePath()`), so it was left behind, and so was `config.json`.
+
+Measured, not inferred: `%APPDATA%\agent-os\keys.json` is **1,309 bytes, mtime
+2026-08-11T20:03Z**; `%APPDATA%\MYTHOS\keys.json` does not exist. The packaged
+build's own `/api/setup/status` answers `needsSetup: true` with *"none of:
+GOOGLE_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, …"*, and the first-run wizard
+then covers the HUD — which is the part the operator sees. Confirmed by driving
+the packaged HUD in a real browser: the transcript button could not be clicked
+because `.setup-overlay` intercepted every pointer event.
+
+**FIXED.** `adoptSiblingUserDataFiles` in `electron/vault-migration.js`, called in
+`startChild()` **before** `decryptedKeysForChild()`, or the adopted keys would
+first reach the server one launch late. One marker per file, newest-wins (a
+larger key store can easily be an older one, so the vault's richest-wins
+heuristic is wrong here), and an existing destination is **never** overwritten —
+clobbering keys the operator just entered with an abandoned copy would be worse
+than the re-prompt. Copy, never move.
+
+Safe because `safeStorage` is DPAPI, which is scoped to the **Windows user**, not
+to a directory or an app — a file copied between two userData directories of the
+same user still decrypts. No plaintext is produced anywhere in that module.
+
+Dry-run against the real directories confirms it adopts the 1,309-byte store on
+the next launch.
+
+### BUG-188 — Hermes was installed into the directory the updater deletes
+
+`setup-hermes.js` installed unconditionally into `<repo>/Hermes Agent`. For a
+packaged install `<repo>` is `resources/app.asar.unpacked` — inside the install
+tree, which the NSIS updater replaces wholesale. That is not a theory: during
+this session's update run the silent uninstaller was measured deleting **23,283
+files / 1,801 MB** before the new ones were written. `doctor.js` restated that one
+path by hand (with a comment explaining that requiring `setup-hermes.js` would run
+its installer), so it could not see an install anywhere else either.
+
+This is the same defect `src/core/setup/model-paths.js` already fixed for model
+weights, and that `setup-android.js` never had because it honours
+`MYTHOS_TOOLS_DIR`.
+
+**FIXED.** `setup-hermes.js` resolves its home as `HERMES_HOME` (explicit
+operator override, still wins) → `MYTHOS_TOOLS_DIR/Hermes Agent` (what
+`electron/main.js:634` injects, i.e. `<userData>/tools`) → `<repo>/Hermes Agent`.
+Reads search all three, so a machine that installed before today keeps working
+with no migration. It now has a `require.main === module` guard and exports its
+own resolution; `doctor.js` calls `hermes.binaryPath()` instead of restating a
+path.
+
+**Worth knowing about this machine specifically:** `HERMES_HOME` is set as a
+**user-level Windows environment variable** to
+`D:\Agen OS\Agent OS APP\MYTHOS\resources\app.asar.unpacked\Hermes Agent` — i.e.
+pinned inside the install tree. The explicit override deliberately still wins, so
+that variable defeats this fix on this machine. Changing a user env var is the
+operator's call and was left to them.
+
+### BUG-189 — the installer asked without ever looking at the disk
+
+`build/installer.nsh`'s component page hardcoded every checkbox (Silero and wake
+word checked, Hermes and adb not) and never probed anything. Worse, the
+`customInstall` fallback — the path an **update** takes, where the page is skipped
+entirely — wrote `silero:true, wakeword:true` unconditionally into
+`install-selection.json`, so every silent update queued a re-download of assets
+already on disk with no page shown and nothing asked.
+
+**FIXED.** A `DetectComponents` macro probes exactly the paths `electron/main.js`
+injects (`$APPDATA\MYTHOS\models\…`, `$APPDATA\MYTHOS\tools\…`), checks all three
+wake-word assets all-or-nothing (a partial set cannot arm `WAKEWORD_ENABLED`, so
+it must still offer the download), and checks all three legitimate Hermes homes
+including the `HERMES_HOME` env var. A detected component renders as "— already
+installed", unchecked and disabled: visible rather than hidden, because a silently
+missing row reads as a downgrade. The update path runs the same detection *before*
+choosing its defaults.
+
+`test/reinstall-asks-again.test.js` pins all three (23 tests), including that the
+NSIS macro is defined before both call sites — NSIS resolves `!insertmacro` at
+parse time and nothing in this suite compiles the installer.

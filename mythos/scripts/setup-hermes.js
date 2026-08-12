@@ -20,11 +20,32 @@
 // diffable, and auditable before it runs. Same line drawn for every other
 // third-party installer in this repo.
 //
-// EVERYTHING STAYS INSIDE THE PROJECT. HERMES_HOME is set to
-// <repo>/Hermes Agent, which relocates the install dir, Hermes's managed uv,
-// its bundled PortableGit, and its data/config. Nothing lands in
-// %LOCALAPPDATA% / ~/.hermes. That directory is gitignored — it holds a full
-// third-party checkout AND Hermes's own credentials.
+// EVERYTHING STAYS INSIDE THE PROJECT (dev checkout) OR INSIDE userData (packaged
+// install). HERMES_HOME is set to the resolved home below, which relocates the
+// install dir, Hermes's managed uv, its bundled PortableGit, and its
+// data/config. Nothing lands in %LOCALAPPDATA% / ~/.hermes. The dev location is
+// gitignored — it holds a full third-party checkout AND Hermes's own credentials.
+//
+// WHY MYTHOS_TOOLS_DIR IS HONOURED (operator, 2026-08-12): "when updating, it
+// asks me for the same things — the phone install, the Hermes install. Those are
+// already installed."
+//
+// They were. An update DELETED them. This script installed unconditionally into
+// <repo>/Hermes Agent, and for a packaged install <repo> is
+// resources/app.asar.unpacked — inside the install tree, which the NSIS updater
+// replaces wholesale (measured 2026-08-12: 23,283 files removed before the new
+// ones were written). So Hermes was un-installed by every single update, and
+// doctor.js — which resolved the same one path — correctly reported it missing
+// and the wizard correctly re-offered it. The re-prompt was a symptom; the
+// delivery location was the defect.
+//
+// This is the same fix, and the same dual-search rule, that
+// src/core/setup/model-paths.js already applies to model weights and
+// setup-android.js applies to adb: WRITE to MYTHOS_TOOLS_DIR when Electron
+// injected it (userData — writable without elevation, survives an update,
+// survives a reinstall), fall back to the repo for a bare `node
+// scripts/setup-hermes.js` in a dev checkout, and READ both so a machine that
+// installed before this change keeps working with no migration step.
 //
 // NOTE ON `-HermesHome`: install.ps1's -InstallDir default is computed from
 // the HERMES_HOME **environment variable**, not from the -HermesHome
@@ -37,14 +58,75 @@ const path = require('path');
 
 const REPO_URL = 'https://github.com/NousResearch/hermes-agent.git';
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const HERMES_HOME = path.join(REPO_ROOT, 'Hermes Agent');
-const INSTALL_DIR = path.join(HERMES_HOME, 'hermes-agent');
 
-// Where each platform's installer leaves the entry point.
-function binaryPath() {
+// Exported (via module.exports at the bottom) so doctor.js resolves exactly the
+// same candidates instead of hardcoding one of them — the drift that made
+// "installed" and "where we install" two different answers.
+const REPO_HERMES_HOME = path.join(REPO_ROOT, 'Hermes Agent');
+
+function toolsHermesHome(env) {
+  const e = env || process.env;
+  if (!e.MYTHOS_TOOLS_DIR) return null;
+  return path.join(path.resolve(e.MYTHOS_TOOLS_DIR), 'Hermes Agent');
+}
+
+// A WRITE goes to userData/tools when Electron told us where that is, else the
+// repo. HERMES_HOME set by the operator overrides both — it is the documented
+// escape hatch and it must keep winning.
+function resolveHermesHome(env) {
+  const e = env || process.env;
+  if (e.HERMES_HOME) return path.resolve(e.HERMES_HOME);
+  return toolsHermesHome(e) || REPO_HERMES_HOME;
+}
+
+// Every home a READ should consider, most-preferred first, de-duplicated. The
+// repo stays in the list forever: a dev checkout (and any machine that installed
+// before 2026-08-12) has Hermes there and must not be told to reinstall it.
+function hermesSearchHomes(env) {
+  const homes = [];
+  const e = env || process.env;
+  if (e.HERMES_HOME) homes.push(path.resolve(e.HERMES_HOME));
+  const tools = toolsHermesHome(e);
+  if (tools) homes.push(tools);
+  homes.push(REPO_HERMES_HOME);
+  return homes.filter((h, i) => homes.indexOf(h) === i);
+}
+
+function installDirFor(home) {
+  return path.join(home, 'hermes-agent');
+}
+
+// Where each platform's installer leaves the entry point, for a given home.
+function binaryPathFor(home) {
   return process.platform === 'win32'
-    ? path.join(INSTALL_DIR, 'venv', 'Scripts', 'hermes.exe')
-    : path.join(INSTALL_DIR, 'venv', 'bin', 'hermes');
+    ? path.join(installDirFor(home), 'venv', 'Scripts', 'hermes.exe')
+    : path.join(installDirFor(home), 'venv', 'bin', 'hermes');
+}
+
+// The first binary that actually exists across the search homes, or null. This is
+// what "is Hermes installed?" means now — not "is it at the one path we would
+// install to today".
+//
+// `homes` is an injectable seam for tests only. Without it, the repo home is
+// always searched (deliberately — see hermesSearchHomes), so a machine that has
+// Hermes in its dev checkout cannot express "nothing is installed anywhere" and
+// the negative case would be untestable on the very machine that needs it.
+function findInstalledBinary(env, homes) {
+  for (const home of (homes || hermesSearchHomes(env))) {
+    const bin = binaryPathFor(home);
+    try { if (fs.statSync(bin).size > 0) return { bin, home }; } catch { /* next candidate */ }
+  }
+  return null;
+}
+
+const HERMES_HOME = resolveHermesHome();
+const INSTALL_DIR = installDirFor(HERMES_HOME);
+
+// An existing install anywhere wins for --check/probe purposes; a fresh
+// --install still writes to the resolved home above.
+function binaryPath() {
+  const found = findInstalledBinary();
+  return found ? found.bin : binaryPathFor(HERMES_HOME);
 }
 
 function run(cmd, args, opts) {
@@ -331,7 +413,24 @@ async function install() {
   return code;
 }
 
-(async () => {
-  const wantsInstall = process.argv.includes('--install');
-  process.exitCode = wantsInstall ? await install() : check();
-})();
+// Same require.main guard setup-android.js uses, and for the same reason: doctor.js
+// now requires this file to resolve the binary, and a require that also ran the
+// --check probe would spawn a child process on every doctor report.
+if (require.main === module) {
+  (async () => {
+    const wantsInstall = process.argv.includes('--install');
+    process.exitCode = wantsInstall ? await install() : check();
+  })();
+}
+
+module.exports = {
+  resolveHermesHome,
+  hermesSearchHomes,
+  findInstalledBinary,
+  binaryPathFor,
+  installDirFor,
+  binaryPath,
+  REPO_HERMES_HOME,
+  HERMES_HOME: function() { return HERMES_HOME; },
+  INSTALL_DIR: function() { return INSTALL_DIR; },
+};

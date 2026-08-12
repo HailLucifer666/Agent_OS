@@ -195,6 +195,137 @@ function adoptSiblingVault({ dest, siblingDirs = [], markerPath, log = () => {} 
   return { status: 'adopted', from: winner.dir, files: winner.files };
 }
 
+// ---- sibling userData FILE adoption (2026-08-12) ------------------------------
+//
+// THE BUG THIS EXISTS FOR (operator, 2026-08-12): "every time after a fresh
+// install it prompts to store the API keys again."
+//
+// adoptSiblingVault above moves the VAULT across the sibling userData
+// directories that app.setName('MYTHOS') orphaned. keys.json is not in the
+// vault. It sits directly in userData (see main.js's storePath), so the rename
+// left the real key store at %APPDATA%\agent-os\keys.json while the running app
+// read %APPDATA%\MYTHOS\keys.json — measured on the operator's machine: a
+// 1,309-byte keys.json in the old directory, none in the new one, and
+// /api/setup/status reporting "none of: GOOGLE_API_KEY, GROQ_API_KEY, …" with
+// needsSetup:true. The first-run wizard then covers the HUD, which is the
+// symptom the operator actually sees. config.json (non-secret settings) is
+// orphaned by exactly the same rename.
+//
+// SAFE TO COPY, and this is the part worth stating: keys.json is encrypted with
+// safeStorage, i.e. DPAPI on Windows. DPAPI is scoped to the WINDOWS USER, not
+// to a directory or an application, so a file copied between two userData
+// directories of the same user still decrypts. Nothing is re-encrypted here and
+// no plaintext is ever produced by this module.
+//
+// Deliberately NOT the same marker as the vault: a fresh install writes the
+// vault markers immediately, and sharing one would suppress this forever.
+//
+// Newest-wins rather than largest-wins. For a directory of accumulated memories
+// "richest" is the right heuristic; for a key store it is not — a bigger file
+// can easily be an older one with keys that have since been rotated out.
+function rankSiblingFiles(candidates, statOf = fs.statSync) {
+  const scored = [];
+  for (const file of candidates) {
+    try {
+      const s = statOf(file);
+      if (!s.isFile() || s.size === 0) { scored.push({ file, present: false, size: 0, mtimeMs: 0 }); continue; }
+      scored.push({ file, present: true, size: s.size, mtimeMs: s.mtimeMs });
+    } catch {
+      // Absent is the overwhelmingly common case (a genuinely new machine), so
+      // it is not an error and not logged as one.
+      scored.push({ file, present: false, size: 0, mtimeMs: 0 });
+    }
+  }
+  const usable = scored.filter((c) => c.present);
+  usable.sort((a, b) => (b.mtimeMs - a.mtimeMs) || (b.size - a.size));
+  return { ranked: scored, winner: usable[0] || null };
+}
+
+// adoptSiblingFile({dest, siblingPaths, markerPath, log}) -> {status, from?, ...}
+//
+//   'already-done'  marker present — never runs twice.
+//   'dest-present'  this install already has the file; never overwritten.
+//   'no-candidate'  no sibling has it (a genuinely new machine).
+//   'adopted'       copied + size-verified from the newest sibling.
+//   'failed'        copy/verify failed; no marker written, so the next boot
+//                   retries, and the source is untouched either way.
+function adoptSiblingFile({ dest, siblingPaths = [], markerPath, log = () => {} }) {
+  if (fs.existsSync(markerPath)) return { status: 'already-done' };
+
+  const label = path.basename(dest);
+
+  // An existing file always wins. Overwriting a key store the operator just
+  // filled in with an older copy would be a data-loss bug worse than the
+  // re-prompt this fixes.
+  try {
+    if (fs.existsSync(dest) && fs.statSync(dest).size > 0) {
+      writeMarker(markerPath, { status: 'dest-present', at: new Date().toISOString() }, log);
+      return { status: 'dest-present' };
+    }
+  } catch { /* unreadable dest is treated as absent — the copy below will fail loudly if it is real */ }
+
+  const { ranked, winner } = rankSiblingFiles(siblingPaths);
+  for (const c of ranked) {
+    log(`userdata-adopt(${label}): candidate ${c.file} — ${c.present ? `${c.size}B mtime=${new Date(c.mtimeMs).toISOString()}` : 'absent'}`
+      + `${winner && c.file === winner.file ? '  <-- newest, adopting' : ''}`);
+  }
+
+  if (!winner) {
+    log(`userdata-adopt(${label}): no sibling copy found — nothing to adopt.`);
+    writeMarker(markerPath, { status: 'no-candidate', candidates: siblingPaths, at: new Date().toISOString() }, log);
+    return { status: 'no-candidate' };
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(winner.file, dest);
+    const copied = fs.statSync(dest).size;
+    if (copied !== winner.size) {
+      throw new Error(`verify mismatch: source ${winner.size}B, dest ${copied}B`);
+    }
+  } catch (err) {
+    log(`userdata-adopt(${label}): FAILED — ${err.message} — ${winner.file} left untouched`);
+    try { fs.rmSync(dest, { force: true }); } catch { /* best-effort cleanup */ }
+    return { status: 'failed', error: err.message, from: winner.file };
+  }
+
+  log(`userdata-adopt(${label}): OK — adopted ${winner.file} -> ${dest} (${winner.size}B; source left in place)`);
+  writeMarker(markerPath, {
+    status: 'adopted', from: winner.file, to: dest, bytes: winner.size,
+    candidates: ranked.map(({ file, present, size, mtimeMs }) => ({ file, present, size, mtimeMs })),
+    at: new Date().toISOString(),
+  }, log);
+  return { status: 'adopted', from: winner.file, bytes: winner.size };
+}
+
+// adoptSiblingUserDataFiles({userDataDir, siblingUserDataNames, fileNames, log})
+//
+// The whole point of the rename fix in one call: for each file, look for it in
+// every sibling userData directory and adopt the newest. One marker per file, so
+// a failure on one never blocks the other, and adding a third file later does
+// not re-run the first two.
+const ORPHANED_USERDATA_FILES = ['keys.json', 'config.json'];
+
+function adoptSiblingUserDataFiles({ userDataDir, siblingUserDataNames = [], fileNames = ORPHANED_USERDATA_FILES, log = () => {} }) {
+  if (!siblingUserDataNames.length) return {};
+  const parent = path.dirname(userDataDir);
+  const results = {};
+  for (const name of fileNames) {
+    const dest = path.join(userDataDir, name);
+    const siblingPaths = siblingUserDataNames
+      .map((sibling) => path.join(parent, sibling, name))
+      .filter((file) => path.resolve(file) !== path.resolve(dest));
+    results[name] = adoptSiblingFile({
+      dest,
+      siblingPaths,
+      // Named per file: 'keys.json' -> userdata-adopt-keys.json
+      markerPath: path.join(userDataDir, `userdata-adopt-${name}`),
+      log,
+    });
+  }
+  return results;
+}
+
 // Resolve MYTHOS_VAULT_ROOT for the forked server child.
 //
 // Explicit env ALWAYS wins and skips migration entirely — the operator's own
@@ -238,8 +369,12 @@ module.exports = {
   migrateVault,
   resolveVaultRoot,
   adoptSiblingVault,
+  adoptSiblingFile,
+  adoptSiblingUserDataFiles,
   rankVaultCandidates,
+  rankSiblingFiles,
   isNonEmptyDir,
   dirStats,
   copyAndVerify,
+  ORPHANED_USERDATA_FILES,
 };

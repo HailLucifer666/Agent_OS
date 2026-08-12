@@ -42,6 +42,7 @@ const REPO_ROOT = path.resolve(MYTHOS_DIR, '..');
 const silero = require('./setup-silero.js');
 const wakeword = require('./setup-wakeword.js');
 const android = require('./setup-android.js');
+const hermes = require('./setup-hermes.js');
 const { findModelFile, userDataModelsDir } = require('../src/core/setup/model-paths');
 
 // Does this directory hold at least one .onnx voice? Mirrors piper-child.js's own
@@ -187,12 +188,15 @@ function assetChecks() {
     piperVoices = fs.readdirSync(piperDir).filter((f) => f.endsWith('.onnx'));
   } catch { /* absent dir — reported as a gap below */ }
 
-  // setup-hermes.js has no export guard, so requiring it would RUN the
-  // installer. The path is restated here from that file's binaryPath() instead,
-  // deliberately and with the citation.
-  const hermesBin = process.platform === 'win32'
-    ? path.join(REPO_ROOT, 'Hermes Agent', 'hermes-agent', 'venv', 'Scripts', 'hermes.exe')
-    : path.join(REPO_ROOT, 'Hermes Agent', 'hermes-agent', 'venv', 'bin', 'hermes');
+  // setup-hermes.js now has a require.main guard and exports its own path
+  // resolution, so this asks it rather than restating one hardcoded path.
+  //
+  // That restatement was a real defect, not just duplication: it named ONLY
+  // <repo>/Hermes Agent, so on a packaged install — where the repo is inside the
+  // install tree an update deletes — Hermes read as missing after every update
+  // and the wizard re-offered an install the operator had already done. Both
+  // sides now search userData/tools (MYTHOS_TOOLS_DIR) first and the repo second.
+  const hermesBin = hermes.binaryPath();
 
   return [
     {
