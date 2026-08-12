@@ -183,21 +183,29 @@ function check() {
   const cfg = path.join(HERMES_HOME, 'config.yaml');
   if (fs.existsSync(cfg)) {
     const src = fs.readFileSync(cfg, 'utf8');
-    const base = /^\s*base_url:\s*(\S+)/m.exec(src);
-    const model = /^\s*default:\s*(\S+)/m.exec(src);
-    const provider = /^\s*provider:\s*(\S+)/m.exec(src);
-    console.log('  provider     : ' + (provider ? provider[1] : '(unset)') +
-                '  model: ' + (model ? model[1] : '(unset)') +
-                '  base_url: ' + (base ? base[1] : '(unset)'));
+    // YAML quotes are optional and Hermes accepts either form, but this check
+    // used to compare the RAW capture against a bare string — so the perfectly
+    // valid `provider: "openai-api"` was reported as
+    // `must be "openai-api" (found: "openai-api")`, which reads as a bug in
+    // MYTHOS and cannot be acted on. It bites by default: the Hermes installer
+    // writes `provider: "auto"` quoted, so an operator fixing it in place keeps
+    // the quotes. Strip them before comparing (2026-08-13).
+    const unquote = (m) => (m ? m[1].replace(/^['"]|['"]$/g, '') : null);
+    const base = unquote(/^\s*base_url:\s*(\S+)/m.exec(src));
+    const model = unquote(/^\s*default:\s*(\S+)/m.exec(src));
+    const provider = unquote(/^\s*provider:\s*(\S+)/m.exec(src));
+    console.log('  provider     : ' + (provider || '(unset)') +
+                '  model: ' + (model || '(unset)') +
+                '  base_url: ' + (base || '(unset)'));
     // config.yaml overrides the OPENAI_* pair the adapter forwards, and only the
     // `openai-api` registry id actually consumes that pair (its ProviderConfig
     // declares api_key_env_vars=("OPENAI_API_KEY",) / base_url_env_var=
     // "OPENAI_BASE_URL"). `openai` is not a registry id at all and `custom` is a
     // plugin, so either one authenticates as nobody: every call comes back
     // "HTTP 401: Missing Authentication header". Root-caused live 2026-07-29.
-    if (!provider || provider[1] !== 'openai-api') {
+    if (provider !== 'openai-api') {
       providerOk = false;
-      console.log('  ERROR: model.provider must be "openai-api" for MYTHOS (found: ' + (provider ? provider[1] : 'unset') + ').');
+      console.log('  ERROR: model.provider must be "openai-api" for MYTHOS (found: ' + (provider || 'unset') + ').');
       console.log('    That is the only registry id that reads the OPENAI_API_KEY/');
       console.log('    OPENAI_BASE_URL pair the adapter forwards. With anything else');
       console.log('    (including "openai" or "custom") every build fails with');

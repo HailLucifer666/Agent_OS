@@ -140,6 +140,25 @@ test('the rescued tools land where MYTHOS_TOOLS_DIR already points', () => {
     'an existing userData copy must never be clobbered by an older in-tree one');
 });
 
+test('an in-tree HERMES_HOME is called out rather than silently defeating the rescue', () => {
+  // Measured on the operator's machine, 2026-08-13: a user-level HERMES_HOME
+  // pointing into resources/app.asar.unpacked outranks MYTHOS_TOOLS_DIR in
+  // setup-hermes.js, so a reinstall puts the whole venv back in the tree and the
+  // next update deletes it again. main.js cannot fix an operator env var; it can
+  // refuse to be quiet about it.
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function warnIfHermesHomeIsInTheInstallTree(');
+  assert.ok(start !== -1, 'the check must exist');
+  const body = code.slice(start, code.indexOf('\nfunction ', start + 10));
+  assert.ok(/process\.env\.HERMES_HOME/.test(body), 'it reads the operator env var');
+  assert.ok(/startsWith/.test(body), 'and compares it against the install root');
+
+  const rescue = code.slice(code.indexOf('function rescueToolDirs('));
+  assert.ok(rescue.indexOf('warnIfHermesHomeIsInTheInstallTree(') !== -1
+    && rescue.indexOf('warnIfHermesHomeIsInTheInstallTree(') < rescue.indexOf('renameSync'),
+    'and runs as part of the handover, before the rename it would otherwise silently undo');
+});
+
 test('the dialog no longer promises a fixed half a minute', () => {
   // Comments stripped: the note above the dialog quotes the old wording to
   // explain why it is gone, and that history must stay readable.

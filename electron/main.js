@@ -1072,9 +1072,31 @@ function checkForUpdates() {
 // Blocking an update is not an option, so every failure logs and installs anyway.
 const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
 
+// An operator HERMES_HOME pointing INSIDE the install tree defeats all of this,
+// and did on the machine this was written on (2026-08-13): it outranks
+// MYTHOS_TOOLS_DIR in mythos/scripts/setup-hermes.js, so every reinstall puts
+// ~17.6k files back into the tree, every update then deletes them, and the slow
+// install returns for good. Nothing here can fix that — the env var is the
+// operator's, and the next reinstall would undo any move — so say so in the log
+// rather than silently rescuing a directory that is about to be recreated.
+function warnIfHermesHomeIsInTheInstallTree(installRoot) {
+  const home = process.env.HERMES_HOME;
+  if (!home || !installRoot) return;
+  try {
+    const inTree = path.resolve(home).toLowerCase().startsWith(path.resolve(installRoot).toLowerCase());
+    if (!inTree) return;
+    log('auto-update: HERMES_HOME points inside the install tree —', home);
+    log('auto-update: every update will delete that Hermes install. Repoint it at',
+      path.join(app.getPath('userData'), 'tools', 'Hermes Agent'), 'and reinstall there.');
+  } catch (err) {
+    log('auto-update: could not check HERMES_HOME —', err && err.message);
+  }
+}
+
 function rescueToolDirs() {
   if (!app.isPackaged) return; // a dev run has no install tree for NSIS to delete
   const src = path.join(process.resourcesPath || '', 'app.asar.unpacked');
+  warnIfHermesHomeIsInTheInstallTree(process.resourcesPath);
   const dest = path.join(app.getPath('userData'), 'tools');
   for (const name of RESCUABLE_TOOL_DIRS) {
     try {

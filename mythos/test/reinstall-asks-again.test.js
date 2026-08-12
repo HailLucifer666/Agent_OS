@@ -300,3 +300,27 @@ describe('3. the installer looks before it asks', () => {
     assert.ok(nsh.indexOf('!macro DetectComponents') > guard);
   });
 });
+
+// ---- the provider check must not fail against a value that is already right --
+//
+// 2026-08-13: `provider: "openai-api"` — valid YAML, and exactly what the fix
+// hint asks for once the operator keeps the quotes the Hermes installer writes —
+// was reported as `must be "openai-api" (found: "openai-api")`, because the
+// check compared the RAW regex capture (quotes included) against a bare string.
+// An unactionable error that reads as a MYTHOS bug is worse than no check, and
+// this bites by default: the installer writes `provider: "auto"` quoted, so
+// every reinstall walks the operator into it. Source-shape assertion — the check
+// lives inline in a reporting function and is not exported.
+describe('setup-hermes.js provider check', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'setup-hermes.js'), 'utf8');
+
+  it('strips YAML quotes before comparing the provider id', () => {
+    assert.match(src, /replace\(\/\^\['"\]\|\['"\]\$\/g, ''\)/,
+      'the captured value must have surrounding quotes stripped before the comparison');
+  });
+
+  it('compares the unquoted value, not the raw match object', () => {
+    assert.match(src, /if \(provider !== 'openai-api'\)/,
+      "comparing provider[1] against 'openai-api' is what made a correct quoted value fail");
+  });
+});
