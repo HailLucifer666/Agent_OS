@@ -5878,3 +5878,93 @@ violate the same no-invented-evidence discipline this whole codebase is
 built on (AD-5). Needs the operator to supply the actual leaked text (or
 point at the vault/machine that has it) before this item can be done
 honestly.
+
+### BUG-213 — an aether-proxy bind failure had no recovery, ever
+
+`main.js`'s `aether-proxy-bind-failed` handler called `scannerProxy.stop()`
+and left it dead for the rest of the process — nothing ever retried, even
+when the port collision was a stale MYTHOS instance still releasing its
+ports on exit (the common case).
+
+**FIXED**, with a deliberate choice between the plan's two offered options:
+a SAME-PORT retry via a new healer playbook (`aether-proxy-rebind`,
+`retry-aether-proxy` action calling the existing `scannerProxy.start()`/
+`whenReady()` — scanner-proxy.js's own comments already document this as
+the sanctioned recovery path), NOT a port shift. Shifting to a different
+base was the plan's OTHER offered option and would have been actively
+dangerous here: `scanner-proxy.js`'s own header states "PORT ORDER IS THE
+CONTRACT" — the Aether aggregator is a separate, externally-run process
+pointed at these exact ports via `--peers`, so silently renumbering would
+misattribute room readings to the wrong scanner instead of failing loudly.
+15s cooldown. `test/aether-proxy-rebind-playbook.test.js`.
+
+### BUG-214 — reminder/timer times fell through on ordinary phrasing
+
+`parseWhen()` (from-calendar.js, shared by `reminder_add`'s free-form `when`
+and `timer_add`'s internally-built one) required either a colon (`HH:MM`) or
+a `today`/`tomorrow` prefix for every time-of-day pattern — a bare `"5pm"`,
+`"at 9:30"`, `"noon"`, or `"in an hour"` all fell through to "Could not parse
+that time" with no fixture either way.
+
+**FIXED.** Widened to accept: a bare hour with am/pm and no colon (`"5pm"`);
+a leading `"at "` on any existing pattern; the literals `"noon"`/`"midnight"`;
+and `"in an hour"`/`"in half an hour"` (word-number durations the numeric-only
+pattern cannot match at all). Deliberately NOT a general word-number parser —
+a bare hour with no am/pm and no colon (`"5"`) stays honestly refused as
+genuinely ambiguous. `test/parse-when-widening.test.js`. The plan's exact
+"6 observed leaked leads" / specific failing phrase from the 2026-08-12/13
+session was not available in this checkout (see the reasoning-leak entry
+above for the same data-availability gap) — this widens the general class of
+missing patterns instead of fixing one specific unavailable phrase.
+
+### BUG-215 — open_web reported success with zero verification
+
+Every `open_web` branch (YouTube, weather, flights, image, web-embed,
+search) returned a bare `ok()` — resolving real content (a geocoded URL, a
+video id, search cards) and handing it to the client is not proof the
+dashboard actually rendered it; no `ui.open-web-consumed` ack exists to
+confirm that.
+
+**FIXED**, choosing the plan's lower-risk offered option over building a new
+HUD-ack round trip: every `open_web` outcome now goes through
+`evidence.unverified()` — the same evidence contract every other
+world-changing effector in this codebase already enforces. Still `ok:true`
+(real content WAS resolved) but honestly marked as unconfirmed. A genuine
+failure (bad type, invalid URL, no results) is unaffected — it still returns
+a real `fail()`, never wrapped as an unverified success.
+`test/open-web-evidence-honesty.test.js`.
+
+### BUG-216 — no durable record of when MYTHOS first booted on this install
+
+"When did you first boot" / "how long have you been in development" had no
+honest answer — `version.js`'s `bootDate` is the CURRENT process's boot
+time, re-stamped on every restart, and answers neither question.
+
+**FIXED.** New `identity/boot-timeline.js`: `ensureFirstBootRecorded()`
+writes `vault/Identity/first-boot.json` exactly once, ever, for the
+lifetime of an install (same durability class as `Identity/boundaries.md`);
+every later boot just reads it back. Wired into `capabilities.writeManifest()`
+so the existing `self_capabilities` self-knowledge tool surfaces it for free
+— no new tool, no new wiring at the voice layer.
+`test/capabilities-manifest.test.js`.
+
+### BUG-217 — log_incident could fire on the model's own initiative
+
+Observed in the 2026-08-12/13 session: `log_incident` called unbidden
+(noticing its own mistake or a tool failure) rather than in response to an
+explicit operator request to log something.
+
+**FIXED** at the prompt level — the only lever available, since the tool
+itself has no way to distinguish who decided to call it. Tightened the
+catalog description to say explicitly: only when the OPERATOR asks; do NOT
+call this on your own initiative; noticing something is wrong is not the
+same as being asked to log it. `test/from-memory.test.js`. **Not
+independently verifiable here**: confirming it stops firing unbidden needs a
+real voice session and an episodic-log review — see the live-verify
+checklist.
+
+### Wave 7 item 6 (stt-failed x10 / provider-down) — no separate work
+
+Per the plan: already covered by Wave 5's lane-health preflight
+(`vision-call.js`'s `chainFor` check generalizes to the same provider-down
+class). No additional code change.

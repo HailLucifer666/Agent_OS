@@ -25,6 +25,7 @@ const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { visionThink } = require('./vision-call');
+const evidence = require('./evidence');
 // BUG-113: surface open spoken commitments in read_status so "where are we
 // on X" is answerable from state instead of memory.
 const { listOpenCommitments } = require('./from-calendar');
@@ -154,6 +155,17 @@ function buildTools(ctx) {
     }
   }
 
+  // Wave 7 (2026-08-13): every open_web branch used to return a bare ok() —
+  // resolving a search/geocode/video-id and handing the payload to the
+  // client is not proof the dashboard actually rendered anything; nothing
+  // here reads back from the HUD (no ui.open-web-consumed ack exists). Same
+  // evidence contract dispatch-action.js enforces everywhere else: ok:true
+  // is kept (this DID resolve real content), but honestly marked unverified
+  // rather than a bare, unqualified success.
+  function openWebResult(result, uiActions) {
+    return evidence.unverified(ok(result, uiActions), 'the dashboard has not confirmed it rendered this');
+  }
+
   // ---- open_web ----
   // Opens web content on the dashboard: YouTube videos (embed), weather cards,
   // search result cards, flight cards, or a general web page. The tool resolves
@@ -203,7 +215,7 @@ function buildTools(ctx) {
         // schema default in mythos/src/core/config/schema.js.
         var youtubeMode = (config && config.YOUTUBE_MODE) || 'electron';
         if (youtubeMode === 'newtab') {
-          return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
+          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
         }
 
         // Embeddability pre-check via YouTube's public oEmbed endpoint (no API
@@ -229,12 +241,12 @@ function buildTools(ctx) {
         // restriction applies outside an iframe). This is the guaranteed
         // "alternate way".
         if (!chosen) {
-          return ok({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
+          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
         }
         // enablejsapi=1 is required for the player to postMessage onReady/
         // infoDelivery — without it, web-panel.js's success detection never
         // fires and its failTimer wrongly assumes every embed has failed.
-        return ok({ widgetType: 'youtube', embedUrl: 'https://www.youtube-nocookie.com/embed/' + chosen.id + '?autoplay=1&rel=0&modestbranding=1&enablejsapi=1', title: chosen.title, videoId: chosen.id });
+        return openWebResult({ widgetType: 'youtube', embedUrl: 'https://www.youtube-nocookie.com/embed/' + chosen.id + '?autoplay=1&rel=0&modestbranding=1&enablejsapi=1', title: chosen.title, videoId: chosen.id });
       }
 
       // WEATHER — geocode location, return the Open-Meteo URL for client-side fetch
@@ -257,7 +269,7 @@ function buildTools(ctx) {
             var hit = attempt1.hit;
             var weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit.latitude + '&longitude=' + hit.longitude +
               '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
-            return ok({ widgetType: 'weather', weatherUrl: weatherUrl, title: 'Weather: ' + hit.name, location: hit.name });
+            return openWebResult({ widgetType: 'weather', weatherUrl: weatherUrl, title: 'Weather: ' + hit.name, location: hit.name });
           }
 
           // If network error on first attempt, fail immediately (don't retry on network failures)
@@ -271,7 +283,7 @@ function buildTools(ctx) {
               var hit2 = attempt2.hit;
               var weatherUrl2 = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit2.latitude + '&longitude=' + hit2.longitude +
                 '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
-              return ok({ widgetType: 'weather', weatherUrl: weatherUrl2, title: 'Weather: ' + hit2.name, location: hit2.name });
+              return openWebResult({ widgetType: 'weather', weatherUrl: weatherUrl2, title: 'Weather: ' + hit2.name, location: hit2.name });
             }
             // If second attempt also has a network error, fail with that
             if (attempt2.error === 'network') return fail(attempt2.msg);
@@ -290,7 +302,7 @@ function buildTools(ctx) {
           return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
         }) : [];
         var deepLink = 'https://www.google.com/travel/flights?q=' + encodeURIComponent('flights ' + q);
-        return ok({ widgetType: 'flights', cards: cards, deepLink: deepLink, title: 'Flights: ' + q, query: q });
+        return openWebResult({ widgetType: 'flights', cards: cards, deepLink: deepLink, title: 'Flights: ' + q, query: q });
       }
 
       // IMAGE — search for images, return URLs
@@ -300,7 +312,7 @@ function buildTools(ctx) {
         var imgCards = (imgRes.ok && imgRes.result && imgRes.result.results) ? imgRes.result.results.map(function(r) {
           return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 150) };
         }) : [];
-        return ok({ widgetType: 'image', cards: imgCards, title: title || q, query: q });
+        return openWebResult({ widgetType: 'image', cards: imgCards, title: title || q, query: q });
       }
 
       // WEB — direct URL embed (validate https scheme).
@@ -314,16 +326,16 @@ function buildTools(ctx) {
         if (parsed.protocol !== 'https:') return fail('Only https: URLs can be embedded (security).');
         var host = parsed.hostname.toLowerCase();
         if (host === 'news.google.com' || host === 'www.news.google.com') {
-          return ok({ widgetType: 'news', title: title || 'Google News' });
+          return openWebResult({ widgetType: 'news', title: title || 'Google News' });
         }
         var NO_EMBED_DOMAINS = ['google.com','facebook.com','twitter.com','x.com',
           'instagram.com','github.com','linkedin.com','reddit.com'];
         for (var d = 0; d < NO_EMBED_DOMAINS.length; d++) {
           if (host === NO_EMBED_DOMAINS[d] || host.endsWith('.' + NO_EMBED_DOMAINS[d])) {
-            return ok({ widgetType: 'newtab', url: url, title: title || parsed.hostname });
+            return openWebResult({ widgetType: 'newtab', url: url, title: title || parsed.hostname });
           }
         }
-        return ok({ widgetType: 'web', embedUrl: url, title: title || parsed.hostname });
+        return openWebResult({ widgetType: 'web', embedUrl: url, title: title || parsed.hostname });
       }
 
       // SEARCH (default) — return search result cards
@@ -335,7 +347,7 @@ function buildTools(ctx) {
       var searchCards = searchRes.result.results.map(function(r) {
         return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
       });
-      return ok({ widgetType: 'search', cards: searchCards, title: title || q, query: q, source: searchRes.result.source });
+      return openWebResult({ widgetType: 'search', cards: searchCards, title: title || q, query: q, source: searchRes.result.source });
 
       // Unreachable: the ALLOWED_TYPES guard at the top rejects all other types.
     } catch (err) {

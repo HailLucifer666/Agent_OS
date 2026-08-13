@@ -242,8 +242,23 @@ function createCalendarEffector({ fs, bus, goals }) {
   function parseWhen(str, now) {
     if (!str || typeof str !== 'string') return null;
     str = str.trim().toLowerCase();
+    // Wave 7 (2026-08-13): a leading "at " is common, ordinary phrasing
+    // ("set a timer at 5pm", "remind me at 9:30") that every pattern below
+    // required the caller to have already stripped — none of them tolerated
+    // it. Stripped once, up front, so every existing pattern gains it for
+    // free instead of duplicating "(at )?" into each regex.
+    str = str.replace(/^at\s+/, '');
     now = now || Date.now();
     var d = new Date(now);
+
+    // "noon" / "midnight" — same next-occurrence semantics as bare "HH:MM"
+    // below (today if still ahead, else tomorrow), not a special case of it.
+    if (str === 'noon' || str === 'midnight') {
+      var noonHour = str === 'noon' ? 12 : 0;
+      d.setHours(noonHour, 0, 0, 0);
+      if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
 
     // ISO datetime: 2026-07-12T15:30:00 or 2026-07-12 15:30
     // BUG-100: `str` was lowercased two lines up, so an uppercase-only `[T ]`
@@ -266,6 +281,14 @@ function createCalendarEffector({ fs, bus, goals }) {
       if (unit.indexOf('hour') === 0) return now + n * 3600000;
       if (unit.indexOf('day') === 0) return now + n * 86400000;
     }
+
+    // Wave 7 (2026-08-13): "in an hour" / "in half an hour" — ordinary
+    // phrasing the numeric-only pattern above cannot match at all (no digit
+    // to capture). Deliberately just these two, not a general word-number
+    // parser — "in a couple minutes"/"in a few hours" are genuinely
+    // ambiguous durations, not worth guessing at.
+    if (str === 'in an hour' || str === 'in one hour') return now + 3600000;
+    if (str === 'in half an hour' || str === 'in a half hour') return now + 1800000;
 
     // "today HH:MM" or "tomorrow HH:MM" or "tomorrow HH:MMam/pm"
     // also "today 9am" / "tomorrow 3pm" (no minutes)
@@ -290,6 +313,25 @@ function createCalendarEffector({ fs, bus, goals }) {
       if (bampm === 'pm' && bh < 12) bh += 12;
       if (bampm === 'am' && bh === 12) bh = 0;
       d.setHours(bh, bm, 0, 0);
+      if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
+
+    // Wave 7 (2026-08-13): bare "5pm" / "9am" — an hour with NO colon and NO
+    // today/tomorrow prefix. The dayTime pattern above requires the day
+    // word; the bare-HH:MM pattern above requires a colon. Neither matches
+    // this, and it is exactly as ordinary a phrasing as either ("set a timer
+    // for 5pm"). ampm is REQUIRED here (unlike the colon form) — a bare "5"
+    // with no am/pm and no colon is genuinely ambiguous (5am? 5pm? 05:00?)
+    // and guessing is worse than the honest "could not parse" the caller
+    // already reports.
+    var bareHour = str.match(/^(\d{1,2})(am|pm)$/);
+    if (bareHour) {
+      var oh = +bareHour[1];
+      var oampm = bareHour[2];
+      if (oampm === 'pm' && oh < 12) oh += 12;
+      if (oampm === 'am' && oh === 12) oh = 0;
+      d.setHours(oh, 0, 0, 0);
       if (d.getTime() <= now) d.setDate(d.getDate() + 1);
       return d.getTime();
     }

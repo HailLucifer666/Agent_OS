@@ -308,7 +308,13 @@ async function main() {
         bus: bus, config: config, memory: memory,
         getCortex: function() { return cortex; },
         getGoals: function() { return goals; },
-        getEffectors: function() { return effectors; }
+        getEffectors: function() { return effectors; },
+        // Wave 7 (2026-08-13): same getter-thunk pattern as getCortex/getGoals
+        // above — healer boots before scannerProxy exists (§13 boot order),
+        // so this closes over the `let scannerProxy` binding and reads
+        // whatever it points to WHEN a retry actually fires, not at
+        // construction time.
+        getScannerProxy: function() { return scannerProxy; }
       });
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
       const announcer = createAnnouncer({

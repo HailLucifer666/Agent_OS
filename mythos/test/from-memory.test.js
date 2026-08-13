@@ -610,6 +610,18 @@ describe('from-memory: tool structure', () => {
     assert.ok(typeof log.fn === 'function');
   });
 
+  // Wave 7 (2026-08-13): log_incident firing on the model's OWN initiative
+  // (noticing a mistake it made, or a tool failure) rather than an explicit
+  // operator request was observed in the 2026-08-12/13 session. This is a
+  // prompt-level fix — the description is the only lever available, since
+  // the tool itself has no way to distinguish who decided to call it.
+  it('log_incident\'s description forbids calling it on the model\'s own initiative', () => {
+    const tools = buildTools({ fs: { ensureDir: () => {}, appendLine: () => {} } });
+    const log = tools.find(t => t.name === 'log_incident');
+    assert.match(log.description, /OPERATOR explicitly asks/i);
+    assert.match(log.description, /do NOT call this on your own initiative/i);
+  });
+
   it('recall_memory tool has correct metadata', () => {
     const tools = buildTools({ memory: { recallHybrid: async () => [] } });
     const recall = tools.find(t => t.name === 'recall_memory');

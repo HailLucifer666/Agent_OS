@@ -123,6 +123,19 @@ const SEED_PLAYBOOKS = [
     when: { kind: 'recurring-failure' },
     then: [{ do: 'record-lesson', args: { lesson: '$evidence.detail', source: 'reflection' } }],
     cooldownMs: 30000
+  },
+  // Wave 7 (2026-08-13) — see retry-aether-proxy's own comment for why this is
+  // a same-port retry, never a port shift. 15s cooldown: long enough that a
+  // genuinely-held port (another real process, not a stale exit) doesn't spin
+  // a bind attempt every tick, short enough that a stale instance's exit
+  // (typically sub-second) is recovered from well inside one operator-noticed
+  // "why is Aether down" window.
+  {
+    id: 'aether-proxy-rebind',
+    title: 'Aether scanner-proxy rebind',
+    when: { kind: 'aether-proxy-bind-failed' },
+    then: [{ do: 'retry-aether-proxy' }],
+    cooldownMs: 15000
   }
 ];
 
@@ -189,11 +202,35 @@ var suppressedTools = {};
 // provider name (e.g. 'ddg-html', 'exa') → { restoreAt: timestamp }.
 var suppressedSearchProviders = {};
 
-function buildActions({ getCortex, getGoals, memory }) {
+function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
   const registry = require('../brain/registry');
   const { BRAIN_TABLES } = require('../brain/lanes.default');
 
   return {
+    // Wave 7 (2026-08-13) — the aether-proxy-bind-failed anomaly (main.js)
+    // used to just stop() and leave the proxy dead for the rest of the
+    // process; nothing ever tried again. scanner-proxy.js's own start()/stop()
+    // comments document exactly this as the sanctioned recovery path ("the
+    // caller retry start() after fixing whatever held the port") — most
+    // commonly a stale MYTHOS instance still releasing its ports on exit,
+    // which a same-port retry after a short cooldown recovers from cleanly.
+    // Deliberately NOT a port shift: "PORT ORDER IS THE CONTRACT" (that
+    // file's own header) — the aggregator's --peers list is a separate,
+    // externally-run process pointed at these exact ports, so silently
+    // moving to a different base would misattribute readings to the wrong
+    // room instead of failing loudly. Same ports, retried, or an honest
+    // failure — never a quiet renumbering.
+    'retry-aether-proxy': async function() {
+      const proxy = getScannerProxy && getScannerProxy();
+      if (!proxy) return { ok: false, reason: 'missing-dependency:scanner-proxy' };
+      try {
+        proxy.start();
+        await proxy.whenReady();
+        return { ok: true, result: { ports: typeof proxy.ports === 'function' ? proxy.ports() : null } };
+      } catch (err) {
+        return { ok: false, reason: 'bind-failed-again', detail: err && err.message };
+      }
+    },
     // registry.js has no selective per-provider refresh and no live key-swap
     // capability — NIM's own two-key rotation is already structural in chain.js's
     // expand(). The real, honest action is a full forced re-probe (Spec Ambiguities #11).
@@ -344,10 +381,10 @@ function buildActions({ getCortex, getGoals, memory }) {
 // Healer
 // ---------------------------------------------------------------------------
 
-function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, playbooks, now }) {
+function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, getScannerProxy, playbooks, now }) {
   if (!bus) throw new Error('createHealer requires bus');
 
-  const ACTIONS = buildActions({ getCortex: getCortex, getGoals: getGoals, memory: memory });
+  const ACTIONS = buildActions({ getCortex: getCortex, getGoals: getGoals, memory: memory, getScannerProxy: getScannerProxy });
   const activePlaybooks = playbooks || SEED_PLAYBOOKS;
   const lastFiredAt = {}; // playbook.id -> ts
   // Task C2: injected clock (mirrors planner/daily.js's nowFn seam) so tests

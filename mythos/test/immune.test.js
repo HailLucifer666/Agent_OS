@@ -330,13 +330,15 @@ describe('immune/healer — matchClause/matches DSL', function() {
     assert.deepEqual(resolved, { literal: 'x', dynamic: 12345 });
   });
 
-  it('all nine SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
+  it('all ten SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
     // REMEDIATION P2-10: 6 -> 8 (2026-07-29 audit item 11).
     // Learning loop: 8 -> 9 — recurring-failure-record added to close the
     // dead-channel gap (reflection.js emitted 'recurring-failure' but no
     // playbook handled it). See healer.js SEED_PLAYBOOKS comment.
+    // Wave 7 (2026-08-13): 9 -> 10 — aether-proxy-rebind, a same-port retry
+    // for aether-proxy-bind-failed.
     var { SEED_PLAYBOOKS } = require('../src/core/immune/healer');
-    assert.equal(SEED_PLAYBOOKS.length, 9);
+    assert.equal(SEED_PLAYBOOKS.length, 10);
     SEED_PLAYBOOKS.forEach(function(p) {
       assert.ok(p.id, 'playbook missing id');
       assert.ok(p.when && p.when.kind, 'playbook ' + p.id + ' missing when.kind');
