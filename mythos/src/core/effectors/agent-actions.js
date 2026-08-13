@@ -12,6 +12,7 @@ var { execFile } = require('child_process');
 var designSystemEngine = require('../design/system');
 var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
+var { reasonText } = require('../util/reason-text');
 
 var DELIVERABLE_PREAMBLE = [
   'You are the Pipeline build agent. Take the captured idea below and produce the single',
@@ -341,7 +342,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         description: String(parsed.description || '').slice(0, 300)
       };
     } catch (err) {
-      return { checked: false, verdict: 'skipped', issues: [], description: 'visual verify error: ' + (err.message || err) };
+      return { checked: false, verdict: 'skipped', issues: [], description: 'visual verify error: ' + reasonText(err) };
     }
   }
 

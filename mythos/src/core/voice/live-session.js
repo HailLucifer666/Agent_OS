@@ -537,6 +537,10 @@ function createLiveSession(deps) {
           userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter,
         };
         userText = ''; assistantText = '';
+        // Snapshot before the reset below — Wave 0 (2026-08-13) needs these on
+        // the health.anomaly emit further down, not just the log line here.
+        const scFieldsSnapshot = turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '';
+        const audioInSnapshot = turnAudioIn;
         // BUG-118 instrumentation — see the counter declarations above. Logged
         // for every turn (one small line) because the interesting case is the
         // NEGATIVE one: a reasoning leak with thoughtParts:0 rules the text
@@ -547,12 +551,12 @@ function createLiveSession(deps) {
           // 2026-08-10 — see turnFrameFields. `inputTranscription` missing from
           // this list on a turn the operator demonstrably spoke in is the whole
           // answer to the empty-user-text question.
-          scFields: turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '',
+          scFields: scFieldsSnapshot,
           // audioIn:0 on a turn the operator spoke in means the browser never sent
           // the mic — look at s2s-bridge.js (captureSuspended, the worklet, the
           // device). A healthy count with no inputTranscription in scFields means
           // the audio went up and came back untranscribed — look upstream.
-          audioIn: turnAudioIn,
+          audioIn: audioInSnapshot,
           // Whether WE provoked this turn — the difference between "the operator
           // spoke and we did not hear it" and "nobody spoke". Logged because
           // reading the first as the second is what produced five false anomalies
@@ -600,9 +604,18 @@ function createLiveSession(deps) {
           // also SPOKEN ALOUD when unplaybooked, so it interrupted the very
           // conversation it was misreporting. turnSystemInitiated is the guard;
           // a genuinely unheard operator still fires.
+          // Wave 0 (2026-08-13): carry audioIn + scFields so one anomaly record
+          // is a complete diagnosis instead of a bare kind — audioIn:0 means the
+          // client mic gate never sent frames (candidate 1: over-eager
+          // suspendForMedia); audioIn>0 with no inputTranscription in scFields
+          // means Gemini dropped it server-side (candidate 2, vendor-side, no
+          // code fix available). Without both fields every prior incident here
+          // needed a manual vault dig to tell the two apart.
           bus.emit('health.anomaly', {
             kind: 'live-turn-no-user-transcript', turnId: turnCounter,
             reason: 'the reply was transcribed but the operator\'s speech was not',
+            audioIn: audioInSnapshot,
+            scFields: scFieldsSnapshot,
           });
         }
         // Consumed: the next turn is operator-initiated until sendText says otherwise.

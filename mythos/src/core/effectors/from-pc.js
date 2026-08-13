@@ -13,6 +13,7 @@ const { resolveSandboxed, open_folder } = require('./from-computer');
 // The evidence contract: a world-changing effector may only report ok:true with
 // proof from an oracle other than its own call. See evidence.js's header.
 const evidence = require('./evidence');
+const { reasonText } = require('../util/reason-text');
 const { visionThink } = require('./vision-call');
 
 function ok(result) {
@@ -1240,7 +1241,7 @@ async function capture_screenshot() {
 
     return ok({ savedTo: filePath, filename: filename, bytes: buffer.length });
   } catch (err) {
-    return fail('Failed to save screenshot: ' + (err.message || err));
+    return fail('Failed to save screenshot: ' + reasonText(err));
   }
 }
 

@@ -325,10 +325,11 @@ function buildActions({ getCortex, getGoals, memory }) {
       }
       var lesson = args && args.lesson;
       if (!lesson) return { ok: false, reason: 'missing-arg:lesson' };
-      // The recurring-failure anomaly has no structured trigger (just a prose
-      // detail), so we key on the detail itself — recordFailure still dedups
-      // by trigger identity across repeated fires.
-      var trigger = { tool: '', argsHash: '0', goalTitle: String(lesson).slice(0, 60) };
+      // Wave 0 (2026-08-13): the recurring-failure anomaly now carries a
+      // best-effort `target` (reflection.js's targetFor()) recovered from the
+      // FAIL actions that fed the brain call. Use it when present; recordFailure
+      // still dedups by trigger identity across repeated fires either way.
+      var trigger = { tool: (diagnosis && diagnosis.target) || '', argsHash: '0', goalTitle: String(lesson).slice(0, 60) };
       try {
         var res = memory.lessons.recordFailure(trigger, lesson, { source: args.source || 'reflection' });
         return { ok: true, result: { ref: res.ref, count: res.count, isNew: res.isNew } };

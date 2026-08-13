@@ -203,6 +203,26 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         return { skipped: 'brain-unavailable' };
       }
 
+      // Wave 0 (2026-08-13): recurring-failure anomalies carried {kind, detail}
+      // only — no `target`, so the diagnostician/announcer (announcer.js's
+      // onHealed builds "Trigger: <kind> on <target>") rendered a blank
+      // trigger for this kind. Recover a real tool name from the FAIL actions
+      // that actually fed the brain call, rather than guessing from the
+      // free-text failure line alone.
+      var failedTools = actions.reduce(function (set, hit) {
+        var r = hit && hit.record ? hit.record : hit;
+        if (r && r.outcome !== 'ok' && r.tool) set.add(String(r.tool));
+        return set;
+      }, new Set());
+
+      function targetFor(line) {
+        for (var t of failedTools) {
+          if (t && line.indexOf(t) !== -1) return t;
+        }
+        var firstWord = /^([a-zA-Z_][\w-]*)/.exec(line);
+        return firstWord ? firstWord[1] : '';
+      }
+
       var failuresEmitted = 0;
       var lessonsWritten = 0;
       var failures = Array.isArray(result.parsed.failures) ? result.parsed.failures.slice(0, 5) : [];
@@ -213,7 +233,7 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         // The diagnostician subscribes (immune/diagnostician.js) and the healer's
         // 'recurring-failure-record' playbook turns it into a durable Lesson.
         if (bus && typeof bus.emit === 'function') {
-          bus.emit('health.anomaly', { kind: 'recurring-failure', detail: line });
+          bus.emit('health.anomaly', { kind: 'recurring-failure', detail: line, target: targetFor(line) });
           failuresEmitted++;
         }
         // Also write the lesson directly, so headless autonomous runs (which

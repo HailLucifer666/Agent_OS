@@ -47,7 +47,14 @@ const PLAYBACK_RATE = 24000;
 // screenShare (Slice 3) is an OPTION, not an import-time dependency: the module
 // is loaded lazily inside start() only when the operator opted in, so a default
 // install never pulls the capture code into the HUD's critical path.
-export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
+//
+// sendMessageOverride (Wave 0, 2026-08-13): the real ws.js sendMessage requires
+// a live socket/WebSocket global that only exists in a browser, so tests inject
+// a spy here instead of mocking the whole ws.js module graph (which every other
+// voice-loop.js import shares). Defaults to the real one — no behavior change
+// outside tests.
+export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride } = {}) {
+  const send = sendMessageOverride || sendMessage;
   let active = false;
   let stream = null;
   let audioCtx = null;
@@ -131,16 +138,29 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
   const MAX_SUSPEND_MS = 30000;
   let captureSuspended = false;
   let suspendTimer = null;
-  function setCaptureSuspended(flag, holdMs) {
+  // Wave 0 (2026-08-13): fire-and-forget transition log so the server side has
+  // a record of every suspend/clear, not just the fact a turn later came back
+  // blind. Best-effort — sendMessage throwing (socket not open yet) must never
+  // block the capture gate itself.
+  function logSuspendTransition(extra) {
+    try {
+      send({ type: 'voice-capture-suspend', suspended: captureSuspended, at: Date.now(), ...extra });
+    } catch (_) { /* logging only — never block the gate */ }
+  }
+  function setCaptureSuspended(flag, holdMs, reason) {
     const next = Boolean(flag);
     if (suspendTimer) { clearTimeout(suspendTimer); suspendTimer = null; }
     captureSuspended = next;
     if (next) {
       const ceiling = Math.min(Number(holdMs) || MAX_SUSPEND_MS, MAX_SUSPEND_MS);
+      logSuspendTransition({ holdMs: ceiling, reason: reason || 'suspend' });
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
         captureSuspended = false;   // fail open: a deaf assistant is the worse failure
+        logSuspendTransition({ reason: 'ceiling-fail-open' });
       }, ceiling);
+    } else {
+      logSuspendTransition({ reason: reason || 'clear' });
     }
   }
 
@@ -158,7 +178,7 @@ export function createS2SBridge({ onState, onCaption, screenShare } = {}) {
   // false transcripts; that is their call, not a default worth choosing for them.
   const MEDIA_START_SUSPEND_MS = 8000;
   function suspendForMedia(holdMs) {
-    setCaptureSuspended(true, Number(holdMs) || MEDIA_START_SUSPEND_MS);
+    setCaptureSuspended(true, Number(holdMs) || MEDIA_START_SUSPEND_MS, 'media-start');
   }
 
   function arrayBufferToBase64(buf) {

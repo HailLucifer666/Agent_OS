@@ -37,18 +37,10 @@ function humanizeArgs(args) {
 // (e.g. from-runner.js's run_command: fail(m, extra) -> {error: m, ...extra}),
 // so a plain String(result.result) produced the useless literal
 // "[object Object]" in the audit trail — confirmed in the 2026-07-29 audit's
-// own Audit/2026-07-29.jsonl. Extract a real message when there is one,
-// falling back to a truncated JSON dump instead of toString's default.
-function reasonText(raw) {
-  if (raw == null) return '';
-  if (typeof raw === 'string') return raw;
-  if (typeof raw === 'object') {
-    if (typeof raw.error === 'string') return raw.error;
-    if (typeof raw.message === 'string') return raw.message;
-    try { return JSON.stringify(raw); } catch (_) { /* fall through */ }
-  }
-  return String(raw);
-}
+// own Audit/2026-07-29.jsonl. Extracted to util/reason-text.js (2026-08-13,
+// Wave 0) so effectors' own catch blocks can share it instead of re-deriving
+// the same fallback ad hoc.
+const { reasonText } = require('../util/reason-text');
 
 async function dispatchAction(decision, ctx) {
   const { effectors, bus, goals, memory, config } = ctx;

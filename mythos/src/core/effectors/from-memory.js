@@ -1,5 +1,6 @@
 'use strict';
 var effectorFromTool = require('./adapter').effectorFromTool;
+var { reasonText } = require('../util/reason-text');
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
@@ -48,7 +49,7 @@ function buildTools(ctx){
         });
       }
       return ok({remembered:text.slice(0,200),ref:res&&res.ref});
-    }catch(err){return fail('remember failed: '+(err.message||err));}
+    }catch(err){return fail('remember failed: '+reasonText(err));}
   }
 
   // BUG-160: the missing half of remember(). Without it a spoken correction
@@ -67,7 +68,7 @@ function buildTools(ctx){
       if(res.error) return fail('forget_fact: '+res.error);
       if(!res.removed.length) return fail('No stored fact contains "'+query.slice(0,80)+'". Topics searched: '+(res.searched.join(', ')||'none'));
       return ok({forgot:res.removed,topic:res.topic,evidence:'removed '+res.removed.length+' fact(s) from Semantic/'+res.topic+'.md'});
-    }catch(err){return fail('forget_fact failed: '+(err.message||err));}
+    }catch(err){return fail('forget_fact failed: '+reasonText(err));}
   }
 
   // BUG-171: the same incident was written twice from one spoken report. The
@@ -143,7 +144,7 @@ function buildTools(ctx){
       }
       return ok({logged:text.slice(0,200),date:d,id:id,
         evidence:'wrote '+id+' to Incidents/'+d+'.jsonl'});
-    }catch(err){return fail('log_incident failed: '+(err.message||err));}
+    }catch(err){return fail('log_incident failed: '+reasonText(err));}
   }
 
   // BUG-171: the read side. Incidents were written and never read by anything
@@ -240,7 +241,7 @@ function buildTools(ctx){
         {kind:'status',id:target.id,status:status,ts:Date.now(),note:(args&&args.note)||'',source:'voice'});
       return ok({id:target.id,text:target.text.slice(0,120),from:target.status,status:status,
         evidence:'appended status '+status+' for '+target.id+' to Incidents/'+d+'.jsonl'});
-    }catch(err){return fail('incident_status failed: '+(err.message||err));}
+    }catch(err){return fail('incident_status failed: '+reasonText(err));}
   }
 
   // Item 9 stretch (RAG follow-up): explicit mid-conversation memory search —
@@ -273,7 +274,7 @@ function buildTools(ctx){
             : 'NO MATCHING MEMORIES for "'+query.slice(0,60)+'". Say you do not have anything stored about this — do not invent a recollection.'});
       }
       return ok({query:query,count:results.length,results:results});
-    }catch(err){return fail('recall_memory failed: '+(err.message||err));}
+    }catch(err){return fail('recall_memory failed: '+reasonText(err));}
   }
 
   // P5 Jarvis upgrade: grounded self-knowledge. Reads the boot-generated

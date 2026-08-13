@@ -159,6 +159,13 @@ describe('live-session (Phase 1, V2 §6)', () => {
     assert.equal(anomalies[0].payload.turnId, 1, 'BUG-124: joinable to the turn it happened during');
     assert.match(anomalies[0].payload.reason, /operator/,
       'AD-5: the payload carries the reason, so the spoken line does not have to invent one');
+    // Wave 0 (2026-08-13): audioIn + scFields ride on the anomaly itself now,
+    // not just in a separate live.turn-parts log line — one record must be a
+    // complete diagnosis without a manual vault cross-reference.
+    assert.equal(anomalies[0].payload.audioIn, 0,
+      'no sendAudio() calls happened in this turn — candidate 1 (client mic gate) is distinguishable from candidate 2 by this field alone');
+    assert.match(anomalies[0].payload.scFields, /outputTranscription/);
+    assert.doesNotMatch(anomalies[0].payload.scFields, /inputTranscription/);
 
     // And the instrumentation that answers WHY: which serverContent fields the
     // turn actually carried, by name. inputTranscription absent here is the

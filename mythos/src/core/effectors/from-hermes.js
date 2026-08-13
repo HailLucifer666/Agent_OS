@@ -8,6 +8,7 @@
 
 var effectorFromTool = require('./adapter').effectorFromTool;
 var hermes = require('../../../adapters/hermes-agent');
+var { reasonText } = require('../util/reason-text');
 
 var MAX_REPLY_CHARS = 20000; // build reports run long — 4000 truncated real output
 
@@ -23,7 +24,7 @@ function buildTools() {
       if (!reply) return fail('hermes returned an empty response');
       return ok({ reply: reply.slice(0, MAX_REPLY_CHARS), status: hermes.getStatus() });
     } catch (err) {
-      return fail(String(err.message || err));
+      return fail(reasonText(err));
     }
   }
 

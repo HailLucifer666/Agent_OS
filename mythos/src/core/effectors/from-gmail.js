@@ -4,6 +4,7 @@
 // Google adapter is injected via createGoogleAdapter deps (client ID/secret/refresh).
 
 var effectorFromTool = require('./adapter').effectorFromTool;
+var { reasonText } = require('../util/reason-text');
 
 var _adapter = null;
 
@@ -36,7 +37,7 @@ async function resolveRecipient(to, adapter) {
   try {
     profile = await adapter.getProfile();
   } catch (err) {
-    return { ok: false, error: 'Could not resolve "me" — the Gmail profile lookup failed: ' + (err.message || err) };
+    return { ok: false, error: 'Could not resolve "me" — the Gmail profile lookup failed: ' + reasonText(err) };
   }
   var address = profile && profile.emailAddress;
   if (!address) {
@@ -72,7 +73,7 @@ function buildTools(ctx) {
       var summary = msgs.slice(0, max).map(function(m) { return { id: m.id, from: m.from, subject: m.subject, snippet: (m.snippet || '').slice(0, 200), date: m.date }; });
       return ok({ count: msgs.length, messages: summary });
     } catch (err) {
-      return fail('Gmail fetch failed: ' + (err.message || err));
+      return fail('Gmail fetch failed: ' + reasonText(err));
     }
   }
 
@@ -88,7 +89,7 @@ function buildTools(ctx) {
       if (body.length > 4000) body = body.slice(0, 4000) + '... [truncated]';
       return ok({ from: msg.from, to: msg.to, subject: msg.subject, date: msg.date, body: body });
     } catch (err) {
-      return fail('Gmail read failed: ' + (err.message || err));
+      return fail('Gmail read failed: ' + reasonText(err));
     }
   }
 
@@ -106,7 +107,7 @@ function buildTools(ctx) {
       await a.send({ to: to, subject: subject, body: body, html: args.html || null });
       return ok({ sent: true, to: to, subject: subject });
     } catch (err) {
-      return fail('Gmail send failed: ' + (err.message || err));
+      return fail('Gmail send failed: ' + reasonText(err));
     }
   }
 
@@ -121,7 +122,7 @@ function buildTools(ctx) {
       await a.draft({ to: to, subject: subject, body: body });
       return ok({ drafted: true, to: to, subject: subject });
     } catch (err) {
-      return fail('Gmail draft failed: ' + (err.message || err));
+      return fail('Gmail draft failed: ' + reasonText(err));
     }
   }
 

@@ -3387,6 +3387,15 @@ function createServer(deps) {
       else if (msg.type === 'unduck-audio') {
         unduckAudio().catch(function() {});
       }
+      // Wave 0 (2026-08-13): s2s-bridge.js's capture-suspend transition log —
+      // fire-and-forget, no reply expected. Gives Wave 2's lost-transcript
+      // diagnosis a server-side record of every suspend/clear instead of only
+      // inferring it after the fact from a blind turn.
+      else if (msg.type === 'voice-capture-suspend') {
+        logger.info('voice.capture-suspend', {
+          suspended: Boolean(msg.suspended), holdMs: msg.holdMs, reason: msg.reason, at: msg.at,
+        });
+      }
       else if (msg.type === 'close-panel-ack') {
         const p = pendingClosePanel.get(msg.reqId);
         if (p) {
@@ -3808,12 +3817,16 @@ function createServer(deps) {
     if (anomalyLog.length > 200) anomalyLog.shift();
     broadcastHealth(lastStatus);
     try {
-      const label = actuallyHealed ? 'healed' : 'unhandled';
+      // Wave 0 (2026-08-13): a playbook suppressed by its own cooldown is
+      // intentional throttling, not a fix that failed — labeling it
+      // 'unhandled' alongside real no-match/error outcomes made a healthy
+      // suppression look like a problem the healer gave up on.
+      const label = actuallyHealed ? 'healed' : (p.outcome === 'cooldown' ? 'cooldown' : 'unhandled');
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
         summary: label + ': ' + (p.kind || 'unknown') + ' — ' + (p.target || ''),
         detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome },
-        outcome: label, salience: actuallyHealed ? 0.6 : 0.5,
+        outcome: label, salience: label === 'cooldown' ? 0.3 : (actuallyHealed ? 0.6 : 0.5),
       });
     } catch (_) {}
   });

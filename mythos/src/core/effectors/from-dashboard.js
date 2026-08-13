@@ -20,6 +20,7 @@
 // singleton requires, matching every other P7 module's DI convention.
 
 const { effectorFromTool } = require('./adapter');
+const { reasonText } = require('../util/reason-text');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
@@ -978,7 +979,7 @@ function buildTools(ctx) {
         note: CAMERA_LOOK_PROVENANCE,
       });
     } catch (err) {
-      return fail(String(err.message || err));
+      return fail(reasonText(err));
     }
   }
 
@@ -999,7 +1000,7 @@ function buildTools(ctx) {
       }
       return ok({ camera: 'on', state: res.state || 'watching', evidence: 'the dashboard reported the camera loop is ' + (res.state || 'watching') });
     } catch (err) {
-      return fail(String(err.message || err));
+      return fail(reasonText(err));
     }
   }
 

@@ -23,6 +23,7 @@
 // subscribe(['open-web']) handler for the client-side routing this feeds.
 
 const { effectorFromTool } = require('./adapter');
+const { reasonText } = require('../util/reason-text');
 
 const VALID_LAYOUTS = ['stat', 'list', 'table', 'text'];
 const MAX_ITEMS = 8;
@@ -144,7 +145,7 @@ function buildTools(ctx) {
       }
       return ok(payload);
     } catch (err) {
-      return fail('spawn_widget failed: ' + (err.message || err));
+      return fail('spawn_widget failed: ' + reasonText(err));
     }
   }
 
@@ -190,7 +191,7 @@ function buildTools(ctx) {
       }
       return ok(payload);
     } catch (err) {
-      return fail('manage_widget failed: ' + (err.message || err));
+      return fail('manage_widget failed: ' + reasonText(err));
     }
   }
 
