@@ -5760,3 +5760,60 @@ codify the pairs this file's comments already documented in prose.
 custom allowlist has an act-tool but none of its read counterparts; a test
 pins that `DEFAULT_ALLOWLIST` itself stays clean.
 `test/live-tools-wrong-channel-guard.test.js`.
+
+### BUG-208 — camera_look's "no vision brain" was a wiring gap, not lane exhaustion
+
+`camera_look` reads `var brain = (ctx && ctx.brain) || null;`. `main.js`'s
+`registerFromDashboard(hub, {...})` call never included a `brain` key at
+all — unlike `registerFromPc(hub, {brain: brain, ...})` twenty lines earlier,
+which wires the identical dependency for `screen_look`. `brain` was ALWAYS
+null in production; NIM_API_KEY being present never mattered, and the
+generic "no vision brain is available" message read exactly like lane
+exhaustion.
+
+**FIXED.** Added `brain: brain` to the `registerFromDashboard` ctx object in
+`main.js`. `test/camera-look-brain-wiring.test.js` pins both the call-site
+source shape (main.js isn't unit-tested end-to-end for this) and the
+unit-level behavior (a wired brain is actually reached; an unwired one still
+fails honestly).
+
+### BUG-209 — a dead vision lane looked identical to a slow one
+
+`vision-call.js`'s `visionThink` had one fixed 12s race against `brain.think`
+— when every vision provider was actually down (not just slow), the call
+still waited the full 12s and reported `timedOut:true`, indistinguishable
+from a merely-slow provider. The 2026-08-12/13 session's ×4 screen_look/
+camera_look failures matched this: with the fast providers down, the lane
+degraded to 90-185s NIM models and the 12s timeout always lost.
+
+**FIXED.** `visionThink` now checks `registry.chainFor('vision')` — the same
+alive-only ranking `brain.think`'s own chain-walk already uses internally —
+before the real call. An empty chain fails FAST with `laneEmpty:true` and a
+`reason` naming that no provider is live, instead of waiting out the full
+timeout for a foregone conclusion. `screen_look`/`camera_look` both surface
+`result.reason` instead of the generic "offline" message. Injectable via a
+`chainFor` option (default: the real registry) so this is testable without
+depending on real API keys. **Not addressed**: the plan's "picks the first
+LIVE provider" framing implied re-ordering which alive provider is tried
+first — `chainFor`'s ranking already IS alive-only and preference-ordered
+(this is what `brain.think`'s internal chain-walk already does), and no
+per-provider latency telemetry exists to know in advance that a
+today-alive provider will be slow this session; that half needs real
+latency data this repo doesn't currently collect, not a code reordering.
+`test/vision-call-lane-preflight.test.js`.
+
+### Wave 5 item 3 (web_search/open_web late outcomes) — already fixed, no action
+
+The plan asked to add `web_search`/`open_web` to `live-tool-adapter.js`'s
+`SLOW_TOOLS` list. Investigation found `TOOL_ACK_DEADLINE_MS` (BUG-128,
+shipped 2026-08-06) already generalizes exactly this: ANY tool call — not
+just `SLOW_TOOLS` members — still running at the 1.5s ack deadline gets the
+same `status:'started'` + late-`[SYSTEM]`-outcome treatment `SLOW_TOOLS`
+uses, so `web_search`/`open_web` already get it whenever they're actually
+slow, while staying single-response when they're fast (`SLOW_TOOLS`
+membership forces the two-step EVERY call, which would be a regression for
+the common fast case). `test/bug-128-live-tool-ack-deadline.test.js` already
+exercises both tools under this exact mechanism. `screen_look`/`camera_look`
+`SLOW_TOOLS` entries were verified to match their real registered tool
+names exactly (no typo) — no fix needed there either. No code change made;
+this entry exists so the "already fixed, don't re-fix" finding is recorded.

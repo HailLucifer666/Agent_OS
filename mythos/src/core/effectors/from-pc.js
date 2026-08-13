@@ -29,6 +29,9 @@ var vaultFs = null;
 // free-tier provider holding a "quick look" for a minute (see vision-call.js).
 var pcLogger = null;
 var visionTimeoutMs = null;
+// Wave 5 (2026-08-13) test seam, forwarded to visionThink's own chainFor
+// option — see from-dashboard.js's identical comment on visionChainFor.
+var visionChainForOverride = null;
 
 // FIX 1: last pid returned by a successful launch_app. ui_type/ui_click use
 // this as their default target when the caller (the planning LLM) omits pid,
@@ -454,11 +457,15 @@ async function screen_look({ query }) {
     source: 'screen-look',
     timeoutMs: visionTimeoutMs,
     logger: pcLogger,
+    chainFor: visionChainForOverride,
   });
   if (result.timedOut) {
     return fail('The vision model did not answer in time, so the screen was not read. '
       + 'Say that you could not see it; do not describe anything.');
   }
+  // Wave 5 (2026-08-13): laneEmpty is the preflight failing fast — name the
+  // real cause instead of the generic "offline" every other cause also sets.
+  if (result.laneEmpty) return fail(result.reason || 'Vision lane is empty — cannot describe the screen.');
   if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the screen.');
 
   // WAVE 4 — the tool that is supposed to catch the lie was itself lying.
@@ -1292,6 +1299,7 @@ function registerFromPc(hub, opts) {
   // module without either.
   pcLogger = (opts && opts.logger) || null;
   visionTimeoutMs = (opts && opts.config && opts.config.VISION_CALL_TIMEOUT_MS) || null;
+  visionChainForOverride = (opts && opts.visionChainFor) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }

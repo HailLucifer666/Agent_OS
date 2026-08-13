@@ -190,7 +190,7 @@ describe('screen_look and camera_look each say what they are NOT', () => {
     try {
       const m = require(FROM_PC_PATH);
       m.registerFromPc({ register: () => {}, effectors: new Map() },
-        { brain, fs: { readJSON: () => null, writeJSON: () => {} } });
+        { brain, fs: { readJSON: () => null, writeJSON: () => {} }, visionChainFor: ALIVE_CHAIN_STUB });
       await m.screen_look({ query: 'What is the user holding in the webcam frame?' });
     } finally {
       Module.prototype.require = originalRequire;
@@ -217,6 +217,7 @@ describe('camera_look reports provenance rather than asserting', () => {
       config: {},
       fs: null,
       brain: { think: async () => ({ content, provider: 'test', model: 'test-vision' }) },
+      visionChainFor: ALIVE_CHAIN_STUB,
     };
   }
 
@@ -247,6 +248,7 @@ describe('camera_look reports provenance rather than asserting', () => {
       config: { VISION_CALL_TIMEOUT_MS: 1000 },
       fs: null,
       brain: { think: () => new Promise(() => {}) }, // never settles
+      visionChainFor: ALIVE_CHAIN_STUB,
     });
     built.setCameraFrameProvider(async () => 'ZmFrZS1qcGVn');
     const res = await toolNamed(built.TOOLS, 'camera_look').fn({});
@@ -259,12 +261,21 @@ describe('camera_look reports provenance rather than asserting', () => {
 // ---------------------------------------------------------------------------
 // Defect 5 — the vision call was unbounded and unobservable.
 // ---------------------------------------------------------------------------
+// Wave 5 (2026-08-13): visionThink's lane preflight (chainFor()) is only
+// meaningful against the REAL registry the production brain facade also
+// queries — a test brain here is a stand-in that never touches that
+// registry, so every visionThink() call below stubs chainFor to report the
+// lane alive, exactly as this repo's real registry does when a key is
+// actually configured. The preflight's own behavior is covered separately
+// in test/vision-call-lane-preflight.test.js.
+const ALIVE_CHAIN_STUB = async () => [{ provider: 'test', model: 'test-vision' }];
+
 describe('visionThink — bounded and instrumented', () => {
   it('logs one vision.call line with provider, model and duration', async () => {
     const lines = [];
     const brain = { think: async () => ({ content: 'a screen', provider: 'mistral', model: 'mistral-small-latest' }) };
     const res = await visionThink(brain, {
-      prompt: 'q', b64: 'x', source: 'screen-look',
+      prompt: 'q', b64: 'x', source: 'screen-look', chainFor: ALIVE_CHAIN_STUB,
       logger: { info: (msg, fields) => lines.push({ msg, fields }) },
     });
     assert.equal(res.content, 'a screen');
@@ -279,7 +290,7 @@ describe('visionThink — bounded and instrumented', () => {
   it('resolves timedOut instead of hanging, and says so in the log', async () => {
     const lines = [];
     const res = await visionThink({ think: () => new Promise(() => {}) }, {
-      prompt: 'q', b64: 'x', source: 'camera-look', timeoutMs: 50,
+      prompt: 'q', b64: 'x', source: 'camera-look', timeoutMs: 50, chainFor: ALIVE_CHAIN_STUB,
       logger: { info: (msg, fields) => lines.push({ msg, fields }) },
     });
     assert.equal(res.timedOut, true);
@@ -295,7 +306,7 @@ describe('visionThink — bounded and instrumented', () => {
     // the look was already reported as timed out.
     let reject;
     const res = await visionThink({ think: () => new Promise((_, r) => { reject = r; }) }, {
-      prompt: 'q', b64: 'x', timeoutMs: 30,
+      prompt: 'q', b64: 'x', timeoutMs: 30, chainFor: ALIVE_CHAIN_STUB,
     });
     assert.equal(res.timedOut, true);
     reject(new Error('late provider failure'));
@@ -303,7 +314,7 @@ describe('visionThink — bounded and instrumented', () => {
   });
 
   it('works with no logger at all (tests and headless construction)', async () => {
-    const res = await visionThink({ think: async () => ({ content: 'ok' }) }, { prompt: 'q', b64: 'x' });
+    const res = await visionThink({ think: async () => ({ content: 'ok' }) }, { prompt: 'q', b64: 'x', chainFor: ALIVE_CHAIN_STUB });
     assert.equal(res.content, 'ok');
   });
 

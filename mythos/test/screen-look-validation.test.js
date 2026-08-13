@@ -60,7 +60,13 @@ async function look(ocrText, visionReply, query) {
   return withPc(pc, async (m) => {
     // registerFromPc is how brain gets injected in the real boot.
     const hub = { register: () => {}, effectors: new Map() };
-    m.registerFromPc(hub, { brain, fs: { readJSON: () => null, writeJSON: () => {} } });
+    // Wave 5 (2026-08-13): visionThink's lane preflight (chainFor) is only
+    // meaningful against the real registry a real brain facade also queries
+    // -- this test's `brain` stub never touches it, so it's stubbed alive.
+    m.registerFromPc(hub, {
+      brain, fs: { readJSON: () => null, writeJSON: () => {} },
+      visionChainFor: async () => [{ provider: 'test', model: 'test-vision' }],
+    });
     return m.screen_look({ query: query || 'what is on screen?' });
   });
 }

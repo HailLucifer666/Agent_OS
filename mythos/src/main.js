@@ -493,6 +493,12 @@ async function main() {
         goals: goals, // BUG-113: raw GoalSystem — read_status surfaces open commitments
         logger: logger, // camera_look's `vision.call` instrumentation (vision-call.js)
         identity: identity, // A4: read_status surfaces current persona trait levels
+        // Wave 5 (2026-08-13): camera_look's `var brain = (ctx && ctx.brain) || null`
+        // was ALWAYS null — this key was simply never passed, unlike from-pc.js's
+        // registerFromPc() call above which does pass it for screen_look. Reported
+        // as "no vision brain" (sounding like lane exhaustion) but was a wiring
+        // gap the whole time; NIM_API_KEY being present never mattered.
+        brain: brain,
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.

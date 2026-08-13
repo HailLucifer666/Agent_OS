@@ -26,6 +26,13 @@
 
 const DEFAULT_VISION_TIMEOUT_MS = 12000;
 
+// Wave 5 (2026-08-13) — lane preflight. registry.js already walks the vision
+// lane alive-provider-only (chainFor), same discipline probes.js's own status
+// read uses; requiring it directly here mirrors that existing pattern rather
+// than threading a new dependency through every caller. Pure lookup, no
+// network call of its own.
+const registry = require('../brain/registry');
+
 /**
  * Ask the vision lane about one image, bounded and instrumented.
  *
@@ -37,6 +44,11 @@ const DEFAULT_VISION_TIMEOUT_MS = 12000;
  * @param {string} [opts.mime]      image mime type (default image/png)
  * @param {number} [opts.timeoutMs] override; falls back to DEFAULT_VISION_TIMEOUT_MS
  * @param {object} [opts.logger]    logger with info(); omitted = no instrumentation
+ * @param {Function} [opts.chainFor] test seam — defaults to the real
+ *   registry.chainFor. Only meaningful when `brain` IS the production brain
+ *   facade (which calls the same registry internally) — a caller passing a
+ *   different/fake `brain.think` should inject a stub here too, or the
+ *   preflight below is answering about a lane that fake brain never touches.
  * @returns {Promise<{content:?string, provider:?string, model:?string, offline:boolean, timedOut:boolean, ms:number}>}
  */
 async function visionThink(brain, opts) {
@@ -46,6 +58,28 @@ async function visionThink(brain, opts) {
     : DEFAULT_VISION_TIMEOUT_MS;
   const startedAt = Date.now();
   const log = (o.logger && typeof o.logger.info === 'function') ? o.logger : null;
+  const chainFor = typeof o.chainFor === 'function' ? o.chainFor : registry.chainFor;
+
+  // Wave 5 — the 2026-08-12/13 session's ×4 screen_look / camera_look
+  // failures: with the fast vision providers down, the lane degraded to
+  // 90-185s NIM models, and this function's own 12s timeout always lost —
+  // reported as timedOut:true with no hint that the WHOLE lane was actually
+  // unreachable, not just slow. chainFor() is the same alive-only ranking
+  // brain.think's own chain-walk already uses internally; checking it here
+  // costs one cheap lookup and turns "waited 12s, got silence" into an honest,
+  // FAST failure naming which providers were tried and found dead.
+  try {
+    const aliveChain = await chainFor('vision');
+    if (!aliveChain.length) {
+      const ms0 = Date.now() - startedAt;
+      if (log) log.info('vision.call', { source: o.source || 'vision-look', ms: ms0, ok: false, laneEmpty: true });
+      return {
+        content: null, provider: null, model: null, offline: true, timedOut: false, ms: ms0,
+        laneEmpty: true,
+        reason: 'the vision lane has no live provider right now (every configured vision model is down or unconfigured)',
+      };
+    }
+  } catch (_) { /* preflight is best-effort — never block the real call on it */ }
 
   const think = brain.think({
     lane: 'vision',

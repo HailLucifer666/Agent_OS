@@ -68,6 +68,13 @@ function buildTools(ctx) {
   // Optional: absent in tests, and vision-call.js degrades to no instrumentation
   // rather than throwing. It is the only logger this module uses.
   const logger = ctx.logger;
+  // Wave 5 (2026-08-13) test seam — forwarded to visionThink's own chainFor
+  // option. Only meaningful when ctx.brain IS the real production brain
+  // facade (which queries the same registry internally); a fake brain in a
+  // test has no relationship to that registry, so tests inject a stub here
+  // rather than exercising the real one. Undefined in production — visionThink
+  // defaults to the real registry.chainFor.
+  const visionChainFor = ctx.visionChainFor;
   const goals = ctx.goals; // BUG-113: raw GoalSystem, optional — commitment ledger read in read_status
   // A4: identity module, optional — read_status surfaces its current persona
   // levels (same accessor persona_status uses, effectors/from-persona.js) so
@@ -969,8 +976,12 @@ function buildTools(ctx) {
         source: 'camera-look',
         timeoutMs: config && config.VISION_CALL_TIMEOUT_MS,
         logger: logger,
+        chainFor: visionChainFor,
       });
       if (result.timedOut) return fail('The vision model did not answer in time — nothing was seen. Say so; do not describe anything.');
+      // Wave 5 (2026-08-13): laneEmpty is the preflight failing fast — name the
+      // real cause instead of the generic "offline" every other cause also sets.
+      if (result.laneEmpty) return fail(result.reason || 'Vision lane is empty — cannot describe the camera view.');
       if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the camera view.');
       return ok({
         description: String(result.content).trim().slice(0, 600),
