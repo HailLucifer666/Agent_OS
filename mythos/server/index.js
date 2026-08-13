@@ -1542,6 +1542,13 @@ function createServer(deps) {
   // node id is the SAME string everywhere — its entry in AETHER_NODE_IDS, its
   // position in the aggregator's --peers, and what it identifies as here.
   const voiceNodes = new Map();
+  // Wave 1 (2026-08-13): connectionId -> that connection's liveAdapter (set
+  // once liveOpen() creates it, deleted on ws close). leash/confirm.js's
+  // per-entry expiry timer fires with no connection context of its own — this
+  // is what lets the server route an EXPIRED confirm back to the SPECIFIC
+  // Live session that raised it, the same way handleConfirmReply already does
+  // for an explicit accept/reject on this same connection's closure.
+  const liveAdaptersByConnection = new Map();
   // The Aether aggregator's current election owner, cached from the sensor's
   // perception. Read at speak time rather than passed in, because the sensor
   // starts in a later boot step than the server and the owner changes as the
@@ -2528,6 +2535,7 @@ function createServer(deps) {
           sanitizeErrorForClient,
           goals, // BUG-113: commitment-ledger logging in onLiveTurnComplete
         });
+        liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
       if (!liveSession) {
         const { declarations, withheld, unavailable } = buildFunctionDeclarations(effectors, {
@@ -3533,6 +3541,7 @@ function createServer(deps) {
     // with no client left to hear the reply.
     ws.on('close', () => {
       if (liveSession) liveSession.close('ws-closed');
+      liveAdaptersByConnection.delete(connectionId);
       // Drop this node's registration — but ONLY if the map still points at THIS
       // socket. A phone that reconnected before its old socket's close event
       // landed has already overwritten the entry, and unconditionally deleting
@@ -3899,6 +3908,20 @@ function createServer(deps) {
   });
   bus.subscribe('checkpoint.resolved', (e) => {
     broadcastAll({ type: 'checkpoint', payload: Object.assign({}, e.payload, { event: 'resolved' }) });
+  });
+
+  // Wave 1 (2026-08-13): leash/confirm.js's per-entry expiry timer fires this
+  // for a T3+ confirm nobody answered in time — the gmail_send incident
+  // (1 confirm created, 0 completed, no trace of why). announceConfirmResolved
+  // dismisses the prompt on every surface still showing it; the connectionId
+  // routes an EXPIRED verdict to the SPECIFIC Live session that raised it, if
+  // any (a modal-only confirm has no liveAdapter registered and this is a
+  // silent no-op, same as resolveLiveConfirm already is for any confirm that
+  // never touched the Live path).
+  bus.subscribe('confirm-expired', (e) => {
+    announceConfirmResolved(e.payload.confirmId, 'expired');
+    const adapter = liveAdaptersByConnection.get(e.payload.connectionId);
+    if (adapter) { adapter.resolveLiveConfirm(e.payload.confirmId, null, false, { expired: true }).catch(() => {}); }
   });
 
   bus.subscribe('confirm-request', (e) => {

@@ -29,6 +29,10 @@ const ALLOWED_EVENTS = new Set([
   'reflect',
   'confirm-request',
   'brain-spend',
+  // Wave 1 (2026-08-13): leash/confirm.js's per-entry expiry timer routes an
+  // EXPIRED confirm back to the specific connection that raised it — same
+  // channel-less shape as 'confirm-request' above, and documented alongside it.
+  'confirm-expired',
 
   // perception.*
   'perception.tick',       // D-36 fix: was 'sensor.timer'

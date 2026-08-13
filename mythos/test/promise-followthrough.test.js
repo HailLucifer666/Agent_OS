@@ -105,6 +105,45 @@ test('onLiveTurnComplete does NOT flag when the matching call actually ran this 
   assert.equal(anomalies.length, 0);
 });
 
+// Wave 1 (2026-08-13): the anomaly above only ever reached the Audit view — Live
+// had already SPOKEN the false claim, and nothing told the model it was wrong,
+// so a retained session kept repeating it. sendSystemNotice is the only channel
+// that still reaches a closed turn (see its own header comment); this proves it
+// fires with a self-describing correction, not a bare "unhandled" anomaly.
+test('onLiveTurnComplete speaks its own correction over the live session for an unbacked claim', () => {
+  const sent = [];
+  const session = { isOpen: () => true, sendText: (t) => sent.push(t) };
+  const { adapter } = makeAdapter({ getLiveSession: () => session });
+  adapter._internal.liveTurnActions.push({ tool: 'log_incident', ok: false, summary: 'log_incident FAILED: db unreachable' });
+  adapter.onLiveTurnComplete({ userText: 'log that bug', assistantText: "I've logged that for you.", turnId: 1 });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /SYSTEM NOTICE/, 'must use the self-describing prefix, never look like the operator speaking');
+  assert.match(sent[0], /CORRECTION of your own prior statement/);
+  assert.match(sent[0], /log_incident FAILED: db unreachable/, 'must name the real reason, not just "it failed"');
+  assert.match(sent[0], /Retract this aloud now/);
+});
+
+test('the correction notice names "no successful tool call" when the claimed tool was never even attempted', () => {
+  const sent = [];
+  const session = { isOpen: () => true, sendText: (t) => sent.push(t) };
+  const { adapter } = makeAdapter({ getLiveSession: () => session });
+  adapter.onLiveTurnComplete({ userText: 'log that bug', assistantText: "I've logged that for you.", turnId: 1 });
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /no successful tool call backs this claim/);
+});
+
+test('no correction is sent when nothing was flagged (a genuine success)', () => {
+  const sent = [];
+  const session = { isOpen: () => true, sendText: (t) => sent.push(t) };
+  const { adapter } = makeAdapter({ getLiveSession: () => session });
+  adapter._internal.liveTurnActions.push({ tool: 'log_incident', ok: true, summary: 'log_incident done.' });
+  adapter.onLiveTurnComplete({ userText: 'log that bug', assistantText: "I've logged that for you.", turnId: 1 });
+
+  assert.equal(sent.length, 0);
+});
+
 test('the reply text itself is returned/passed through unmodified (detect-only contract)', () => {
   const originalText = "I've logged that for you.";
   const claims = detectUnbackedClaims(originalText, []);

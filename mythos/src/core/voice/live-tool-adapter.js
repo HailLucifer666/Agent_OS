@@ -69,7 +69,9 @@ const LIVE_SYSTEM_NOTICE_INSTRUCTION =
   `truth about what happened, act on them, but NEVER say or imply the operator told you any of it, ` +
   `and never blame the operator for their content. A notice reporting that a reminder or timer has ` +
   `just fired and is complete is a REPORT of something that ALREADY happened — it is NEVER a request ` +
-  `to create a new one, and must never cause you to call reminder_add or timer_add.`;
+  `to create a new one, and must never cause you to call reminder_add or timer_add. A notice may also ` +
+  `be a CORRECTION of something YOU JUST SAID in this same conversation, not a report about the ` +
+  `operator — when it is, retract the earlier claim aloud instead of repeating it.`;
 
 function createLiveToolAdapter(deps) {
   const {
@@ -623,9 +625,14 @@ function createLiveToolAdapter(deps) {
   // Hook the EXISTING confirm-accept path so an approval/rejection feeds the
   // Live session. Called from server/index.js's handleConfirmReply(), after
   // its own dispatchAction() resolves (accept) or on the reject branch.
-  async function resolveLiveConfirm(confirmId, outcome, accepted) {
+  async function resolveLiveConfirm(confirmId, outcome, accepted, options) {
     const pending = livePendingConfirms.get(confirmId);
     if (!pending) return;
+    // Wave 1 (2026-08-13): leash/confirm.js's per-entry expiry timer calls this
+    // with accepted:false when nobody ever answered — distinct from an
+    // explicit decline, and the model must be told which one happened, not a
+    // uniform "the operator DECLINED" for a confirm the operator never saw.
+    const expired = Boolean(options && options.expired);
     // Security-review fix: delete unconditionally once resolved — this
     // confirm is decided either way (accepted or rejected) regardless of
     // whether the live session is still around to hear about it, so keeping
@@ -646,7 +653,9 @@ function createLiveToolAdapter(deps) {
     // statement, the model gets the explicit prohibition on a failure.
     let instruction = 'Report this to the operator accurately.';
     if (!accepted) {
-      verdict = 'The operator DECLINED that action.';
+      verdict = expired
+        ? `The confirmation request for ${pending.name} EXPIRED — nobody answered it in time. This is NOT a decline.`
+        : 'The operator DECLINED that action.';
     } else if (!ok) {
       verdict = `The operator APPROVED ${pending.name} but it FAILED: ${String((outcome && outcome.result) || 'unknown')}`;
       instruction = NO_SUCCESS_CLAIM;
@@ -744,14 +753,33 @@ function createLiveToolAdapter(deps) {
     // or suppresses assistantText (that stays exactly what the model said and
     // what the operator hears). Same field names as every other anomaly
     // emitted in this file (kind/tool/target) — no parallel shape.
-    if (assistantText && bus && typeof bus.emit === 'function') {
+    if (assistantText) {
       const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn);
       for (const claim of unbackedClaims) {
-        bus.emit('health.anomaly', {
-          kind: 'claimed-action-not-taken',
-          tool: claim.category, target: claim.category,
-          claim: claim.phrase, candidateTools: claim.candidateTools,
-        });
+        if (bus && typeof bus.emit === 'function') {
+          bus.emit('health.anomaly', {
+            kind: 'claimed-action-not-taken',
+            tool: claim.category, target: claim.category,
+            claim: claim.phrase, candidateTools: claim.candidateTools,
+          });
+        }
+        // Wave 1 (2026-08-13): the anomaly alone only ever reached an
+        // operator watching the Audit view — Live has already SPOKEN the
+        // false claim by the time onLiveTurnComplete runs, and nothing told
+        // the model it was wrong, so it kept repeating it later in the same
+        // retained session. This is the only channel left to reach a closed
+        // turn (see sendSystemNotice's header) — a correction of the model's
+        // OWN prior claim, not a report about a tool call, so it says so
+        // explicitly rather than looking like an ordinary outcome notice.
+        const byTool = new Map(actionsThisTurn.map((a) => [a.tool, a]));
+        const failedTool = claim.candidateTools.find((t) => byTool.has(t) && byTool.get(t).ok !== true);
+        const detail = failedTool
+          ? `${failedTool}: ${byTool.get(failedTool).summary || 'did not succeed'}`
+          : 'no successful tool call backs this claim this turn';
+        sendSystemNotice(
+          `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
+          'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
+        );
       }
     }
 

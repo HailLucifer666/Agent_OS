@@ -55,7 +55,37 @@ function createLeash(deps) {
     throw new Error('createLeash requires effectors with get() — inject a stub until Phase 7 ships, never omit this dependency');
   }
 
-  var confirmRegistry = createConfirmRegistry({ config: config });
+  // Wave 1 (2026-08-13): a confirm that times out with nobody answering used
+  // to vanish silently — no audit row, no anomaly, and the caller (e.g. the
+  // Live session waiting to tell the model what happened) never heard about
+  // it either. onExpire runs the two things this module already owns
+  // (auditWriter/bus) and ALSO emits a routable bus event — 'confirm-expired'
+  // — carrying the entry's connectionId, so server/index.js (which owns the
+  // per-connection liveAdapter this module has no reach into) can route an
+  // EXPIRED verdict back to the exact Live session that raised the confirm,
+  // the same way it already routes confirm-request/confirm-resolved over the
+  // bus rather than through a constructor-time callback.
+  var confirmRegistry = createConfirmRegistry({
+    config: config,
+    onExpire: function(confirmId, entry) {
+      var action = entry && entry.action;
+      try {
+        auditWriter.write({
+          actor: (action && action.goalId) ? 'cortex' : 'voice',
+          tool: action && action.tool, tier: action && action.tier,
+          decision: 'deny', reason: 'confirm-ttl-expired', confirmId: confirmId,
+        });
+      } catch (_) { /* audit failure must not block the rest of expiry handling */ }
+      try {
+        bus.emit('health.anomaly', {
+          kind: 'confirm-expired-silently', tool: action && action.tool, target: action && action.tool,
+        });
+      } catch (_) {}
+      try {
+        bus.emit('confirm-expired', { confirmId: confirmId, connectionId: entry && entry.connectionId, tool: action && action.tool });
+      } catch (_) {}
+    },
+  });
 
   // BUG-012: session-scoped T3 grants for GOAL-LESS actions. The per-goal grant
   // check below (goal.grants['3']) can never engage on the voice/conversation

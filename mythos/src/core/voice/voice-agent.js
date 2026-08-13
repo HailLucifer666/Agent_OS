@@ -3,6 +3,7 @@
 // F3: Import tierOf to compute danger flags dynamically from the tier table.
 const { tierOf } = require('../leash/tiers');
 const { truncateAtSentenceBoundary } = require('../effectors/voice');
+const { detectUnbackedClaims } = require('./claim-check');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -856,6 +857,43 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         (failedTools.length === 1 ? " failed." : " all failed.") +
         " I won't claim it succeeded.";
       finalSay = truth + (finalSay ? ' ' + finalSay : '');
+    } else if (needsCorrective) {
+      // Wave 1 (2026-08-13): the guard above only fires when the WHOLE turn
+      // failed. A partial-success turn (one send succeeded, a second failed)
+      // was left entirely to the corrective brain pass above — which the
+      // model can still ignore, and the 2026-08-12/13 session shows it did
+      // (a false "sent" survived alongside one real success). Reuse
+      // claim-check.js's detector — the same one live-tool-adapter.js uses
+      // for the anomaly-only path — rather than writing a second, driftable
+      // one: flag any first-person completed-action claim in finalSay whose
+      // ONLY evidence this turn is a failed or unverified call, and name
+      // exactly which tool didn't succeed instead of leaving the false claim
+      // standing.
+      try {
+        const unbacked = allFailedActions.concat(allUnverifiedActions)
+          .map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
+        const claims = detectUnbackedClaims(finalSay, unbacked);
+        if (claims.length) {
+          const byTool = new Map();
+          allFailedActions.concat(allUnverifiedActions).forEach((a) => {
+            if (!byTool.has(a.tool)) byTool.set(a.tool, a);
+          });
+          const said = new Set();
+          const clauses = [];
+          claims.forEach((claim) => {
+            claim.candidateTools.forEach((tool) => {
+              const a = byTool.get(tool);
+              if (!a || said.has(tool)) return;
+              said.add(tool);
+              const why = a.unverified
+                ? ((a.raw && a.raw.reason) || a.summary || 'could not be confirmed')
+                : (a.summary || 'failed');
+              clauses.push(tool + ' did not succeed — ' + why + '.');
+            });
+          });
+          if (clauses.length) finalSay = (finalSay ? finalSay + ' ' : '') + clauses.join(' ');
+        }
+      } catch (_) { /* claim-check is best-effort — never block the reply */ }
     }
 
     return { say: finalSay, actions: executedActions, confirmPending: confirmPending || null };

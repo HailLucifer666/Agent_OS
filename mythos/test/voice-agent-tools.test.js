@@ -619,3 +619,102 @@ describe('BUG-007: corrective pass overrides a fabricated success claim', () => 
     assert.equal(result.say, firstReply.say);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 1 (2026-08-13): the all-failed guard above only fires when EVERY action
+// in the turn failed. A partial-success turn (one send worked, a second one
+// didn't) was left entirely to the corrective brain pass, which can still
+// fabricate success on the tool that actually failed — the 2026-08-12/13
+// session's false "sent" surviving next to one real send. This closes that
+// hole deterministically using claim-check.js's existing detector, reused
+// rather than re-implemented.
+// ---------------------------------------------------------------------------
+describe('Wave 1: partial-success turns get a per-tool corrective clause for unbacked claims', () => {
+  const { createVoiceAgent } = require('../src/core/voice/voice-agent');
+
+  function makeBrain(firstReply, correctiveReply) {
+    return {
+      think: async ({ messages }) => {
+        const prompt = messages[0].content;
+        const reply = prompt.includes('CORRECTIVE PASS') ? correctiveReply : firstReply;
+        return { content: JSON.stringify(reply), parsed: reply, offline: false };
+      },
+    };
+  }
+
+  it('names the tool that actually failed even though the corrective pass still claims full success', async () => {
+    // Both tools are in the default CATALOG (whatsapp_send/launch_app are
+    // hub-registered, not in this test's bare catalog) — gmail_send
+    // ('sending' category) succeeds, open_web ('opening' category) fails.
+    const firstReply = {
+      say: 'Doing both now.',
+      actions: [
+        { tool: 'gmail_send', args: { to: 'a@b.com', subject: 'hi', body: 'hi' } },
+        { tool: 'open_web', args: { type: 'web', url: 'https://example.com' } },
+      ],
+      needs_result: false,
+    };
+    // The corrective pass STILL claims both worked — same failure mode BUG-007's
+    // second test pins for the all-failed case, here on a partial-success turn.
+    // Two sentences, since the detector's first-person prefix is per-clause.
+    const correctiveReply = { say: 'I sent the email. I opened the page for you.', actions: [], needs_result: false };
+    const brain = makeBrain(firstReply, correctiveReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async (decision) => decision.tool === 'gmail_send'
+      ? { ok: true, result: { sent: true } }
+      : { ok: false, result: { error: 'no browser session available' } };
+    const bus = { emit: () => {} };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
+    const result = await agent.handleUtterance({ text: 'send the email and open that page', ctx: {} });
+
+    assert.match(result.say, /I sent the email\. I opened the page for you\./, 'the model\'s text is not deleted, only corrected');
+    assert.match(result.say, /open_web did not succeed/, 'the failed tool must be named');
+    assert.match(result.say, /no browser session available/, 'the real reason must reach the operator');
+    assert.doesNotMatch(result.say, /gmail_send did not succeed/, 'the tool that actually succeeded must not be scolded');
+  });
+
+  it('an unverified (ok but unproven) action is treated the same as a failure for claim-backing purposes', async () => {
+    // gmail_send is one of the few tools both in OUTCOME_CLAIMED_TOOLS (whose
+    // ok:true-but-unverified outcomes force re-derivation at all) AND in a
+    // claim-check.js category — needed for both halves of this path to fire.
+    const firstReply = {
+      say: 'Sending it now.',
+      actions: [{ tool: 'gmail_send', args: { to: 'a@b.com', subject: 'hi', body: 'hi' } }],
+      needs_result: false,
+    };
+    const correctiveReply = { say: 'I sent the email for you.', actions: [], needs_result: false };
+    const brain = makeBrain(firstReply, correctiveReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async () => ({ ok: true, unverified: true, reason: 'no delivery confirmation received', result: {} });
+    const bus = { emit: () => {} };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
+    const result = await agent.handleUtterance({ text: 'send the email', ctx: {} });
+
+    assert.match(result.say, /gmail_send did not succeed — no delivery confirmation received/);
+  });
+
+  it('does not append anything when the corrective pass already admits the failure honestly', async () => {
+    const firstReply = {
+      say: 'Doing both now.',
+      actions: [
+        { tool: 'gmail_send', args: { to: 'a@b.com', subject: 'hi', body: 'hi' } },
+        { tool: 'open_web', args: { type: 'web', url: 'https://example.com' } },
+      ],
+      needs_result: false,
+    };
+    const correctiveReply = { say: 'The email went out, but the page did not open.', actions: [], needs_result: false };
+    const brain = makeBrain(firstReply, correctiveReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async (decision) => decision.tool === 'gmail_send'
+      ? { ok: true, result: { sent: true } }
+      : { ok: false, result: { error: 'no browser session available' } };
+    const bus = { emit: () => {} };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
+    const result = await agent.handleUtterance({ text: 'send the email and open that page', ctx: {} });
+
+    assert.equal(result.say, correctiveReply.say, 'an honest corrective reply must not get an extra clause appended');
+  });
+});

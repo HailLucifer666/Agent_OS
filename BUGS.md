@@ -9,7 +9,18 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-12 - a 45-minute operator session on the INSTALLED build
+Last updated: 2026-08-13 - Wave 0/1 of the remediation plan for the
+2026-08-12/13 Live session (13 hard tool failures, 121 immune-system
+anomalies): BUG-190..BUG-197. Killed `"[object Object]"` in effector audit
+rows, gave recurring-failure/lost-transcript anomalies the fields needed to
+actually diagnose them, made a cooldown-suppressed heal and a healer audit row
+render correctly instead of blank/misleading, closed the partial-success
+honesty hole on both the batch and Live voice paths, and made an unanswered
+T3+ confirm expire loudly (audit row + anomaly + an explicit EXPIRED verdict to
+the Live session that raised it) instead of vanishing with no trace. Baseline
+4217 tests, 4217 pass, 0 fail, 0 skip.
+
+Previous entry: 2026-08-12 - a 45-minute operator session on the INSTALLED build
 (the packaging fixes from the 2026-08-11 entry below did ship), findings
 A1..A26 in the new final section. Two same-symptom/different-cause recurrences
 worth flagging up front: the media transport buttons were dead again, but this
@@ -5467,3 +5478,119 @@ choosing its defaults.
 `test/reinstall-asks-again.test.js` pins all three (23 tests), including that the
 NSIS macro is defined before both call sites — NSIS resolves `!insertmacro` at
 parse time and nothing in this suite compiles the installer.
+
+### BUG-190 — effector catch blocks stringified a non-Error as "[object Object]"
+
+`from-gmail.js`, `from-memory.js`, `from-hermes.js`, `from-widgets.js`,
+`from-dashboard.js`, `from-pc.js`, `agent-actions.js` all built their failure
+message as `err.message || err` — fine for a real `Error`, useless for a plain
+object thrown/returned by an adapter (`err.message` undefined, falls through to
+`String(err)` -> the literal `"[object Object]"` in the audit trail).
+`dispatch-action.js` had already fixed exactly this for its own one call site
+(`reasonText()`, REMEDIATION P2-12) but the fix never reached the effectors
+themselves.
+
+**FIXED.** Extracted `reasonText()` to `src/core/util/reason-text.js`; every
+effector catch block above now uses it. `test/util-reason-text.test.js`.
+
+### BUG-191 — recurring-failure anomalies rendered a blank trigger
+
+`identity/reflection.js`'s learning-loop pass emitted
+`{kind:'recurring-failure', detail: line}` with no `target`, so
+`immune/announcer.js`'s `onHealed` (which builds "Trigger: `<kind>` on
+`<target>`") had nothing to put after "on" and the diagnostician/healer could
+not name what actually failed.
+
+**FIXED.** `reflection.js` now recovers a best-effort `target` by matching the
+brain's free-text failure line against the real tool names of the FAIL actions
+that fed the brain call in the first place, falling back to the line's first
+word. `healer.js`'s `record-lesson` action uses the same field for the lesson's
+`trigger.tool`.
+
+### BUG-192 — a lost-transcript anomaly had no way to tell two different causes apart
+
+`live-session.js`'s `live-turn-no-user-transcript` anomaly (a turn that
+answered without recording anything the operator said) carried only
+`{kind, turnId, reason}`. Diagnosing WHY needed `audioIn` (did the browser send
+mic frames at all?) and `scFields` (did an `inputTranscription` come back?),
+both of which existed only in a separate `live.turn-parts` log line, requiring
+a manual vault cross-reference every time.
+
+**FIXED.** The anomaly now carries `audioIn`/`scFields` directly, snapshotted
+before the per-turn counters reset (they were being cleared before the anomaly
+emit ran). `test/live-session.test.js`.
+
+### BUG-193 — s2s-bridge.js's mic-suspend gate had no server-side trail
+
+`s2s-bridge.js` suspends mic capture around MYTHOS's own TTS and media
+playback (the German-narration-transcribed-as-operator incident, 2026-07-31),
+entirely client-side — the server never learned a suspend happened, so a
+lost-transcript incident could not be correlated against "was the mic gated
+at the time".
+
+**FIXED.** `setCaptureSuspended` now sends a best-effort `voice-capture-suspend`
+message on every start/clear/ceiling-fail-open transition; `server/index.js`
+logs it as `voice.capture-suspend`. `sendMessageOverride` added as an injectable
+seam so this is unit-testable without mocking the whole `ws.js` module graph.
+`test/s2s-capture-suspend-log.test.js`.
+
+### BUG-194 — a healer row rendered as blank, and a cooldown read as "unhandled"
+
+Two related HUD/episodic mislabelings: (1) `audit.js`'s Audit view rendered a
+healer row's deliberately-`null` `tool` field (BUG-125) as literally nothing,
+indistinguishable from a dispatch that lost its tool name; (2) `server/index.js`'s
+`health.healed` subscriber labeled a `cooldown`-suppressed playbook the same
+`'unhandled'` as a real no-match/error, so a playbook correctly throttling
+itself read as a standing problem the healer had given up on.
+
+**FIXED.** The Audit view shows "heal" for a `decision:'heal'` row instead of
+blank; `outcome:'cooldown'` gets its own episodic label instead of folding into
+`'unhandled'`. `test/bug-069-healer-no-match-label.test.js` updated.
+
+### BUG-195 — a partial-success turn let a false claim survive next to one real success
+
+`voice-agent.js`'s deterministic honesty guard only fired when the WHOLE turn
+failed (`allFailedActions.length > 0 && !anySuccess`). A turn where one send
+succeeded and a second failed was left entirely to the corrective brain pass,
+which the model can (and, in the 2026-08-12/13 session, did) still ignore —
+claiming both succeeded.
+
+**FIXED.** Added an `else if (needsCorrective)` branch that reuses
+`claim-check.js`'s `detectUnbackedClaims` (the same detector the Live path
+already uses) against the turn's failed+unverified actions, and appends a
+per-tool "`<tool>` did not succeed — `<reason>`." clause naming exactly which
+call didn't back the claim — without touching the tool that actually
+succeeded. `test/voice-agent-tools.test.js`.
+
+### BUG-196 — the Live path never told the model its own claim was wrong
+
+`live-tool-adapter.js`'s `onLiveTurnComplete` already detected an unbacked
+claim (`detectUnbackedClaims`) and emitted `health.anomaly`
+`kind:'claimed-action-not-taken'` — but that only ever reached the Audit view.
+Live had already SPOKEN the false claim, nothing told the model it was wrong,
+and a retained session kept repeating it.
+
+**FIXED.** Each flagged claim now also gets a `sendSystemNotice()` correction
+— the only channel that still reaches a closed Live turn — explicitly framed
+as a correction of the model's OWN prior statement (not a report about the
+operator), naming the real reason and instructing it to retract aloud.
+`LIVE_SYSTEM_NOTICE_INSTRUCTION` gained one line documenting that a notice can
+be this kind of self-correction. `test/promise-followthrough.test.js`.
+
+### BUG-197 — an unanswered T3+ confirm expired silently, with no trace anywhere
+
+`leash/confirm.js`'s only expiry mechanism was an opportunistic sweep inside
+`create()` — an entry nobody ever answered just vanished with no audit row, no
+anomaly, and no signal to whatever was waiting on the outcome. The
+2026-08-12/13 session's `gmail_send` confirm (1 created, 0 completed) is
+exactly this: no record anywhere of why it never completed.
+
+**FIXED.** Each confirm now arms an unref'd per-entry `setTimeout` (cleared on
+accept/reject) that writes an audit `decision:'deny' reason:'confirm-ttl-expired'`
+row, emits `health.anomaly` `kind:'confirm-expired-silently'`, and emits a
+routable `confirm-expired` bus event carrying the entry's `connectionId`.
+`server/index.js` uses that to dismiss the prompt on every surface
+(`announceConfirmResolved`) and, if the confirm came from a Live session, calls
+`resolveLiveConfirm(id, null, false, {expired:true})` so the model hears an
+explicit EXPIRED verdict rather than being told it was DECLINED — something the
+operator never actually did. `test/leash-confirm-expiry.test.js`.
