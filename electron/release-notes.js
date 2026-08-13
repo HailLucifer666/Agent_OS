@@ -69,7 +69,15 @@ function sanitizeReleaseNotes(raw) {
     // Collapse whitespace (newlines, tabs, repeated spaces) into single spaces.
     text = text.replace(/\s+/g, ' ').trim();
 
-    if (text.length > MAX_LENGTH) text = text.slice(0, MAX_LENGTH);
+    if (text.length > MAX_LENGTH) {
+      text = text.slice(0, MAX_LENGTH);
+      // .slice() cuts by UTF-16 code unit, so a cap landing between a surrogate
+      // pair leaves a lone high surrogate — an invalid character rendered as a
+      // replacement glyph in the native dialog. Drop it. Same fix as
+      // scripts/build-release-notes.js's capLength(); this is the runtime half
+      // of that truncation, and it was missed when the build half was fixed.
+      if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
+    }
 
     return text;
   } catch {

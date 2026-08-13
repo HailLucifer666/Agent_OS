@@ -95,6 +95,19 @@ test('sanitizeReleaseNotes: caps at 500 characters', () => {
   assert.equal(result.length, 500);
 });
 
+test('sanitizeReleaseNotes: the 500-char cap never leaves a lone UTF-16 surrogate', () => {
+  // The pre-existing cap test uses pure ASCII, so it could never catch this: a
+  // codepoint outside the BMP is two UTF-16 code units, and .slice() cuts by
+  // code unit. Land the boundary exactly between the pair — 499 filler chars,
+  // then an emoji whose high surrogate is character 500 — and the cut would
+  // otherwise emit a lone high surrogate into the native dialog.
+  // encodeURIComponent throws on exactly that, which is a direct proof of
+  // validity rather than a proxy for it.
+  const result = sanitizeReleaseNotes('x'.repeat(499) + '\u{1F600}' + 'tail');
+  assert.equal(result.length, 499, 'the split pair must be dropped, not half-kept');
+  assert.doesNotThrow(() => encodeURIComponent(result), /malformed/);
+});
+
 test('sanitizeReleaseNotes: entity-encoded tags do not survive as literal tags (Medium finding on f6975ce)', () => {
   // Decoding entities AFTER the first tag-strip pass can reconstruct a literal
   // tag that was entity-encoded and therefore invisible to that first pass —
