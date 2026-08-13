@@ -5694,3 +5694,69 @@ spotify.js` now fails honestly with the real click error instead of guessing
 via keystrokes. The "no identifiable play control was found at all" fallback
 path (where a keystroke guess is the only option left) is unchanged.
 `test/spotify-effector.test.js`.
+
+### BUG-204 — whatsapp_send refused on a wrong conversation with no recovery
+
+WAVE 9's own refusal (BUG-064) correctly REFUSES rather than typing into the
+wrong chat when the deep link silently failed to switch conversations — but
+never retried, so every one of these was an honest failure the operator then
+had to redo by hand.
+
+**FIXED** — with a deliberate deviation from the remediation plan's literal
+wording, documented in code: the plan asked for a retry "via in-app search →
+click contact → re-run the composer oracle", but from-whatsapp.js's own
+header explicitly rejects exactly that UI-hunting approach as "the fragile
+path" this Electron app already paid for twice. Implementing it here would
+undo the reason the deep-link design exists. Instead, `whatsapp_send` retries
+the SAME deep link once (`whatsapp://send?phone=...`) — the diagnosed root
+cause is the first navigation not taking, and a second attempt is the fix
+consistent with the architecture already chosen. Still fails honestly, still
+without typing a single character, if the retry doesn't fix it either.
+`test/whatsapp-verified-send.test.js`.
+
+### BUG-205 — no way to remove a WhatsApp contact without overwriting it
+
+`whatsapp_contact_save` already deletes-then-rewrites a contact internally
+when replacing one, but there was no tool to remove one WITHOUT immediately
+re-adding it — incident inc-1786616401736-1. A throwaway/test contact could
+only be overwritten with a new number, never actually deleted.
+
+**FIXED.** New `whatsapp_contact_delete` tool (T3, destructive, same tier as
+the save it undoes), same case-insensitive lookup and read-back-verify
+discipline `whatsapp_contact_save` already uses. Added to the Live voice
+allowlist alongside its sibling. `test/whatsapp-contact-delete.test.js`.
+
+### BUG-206 — forget_fact was a dead end on any paraphrased correction
+
+`semantic.forget()`'s only match mode was exact substring — a spoken
+correction phrased differently than the stored fact ("forget that I said
+kids come first" vs. a stored "children/family priority") reported "No
+stored fact contains ..." even though the intended fact was right there.
+This is the mechanism behind the false "children/family priority" fact the
+operator could not get MYTHOS to actually forget.
+
+**FIXED.** When exact substring finds nothing, `forget()` now falls back to
+a normalized token-overlap pass (the same half-the-terms floor `recall()`
+already uses) across every stored bullet. Exactly one plausible match
+auto-resolves; more than one returns `candidates` instead of deleting
+anything, and the `forget_fact` effector turns that into "found N similar
+facts ... which one?" rather than guessing. `test/bug-160-semantic-
+supersede.test.js`. **Not yet done**: actually deleting the real
+"children/family priority" fact from the operator's live vault — that is a
+live-data edit on a running system, out of scope for this session; use the
+now-fixed tool or a direct, operator-approved vault edit.
+
+### BUG-207 — no automated guard against the BUG-171 class recurring
+
+`live-tools.js`'s own comments have described "an act-tool promoted without
+its read/list counterpart" five separate times (log_incident, ui_click,
+set_volume, whatsapp_send, cua_click) — each found by an operator noticing
+the model improvise, never by anything automated. A hand-typed
+`LIVE_TOOL_ALLOWLIST` override bypasses this file's own review entirely.
+
+**FIXED.** New `ACT_TOOL_READ_COUNTERPARTS` table + `findMissingReadCounterparts()`
+codify the pairs this file's comments already documented in prose.
+`buildFunctionDeclarations` logs a `WARNING` naming the BUG-171 shape when a
+custom allowlist has an act-tool but none of its read counterparts; a test
+pins that `DEFAULT_ALLOWLIST` itself stays clean.
+`test/live-tools-wrong-channel-guard.test.js`.

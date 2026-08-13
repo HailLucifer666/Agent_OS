@@ -90,7 +90,10 @@ const DEFAULT_ALLOWLIST = [
   // truthfully answered "I don't currently have a tool to send WhatsApp messages"
   // and then improvised with ui_type into whatever box had focus. app_reply is the
   // generic form of the same job (reply into whatever chat app is already open).
-  'whatsapp_send','whatsapp_contacts','whatsapp_contact_save','app_reply',
+  // Wave 4 (2026-08-13): whatsapp_contact_delete is the destructive sibling of
+  // whatsapp_contact_save (both T3, same reasoning) — omitting it left Live
+  // able to save a bad contact but never remove one.
+  'whatsapp_send','whatsapp_contacts','whatsapp_contact_save','whatsapp_contact_delete','app_reply',
   'screen_look','screen_read_text','capture_screenshot',
   // The webcam pair, promoted out of VOICE_ALLOWLIST_EXEMPT on 2026-08-10 after
   // the incident that list's own comment invited ("promote if usage shows up").
@@ -232,6 +235,49 @@ const VOICE_ALLOWLIST_EXEMPT = [
   'propose_goal',
 ];
 
+// Wave 4 (2026-08-13) — the "wrong-channel guard". This list's own comments
+// have documented the same shape (BUG-171 class) five separate times before
+// this table existed: an act-tool promoted to DEFAULT_ALLOWLIST without the
+// read/list tool that lets the model verify or reference what it acted on
+// (log_incident without list_incidents/incident_status; ui_click without
+// ui_elements; set_volume without get_volume; ...). Each was found by an
+// operator noticing the model improvising, not by anything automated. This
+// codifies the rule those comments state in prose: an act-tool ships with at
+// least one of its listed counterparts, or a custom LIVE_TOOL_ALLOWLIST that
+// drops one half of a pair is now caught below instead of silently reproducing
+// the same class of gap.
+const ACT_TOOL_READ_COUNTERPARTS = {
+  whatsapp_send: ['whatsapp_contacts'],
+  whatsapp_contact_save: ['whatsapp_contacts'],
+  whatsapp_contact_delete: ['whatsapp_contacts'],
+  log_incident: ['list_incidents', 'incident_status'],
+  reminder_add: ['reminder_list'],
+  reminder_cancel: ['reminder_list'],
+  ui_click: ['ui_elements'],
+  ui_type: ['ui_elements'],
+  click_at: ['ui_elements'],
+  see_and_click: ['ui_elements'],
+  cua_click: ['cua_list_windows', 'cua_get_window_state'],
+  cua_bring_to_front: ['cua_list_windows', 'cua_get_window_state'],
+  set_volume: ['get_volume'],
+  media_key: ['get_volume'],
+};
+
+// Pure — exported so a test can pin the rule against DEFAULT_ALLOWLIST AND
+// against any custom allowlist without needing a hub/catalog. Returns the
+// act-tools present in `allowSet` with NONE of their read counterparts present.
+function findMissingReadCounterparts(allowSet) {
+  const gaps = [];
+  for (const actTool of Object.keys(ACT_TOOL_READ_COUNTERPARTS)) {
+    if (!allowSet.has(actTool)) continue;
+    const counterparts = ACT_TOOL_READ_COUNTERPARTS[actTool];
+    if (!counterparts.some((c) => allowSet.has(c))) {
+      gaps.push({ tool: actTool, missing: counterparts });
+    }
+  }
+  return gaps;
+}
+
 const OPTIONAL_RE = /\(optional\)/i;
 const TYPE_RE = /^\s*(string|number|integer|boolean|object|array)\b/i;
 const ENUM_RE = /'([^']+)'/g;
@@ -316,6 +362,21 @@ function buildFunctionDeclarations(hub, opts) {
     : new Set(DEFAULT_ALLOWLIST);
   const snapshot = options.capability || null;
 
+  // Wave 4 — the wrong-channel guard. A custom LIVE_TOOL_ALLOWLIST (env
+  // override) is the one path that can reintroduce a BUG-171-class gap that
+  // DEFAULT_ALLOWLIST itself no longer has, since it is hand-typed and not
+  // reviewed against this rule the way a change to this file is. Logged as
+  // its own line, separate from withheld/unavailable — this is a WARNING
+  // about the allowlist's shape, not a report of what the catalog did.
+  if (options.log) {
+    const gaps = findMissingReadCounterparts(allow);
+    for (const gap of gaps) {
+      options.log(`live-tools: WARNING — ${gap.tool} is allowlisted with none of its read/list ` +
+        `counterpart(s) (${gap.missing.join(', ')}) present. This is the BUG-171 shape: the model can ` +
+        `act but has no reachable way to verify or reference what it acted on.`);
+    }
+  }
+
   const declared = [], withheld = [], unavailable = [];
   for (const entry of catalog) {
     if (!entry || !entry.name) continue;
@@ -346,5 +407,7 @@ module.exports = {
   buildFunctionDeclarations,
   DEFAULT_ALLOWLIST,
   VOICE_ALLOWLIST_EXEMPT,
+  ACT_TOOL_READ_COUNTERPARTS,
+  findMissingReadCounterparts,
   _internal: { parseParam, toDeclaration },
 };

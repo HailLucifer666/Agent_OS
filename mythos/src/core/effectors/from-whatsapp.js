@@ -284,10 +284,54 @@ async function whatsapp_send({ to, text, send }) {
     addressee.toLowerCase().includes(String(recipient.name).toLowerCase());
 
   if (!matchedByNumber && !matchedByName) {
-    return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
-      ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
-      (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
-      '. Nothing was typed and nothing was sent — open the right chat, or check the saved number.');
+    // Wave 4 (2026-08-13): the deep link silently failing to switch chats is
+    // the diagnosed root cause (BUGS.md) — WhatsApp was already open on a
+    // DIFFERENT conversation and whatsapp://send?phone=... did not move it.
+    // One retry of the SAME deep link (not an in-app search-and-click):
+    // this file's own header explains why UI-hunting (search box, type,
+    // click a result) was deliberately rejected as the fragile path for
+    // this Electron app — a retry that reintroduces exactly that path would
+    // undo the reason the deep link exists. Re-issuing the deep link is the
+    // one retry consistent with the architecture already chosen; it either
+    // recovers from whatever made the first navigation not take, or the
+    // retry proves it wasn't a fluke and the honest fail below stands.
+    const retryLaunch = await fromPc.launch_app({ name: uri });
+    if (retryLaunch.ok) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const retryComposer = await fromPc.readComposeBox(pid);
+      const retryBox = (retryComposer && retryComposer.ok && retryComposer.result) || null;
+      if (retryBox) {
+        const retryAddressee = String(retryBox.name || '') + '   ' + String(retryBox.headerName || '');
+        const retrySeenDigits = retryAddressee.replace(/\D/g, '');
+        const retryMatchedByNumber = Boolean(wantDigits) &&
+          (retrySeenDigits.includes(wantDigits) || retrySeenDigits.includes(wantDigits.slice(-10)));
+        const retryMatchedByName = Boolean(recipient.name) &&
+          retryAddressee.toLowerCase().includes(String(recipient.name).toLowerCase());
+        if (retryMatchedByNumber || retryMatchedByName) {
+          cbox.name = retryBox.name;
+          cbox.headerName = retryBox.headerName;
+          cbox.currentText = retryBox.currentText;
+        } else {
+          return fail('REFUSED: WhatsApp is showing a different conversation, and retrying the deep link ' +
+            'did not switch it. I asked for ' + label + ', but the message box says "' +
+            String(retryBox.name || cbox.name || '(unnamed)') + '"' +
+            (retryBox.headerName ? ' and the chat header says "' + retryBox.headerName + '"' : '') +
+            '. Nothing was typed and nothing was sent — open the right chat, or check the saved number.');
+        }
+      } else {
+        return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
+          ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
+          (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
+          '. A retry of the deep link could not re-read the message box either. Nothing was typed and ' +
+          'nothing was sent — open the right chat, or check the saved number.');
+      }
+    } else {
+      return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
+        ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
+        (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
+        '. A retry of the deep link failed too (' + reasonText(retryLaunch) + '). Nothing was typed and ' +
+        'nothing was sent — open the right chat, or check the saved number.');
+    }
   }
 
   // Anything already sitting in the composer is the operator's draft. Report it
@@ -419,6 +463,47 @@ async function whatsapp_contact_save({ name, number }) {
   });
 }
 
+// Wave 4 (2026-08-13): whatsapp_contact_save already deletes-then-rewrites a
+// contact internally when replacing one (line ~439 above) — there was just no
+// way to remove one WITHOUT immediately re-adding it, so a throwaway/bad
+// contact could only be overwritten with a new number, never actually
+// removed. Same case-insensitive lookup whatsapp_contact_save and
+// resolveRecipient already use.
+async function whatsapp_contact_delete({ name }) {
+  const label = String(name || '').trim();
+  if (!label) return fail('Ask the operator for the contact name to delete before calling this.');
+
+  if (!vaultFs || typeof vaultFs.writeJSON !== 'function') {
+    return fail('The vault is not writable, so I cannot delete contacts right now.');
+  }
+
+  const contacts = loadContacts();
+  const existing = Object.keys(contacts).find((n) => n.toLowerCase() === label.toLowerCase());
+  if (!existing) {
+    return fail('No saved contact named "' + label + '". Nothing to delete.');
+  }
+  delete contacts[existing];
+
+  const written = vaultFs.writeJSON(CONTACTS_PATH, contacts);
+  if (written && written.ok === false) {
+    return fail('Could not delete ' + existing + ': ' + reasonText(written));
+  }
+
+  // Oracle: read the file back and confirm the name no longer resolves,
+  // same discipline as whatsapp_contact_save's own read-back.
+  const check = resolveRecipient(existing);
+  if (!check.error) {
+    return fail('I wrote the contacts file without ' + existing + ' but it still resolves to a number ' +
+      '(' + check.number + '). Not deleted reliably.');
+  }
+
+  return ok({
+    deleted: existing,
+    evidence: 'read-back',
+    note: 'Deleted ' + existing + ' from saved contacts.',
+  });
+}
+
 const TOOLS = [
   {
     name: 'whatsapp_send',
@@ -448,6 +533,15 @@ const TOOLS = [
     danger: true,
     fn: whatsapp_contact_save,
   },
+  {
+    name: 'whatsapp_contact_delete',
+    description: 'Permanently remove a saved WhatsApp contact by name. Use for "delete the WhatsApp contact ' +
+      'for X", "forget X\'s WhatsApp number", or cleaning up a throwaway/test contact. Destructive — the ' +
+      'contact can no longer be messaged by name afterward.',
+    params: { name: 'string - the saved contact name to remove' },
+    danger: true,
+    fn: whatsapp_contact_delete,
+  },
 ];
 
 function registerFromWhatsapp(hub, ctx) {
@@ -465,6 +559,7 @@ module.exports = {
   whatsapp_send,
   whatsapp_contacts,
   whatsapp_contact_save,
+  whatsapp_contact_delete,
   // exported for tests
   _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH },
 };

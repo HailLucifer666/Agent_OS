@@ -66,8 +66,18 @@ function buildTools(ctx){
     try{
       var res=semantic.forget(query,{topic:(args&&args.topic)||''});
       if(res.error) return fail('forget_fact: '+res.error);
+      // Wave 4 (2026-08-13): exact substring found nothing, but semantic.forget's
+      // fuzzy fallback found MORE THAN ONE plausible match — a paraphrased forget
+      // that happens to land on several stored facts (e.g. "forget the kids thing")
+      // must ask which one rather than silently deleting the wrong fact or the
+      // exact-match "no stored fact" message, which would be false here.
+      if(!res.removed.length && res.candidates && res.candidates.length){
+        var list=res.candidates.map(function(c,i){return (i+1)+'. "'+c.text+'" ('+c.topic+')';}).join('; ');
+        return fail('Found '+res.candidates.length+' similar facts, none an exact match for "'+
+          query.slice(0,80)+'" — which one? '+list);
+      }
       if(!res.removed.length) return fail('No stored fact contains "'+query.slice(0,80)+'". Topics searched: '+(res.searched.join(', ')||'none'));
-      return ok({forgot:res.removed,topic:res.topic,evidence:'removed '+res.removed.length+' fact(s) from Semantic/'+res.topic+'.md'});
+      return ok({forgot:res.removed,topic:res.topic,evidence:'removed '+res.removed.length+' fact(s) from Semantic/'+res.topic+'.md'+(res.matchedBy==='fuzzy'?' (paraphrase match)':'')});
     }catch(err){return fail('forget_fact failed: '+reasonText(err));}
   }
 

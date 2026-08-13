@@ -350,6 +350,10 @@ const TIER_TABLE = {
   // without asking again — a wrong digit here misdirects every future message to
   // that name, so it is confirmed once at save time rather than silently accepted.
   'whatsapp_contact_save': 3,
+  // Wave 4 (2026-08-13): destructive by nature (removes the ability to
+  // message someone by name) — same T3 as the save it undoes, never
+  // auto-allowed.
+  'whatsapp_contact_delete': 3,
   // Security-review correction (Task 10): phone_file_pull was originally T1
   // ("a read from the phone"), but from the PC-filesystem-integrity
   // standpoint `adb pull` WRITES (creates or overwrites) an arbitrary local
