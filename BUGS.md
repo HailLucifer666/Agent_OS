@@ -5911,11 +5911,30 @@ a leading `"at "` on any existing pattern; the literals `"noon"`/`"midnight"`;
 and `"in an hour"`/`"in half an hour"` (word-number durations the numeric-only
 pattern cannot match at all). Deliberately NOT a general word-number parser —
 a bare hour with no am/pm and no colon (`"5"`) stays honestly refused as
-genuinely ambiguous. `test/parse-when-widening.test.js`. The plan's exact
-"6 observed leaked leads" / specific failing phrase from the 2026-08-12/13
-session was not available in this checkout (see the reasoning-leak entry
-above for the same data-availability gap) — this widens the general class of
-missing patterns instead of fixing one specific unavailable phrase.
+genuinely ambiguous. `test/parse-when-widening.test.js`.
+
+**Deferred-fixture follow-up, re-searched 2026-08-14 with full vault access
+(both `mythos/vault` and the Electron app's `%APPDATA%\agent-os\vault`,
+`Audit` and `Episodic`, every date 2026-08-11 through 2026-08-13): still not
+found, and now for a different reason than "not available in this
+checkout" — it is not there to find. Every `reminder_add`/`timer_add` call
+in the actual 2026-08-11/12 session (the vault-day file named
+"2026-08-12.jsonl" by IST rollover) parsed and fired successfully —
+`"in 30 minutes"`, `"in 1 minute"` ×2 more — none failed to parse. The
+session's real, repeated operator complaint in that exact stretch
+(2026-08-11T20:38-20:39 UTC) was `"But you didn't remind me when it went
+off"` / `"You're not reminding me when the timer goes off"` — a missing
+proactive-notification bug, already captured as its own stored fact
+(`Semantic/user-facts.md`: "When a reminder fires, pro-actively send a chat
+message notifying the operator immediately, without waiting for them to
+ask.") — not a `parseWhen()` failure at all. The one genuine `parseWhen()`
+parse failure anywhere in the vault history is BUG-100 (2026-08-04, "Vet
+appointment" / `when:"2026-08-05T16:00:00"`), already fixed and unrelated
+to this session. Closing this item as: the widening above stands on its own
+merits (real classes of missing phrasing), but the specific
+2026-08-12/13-session failing phrase the plan describes does not exist in
+the available data — continuing to search for it in a future session would
+be repeating this same dead end.
 
 ### BUG-215 — open_web reported success with zero verification
 
@@ -6090,10 +6109,84 @@ same window and the flag-removal test that ruled out `-NonInteractive`/
 | W3 spotify_play | OPERATOR-ONLY | no Spotify desktop install on this machine to test against without risking a real playback/UI side effect |
 | W4 whatsapp contact save/delete | VERIFIED | real `Contacts/contacts.json` round-trip: written then removed, read back each time |
 | W4 forget_fact fuzzy match | VERIFIED | real `Semantic/user-facts.md`; a paraphrase (`"restart the throwaway server on Tuesdays"`) matched and removed the stored fact via `matchedBy:'fuzzy'` |
-| W4 real "children/family priority" fact | NOT FOUND on this machine | searched `mythos/vault/Semantic/*.md` and `%LOCALAPPDATA%\agent-os\vault\Semantic\*.md`; not present in either — not deleted, just absent here |
+| W4 real "children/family priority" fact | NOT FOUND on this machine, now confirmed exhaustively | searched `mythos/vault/Semantic/*.md`, `%LOCALAPPDATA%\agent-os\vault\Semantic\*.md`, AND `%APPDATA%\agent-os\vault\Semantic\*.md` (2026-08-14 follow-up closed the one unchecked location) — not present in any of the three; not deleted, just absent everywhere on this machine |
 | W5 vision lane-empty honesty | VERIFIED | real `registry.chainFor('vision')` with every vision key blanked in the child env returned `laneEmpty:true` in 91ms (not a 12s timeout), naming the reason |
 | W5 vision brain wiring | VERIFIED | same call with real keys returned a real description from `nim2`/`nvidia/nemotron-nano-12b-v2-vl` in 4.3s |
 | W7 aether-proxy rebind | VERIFIED | real `net.createServer` occupied the port, real `createScannerProxy` bind failed, real diagnostician+healer chain fired `aether-proxy-rebind`, and after the port was released the real retry rebound and `health.healed outcome:'applied'` |
 | W7 firstBootAt | VERIFIED | real vault: two simulated boots returned the identical timestamp (idempotent), persisted on disk, and surfaced in the real `writeManifest()` output |
 | W6 (language pin / live-voice revert / notice self-ownership) | NOT ATTEMPTED | requires a real Live/S2S voice session (human mic/HUD) — out of scope for a headless pass |
 | log_incident scope (BUG-217) | OPERATOR-ONLY | needs a real conversation to prove it no longer fires unbidden |
+
+## Deferred-fixture follow-up, 2026-08-14
+
+The 2026-08-12/13 incident session's raw vault data turned out to be present
+on this machine all along — gitignored, in BOTH vaults (`mythos/vault` for
+the batch launcher, `%APPDATA%\agent-os\vault` for the Electron app), which
+is why the earlier checkout-only search in the entries above missed it.
+
+### BUG-220 — two of the six real leaked-reasoning texts still weren't caught
+
+Pulled the six actual leaked-reasoning replies verbatim from
+`Episodic/2026-08-11.jsonl` and `Episodic/2026-08-12.jsonl` (`%APPDATA%\
+agent-os\vault` — these are the real texts `test/live-reasoning-strip.test.js`
+only ever paraphrased). Running the real `stripReasoningLead()` against all
+six found two it still let through unstripped:
+
+- One turn used the label `"Self-Correction:"` once and then, LATER IN THE
+  SAME REPLY, `"Self-Correction during reasoning:"` — different wording.
+  `SELF_CORRECTION_RE` only matched the literal colon-immediately-after
+  spelling, and — separately — the marker scan only ever used a
+  non-global `.exec()`, which finds the FIRST occurrence of a marker, not
+  the last one the code's own comment claims to look for. The second
+  header, and the truncated real text behind it, went to the operator
+  verbatim.
+- Two turns used a header the fix never recognized at all,
+  `"Reasoning after tool analysis:"` / `"Reasoning after tool
+  consideration:"` — same class as `Self-Correction:`/`Correction plan:`,
+  just different wording the model used that day.
+- One turn ended its reasoning with `"Output:"` marking where its own
+  real answer began — no marker recognized this at all, so the label
+  itself reached the operator glued onto an otherwise clean reply.
+
+**FIXED** in `live-session.js`: `SELF_CORRECTION_RE` widened to tolerate
+wording between "Self-Correction" and its colon (`Self-Correction\b[^:\n]
+{0,60}:`); new `REASONING_AFTER_RE` and `OUTPUT_LABEL_RE` markers added
+(the latter requires a preceding newline, deliberately narrower, so it
+never fires on a genuine reply that discusses "output:" as a topic); the
+marker scan now finds the LAST occurrence of each marker across the whole
+string via a global-regex helper, not just the first. All six real texts
+now pass the same bar the existing 2026-08-12 fix already applies to
+everything else in this file: the cleaned result is never empty and never
+RE-OPENS with a recognized reasoning-lead marker. Four of the six still
+carry one residual imperfection each — two end mid-word because the VAULT
+RECORD ITSELF is truncated there (not a stripping defect — there is no
+more text to recover), and two keep one leaked non-"I" sentence glued in
+front of the real answer, because `peelContinuationSentences` only ever
+peels a leading "I ..." or numbered sentence by design (see its own
+"CRITICAL fix" comment) — going further risks exactly the false-positive
+regression that comment already warns against, so this was left alone
+rather than chased. `test/reasoning-leak-2026-08-12-fixtures.test.js` (new,
+all six fixtures, scrub-checked for personal data — none was embedded in
+any of the six: no names, phone numbers, or real account details).
+
+### BUG-214 deferred fixture — closed as genuinely absent, not unavailable
+
+Re-searched with full vault access (see BUG-214's entry above, updated in
+place): the specific failing `timer_add`/`reminder_add` phrase the plan
+describes for this session does not exist in either vault's Audit or
+Episodic files for 2026-08-11 through 2026-08-13. Every timer/reminder call
+in that session parsed and fired; the session's real complaint in that
+stretch was a missing proactive-notification behavior, unrelated to
+`parseWhen()`. No fixture added — inventing one to satisfy the checklist
+item would misrepresent what the evidence actually shows.
+
+### "children/family priority" fact — confirmed absent in all three vault locations
+
+Checked the one location the 2026-08-13 pass hadn't (`%APPDATA%\agent-os\
+vault\Semantic\*.md`, the Electron app's vault) — `user-facts.md` there
+holds only two facts (a test-is-not-emotional-distress note, and the
+proactive-reminder-notification preference from the BUG-214 investigation
+above), neither matching. Combined with the earlier pass's negative results
+for `mythos/vault/Semantic` and `%LOCALAPPDATA%\agent-os\vault\Semantic`,
+this fact is not present anywhere on this machine, in any of the three
+plausible locations. Not deleted — there was nothing to delete.

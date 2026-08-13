@@ -56,8 +56,29 @@ const REASONING_LABEL_RE = /^[\s>*_#-]*(?:reasoning|thinking|thought|thoughts|ch
 // in the text (not anchored), matching the label BUG-118/BUG-170 already
 // tolerate appearing after other reasoning content, not only at position 0.
 const NARRATION_LEAD_RE = /^The user (?:is asking|asked)\b[^.?!]*[.?!]\s*/i;
-const SELF_CORRECTION_RE = /Self-Correction:\s*/i;
+// Widened 2026-08-14 against real leaked transcripts (BUGS.md — deferred
+// fixtures, 2026-08-12/13 incident session): the model does not always spell
+// this label the same way twice in one turn — "Self-Correction:" the first
+// time, "Self-Correction during reasoning:" the second, in the SAME reply.
+// The literal colon-right-after-the-word version below missed the second
+// spelling entirely, so it kept reaching the operator verbatim. Still a
+// labelled-header match only (bounded by requiring a colon within 60 chars),
+// not a general "contains these words" search.
+const SELF_CORRECTION_RE = /Self-Correction\b[^:\n]{0,60}:\s*/i;
 const CORRECTION_PLAN_RE = /Correction plan:\s*/i;
+// New 2026-08-14, same real-transcript evidence: "Reasoning after tool
+// analysis:" / "Reasoning after tool consideration:" are the SAME class of
+// labelled reasoning header as Self-Correction/Correction plan above — this
+// model just varies the wording per turn. Bounded the same way.
+const REASONING_AFTER_RE = /Reasoning after\b[^:\n]{0,60}:\s*/i;
+// New 2026-08-14: an "Output:" header marking where the model's OWN answer
+// begins is the mirror image of the labels above — everything before it is
+// the model talking to itself, everything after is meant for the operator.
+// Requires a preceding newline (never mid-sentence) specifically so this
+// does not fire on a genuine reply that happens to discuss "output:" as a
+// topic — narrower than the other three labels on purpose, since this one
+// has no colon-adjacent keyword like "Correction"/"Reasoning" to anchor on.
+const OUTPUT_LABEL_RE = /\n[ \t]*Output:\s*/i;
 
 // A plan header is normally followed by its own numbered steps, and a
 // narration lead is often followed by more first-person self-talk before the
@@ -103,16 +124,30 @@ function stripReasoningLead(text) {
   let candidate = labelStripped;
 
   if (labelStripped === str) {
-    // No bare label — find the LAST of the new 2026-08-12 markers and cut
-    // everything up to it, then peel any leading plan steps/self-talk that
-    // still haven't addressed the operator.
+    // No bare label — find the LAST of the 2026-08-12/2026-08-14 markers and
+    // cut everything up to it, then peel any leading plan steps/self-talk
+    // that still haven't addressed the operator.
+    //
+    // "LAST" means the last OCCURRENCE across the whole string, not just the
+    // last of the four regex TYPES — a real leaked turn (BUGS.md's
+    // 2026-08-12/13 fixtures) repeated the Self-Correction header twice with
+    // different wording in the same reply, and a non-global .exec() only
+    // ever finds the FIRST occurrence, leaving the second one — and
+    // everything after it — unstripped. lastMatchEnd scans with a global
+    // flag and keeps the LAST match's end index instead.
+    function lastMatchEnd(source, re) {
+      const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+      let m, end = -1;
+      while ((m = g.exec(source))) { end = m.index + m[0].length; if (m[0].length === 0) g.lastIndex++; }
+      return end;
+    }
     let lastEnd = -1;
     const narrationMatch = NARRATION_LEAD_RE.exec(str);
     if (narrationMatch) lastEnd = Math.max(lastEnd, narrationMatch[0].length);
-    const selfCorrectionMatch = SELF_CORRECTION_RE.exec(str);
-    if (selfCorrectionMatch) lastEnd = Math.max(lastEnd, selfCorrectionMatch.index + selfCorrectionMatch[0].length);
-    const correctionPlanMatch = CORRECTION_PLAN_RE.exec(str);
-    if (correctionPlanMatch) lastEnd = Math.max(lastEnd, correctionPlanMatch.index + correctionPlanMatch[0].length);
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, SELF_CORRECTION_RE));
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, CORRECTION_PLAN_RE));
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, REASONING_AFTER_RE));
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, OUTPUT_LABEL_RE));
     candidate = lastEnd === -1 ? str : peelContinuationSentences(str.slice(lastEnd));
   }
 
