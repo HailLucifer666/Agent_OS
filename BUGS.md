@@ -5630,3 +5630,67 @@ on a client that was never suspended (candidate 2, Gemini dropping the
 transcript server-side, has no client-side fix). Tightens the existing 30s
 fail-open ceiling reactively rather than replacing it.
 `test/live-session.test.js`.
+
+### BUG-200 — send_key aborted on a drifted caret instead of trying to recover it
+
+`Handle-SendKey`'s caret-owner guard (2026-08-02) aborts outright when the
+keyboard caret belongs to a different app than the target — correct, but
+Handle-UiType's own WAVE 9 fix already showed the caret drifting away (a
+confirm-dialog round trip, a stray click) is recoverable by re-focusing an
+editable element in the target window, and send_key never got that recovery.
+
+**FIXED.** Before aborting, `Handle-SendKey` now calls the SAME
+`Focus-EditableDescendant` helper Handle-UiType already uses (UIA SetFocus on
+the target window's largest editable descendant, falling back to a click at
+its center) and re-checks the caret owner before giving up. Not independently
+verifiable without a real Windows session — see the live-verify checklist.
+
+### BUG-201 — send_key('enter') had no WM_CHAR route, unlike ui_type's text path
+
+`Handle-UiType` escalates through `sendinput-unicode -> uia-setvalue ->
+wm-char-post` for ordinary text on MSIX-blocked targets, but `Handle-SendKey`'s
+Enter ladder stopped at `wm-key-post` and `uia-invoke-focused` — missing the
+WM_CHAR form some RichEdit/Chromium composers listen for specifically (some
+controls treat WM_KEYDOWN(VK_RETURN) and WM_CHAR('\r') as distinct signals).
+
+**FIXED.** Added a 4th route posting `WM_CHAR` with `\r` to the focused
+control, gated on the same proof-of-absence as every other route (oracle
+re-checked, only reached when nothing else already landed) so honest-fail
+stays intact by construction. Not independently verifiable without a real
+Windows session.
+
+### BUG-202 — ctrl+s had no recovery path on an MSIX target, unlike every other route in this file
+
+Combos deliberately get no escalation ladder (a wrong base key delivered via
+WM_KEYDOWN would be a silent wrong action) — but that blanket rule left
+ctrl+s with zero recovery on the exact MSIX blackhole every other route in
+this file works around, and no way to know a Save-As dialog had opened
+instead of a silent save.
+
+**FIXED.** ctrl+s is now an explicit, narrow exception (not a generalization
+to arbitrary combos): when SendInput delivers the combo, the foreground
+window title is checked for a Save-As dialog; when it delivers zero events,
+a new `Find-InvokableSaveDescendant` helper looks for an on-screen, invokable
+element literally named 'Save'/'Save As' anywhere in the foreground window's
+UIA tree and invokes it instead. A detected Save-As dialog is reported as its
+own distinct outcome (`result:'save-as-dialog-opened'`), never folded into
+plain success or failure — dismissing it is the caller's next step. Not
+independently verifiable without a real Windows session.
+
+### BUG-203 — spotify_play fell back to a blind keystroke guess after a REAL click failed
+
+A play control's real bounding rect was located via `ui_elements`, and its
+`click_at` (a genuine SendInput mouse click at that physical screen
+coordinate) failed — and the code fell through to the same blind Tab+Enter
+keystroke guess BUG-026's own 3rd-attempt comment already explains is
+unreliable (Enter kept landing back in the search box). Unlike the
+cua-driver path above it (which posts a click to a window without activating
+it and DOES have a foreground-delivery retry, already applied at its own
+click loop), `click_at` has no "background" mode to retry into — it already
+is a real, physical click.
+
+**FIXED.** When a play control was located and its `click_at` fails, `from-
+spotify.js` now fails honestly with the real click error instead of guessing
+via keystrokes. The "no identifiable play control was found at all" fallback
+path (where a keystroke guess is the only option left) is unchanged.
+`test/spotify-effector.test.js`.

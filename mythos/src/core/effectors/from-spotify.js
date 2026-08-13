@@ -687,11 +687,21 @@ async function spotify_play({ query, trackId }) {
           const check = await verifyPlaybackAgainstQuery(query);
           return playResultWithEvidence(merged, query, check);
         }
-        // click_at failed — fall through to the keystroke fallback below,
-        // carrying the failure reason instead of silently dropping it.
-        focusWarning = focusWarning
-          ? `${focusWarning}; click_at failed: ${clickResult.result}`
-          : `click_at failed: ${clickResult.result}`;
+        // Wave 3 (2026-08-13): a REAL play control was located and its click
+        // FAILED — this used to fall through to a blind Tab+Enter keystroke
+        // guess (BUG-026's own comment above explains why that guess is
+        // unreliable: Enter kept landing back in the search box). click_at
+        // (Handle-ClickAt -> Click-AtScreenCoords, ps-automation.ps1) is
+        // already a real SendInput mouse click at a physical screen
+        // coordinate — there is no "background delivery mode" to retry into,
+        // unlike the cua-driver path above (which posts to a window without
+        // activating it, and DOES have a foreground escalation to retry with,
+        // already applied at cuaPlayViaDriver's own click loop). With a real
+        // click target identified and a real click attempt already failed,
+        // guessing at the wrong element via keystrokes is worse than an
+        // honest failure naming the actual click error.
+        return fail(`click_at failed on the located play control: ${clickResult.result}` +
+          (focusWarning ? ` (also: ${focusWarning})` : ''));
       }
     }
   }

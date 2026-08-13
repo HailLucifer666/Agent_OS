@@ -2043,6 +2043,29 @@ function Test-TextLanded($Haystack, $Needle) {
     return $h.Contains($n)
 }
 
+# Wave 3 (2026-08-13) — ctrl+s's UIA equivalent, scoped deliberately narrow (see
+# Handle-SendKey's combo branch: this is the ONE combo that gets an escalation
+# path, not a general mechanism). Finds the first on-screen, invokable element
+# literally named 'Save' or 'Save As' anywhere in $Root's tree — a menu item or
+# button, whichever the app exposes. Same "bounded by UIA itself" scan as
+# Find-EditableDescendants below; a window's control tree is small enough that
+# TrueCondition over Descendants is not slow in practice.
+function Find-InvokableSaveDescendant($Root) {
+    if (-not $Root) { return $null }
+    $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($el in $all) {
+        try {
+            if ($el.Current.IsOffscreen) { continue }
+            $name = ([string]$el.Current.Name).Trim().TrimEnd('.', "`u{2026}")
+            if ($name -ne 'Save' -and $name -ne 'Save As') { continue }
+            $ip = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern]
+            if ($ip) { return @{ element = $el; invoke = $ip; name = $name } }
+        } catch { }
+    }
+    return $null
+}
+
 # Every editable, keyboard-focusable, on-screen descendant of $Root, as candidate
 # records. Extracted from Handle-FocusMessageBox (Wave 7) so Handle-UiType can use
 # the same live-proven search — measured 2026-07-31 against a real Electron window:
@@ -3387,11 +3410,30 @@ function Handle-SendKey($key, $TargetPid) {
     if ($TargetPid) {
         $caretPid = Get-CaretOwnerPid
         if ($caretPid -and -not (Test-SameApp $caretPid $TargetPid)) {
+            # RUNG 0 — CARET RE-ACQUISITION (Wave 3, 2026-08-13). Before aborting,
+            # try to put the caret back where it belongs, the same way Handle-UiType's
+            # WAVE 9 fix does for typing (Focus-EditableDescendant: UIA SetFocus on the
+            # target window's largest editable descendant, falling back to a click at
+            # its center). Reuses that exact helper rather than a second detector —
+            # the caret drifting to another app (a confirm-dialog round trip, a stray
+            # click) is the same failure mode typing already recovers from; send_key
+            # never got the same recovery and just gave up.
+            try {
+                $tProc = Get-Process -Id $TargetPid -ErrorAction Stop
+                if ($tProc.MainWindowHandle -ne [IntPtr]::Zero) {
+                    [void](Focus-EditableDescendant $tProc.MainWindowHandle)
+                    Start-Sleep -Milliseconds 100
+                    $caretPid = Get-CaretOwnerPid
+                }
+            } catch { }
+        }
+        if ($caretPid -and -not (Test-SameApp $caretPid $TargetPid)) {
             $caretLabel = ''
             try { $caretLabel = ' (' + (Get-Process -Id $caretPid -ErrorAction Stop).ProcessName + ')' } catch { }
             return ("Key '$raw' aborted: the keyboard caret belongs to PID $caretPid" + $caretLabel +
-                ", which is not part of target PID $TargetPid's application. The keystroke " +
-                'would have gone to the wrong window, so nothing was sent.')
+                ", which is not part of target PID $TargetPid's application (tried re-focusing an " +
+                'editable element in the target window first). The keystroke would have gone to the ' +
+                'wrong window, so nothing was sent.')
         }
     }
 
@@ -3410,7 +3452,57 @@ function Handle-SendKey($key, $TargetPid) {
         }
         $script:LastVkSent = $null
         Send-VkCombo $modVks $vk
-        if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
+        $comboSentZero = ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1)
+
+        # Wave 3 (2026-08-13) — ctrl+s is the ONE explicit exception to "combos get
+        # no escalation ladder" (comment below, unchanged for every other combo).
+        # A save is common enough, and unambiguous enough (there is exactly one
+        # verifiable equivalent action, not N possible base-key mismatches like
+        # "ctrl+n"), to be worth the exception. Checked here, gated on the raw
+        # string, not generalized to the branch above.
+        if ($raw -eq 'ctrl+s') {
+            Start-Sleep -Milliseconds 300
+            $fgHwnd2 = [NativeInput]::GetForegroundWindow()
+            $sb2 = New-Object System.Text.StringBuilder 512
+            [void][NativeInput]::GetWindowText($fgHwnd2, $sb2, 512)
+            $fgTitle2 = $sb2.ToString()
+            # A Save-As dialog appearing is neither success nor failure of the save
+            # itself — it's the app asking a question this call cannot answer.
+            # Reported as its own distinct outcome; dismissing it is the caller's
+            # next verifiable step (e.g. send_key('enter') or send_key('escape')).
+            $saveAsOpened = ($fgTitle2 -match 'Save As')
+
+            if (-not $comboSentZero) {
+                $result = @{ key = $raw; sent = $true; combo = $true; mechanism = 'sendinput-vk' }
+                if ($saveAsOpened) { $result.result = 'save-as-dialog-opened' }
+                return $result
+            }
+
+            # SendInput delivered nothing (the MSIX blackhole every other route in
+            # this file works around) — try the app's own Save UI element via UIA,
+            # which does not travel through the input stack SendInput uses.
+            $saveEl = $null
+            try {
+                $root2 = [System.Windows.Automation.AutomationElement]::FromHandle($fgHwnd2)
+                $saveEl = Find-InvokableSaveDescendant $root2
+            } catch { }
+            if (-not $saveEl) {
+                return ("Send key 'ctrl+s' failed: SendInput injected 0 events, and no invokable " +
+                    "'Save'/'Save As' element was found in the foreground window ($fgTitle2) to use instead.")
+            }
+            try { $saveEl.invoke.Invoke() } catch {
+                return "Send key 'ctrl+s' failed: SendInput injected 0 events, and invoking the UIA '$($saveEl.name)' element threw: $($_.Exception.Message)"
+            }
+            Start-Sleep -Milliseconds 300
+            $fgHwnd3 = [NativeInput]::GetForegroundWindow()
+            $sb3 = New-Object System.Text.StringBuilder 512
+            [void][NativeInput]::GetWindowText($fgHwnd3, $sb3, 512)
+            $result = @{ key = $raw; sent = $true; combo = $true; mechanism = 'uia-invoke-save' }
+            if ($sb3.ToString() -match 'Save As') { $result.result = 'save-as-dialog-opened' }
+            return $result
+        }
+
+        if ($comboSentZero) {
             return "Send key '$key' failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
         }
         # Combos deliberately get NO escalation ladder. WM_KEYDOWN carries a single
@@ -3507,6 +3599,36 @@ function Handle-SendKey($key, $TargetPid) {
                     $mechanism = 'uia-invoke-focused'
                     $landed = $true
                 }
+            }
+        } catch { }
+    }
+
+    if ($landed -eq $false -and $raw -eq 'enter') {
+        # Route 4 — WM_CHAR posted with \r, same mechanism Handle-UiType's route 3
+        # (wm-char-post) already uses for ordinary text, applied to Enter specifically.
+        # Route 2 (wm-key-post) carries a real virtual key and is preferred when it
+        # works; this exists for controls that only listen for the CHARACTER form of
+        # Enter (some RichEdit/Chromium composers treat WM_KEYDOWN(VK_RETURN) and
+        # WM_CHAR('\r') as distinct signals and only act on one of them). Gated on the
+        # same proof-of-absence as every other route here, so a key that already
+        # landed via route 2/3 never reaches this and cannot double-fire.
+        $mechanismsTried += 'wm-char-post'
+        try {
+            $fgH3 = [NativeInput]::GetForegroundWindow()
+            $fgP3 = 0
+            $fgThread3 = [NativeInput]::GetWindowThreadProcessId($fgH3, [ref]$fgP3)
+            $ourThread3 = [NativeInput]::GetCurrentThreadId()
+            $attached3 = [NativeInput]::AttachThreadInput($ourThread3, $fgThread3, $true)
+            $target3 = [IntPtr]::Zero
+            try { if ($attached3) { $target3 = [NativeInput]::GetFocus() } }
+            finally { if ($attached3) { [void][NativeInput]::AttachThreadInput($ourThread3, $fgThread3, $false) } }
+            if ($target3 -eq [IntPtr]::Zero) { $target3 = $fgH3 }
+            [void][NativeInput]::PostMessage($target3, [NativeInput]::WM_CHAR, [IntPtr][int][char]"`r", [IntPtr]0)
+            Start-Sleep -Milliseconds 250
+            $after = Read-FocusedElementText
+            if ($null -ne $after -and [string]$after.text -ne [string]$beforeRead.text) {
+                $mechanism = 'wm-char-post'
+                $landed = $true
             }
         } catch { }
     }
