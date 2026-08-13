@@ -51,6 +51,7 @@ const browserAgentAdapter = require('../adapters/browser-agent');
 const cuaDriverAdapter = require('../adapters/cua-driver');
 const androidChildAdapter = require('../adapters/android-child');
 const version = require('../src/core/identity/version');
+const { getUpdateReport } = require('../src/core/identity/update-report');
 const { isProviderDown } = require('../src/core/immune/probes');
 const { createPinSessionStore } = require('../src/core/security/pin-session');
 
@@ -2055,6 +2056,35 @@ function createServer(deps) {
     logger.warn('boot-greeting.version-check-failed', { error: err.message });
   }
 
+  // What the last update did, if anything — electron/main.js forwards
+  // unfinishedUpdate()'s result as MYTHOS_UPDATE_RESULT (JSON) just before
+  // forking this process. getUpdateReport() throws on a present-but-corrupt/
+  // malformed value rather than returning the same null it returns for
+  // "absent" — that distinction matters here: a caught parse failure is
+  // logged and otherwise ignored (no fact, no episodic entry), but it must
+  // never be silently treated as "no update happened".
+  let updateReport = null;
+  try {
+    updateReport = getUpdateReport();
+  } catch (err) {
+    logger.warn('boot-greeting.update-report-invalid', { error: err.message });
+  }
+  if (updateReport) {
+    // One episodic entry, not one per fact — recallable later so "what
+    // changed recently" and self-knowledge answers stay truthful even after
+    // the boot greeting itself has scrolled out of the dedup window.
+    try {
+      memory.episodic.write({
+        kind: 'system',
+        summary: updateReport.completed
+          ? 'Update completed: v' + updateReport.from + ' -> v' + updateReport.version
+          : 'Update did not complete: still on v' + updateReport.from + ' (target v' + updateReport.version + ')',
+        detail: updateReport,
+        salience: 0.5,
+      });
+    } catch (_) { /* memory must never block boot */ }
+  }
+
   // Two-brain key separation (.env.example's HERMES_PROVIDER_KEY block): the
   // Hermes build engine and the Mythos brain must not share one Mistral
   // workspace key — a 20-60-call build then eats the same rate limit as voice,
@@ -2096,6 +2126,12 @@ function createServer(deps) {
     if (bootUpgrade.upgraded) {
       facts.push('You received a code upgrade since your last boot' +
         (bootUpgrade.changes.length ? ' — recent changes: ' + bootUpgrade.changes.join('; ') : ''));
+    }
+    if (updateReport) {
+      facts.push(updateReport.completed
+        ? 'I was updated to v' + updateReport.version +
+          (updateReport.releaseNotes ? ' — ' + updateReport.releaseNotes : '')
+        : 'an update to v' + updateReport.version + ' did not complete — still on v' + updateReport.from);
     }
     // Session carryover: greet by picking up the thread instead of booting
     // cold. recall('') with a kind filter scores by recency alone (episodic.js),

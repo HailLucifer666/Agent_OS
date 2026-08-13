@@ -395,6 +395,13 @@ async function primeAuthSession(win, token, port) {
 // ---- child lifecycle ----------------------------------------------------------
 let child = null;
 let mainWindow = null;
+// Set from unfinishedUpdate() just before the FIRST startChild() call of this
+// boot, and forwarded to the child once as MYTHOS_UPDATE_RESULT (see
+// startChild()'s env block below) — then cleared, so a later re-fork (the
+// exit-handler's backoff restart, or mythos:restart-server) never resends a
+// stale report. Single-shot on the wire, same contract as the attempt file
+// unfinishedUpdate() itself unlinks after reading.
+let pendingUpdateResult = null;
 // True once we are on the way out (quit, or an update handover). Read by the
 // child's exit handler, which must not resurrect the server while the app is
 // shutting down — during an update that respawned child lands inside the very
@@ -742,9 +749,22 @@ function startChild() {
       // release asset carries. Injected rather than resolved, for the same
       // reason as MYTHOS_BUILD_TIME above — only the main process can know it.
       MYTHOS_APP_VERSION: app.getVersion(),
+      // WHAT THE LAST UPDATE DID, if anything — unfinishedUpdate()'s result,
+      // read in whenReady() BEFORE this fork (see pendingUpdateResult above).
+      // JSON, not a file: this repo has a documented divergence where the
+      // packaged app and the batch launcher use DIFFERENT vault directories,
+      // so a file handoff would land in the wrong one. Empty string when there
+      // is nothing to report — mythos/src/core/identity/update-report.js reads
+      // this and must be able to tell "nothing happened" from "malformed".
+      MYTHOS_UPDATE_RESULT: pendingUpdateResult ? JSON.stringify(pendingUpdateResult) : '',
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });
+  // Single-shot on the wire: cleared immediately after being placed in the
+  // env above, so the exit-handler's backoff re-fork (or a manual
+  // mythos:restart-server) does not resend a report from an update that
+  // finished boots ago.
+  pendingUpdateResult = null;
   if (childLogStream) {
     child.stdout.pipe(childLogStream);
     child.stderr.pipe(childLogStream);
@@ -1647,11 +1667,17 @@ if (!gotLock) {
     // only on the NEXT launch — which is exactly the "the other machine's work is
     // not here" complaint this exists to fix.
     syncVault('--pull');
+    // ALSO before startChild(), and for the same reason: unfinishedUpdate() is
+    // single-shot (it unlinks the attempt file as it reads it), and its result
+    // is forwarded to the child as MYTHOS_UPDATE_RESULT in the fork() env below
+    // — so it must be read before the fork, not after, or the child boots with
+    // nothing to tell the brain about what the update did.
+    const lastUpdate = unfinishedUpdate();
+    pendingUpdateResult = lastUpdate;
     startChild();
     // Before checkForUpdates(), so the log reads in the order things happened.
     // A later 'available'/'ready' from the check legitimately supersedes this
     // banner — that one is more actionable, and the log keeps the evidence.
-    const lastUpdate = unfinishedUpdate();
     if (lastUpdate) {
       if (lastUpdate.completed) {
         // A banner would be clobbered by the ~1s-later update-not-available
