@@ -69,6 +69,13 @@ export function mountCoreOrb(canvas, ctx) {
     listening: cssVar('--orb-listening', '#43e5a0'),
     speaking: cssVar('--orb-speaking', '#f5d020'),
     online: cssVar('--orb-online', '#4fd8ff'),
+    // Wave 2 (2026-08-13): s2s-bridge.js's mic-suspend gate (own-TTS/media
+    // echo guard) used to drop frames while the orb kept showing 'listening'
+    // — the operator had no visual reason to doubt they were being heard.
+    // Reuses the dim/offline token rather than inventing a new hue: this is
+    // "not actually listening right now", closer to offline than to any
+    // active state.
+    muted: cssVar('--orb-offline', '#8ba3c4'),
   };
   // idle/online share the accent token; legacy local aliases kept for ACTION_COLORS
   // and the per-state plasma/orbital code below, which still read named consts.
@@ -127,7 +134,7 @@ export function mountCoreOrb(canvas, ctx) {
   const STATE_LINE = {
     offline: 'ENTITY OFFLINE', booting: 'ENTITY BOOTING', confirm: 'AWAITING CONFIRM',
     degraded: 'ENTITY DEGRADED', thinking: 'PROCESSING', listening: 'LISTENING',
-    speaking: 'SPEAKING', online: 'ENTITY ONLINE',
+    speaking: 'SPEAKING', online: 'ENTITY ONLINE', muted: 'MIC MUTED',
   };
 
   function resolveState() {
@@ -137,6 +144,7 @@ export function mountCoreOrb(canvas, ctx) {
     if (degraded) return 'degraded';
     if (voiceState === 'speaking') return 'speaking';
     if (voiceState === 'processing') return 'thinking';
+    if (voiceState === 'muted') return 'muted';
     if (voiceState === 'listening') return 'listening';
     return 'online';
   }
@@ -833,11 +841,12 @@ export function mountCoreOrb(canvas, ctx) {
   return {
     setDegraded(v) { degraded = !!v; },
     notifyConfirmResolved() { confirmPending = false; },
-    // voice-loop states (idle|listening|processing|speaking) — each has its own
-    // glow color: idle=cyan, listening=green, processing=purple, speaking=yellow.
+    // voice-loop states (idle|listening|processing|speaking|muted) — each has
+    // its own glow color: idle=cyan, listening=green, processing=purple,
+    // speaking=yellow, muted=dim (Wave 2, 2026-08-13 — s2s-bridge.js's mic gate).
     // Hardware states (downloading/disabled/error/unsupported) collapse to idle.
     setVoiceState(s) {
-      voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle';
+      voiceState = (s === 'listening' || s === 'processing' || s === 'speaking' || s === 'muted') ? s : 'idle';
     },
     // live voice amplitude 0..1 — drives the speaking-state plasma boost, arc
     // speed, and outward halo waves. Harmless no-op at other states.

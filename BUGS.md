@@ -5594,3 +5594,39 @@ routable `confirm-expired` bus event carrying the entry's `connectionId`.
 `resolveLiveConfirm(id, null, false, {expired:true})` so the model hears an
 explicit EXPIRED verdict rather than being told it was DECLINED — something the
 operator never actually did. `test/leash-confirm-expiry.test.js`.
+
+### BUG-198 — a mic-suspend gate gave no visible sign it had suspended the mic
+
+`s2s-bridge.js`'s captureSuspended gate (media-echo protection around
+spotify_play/open_web) drops mic frames client-side with no HUD change at
+all — the orb kept showing 'listening' while the mic was actually gated. This
+is candidate 1 for the lost-transcript incidents (21/21 empty operator
+transcripts on 2026-08-10): the operator had no reason to doubt they were
+being heard.
+
+**FIXED.** `setVoiceState()` now tracks the underlying voice-loop state
+separately from the mute overlay, so `setCaptureSuspended` can paint a
+dedicated `'muted'` state (and restore the REAL prior state on clear, not a
+hardcoded `'listening'` guess) plus a caption. `core-orb.js` renders it with
+its own color/label (`MIC MUTED`) rather than collapsing to idle.
+`test/s2s-capture-suspend-log.test.js`. Not independently verifiable without a
+real browser + mic — see the live-verify checklist below.
+
+### BUG-199 — nothing reacted to a lost-transcript anomaly while it was happening
+
+Diagnosing a `live-turn-no-user-transcript` anomaly needed a manual vault dig
+after the fact; nothing tried to correct course DURING the conversation it
+was still live in, even for candidate 1 (the client mic gate outliving the
+media/TTS burst it was meant to cover).
+
+**FIXED.** `live-session.js` gained a direct per-connection callback,
+`onSuspendedTurnAnomaly` (same "direct callback, not a bus event" pattern
+`onInterrupted` already uses, and for the identical reason — the shared
+process bus has no connectionId, so a bus subscriber would clear every OTHER
+connection's mic gate too). `server/index.js` wires it to send
+`{type:'live-watchdog-clear'}` to that one connection; `s2s-bridge.js` handles
+it by checking its OWN `captureSuspended` and clearing early if set — a no-op
+on a client that was never suspended (candidate 2, Gemini dropping the
+transcript server-side, has no client-side fix). Tightens the existing 30s
+fail-open ceiling reactively rather than replacing it.
+`test/live-session.test.js`.

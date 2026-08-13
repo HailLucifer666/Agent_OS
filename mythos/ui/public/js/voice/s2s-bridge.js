@@ -75,6 +75,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   let onInterruptedMsg = null;
   let onLiveStateMsg = null;
   let onTranscriptMsg = null;
+  let onWatchdogClearMsg = null;
 
   // BUG-059: debounce for the auto-reopen below, so a persistent server-side
   // failure (e.g. breaker tripped) can't turn into a tight live-open retry loop.
@@ -105,7 +106,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     openAckTimer = setTimeout(() => {
       openAckTimer = null;
       if (!startRequested) return;   // stopped in the meantime; nothing to report
-      setState('idle');
+      setVoiceState('idle');
       if (onCaption) {
         onCaption('Live voice did not respond — click to try again.', 'error');
       }
@@ -113,6 +114,21 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   }
 
   function setState(s) { if (onState) onState(s); }
+
+  // Wave 2 (2026-08-13): candidate 1 for the lost-transcript incidents — the
+  // mic gate below drops frames while captureSuspended, but the orb still
+  // showed 'listening', so the operator had no idea they were talking to a
+  // client that had already stopped sending audio. lastVoiceState is the
+  // underlying voice-loop state (idle|listening|processing|speaking) as if
+  // captureSuspended didn't exist; setVoiceState is what every real state
+  // transition below now goes through, so the mute overlay in
+  // setCaptureSuspended can always restore the right thing on clear instead
+  // of guessing 'listening'.
+  let lastVoiceState = 'idle';
+  function setVoiceState(s) {
+    lastVoiceState = s;
+    setState(captureSuspended ? 'muted' : s);
+  }
 
   // Half-duplex gate for MYTHOS's OWN server-side TTS — the boot greeting,
   // reminders, build announcements and idle thoughts. Those play through the
@@ -151,12 +167,19 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     const next = Boolean(flag);
     if (suspendTimer) { clearTimeout(suspendTimer); suspendTimer = null; }
     captureSuspended = next;
+    // Wave 2: paint the overlay the moment the gate itself changes, not on
+    // the next unrelated live-state message — a caption alongside it, since
+    // "muted" alone doesn't say WHY (core-orb.js collapses anything it
+    // doesn't recognize to idle, so this is additive, not a repaint hack).
+    setState(next ? 'muted' : lastVoiceState);
+    if (next && onCaption) onCaption('Mic muted — media playing', 'muted');
     if (next) {
       const ceiling = Math.min(Number(holdMs) || MAX_SUSPEND_MS, MAX_SUSPEND_MS);
       logSuspendTransition({ holdMs: ceiling, reason: reason || 'suspend' });
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
         captureSuspended = false;   // fail open: a deaf assistant is the worse failure
+        setState(lastVoiceState);
         logSuspendTransition({ reason: 'ceiling-fail-open' });
       }, ceiling);
     } else {
@@ -200,7 +223,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // outside listening/processing/speaking to 'idle', so an invented
     // 'connecting' would render as no change at all — exactly the bug.
     startRequested = true;
-    setState('processing');
+    setVoiceState('processing');
 
     onAudioOutMsg = (msg) => { if (player && msg && msg.data) player.enqueue(msg.data); };
     // The server won this race: stop the audio and clear the local run, so a
@@ -214,7 +237,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // Includes the BUG-146 already-open ack, which is the whole reason a click
       // on an already-open session now repaints anything.
       clearOpenAckTimer();
-      setState(s === 'open' ? 'listening' : s || 'idle');
+      setVoiceState(s === 'open' ? 'listening' : s || 'idle');
       // BUG-059: the server-side session (live-session.js) now rotates itself
       // transparently through idle-timeout/session-max, so a terminal 'closed'
       // reaching the browser while the operator never pressed stop() (active
@@ -242,10 +265,17 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       }
     };
     onTranscriptMsg = (msg) => { if (onCaption && msg) onCaption(msg.text, msg.role === 'user' ? 'heard' : 'reply'); };
+    // Wave 2 (2026-08-13, resume-on-activity watchdog): the server tells us a
+    // Live turn came back with no operator transcript. We're the only side
+    // that knows whether captureSuspended is actually set right now — a
+    // signal on a client that was never suspended (Gemini dropped it
+    // server-side instead) is a harmless no-op.
+    onWatchdogClearMsg = () => { if (captureSuspended) setCaptureSuspended(false, undefined, 'watchdog-clear'); };
     onBroadcast('live-audio-out', onAudioOutMsg);
     onBroadcast('live-interrupted', onInterruptedMsg);
     onBroadcast('live-state', onLiveStateMsg);
     onBroadcast('live-transcript', onTranscriptMsg);
+    onBroadcast('live-watchdog-clear', onWatchdogClearMsg);
 
     sendMessage({ type: 'live-open' });
     armOpenAckTimer();   // BUG-147: silence from here on becomes a visible refusal
@@ -338,12 +368,13 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (onInterruptedMsg) { offBroadcast('live-interrupted', onInterruptedMsg); onInterruptedMsg = null; }
     if (onLiveStateMsg) { offBroadcast('live-state', onLiveStateMsg); onLiveStateMsg = null; }
     if (onTranscriptMsg) { offBroadcast('live-transcript', onTranscriptMsg); onTranscriptMsg = null; }
+    if (onWatchdogClearMsg) { offBroadcast('live-watchdog-clear', onWatchdogClearMsg); onWatchdogClearMsg = null; }
     if (captureNode) { try { captureNode.disconnect(); } catch { /* ok */ } captureNode = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }
     if (player) { player.close(); player = null; }
     bargeBackstop.reset();
-    setState('idle');
+    setVoiceState('idle');
   }
 
   return {

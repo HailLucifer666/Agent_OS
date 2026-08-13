@@ -177,6 +177,64 @@ describe('live-session (Phase 1, V2 §6)', () => {
     session.close();
   });
 
+  // Wave 2 (2026-08-13, resume-on-activity watchdog): the SAME half-blind turn
+  // above must also fire a direct per-connection callback — not a bus event,
+  // for the exact reason onInterrupted's own comment gives (the shared bus has
+  // no connectionId, so a bus.subscribe in server/index.js would clear every
+  // OTHER connection's mic-suspend gate too).
+  test('a half-blind turn also fires onSuspendedTurnAnomaly directly, once, alongside the anomaly', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    let fired = 0;
+    const { deps, sockets } = fakeDeps({ onSuspendedTurnAnomaly: () => { fired += 1; } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Alright, the recipe is staged.' },
+        turnComplete: true,
+      },
+    });
+
+    assert.equal(fired, 1);
+    session.close();
+  });
+
+  test('a turn WE provoked (no anomaly) never fires onSuspendedTurnAnomaly', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    let fired = 0;
+    const { deps, sockets } = fakeDeps({ onSuspendedTurnAnomaly: () => { fired += 1; } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    session.sendText('[SYSTEM] something finished.');
+    sockets[0].serverFrame({ serverContent: { outputTranscription: { text: 'Noted.' }, turnComplete: true } });
+
+    assert.equal(fired, 0, 'a system-initiated turn is not the shape this watchdog exists for');
+    session.close();
+  });
+
+  test('a throwing onSuspendedTurnAnomaly never breaks turn completion', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets } = fakeDeps({ onSuspendedTurnAnomaly: () => { throw new Error('boom'); } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    assert.doesNotThrow(() => {
+      sockets[0].serverFrame({ serverContent: { outputTranscription: { text: 'ok' }, turnComplete: true } });
+    });
+    session.close();
+  });
+
   // ...and the other half, later the same day. The check above fired 5 times in
   // one six-minute conversation (turns 1, 3, 8, 13, 15 of 16) and every one was a
   // FALSE alarm: those turns were provoked by us — the proactive greeting and

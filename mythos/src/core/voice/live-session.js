@@ -149,6 +149,14 @@ function createLiveSession(deps) {
     // it itself (Live just demonstrably didn't), so the caller routes it to
     // the TTS chain.
     onSilentTurn,
+    // Wave 2 (2026-08-13, resume-on-activity watchdog): () => void — fires
+    // alongside the live-turn-no-user-transcript health.anomaly below. Same
+    // reason as onInterrupted above (see its comment): the shared process bus
+    // is not connection-scoped, so a bus.subscribe in server/index.js would
+    // clear EVERY connection's mic-suspend gate on ANY one connection's blind
+    // turn. A direct per-session callback is the established fix for exactly
+    // this shape here, not a connectionId added to the bus payload.
+    onSuspendedTurnAnomaly,
 
     // Test-only seam: the wire protocol is frozen, the transport constructor is
     // not. Defaults to the real 'ws' WebSocket against the real endpoint.
@@ -617,6 +625,17 @@ function createLiveSession(deps) {
             audioIn: audioInSnapshot,
             scFields: scFieldsSnapshot,
           });
+          // Wave 2 (resume-on-activity watchdog): candidate 1 is a mic gate
+          // (s2s-bridge.js's captureSuspended) that outlived the media/TTS
+          // burst it was meant to cover. The client, not us, knows whether it
+          // is actually suspended right now — this just tells it to check and
+          // clear early if so, tightening the existing 30s fail-open ceiling
+          // reactively instead of waiting it out. A no-op signal on a client
+          // that was never suspended (candidate 2 — Gemini dropped it
+          // server-side; no code fix available for that half).
+          if (typeof onSuspendedTurnAnomaly === 'function') {
+            try { onSuspendedTurnAnomaly(); } catch (_) { /* best-effort */ }
+          }
         }
         // Consumed: the next turn is operator-initiated until sendText says otherwise.
         turnSystemInitiated = false;

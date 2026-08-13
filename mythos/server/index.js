@@ -2626,6 +2626,12 @@ function createServer(deps) {
             proactiveSpeak(text, ws, { skipLive: true })
               .catch((err) => logger.warn('live.turn-silent.tts-failed', { turnId, error: err.message }));
           },
+          // Wave 2 (2026-08-13, resume-on-activity watchdog): direct
+          // per-connection callback, same reason as onInterrupted above — tell
+          // THIS connection's bridge to check its own captureSuspended and
+          // clear early if set. The bridge (not us) knows whether it's
+          // actually suspended right now.
+          onSuspendedTurnAnomaly: () => send({ type: 'live-watchdog-clear' }),
         });
       }
       const ok = await liveSession.open();
