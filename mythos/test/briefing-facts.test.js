@@ -379,14 +379,21 @@ describe('buildBriefingFacts: new fact — needs-done (goals + kanban + proposal
   });
 });
 
-describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.query, TASK B4)', () => {
+describe('buildBriefingFacts: new fact — self-healing since last boot (memory.audit.query, TASK B4)', () => {
   const NOW = Date.now();
-  const WINDOW_MS = 24 * 3600 * 1000;
+  // No deps.previousBootAt supplied -> briefing.js falls back to its
+  // DEFAULT_SELF_HEALING_WINDOW_MS (24h), so these tests can predict the
+  // "in the last 24 hours" wording without depending on that constant's
+  // literal value from outside the module.
+  const DEFAULT_WINDOW_MS = 24 * 3600 * 1000;
+  // A previousBootAt this far back drives the window via the real
+  // since-last-boot path (FIX 1) instead of the fallback.
+  const CUSTOM_WINDOW_MS = 2 * 3600 * 1000; // 2h
+  const previousBootAtFor = (windowMs) => NOW - windowMs;
 
   it('present and phrased from playbookId + count when applied heal records exist in the window', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
       memory: {
         audit: {
           query: () => [
@@ -396,16 +403,17 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
         },
       },
     });
-    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24h:'));
+    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24 hours:'));
     assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('2 heals') !== -1, fact);
     assert.ok(fact.indexOf('stall restart once') !== -1, fact);
     assert.ok(fact.indexOf('search provider degrade once') !== -1, fact);
+    assert.ok(fact.indexOf('at least') === -1, 'a small, uncapped result must not claim partial coverage: ' + fact);
   });
 
   it('counts repeated playbookIds instead of listing each occurrence separately', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
       memory: {
         audit: {
           query: () => [
@@ -415,7 +423,7 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
         },
       },
     });
-    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24h:'));
+    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24 hours:'));
     assert.ok(fact, JSON.stringify(facts));
     assert.ok(fact.indexOf('stall restart 2 times') !== -1, fact);
   });
@@ -423,7 +431,6 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
   it('ABSENT when there are no heal records at all', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
       memory: { audit: { query: () => [] } },
     });
     assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
@@ -432,7 +439,6 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
   it('ABSENT (not a vague "nothing to report") when every record in range failed (outcome !== applied)', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
       memory: {
         audit: {
           query: () => [
@@ -447,7 +453,6 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
   it('skipped when memory.audit.query throws', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
       memory: { audit: { query: () => { throw new Error('audit unreadable'); } } },
     });
     assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
@@ -456,24 +461,24 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
   it('skipped when memory.audit.query hangs past the timeout', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
       memory: { audit: { query: () => never() } },
     });
     assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
   });
 
   // This is the assertion that proves the window is real rather than
-  // decorative: a record well outside selfHealingWindowMs must not count
-  // toward the fact, even though the exact same record would be counted
-  // (and change the phrasing) if it were inside the window.
+  // decorative: a record well outside the window must not count toward the
+  // fact, even though the exact same record would be counted (and change
+  // the phrasing) if it were inside the window. Uses previousBootAt (FIX 1)
+  // to drive a real, non-default window rather than the 24h fallback.
   it('excludes records outside the window — a record from 2x the window ago does not count', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
+      previousBootAt: previousBootAtFor(CUSTOM_WINDOW_MS),
       memory: {
         audit: {
           query: () => [
-            { ts: NOW - (2 * WINDOW_MS), decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+            { ts: NOW - (2 * CUSTOM_WINDOW_MS), decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
           ],
         },
       },
@@ -481,23 +486,119 @@ describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.
     assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
   });
 
-  it('an in-window record is still reported when mixed with an out-of-window record', async () => {
+  it('an in-window record is still reported when mixed with an out-of-window record, and the window is named by hours since previousBootAt', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
-      selfHealingWindowMs: WINDOW_MS,
+      previousBootAt: previousBootAtFor(CUSTOM_WINDOW_MS),
       memory: {
         audit: {
           query: () => [
-            { ts: NOW - (2 * WINDOW_MS), decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+            { ts: NOW - (2 * CUSTOM_WINDOW_MS), decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
             { ts: NOW - 1000, decision: 'heal', playbookId: 'search-provider-degrade', outcome: 'applied' },
           ],
         },
       },
     });
-    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24h:'));
+    const fact = facts.find((f) => f.startsWith('Self-healing in the last 2 hours:'));
     assert.ok(fact, JSON.stringify(facts));
     assert.ok(fact.indexOf('search provider degrade once') !== -1, fact);
     assert.ok(fact.indexOf('stall restart') === -1, fact);
+  });
+
+  // FIX 1: previousBootAt drives the window, capped at MAX_SELF_HEALING_WINDOW_MS
+  // (7 days) so a long-idle machine cannot stretch the fact's scope into an
+  // absurd claim. A gap far beyond the cap must still describe itself using
+  // the CAPPED window, not the raw (much larger) gap.
+  it('caps an unusually long since-last-boot gap instead of reporting it verbatim', async () => {
+    const hugeGapMs = 30 * 24 * 3600 * 1000; // 30 days
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      previousBootAt: previousBootAtFor(hugeGapMs),
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('in the last 168 hours:') !== -1, // 7 days, the cap
+      'expected the fact to name the CAPPED window (168h), not the raw 720h gap: ' + fact);
+  });
+
+  // FIX 2: query({decision:'heal', limit}) walks newest-first and stops at
+  // `limit` matches regardless of outcome — a noisy window (a playbook
+  // re-firing on a short cooldown writes decision:'heal' every time, not
+  // just on outcome:'applied') can fill every slot with non-applied rows
+  // and push genuine in-window applied heals out of the result set. If this
+  // were ignored, the fact would silently report a smaller number than the
+  // truth. Simulates hitting the cap: SELF_HEALING_QUERY_LIMIT (500)
+  // records, all still inside the default 24h window, so the oldest
+  // returned record does NOT prove the window is fully covered.
+  it('detects truncation at the query cap and says "at least" instead of a false-complete count', async () => {
+    const CAP = 500;
+    const records = [];
+    for (let i = 0; i < CAP; i++) {
+      // Mostly noise (re-fired cooldown/no-match rows also carry
+      // decision:'heal'), 3 genuine applied heals mixed in among them.
+      const outcome = (i === 10 || i === 200 || i === 400) ? 'applied' : 'cooldown';
+      records.push({ ts: NOW - (i * 1000), decision: 'heal', playbookId: 'search-provider-degrade', outcome });
+    }
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      memory: { audit: { query: () => records } },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('at least 3 heals') !== -1,
+      'expected an honest lower-bound count flagged as partial, not a bare (and misleadingly exact-looking) 3: ' + fact);
+  });
+
+  it('does NOT say "at least" when the result is well under the query cap (no truncation)', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('at least') === -1, fact);
+    assert.ok(fact.indexOf('1 heal —') !== -1, fact);
+  });
+
+  // FIX 3: the sentence must not name an unbounded number of distinct
+  // playbooks — same precedent as the last-conversations fact's
+  // slice(0, 3) and needs-done's four fixed sub-counts.
+  it('caps the number of distinct playbooks named and folds the rest into "+N more"', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+            { ts: NOW - 2000, decision: 'heal', playbookId: 'search-provider-degrade', outcome: 'applied' },
+            { ts: NOW - 3000, decision: 'heal', playbookId: 'rotate-nim-key', outcome: 'applied' },
+            { ts: NOW - 4000, decision: 'heal', playbookId: 'mem-consolidate', outcome: 'applied' },
+            { ts: NOW - 5000, decision: 'heal', playbookId: 'budget-pause', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('stall restart once') !== -1, fact);
+    assert.ok(fact.indexOf('search provider degrade once') !== -1, fact);
+    assert.ok(fact.indexOf('rotate nim key once') !== -1, fact);
+    assert.ok(fact.indexOf('mem consolidate') === -1, 'expected the 4th distinct playbook to be folded away: ' + fact);
+    assert.ok(fact.indexOf('budget pause') === -1, 'expected the 5th distinct playbook to be folded away: ' + fact);
+    assert.ok(fact.indexOf('2 more') !== -1, fact);
   });
 });
 

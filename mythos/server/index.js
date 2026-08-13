@@ -2045,9 +2045,21 @@ function createServer(deps) {
   let bootGreetingDelayMs = 2500;
   const LAST_BOOT_PATH = 'Identity/last-boot.json';
   const bootUpgrade = { upgraded: false, changes: [] };
+  // Genuine "since this entity was last alive" instant for the self-healing
+  // briefing fact (TASK B4 code review) — read from the SAME prev record
+  // bootUpgrade already diffs gitRef against, before it gets overwritten
+  // below with this boot's own bootDate. null on a first run (no
+  // Identity/last-boot.json yet) or if the version-check try below fails;
+  // briefing.js's buildBriefingFacts() falls back to a fixed window itself
+  // when this stays null.
+  let previousBootAt = null;
   try {
     const v = version.getVersion();
     const prev = memory.fs.readJSON(LAST_BOOT_PATH, null);
+    if (prev && prev.bootDate) {
+      const parsed = Date.parse(prev.bootDate);
+      if (!Number.isNaN(parsed)) previousBootAt = parsed;
+    }
     if (prev && prev.gitRef && prev.gitRef !== v.gitRef) {
       bootUpgrade.upgraded = true;
       // Commit subjects newer than the previous boot's ref (newest first,
@@ -2132,6 +2144,9 @@ function createServer(deps) {
       // Also backs the self-healing fact (TASK B4) via memory.audit.query —
       // no separate dep needed, briefing.js reads it off this same object.
       memory,
+      // The self-healing fact's real window — see the comment where this is
+      // computed above.
+      previousBootAt,
       kanbanEffector,
       spend,
       snapshotSystemMetrics,
