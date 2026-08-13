@@ -32,6 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const buildReleaseNotes = require('./build-release-notes');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PKG_PATH = path.join(REPO_ROOT, 'package.json');
@@ -237,6 +238,10 @@ function main(argv) {
   }
 
   writeVersion(version);
+  // Must exist on disk before the electron-builder step runs (it is one of the
+  // `steps` below) — that is the only point at which anything reads it, via
+  // app-builder-lib's getReleaseInfo() resolving build/release-notes.md.
+  buildReleaseNotes.main([]);
   for (const [cmd, cmdArgs] of steps) {
     console.log(`+ ${cmd} ${cmdArgs.join(' ')}`);
     const res = run(cmd, cmdArgs, { stdio: 'inherit' });

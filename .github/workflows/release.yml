@@ -91,6 +91,13 @@ jobs:
             exit 1
           }
 
+      # CI is a fresh checkout — build/release-notes.md is gitignored (release.js's
+      # preflight blocks on any untracked file, so it can never be committed), so
+      # it must be regenerated here or app-builder-lib's getReleaseInfo() finds
+      # nothing and latest.yml's releaseNotes field goes back to being empty.
+      - name: Build release notes from the commit log
+        run: node scripts/build-release-notes.js
+
       - name: Build and publish the installer
         env:
           # Scoped to this repository by GitHub. Never a personal token, and
