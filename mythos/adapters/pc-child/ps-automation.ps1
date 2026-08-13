@@ -2066,6 +2066,125 @@ function Find-InvokableSaveDescendant($Root) {
     return $null
 }
 
+# BUG-219 follow-up, investigated live 2026-08-13 and left UNRESOLVED — see
+# BUGS.md for the full record. Find-InvokableSaveDescendant above only ever
+# finds a 'Save'/'Save As' element that is ALREADY on screen; on Windows 11's
+# current Notepad that element does not exist until the top-level 'File' menu
+# is opened (confirmed by live UIA enumeration: MenuBar > MenuBarItem
+# 'File'/automationId 'File' exists at rest, 'Save'/'Save As'/'Save all' do
+# not appear anywhere in the same tree until File is expanded).
+#
+# This function's mechanism — re-resolve the window fresh by pid rather than
+# trust a carried-over element reference, explicitly re-focus the target
+# window (Handle-FocusWindow's own AttachThreadInput workaround) before
+# invoking, unconditionally force a Collapse-then-Expand toggle rather than
+# trust a possibly-stale ExpandCollapseState, then re-scan both the original
+# root and the current foreground window with one retry — is all verified
+# correct in isolation: an identical sequence run from a plain
+# `powershell.exe -File script.ps1` process against the exact same live
+# window opens the File menu and finds Save/Save As/Save all every time.
+#
+# It still returns $null when actually called through Handle-SendKey in this
+# file, because THIS file only ever runs as pc-child/index.js's spawned child
+# (`child_process.spawn('powershell.exe', ...)`), and InvokePattern.Invoke()/
+# ExpandCollapsePattern.Expand() on this specific WinUI3 MenuBarItem are a
+# silent no-op — no exception, ExpandCollapseState transitions and reports
+# 'Expanded', yet no flyout ever renders — SPECIFICALLY when the calling
+# PowerShell process was spawned as a Node child_process, regardless of
+# -NonInteractive/windowsHide (tested with both removed — same result,
+# confirmed live). Every other UIA route this file already uses successfully
+# from inside this same daemon (uia-setvalue for typing, click_at, etc.) is
+# unaffected — this is narrow to Invoke/ExpandCollapse on this one control,
+# in this one process-spawn shape. Kept in the file rather than reverted:
+# harmless when it fails (never opens the menu -> never finds Save -> the
+# caller's honest-failure path below is unchanged), and it is the correct
+# code if this file is ever invoked a different way (a real terminal-attached
+# daemon, a different automation host) where the same block does not apply.
+function Find-SaveViaFileMenu($Root, $TargetPid) {
+    if ($TargetPid) {
+        try {
+            $freshRoot = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+                [System.Windows.Automation.TreeScope]::Children,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid)))
+            if ($freshRoot) { $Root = $freshRoot }
+        } catch { }
+    }
+    if (-not $Root) { return $null }
+    $fileEl = $null
+    try {
+        $idCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'File')
+        $fileEl = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $idCond)
+    } catch { }
+    if (-not $fileEl) {
+        try {
+            $nameCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty, 'File')
+            $fileEl = $Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond)
+        } catch { }
+    }
+    if (-not $fileEl) { return $null }
+
+    if ($TargetPid) { try { Handle-FocusWindow $TargetPid | Out-Null } catch { } }
+    Start-Sleep -Milliseconds 100
+
+    try { $fileEl.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern] | ForEach-Object { $_.Invoke() } } catch { }
+    $ecp = $null
+    try { $ecp = $fileEl.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) -as [System.Windows.Automation.ExpandCollapsePattern] } catch { }
+    $opened = $false
+    if ($ecp) {
+        try { $ecp.Collapse() } catch { }
+        Start-Sleep -Milliseconds 150
+        try { $ecp.Expand(); $opened = $true } catch { }
+    }
+    if (-not $opened) { return $null }
+
+    Start-Sleep -Milliseconds 300
+    $scanRoot = $Root
+    if ($TargetPid) {
+        try {
+            $freshRoot2 = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+                [System.Windows.Automation.TreeScope]::Children,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid)))
+            if ($freshRoot2) { $scanRoot = $freshRoot2 }
+        } catch { }
+    }
+    $saveEl = Find-InvokableSaveDescendant $scanRoot
+    if (-not $saveEl) {
+        try {
+            $fgNow = [NativeInput]::GetForegroundWindow()
+            $fgRoot = [System.Windows.Automation.AutomationElement]::FromHandle($fgNow)
+            $saveEl = Find-InvokableSaveDescendant $fgRoot
+        } catch { }
+    }
+    if (-not $saveEl) {
+        # Route 2 — one short retry: a flyout's own children can populate a
+        # beat after the popup window itself becomes visible.
+        Start-Sleep -Milliseconds 300
+        $saveEl = Find-InvokableSaveDescendant $scanRoot
+        if (-not $saveEl) {
+            try {
+                $fgNow2 = [NativeInput]::GetForegroundWindow()
+                $fgRoot2 = [System.Windows.Automation.AutomationElement]::FromHandle($fgNow2)
+                $saveEl = Find-InvokableSaveDescendant $fgRoot2
+            } catch { }
+        }
+    }
+    if (-not $saveEl) {
+        # Never leave the menu open for whatever runs next. Collapse() via
+        # the same pattern we already have a live reference to — SendInput
+        # Escape is the same MSIX-blackhole-prone path this whole function
+        # exists to route around, so it is the fallback, not the primary.
+        try { $ecp.Collapse() } catch {
+            try { Send-VkKeyDown $VK_CODES['escape']; Send-VkKeyUp $VK_CODES['escape'] } catch { }
+        }
+        return $null
+    }
+    return $saveEl
+}
+
 # Every editable, keyboard-focusable, on-screen descendant of $Root, as candidate
 # records. Extracted from Handle-FocusMessageBox (Wave 7) so Handle-UiType can use
 # the same live-proven search — measured 2026-07-31 against a real Electron window:
@@ -3520,9 +3639,20 @@ function Handle-SendKey($key, $TargetPid) {
                 $saveEl = Find-InvokableSaveDescendant $root2
             } catch { }
             $blackholeReason = if ($comboSentZero) { 'SendInput injected 0 events' } else { "SendInput reported success but the window title ($fgTitle2) never changed" }
+            $viaFileMenu = $false
+            if (-not $saveEl -and $root2) {
+                # BUG-219 follow-up — the direct scan above only finds a
+                # 'Save'/'Save As' element already on screen; Notepad's is
+                # inside the 'File' menu's flyout, never resting-state
+                # visible. Narrow, named-menu-only escalation — see
+                # Find-SaveViaFileMenu's own header for why.
+                try { $saveEl = Find-SaveViaFileMenu $root2 $TargetPid } catch { $script:LastFileMenuDebug = @('outer-err:' + $_.Exception.Message) }
+                if ($saveEl) { $viaFileMenu = $true }
+            }
             if (-not $saveEl) {
+                $dbg = if ($script:LastFileMenuDebug) { ' [debug: ' + ($script:LastFileMenuDebug -join ', ') + ']' } else { '' }
                 return ("Send key 'ctrl+s' failed: $blackholeReason, and no invokable " +
-                    "'Save'/'Save As' element was found in the foreground window ($fgTitle2) to use instead.")
+                    "'Save'/'Save As' element was found in the foreground window ($fgTitle2) or its File menu to use instead.$dbg")
             }
             try { $saveEl.invoke.Invoke() } catch {
                 return "Send key 'ctrl+s' failed: $blackholeReason, and invoking the UIA '$($saveEl.name)' element threw: $($_.Exception.Message)"
@@ -3531,9 +3661,24 @@ function Handle-SendKey($key, $TargetPid) {
             $fgHwnd3 = [NativeInput]::GetForegroundWindow()
             $sb3 = New-Object System.Text.StringBuilder 512
             [void][NativeInput]::GetWindowText($fgHwnd3, $sb3, 512)
-            $result = @{ key = $raw; sent = $true; combo = $true; mechanism = 'uia-invoke-save' }
-            if ($sb3.ToString() -match 'Save As') { $result.result = 'save-as-dialog-opened' }
-            return $result
+            $fgTitle3 = $sb3.ToString()
+            $saveAsOpenedNow = ($fgTitle3 -match 'Save As')
+            $mechanism = if ($viaFileMenu) { 'uia-invoke-save-via-file-menu' } else { 'uia-invoke-save' }
+            # Same oracle discipline as the SendInput leg above: invoking the
+            # element is not itself proof anything happened. A Save-As dialog
+            # opening IS proof (its own distinct outcome, unchanged). Absent
+            # that, the title must have actually changed — still '*'-prefixed
+            # and byte-identical to before is exactly the "reported success,
+            # nothing happened" shape this whole fix exists to stop reporting.
+            if ($saveAsOpenedNow) {
+                return @{ key = $raw; sent = $true; combo = $true; mechanism = $mechanism; result = 'save-as-dialog-opened' }
+            }
+            if ($fgTitleBefore -and $fgTitleBefore.StartsWith('*') -and ($fgTitle3 -eq $fgTitleBefore)) {
+                return ("Send key 'ctrl+s' failed: invoked the '$($saveEl.name)' element via " +
+                    "$mechanism, but the window title ($fgTitle3) still shows unsaved changes and no " +
+                    'Save-As dialog opened — nothing verifiably happened.')
+            }
+            return @{ key = $raw; sent = $true; combo = $true; mechanism = $mechanism }
         }
 
         if ($comboSentZero) {

@@ -6017,25 +6017,67 @@ SendInput while still reporting the injected event as successful"), on the
 one app this fix's own commit message names as the target — the escalation
 ladder Wave 3 added was dead code for it.
 
-**FIXED.** The pre-send foreground title is now captured for ctrl+s; if no
-Save-As dialog opened AND the title still starts with `*` and is unchanged
-from before the send, that is treated as the same blackhole `comboSentZero`
-already covers, and the same `Find-InvokableSaveDescendant` fallback runs.
-Live-verified: the false `sent:true` is gone — the call now honestly returns
-`ok:false` naming the real cause. **Not fully resolved**: modern Notepad's
-Save action lives inside an unlabeled hamburger-menu flyout, not a
-directly-invokable on-screen 'Save'/'Save As' element, so
-`Find-InvokableSaveDescendant`'s deliberately-narrow scan (by design, see its
-own header) still finds nothing to invoke — `send_key('ctrl+s')` on modern
-Notepad now fails HONESTLY instead of falsely claiming success, but cannot
-yet complete the save itself. Opening the hamburger menu first is a
-separate, larger change (a second narrow exception, or a generalized
-menu-opening step) left for a future session. Syntax-validated via
+**FIXED (the false-success half).** The pre-send foreground title is now
+captured for ctrl+s; if no Save-As dialog opened AND the title still starts
+with `*` and is unchanged from before the send, that is treated as the same
+blackhole `comboSentZero` already covers, and the `Find-InvokableSaveDescendant`
+fallback runs. Live-verified: the false `sent:true` is gone — the call now
+honestly returns `ok:false` naming the real cause.
+
+**Save completion — attempted 2026-08-13, FAILED with a documented reason,
+left open.** Live UIA enumeration of a real launched Notepad found the
+answer to "where does Save actually live": not a hamburger/overflow button
+(there isn't one) but a plain, always-visible `MenuBar` > `MenuBarItem`
+named/automationId `'File'` — clicking or invoking it should open a
+standard flyout containing `New tab`/`New window`/`Open`/`Save`/`Save as`/
+`Save all`. Added `Find-SaveViaFileMenu`: re-resolves the window fresh by
+pid rather than trust a carried-over element reference, explicitly
+re-focuses the target window first (`Handle-FocusWindow`'s own
+`AttachThreadInput` workaround), unconditionally forces a
+Collapse-then-Expand toggle rather than trust `ExpandCollapseState` (which
+was observed live reporting `'Expanded'` while nothing was visibly open —
+a stale leftover from an earlier attempt, not the current truth), then
+re-scans both the original root and the current foreground window with one
+retry for a flyout whose content populates a beat late.
+
+Every piece of that mechanism is independently verified correct: a plain
+`powershell.exe -File script.ps1` process invoking `InvokePattern.Invoke()`/
+`ExpandCollapsePattern.Expand()` against the exact same live Notepad window
+opens the File menu and finds `Save`/`Save as`/`Save all` as real,
+on-screen, invokable elements, every time. It still returns nothing when
+driven through the real path, because **this file only ever runs as
+`pc-child/index.js`'s spawned child
+(`child_process.spawn('powershell.exe', ...)`), and on this one WinUI3
+MenuBarItem, from a Node-spawned child specifically, `Invoke()`/`Expand()`
+are a silent no-op — no exception, `ExpandCollapseState` transitions and
+reports `Expanded`, no flyout ever renders.** Tested and ruled out as the
+cause: `-NonInteractive` and `windowsHide:true` (removed both, spawned an
+identical daemon via a throwaway Node script with a visible, interactive
+PowerShell window — same silent no-op). Every OTHER UIA route this same
+file already uses successfully from inside this same daemon
+(`uia-setvalue` for typing, `click_at`, the caret-owner guard, etc.) is
+unaffected — this is narrow to `Invoke`/`ExpandCollapse` on this one
+control, in this one process-spawn shape, and the mechanism behind it was
+not identified beyond "Node-spawned child, specifically" — deeper than a
+UIPI/integrity-level check (those already gate `SendInput`, not COM
+`Invoke()`), and diagnosing further would mean instrumenting the WinUI3
+XAML dispatch pipeline this daemon has no visibility into.
+
+**Disposition:** `Find-SaveViaFileMenu` is kept in the file rather than
+reverted — harmless when it silently fails (never opens the menu, never
+finds `Save`, the caller's honest-failure path is unchanged) and it is the
+verified-correct code path if this file is ever hosted a different way (a
+real terminal-attached daemon, a different automation host) where this
+specific block does not apply. `send_key('ctrl+s')` on modern Windows 11
+Notepad, run through the real product, now fails HONESTLY — `ok:false`
+naming the real cause — instead of the false `sent:true` BUG-219 originally
+reported; it still cannot COMPLETE the save. Syntax-validated via
 `[System.Management.Automation.Language.Parser]::ParseFile` (this file's
 established practice — no PowerShell-internals test seam exists, per
-`adapters/CLAUDE.md`); the false-success -> honest-failure transition was
-observed live via `type text -> send_key ctrl+s -> title/dialog check`
-end-to-end.
+`adapters/CLAUDE.md`); every claim above was observed live, not inferred —
+including the fresh-process-vs-daemon-process comparison against the exact
+same window and the flag-removal test that ruled out `-NonInteractive`/
+`windowsHide`.
 
 ### Checklist results
 
@@ -6044,7 +6086,7 @@ end-to-end.
 | W1 confirm expiry | VERIFIED (found+fixed BUG-218) | real on-disk audit row + anomaly + bus event, correctly named after fix |
 | W1 partial-success guard | VERIFIED | real `log_incident`/`get_time` dispatch through a real hub; finalSay gained `"log_incident did not succeed — text required..."` |
 | W2 watchdog | VERIFIED | real `createLiveSession` half-blind turn emitted `live-turn-no-user-transcript` and fired `onSuspendedTurnAnomaly`, wired exactly as `server/index.js:2656`, producing a real `{type:'live-watchdog-clear'}` frame |
-| W3 send_key/Notepad | VERIFIED (found+fixed BUG-219); save completion still blocked (see BUG-219) | real pc-child + real Notepad; ctrl+s now fails honestly instead of a false success |
+| W3 send_key/Notepad | VERIFIED (found+fixed the false-success half of BUG-219); save completion FAILED-with-reason (see BUG-219) | real pc-child + real Notepad; ctrl+s now fails honestly instead of a false success; a follow-up File-menu route was built and verified correct standalone but is a silent no-op specifically when spawned as a Node child_process — documented, not forced |
 | W3 spotify_play | OPERATOR-ONLY | no Spotify desktop install on this machine to test against without risking a real playback/UI side effect |
 | W4 whatsapp contact save/delete | VERIFIED | real `Contacts/contacts.json` round-trip: written then removed, read back each time |
 | W4 forget_fact fuzzy match | VERIFIED | real `Semantic/user-facts.md`; a paraphrase (`"restart the throwaway server on Tuesdays"`) matched and removed the stored fact via `matchedBy:'fuzzy'` |
