@@ -27,7 +27,9 @@
     "icon": "build/icon.ico",
     "asar": true,
     "asarUnpack": [
-      "mythos/**/*"
+      "mythos/**/*",
+      "!**/onnxruntime-web/**",
+      "!**/@huggingface/**"
     ],
     "includeSubNodeModules": true,
     "files": [
@@ -55,7 +57,9 @@
       "!mythos/scripts/graphify-validate.js",
       "!mythos/scripts/live-logs.js",
       "!mythos/scripts/diagnose-type-mechanisms.js",
-      "!mythos/scripts/e2e{,/**/*}"
+      "!mythos/scripts/e2e{,/**/*}",
+      "!**/onnxruntime-node/bin/napi-v*/darwin{,/**/*}",
+      "!**/onnxruntime-node/bin/napi-v*/linux{,/**/*}"
     ],
     "win": {
       "target": "nsis",
