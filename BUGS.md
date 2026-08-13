@@ -6432,3 +6432,57 @@ interruption still gets through (the local backstop threshold is
 `0.035 * 2.5` RMS sustained ~600ms — higher than Gemini's server VAD, so a quiet
 "stop" may now need to be firmer), and whether 250ms of grace is enough tail for
 the operator's room.
+
+## BUG-225 — zombie-on-close / silent refusal to relaunch: DORMANT, cause NOT identified
+
+**Operator, 2026-08-14 (morning):** closing the app with the title-bar X left the
+process alive in Task Manager, and double-clicking the shortcut did nothing at
+all until the process was ended manually.
+
+**Operator, 2026-08-14 (later, after this session's four fixes):** *"the ghost
+process is no longer there — if I open and close it, it actually closes, and I
+can double click and open it again."*
+
+**Status: NOT FIXED. Not reproducing.** Recorded deliberately as an open,
+unexplained bug rather than a closed one, because **no code on the shutdown path
+changed.** `git log` across this session touches `ps-automation.ps1`,
+`live-tools.js`, `pcm-player.js`, `s2s-bridge.js` and docs — nothing in
+`electron/main.js`. A behaviour that improves with no corresponding change has
+not been fixed; it has gone quiet. The most likely reason it went quiet is
+mundane: the operator ended the stuck process, and BUG-029's pidfile mitigation
+kills orphans on the NEXT launch, so every launch since has started clean.
+
+**Hypothesis raised and DISPROVED (recorded so it is not re-derived):**
+`before-quit` runs `syncVault('--push')`, a **blocking** `spawnSync` with a 15s
+timeout, and it is the only blocking call on the quit path. A quit that waits up
+to 15 seconds on a network `git push` would look exactly like the report: window
+gone, process alive, single-instance lock still held, so a double-click hits the
+`!gotLock` branch and calls `app.quit()` **in silence**. It also explains the
+intermittency, since a push's duration depends on the network.
+
+It is not the cause here. `vault-sync.js` is opt-in by construction — `--push`
+no-ops unless the vault is already a git repo with a remote — and **none of the
+vault locations on this machine is a git repo** (`%APPDATA%\MYTHOS\vault`,
+`%APPDATA%\agent-os\vault`, `mythos/vault` all checked, none has `.git`). So the
+push exits immediately and the quit path is fast. `ELECTRON_RUN_AS_NODE` is also
+correctly set on that spawn, so the 2026-08-10 "spawns a second Electron app and
+stalls 15s" trap is not in play either.
+
+**What remains true regardless of cause — a real defect, not yet fixed.** When a
+primary instance is alive but has NO window, a relaunch is swallowed in total
+silence: `app.requestSingleInstanceLock()` fails, the new process calls
+`app.quit()` with no message, and the primary's `second-instance` handler calls
+`raiseWindow(mainWindow)` — which does nothing when `mainWindow` is null (it is
+set to null by its own `'closed'` handler). That is precisely the "double-click
+does nothing, forever" state, and it is reachable from ANY cause that leaves the
+process alive without a window. `second-instance` should never be able to no-op:
+with no window it should say so, or offer to restart. Not shipped in this
+session — it is unverifiable while the bug is dormant, and this repo does not
+ship unverified fixes for symptoms it cannot reproduce.
+
+**If it returns, capture before restarting anything:** which process name is
+still listed (`MYTHOS.exe` = Electron itself; `node.exe` = the forked server
+child; `powershell.exe` = the pc-child daemon; piper listens on 5051), whether
+ports 4478/5050/5051 are still held (`netstat -ano | findstr 4478`), and the tail
+of `%APPDATA%\MYTHOS\main.log`. Which of those three survives is what separates
+the candidate causes.
