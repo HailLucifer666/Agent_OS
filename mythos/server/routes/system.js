@@ -68,42 +68,58 @@ function readDisk(dirPath) {
   });
 }
 
+// snapshotSystemMetrics(prevCpus) — the metric math that used to live inline
+// in the route handler, pulled out so a second caller (the boot briefing,
+// src/core/conversation/briefing.js) can read the same numbers without
+// duplicating the delta/average/disk logic. `prevCpus` is the previous
+// os.cpus() sample to diff against (omit for a one-off snapshot, which yields
+// a null cpu.loadPercent for the same reason a process's very first request
+// does — no elapsed window to diff). Returns `{ metrics, nextCpus }`: callers
+// that poll repeatedly (the route) keep `nextCpus` as next call's `prevCpus`;
+// one-off callers can ignore it.
+async function snapshotSystemMetrics(prevCpus) {
+  const nextCpus = os.cpus();
+  const perCore = cpuDeltaPercent(prevCpus || nextCpus, nextCpus);
+
+  const totalBytes = os.totalmem();
+  const freeBytes = os.freemem();
+  const disk = await readDisk(__dirname);
+
+  const metrics = {
+    cpu: {
+      // null on the very first request of a process — there is no previous
+      // sample to diff against, and inventing one defeats the sampling.
+      loadPercent: perCore ? average(perCore) : null,
+      perCore: perCore || [],
+      model: (nextCpus[0] && nextCpus[0].model) || null,
+      count: nextCpus.length,
+    },
+    mem: {
+      totalBytes,
+      freeBytes,
+      usedPercent: totalBytes > 0 ? Math.round((1 - freeBytes / totalBytes) * 100) : null,
+    },
+    disk,
+    uptimeSec: Math.round(os.uptime()),
+    platform: os.platform(),
+    arch: os.arch(),
+  };
+
+  return { metrics, nextCpus };
+}
+
 function mountSystemRoutes(app, deps) {
   let prevCpus = os.cpus();
 
   app.get('/api/system', async (req, res) => {
     try {
-      const nextCpus = os.cpus();
-      const perCore = cpuDeltaPercent(prevCpus, nextCpus);
+      const { metrics, nextCpus } = await snapshotSystemMetrics(prevCpus);
       prevCpus = nextCpus;
-
-      const totalBytes = os.totalmem();
-      const freeBytes = os.freemem();
-      const disk = await readDisk(__dirname);
-
-      res.json({
-        cpu: {
-          // null on the very first request of a process — there is no previous
-          // sample to diff against, and inventing one defeats the sampling.
-          loadPercent: perCore ? average(perCore) : null,
-          perCore: perCore || [],
-          model: (nextCpus[0] && nextCpus[0].model) || null,
-          count: nextCpus.length,
-        },
-        mem: {
-          totalBytes,
-          freeBytes,
-          usedPercent: totalBytes > 0 ? Math.round((1 - freeBytes / totalBytes) * 100) : null,
-        },
-        disk,
-        uptimeSec: Math.round(os.uptime()),
-        platform: os.platform(),
-        arch: os.arch(),
-      });
+      res.json(metrics);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 }
 
-module.exports = { mountSystemRoutes, cpuDeltaPercent, average };
+module.exports = { mountSystemRoutes, cpuDeltaPercent, average, snapshotSystemMetrics };

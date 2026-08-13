@@ -20,6 +20,8 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
+const { buildBriefingFacts } = require('../src/core/conversation/briefing');
+const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
@@ -2104,47 +2106,26 @@ function createServer(deps) {
   async function deliverBootGreeting(targetWs) {
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    const facts = [];
-    try {
-      facts.push('Local time: ' + new Date().toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' }));
-    } catch (_) {}
-    try {
-      if (goalsEffector && typeof goalsEffector.stats === 'function') {
-        const gs = goalsEffector.stats();
-        facts.push('Goals: ' + gs.active + ' active, ' + gs.done + ' done');
-      }
-    } catch (_) {}
-    try {
-      if (probes) {
-        const st = await probes.getStatus();
-        const down = ['nim', 'groq', 'mistral'].filter((id) => {
-          try { return isProviderDown(id, st.providers); } catch (_) { return false; }
-        });
-        facts.push(down.length ? 'AI providers down: ' + down.join(', ') : 'All AI providers online');
-      }
-    } catch (_) {}
-    if (bootUpgrade.upgraded) {
-      facts.push('You received a code upgrade since your last boot' +
-        (bootUpgrade.changes.length ? ' — recent changes: ' + bootUpgrade.changes.join('; ') : ''));
-    }
-    if (updateReport) {
-      facts.push(updateReport.completed
-        ? 'I was updated to v' + updateReport.version +
-          (updateReport.releaseNotes ? ' — ' + updateReport.releaseNotes : '')
-        : 'an update to v' + updateReport.version + ' did not complete — still on v' + updateReport.from);
-    }
-    // Session carryover: greet by picking up the thread instead of booting
-    // cold. recall('') with a kind filter scores by recency alone (episodic.js),
-    // so this is simply the three most recent conversation records — no new
-    // query path. Best-effort: a greeting must never depend on memory.
-    try {
-      const recent = memory.episodic.recall('', { kind: 'conversation', limit: 3, windowDays: 3 }) || [];
-      const lines = recent
-        .map((hit) => (hit.record && hit.record.summary) || hit.snippet || '')
-        .filter(Boolean)
-        .slice(0, 3);
-      if (lines.length) facts.push('Last time we spoke: ' + lines.join(' / '));
-    } catch (_) { /* no vault, fake fs, or empty history — greet cold */ }
+    // TASK B2: fact assembly lives in conversation/briefing.js now (extracted
+    // for the same reason electron/child-exit.js was — testable behaviorally,
+    // not just source-shape) and each source is individually time-boxed there.
+    // Deps below are exactly the closure state the inline code used to read.
+    // `dispatch` reaches read-only T0 tools (get_weather, reminder_list) via
+    // the same dispatchAction() wrapper every other caller uses — AD-1's
+    // "one execution surface" rule forbids briefing.js from calling
+    // effectors.invoke directly.
+    const facts = await buildBriefingFacts({
+      goalsEffector,
+      probes,
+      isProviderDown,
+      bootUpgrade,
+      updateReport,
+      memory,
+      kanbanEffector,
+      spend,
+      snapshotSystemMetrics,
+      dispatch: (tool, args) => dispatchAction({ tool, args: args || {} }, { tier: 0, channel: 'boot-briefing' }),
+    });
     let text = null;
     try {
       const result = await Promise.race([
