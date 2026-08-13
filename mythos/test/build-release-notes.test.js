@@ -10,6 +10,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
+const os = require('os');
+const fs = require('fs');
 
 const notes = require(path.join(__dirname, '..', '..', 'scripts', 'build-release-notes.js'));
 
@@ -96,6 +98,20 @@ describe('capLength', () => {
       assert.ok(long.includes(line), `truncated output introduced a line not in the source: ${line}`);
     }
   });
+
+  it('never leaves a lone UTF-16 surrogate at the cut point', () => {
+    // A codepoint outside the BMP (e.g. an emoji) is two UTF-16 code units.
+    // .slice() cuts by code unit, so a budget landing exactly between them
+    // must not leave a lone high surrogate — encodeURIComponent throws on
+    // exactly that (a malformed URI), which is a direct proof of validity.
+    const suffixLength = '\n\n…(truncated)'.length;
+    const pair = '😀'; // U+1F600 GRINNING FACE, as a surrogate pair
+    const text = `${'a'.repeat(20)}${pair}${'b'.repeat(20)}`;
+    // Budget of 21 code units lands the cut one past the 20 a's, i.e. exactly
+    // on the high surrogate alone, with no newline anywhere to trim to first.
+    const capped = notes.capLength(text, 21 + suffixLength);
+    assert.doesNotThrow(() => encodeURIComponent(capped), /malformed/);
+  });
 });
 
 describe('collectCommitLog against this repo\'s real history', () => {
@@ -127,25 +143,37 @@ describe('readVersion', () => {
 });
 
 describe('main() end to end against real history', () => {
-  it('writes build/release-notes.md with a sensible body, then cleans up', () => {
+  it('writes a sensible body to an INJECTED path, never touching the real repo', () => {
     // This exercises the same path `node scripts/build-release-notes.js v0.1.9`
-    // does by hand, but must leave no trace: build/release-notes.md is
-    // gitignored precisely because release.js's preflight blocks on any
-    // untracked file, so a test that left it behind would itself block the
-    // next real release.
-    const fs = require('fs');
-    const existedBefore = fs.existsSync(notes.OUT_PATH);
-    const before = existedBefore ? fs.readFileSync(notes.OUT_PATH, 'utf8') : null;
-    try {
-      const code = notes.main(['v0.1.8']);
-      assert.equal(code, 0);
-      assert.equal(fs.existsSync(notes.OUT_PATH), true);
-      const written = fs.readFileSync(notes.OUT_PATH, 'utf8');
-      assert.match(written, /^## MYTHOS \d+\.\d+\.\d+/);
-      assert.ok(written.length <= notes.MAX_LENGTH);
-    } finally {
-      if (existedBefore) fs.writeFileSync(notes.OUT_PATH, before, 'utf8');
-      else fs.rmSync(notes.OUT_PATH, { force: true });
-    }
+    // does by hand, but at a temp path — the standing lesson in this repo (see
+    // the wakeword-test EPERM scar) is that a test mutating a real, gitignored
+    // production path can destroy it if a restore-in-finally loses a race.
+    // Injecting the destination instead of touching OUT_PATH removes that risk
+    // entirely rather than mitigating it.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-release-notes-'));
+    const tmpPath = path.join(tmpDir, 'release-notes.md');
+    const code = notes.main(['v0.1.8'], tmpPath);
+    assert.equal(code, 0);
+    assert.equal(fs.existsSync(tmpPath), true);
+    const written = fs.readFileSync(tmpPath, 'utf8');
+    assert.match(written, /^## MYTHOS \d+\.\d+\.\d+/);
+    assert.ok(written.length <= notes.MAX_LENGTH);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('defaults to the real build/release-notes.md when no path is injected', () => {
+    // Pins the seam this fix was added to protect: scripts/release.js and the
+    // CI workflow step both call main() with no output-path argument, so the
+    // default must keep resolving to the exact file app-builder-lib reads.
+    assert.equal(notes.OUT_PATH, path.join(path.resolve(__dirname, '..', '..'), 'build', 'release-notes.md'));
+  });
+});
+
+describe('a failed git command is not silently mistaken for an empty result', () => {
+  it('collectCommitLog throws, rather than degrading to an empty log, when the range is invalid', () => {
+    // A range naming a ref that does not exist makes git exit non-zero — this
+    // must surface as a loud failure, not the same [] a genuinely empty range
+    // between two adjacent real commits would produce.
+    assert.throws(() => notes.collectCommitLog('this-tag-does-not-exist-anywhere'), /git log/);
   });
 });

@@ -85,6 +85,9 @@ function capLength(text, max) {
   let cut = text.slice(0, budget);
   const lastNewline = cut.lastIndexOf('\n');
   if (lastNewline > 0) cut = cut.slice(0, lastNewline);
+  // A slice can end on a lone UTF-16 high surrogate (its low-surrogate partner
+  // fell just past the cut) — drop it rather than write an invalid character.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
   return `${cut}${suffix}`;
 }
 
@@ -93,16 +96,20 @@ function capLength(text, max) {
 function run(cmd, args, opts) {
   const res = spawnSync(cmd, args, Object.assign({ cwd: REPO_ROOT, encoding: 'utf8' }, opts || {}));
   return {
-    ok: res.status === 0,
+    ok: res.status === 0 && !res.error,
     status: res.status,
     stdout: String(res.stdout || '').trim(),
-    stderr: String(res.stderr || '').trim(),
+    stderr: String(res.stderr || res.error || '').trim(),
   };
 }
 
+// A failed git command (spawn error or non-zero exit) must not look like a
+// genuinely empty result — that is how a broken git in CI ships placeholder
+// notes that look fine. Only a successful call with no output degrades to [].
 function listTags() {
   const res = run('git', ['tag']);
-  return res.ok && res.stdout ? res.stdout.split(/\r?\n/).filter(Boolean) : [];
+  if (!res.ok) throw new Error(`git tag failed: ${res.stderr || 'unknown error'}`);
+  return res.stdout ? res.stdout.split(/\r?\n/).filter(Boolean) : [];
 }
 
 // collectCommitLog(prevTag) -> ['- subject one', '- subject two']
@@ -111,19 +118,25 @@ function listTags() {
 function collectCommitLog(prevTag) {
   const range = prevTag ? `${prevTag}..HEAD` : 'HEAD';
   const res = run('git', ['log', '--pretty=- %s', range]);
-  return res.ok && res.stdout ? res.stdout.split(/\r?\n/).filter(Boolean) : [];
+  if (!res.ok) throw new Error(`git log ${range} failed: ${res.stderr || 'unknown error'}`);
+  return res.stdout ? res.stdout.split(/\r?\n/).filter(Boolean) : [];
 }
 
 function readVersion() {
   return JSON.parse(fs.readFileSync(PKG_PATH, 'utf8')).version;
 }
 
-function writeReleaseNotes(body) {
-  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
-  fs.writeFileSync(OUT_PATH, body, 'utf8');
+function writeReleaseNotes(body, outPath) {
+  const dest = outPath || OUT_PATH;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, body, 'utf8');
 }
 
-function main(argv) {
+// outPath defaults to the real build/release-notes.md that scripts/release.js
+// and the CI step both expect — tests must pass their own (os.tmpdir()-based)
+// path instead of touching that real, gitignored file.
+function main(argv, outPath) {
+  const dest = outPath || OUT_PATH;
   const version = readVersion();
   const prevTagArg = (argv || []).find((a) => !a.startsWith('--'));
   const prevTag = prevTagArg || pickPreviousTag(listTags(), version);
@@ -131,8 +144,8 @@ function main(argv) {
   const commitLines = collectCommitLog(prevTag);
   const body = capLength(buildReleaseNotesBody(version, commitLines), MAX_LENGTH);
 
-  writeReleaseNotes(body);
-  console.log(`build-release-notes: wrote ${OUT_PATH} (previous tag: ${prevTag || '(none found)'}, ${commitLines.length} commit(s))`);
+  writeReleaseNotes(body, dest);
+  console.log(`build-release-notes: wrote ${dest} (previous tag: ${prevTag || '(none found)'}, ${commitLines.length} commit(s))`);
   return 0;
 }
 
