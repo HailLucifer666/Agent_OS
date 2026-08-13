@@ -3450,6 +3450,16 @@ function Handle-SendKey($key, $TargetPid) {
             if (-not $mv) { return @("Unknown modifier: $m. Valid: $($VK_MODIFIERS.Keys -join ', ')") }
             $modVks += $mv
         }
+        # Wave 3-fix (live-verified 2026-08-13): the pre-send title is captured
+        # ONLY for ctrl+s (gated below), needed to tell a real MSIX blackhole
+        # apart from a real save — see the comment at $msixBlackhole below.
+        $fgTitleBefore = $null
+        if ($raw -eq 'ctrl+s') {
+            $fgHwndBefore = [NativeInput]::GetForegroundWindow()
+            $sbBefore = New-Object System.Text.StringBuilder 512
+            [void][NativeInput]::GetWindowText($fgHwndBefore, $sbBefore, 512)
+            $fgTitleBefore = $sbBefore.ToString()
+        }
         $script:LastVkSent = $null
         Send-VkCombo $modVks $vk
         $comboSentZero = ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1)
@@ -3472,26 +3482,50 @@ function Handle-SendKey($key, $TargetPid) {
             # next verifiable step (e.g. send_key('enter') or send_key('escape')).
             $saveAsOpened = ($fgTitle2 -match 'Save As')
 
-            if (-not $comboSentZero) {
+            # LIVE-VERIFIED FIX (2026-08-13): $comboSentZero is driven purely by
+            # SendInput()'s OS-level return value — the number of INPUT structs
+            # the OS accepted into the input stream. On Win11's MSIX Notepad that
+            # is (almost) never zero: the OS always accepts the events, then the
+            # MSIX app's message loop silently discards them — the exact
+            # blackhole adapters/CLAUDE.md documents ("silently discard SendInput
+            # while reporting the injected event as successful"). Verified live:
+            # comboSentZero was false, "sent:true" was returned, no Save-As
+            # dialog ever opened, and the title never lost its "*" unsaved
+            # marker — the save never happened, but the ONLY escalation gate
+            # that existed (comboSentZero) never fires for this exact case,
+            # making the whole fallback below dead code on the app it names in
+            # its own header. A title that still starts with "*" (Notepad's own
+            # unsaved-changes marker) and did not change at all is the same
+            # class of proof-of-absence every other route in this file already
+            # requires before falling through — not a guess, a re-check of the
+            # oracle the file already trusts elsewhere.
+            $msixBlackhole = (-not $saveAsOpened) -and $fgTitleBefore -and
+                $fgTitleBefore.StartsWith('*') -and ($fgTitle2 -eq $fgTitleBefore)
+
+            if (-not $comboSentZero -and -not $msixBlackhole) {
                 $result = @{ key = $raw; sent = $true; combo = $true; mechanism = 'sendinput-vk' }
                 if ($saveAsOpened) { $result.result = 'save-as-dialog-opened' }
                 return $result
             }
 
             # SendInput delivered nothing (the MSIX blackhole every other route in
-            # this file works around) — try the app's own Save UI element via UIA,
-            # which does not travel through the input stack SendInput uses.
+            # this file works around), OR it reported delivery but the title proves
+            # the app never acted on it (the same blackhole, self-reported as a
+            # false success instead of comboSentZero) — try the app's own Save UI
+            # element via UIA, which does not travel through the input stack
+            # SendInput uses.
             $saveEl = $null
             try {
                 $root2 = [System.Windows.Automation.AutomationElement]::FromHandle($fgHwnd2)
                 $saveEl = Find-InvokableSaveDescendant $root2
             } catch { }
+            $blackholeReason = if ($comboSentZero) { 'SendInput injected 0 events' } else { "SendInput reported success but the window title ($fgTitle2) never changed" }
             if (-not $saveEl) {
-                return ("Send key 'ctrl+s' failed: SendInput injected 0 events, and no invokable " +
+                return ("Send key 'ctrl+s' failed: $blackholeReason, and no invokable " +
                     "'Save'/'Save As' element was found in the foreground window ($fgTitle2) to use instead.")
             }
             try { $saveEl.invoke.Invoke() } catch {
-                return "Send key 'ctrl+s' failed: SendInput injected 0 events, and invoking the UIA '$($saveEl.name)' element threw: $($_.Exception.Message)"
+                return "Send key 'ctrl+s' failed: $blackholeReason, and invoking the UIA '$($saveEl.name)' element threw: $($_.Exception.Message)"
             }
             Start-Sleep -Milliseconds 300
             $fgHwnd3 = [NativeInput]::GetForegroundWindow()

@@ -69,20 +69,34 @@ function createLeash(deps) {
     config: config,
     onExpire: function(confirmId, entry) {
       var action = entry && entry.action;
+      // BUG-119-class shape mismatch (same bug the accept() wrapper below
+      // already documents and fixes): every production caller stores an
+      // ENVELOPE — confirm.create(summary, {decision, goalId, tier},
+      // connectionId) — not a bare {tool, args}. Reading action.tool/
+      // action.tier directly is only ever non-undefined for the test
+      // fixtures that pass the bare shape; in production it silently wrote
+      // tool:undefined into both the audit deny row and the anomaly,
+      // defeating the entire point of making expiry loud (live-verified
+      // 2026-08-13 — see BUGS.md). Unwrap .decision when present, exactly
+      // like confirmApi.accept() does, so the SAME shape rule holds at both
+      // resolution paths of a confirm (accepted or expired).
+      var decision = action && action.decision ? action.decision : action;
+      var expiredTool = decision && decision.tool;
+      var expiredTier = (action && action.tier !== undefined) ? action.tier : (decision && decision.tier);
       try {
         auditWriter.write({
           actor: (action && action.goalId) ? 'cortex' : 'voice',
-          tool: action && action.tool, tier: action && action.tier,
+          tool: expiredTool, tier: expiredTier,
           decision: 'deny', reason: 'confirm-ttl-expired', confirmId: confirmId,
         });
       } catch (_) { /* audit failure must not block the rest of expiry handling */ }
       try {
         bus.emit('health.anomaly', {
-          kind: 'confirm-expired-silently', tool: action && action.tool, target: action && action.tool,
+          kind: 'confirm-expired-silently', tool: expiredTool, target: expiredTool,
         });
       } catch (_) {}
       try {
-        bus.emit('confirm-expired', { confirmId: confirmId, connectionId: entry && entry.connectionId, tool: action && action.tool });
+        bus.emit('confirm-expired', { confirmId: confirmId, connectionId: entry && entry.connectionId, tool: expiredTool });
       } catch (_) {}
     },
   });

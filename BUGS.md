@@ -5968,3 +5968,90 @@ checklist.
 Per the plan: already covered by Wave 5's lane-health preflight
 (`vision-call.js`'s `chainFor` check generalizes to the same provider-down
 class). No additional code change.
+
+## Live-verification pass, 2026-08-13 (remediation waves 1-7, commits `2e79d13..a66fc9d`)
+
+Full checklist run against the real running system per
+`MYTHOS-IRIS-Synthesis-Plan.md`'s testing discipline: real vaults, a real
+per-entry TTL, a real effector hub dispatching real tool code, a real
+pc-child adapter driving a real Notepad, real vision-provider keys. Two of
+the waves being verified were themselves found broken by this pass and fixed
+below (BUG-218, BUG-219) — both were green under their own unit tests, which
+used the bare `{tool, args}` shape or fake timers instead of the real
+production envelope/timing, so neither test suite could have caught either
+regression.
+
+### BUG-218 — Wave 1's "loud" confirm expiry wrote `tool:undefined` in production
+
+`leash/index.js`'s new `onExpire` handler (Wave 1, BUG-197) read
+`entry.action.tool`/`.tier` directly. Every real caller — `voice-agent.js`,
+`cortex/index.js`, `live-tool-adapter.js`, `engagements/executor.js` — stores
+the enveloped shape `confirm.create(summary, {decision, goalId, tier},
+connectionId)`, the exact BUG-119-class mismatch this same file's `accept()`
+wrapper already documents and unwraps a few lines below. Only
+`test/leash-confirm-expiry.test.js`'s bare `{tool, args}` fixture ever
+exercised the fixed path, so the real-shape bug shipped green. Live-verified
+2026-08-13: a real `createLeash` + real `memory.audit` (on-disk vault) +
+real 1.5s wall-clock TTL, given the production envelope, wrote an audit deny
+row and `health.anomaly` with `tool` and `target` both `undefined` —
+defeating the entire point of Wave 1 (an operator or Live session hearing
+"an unnamed tool's confirm expired" instead of naming `gmail_send`).
+
+**FIXED.** `onExpire` now unwraps `.decision` exactly like `accept()` does
+before reading `tool`/`tier`. Re-verified live with the same rig: the audit
+row, the anomaly, and the `confirm-expired` bus event all now correctly name
+the tool. Full suite re-run at 4303/4303 pass after the fix.
+
+### BUG-219 — Wave 3's ctrl+s escalation gate never fires on Win11's MSIX Notepad
+
+`Handle-SendKey`'s ctrl+s branch (Wave 3, BUG-202) gated its
+`Find-InvokableSaveDescendant` fallback on `$comboSentZero` —
+`SendInput()`'s own return value being zero. Live-verified 2026-08-13 against
+a real launched Notepad (MSIX): `SendInput` always reports success (the OS
+accepts all 4 combo events), so `$comboSentZero` is never true, and the
+branch returned `{sent:true, mechanism:'sendinput-vk'}` with no
+`save-as-dialog-opened` flag — while no Save-As dialog ever opened and the
+title kept its `*` unsaved marker. This is exactly the MSIX SendInput
+blackhole `adapters/CLAUDE.md` already documents ("silently discard
+SendInput while still reporting the injected event as successful"), on the
+one app this fix's own commit message names as the target — the escalation
+ladder Wave 3 added was dead code for it.
+
+**FIXED.** The pre-send foreground title is now captured for ctrl+s; if no
+Save-As dialog opened AND the title still starts with `*` and is unchanged
+from before the send, that is treated as the same blackhole `comboSentZero`
+already covers, and the same `Find-InvokableSaveDescendant` fallback runs.
+Live-verified: the false `sent:true` is gone — the call now honestly returns
+`ok:false` naming the real cause. **Not fully resolved**: modern Notepad's
+Save action lives inside an unlabeled hamburger-menu flyout, not a
+directly-invokable on-screen 'Save'/'Save As' element, so
+`Find-InvokableSaveDescendant`'s deliberately-narrow scan (by design, see its
+own header) still finds nothing to invoke — `send_key('ctrl+s')` on modern
+Notepad now fails HONESTLY instead of falsely claiming success, but cannot
+yet complete the save itself. Opening the hamburger menu first is a
+separate, larger change (a second narrow exception, or a generalized
+menu-opening step) left for a future session. Syntax-validated via
+`[System.Management.Automation.Language.Parser]::ParseFile` (this file's
+established practice — no PowerShell-internals test seam exists, per
+`adapters/CLAUDE.md`); the false-success -> honest-failure transition was
+observed live via `type text -> send_key ctrl+s -> title/dialog check`
+end-to-end.
+
+### Checklist results
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| W1 confirm expiry | VERIFIED (found+fixed BUG-218) | real on-disk audit row + anomaly + bus event, correctly named after fix |
+| W1 partial-success guard | VERIFIED | real `log_incident`/`get_time` dispatch through a real hub; finalSay gained `"log_incident did not succeed — text required..."` |
+| W2 watchdog | VERIFIED | real `createLiveSession` half-blind turn emitted `live-turn-no-user-transcript` and fired `onSuspendedTurnAnomaly`, wired exactly as `server/index.js:2656`, producing a real `{type:'live-watchdog-clear'}` frame |
+| W3 send_key/Notepad | VERIFIED (found+fixed BUG-219); save completion still blocked (see BUG-219) | real pc-child + real Notepad; ctrl+s now fails honestly instead of a false success |
+| W3 spotify_play | OPERATOR-ONLY | no Spotify desktop install on this machine to test against without risking a real playback/UI side effect |
+| W4 whatsapp contact save/delete | VERIFIED | real `Contacts/contacts.json` round-trip: written then removed, read back each time |
+| W4 forget_fact fuzzy match | VERIFIED | real `Semantic/user-facts.md`; a paraphrase (`"restart the throwaway server on Tuesdays"`) matched and removed the stored fact via `matchedBy:'fuzzy'` |
+| W4 real "children/family priority" fact | NOT FOUND on this machine | searched `mythos/vault/Semantic/*.md` and `%LOCALAPPDATA%\agent-os\vault\Semantic\*.md`; not present in either — not deleted, just absent here |
+| W5 vision lane-empty honesty | VERIFIED | real `registry.chainFor('vision')` with every vision key blanked in the child env returned `laneEmpty:true` in 91ms (not a 12s timeout), naming the reason |
+| W5 vision brain wiring | VERIFIED | same call with real keys returned a real description from `nim2`/`nvidia/nemotron-nano-12b-v2-vl` in 4.3s |
+| W7 aether-proxy rebind | VERIFIED | real `net.createServer` occupied the port, real `createScannerProxy` bind failed, real diagnostician+healer chain fired `aether-proxy-rebind`, and after the port was released the real retry rebound and `health.healed outcome:'applied'` |
+| W7 firstBootAt | VERIFIED | real vault: two simulated boots returned the identical timestamp (idempotent), persisted on disk, and surfaced in the real `writeManifest()` output |
+| W6 (language pin / live-voice revert / notice self-ownership) | NOT ATTEMPTED | requires a real Live/S2S voice session (human mic/HUD) — out of scope for a headless pass |
+| log_incident scope (BUG-217) | OPERATOR-ONLY | needs a real conversation to prove it no longer fires unbidden |
