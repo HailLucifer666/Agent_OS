@@ -2433,12 +2433,28 @@ function Get-CaretOwnerPid() {
 function Handle-UiType($text, $TargetPid, $elementPath) {
     if (-not $text) { return 'Text is required.' }
     try {
-        # If a target element is specified, try to set focus there first
+        # If a target element is specified, try to set focus there first.
+        #
+        # SetFocus is ADVISORY and throws on elements that refuse focus —
+        # "Target element cannot receive focus." Win11's WinUI3 Notepad does
+        # exactly that. This call was the only unguarded SetFocus in the file
+        # (the other three are wrapped), so that exception escaped to the outer
+        # catch and aborted the WHOLE handler with "Type failed: ...", before a
+        # single typing route ran. It killed uia-setvalue and wm-char-post —
+        # the two routes that need no focus at all and are the measured-working
+        # ones on MSIX Notepad. Live failure 2026-08-14, ui_type into pid 11604.
+        # Focus here is an optimisation, never a precondition: on failure fall
+        # through and let the escalation ladder do its job.
+        $preFocusNote = $null
         if ($TargetPid -and $elementPath) {
             $element = Resolve-UIAElement -TargetPid $TargetPid -ElementPath $elementPath
             if (-not $element.error) {
-                $element.element.SetFocus()
-                Start-Sleep -Milliseconds 50
+                try {
+                    $element.element.SetFocus()
+                    Start-Sleep -Milliseconds 50
+                } catch {
+                    $preFocusNote = 'target element refused focus (' + $_.Exception.Message + '); continued via the escalation ladder'
+                }
             }
         }
 
@@ -2714,6 +2730,11 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             $result.readBackText = $a
             $result.readBackReason = 'the control does not contain the text after injection'
         }
+
+        # A refused pre-focus is not a failure, but it must not vanish either:
+        # it is the difference between "the ladder was never needed" and "the
+        # ladder is the only reason this worked".
+        if ($preFocusNote) { $result.preFocus = $preFocusNote }
 
         return $result
     } catch {

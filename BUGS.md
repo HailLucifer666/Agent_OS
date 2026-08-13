@@ -6190,3 +6190,66 @@ above), neither matching. Combined with the earlier pass's negative results
 for `mythos/vault/Semantic` and `%LOCALAPPDATA%\agent-os\vault\Semantic`,
 this fact is not present anywhere on this machine, in any of the three
 plausible locations. Not deleted — there was nothing to delete.
+
+## BUG-221 — `ui_type` aborted on an advisory UIA focus call, killing the very ladder built for MSIX Notepad
+
+**Live failure, 2026-08-14** (`%APPDATA%\MYTHOS\vault\Episodic\2026-08-14.jsonl`
+line 136). The operator asked MYTHOS to type into Notepad during a Live voice
+session. Notepad launched fine (`launch_app` ok, pid 11604, process-window
+oracle), was maximized, and then:
+
+    ui_type({"pid":11604,"text":"Mythos capability test. Round 2..."})
+      -> ok:false, retries:2
+      "Type failed: Exception calling \"SetFocus\" with \"0\" argument(s):
+       \"Target element cannot receive focus.\""
+
+Nothing was typed. The operator's read of it — reasonably — was "it can't even
+type into Notepad any more", and it was the trigger for considering scrapping
+the project.
+
+**Root cause.** `Handle-UiType` opens with an OPTIONAL pre-focus step: when the
+caller supplies an `elementPath`, it resolves that element and calls
+`SetFocus()` on it. That call was the **only unguarded `SetFocus()` in
+`ps-automation.ps1`** — the other three are wrapped precisely because SetFocus
+is advisory and throws on controls that refuse focus. Win11's WinUI3 Notepad
+refuses it. The exception escaped to `Handle-UiType`'s outer `catch`, which
+returns `'Type failed: ' + message`.
+
+What never ran is the damage: `uia-setvalue` and `wm-char-post` — the two
+routes in the escalation ladder that need **no focus at all**, and the two this
+repo has measured as the working mechanisms against MSIX Notepad (see the
+ladder comment in `Handle-UiType`: "uia-valuepattern-setvalue LANDED /
+wm-char-post LANDED", SendInput silently discarded). A best-effort optimisation
+was able to abort the recovery path built for exactly the app that triggered it.
+Note the ladder was never broken — every load-bearing piece was intact and no
+commit had regressed it. The entrance to it was.
+
+**FIXED** in `ps-automation.ps1`: the pre-focus `SetFocus()` is wrapped in its
+own `try/catch`; a refusal is captured in `$preFocusNote` and returned on the
+result as `preFocus`, then execution falls through to the ladder. Focus here is
+an optimisation, never a precondition. The refusal is surfaced rather than
+swallowed so "the ladder was never needed" stays distinguishable from "the
+ladder is the only reason this worked".
+
+**LIVE-VERIFIED 2026-08-14**, driving the real pc-child against a real Notepad
+with an `elementPath` aimed at a deliberately non-focusable element
+(`ControlType.TitleBar`), which reproduces the exact exception:
+
+    mechanism: "uia-setvalue"   mechanismsTried: ["sendinput-unicode","uia-setvalue"]
+    readBack: "confirmed"       readBackVia: "ValuePattern"
+    preFocus: "target element refused focus (Exception calling \"SetFocus\" ...
+               \"Target element cannot receive focus.\"); continued via the
+               escalation ladder"
+
+Same exception, previously fatal, now non-fatal with the text landed and
+read-back confirmed. `scripts/verify-notepad-typing.js` (no elementPath, so it
+never touched this branch) also passes end to end.
+
+**Regression test**: `test/ui-type-focus-is-advisory.test.js` — asserts every
+`SetFocus()` in the file absorbs a refusal locally, that the note reaches the
+result, and that the focus-free routes stay downstream of the focus step.
+Note the FIRST version of that test was **vacuous**: it looked upward for an
+enclosing `try {`, found `Handle-UiType`'s body-wide one, and passed against the
+buggy source. An enclosing try is not a guard when its catch abandons the
+handler. Verified red against `HEAD~` (flags line 2440, and only that line)
+before being trusted.
