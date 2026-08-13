@@ -6291,3 +6291,66 @@ pass (16/16).
 **NOT yet live-verified** — this needs a real Live voice session to confirm the
 model both reaches the tool and prefers it over improvising. Recorded here as
 CODED, not verified, deliberately: the same distinction this file exists to keep.
+
+## BUG-223 — a failure string shipped as `ok:true`: `close_window`'s dispatcher arm had no convention guard
+
+**Live, 2026-08-14** (`%APPDATA%\MYTHOS\vault\Episodic\2026-08-14.jsonl` line 129).
+The audit recorded:
+
+    close_window({"pid":11604})
+      outcome: "ok",  ok: true,
+      result: "Window for PID 11604 (Notepad, window handle 1050350, resolved by
+               pid) did not close within 3s and is still open. Nothing was closed."
+
+A failure recorded as a success, in the same record that spells the failure out
+in prose. Exactly what `src/core/CLAUDE.md`'s evidence contract forbids.
+
+**Root cause — the fix worked, the plumbing didn't.** `ps-automation.ps1`'s
+stated convention is "string = failure, hashtable = success". BUG-103 already
+made `Handle-CloseWindow` honest: on a graceful-close timeout it returns a
+STRING, and its own comment says *"Returning a STRING is how this file reports
+an honest failure"*. But the string-to-`ok:false` conversion lived **per
+dispatcher arm** — ~24 of 42 arms carried their own copy, each one added
+reactively after an incident proved that arm was missing it (`launch_app` FIX 4,
+`media_key` P0-2, `ui_click`, `ui_type`, `click_at`, ...). `close_window`'s arm
+never got one, so its honest failure was re-dressed as success one line later.
+
+`from-pc.js`'s Node backstop missed it for a second, independent reason: it
+still tests the **pre-BUG-103 hashtable shape** (`res.result.closed === false`),
+which the handler stopped producing when it was made honest. Two layers of
+protection, both blind to the shape the code actually emits.
+
+**FIXED** in `ps-automation.ps1` by hoisting the conversion to a single gate
+before `Write-Response`, rather than adding a 25th copy — a 25th copy leaves the
+next unguarded arm to be found by the next incident. Audited first: string
+returns in every previously-unguarded handler (`close_window`, `move_window`,
+`snap_window`, `scroll_at`, `right_click_at`, `drag`, `screen_look`,
+`ui_elements`, `write_note`) are **all** failure messages, and
+`list_windows`/`active_window`/`media_status` return no strings at all — so the
+hoist changes no success path. It closes the same latent hole in eight other
+commands. The per-arm copies are left in place: no-ops now, and each documents
+the incident that put it there.
+
+**LIVE-VERIFIED 2026-08-14, both halves.**
+Dispatcher, driven end to end (`close_window` with no pid — hermetic, touches no
+window):
+
+    HEAD~ : {"ok":true,"result":"PID is required.","id":"t1"}
+    fixed : {"ok":false,"error":"PID is required.","id":"t1"}
+
+Real window, real refusal (Notepad holding unsaved text refuses CloseMainWindow):
+
+    ok:false — "Window for PID 11604 (Notepad, window handle 5702714, resolved
+    by pid) did not close within 3s and is still open. Nothing was closed."
+
+**Regression test**: `test/pc-child-string-is-failure.test.js` — pins the gate's
+existence and its position before `Write-Response`, plus the end-to-end
+dispatcher assertion (windows-only skip guard; CI is `windows-latest`, so it
+runs there).
+
+**Observed, NOT fixed** (separate defect, recorded so it is not lost): the
+failure text reaches Node mojibaked — `"confirmation prompt â€" check the
+screen"` — a UTF-8 em dash (U+2014) decoded as cp1252 somewhere in the failure
+path, despite `Write-Response`'s ASCII-safe `\uXXXX` escaping. Present in the
+2026-08-14 episodic record too, so it is not new. It is spoken aloud, so it is
+worth its own fix; it is not this one.

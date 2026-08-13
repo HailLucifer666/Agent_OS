@@ -4313,6 +4313,31 @@ while ($true) {
         }
     }
 
+    # CONVENTION GATE (hoisted 2026-08-14, BUG-223). "string = failure,
+    # hashtable = success" is this file's stated convention, but it was enforced
+    # per-case: ~24 of the 42 dispatcher arms carry their own copy of this line,
+    # each added reactively after a bug proved that arm was missing it (see the
+    # comments on launch_app FIX 4, media_key P0-2, ui_click, ui_type, click_at).
+    #
+    # close_window never got one. Handle-CloseWindow was made honest in BUG-103 —
+    # it returns a STRING when the window is still open, and its own comment says
+    # "Returning a STRING is how this file reports an honest failure" — but with
+    # no guard on its arm, that honest failure shipped as
+    # {ok:true, result:"<...did not close... Nothing was closed...>"}. Live on
+    # 2026-08-14: the audit recorded outcome "ok" while the result text said the
+    # window was still open. from-pc.js's Node backstop missed it too, because it
+    # still tests for the pre-BUG-103 hashtable shape (result.closed === false).
+    #
+    # Enforcing it once, here, is the fix — a 25th copy would leave the next
+    # unguarded arm to be found by the next incident. This also closes the same
+    # latent hole in move_window, snap_window, scroll_at, right_click_at, drag,
+    # screen_look, ui_elements and write_note, whose string returns are ALL
+    # failure messages (audited 2026-08-14; list_windows/active_window/
+    # media_status return no strings at all, so they are unaffected).
+    # The per-arm copies are left in place: they run first and become no-ops, and
+    # each one documents the incident that put it there.
+    if ($null -eq $err -and $result -is [string]) { $err = $result; $result = $null }
+
     if ($err) {
         Write-Response $false $err
     } elseif ($null -eq $result) {
