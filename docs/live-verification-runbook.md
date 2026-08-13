@@ -190,6 +190,27 @@ SCREEN_AWARENESS_ENABLED=true SCREEN_AWARENESS_POLL_MS=10000 node scripts/verify
 
 These need a real microphone and real speakers (NOT headphones for some — open-air speakers exercise the acoustic echo loop). No Node-side harness exists for these because `voice-loop.js` is a browser-only ES module (`MediaRecorder`, `AudioContext`, `AudioWorklet`, `getUserMedia` — none of which exist under Node).
 
+> **Which transport are you actually testing?** (added 2026-08-14 — read this before
+> trusting a Group C pass.) C2 and C3 below describe the **legacy** voice loop:
+> `voice-loop.js`, its `assistantSpeaking` flag, and `BARGE_IN_RMS_MULT`. With
+> `VOICE_UNIFIED_LIVE_VOICE` on, a real session runs over **Gemini Live (S2S)**
+> instead, which does its own VAD and barge-in server-side — the episodic records
+> from 2026-08-14 are all `"transport":"s2s"`. Tuning a `voice-loop.js` constant
+> cannot fix an S2S session, and a C2/C3 pass on the legacy path does not clear
+> the bug on the Live path. Check `transport` on the turn in
+> `vault/Episodic/<date>.jsonl` before recording any result here.
+
+### Suggested single sitting (~20 min, one pass)
+
+Ordered so each step's setup serves the next; do them in one session rather than
+six visits. Record each outcome against its BUG entry as you go.
+
+1. **C1** wake word — say "hey jarvis" (proves the mic path is live at all).
+2. **C5** self-capabilities — two questions, no hardware change.
+3. **C6** desktop typing — one sentence, exercises the 2026-08-14 fixes.
+4. **C2/C3** echo + barge-in — needs open-air speakers; note the transport warning above.
+5. **C4** noise — passive, run it last and just leave the room listening.
+
 ### C1. BUG-039 wake-word ("hey jarvis")
 
 **What:** on-device wake-word detection via ONNX. Speaking the phrase near the mic should activate voice without a manual click on the orb.
@@ -294,6 +315,69 @@ The audio path itself is browser-only and not covered.
 
 ---
 
+### C5. BUG-222 self-capabilities reachable from voice
+
+**What:** "what can you do?" and "what did you fix?" must be answered from the
+boot-written capabilities manifest (`vault/Identity/capabilities.md`, regenerated
+every boot from the live hub catalog, adapter states and recent git changes), not
+improvised. `self_capabilities` was withheld from the Live allowlist until
+2026-08-14, and with nothing able to answer, the model substituted the nearest
+reachable tool — which is where the repeated web-search suggestions came from.
+
+**Requirements:** real voice session. No special hardware beyond a mic.
+
+**Procedure:**
+1. Boot MYTHOS, start a voice session.
+2. Ask: "what can you do?"
+3. Ask: "what did you fix recently?" / "what changed?"
+
+**Pass signal:** the audit panel (or `vault/Audit/<date>.jsonl`) shows a
+`self_capabilities` tool call for at least one of the two questions, and the
+spoken answer names real tool families / real recent changes.
+
+**Fail signal:** no `self_capabilities` call in the audit; the answer is generic,
+or it offers to web-search for the answer. That means the model can reach the
+tool but does not prefer it — a prompt problem, not an allowlist one. Record the
+transcript before changing anything.
+
+**Existing coverage:** `test/allowlist-reachability.test.js`,
+`test/live-tools.test.js` (reachability only — they cannot prove the model
+chooses it).
+
+---
+
+### C6. BUG-221 / BUG-223 desktop typing + honest close
+
+**What:** the 2026-08-14 pair. `ui_type` no longer aborts when a target element
+refuses focus (BUG-221), and `close_window` no longer reports `ok:true` for a
+window that is still open (BUG-223).
+
+**Requirements:** real voice session, Windows desktop.
+
+**Procedure:**
+1. "Open Notepad."
+2. "Type: the quick brown fox jumps over the lazy dog."
+3. Look at the screen. Then: "close it."
+
+**Pass signal:**
+- The text is actually in Notepad — not merely claimed.
+- The audit row for `ui_type` shows `readBack: "confirmed"`. If it also carries a
+  `preFocus` note, that is the BUG-221 path working as designed: focus was
+  refused and the escalation ladder typed anyway.
+- Closing an unsaved Notepad triggers Windows' save prompt, so the window
+  survives — MYTHOS must say so honestly. An `ok:true`/"closed it" here is a
+  BUG-223 regression.
+
+**Fail signal:** any "I typed it" / "I closed it" that the screen contradicts.
+That is the fabrication class both fixes exist to end — capture the audit row.
+
+**Existing coverage:** `test/ui-type-focus-is-advisory.test.js`,
+`test/pc-child-string-is-failure.test.js`,
+`scripts/verify-notepad-typing.js` (all green as of 2026-08-14; none of them
+proves the *voice* path chooses the tools correctly).
+
+---
+
 ## BUG-by-BUG summary table
 
 | BUG | Group | Required hardware | Existing tests | Verify approach |
@@ -307,6 +391,8 @@ The audio path itself is browser-only and not covered.
 | BUG-027 TTS echo loop | C (voice) | Mic + open-air speakers | None (browser-only) | Manual voice session |
 | Barge-in | C (voice) | Mic + speakers | 6 unit (decision + WS abort) | Manual voice session |
 | BUG-020 noise tuning | C (voice) | Mic in real environment | Config only | Manual session + VAD constant tuning |
+| BUG-222 self-capabilities | C (voice) | Mic | 2 reachability suites | Ask "what can you do / what did you fix", check audit for the call |
+| BUG-221 typing / BUG-223 close | C (voice) | Mic + Windows desktop | 3 suites + verify script | "Open Notepad, type X, close it" — screen is the oracle |
 
 ## After verification
 
