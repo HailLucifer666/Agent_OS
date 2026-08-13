@@ -1048,7 +1048,10 @@ ipcMain.handle('mythos:install-update', async (event) => {
     // before handing over), so failures arrive as a rejection, not a throw.
     setImmediate(() => {
       beginInstall(updaterRef, updateState.version)
-        .catch((err) => log('auto-update: quitAndInstall failed —', err && err.message));
+        .catch((err) => {
+          log('auto-update: quitAndInstall failed —', err && err.message);
+          recordUpdateError('install', err);
+        });
     });
     return { ok: true, installing: true, state: updateState.state, version: updateState.version };
   }
@@ -1128,6 +1131,7 @@ function checkForUpdates() {
     autoUpdater.on('error', (err) => {
       log('auto-update: check failed —', err && err.message);
       setUpdateState('error', updateState.version);
+      recordUpdateError('check', err);
     });
     autoUpdater.on('update-available', (info) => {
       const version = (info && info.version) || 'unknown';
@@ -1332,10 +1336,48 @@ function unfinishedUpdate() {
   const releaseNotes = String((record && record.releaseNotes) || '');
   if (target === app.getVersion()) {
     log('auto-update: the update to', target, 'completed');
+    // A completed update means whatever the last recorded error was is now
+    // stale — best-effort only, same as everything else in this function: a
+    // failed unlink must never turn a successful update into a boot problem.
+    try { fs.unlinkSync(updateErrorPath()); } catch { /* stale or already gone */ }
     return { completed: true, version: target, from, releaseNotes };
   }
   log('auto-update: the last update to', target, 'did NOT complete — still running', app.getVersion());
   return { completed: false, version: target, from, releaseNotes };
+}
+
+// update-error.json is deliberately a SEPARATE file from update-attempt.json,
+// because the two have opposite contracts. The attempt file is written before
+// a handover and cleared on the next boot — one report per attempt. This one
+// PERSISTS: each new failure overwrites it, so "what was the last thing that
+// went wrong" survives across as many boots as it takes to notice, instead of
+// being read once and thrown away like the attempt file above.
+//
+// Added after three in-app update failures (0.1.6-0.1.7) whose only forensic
+// trace was a single log line in a file nobody opens. A stack trace is not an
+// AD-8 status primitive — this never travels over IPC, file only.
+function updateErrorPath() {
+  return path.join(app.getPath('userData'), 'update-error.json');
+}
+
+// context is 'check' (autoUpdater's own 'error' event, i.e. the feed check
+// failed) or 'install' (beginInstall/promptInstall rejected). Same try/catch
+// idiom as recordUpdateAttempt() and notifyUpdateAvailable() above: a failure
+// to write this must never take down boot or the update flow it is trying to
+// diagnose.
+function recordUpdateError(context, err) {
+  try {
+    fs.writeFileSync(updateErrorPath(), JSON.stringify({
+      context: String(context || ''),
+      message: String((err && err.message) || ''),
+      stack: String((err && err.stack) || ''),
+      version: String(updateState.version || ''),
+      appVersion: app.getVersion(),
+      at: new Date().toISOString(),
+    }, null, 2));
+  } catch (writeErr) {
+    log('auto-update: could not record the update error —', writeErr && writeErr.message);
+  }
 }
 
 // $PLUGINSDIR — where the old uninstaller renames the install tree to — is
@@ -1509,7 +1551,10 @@ function promptInstall(autoUpdater, version) {
       // inside it must reach the .catch below rather than becoming an unhandled
       // rejection that loses the update silently.
       return beginInstall(autoUpdater, version);
-    }).catch((err) => log('auto-update: install prompt failed —', err && err.message));
+    }).catch((err) => {
+      log('auto-update: install prompt failed —', err && err.message);
+      recordUpdateError('install', err);
+    });
   } catch (err) {
     // A dialog that cannot be shown must not lose the download or kill the app.
     log('auto-update: could not ask about installing —', err && err.message);

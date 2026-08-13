@@ -404,3 +404,81 @@ test("'incomplete' is an accepted update state end to end", () => {
   assert.ok(/case 'incomplete':/.test(banner),
     'and the HUD must have copy for it — an unhandled state renders as a blank strip');
 });
+
+// ---- A6: persist the last updater error for forensics -------------------------
+//
+// Updates at 0.1.6-0.1.7 failed three times and the only forensic trace was a
+// single log line. recordUpdateError() persists structured failure detail to
+// its own file so the next failure can actually be diagnosed.
+
+test('recordUpdateError writes a SEPARATE file from the attempt marker', () => {
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function recordUpdateError(');
+  assert.ok(start !== -1, 'recordUpdateError must exist');
+  const body = code.slice(start, code.indexOf('\n}', start));
+
+  assert.ok(/update-error\.json/.test(code), 'the marker file is update-error.json');
+  const errorPathFn = code.slice(code.indexOf('function updateErrorPath('), code.indexOf('function recordUpdateError('));
+  assert.ok(/update-error\.json/.test(errorPathFn),
+    'updateErrorPath() must point at update-error.json, not update-attempt.json — the two files '
+    + 'have opposite contracts (this one persists, the attempt file is write-then-clear)');
+
+  assert.ok(/context/.test(body) && /message/.test(body) && /stack/.test(body)
+    && /appVersion/.test(body) && /\bat\b/.test(body),
+    'the persisted JSON must carry context, message, stack, version, appVersion, at');
+  assert.ok(/try \{/.test(body) && /catch/.test(body),
+    'writing the error file must itself be guarded — a failed write must never take down the '
+    + 'update flow it is trying to diagnose');
+});
+
+test('recordUpdateError is called from all three updater failure sites', () => {
+  const code = codeOnly(readMainJs());
+
+  const errorHandlerAt = code.indexOf("autoUpdater.on('error'");
+  const errorHandlerBody = code.slice(errorHandlerAt, code.indexOf('});', errorHandlerAt));
+  assert.ok(/recordUpdateError\('check'/.test(errorHandlerBody),
+    "autoUpdater.on('error', ...) must record a 'check' failure");
+
+  const hudHandle = code.indexOf("ipcMain.handle('mythos:install-update'");
+  assert.ok(hudHandle !== -1, "the HUD's install-update handler must exist");
+  const hudCatchAt = code.indexOf('beginInstall(updaterRef, updateState.version)', hudHandle);
+  const hudCatch = code.slice(hudCatchAt, hudCatchAt + 400);
+  assert.ok(/recordUpdateError\('install'/.test(hudCatch),
+    'the HUD install-button beginInstall(...).catch(...) must record an \'install\' failure');
+
+  const promptStart = code.indexOf('function promptInstall(');
+  const promptBody = code.slice(promptStart, code.indexOf('\nfunction ', promptStart + 10));
+  const promptCatchAt = promptBody.indexOf('return beginInstall(autoUpdater, version);');
+  const promptCatch = promptBody.slice(promptCatchAt, promptCatchAt + 400);
+  assert.ok(/recordUpdateError\('install'/.test(promptCatch),
+    "promptInstall()'s beginInstall(...).catch(...) must record an 'install' failure");
+});
+
+test('a completed update best-effort clears the stale error file', () => {
+  const code = codeOnly(readMainJs());
+  const start = code.indexOf('function unfinishedUpdate(');
+  const body = code.slice(start, code.indexOf('function ', start + 10));
+  const completedAt = body.indexOf('completed: true');
+  assert.ok(completedAt !== -1, 'unfinishedUpdate must have a completed:true branch');
+  const beforeCompleted = body.slice(0, completedAt);
+  const unlinkAt = beforeCompleted.lastIndexOf('unlinkSync');
+  assert.ok(unlinkAt !== -1 && /updateErrorPath\(\)/.test(beforeCompleted.slice(unlinkAt, unlinkAt + 60)),
+    'the success branch must best-effort unlink updateErrorPath() — a completed update means the '
+    + 'last recorded error is now stale');
+  assert.ok(/try \{ fs\.unlinkSync\(updateErrorPath\(\)\); \} catch/.test(body),
+    'the unlink must be wrapped — a failed cleanup must never turn a successful update into a boot problem');
+});
+
+test('update-error.json never crosses the AD-8 preload surface', () => {
+  const code = codeOnly(readMainJs());
+  // sendUpdateState() is the only main->renderer channel for update state; it
+  // must keep sending only {state, version, percent}, never anything about
+  // the error file.
+  const sendStart = code.indexOf('function sendUpdateState(');
+  const sendBody = code.slice(sendStart, code.indexOf('\n}', sendStart));
+  assert.ok(!/update-error/.test(sendBody),
+    'sendUpdateState() must not forward anything about update-error.json to the renderer');
+
+  const preload = fs.readFileSync(path.join(REPO_ROOT, 'electron', 'preload.js'), 'utf8');
+  assert.ok(!/update-error/.test(preload), 'preload.js must never mention update-error.json — file-only, never IPC');
+});
