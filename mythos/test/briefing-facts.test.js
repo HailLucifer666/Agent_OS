@@ -379,6 +379,128 @@ describe('buildBriefingFacts: new fact — needs-done (goals + kanban + proposal
   });
 });
 
+describe('buildBriefingFacts: new fact — self-healing overnight (memory.audit.query, TASK B4)', () => {
+  const NOW = Date.now();
+  const WINDOW_MS = 24 * 3600 * 1000;
+
+  it('present and phrased from playbookId + count when applied heal records exist in the window', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+            { ts: NOW - 2000, decision: 'heal', playbookId: 'search-provider-degrade', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24h:'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('stall restart once') !== -1, fact);
+    assert.ok(fact.indexOf('search provider degrade once') !== -1, fact);
+  });
+
+  it('counts repeated playbookIds instead of listing each occurrence separately', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+            { ts: NOW - 2000, decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24h:'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('stall restart 2 times') !== -1, fact);
+  });
+
+  it('ABSENT when there are no heal records at all', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: { audit: { query: () => [] } },
+    });
+    assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
+  });
+
+  it('ABSENT (not a vague "nothing to report") when every record in range failed (outcome !== applied)', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'rotate-nim-key', outcome: 'error' },
+          ],
+        },
+      },
+    });
+    assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
+  });
+
+  it('skipped when memory.audit.query throws', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: { audit: { query: () => { throw new Error('audit unreadable'); } } },
+    });
+    assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
+  });
+
+  it('skipped when memory.audit.query hangs past the timeout', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: { audit: { query: () => never() } },
+    });
+    assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
+  });
+
+  // This is the assertion that proves the window is real rather than
+  // decorative: a record well outside selfHealingWindowMs must not count
+  // toward the fact, even though the exact same record would be counted
+  // (and change the phrasing) if it were inside the window.
+  it('excludes records outside the window — a record from 2x the window ago does not count', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - (2 * WINDOW_MS), decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    assert.ok(!facts.some((f) => f.startsWith('Self-healing')), JSON.stringify(facts));
+  });
+
+  it('an in-window record is still reported when mixed with an out-of-window record', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      selfHealingWindowMs: WINDOW_MS,
+      memory: {
+        audit: {
+          query: () => [
+            { ts: NOW - (2 * WINDOW_MS), decision: 'heal', playbookId: 'stall-restart', outcome: 'applied' },
+            { ts: NOW - 1000, decision: 'heal', playbookId: 'search-provider-degrade', outcome: 'applied' },
+          ],
+        },
+      },
+    });
+    const fact = facts.find((f) => f.startsWith('Self-healing in the last 24h:'));
+    assert.ok(fact, JSON.stringify(facts));
+    assert.ok(fact.indexOf('search provider degrade once') !== -1, fact);
+    assert.ok(fact.indexOf('stall restart') === -1, fact);
+  });
+});
+
 describe('buildBriefingFacts: no dependencies at all', () => {
   it('never throws and still produces the local-time fact', async () => {
     const facts = await buildBriefingFacts();

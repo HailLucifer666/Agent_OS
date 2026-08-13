@@ -2129,6 +2129,8 @@ function createServer(deps) {
       isProviderDown,
       bootUpgrade,
       updateReport,
+      // Also backs the self-healing fact (TASK B4) via memory.audit.query —
+      // no separate dep needed, briefing.js reads it off this same object.
       memory,
       kanbanEffector,
       spend,

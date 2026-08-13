@@ -63,6 +63,7 @@ async function buildBriefingFacts(deps) {
     systemFact,
     spendFact,
     needsDoneFact,
+    selfHealingFact,
   ] = await Promise.all([
     // 1. Local time.
     withTimeout(() => (
@@ -200,6 +201,44 @@ async function buildBriefingFacts(deps) {
       } catch (_) {}
       return parts.length ? 'On your plate: ' + parts.join(', ') + '.' : null;
     }, timeoutMs),
+
+    // 11. Self-healing overnight (TASK B4) — summarizes what the immune
+    // system's healer.js playbooks did, read from the PERSISTENT audit trail
+    // via `memory.audit.query`, never from `bus.emit('health.healed', ...)`
+    // — that event is a stream-only signal with nothing listening at boot
+    // time, so it cannot answer "what happened while nobody was watching".
+    // No last-boot timestamp is plumbed anywhere this module can reach, so
+    // the window is the last 24h — the most specific claim the available
+    // data can honestly support (never "overnight", which would imply a
+    // real boot time we don't have). A heal audit record (see healer.js)
+    // carries only playbookId/kind/target/outcome/detail — no human-facing
+    // playbook title — so the fact names playbooks by their own recorded id
+    // (hyphens turned to spaces for speech), never a friendlier name that
+    // would have to be invented. Only outcome === 'applied' counts as
+    // "healed": an 'error' outcome means the playbook ran and did NOT fix
+    // anything, so it is excluded rather than reported as a heal.
+    withTimeout(async () => {
+      const memory = deps.memory;
+      if (!memory || !memory.audit || typeof memory.audit.query !== 'function') return null;
+      const windowMs = typeof deps.selfHealingWindowMs === 'number' ? deps.selfHealingWindowMs : 24 * 3600 * 1000;
+      const cutoff = Date.now() - windowMs;
+      const records = await memory.audit.query({ decision: 'heal', limit: 200 });
+      if (!Array.isArray(records)) return null;
+      const applied = records.filter((r) => (
+        r && r.outcome === 'applied' && typeof r.ts === 'number' && r.ts >= cutoff
+      ));
+      if (!applied.length) return null;
+      const counts = {};
+      applied.forEach((r) => {
+        const id = String(r.playbookId || 'unknown-playbook');
+        counts[id] = (counts[id] || 0) + 1;
+      });
+      const parts = Object.keys(counts).map((id) => {
+        const n = counts[id];
+        return id.replace(/-/g, ' ') + ' ' + (n === 1 ? 'once' : n + ' times');
+      });
+      return 'Self-healing in the last 24h: ' + parts.join(', ') + '.';
+    }, timeoutMs),
   ]);
 
   // 4. gitRef upgrade delta — precomputed once at boot by the caller
@@ -222,7 +261,8 @@ async function buildBriefingFacts(deps) {
     : null;
 
   // Original fact order: time, goals, providers, gitRef upgrade, update
-  // report, last-conversations, weather, system, spend, needs-done.
+  // report, last-conversations, weather, system, spend, needs-done,
+  // self-healing (TASK B4 — appended last).
   const facts = [];
   if (timeFact) facts.push(timeFact);
   if (goalsFact) facts.push(goalsFact);
@@ -234,10 +274,7 @@ async function buildBriefingFacts(deps) {
   if (systemFact) facts.push(systemFact);
   if (spendFact) facts.push(spendFact);
   if (needsDoneFact) facts.push(needsDoneFact);
-
-  // SLOT for a following task (B4): a self-healing summary fact belongs here
-  // — appended after needs-done, before the facts are handed to the brain
-  // prompt. Deliberately NOT implemented in this task.
+  if (selfHealingFact) facts.push(selfHealingFact);
 
   return facts;
 }
