@@ -1117,6 +1117,11 @@ function checkForUpdates() {
     // An operator who closes the app to do something else would come back to a
     // different version they never agreed to.
     autoUpdater.autoInstallOnAppQuit = false;
+    // This build never produces a web installer, so NsisUpdater's per-download
+    // "disableWebInstaller is not set" warning is pure log noise. Setting it
+    // true silences the warning and pins the intent: only the full NSIS
+    // installer we publish is ever an acceptable download.
+    autoUpdater.disableWebInstaller = true;
     if (feedUrl) {
       autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
     }

@@ -120,6 +120,9 @@ test('electron/main.js downloads updates but installs only on an explicit operat
     'and this one exits the app');
   assert.match(text, /MYTHOS_AUTO_UPDATE/,
     'there must be an escape hatch that turns the whole thing off');
+  assert.match(text, /disableWebInstaller\s*=\s*true/,
+    'this build publishes only the full NSIS installer, so the web installer must stay disabled — ' +
+    'NsisUpdater otherwise logs a "disableWebInstaller is not set" warning on every single download');
 });
 
 // Reported by the operator on v0.1.5: "it's taking me through that whole
