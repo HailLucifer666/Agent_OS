@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Profile directory — persistent so cookies/extensions survive across launches
+# Profile directory - persistent so cookies/extensions survive across launches
 $profileDir = Join-Path $env:LOCALAPPDATA 'MYTHOS\chrome-debug-profile'
 
 if (-not (Test-Path $profileDir)) {

@@ -267,7 +267,7 @@ public static class NativeInput {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
 
-    // WAVE 2 — an alternative injection route for diagnose_type. SendInput is a
+    // WAVE 2 - an alternative injection route for diagnose_type. SendInput is a
     // whole-desktop, foreground-dependent mechanism; posting WM_CHAR addresses one
     // specific control and so survives some cases where SendInput is dropped
     // (and fails in others, e.g. controls that only read real key events). Which
@@ -275,7 +275,7 @@ public static class NativeInput {
     // on 2026-07-31 SendInput reported a full 23-character injection into a
     // confirmed-foreground Notepad that a screenshot showed empty.
     //
-    // GetFocus is thread-local — it reports the focused control of the CALLING
+    // GetFocus is thread-local - it reports the focused control of the CALLING
     // thread's input queue, so it is only meaningful between AttachThreadInput
     // calls (already declared above for exactly that reason).
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -293,7 +293,7 @@ public static class NativeInput {
     public const uint SWP_NOACTIVATE = 0x0010;
     public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
-    // §7.7 (step 5, desktop gaps) — wallpaper engine. SPI_SETDESKWALLPAPER
+    // sec 7.7 (step 5, desktop gaps) - wallpaper engine. SPI_SETDESKWALLPAPER
     // (0x0014) with SPIF_UPDATEINIFILE|SPIF_SENDCHANGE (0x03) persists the
     // change across reboots and broadcasts WM_SETTINGCHANGE so other apps
     // (Explorer) pick it up immediately.
@@ -304,7 +304,7 @@ public static class NativeInput {
     public const uint SPIF_SENDCHANGE = 0x02;
 
     // Same export, integer pvParam. Needed for the foreground-lock timeout,
-    // whose pvParam is a value, not a string — the declaration above marshals
+    // whose pvParam is a value, not a string - the declaration above marshals
     // pvParam as a string and cannot express it.
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW", CharSet = CharSet.Unicode)]
     public static extern bool SystemParametersInfoValue(uint uiAction, uint uiParam, IntPtr pvParam, uint fWinIni);
@@ -317,7 +317,7 @@ public static class NativeInput {
 
 function Write-Response($ok, $resultOrError) {
     # Echo the current command's id (set by the main loop) so the Node parent can
-    # correlate responses to commands — a late response from a timed-out command
+    # correlate responses to commands - a late response from a timed-out command
     # must never be matched to the next command in flight.
     if ($ok) {
         $payload = @{ ok = $true; result = $resultOrError }
@@ -386,7 +386,7 @@ function Send-MediaKey($keyName) {
 
 # Drive transport (play/pause, next, previous) via the SAME SMTC session the
 # media_status read path uses. This controls the active media app directly and
-# does NOT depend on SendInput / foreground focus / integrity level — the
+# does NOT depend on SendInput / foreground focus / integrity level - the
 # fragile path the global media keys were silently failing on. Returns $true on
 # success or an error string on failure (caller can then fall back to VK keys).
 function Send-SmtcControl($action) {
@@ -442,7 +442,7 @@ function Send-UnicodeText($text) {
 # ---- Command Handlers ----
 
 # FIX 7: env-derived, portable app-path resolution chain. KnownApps' per-user
-# paths go stale the moment an app is reinstalled via a different channel —
+# paths go stale the moment an app is reinstalled via a different channel -
 # e.g. Slack installed as a Microsoft Store package is registered under
 # HKCU:\...\App Paths\slack.exe, not %LOCALAPPDATA%. No machine-specific path
 # is ever hardcoded here (portability rule).
@@ -471,10 +471,10 @@ function Resolve-AppViaStartApps($name) {
 }
 
 # FIX 6: known desktop-app resolver. Several common apps install to per-user
-# AppData paths with no PATH entry and no registered "App Path" — Start-Process
+# AppData paths with no PATH entry and no registered "App Path" - Start-Process
 # -FilePath "<name>" can't resolve them, so they fell through to the generic
 # attempt below and failed (or, before FIX 4, silently opened File Explorer /
-# a browser search instead). Env-derived only (portability rule — no hardcoded
+# a browser search instead). Env-derived only (portability rule - no hardcoded
 # user paths), so this resolves correctly for any installed user's account.
 # Keep this list short; easy to extend.
 $script:KnownApps = @{
@@ -486,13 +486,13 @@ $script:KnownApps = @{
 # BUG-notepad-typing: MSIX/UWP-packaged apps (confirmed live: Windows 11's
 # Microsoft.WindowsNotepad package) resolve through a thin registry-App-Paths
 # or generic Start-Process launcher that hands activation off via COM and
-# exits within about a second — Start-Process's own -PassThru handle then
+# exits within about a second - Start-Process's own -PassThru handle then
 # refers to a pid that is already gone by the time any subsequent
 # focus_window/ui_type call tries to use it, so those calls fail (or worse,
 # silently act on whatever unrelated window happens to have OS focus). This
 # is the same class of bug the AUDIT FIX below already solved for Squirrel-
 # style bootstrappers (Discord/Slack/Teams) by re-resolving the real process
-# by name after launch — generalized here for any launch path that can hit
+# by name after launch - generalized here for any launch path that can hit
 # it, not just the KnownApps table.
 function Resolve-RealProcessAfterLaunch($StartedProc, $Name) {
     # A bare "does the pid still exist" check is not enough: some single-
@@ -593,7 +593,7 @@ function Resolve-WindowedProcessByName($Name, $TimeoutMs) {
 # in another.
 #
 # A resolved launch carries `pid` + resolved:$true. An unresolved one carries NO
-# `pid` at all — deliberately, because from-pc.js keys lastLaunchedPid and the
+# `pid` at all - deliberately, because from-pc.js keys lastLaunchedPid and the
 # fresh-document Ctrl+N off its presence, and a pid it cannot trust is worse than
 # no pid: no pid degrades to "I could not confirm which window", while a wrong
 # pid types into a stranger's window and reports success.
@@ -628,7 +628,7 @@ function Handle-LaunchApp($name) {
     # A bare non-string JSON value (e.g. a number) reaches here as-is; coerce
     # before .ToLowerInvariant() below, which only exists on [string] and would
     # otherwise throw a MethodInvocationException that crashes this dispatch
-    # loop (transient DoS — pc-child auto-restarts, but every in-flight command
+    # loop (transient DoS - pc-child auto-restarts, but every in-flight command
     # is lost until it does).
     $name = [string]$name
 
@@ -650,7 +650,7 @@ function Handle-LaunchApp($name) {
         }
     }
 
-    # FIX 6: known installed desktop app — resolve before the generic
+    # FIX 6: known installed desktop app - resolve before the generic
     # Start-Process attempt below, which can't find apps with no PATH entry.
     $attempted = @()
     $known = $script:KnownApps[$name.ToLowerInvariant()]
@@ -661,7 +661,7 @@ function Handle-LaunchApp($name) {
             $proc = Start-Process @procArgs
             Start-Sleep -Milliseconds 500
             # AUDIT FIX: launcher-style entries (Discord's Squirrel Update.exe)
-            # spawn the real app and exit — $proc.Id would be the bootstrapper's
+            # spawn the real app and exit - $proc.Id would be the bootstrapper's
             # transient PID, poisoning lastLaunchedPid upstream. Resolve the
             # real process by name, same pattern as the Spotify branch above.
             if ($known.procName) {
@@ -676,8 +676,8 @@ function Handle-LaunchApp($name) {
         }
     } else {
         # FIX 7: KnownApps only knows a literal per-user Win32 exe path. Apps
-        # reinstalled via a different channel — e.g. Slack as a Microsoft Store
-        # package — register under HKCU App Paths instead, or need the
+        # reinstalled via a different channel - e.g. Slack as a Microsoft Store
+        # package - register under HKCU App Paths instead, or need the
         # shell:AppsFolder\<AppID> launch form entirely. Both steps are
         # best-effort and additive: any failure just falls through to the
         # generic Start-Process attempt below, preserving the honest-failure
@@ -702,7 +702,7 @@ function Handle-LaunchApp($name) {
                 Start-Process "shell:AppsFolder\$appId" -ErrorAction Stop
                 Start-Sleep -Milliseconds 800
                 # A Store/UWP activation has no launcher process to follow, but the
-                # app it activates does own a real windowed process — find it by
+                # app it activates does own a real windowed process - find it by
                 # name. Returning no pid here is what left ui_type with nothing to
                 # foreground (see Resolve-WindowedProcessByName's comment).
                 $resolution = Resolve-WindowedProcessByName $name 8000
@@ -722,7 +722,7 @@ function Handle-LaunchApp($name) {
     } catch {
         # FIX 4: an unresolvable name must report an honest failure, not
         # silently fall back to opening File Explorer / triggering a browser
-        # web-search while still claiming success — a mistyped or unknown app
+        # web-search while still claiming success - a mistyped or unknown app
         # name previously opened the wrong thing and reported launched:true.
         $attempted += ('Start-Process "' + $name + '": ' + $_.Exception.Message)
         return ('Failed to launch "' + $name + '". Tried: ' + ($attempted -join '; '))
@@ -730,11 +730,11 @@ function Handle-LaunchApp($name) {
 }
 
 # FIX 5: "show desktop" previously had no dedicated tool, so the planner fell
-# back to launch_app("explorer") — opening a File Explorer window instead of
+# back to launch_app("explorer") - opening a File Explorer window instead of
 # minimizing everything. Shell.Application's MinimizeAll performs the same
 # minimize-all action as the taskbar's "Show desktop" corner button, but is
 # one-directional (always minimizes; the real corner button toggles back to
-# restore all on a second press) — arguably the better semantic for a voice
+# restore all on a second press) - arguably the better semantic for a voice
 # command anyway, since "show desktop" said twice should not un-minimize
 # everything. No P/Invoke needed.
 function Handle-ShowDesktop {
@@ -755,7 +755,7 @@ function Handle-ListWindows {
     $skipped = 0
     foreach ($child in $all) {
         # A window can close between FindAll() enumerating it and this loop
-        # reading its .Current properties — the AutomationElement COM handle
+        # reading its .Current properties - the AutomationElement COM handle
         # then throws ElementNotAvailableException on ANY property access.
         # Previously only the Get-Process lookup below was guarded; a throw
         # from ProcessId/Name/ClassName/BoundingRectangle itself aborted the
@@ -768,7 +768,7 @@ function Handle-ListWindows {
             $rect = Get-RectBounds $child.Current.BoundingRectangle
             # BUG-122 instrumentation (2026-08-06). Closing a Brave window was
             # unreliable, and list_windows appeared to report two windowed Brave
-            # processes for one visible window — appeared, because nothing in the
+            # processes for one visible window - appeared, because nothing in the
             # reply could tell two DISTINCT top-level windows apart from two rows
             # describing the SAME one. The native handle is what distinguishes
             # them: two rows sharing one hwnd is a duplicate to be deduped here,
@@ -791,7 +791,7 @@ function Handle-ListWindows {
             className = $cls
             rect = $rect
             visible = ($rect.width -gt 0 -and $rect.height -gt 0)
-            hwnd = ([string]$hwnd)   # BUG-122 instrumentation — see above
+            hwnd = ([string]$hwnd)   # BUG-122 instrumentation - see above
         }
     }
     return @{ windows = $windows; total = $windows.Count; skipped = $skipped }
@@ -806,11 +806,11 @@ function Handle-ActiveWindow {
     if ($hwnd -eq [IntPtr]::Zero) {
         return @{ app = ''; title = ''; pid = 0; hwnd = '0' }
     }
-    # Title (max 512 chars — generous, the sensor slices to 120 anyway)
+    # Title (max 512 chars - generous, the sensor slices to 120 anyway)
     $sb = New-Object System.Text.StringBuilder 512
     [void][NativeInput]::GetWindowText($hwnd, $sb, 512)
     $title = $sb.ToString()
-    # PID → process name
+    # PID -> process name
     $pidVal = 0
     [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$pidVal)
     $procName = 'unknown'
@@ -861,12 +861,12 @@ function Handle-FocusWindow($TargetPid) {
         }
         Start-Sleep -Milliseconds 50
 
-        # Verify it actually took instead of trusting the return value blind —
+        # Verify it actually took instead of trusting the return value blind -
         # SetForegroundWindow can return true yet still be denied in edge cases.
         $method = 'attach-thread-input'
 
         # ESCALATION LADDER (2026-07-31). AttachThreadInput alone was denied 5/5 in
-        # live testing, and a denied focus means ui_type has no target — which is
+        # live testing, and a denied focus means ui_type has no target - which is
         # how keystrokes ended up in MYTHOS's own window. Two further attempts,
         # both self-contained (no cooperation needed from the foreground app):
         #
@@ -917,7 +917,7 @@ function Handle-FocusWindow($TargetPid) {
             return ('Failed to bring PID ' + $TargetPid + ' to the foreground (blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore).')
         }
 
-        # WAVE 9 (BUG-060) — foreground is not the same as visible. Windows will
+        # WAVE 9 (BUG-060) - foreground is not the same as visible. Windows will
         # happily name a MINIMIZED window as foreground, and on 2026-07-31 that is
         # exactly what happened: focus_window returned focused:true while Notepad
         # sat at -32000,-32000, so the operator watched an empty desktop while
@@ -942,10 +942,10 @@ function Handle-CloseWindow($TargetPid) {
     #      had already exited), so Get-Process/CloseMainWindow could not act and
     #      the operator heard "the process couldn't be found".
     #   2. Brave: WaitForExit(3000) is the WRONG ORACLE for a multi-window,
-    #      multi-process browser — closing one window never exits the process, so
+    #      multi-process browser - closing one window never exits the process, so
     #      a successful close looked like a timeout.
     #   3. Worse, the timeout branch returned a HASHTABLE (`closed=$false`), and
-    #      the dispatcher reads any hashtable as ok:true — a window that was still
+    #      the dispatcher reads any hashtable as ok:true - a window that was still
     #      open was audited as a successful close. Returning a STRING is how this
     #      file reports an honest failure (see Handle-FocusWindow's FIX 2).
     # The oracle is now the window handle itself, and a pid with no main window is
@@ -981,7 +981,7 @@ function Handle-CloseWindow($TargetPid) {
     # acted on, before acting. The reported symptom is an unreliable Brave close
     # with two Brave PIDs in play, and the open question is whether the failing
     # close targeted a different window than the one the operator meant. Without
-    # the handle in the reply, a failure names only a pid — and a pid is exactly
+    # the handle in the reply, a failure names only a pid - and a pid is exactly
     # the thing that is ambiguous for a multi-window, multi-process browser.
     $targetHwnd = ([string]$proc.MainWindowHandle)
     $targetName = $proc.ProcessName
@@ -989,7 +989,7 @@ function Handle-CloseWindow($TargetPid) {
     $proc.CloseMainWindow() | Out-Null
 
     # Oracle: the main window is gone (or the whole process exited). Poll rather
-    # than WaitForExit — a browser with other windows open stays alive on purpose.
+    # than WaitForExit - a browser with other windows open stays alive on purpose.
     $deadline = [DateTime]::UtcNow.AddMilliseconds(3000)
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
@@ -999,7 +999,7 @@ function Handle-CloseWindow($TargetPid) {
                           resolvedBy = $resolvedBy; hwnd = $targetHwnd; processName = $targetName }
             }
         } catch {
-            # Refresh throws once the process is gone — that IS the close.
+            # Refresh throws once the process is gone - that IS the close.
             return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true;
                       resolvedBy = $resolvedBy; hwnd = $targetHwnd; processName = $targetName }
         }
@@ -1011,12 +1011,12 @@ function Handle-CloseWindow($TargetPid) {
     # operator's call, not this handler's.
     return ('Window for PID ' + $resolvedPid + ' (' + $targetName + ', window handle ' + $targetHwnd +
             ', resolved by ' + $resolvedBy + ') did not close within 3s and is still open. Nothing was closed. ' +
-            'It may be showing a confirmation prompt — check the screen, or ask me to force it.')
+            'It may be showing a confirmation prompt - check the screen, or ask me to force it.')
 }
 
 # ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
 # NOTE: every handler takes the target PID as a parameter named $TargetPid (NOT
-# $pid — $pid is the PowerShell automatic variable for THIS shell's process,
+# $pid - $pid is the PowerShell automatic variable for THIS shell's process,
 # a classic wrong-target bug). We resolve $proc from $TargetPid and act on
 # $proc.MainWindowHandle. Click-style handlers take screen coords, not a PID.
 
@@ -1029,7 +1029,7 @@ function Resolve-TargetWindow($TargetPid) {
     } catch {
         # BUG-126: `stale` distinguishes "that process is gone" from every other
         # refusal below (minimized, no main window, off-screen). Those are
-        # deliberate — reading them anyway would OCR whatever content happens to
+        # deliberate - reading them anyway would OCR whatever content happens to
         # occupy the rectangle and report it as the target's. A dead PID is the
         # only one where widening the read is honest, and only a caller that says
         # so in its reply may act on this flag.
@@ -1199,7 +1199,7 @@ function Handle-Drag($x1, $y1, $x2, $y2) {
 function Handle-MediaKey($key) {
     if (-not $key) { return 'Key name is required.' }
 
-    # Transport controls → SMTC session (robust). Fall back to VK media-key
+    # Transport controls -> SMTC session (robust). Fall back to VK media-key
     # injection if SMTC is unavailable or rejects the command.
     $transport = @{ play_pause = 'toggle'; next_track = 'next'; prev_track = 'prev' }
     if ($transport.ContainsKey($key)) {
@@ -1215,7 +1215,7 @@ function Handle-MediaKey($key) {
         return @{ key = $key; sent = $true; via = 'vkey-fallback'; smtc = "$smtc" }
     }
 
-    # Volume keys have no SMTC equivalent → VK injection, but report honestly
+    # Volume keys have no SMTC equivalent -> VK injection, but report honestly
     # whether SendInput actually delivered anything.
     $script:LastVkSent = $null
     $err = Send-MediaKey $key
@@ -1328,10 +1328,10 @@ function Handle-SetVolume($level) {
     }
 }
 
-# BUG-127 — per-application volume. "Lower Spotify" used to move the SYSTEM
+# BUG-127 - per-application volume. "Lower Spotify" used to move the SYSTEM
 # master volume (Handle-SetVolume above), i.e. it turned down the whole machine
 # including MYTHOS's own voice. Core Audio models each app's playback as a
-# SESSION on the endpoint, and ISimpleAudioVolume sets that session alone —
+# SESSION on the endpoint, and ISimpleAudioVolume sets that session alone -
 # exactly what the Windows Volume Mixer shows per app.
 #
 # Separate interface declarations from Get-AudioEndpointVolumeType's on purpose:
@@ -1358,7 +1358,7 @@ public interface IMythosDevice {
                  [MarshalAs(UnmanagedType.IUnknown)] out object iface);
 }
 
-// IAudioSessionManager2 : IAudioSessionManager — the two inherited slots
+// IAudioSessionManager2 : IAudioSessionManager - the two inherited slots
 // (GetAudioSessionControl, GetSimpleAudioVolume) must be declared to keep the
 // vtable offsets right, even though neither is called here.
 [Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -1374,7 +1374,7 @@ public interface IMythosSessionEnumerator {
     int GetSession(int sessionIndex, [MarshalAs(UnmanagedType.IUnknown)] out object session);
 }
 
-// IAudioSessionControl2 : IAudioSessionControl — same rule, the nine inherited
+// IAudioSessionControl2 : IAudioSessionControl - same rule, the nine inherited
 // slots come first.
 [Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 public interface IMythosSessionControl2 {
@@ -1417,7 +1417,7 @@ public static class MythosAppVolume {
         catch { return ""; }   // process exited between enumeration and lookup
     }
 
-    // "name|pid" per live session — the honest failure message names what was
+    // "name|pid" per live session - the honest failure message names what was
     // actually there, instead of claiming the app does not exist.
     public static string[] ListSessions() {
         var found = new List<string>();
@@ -1439,7 +1439,7 @@ public static class MythosAppVolume {
     }
 
     // "name|pid|readBackLevel" per session actually changed. Empty array means
-    // nothing matched — the caller must NOT fall back to master volume.
+    // nothing matched - the caller must NOT fall back to master volume.
     public static string[] SetVolume(string name, int targetProcessId, float level) {
         var changed = new List<string>();
         var sessions = GetSessions();
@@ -1539,7 +1539,7 @@ public static class MythosAppVolume {
     return $script:AppVolumeType
 }
 
-# $TargetPid, never $pid — $pid is a read-only PowerShell automatic variable and
+# $TargetPid, never $pid - $pid is a read-only PowerShell automatic variable and
 # a parameter of that name throws at binding time (see adapters/CLAUDE.md).
 function Handle-SetAppVolume($name, $TargetPid, $level) {
     if ($null -eq $level -or $level -eq '') { return 'level (0-100) is required.' }
@@ -1558,7 +1558,7 @@ function Handle-SetAppVolume($name, $TargetPid, $level) {
         $changed = @($type::SetVolume($wantName, $wantPid, [float]($lvl / 100.0)))
         if ($changed.Count -eq 0) {
             # Honest failure: an app with no audio session simply has no volume
-            # to set. Say what was searched for and what was there — never
+            # to set. Say what was searched for and what was there - never
             # silently move the master volume instead.
             $seen = @($type::ListSessions())
             $target = if ($wantPid -gt 0) { "pid $wantPid" } else { "process '$wantName'" }
@@ -1666,19 +1666,19 @@ function Handle-ScreenLook($query) {
     }
 }
 
-# §7.1 (step 5, desktop gaps) — real screen OCR via Windows.Media.Ocr, zero
-# new dependencies (no tesseract.js — wasm+traineddata for something Windows
+# sec 7.1 (step 5, desktop gaps) - real screen OCR via Windows.Media.Ocr, zero
+# new dependencies (no tesseract.js - wasm+traineddata for something Windows
 # already ships). Reuses the existing Await-WinRTOperation helper (line ~100)
 # and this file's already-established WinRT-type-resolution convention
 # ([Type]::GetType('...,ContentType=WindowsRuntime')), matching how the SMTC
-# media session code above resolves Windows.Media.Control types — NOT the
+# media session code above resolves Windows.Media.Control types - NOT the
 # bare [Windows.Storage.StorageFile] bracket syntax the source plan doc
 # sketches, which doesn't reliably resolve in this codebase's established
 # pattern. Verified live before wiring in: a standalone script using this
 # exact reflection chain against a bitmap with known drawn text ("MYTHOS OCR
 # TEST 12345") round-tripped that exact string back through the real OCR
 # engine on this machine.
-# BUG-108 — the rectangle a window-scoped OCR capture should cover.
+# BUG-108 - the rectangle a window-scoped OCR capture should cover.
 #
 # Deliberately a COMPOSITION of the two window resolvers this file already has,
 # not a new one: Resolve-TargetWindow (pid -> a process with a real
@@ -1687,16 +1687,16 @@ function Handle-ScreenLook($query) {
 # rectangle captured here is the same rectangle list_windows already showed the
 # model, and the two can never disagree.
 #
-# NOTE the parameter is $TargetPid, never $pid — $pid is a read-only PowerShell
+# NOTE the parameter is $TargetPid, never $pid - $pid is a read-only PowerShell
 # automatic variable and a parameter of that name throws at binding time.
 function Get-TargetWindowRect($TargetPid) {
     $w = Resolve-TargetWindow $TargetPid
-    # BUG-126: carry the stale flag through — the caller decides what to do with
+    # BUG-126: carry the stale flag through - the caller decides what to do with
     # it, this function only reports what it found.
     if (-not $w.ok) { return @{ ok = $false; stale = [bool]$w.stale; error = $w.error } }
     # A minimized window parks at -32000,-32000 with none of its content on
     # screen. OCRing that rectangle would read whatever is actually there and
-    # report it as this window's content — the same trap BUG-060 hit in
+    # report it as this window's content - the same trap BUG-060 hit in
     # focus_window. Refuse instead.
     if ([NativeInput]::IsIconic($w.hwnd)) {
         return @{ ok = $false; error = ('PID ' + $TargetPid + ' is minimized, so none of its content is on screen to read. ' +
@@ -1727,7 +1727,7 @@ function Get-TargetWindowRect($TargetPid) {
             ', so there is nothing safe to capture.') }
     }
     # Clip to the desktop: a window can be dragged partly (or entirely) off-screen,
-    # and only the on-screen part can be captured — or clicked afterwards.
+    # and only the on-screen part can be captured - or clicked afterwards.
     $want = New-Object System.Drawing.Rectangle([int]$bounds.x, [int]$bounds.y, [int]$bounds.width, [int]$bounds.height)
     $clipped = [System.Drawing.Rectangle]::Intersect($want, [System.Windows.Forms.SystemInformation]::VirtualScreen)
     if ($clipped.Width -le 0 -or $clipped.Height -le 0) {
@@ -1739,32 +1739,32 @@ function Get-TargetWindowRect($TargetPid) {
 function Handle-ScreenReadText($TargetPid) {
     # BUG-108: with no $TargetPid this captures the primary screen exactly as it
     # always did (existing callers: screen_look's OCR grounding, from-app-reply,
-    # the Electron OCR hotkey). With one, it captures ONLY that window — the
+    # the Electron OCR hotkey). With one, it captures ONLY that window - the
     # incident was an OCR of MYTHOS's own HUD standing in for a YouTube page,
     # because there was no way to ask for one window.
     #
     # Windows.Media.Ocr reports word boxes relative to the BITMAP it was handed,
     # so a window capture yields WINDOW-relative coordinates. Rather than return
     # coordinates that silently mean different things depending on the arguments,
-    # every reply carries `origin` — the top-left of the rectangle that was
-    # captured, (0,0) for the full-desktop case — and from-pc.js's
+    # every reply carries `origin` - the top-left of the rectangle that was
+    # captured, (0,0) for the full-desktop case - and from-pc.js's
     # toAbsoluteRegions() is the single place it is added back on before anything
     # is clicked.
     #
     # KNOWN LIMIT, stated rather than hidden: this narrows the SCREEN AREA the
-    # window occupies, it does not render the window itself (no PrintWindow —
+    # window occupies, it does not render the window itself (no PrintWindow -
     # which returns black for the DirectComposition/Chromium windows this is most
     # needed for). A target sitting behind another window therefore reads
     # whatever is on top of it. Scoping is what stops a match in an unrelated
     # window; focus_window first is what makes the target the thing being read.
     #
-    # BUG-126 (2026-08-05): a PID that no longer exists used to dead-end here —
+    # BUG-126 (2026-08-05): a PID that no longer exists used to dead-end here -
     # the read returned 'Cannot find PID 1234' and there was nothing the model
     # could do next, because screen_read_text's only parameter IS the pid (a
     # name-based re-resolution needs a schema change, tracked separately). A
     # stale PID is almost always a window that was closed or relaunched between
     # list_windows and the read, and the full-desktop read the caller would have
-    # got by passing nothing at all is still useful. So widen — and SAY SO in
+    # got by passing nothing at all is still useful. So widen - and SAY SO in
     # the reply, naming the dead PID, so neither the model nor the operator can
     # mistake a whole-screen read for a read of the window they asked about.
     #
@@ -1821,19 +1821,19 @@ function Handle-ScreenReadText($TargetPid) {
         if ($null -eq $engine) { return 'no OCR language pack installed' }
         $ocr = Await-WinRTOperation ($engine.RecognizeAsync($bitmap)) $ocrResultType
 
-        # 2026-08-02: this used to be `$ocr.Lines | ForEach-Object { $_.Text }` — it read
+        # 2026-08-02: this used to be `$ocr.Lines | ForEach-Object { $_.Text }` - it read
         # the screen and then threw away WHERE everything was. Every OcrWord carries a
         # BoundingRect in the pixel space of the captured bitmap (this process is
         # DPI-aware per the block at the top of this file), so the coordinates needed to
         # click a piece of text were being computed by Windows and discarded here.
         # Since BUG-108 that space is "relative to `origin`" rather than always
-        # screen-absolute — identical for a full-desktop capture, offset by the window's
+        # screen-absolute - identical for a full-desktop capture, offset by the window's
         # top-left for a scoped one. Do NOT add the offset here as well; from-pc.js owns
         # that translation and doing it twice sends every click to the wrong place.
         #
         # Line-level boxes, unioned from the words: a click target is a label, not a
         # word, and per-word boxes would make "Type a message" three targets.
-        # ADDITIVE ONLY — text/lineCount keep their exact previous shape because
+        # ADDITIVE ONLY - text/lineCount keep their exact previous shape because
         # screen_read_text has existing callers.
         $lines = @()
         $regions = @()
@@ -1850,7 +1850,7 @@ function Handle-ScreenReadText($TargetPid) {
                 if ($null -eq $maxX -or $x2  -gt $maxX) { $maxX = $x2 }
                 if ($null -eq $maxY -or $y2  -gt $maxY) { $maxY = $y2 }
             }
-            # A line whose words carry no geometry is still real text — it belongs in
+            # A line whose words carry no geometry is still real text - it belongs in
             # `text` (appended above) but must NOT become an un-clickable region with a
             # zero box, which a caller would happily click at 0,0.
             if ($null -eq $minX) { continue }
@@ -1957,7 +1957,7 @@ function Handle-UiClick($TargetPid, $elementPath) {
                 $invoked = $true
             }
         } catch {
-            # No invoke pattern on this element — fall through to the coordinate
+            # No invoke pattern on this element - fall through to the coordinate
             # click below. PowerShell has NO C-style comments: a `/* ... */` here
             # parses as a command named '/*', so the catch itself threw
             # "The term '/*' is not recognized..." and killed every ui_click on
@@ -1978,30 +1978,30 @@ function Handle-UiClick($TargetPid, $elementPath) {
     }
 }
 
-# WAVE 2 — the read-back oracle. Nothing in this file could previously READ text
+# WAVE 2 - the read-back oracle. Nothing in this file could previously READ text
 # back out of a control, which is why "SendInput accepted 46 events" was the
 # strongest evidence ui_type had, and why an empty Notepad could be reported as
 # holding 23 typed characters.
 #
 # Reads the text of the currently FOCUSED element (whatever actually received the
-# keystrokes, which is the honest thing to inspect — not the element we hoped for).
+# keystrokes, which is the honest thing to inspect - not the element we hoped for).
 # Two patterns, in order of directness:
-#   ValuePattern  — edit boxes, most Win32/WinForms/WPF single-line controls.
-#   TextPattern   — documents; Notepad, Word, and most rich editors expose this.
+#   ValuePattern  - edit boxes, most Win32/WinForms/WPF single-line controls.
+#   TextPattern   - documents; Notepad, Word, and most rich editors expose this.
 # Returns @{ text; via } or $null when the element exposes neither. $null is a
 # legitimate, common answer (games, canvas-drawn Electron surfaces) and MUST be
 # reported as "cannot confirm" rather than as failure.
 #
-# TextPattern is READ-ONLY in UI Automation — it has no insertion API, so it can
+# TextPattern is READ-ONLY in UI Automation - it has no insertion API, so it can
 # serve as an oracle but never as a typing mechanism.
-# Chromium/Electron builds its accessibility tree LAZILY, on first UIA query — the
+# Chromium/Electron builds its accessibility tree LAZILY, on first UIA query - the
 # gotcha this repo already documents for Spotify. Measured live 2026-07-31 against
 # an Electron editor: the first Read-FocusedElementText returned $null, and every
 # call in a later process returned via=ValuePattern immediately, because the first
 # query is what triggered the tree to build.
 #
 # Without a retry, the FIRST type into a freshly-started Slack/Discord/Electron app
-# would report unverified even though the text landed — honest, but needlessly so,
+# would report unverified even though the text landed - honest, but needlessly so,
 # and it would also deny that type its Enter under Wave 2's messaging guard. One
 # retry converts that into a real confirmation.
 function Read-FocusedElementText() {
@@ -2043,10 +2043,10 @@ function Test-TextLanded($Haystack, $Needle) {
     return $h.Contains($n)
 }
 
-# Wave 3 (2026-08-13) — ctrl+s's UIA equivalent, scoped deliberately narrow (see
+# Wave 3 (2026-08-13) - ctrl+s's UIA equivalent, scoped deliberately narrow (see
 # Handle-SendKey's combo branch: this is the ONE combo that gets an escalation
 # path, not a general mechanism). Finds the first on-screen, invokable element
-# literally named 'Save' or 'Save As' anywhere in $Root's tree — a menu item or
+# literally named 'Save' or 'Save As' anywhere in $Root's tree - a menu item or
 # button, whichever the app exposes. Same "bounded by UIA itself" scan as
 # Find-EditableDescendants below; a window's control tree is small enough that
 # TrueCondition over Descendants is not slow in practice.
@@ -2066,7 +2066,7 @@ function Find-InvokableSaveDescendant($Root) {
     return $null
 }
 
-# BUG-219 follow-up, investigated live 2026-08-13 and left UNRESOLVED — see
+# BUG-219 follow-up, investigated live 2026-08-13 and left UNRESOLVED - see
 # BUGS.md for the full record. Find-InvokableSaveDescendant above only ever
 # finds a 'Save'/'Save As' element that is ALREADY on screen; on Windows 11's
 # current Notepad that element does not exist until the top-level 'File' menu
@@ -2074,12 +2074,12 @@ function Find-InvokableSaveDescendant($Root) {
 # 'File'/automationId 'File' exists at rest, 'Save'/'Save As'/'Save all' do
 # not appear anywhere in the same tree until File is expanded).
 #
-# This function's mechanism — re-resolve the window fresh by pid rather than
+# This function's mechanism - re-resolve the window fresh by pid rather than
 # trust a carried-over element reference, explicitly re-focus the target
 # window (Handle-FocusWindow's own AttachThreadInput workaround) before
 # invoking, unconditionally force a Collapse-then-Expand toggle rather than
 # trust a possibly-stale ExpandCollapseState, then re-scan both the original
-# root and the current foreground window with one retry — is all verified
+# root and the current foreground window with one retry - is all verified
 # correct in isolation: an identical sequence run from a plain
 # `powershell.exe -File script.ps1` process against the exact same live
 # window opens the File menu and finds Save/Save As/Save all every time.
@@ -2088,13 +2088,13 @@ function Find-InvokableSaveDescendant($Root) {
 # file, because THIS file only ever runs as pc-child/index.js's spawned child
 # (`child_process.spawn('powershell.exe', ...)`), and InvokePattern.Invoke()/
 # ExpandCollapsePattern.Expand() on this specific WinUI3 MenuBarItem are a
-# silent no-op — no exception, ExpandCollapseState transitions and reports
-# 'Expanded', yet no flyout ever renders — SPECIFICALLY when the calling
+# silent no-op - no exception, ExpandCollapseState transitions and reports
+# 'Expanded', yet no flyout ever renders - SPECIFICALLY when the calling
 # PowerShell process was spawned as a Node child_process, regardless of
-# -NonInteractive/windowsHide (tested with both removed — same result,
+# -NonInteractive/windowsHide (tested with both removed - same result,
 # confirmed live). Every other UIA route this file already uses successfully
 # from inside this same daemon (uia-setvalue for typing, click_at, etc.) is
-# unaffected — this is narrow to Invoke/ExpandCollapse on this one control,
+# unaffected - this is narrow to Invoke/ExpandCollapse on this one control,
 # in this one process-spawn shape. Kept in the file rather than reverted:
 # harmless when it fails (never opens the menu -> never finds Save -> the
 # caller's honest-failure path below is unchanged), and it is the correct
@@ -2160,7 +2160,7 @@ function Find-SaveViaFileMenu($Root, $TargetPid) {
         } catch { }
     }
     if (-not $saveEl) {
-        # Route 2 — one short retry: a flyout's own children can populate a
+        # Route 2 - one short retry: a flyout's own children can populate a
         # beat after the popup window itself becomes visible.
         Start-Sleep -Milliseconds 300
         $saveEl = Find-InvokableSaveDescendant $scanRoot
@@ -2174,7 +2174,7 @@ function Find-SaveViaFileMenu($Root, $TargetPid) {
     }
     if (-not $saveEl) {
         # Never leave the menu open for whatever runs next. Collapse() via
-        # the same pattern we already have a live reference to — SendInput
+        # the same pattern we already have a live reference to - SendInput
         # Escape is the same MSIX-blackhole-prone path this whole function
         # exists to route around, so it is the fallback, not the primary.
         try { $ecp.Collapse() } catch {
@@ -2187,7 +2187,7 @@ function Find-SaveViaFileMenu($Root, $TargetPid) {
 
 # Every editable, keyboard-focusable, on-screen descendant of $Root, as candidate
 # records. Extracted from Handle-FocusMessageBox (Wave 7) so Handle-UiType can use
-# the same live-proven search — measured 2026-07-31 against a real Electron window:
+# the same live-proven search - measured 2026-07-31 against a real Electron window:
 # 7 candidates found, SetFocus via TextPattern.
 #
 # Callers rank the results themselves, because "the place text goes" differs by
@@ -2239,7 +2239,7 @@ function Find-EditableDescendants($Root) {
     return $candidates
 }
 
-# WAVE 9 (BUG-070) — "is this the same application?" by process ancestry.
+# WAVE 9 (BUG-070) - "is this the same application?" by process ancestry.
 #
 # A WebView2 app spans two processes: the shell owns the window the caller knows
 # about, the renderer child owns the text boxes AND takes the foreground once
@@ -2271,7 +2271,7 @@ function Test-SameApp($PidA, $PidB) {
     return $false
 }
 
-# WAVE 9 (BUG-065) — find the surface that actually holds the text boxes.
+# WAVE 9 (BUG-065) - find the surface that actually holds the text boxes.
 #
 # A window's own UIA tree is not always where its UI lives. WhatsApp Desktop's
 # foreground window is a WinUI shell (~8 elements) while the whole interface is a
@@ -2281,7 +2281,7 @@ function Test-SameApp($PidA, $PidB) {
 #
 # The link is PROCESS PARENTAGE. Geometry was tried first and was wrong: "the
 # window whose centre lies inside the foreground window" matched a Notepad that
-# merely overlapped WhatsApp and offered ITS document as the message box — BUG-052
+# merely overlapped WhatsApp and offered ITS document as the message box - BUG-052
 # (right-looking target, wrong app) with a human on the other end. Titles are no
 # better; they break on localisation and on the unread prefix ("(194) WhatsApp").
 #
@@ -2342,18 +2342,18 @@ function Resolve-EditableSurface($Hwnd) {
     return $null
 }
 
-# WAVE 9 (BUG-059) — put the caret in a real edit control before injecting.
+# WAVE 9 (BUG-059) - put the caret in a real edit control before injecting.
 #
 # 2026-07-31 20:03: focus_window reported focused:true, ui_type's foreground
 # pre-check passed, typedIntoTitle read "Untitled - Notepad", SendInput injected 7
-# events — and the document stayed empty, with the read-back finding a focused
+# events - and the document stayed empty, with the read-back finding a focused
 # element exposing NEITHER ValuePattern NOR TextPattern. That combination only
 # happens when the focused element is the window frame, not its editor: a
 # SYNTHETIC foreground grant (AttachThreadInput / lock-timeout / minimize-restore)
 # activates a window without giving any child keyboard focus, so the keystrokes
 # had no editable target at all.
 #
-# So the read-back's $null was never only a verification gap — it was the symptom
+# So the read-back's $null was never only a verification gap - it was the symptom
 # of the typing failure itself. Finding an editable descendant and focusing it
 # fixes both halves: the keystrokes get a target, and the oracle gets a patterned
 # element to read.
@@ -2363,7 +2363,7 @@ function Focus-EditableDescendant($Hwnd) {
         # Resolve-EditableSurface, not FromHandle alone: a WebView2 app (WhatsApp,
         # Teams) keeps its text boxes in a child process's separate desktop window,
         # so searching only the foreground window's own tree finds nothing and the
-        # caret is never placed — measured against WhatsApp on 2026-07-31.
+        # caret is never placed - measured against WhatsApp on 2026-07-31.
         $surface = Resolve-EditableSurface $Hwnd
         if (-not $surface) {
             return @{ focused = $false; reason = 'neither the foreground window nor any surface it embeds contains an editable, keyboard-focusable element' }
@@ -2382,7 +2382,7 @@ function Focus-EditableDescendant($Hwnd) {
 
         $read = Read-FocusedElementText
         if ($null -eq $read) {
-            # SetFocus is advisory — some controls ignore it. A click on the
+            # SetFocus is advisory - some controls ignore it. A click on the
             # element's centre is what a human would do.
             try {
                 Click-AtScreenCoords $pick.cx $pick.cy
@@ -2420,7 +2420,7 @@ function Focus-EditableDescendant($Hwnd) {
 # two callers (Handle-UiType, Handle-SendKey) rather than beside the other pid helpers
 # so the guard and the thing it measures stay readable together.
 #
-# Returns 0 when UIA cannot answer. 0 means UNKNOWN, never "no owner" — callers must
+# Returns 0 when UIA cannot answer. 0 means UNKNOWN, never "no owner" - callers must
 # not treat it as a mismatch.
 function Get-CaretOwnerPid() {
     try {
@@ -2435,12 +2435,12 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
     try {
         # If a target element is specified, try to set focus there first.
         #
-        # SetFocus is ADVISORY and throws on elements that refuse focus —
+        # SetFocus is ADVISORY and throws on elements that refuse focus -
         # "Target element cannot receive focus." Win11's WinUI3 Notepad does
         # exactly that. This call was the only unguarded SetFocus in the file
         # (the other three are wrapped), so that exception escaped to the outer
         # catch and aborted the WHOLE handler with "Type failed: ...", before a
-        # single typing route ran. It killed uia-setvalue and wm-char-post —
+        # single typing route ran. It killed uia-setvalue and wm-char-post -
         # the two routes that need no focus at all and are the measured-working
         # ones on MSIX Notepad. Live failure 2026-08-14, ui_type into pid 11604.
         # Focus here is an optimisation, never a precondition: on failure fall
@@ -2462,7 +2462,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         # SendInput types into whatever window the OS currently has foreground,
         # not whatever the caller intended. When a target pid is known, confirm
         # the foreground window is actually owned by that pid before injecting
-        # a single keystroke — a stale/drifted foreground (e.g. a confirm-dialog
+        # a single keystroke - a stale/drifted foreground (e.g. a confirm-dialog
         # round trip that moved focus away) must surface as an honest failure
         # so the retry loop re-attempts instead of typing into the wrong window.
         if ($TargetPid) {
@@ -2480,13 +2480,13 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
 
             # CARET-OWNER GUARD (2026-08-02). The check above is necessary and was never
             # sufficient. Measured live: WhatsApp (pid 2132) held the FOREGROUND and
-            # passed this guard, while Brave (pid 7972) held the CARET — so SendInput,
+            # passed this guard, while Brave (pid 7972) held the CARET - so SendInput,
             # which follows the caret and not the window, typed "mom" into Brave's
             # address bar, and the read-back then read Brave's address bar and called it
             # confirmed. Foreground is where the window is; the caret is where the
             # keystrokes go. Both have to belong to the target.
             #
-            # A caret owner of 0 means UIA could not tell us — an honest unknown, and the
+            # A caret owner of 0 means UIA could not tell us - an honest unknown, and the
             # Focus-EditableDescendant path below exists precisely to fix "nothing is
             # focused", so that case must NOT abort here.
             $caretPid = Get-CaretOwnerPid
@@ -2501,7 +2501,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         }
 
         # Audit honesty: capture what is ACTUALLY foreground at injection time,
-        # TargetPid or not — when the caller omits pid (the "type into whatever
+        # TargetPid or not - when the caller omits pid (the "type into whatever
         # has focus" contract), typed:true previously gave zero visibility into
         # where the keystrokes landed. Best-effort: a lookup failure must never
         # block typing.
@@ -2515,13 +2515,13 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             $typedIntoTitle = $sb.ToString()
         } catch { }
 
-        # WAVE 2 — snapshot the target's text BEFORE injecting. Comparing only the
+        # WAVE 2 - snapshot the target's text BEFORE injecting. Comparing only the
         # AFTER state is not enough: Notepad hands back the whole document, so text
         # left over from an earlier run would read as a successful type. Requiring
         # the content to have CHANGED as well is what makes this a real oracle.
         $beforeRead = Read-FocusedElementText
 
-        # WAVE 9 (BUG-059) — no editable control has the caret. Foreground is not
+        # WAVE 9 (BUG-059) - no editable control has the caret. Foreground is not
         # focus: a synthetic activation puts the window in front without focusing
         # anything inside it, and SendInput then injects into nothing. Place the
         # caret first, then read the BEFORE state again from the element we chose.
@@ -2534,7 +2534,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             }
         }
 
-        # WAVE 9 (BUG-061) — TRY, VERIFY, ESCALATE. The real root cause of BUG-051.
+        # WAVE 9 (BUG-061) - TRY, VERIFY, ESCALATE. The real root cause of BUG-051.
         #
         # Measured 2026-07-31 against Win11 Notepad, with diagnose_type fixed so its
         # inter-route clear no longer rides the mechanism under test:
@@ -2548,7 +2548,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         # GetLastError nor the return value will indicate the failure". Win11's
         # packaged Notepad is such a target, so the production path reported a full
         # injection into a document that never received a character. No amount of
-        # focus or window work fixes that — the MECHANISM is blocked.
+        # focus or window work fixes that - the MECHANISM is blocked.
         #
         # SendInput stays FIRST: it is the only route that honours the caret's
         # position, and the only one proven against Chromium/Electron (BUG-053's
@@ -2560,7 +2560,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         $script:LastVkSent = $null
         Send-UnicodeText $text
         # BUG-042-class honest failure: SendInput injected zero events (UIPI /
-        # a higher-integrity foreground app blocked it) — report failure instead
+        # a higher-integrity foreground app blocked it) - report failure instead
         # of the silent typed:$true that shipped before this fix.
         if ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1) {
             return "Type failed: SendInput injected 0 events (input may be blocked by a higher-integrity foreground app)."
@@ -2569,7 +2569,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         # Escalate ONLY on proof that nothing landed: the oracle answered, the text
         # is absent, AND the content is byte-identical to the before-state. An
         # unreadable or partially-changed control is ambiguous, and retrying there
-        # would type the text twice — a duplicated message is worse than an honest
+        # would type the text twice - a duplicated message is worse than an honest
         # "I could not confirm this".
         Start-Sleep -Milliseconds 120
         $probe = Read-FocusedElementText
@@ -2578,7 +2578,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
                           ([string]$probe.text -eq [string]$beforeRead.text)
 
         if ($provablyAbsent) {
-            # Route 2 — UIA ValuePattern.SetValue, which does not travel through the
+            # Route 2 - UIA ValuePattern.SetValue, which does not travel through the
             # input stack at all, so UIPI cannot block it. SetValue REPLACES the
             # whole value, so the existing content is re-supplied explicitly and the
             # new text appended; passing $text alone would silently wipe the
@@ -2598,7 +2598,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             } catch { }
 
             if ($mechanism -eq 'sendinput-unicode') {
-                # Route 3 — WM_CHAR posted straight to the focused child control.
+                # Route 3 - WM_CHAR posted straight to the focused child control.
                 # GetFocus is thread-local, so our input queue must be attached to
                 # the foreground thread's first, or it reports our own (windowless)
                 # focus and the characters go nowhere.
@@ -2631,7 +2631,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         # left doing strict pid equality and fails the same way. Measured live in
         # vault/Audit/2026-08-09.jsonl: two whatsapp_send attempts refused with
         # 'the text went to "Chrome Legacy Window" (pid 15956), not the target
-        # (pid 15928)' — 15956 is WhatsApp.Root's own msedgewebview2 child, i.e.
+        # (pid 15928)' - 15956 is WhatsApp.Root's own msedgewebview2 child, i.e.
         # the same application, and the message really was typed in the right
         # place. Same rule as caretSameApp: Test-SameApp is the only thing that
         # knows a shell and its renderer child are one app, so that knowledge
@@ -2654,12 +2654,12 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
             }
         }
 
-        # WAVE 9 (BUG-066) — which process actually owns the caret.
+        # WAVE 9 (BUG-066) - which process actually owns the caret.
         #
         # typedIntoPid is the FOREGROUND window's pid, and for a WebView2 app that is
         # the shell (WhatsApp.Root), while the caret sits in its renderer child
         # (msedgewebview2). Enter goes to the caret, not to the shell, so a guard
-        # comparing Enter's target against typedIntoPid refuses a legitimate send —
+        # comparing Enter's target against typedIntoPid refuses a legitimate send -
         # measured against WhatsApp on 2026-07-31. Report the caret's real owner so
         # the Enter guard can tell "a child of the same app" from "a different app".
         try {
@@ -2669,10 +2669,10 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
                 # 2026-08-02: focusedPid alone could not be turned into a sentence. The
                 # cross-check in from-pc.js has to tell the operator WHICH app the
                 # keystrokes went to ("they went to Brave, not WhatsApp"), and a bare
-                # number cannot do that. Best-effort — a name lookup must never break a
+                # number cannot do that. Best-effort - a name lookup must never break a
                 # type that otherwise worked.
                 try { $result.focusedProcess = [string](Get-Process -Id $result.focusedPid -ErrorAction Stop).ProcessName } catch { }
-                # Whether the caret STILL belongs to the target, evaluated here — after
+                # Whether the caret STILL belongs to the target, evaluated here - after
                 # injection and immediately before the read-back. The pre-injection guard
                 # cannot cover this moment: the caret can drift mid-type, and
                 # Focus-EditableDescendant can legitimately move it. This is the flag
@@ -2694,7 +2694,7 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
         $afterRead = Read-FocusedElementText
 
         if ($null -eq $afterRead) {
-            # No readable pattern. Genuinely unknown — not a failure.
+            # No readable pattern. Genuinely unknown - not a failure.
             $result.readBack = 'unavailable'
             if ($null -ne $caretPlacement -and -not $caretPlacement.focused) {
                 # The stronger statement, and the one that was true tonight: nothing
@@ -2742,30 +2742,30 @@ function Handle-UiType($text, $TargetPid, $elementPath) {
     }
 }
 
-# WAVE 7 — find and focus a real message box inside a window, then PROVE the
+# WAVE 7 - find and focus a real message box inside a window, then PROVE the
 # caret is in it.
 #
 # app_reply needs to type into the compose box of whatever chat app is already
 # open. Guessing a coordinate is how you type into a search field, a channel name,
 # or someone's message history. So the box is located through UIA: an element that
 # is genuinely editable (ValuePattern that is not read-only, or TextPattern) AND
-# keyboard-focusable, preferring the one lowest on screen — in every chat client
+# keyboard-focusable, preferring the one lowest on screen - in every chat client
 # the compose box sits at the bottom, while search sits at the top.
 #
 # SetFocus first (reliable, no pointer involved), falling back to a click at the
-# element's centre for surfaces that ignore programmatic focus — the same
+# element's centre for surfaces that ignore programmatic focus - the same
 # escalation philosophy as Handle-UiClick. Either way it then re-reads
 # FocusedElement and confirms the thing now holding the caret is editable. No
 # editable element, or focus that will not take, is an honest stop: "I can see the
 # app, I cannot find its message box" beats typing into the wrong field.
-# WAVE 9 (BUG-068): $Role selects WHICH box. Measured 2026-08-01 — typing into a
+# WAVE 9 (BUG-068): $Role selects WHICH box. Measured 2026-08-01 - typing into a
 # chat app's search field cannot go through ui_type alone, because ui_type places the
 # caret in the LARGEST text entry when nothing readable holds it, and a composer
 # (612x34 in WhatsApp) always beats a search field (367x31). A search term therefore
 # landed in the operator's message composer. The box has to be chosen deliberately.
 #
-#   'compose' (default) — lowest on screen, unchanged behaviour for app_reply.
-#   'search'            — an editable element whose Name says search, else the
+#   'compose' (default) - lowest on screen, unchanged behaviour for app_reply.
+#   'search'            - an editable element whose Name says search, else the
 #                         HIGHEST on screen. Both chat clients tested put search at
 #                         the top; the name match is preferred because position is a
 #                         weaker signal than the app's own label.
@@ -2783,7 +2783,7 @@ function Handle-FocusMessageBox($TargetPid, $Role) {
         $candidates = Find-EditableDescendants $win
         if ($candidates.Count -eq 0) {
             # Try the pid's own main window first, then whatever is actually in front
-            # — once a WebView2 app's box has been focused its RENDERER owns the
+            # - once a WebView2 app's box has been focused its RENDERER owns the
             # foreground window, and that is the tree holding the text boxes.
             $proc = $null
             try { $proc = Get-Process -Id $TargetPid -ErrorAction Stop } catch { }
@@ -2803,7 +2803,7 @@ function Handle-FocusMessageBox($TargetPid, $Role) {
         }
 
         if ($candidates.Count -eq 0) {
-            return ('Found the window for PID ' + $TargetPid + ' but no editable, keyboard-focusable element in it — cannot locate a message box.')
+            return ('Found the window for PID ' + $TargetPid + ' but no editable, keyboard-focusable element in it - cannot locate a message box.')
         }
 
         $wantSearch = ([string]$Role -eq 'search')
@@ -2812,7 +2812,7 @@ function Handle-FocusMessageBox($TargetPid, $Role) {
             if ($named.Count -gt 0) {
                 $pick = $named | Sort-Object -Property bottom | Select-Object -First 1
             } else {
-                # Highest on screen — search sits above the conversation.
+                # Highest on screen - search sits above the conversation.
                 $pick = $candidates | Sort-Object -Property bottom | Select-Object -First 1
             }
         } else {
@@ -2825,7 +2825,7 @@ function Handle-FocusMessageBox($TargetPid, $Role) {
 
         $focused = Read-FocusedElementText
         if ($null -eq $focused) {
-            # SetFocus did not take (or the focused element is unreadable) — click it.
+            # SetFocus did not take (or the focused element is unreadable) - click it.
             try {
                 Click-AtScreenCoords $pick.cx $pick.cy
                 $method = 'click-center'
@@ -2855,7 +2855,7 @@ function Handle-FocusMessageBox($TargetPid, $Role) {
     }
 }
 
-# WAVE 9 (BUG-064) — WHO is this message addressed to?
+# WAVE 9 (BUG-064) - WHO is this message addressed to?
 #
 # whatsapp_send verified the WINDOW it typed into and never the RECIPIENT. The
 # window title is "(194) WhatsApp" whether the open conversation is your mother or
@@ -2866,7 +2866,7 @@ function Handle-FocusMessageBox($TargetPid, $Role) {
 #
 # Measured against WhatsApp Desktop 2026-07-31: its compose box is
 # ControlType.Edit with Name "Type a message to <recipient>" and a WRITABLE
-# ValuePattern. The Name is the oracle — the app itself telling us who it will send
+# ValuePattern. The Name is the oracle - the app itself telling us who it will send
 # to. A second, independent one exists as the conversation-header Button
 # ("<recipient> ... Message yourself"), returned as headerName.
 #
@@ -2878,15 +2878,15 @@ function Handle-ReadComposeBox($TargetPid) {
         if ($TargetPid) {
             $fgP = 0
             [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
-            # Same-APP, not same-pid — see Test-SameApp (BUG-070).
+            # Same-APP, not same-pid - see Test-SameApp (BUG-070).
             if (-not (Test-SameApp $fgP $TargetPid)) {
                 return ('The foreground window belongs to PID ' + $fgP + ', which is not part of PID ' + $TargetPid + "'s application.")
             }
         }
-        # The text boxes are not always in the foreground window’s own tree: a
+        # The text boxes are not always in the foreground window's own tree: a
         # WebView2 app (WhatsApp, Teams) keeps them in a child process registered
         # as a separate desktop window. Resolve-EditableSurface handles that, by
-        # process parentage rather than geometry — see its header for why geometry
+        # process parentage rather than geometry - see its header for why geometry
         # offered up an overlapping Notepad as the message box.
         $surface = Resolve-EditableSurface $hwnd
         if (-not $surface) {
@@ -2939,7 +2939,7 @@ function Handle-ReadComposeBox($TargetPid) {
     }
 }
 
-# WAVE 9 (BUG-069) — empty a text box, provably.
+# WAVE 9 (BUG-069) - empty a text box, provably.
 #
 # Needed because ctrl+a and Delete both ride SendInput, which MSIX/WebView2 apps
 # silently discard (BUG-061), and UIA SetValue('') is ignored by React-controlled
@@ -2987,7 +2987,7 @@ function Handle-ClearFocusedBox($TargetPid, $Count) {
 
         # WM_KEYDOWN/WM_KEYUP first: React editors handle Backspace and Delete as KEY
         # events, and WM_CHAR 0x08 is silently ignored by them (measured against
-        # WhatsApp — the text was completely untouched). WM_CHAR is kept as a fallback
+        # WhatsApp - the text was completely untouched). WM_CHAR is kept as a fallback
         # for plain Win32 edit controls, which do honour it.
         $via = $null
         for ($i = 0; $i -lt $n; $i++) {
@@ -3030,11 +3030,11 @@ function Handle-ClearFocusedBox($TargetPid, $Count) {
     }
 }
 
-# WAVE 9 (BUG-067) — a send that can be PROVEN, because Enter cannot.
+# WAVE 9 (BUG-067) - a send that can be PROVEN, because Enter cannot.
 #
 # 2026-08-01: whatsapp_send reported sent:true and the message was still sitting in
 # the composer. Enter rides SendInput, which this MSIX app silently discards
-# (BUG-061), so `send_key enter` was "accepted" and nothing was submitted — the
+# (BUG-061), so `send_key enter` was "accepted" and nothing was submitted - the
 # exact shape of lie this whole plan exists to remove, one layer further out.
 #
 # from-pc.js's keyPressed() already predicted both the problem and the fix in a
@@ -3043,10 +3043,10 @@ function Handle-ClearFocusedBox($TargetPid, $Count) {
 #
 # Mechanisms, in order of provability, each verified by the same oracle:
 #   1. Invoke the app's own Send button through UIA (measured present in WhatsApp as
-#      Button name='Send', invokable) — no input stack involved at all.
+#      Button name='Send', invokable) - no input stack involved at all.
 #   2. WM_CHAR carriage return to the focused control (WM_CHAR is the mechanism that
 #      succeeded for TYPING into this app, so it is the best keystroke bet).
-#   3. SendInput Enter — the old path, kept last because it is the one measured to
+#   3. SendInput Enter - the old path, kept last because it is the one measured to
 #      fail here.
 #
 # The oracle is the composer emptying. A composer that was empty to begin with is
@@ -3058,7 +3058,7 @@ function Handle-SubmitMessage($TargetPid) {
             $fgP = 0
             [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$fgP)
             # Same-APP, not same-pid (BUG-070). Submitting in a DIFFERENT application
-            # is still refused — that is the property protecting the operator here.
+            # is still refused - that is the property protecting the operator here.
             if (-not (Test-SameApp $fgP $TargetPid)) {
                 return ('Refusing to submit: the foreground window belongs to PID ' + $fgP +
                     ', which is not part of PID ' + $TargetPid + "'s application.")
@@ -3086,7 +3086,7 @@ function Handle-SubmitMessage($TargetPid) {
             return 'The message box cannot be read, so a send could not be verified either way. Nothing was submitted.'
         }
         if (-not ([string]$before).Trim()) {
-            return 'The message box is empty — there is nothing to send.'
+            return 'The message box is empty - there is nothing to send.'
         }
 
         $tried = @()
@@ -3110,7 +3110,7 @@ function Handle-SubmitMessage($TargetPid) {
         $after = & $readBox
         if ($null -ne $after -and -not ([string]$after).Trim()) { $mechanism = 'uia-invoke-send' }
 
-        # 2. WM_CHAR carriage return — the mechanism that works for typing here.
+        # 2. WM_CHAR carriage return - the mechanism that works for typing here.
         if (-not $mechanism) {
             $tried += 'wm-char-return'
             try {
@@ -3158,7 +3158,7 @@ function Handle-SubmitMessage($TargetPid) {
     }
 }
 
-# WAVE 9 (BUG-062) — "open notepad" must mean a BLANK document, every time.
+# WAVE 9 (BUG-062) - "open notepad" must mean a BLANK document, every time.
 #
 # Win11 Notepad is a single-instance, TAB-BASED app with session restore. On
 # 2026-07-31 the operator asked for a fresh Notepad and got their own .env file
@@ -3168,7 +3168,7 @@ function Handle-SubmitMessage($TargetPid) {
 # discards (see BUG-061). The claim was unfalsifiable and false.
 #
 # So the new tab is opened the way UIA can prove: invoke the Add-New-Tab button
-# (AutomationId 'AddButton', read off the live app rather than guessed — its Name
+# (AutomationId 'AddButton', read off the live app rather than guessed - its Name
 # is localised, its AutomationId is not) and require the TAB COUNT to rise and the
 # active document to be EMPTY. Keystrokes are only a fallback, and they have to
 # pass the same check.
@@ -3225,7 +3225,7 @@ function Handle-NewDocument($TargetPid) {
         $tabsAfter = & $countTabs
         $textAfter = & $activeText
 
-        # Fallback: ctrl+n. Held to the SAME oracle — a keystroke that reports
+        # Fallback: ctrl+n. Held to the SAME oracle - a keystroke that reports
         # "sent" proves nothing about whether a tab appeared.
         if (($tabsAfter -le $tabsBefore) -or ($null -eq $textAfter) -or $textAfter.Trim()) {
             try {
@@ -3256,7 +3256,7 @@ function Handle-NewDocument($TargetPid) {
     }
 }
 
-# WAVE 2 — which window has the keyboard RIGHT NOW. The foreground-pid oracle.
+# WAVE 2 - which window has the keyboard RIGHT NOW. The foreground-pid oracle.
 # Needed because "is Enter about to send a Slack message" cannot be answered from
 # anything remembered: focus moves without telling us (the operator alt-tabs, a
 # confirm dialog closes), and on 2026-07-31 two Enters went into a real Slack DM
@@ -3281,7 +3281,7 @@ function Handle-GetForegroundWindow() {
     }
 }
 
-# WAVE 2 STEP A — the mechanism experiment, not a guess.
+# WAVE 2 STEP A - the mechanism experiment, not a guess.
 #
 # On 2026-07-31 11:28:09, against a foreground window confirmed as "Untitled -
 # Notepad", SendInput reported a full 23-character injection and the screenshot 28
@@ -3296,7 +3296,7 @@ function Handle-GetForegroundWindow() {
 # voice path.
 #
 # Deliberate deviation from the plan: "UIA TextPattern insertion" is not a
-# mechanism. TextPattern is read-only in UI Automation — no insertion API exists.
+# mechanism. TextPattern is read-only in UI Automation - no insertion API exists.
 # Route 2 is instead UIA SetFocus followed by SendInput, which is a genuinely
 # different route (it fixes focus through UIA rather than trusting the OS
 # foreground) and is the one most likely to explain the Notepad case.
@@ -3319,7 +3319,7 @@ function Handle-DiagnoseType($text, $TargetPid) {
     # landed:$true on the FIRST route's leftover text. Measured 2026-07-31 against
     # Win11 Notepad: routes 2-4 all claimed success over text that UIA SetValue
     # (route 1) had put there. An instrument that rides the mechanism it measures
-    # cannot falsify it — the screen_look/Wave 4 mistake in a different costume.
+    # cannot falsify it - the screen_look/Wave 4 mistake in a different costume.
     #
     # UIA SetValue is independent of the input stack, so it clears honestly. It
     # returns whether the field was actually emptied, and each attempt records
@@ -3354,7 +3354,7 @@ function Handle-DiagnoseType($text, $TargetPid) {
         $trustworthy = ($FieldWasEmpty -eq $true)
         if ($landed -and -not $trustworthy) {
             $landed = $false
-            $Detail = [string]$Detail + ' — INCONCLUSIVE: the field could not be cleared first, so matching text may be left over from an earlier route'
+            $Detail = [string]$Detail + ' - INCONCLUSIVE: the field could not be cleared first, so matching text may be left over from an earlier route'
         }
         return @{
             mechanism = $Name
@@ -3367,7 +3367,7 @@ function Handle-DiagnoseType($text, $TargetPid) {
         }
     }
 
-    # --- 1: UIA ValuePattern.SetValue — no keystrokes at all -----------------
+    # --- 1: UIA ValuePattern.SetValue - no keystrokes at all -----------------
     $wasEmpty = & $clear
     $d1 = 'not attempted'
     try {
@@ -3394,7 +3394,7 @@ function Handle-DiagnoseType($text, $TargetPid) {
     } catch { $d2 = 'threw: ' + $_.Exception.Message }
     $attempts += (& $record 'uia-setfocus-then-sendinput' $d2 $wasEmpty)
 
-    # --- 3: SendInput unicode — the current production path ------------------
+    # --- 3: SendInput unicode - the current production path ------------------
     $wasEmpty = & $clear
     $d3 = 'not attempted'
     try {
@@ -3428,7 +3428,7 @@ function Handle-DiagnoseType($text, $TargetPid) {
     $attempts += (& $record 'wm-char-post' $d4 $wasEmpty)
 
     # Leave the field as we found it. $clear now RETURNS a verdict, so discard it
-    # explicitly — an unassigned call would emit into this function's output and
+    # explicitly - an unassigned call would emit into this function's output and
     # turn the returned hashtable into an array.
     $null = & $clear
 
@@ -3447,7 +3447,7 @@ function Handle-DiagnoseType($text, $TargetPid) {
     }
 }
 
-# VK codes for send_key — real virtual keystrokes for keys that Chromium/Electron
+# VK codes for send_key - real virtual keystrokes for keys that Chromium/Electron
 # apps (Spotify, etc.) don't reliably accept as Unicode WM_CHAR events.
 $VK_CODES = @{
     enter  = 0x0D
@@ -3468,7 +3468,7 @@ $VK_CODES = @{
     delete = 0x2E
     home   = 0x24
     end    = 0x23
-    # BUG-077: function keys — needed to express alt+f4 ("close Spotify"). VK_F1
+    # BUG-077: function keys - needed to express alt+f4 ("close Spotify"). VK_F1
     # is 0x70 and they're contiguous through VK_F12 (0x7B).
     f1 = 0x70; f2 = 0x71; f3 = 0x72; f4 = 0x73; f5 = 0x74; f6 = 0x75
     f7 = 0x76; f8 = 0x77; f9 = 0x78; f10 = 0x79; f11 = 0x7A; f12 = 0x7B
@@ -3528,7 +3528,7 @@ function Send-VkKeyUp($vk) {
 # therefore the only ones the read-back oracle can grade. Enter either submits
 # (composer empties) or inserts a newline; space/delete/letters edit in place.
 #
-# Everything else — tab, escape, home, end, the arrows, f1-f12 — moves the caret,
+# Everything else - tab, escape, home, end, the arrows, f1-f12 - moves the caret,
 # changes selection, or talks to the app, all WITHOUT touching the text. For those,
 # "the text did not change" is the expected outcome of a SUCCESSFUL press, so it is
 # not evidence of anything and must never trigger an escalation.
@@ -3550,11 +3550,11 @@ function Handle-SendKey($key, $TargetPid) {
     if ($TargetPid) {
         $caretPid = Get-CaretOwnerPid
         if ($caretPid -and -not (Test-SameApp $caretPid $TargetPid)) {
-            # RUNG 0 — CARET RE-ACQUISITION (Wave 3, 2026-08-13). Before aborting,
+            # RUNG 0 - CARET RE-ACQUISITION (Wave 3, 2026-08-13). Before aborting,
             # try to put the caret back where it belongs, the same way Handle-UiType's
             # WAVE 9 fix does for typing (Focus-EditableDescendant: UIA SetFocus on the
             # target window's largest editable descendant, falling back to a click at
-            # its center). Reuses that exact helper rather than a second detector —
+            # its center). Reuses that exact helper rather than a second detector -
             # the caret drifting to another app (a confirm-dialog round trip, a stray
             # click) is the same failure mode typing already recovers from; send_key
             # never got the same recovery and just gave up.
@@ -3592,7 +3592,7 @@ function Handle-SendKey($key, $TargetPid) {
         }
         # Wave 3-fix (live-verified 2026-08-13): the pre-send title is captured
         # ONLY for ctrl+s (gated below), needed to tell a real MSIX blackhole
-        # apart from a real save — see the comment at $msixBlackhole below.
+        # apart from a real save - see the comment at $msixBlackhole below.
         $fgTitleBefore = $null
         if ($raw -eq 'ctrl+s') {
             $fgHwndBefore = [NativeInput]::GetForegroundWindow()
@@ -3604,7 +3604,7 @@ function Handle-SendKey($key, $TargetPid) {
         Send-VkCombo $modVks $vk
         $comboSentZero = ($null -ne $script:LastVkSent -and $script:LastVkSent -lt 1)
 
-        # Wave 3 (2026-08-13) — ctrl+s is the ONE explicit exception to "combos get
+        # Wave 3 (2026-08-13) - ctrl+s is the ONE explicit exception to "combos get
         # no escalation ladder" (comment below, unchanged for every other combo).
         # A save is common enough, and unambiguous enough (there is exactly one
         # verifiable equivalent action, not N possible base-key mismatches like
@@ -3617,27 +3617,27 @@ function Handle-SendKey($key, $TargetPid) {
             [void][NativeInput]::GetWindowText($fgHwnd2, $sb2, 512)
             $fgTitle2 = $sb2.ToString()
             # A Save-As dialog appearing is neither success nor failure of the save
-            # itself — it's the app asking a question this call cannot answer.
+            # itself - it's the app asking a question this call cannot answer.
             # Reported as its own distinct outcome; dismissing it is the caller's
             # next verifiable step (e.g. send_key('enter') or send_key('escape')).
             $saveAsOpened = ($fgTitle2 -match 'Save As')
 
             # LIVE-VERIFIED FIX (2026-08-13): $comboSentZero is driven purely by
-            # SendInput()'s OS-level return value — the number of INPUT structs
+            # SendInput()'s OS-level return value - the number of INPUT structs
             # the OS accepted into the input stream. On Win11's MSIX Notepad that
             # is (almost) never zero: the OS always accepts the events, then the
-            # MSIX app's message loop silently discards them — the exact
+            # MSIX app's message loop silently discards them - the exact
             # blackhole adapters/CLAUDE.md documents ("silently discard SendInput
             # while reporting the injected event as successful"). Verified live:
             # comboSentZero was false, "sent:true" was returned, no Save-As
             # dialog ever opened, and the title never lost its "*" unsaved
-            # marker — the save never happened, but the ONLY escalation gate
+            # marker - the save never happened, but the ONLY escalation gate
             # that existed (comboSentZero) never fires for this exact case,
             # making the whole fallback below dead code on the app it names in
             # its own header. A title that still starts with "*" (Notepad's own
             # unsaved-changes marker) and did not change at all is the same
             # class of proof-of-absence every other route in this file already
-            # requires before falling through — not a guess, a re-check of the
+            # requires before falling through - not a guess, a re-check of the
             # oracle the file already trusts elsewhere.
             $msixBlackhole = (-not $saveAsOpened) -and $fgTitleBefore -and
                 $fgTitleBefore.StartsWith('*') -and ($fgTitle2 -eq $fgTitleBefore)
@@ -3651,7 +3651,7 @@ function Handle-SendKey($key, $TargetPid) {
             # SendInput delivered nothing (the MSIX blackhole every other route in
             # this file works around), OR it reported delivery but the title proves
             # the app never acted on it (the same blackhole, self-reported as a
-            # false success instead of comboSentZero) — try the app's own Save UI
+            # false success instead of comboSentZero) - try the app's own Save UI
             # element via UIA, which does not travel through the input stack
             # SendInput uses.
             $saveEl = $null
@@ -3662,10 +3662,10 @@ function Handle-SendKey($key, $TargetPid) {
             $blackholeReason = if ($comboSentZero) { 'SendInput injected 0 events' } else { "SendInput reported success but the window title ($fgTitle2) never changed" }
             $viaFileMenu = $false
             if (-not $saveEl -and $root2) {
-                # BUG-219 follow-up — the direct scan above only finds a
+                # BUG-219 follow-up - the direct scan above only finds a
                 # 'Save'/'Save As' element already on screen; Notepad's is
                 # inside the 'File' menu's flyout, never resting-state
-                # visible. Narrow, named-menu-only escalation — see
+                # visible. Narrow, named-menu-only escalation - see
                 # Find-SaveViaFileMenu's own header for why.
                 try { $saveEl = Find-SaveViaFileMenu $root2 $TargetPid } catch { $script:LastFileMenuDebug = @('outer-err:' + $_.Exception.Message) }
                 if ($saveEl) { $viaFileMenu = $true }
@@ -3688,7 +3688,7 @@ function Handle-SendKey($key, $TargetPid) {
             # Same oracle discipline as the SendInput leg above: invoking the
             # element is not itself proof anything happened. A Save-As dialog
             # opening IS proof (its own distinct outcome, unchanged). Absent
-            # that, the title must have actually changed — still '*'-prefixed
+            # that, the title must have actually changed - still '*'-prefixed
             # and byte-identical to before is exactly the "reported success,
             # nothing happened" shape this whole fix exists to stop reporting.
             if ($saveAsOpenedNow) {
@@ -3697,7 +3697,7 @@ function Handle-SendKey($key, $TargetPid) {
             if ($fgTitleBefore -and $fgTitleBefore.StartsWith('*') -and ($fgTitle3 -eq $fgTitleBefore)) {
                 return ("Send key 'ctrl+s' failed: invoked the '$($saveEl.name)' element via " +
                     "$mechanism, but the window title ($fgTitle3) still shows unsaved changes and no " +
-                    'Save-As dialog opened — nothing verifiably happened.')
+                    'Save-As dialog opened - nothing verifiably happened.')
             }
             return @{ key = $raw; sent = $true; combo = $true; mechanism = $mechanism }
         }
@@ -3707,7 +3707,7 @@ function Handle-SendKey($key, $TargetPid) {
         }
         # Combos deliberately get NO escalation ladder. WM_KEYDOWN carries a single
         # virtual key and no modifier state, so posting the base key of "ctrl+n" would
-        # deliver a bare 'n' — a wrong action dressed up as a recovered one. A combo
+        # deliver a bare 'n' - a wrong action dressed up as a recovered one. A combo
         # that SendInput cannot deliver is reported honestly instead.
         return @{ key = $raw; sent = $true; combo = $true; mechanism = 'sendinput-vk' }
     }
@@ -3717,7 +3717,7 @@ function Handle-SendKey($key, $TargetPid) {
         return @("Unknown key: $key. Valid: $($VK_CODES.Keys -join ', ')")
     }
 
-    # MECHANISM LADDER (2026-08-02) — the send_key analogue of Handle-UiType's.
+    # MECHANISM LADDER (2026-08-02) - the send_key analogue of Handle-UiType's.
     #
     # MSIX-packaged apps (Win11 Notepad, WhatsApp Desktop) silently discard SendInput
     # while reporting the events as injected: UIPI blocks it and, per Microsoft's own
@@ -3728,7 +3728,7 @@ function Handle-SendKey($key, $TargetPid) {
     # escalates around ('sendinput-unicode' -> 'uia-setvalue' -> 'wm-char-post').
     #
     # ESCALATION IS GATED ON PROOF OF ABSENCE, exactly as in Handle-UiType. A key that
-    # DID land and is then re-sent through route 2 fires the action twice — for Enter in
+    # DID land and is then re-sent through route 2 fires the action twice - for Enter in
     # a chat app that means sending the message twice, which is worse than an honest
     # "I could not confirm this". So a route only runs when the oracle positively shows
     # the control unchanged, and when no oracle is available nothing escalates.
@@ -3753,7 +3753,7 @@ function Handle-SendKey($key, $TargetPid) {
     }
 
     if ($landed -eq $false) {
-        # Route 2 — WM_KEYDOWN/WM_KEYUP posted straight at the focused child control.
+        # Route 2 - WM_KEYDOWN/WM_KEYUP posted straight at the focused child control.
         # This bypasses the input stack UIPI guards, and unlike WM_CHAR it carries a
         # real virtual key, so editors that treat Enter/Delete as key events (React
         # composers, Chromium) see what they expect. GetFocus is thread-local, so our
@@ -3782,7 +3782,7 @@ function Handle-SendKey($key, $TargetPid) {
     }
 
     if ($landed -eq $false -and $raw -eq 'enter') {
-        # Route 3 — ask the app to do the thing Enter means, through UIA. Only Enter has
+        # Route 3 - ask the app to do the thing Enter means, through UIA. Only Enter has
         # a defensible UIA equivalent: invoke the default action of whatever holds the
         # caret. There is no UIA analogue of "press Delete", so the other oracle keys
         # stop at route 2 rather than invoking something arbitrary.
@@ -3804,7 +3804,7 @@ function Handle-SendKey($key, $TargetPid) {
     }
 
     if ($landed -eq $false -and $raw -eq 'enter') {
-        # Route 4 — WM_CHAR posted with \r, same mechanism Handle-UiType's route 3
+        # Route 4 - WM_CHAR posted with \r, same mechanism Handle-UiType's route 3
         # (wm-char-post) already uses for ordinary text, applied to Enter specifically.
         # Route 2 (wm-key-post) carries a real virtual key and is preferred when it
         # works; this exists for controls that only listen for the CHARACTER form of
@@ -3844,7 +3844,7 @@ function Handle-SendKey($key, $TargetPid) {
     if ($mechanismsTried.Count -gt 1) { $result.mechanismsTried = $mechanismsTried }
     # State the oracle's verdict rather than leaving the caller to infer it. A proven
     # failure already returned above, so the only two states left are PROVEN LANDED and
-    # UNKNOWN — and they get different field names so no consumer can mistake the second
+    # UNKNOWN - and they get different field names so no consumer can mistake the second
     # for the first, or for a failure.
     if ($landed -eq $true) {
         $result.keyLanded = $true
@@ -3937,7 +3937,7 @@ function Handle-MediaStatus {
             }
         }
 
-        # Timeline (position/duration) — synchronous properties; guard separately
+        # Timeline (position/duration) - synchronous properties; guard separately
         # so a timeline failure never degrades the rest of media_status.
         try {
             $timeline = $currentSession.GetTimelineProperties()
@@ -3953,11 +3953,11 @@ function Handle-MediaStatus {
     }
 }
 
-# WAVE 9 (BUG-072) — Chromium/Electron builds its a11y tree LAZILY, on first UIA
+# WAVE 9 (BUG-072) - Chromium/Electron builds its a11y tree LAZILY, on first UIA
 # query (the same gotcha Read-FocusedElementText already retries once for,
 # elsewhere in this file). A path resolved against an earlier turn's snapshot
 # can go stale before a freshly-opened window's tree has settled, surfacing as
-# "Element path index 0 out of range (parent has 0 children)" — a real example
+# "Element path index 0 out of range (parent has 0 children)" - a real example
 # against WhatsApp at 20:10:36. One retry after a short settle, reusing that
 # same precedent, before treating the path as genuinely gone.
 function Resolve-UIAElement($TargetPid, $elementPath) {
@@ -3994,7 +3994,7 @@ function Resolve-UIAElementOnce($TargetPid, $elementPath) {
                         $labels += ([string]$c.Current.ControlType.LocalizedControlType + ':' + [string]$c.Current.Name)
                     } catch { }
                 }
-                $labelText = if ($labels.Count -gt 0) { ' — current children: ' + ($labels -join ', ') } else { '' }
+                $labelText = if ($labels.Count -gt 0) { ' - current children: ' + ($labels -join ', ') } else { '' }
                 return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)' + $labelText) }
             }
         }
@@ -4046,7 +4046,7 @@ function Handle-ClickAt($x, $y) {
     }
 }
 
-# Task 3 (step 5, desktop gaps) — clipboard read/write. Same Handle-*
+# Task 3 (step 5, desktop gaps) - clipboard read/write. Same Handle-*
 # convention as every other command here: return a hashtable on success, a
 # bare string on failure (the dispatch loop below treats a string result as
 # ok:false).
@@ -4070,10 +4070,10 @@ function Handle-SetClipboard($text) {
     }
 }
 
-# §7.7 (step 5, desktop gaps) — wallpaper engine via SystemParametersInfo
+# sec 7.7 (step 5, desktop gaps) - wallpaper engine via SystemParametersInfo
 # P/Invoke (NativeInput class above). Path validation/sandboxing happens on
 # the JS side (from-pc.js's resolveSandboxed, reused from from-computer.js)
-# before this ever runs — this function only checks the resolved path
+# before this ever runs - this function only checks the resolved path
 # actually exists, matching this file's own Handle-X convention.
 function Handle-SetWallpaper($path) {
     if (-not $path) { return 'A wallpaper image path is required.' }
@@ -4150,7 +4150,7 @@ while ($true) {
         'launch_app' {
             $result = Handle-LaunchApp $cmd.name
             # FIX 4: this case was missing the string-result-is-failure guard
-            # every other handler below already has — a genuine "Failed to
+            # every other handler below already has - a genuine "Failed to
             # launch..." string (including FIX 4's new honest failure) shipped
             # as {ok:true, result:"<failure text>"} instead of ok:false.
             if ($result -is [string]) { $err = $result; $result = $null }
@@ -4193,7 +4193,7 @@ while ($true) {
         'media_key' {
             $result = Handle-MediaKey $cmd.key
             # REMEDIATION P0-2: the dispatch loop's final gate below only sets
-            # ok:false from $err (unknown-command) or a null $result — every
+            # ok:false from $err (unknown-command) or a null $result - every
             # Handle-* function's own bare-string failure (this file's
             # established convention: string = failure, hashtable = success)
             # otherwise fell through as {ok:true, result:"<failure text>"}.
@@ -4237,7 +4237,7 @@ while ($true) {
         }
         'ui_type' {
             $result = Handle-UiType $cmd.text $cmd.pid $cmd.elementPath
-            # REMEDIATION P0-2: same dispatcher defect as media_key above —
+            # REMEDIATION P0-2: same dispatcher defect as media_key above -
             # without this, Handle-UiType's zero-SendInput honest failure (and
             # its plain arg-validation failures) always shipped as ok:true,
             # and from-pc.js's foregroundThenRetry (which only retries on
@@ -4281,7 +4281,7 @@ while ($true) {
         }
         'click_at' {
             $result = Handle-ClickAt $cmd.x $cmd.y
-            # Same guard as ui_click above — Handle-ClickAt's own 'Click failed: ...'
+            # Same guard as ui_click above - Handle-ClickAt's own 'Click failed: ...'
             # string must reach the caller as ok:false, not a false success.
             if ($result -is [string]) { $err = $result; $result = $null }
         }
@@ -4292,7 +4292,7 @@ while ($true) {
             $result = Handle-WriteNote $cmd.text $cmd.title
         }
         'screen_read_text' {
-            # BUG-108: pid is optional — absent means the whole desktop, as before.
+            # BUG-108: pid is optional - absent means the whole desktop, as before.
             $result = Handle-ScreenReadText $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
@@ -4319,16 +4319,16 @@ while ($true) {
     # each added reactively after a bug proved that arm was missing it (see the
     # comments on launch_app FIX 4, media_key P0-2, ui_click, ui_type, click_at).
     #
-    # close_window never got one. Handle-CloseWindow was made honest in BUG-103 —
+    # close_window never got one. Handle-CloseWindow was made honest in BUG-103 -
     # it returns a STRING when the window is still open, and its own comment says
-    # "Returning a STRING is how this file reports an honest failure" — but with
+    # "Returning a STRING is how this file reports an honest failure" - but with
     # no guard on its arm, that honest failure shipped as
     # {ok:true, result:"<...did not close... Nothing was closed...>"}. Live on
     # 2026-08-14: the audit recorded outcome "ok" while the result text said the
     # window was still open. from-pc.js's Node backstop missed it too, because it
     # still tests for the pre-BUG-103 hashtable shape (result.closed === false).
     #
-    # Enforcing it once, here, is the fix — a 25th copy would leave the next
+    # Enforcing it once, here, is the fix - a 25th copy would leave the next
     # unguarded arm to be found by the next incident. This also closes the same
     # latent hole in move_window, snap_window, scroll_at, right_click_at, drag,
     # screen_look, ui_elements and write_note, whose string returns are ALL

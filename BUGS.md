@@ -6348,12 +6348,12 @@ existence and its position before `Write-Response`, plus the end-to-end
 dispatcher assertion (windows-only skip guard; CI is `windows-latest`, so it
 runs there).
 
-**Observed, NOT fixed** (separate defect, recorded so it is not lost): the
-failure text reaches Node mojibaked — `"confirmation prompt â€" check the
-screen"` — a UTF-8 em dash (U+2014) decoded as cp1252 somewhere in the failure
-path, despite `Write-Response`'s ASCII-safe `\uXXXX` escaping. Present in the
-2026-08-14 episodic record too, so it is not new. It is spoken aloud, so it is
-worth its own fix; it is not this one.
+**Observed here, fixed separately as BUG-226** (below): the failure text reached
+Node mojibaked — `"confirmation prompt â€" check the screen"` — a UTF-8 em dash
+(U+2014) decoded as cp1252, despite `Write-Response`'s ASCII-safe `\uXXXX`
+escaping. Present in the 2026-08-14 episodic record too, so it was not new. The
+"somewhere in the failure path" guess in this note was wrong: it happens at
+**parse** time, before any string exists to escape.
 
 ## BUG-224 — MYTHOS's own Live voice was fed back to Gemini's VAD, causing BOTH the interruptions and the clipped last word
 
@@ -6486,3 +6486,59 @@ child; `powershell.exe` = the pc-child daemon; piper listens on 5051), whether
 ports 4478/5050/5051 are still held (`netstat -ano | findstr 4478`), and the tail
 of `%APPDATA%\MYTHOS\main.log`. Which of those three survives is what separates
 the candidate causes.
+
+## BUG-226 — spoken failure messages were mojibaked because PowerShell 5.1 parses a BOM-less script as cp1252
+
+**Split out of BUG-223, 2026-08-14.** `close_window`'s honest refusal reached
+Node — and the operator's speakers — as
+
+    It may be showing a confirmation prompt â€" check the screen, or ask me to force it.
+
+**The cause is at PARSE time, not output time.** `ps-automation.ps1` was stored
+UTF-8 with **no byte-order mark**, and Windows PowerShell 5.1 parses a BOM-less
+script as the ANSI codepage (cp1252 here). The source bytes `E2 80 94` (U+2014,
+em dash) were therefore read by the parser as three separate cp1252 characters
+— `â`, `€`, `”` — and the string was already corrupt in memory before any code
+touched it.
+
+**Why both existing encoding guards missed it.** `adapters/CLAUDE.md` records two
+protections, and both act on **output**: the UTF-8 console-encoding block, and
+`Write-Response`'s escaping of non-ASCII to `\uXXXX`. They worked exactly as
+designed — they faithfully transmitted the three mojibake characters as three
+correct `\uXXXX` escapes. **Escaping a corrupt string preserves the corruption.**
+BUG-223's note guessed the corruption happened "somewhere in the failure path"
+*despite* the escaping; in fact it happened upstream of the escaping, which is
+why the escaping looked innocent.
+
+**Proven with the real parser**, `[System.Management.Automation.Language.Parser]::ParseFile`
+under Windows PowerShell 5.1, on the same literal in both revisions:
+
+    HEAD~ : 'It may be showing a confirmation prompt â€" check the screen, ...'
+    fixed : 'It may be showing a confirmation prompt - check the screen, ...'
+
+**FIXED** by making every tracked `.ps1` pure ASCII — 185 em dashes, 3 `→`, 3
+`§` and 1 `’` in `ps-automation.ps1`, plus 1 em dash in
+`scripts/setup-chrome-debug.ps1`. All of them sat in comments or in operator-
+facing prose, where a hyphen reads identically; none is load-bearing.
+
+**Why ASCII and not a BOM.** Adding a BOM would also fix the parse, in one byte.
+It was rejected: a BOM is a single invisible byte that any editor, formatter or
+tooling pass can silently drop, which reintroduces this bug with **no visible
+diff** — the same class of invisible-regression trap as the gitignored
+wake-word models. ASCII-only is greppable, diff-visible, and correct regardless
+of which PowerShell edition or console codepage reads the file.
+
+**Live-verified 2026-08-14** beyond the parser check: the rewritten script was
+driven end to end as a JSON-over-stdin daemon and answered `ping`,
+`close_window` (no pid → `ok:false,"PID is required."`, so BUG-223's hoisted
+gate survives) and `list_windows` (9 windows). Load-bearing pieces re-counted
+intact per `adapters/CLAUDE.md`: UTF-8 console encoding, `Await-WinRTOperation`
+(12), `$TargetPid` (120), DPI awareness (2), `click_at`, `Write-Response` (9),
+the string-is-failure gate (25).
+
+**Regression test**: `test/ps-source-is-ascii.test.js` — enumerates
+`git ls-files '*.ps1'` and asserts no byte above `0x7F`, reporting the offending
+offset with ASCII context. It has a non-vacuity check (fails if the file list is
+empty or stops covering `ps-automation.ps1`), and it earned its keep immediately:
+it caught `setup-chrome-debug.ps1`, which the hand scan that preceded it missed
+because that scan only walked `adapters/`.
