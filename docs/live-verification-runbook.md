@@ -255,6 +255,33 @@ six visits. Record each outcome against its BUG entry as you go.
 
 **Tuning:** if echo loops happen intermittently, the BUG-027 gate (`voice-loop.js:113`) may need the `assistantSpeaking` flag widened. Document the transcript in BUGS.md.
 
+**On the Live (S2S) path — BUG-224, added 2026-08-14, CODED not verified.** The
+above is the legacy loop. On S2S the echo source is the Live model's OWN spoken
+reply, and the new gate in `s2s-bridge.js` stops those mic frames reaching
+Gemini's VAD while MYTHOS is audible. This is the fix for *both* "it interrupts
+me" and "the last word is half-spoken" — one mechanism caused both (Gemini heard
+itself finish a sentence, called it a barge-in, and stopped synthesizing).
+
+Check all four of these in one pass:
+1. **Clipping gone** — ask for a multi-sentence answer on open-air speakers. Every
+   sentence should finish its final word. Half-spoken endings mean the gate is not
+   holding; check the server log for `voice-capture-suspend` frames with
+   `reason:"own-voice-hold"`.
+2. **No self-interruption** — MYTHOS must not cut itself off mid-reply, and must
+   not start a new turn off its own voice.
+3. **Barge-in still works** — talk over it firmly mid-reply. It must stop.
+   *This is the regression risk*: while the gate is held, the LOCAL backstop is the
+   only detector, and its threshold (`0.035 * 2.5` RMS sustained ~600ms) is higher
+   than Gemini's server VAD. If a normal-volume interruption no longer lands,
+   lower `BACKSTOP_RMS_THRESHOLD` — do not disable the gate.
+4. **Nothing is swallowed** — when you do interrupt, the first word must survive.
+   Say "stop, actually what's the weather" and confirm it did not hear only
+   "actually what's the weather" (that is the 1.2s preroll replay working).
+
+**Kill switch** (no rebuild): `localStorage.MYTHOS_LIVE_HALF_DUPLEX = 'off'` in the
+browser console, then reload. Use it to A/B the same question if you are unsure
+whether the gate helped.
+
 **Existing unit coverage:** None. The bug entry itself (`BUGS.md:661`) documents why: building a harness would require mocking `MediaRecorder` / `AudioContext` / `getUserMedia` / `AudioWorklet`, which is out of scope.
 
 ---

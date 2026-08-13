@@ -67,7 +67,17 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // Gemini's VAD fires; this only covers the case where it MISSES, which is
   // what the operator experiences as "it talks over me". Local flush only —
   // see barge-in-backstop.js for why nothing is sent to the server here.
-  const bargeBackstop = createBargeInBackstop({ onFlush: () => { if (player) player.flush(); } });
+  // releaseOwnVoiceGate is a function DECLARATION below, so it is hoisted and
+  // safe to reference here. A sustained-loud local streak is the operator
+  // genuinely talking over us, which is exactly when the half-duplex gate has
+  // to get out of the way — see the gate's own comment for why it opens here
+  // rather than waiting for playback to end.
+  const bargeBackstop = createBargeInBackstop({
+    onFlush: () => {
+      if (player) player.flush();
+      releaseOwnVoiceGate('barge-in');
+    },
+  });
 
   // Bound listener refs, so stop() can precisely unsubscribe the exact
   // functions start() registered (offBroadcast matches by reference).
@@ -204,6 +214,85 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     setCaptureSuspended(true, Number(holdMs) || MEDIA_START_SUSPEND_MS, 'media-start');
   }
 
+  // ---- BUG-224: half-duplex against MYTHOS's OWN Live voice -----------------
+  //
+  // The gate above covers our own edge-tts and media playback. It never covered
+  // the loudest source of all: the Live model's own spoken reply. Those frames
+  // come out of the same speakers, back in through the same mic, and go straight
+  // to Gemini's server-side VAD — which is configured START_SENSITIVITY_HIGH
+  // (live-session.js) precisely so it reacts to speech onset quickly.
+  //
+  // That produces BOTH of the operator's complaints from one mechanism:
+  //   - the VAD hears MYTHOS's own trailing word, decides the operator has
+  //     started talking, and fires serverContent.interrupted — so the server
+  //     STOPS SYNTHESIZING mid-word. This is why pcm-player's 250ms tail guard
+  //     (BUG-084) never fixed the clipping: that guard protects audio already
+  //     buffered on the client, and cannot recover a word the server never sent.
+  //   - and the same self-trigger, one turn later, reads as MYTHOS interrupting
+  //     the operator.
+  //
+  // getUserMedia already asks for echoCancellation (mic-device.js) and it is not
+  // enough on open-air speakers — BUGS.md has recorded that twice.
+  //
+  // Two properties make this safe rather than a mute button:
+  //   1. It gates the SEND to Gemini only. bargeBackstop.observe() keeps running
+  //      on every frame, so a genuine interruption is still detected locally —
+  //      and its onFlush opens this gate immediately (see above). Gating the
+  //      observe() call too, the way the media gate does, would disable barge-in
+  //      exactly while MYTHOS is speaking, which is the only time it matters.
+  //   2. The frames dropped during the gate are not thrown away but kept in a
+  //      short preroll ring and sent on release, so the first word of an
+  //      interruption is not lost. Without this, "stop, actually—" would reach
+  //      the model as "actually—".
+  //
+  // Kill switch: localStorage.MYTHOS_LIVE_HALF_DUPLEX = 'off' (same per-session
+  // idiom the VAD constants already use — see docs/live-verification-runbook.md).
+  const PREROLL_MAX_FRAMES = 12;          // 12 x 100ms = 1.2s, bounds the memory
+  // Same fail-open reasoning as MAX_SUSPEND_MS above, and the same reason it is
+  // not optional: if onSpeakEnd never arrives (a player torn down mid-utterance,
+  // an AudioContext that never resumes), a gate with no ceiling leaves Live
+  // permanently deaf with no symptom except silence. No single reply runs this
+  // long, so reaching this ceiling always means something else broke.
+  const MAX_OWN_VOICE_HOLD_MS = 20000;
+  let ownVoiceGate = false;
+  let ownVoiceTimer = null;
+  let preroll = [];
+
+  function halfDuplexEnabled() {
+    try {
+      return String(window.localStorage.getItem('MYTHOS_LIVE_HALF_DUPLEX') || '').toLowerCase() !== 'off';
+    } catch (_) {
+      return true;   // no localStorage (tests, privacy modes) — default on
+    }
+  }
+
+  function holdOwnVoiceGate() {
+    if (!halfDuplexEnabled() || ownVoiceGate) return;
+    ownVoiceGate = true;
+    preroll = [];
+    if (ownVoiceTimer) clearTimeout(ownVoiceTimer);
+    ownVoiceTimer = setTimeout(() => {
+      ownVoiceTimer = null;
+      releaseOwnVoiceGate('ceiling-fail-open');
+    }, MAX_OWN_VOICE_HOLD_MS);
+    if (typeof ownVoiceTimer.unref === 'function') ownVoiceTimer.unref();
+    logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
+  }
+
+  function releaseOwnVoiceGate(reason) {
+    if (ownVoiceTimer) { clearTimeout(ownVoiceTimer); ownVoiceTimer = null; }
+    if (!ownVoiceGate) return;
+    ownVoiceGate = false;
+    // Replay what the operator said while we were talking over them. Oldest
+    // first, so the model receives it in the order it was spoken.
+    const held = preroll;
+    preroll = [];
+    for (const frame of held) {
+      try { send({ type: 'live-audio', data: arrayBufferToBase64(frame) }); } catch (_) { /* socket closed */ }
+    }
+    logSuspendTransition({ reason: reason || 'own-voice-release', ownVoiceGate: false, prerollFrames: held.length });
+  }
+
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let bin = '';
@@ -296,6 +385,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // ourselves (own TTS, media playback) those frames are not the operator
         // and must not count toward an interruption.
         bargeBackstop.observe(e.data, player ? player.isSpeaking() : false);
+        // BUG-224: while MYTHOS's own voice is in the room, hold the frames
+        // instead of feeding them to Gemini's VAD. observe() above deliberately
+        // still ran — it is what decides this is a real interruption and opens
+        // the gate, and it already takes isSpeaking() into account.
+        if (ownVoiceGate) {
+          preroll.push(e.data);
+          if (preroll.length > PREROLL_MAX_FRAMES) preroll.shift();
+          return;
+        }
         sendMessage({ type: 'live-audio', data: arrayBufferToBase64(e.data) });
       };
       source.connect(captureNode);
@@ -317,7 +415,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       return false;
     }
 
-    player = createPcmPlayer({ sampleRate: PLAYBACK_RATE });
+    player = createPcmPlayer({
+      sampleRate: PLAYBACK_RATE,
+      // BUG-224. The gate is driven by the edges of our OWN playback, so it is
+      // held for exactly as long as we are making noise — no fixed timeout to
+      // guess, and pcm-player's own END_GRACE_MS covers the room's reverb tail.
+      onSpeakStart: () => holdOwnVoiceGate(),
+      onSpeakEnd: () => releaseOwnVoiceGate('own-voice-ended'),
+    });
     active = true;
 
     // Slice 3: screen share rides the session lifecycle. Started here so frames

@@ -159,12 +159,28 @@ describe('barge-in backstop: actually wired into s2s-bridge.js', () => {
       'a server interrupt must clear the local run');
   });
 
-  it('never sends a cancel frame from the backstop — local flush only', () => {
+  it('never sends a cancel frame from the backstop — local flush, plus the gate release', () => {
     // The one thing that must NOT happen: a false positive that kills a turn the
-    // server VAD was correctly keeping alive. onFlush is wired to player.flush()
-    // and to nothing else.
-    assert.match(bridge(), /createBargeInBackstop\(\{\s*onFlush:\s*\(\)\s*=>\s*\{\s*if\s*\(player\)\s*player\.flush\(\);\s*\}\s*\}\)/,
-      'the backstop callback must be exactly player.flush() — no sendMessage, no cancel frame');
+    // server VAD was correctly keeping alive.
+    //
+    // Widened 2026-08-14 (BUG-224). onFlush now also opens the half-duplex
+    // own-voice gate. That is deliberately NOT the thing this test forbids:
+    // releasing the gate replays the operator's OWN held mic frames as ordinary
+    // `live-audio`, which is the same audio that would have been streaming
+    // anyway had the gate not been holding it. It sends no control frame and
+    // cancels nothing. The local backstop is the only detector that runs while
+    // the gate is held, so if it could not open the gate, barge-in would be
+    // impossible for exactly as long as MYTHOS is speaking.
+    assert.match(bridge(),
+      /createBargeInBackstop\(\{\s*onFlush:\s*\(\)\s*=>\s*\{\s*if\s*\(player\)\s*player\.flush\(\);\s*releaseOwnVoiceGate\('barge-in'\);\s*\},?\s*\}\)/,
+      'the backstop callback must be exactly player.flush() + releaseOwnVoiceGate — no cancel frame');
+
+    const release = bridge().slice(bridge().indexOf('function releaseOwnVoiceGate'));
+    const body = release.slice(0, release.indexOf('\n  }') + 1);
+    const sends = [...body.matchAll(/type:\s*'([a-z-]+)'/g)].map((m) => m[1]);
+    assert.deepEqual([...new Set(sends)].sort(), ['live-audio'],
+      'the gate release may only replay captured mic audio; any other frame type here would '
+      + 'be the backstop talking to the server, which is what this test exists to forbid');
   });
 });
 

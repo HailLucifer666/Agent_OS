@@ -6354,3 +6354,81 @@ screen"` — a UTF-8 em dash (U+2014) decoded as cp1252 somewhere in the failure
 path, despite `Write-Response`'s ASCII-safe `\uXXXX` escaping. Present in the
 2026-08-14 episodic record too, so it is not new. It is spoken aloud, so it is
 worth its own fix; it is not this one.
+
+## BUG-224 — MYTHOS's own Live voice was fed back to Gemini's VAD, causing BOTH the interruptions and the clipped last word
+
+**Operator, 2026-08-14:** *"it keeps interrupting, interrupting — I'm not even
+done finishing my question"* and *"when it's completing a sentence, the last
+word is not completely spoken out... it feels like it was hard stopped."*
+
+Two complaints, **one mechanism.**
+
+Gemini Live's VAD is configured `START_SENSITIVITY_HIGH` in `live-session.js` —
+deliberately, so speech onset is caught quickly for barge-in. The model's own
+spoken reply leaves the speakers, re-enters the microphone, and `s2s-bridge.js`
+streamed those frames straight on to that VAD. So Gemini heard *itself* finishing
+a sentence, concluded the operator had started speaking, and fired
+`serverContent.interrupted` — at which point **the server stops synthesizing the
+rest of the turn.** The operator hears the last word cut in half. The same
+self-trigger, arriving as a turn boundary, is what reads as MYTHOS interrupting.
+
+`getUserMedia` already requests `echoCancellation`/`noiseSuppression`/
+`autoGainControl` (`mic-device.js`) and BUGS.md has twice recorded that browser
+AEC does not stop this on open-air speakers.
+
+**Why the existing fixes did not cover it.** Both prior attempts were aimed one
+layer off:
+- BUG-083 routed MYTHOS's own *edge-tts* speech through `sendText()` so it is
+  never played as audio during a Live session. That removed the **edge-tts**
+  echo source, not the Live model's own voice.
+- BUG-084 added `pcm-player.js`'s 250ms `TAIL_GUARD_SEC`, which refuses to flush
+  a nearly-finished reply. That protects audio **already buffered on the
+  client** — it cannot recover a word the server never synthesized. The cut
+  happens upstream of the client entirely, which is why the clipping survived
+  the fix and BUGS.md:1415 still recorded the cause as OPEN.
+
+The half-duplex machinery to prevent this already existed and was **battle-tested**
+— `setCaptureSuspended()` — but was wired only to `suspendForMedia()` (Spotify /
+YouTube playback). The loudest echo source in the room, the Live model's own
+reply, never passed through it.
+
+**FIXED** across two files:
+- `pcm-player.js` — optional `onSpeakStart`/`onSpeakEnd` callbacks turn "are we
+  speaking" from a polled value (`isSpeaking()`, which nothing could react to)
+  into an edge. `END_GRACE_MS = 250` holds the gate past the end of the samples
+  because a room has a reverb tail; `stopAll()` reports the end too, so a
+  barge-in cut reopens the mic instead of waiting on a timer measuring audio that
+  was just discarded. Callbacks are best-effort — a throwing listener must never
+  break playback (the BUG-221 lesson, applied preemptively).
+- `s2s-bridge.js` — a new own-voice gate held for exactly as long as MYTHOS is
+  audible.
+
+Two properties keep this from being a mute button:
+1. **It gates the send to Gemini only.** `bargeBackstop.observe()` still runs on
+   every frame, so a genuine interruption is still detected locally — and its
+   `onFlush` opens the gate immediately. Gating the observer too (the way the
+   media gate does) would disable barge-in *precisely* while MYTHOS is speaking,
+   which is the only moment it matters.
+2. **Held frames are replayed, not dropped.** A bounded 1.2s preroll ring is
+   flushed to the server on release, so "stop, actually—" does not reach the
+   model as "actually—".
+
+Fail-open ceiling (`MAX_OWN_VOICE_HOLD_MS = 20000`) matches the existing
+`MAX_SUSPEND_MS` reasoning: a stuck gate would leave Live permanently deaf with
+no symptom except silence. Kill switch without a rebuild:
+`localStorage.MYTHOS_LIVE_HALF_DUPLEX = 'off'`.
+
+**Tests**: `test/live-half-duplex-gate.test.js` (9 — the send-not-observe
+ordering, preroll replay + bound, barge-in release, ceiling, kill switch; plus
+behavioural coverage of the player edges through its `contextFactory` seam).
+`test/s2s-barge-in-backstop.test.js`'s "never sends a cancel frame" assertion was
+**widened, not loosened**: the gate release may only replay captured `live-audio`
+and the test now enumerates the frame types it can emit to prove it.
+
+**CODED — NOT LIVE-VERIFIED.** This is acoustic and needs the operator, real
+speakers and a real room; no harness can prove it. Runbook §C2 updated with the
+new pass/fail signals. Two things to watch on that sitting: whether a *soft*
+interruption still gets through (the local backstop threshold is
+`0.035 * 2.5` RMS sustained ~600ms — higher than Gemini's server VAD, so a quiet
+"stop" may now need to be firmer), and whether 250ms of grace is enough tail for
+the operator's room.

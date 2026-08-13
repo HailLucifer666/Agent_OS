@@ -4,10 +4,58 @@
 // contextFactory is a test-only seam (mirrors live-session.js's createSocket):
 // defaults to the real browser AudioContext; test/pcm-player.test.js injects a
 // fake context so the scheduling/flush logic is node:test-able without jsdom.
-export function createPcmPlayer({ sampleRate = 24000, contextFactory } = {}) {
+// onSpeakStart/onSpeakEnd (BUG-224) turn "are we speaking" from a POLLED value
+// into an edge. isSpeaking() below has always existed, but nothing fires when it
+// flips, so the only way to react to MYTHOS finishing a sentence was to poll it.
+// The half-duplex mic gate in s2s-bridge.js needs both edges, and a poll would
+// have to run on the audio-frame path (every 100ms, forever) to get them.
+// Optional and best-effort: a throwing callback must never break playback.
+export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakStart, onSpeakEnd } = {}) {
   let ctx = null;
   let nextAt = 0;
   const live = new Set();
+
+  // How long after the last scheduled sample before we call it "stopped".
+  // Not zero: this is a ROOM, and the speaker's decay plus the room's reverb
+  // tail keep arriving at the mic after the samples run out. Reopening the mic
+  // the instant the buffer empties feeds that tail straight back to Gemini's
+  // VAD, which is the self-interrupt this whole mechanism exists to stop.
+  const END_GRACE_MS = 250;
+  let speaking = false;
+  let endTimer = null;
+
+  function clearEndTimer() {
+    if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+  }
+
+  // Re-armed on every enqueue: a continuing reply keeps pushing the deadline
+  // out, so the callbacks fire once per utterance, not once per 100ms chunk.
+  function armEndTimer() {
+    clearEndTimer();
+    if (!ctx) return;
+    const remainingMs = Math.max(0, (nextAt - ctx.currentTime) * 1000);
+    endTimer = setTimeout(() => {
+      endTimer = null;
+      if (isSpeaking()) { armEndTimer(); return; }   // more audio landed meanwhile
+      markStopped();
+    }, remainingMs + END_GRACE_MS);
+    if (typeof endTimer.unref === 'function') endTimer.unref();
+  }
+
+  function markSpeaking() {
+    if (!speaking) {
+      speaking = true;
+      try { if (onSpeakStart) onSpeakStart(); } catch { /* never break playback */ }
+    }
+    armEndTimer();
+  }
+
+  function markStopped() {
+    clearEndTimer();
+    if (!speaking) return;
+    speaking = false;
+    try { if (onSpeakEnd) onSpeakEnd(); } catch { /* never break playback */ }
+  }
 
   const makeContext = contextFactory || (() => new (window.AudioContext || window.webkitAudioContext)());
 
@@ -37,6 +85,7 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory } = {}) {
     nextAt = startAt + buf.duration;
     live.add(src);
     src.onended = () => live.delete(src);
+    markSpeaking();
   }
 
   // Stage 2 (BUG-061): "consistently cut off at the end, losing the last one
@@ -53,6 +102,10 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory } = {}) {
     for (const s of live) { try { s.stop(); } catch {} }
     live.clear();
     nextAt = ctx ? ctx.currentTime : 0;
+    // A barge-in cut IS the end of speech, and the mic gate must reopen for it —
+    // otherwise interrupting MYTHOS would leave the operator muted until the
+    // timer that was measuring the audio we just threw away finally expired.
+    markStopped();
   }
 
   function flush() {                    // barge-in / interrupted
