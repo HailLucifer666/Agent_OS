@@ -69,4 +69,17 @@ describe('internal channels are audited but not remembered', () => {
     assert.equal(h.episodicWrites.length, 1);
     assert.equal(h.episodicWrites[0].channel, 'cortex');
   });
+
+  // TASK B2 code review (2026-08-13): the boot briefing dispatches get_weather
+  // and reminder_list every boot through this same sequence, for the same
+  // plumbing-not-experience reason as voice-ducking above — an episodic row
+  // per boot for "checked the weather" would crowd the same recall window.
+  it('a boot-briefing read (e.g. get_weather) writes an audit line and NO episodic entry', async () => {
+    const h = harness();
+    await dispatchAction({ tool: 'get_weather', args: {} }, { ...h.ctx, tier: 0, channel: 'boot-briefing' });
+    assert.equal(h.auditWrites.length, 1);
+    assert.equal(h.auditWrites[0].actor, 'boot-briefing');
+    assert.equal(h.episodicWrites.length, 0,
+      'a boot-time weather/reminder lookup is plumbing for the greeting, not a remembered event');
+  });
 });

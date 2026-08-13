@@ -19,7 +19,13 @@
 // setting it there" — it was reading its own microphone plumbing as if it were
 // something the operator had done. Hysteresis (server/index.js) stops the
 // oscillation; this stops the plumbing from being remembered as events at all.
-const INTERNAL_CHANNELS = new Set(['voice-ducking']);
+//
+// 'boot-briefing' (TASK B2 code review, 2026-08-13): the boot briefing dispatches
+// get_weather/reminder_list through this same sequence every boot for the exact
+// same reason set_volume did — the reads are plumbing for a spoken greeting, not
+// an experience, and an episodic row per boot for "checked the weather" would
+// crowd the same recall window this exception was created to protect.
+const INTERNAL_CHANNELS = new Set(['voice-ducking', 'boot-briefing']);
 
 function humanizeArgs(args) {
   const entries = Object.entries(args || {});

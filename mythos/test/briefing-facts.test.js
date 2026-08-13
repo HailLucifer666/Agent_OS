@@ -218,6 +218,7 @@ describe('buildBriefingFacts: new fact — system conditions (snapshotSystemMetr
   it('present when snapshotSystemMetrics resolves usable numbers', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
+      systemSampleGapMs: 0,
       snapshotSystemMetrics: async () => ({ metrics: { cpu: { loadPercent: 42 }, mem: { usedPercent: 60 } } }),
     });
     const fact = facts.find((f) => f.startsWith('System:'));
@@ -228,6 +229,7 @@ describe('buildBriefingFacts: new fact — system conditions (snapshotSystemMetr
   it('skipped when snapshotSystemMetrics throws', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
+      systemSampleGapMs: 0,
       snapshotSystemMetrics: async () => { throw new Error('os.cpus failed'); },
     });
     assert.ok(!facts.some((f) => f.startsWith('System:')), JSON.stringify(facts));
@@ -236,6 +238,7 @@ describe('buildBriefingFacts: new fact — system conditions (snapshotSystemMetr
   it('skipped when snapshotSystemMetrics hangs past the timeout', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
+      systemSampleGapMs: 0,
       snapshotSystemMetrics: () => never(),
     });
     assert.ok(!facts.some((f) => f.startsWith('System:')), JSON.stringify(facts));
@@ -244,9 +247,29 @@ describe('buildBriefingFacts: new fact — system conditions (snapshotSystemMetr
   it('skipped when neither cpu.loadPercent nor mem.usedPercent is a number (e.g. cold-start null)', async () => {
     const facts = await buildBriefingFacts({
       factTimeoutMs: FAST_TIMEOUT_MS,
+      systemSampleGapMs: 0,
       snapshotSystemMetrics: async () => ({ metrics: { cpu: { loadPercent: null }, mem: { usedPercent: null } } }),
     });
     assert.ok(!facts.some((f) => f.startsWith('System:')), JSON.stringify(facts));
+  });
+
+  // FIX 3 (code review, 2026-08-13): snapshotSystemMetrics(undefined) used to
+  // diff a single os.cpus() sample against itself — zero elapsed time, so
+  // cpu.loadPercent was null on every real boot and the CPU clause could never
+  // populate. buildBriefingFacts now takes two samples (systemSampleGapMs apart)
+  // and diffs the second against the first. Proves it with the REAL
+  // snapshotSystemMetrics from server/routes/system.js, not a fake, so a
+  // regression back to the single-sample self-diff would fail this test.
+  it('the CPU clause actually populates against the real snapshotSystemMetrics (not structurally dead)', async () => {
+    const { snapshotSystemMetrics } = require('../server/routes/system');
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: 5000,
+      systemSampleGapMs: 120,
+      snapshotSystemMetrics,
+    });
+    const fact = facts.find((f) => f.startsWith('System:'));
+    assert.ok(fact, 'expected a System: fact from the real snapshotSystemMetrics: ' + JSON.stringify(facts));
+    assert.match(fact, /CPU \d+%/, 'CPU clause must carry a real number, not stay permanently null: ' + fact);
   });
 });
 
@@ -260,7 +283,11 @@ describe('buildBriefingFacts: new fact — spend (spend.getStats().today, no dol
     assert.ok(fact, JSON.stringify(facts));
     assert.ok(fact.indexOf('12 brain calls') !== -1, fact);
     assert.ok(fact.indexOf('800 tokens') !== -1, fact);
-    assert.ok(fact.indexOf('97% success') !== -1, fact);
+    assert.ok(fact.indexOf('97%') !== -1, fact);
+    // FIX 4 (code review, 2026-08-13): successRate spans the whole in-memory
+    // recent-call buffer, not just today — the fact must say so rather than
+    // implying "97% success" is itself today-scoped like the calls/tokens are.
+    assert.match(fact, /not today-scoped/i, 'success-rate clause must disclose it is not today-scoped: ' + fact);
     assert.ok(!/\$/.test(fact), 'spend fact must never invent a dollar figure: ' + fact);
   });
 
@@ -357,5 +384,56 @@ describe('buildBriefingFacts: no dependencies at all', () => {
     const facts = await buildBriefingFacts();
     assert.ok(Array.isArray(facts));
     assert.ok(facts.some((f) => f.startsWith('Local time: ')));
+  });
+});
+
+// FIX 1 (code review, 2026-08-13): sources used to gather one at a time, so
+// each ~timeoutMs cap STACKED — several slow sources in a row added seconds
+// of latency in front of the 12s brain-compose race. Gathering with
+// Promise.all bounds the wall-clock cost to the slowest single source.
+describe('buildBriefingFacts: sources gather in parallel (FIX 1)', () => {
+  it('total wall time stays close to one slow source, not the sum of several', async () => {
+    const SLOW_MS = 60; // well under FAST_TIMEOUT_MS's usual 30ms elsewhere, but this test needs the source to actually finish, not time out
+    const slow = () => new Promise((resolve) => setTimeout(() => resolve(true), SLOW_MS));
+    const started = Date.now();
+    await buildBriefingFacts({
+      factTimeoutMs: 500,
+      systemSampleGapMs: 0,
+      // Three independently slow sources. Sequential gathering would cost
+      // roughly 3 x SLOW_MS; parallel gathering should cost roughly 1x.
+      probes: { getStatus: async () => { await slow(); return { providers: {} }; } },
+      isProviderDown: () => false,
+      dispatch: async (tool) => { await slow(); return tool === 'get_weather' ? { ok: true, result: { temperatureC: 1 } } : { ok: true }; },
+      spend: { getStats: async () => { await slow(); return { successRate: 100, today: { calls: 1, tokensIn: 1, tokensOut: 1 } }; } },
+    });
+    const elapsedMs = Date.now() - started;
+    assert.ok(elapsedMs < SLOW_MS * 2,
+      `expected parallel gathering to cost roughly one SLOW_MS (${SLOW_MS}ms), took ${elapsedMs}ms — looks sequential`);
+  });
+
+  it('preserves the original fact order regardless of which source resolves first', async () => {
+    const facts = await buildBriefingFacts({
+      factTimeoutMs: FAST_TIMEOUT_MS,
+      systemSampleGapMs: 0,
+      goalsEffector: { stats: () => ({ active: 1, done: 0 }) },
+      probes: { getStatus: async () => ({ providers: {} }) },
+      isProviderDown: () => false,
+      bootUpgrade: { upgraded: true, changes: ['x'] },
+      updateReport: { completed: true, version: '0.2.0', from: '0.1.9', releaseNotes: '' },
+      memory: { episodic: { recall: () => [{ record: { summary: 'hi' } }] } },
+      dispatch: async (tool) => (tool === 'get_weather'
+        ? { ok: true, result: { temperatureC: 5 } }
+        : { ok: true, result: { reminders: [] } }),
+      snapshotSystemMetrics: async () => ({ metrics: { cpu: { loadPercent: 1 }, mem: { usedPercent: 2 } } }),
+      spend: { getStats: () => ({ successRate: 100, today: { calls: 1, tokensIn: 1, tokensOut: 1 } }) },
+      kanbanEffector: { listBoard: () => ({ cards: [] }) },
+    });
+    const order = ['Local time:', 'Goals:', 'All AI providers online', 'You received a code upgrade',
+      'I was updated to v', 'Last time we spoke:', 'Weather', 'System:', 'Today so far:', 'On your plate:'];
+    const indices = order.map((prefix) => facts.findIndex((f) => f.indexOf(prefix) === 0));
+    assert.ok(indices.every((i) => i !== -1), 'expected every fact to be present: ' + JSON.stringify(facts));
+    for (let i = 1; i < indices.length; i++) {
+      assert.ok(indices[i - 1] < indices[i], `expected "${order[i - 1]}" before "${order[i]}": ${JSON.stringify(facts)}`);
+    }
   });
 });
