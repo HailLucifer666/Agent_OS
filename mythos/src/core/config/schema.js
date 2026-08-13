@@ -615,6 +615,17 @@ const SCHEMA = {
   // .env.example): auditioning by ear across all six needs a human with
   // speakers, which cannot happen in this environment.
   GEMINI_LIVE_VOICE:           { type: 'string', default: 'Aoede' },
+  // Wave 6 (2026-08-13): unset (empty string) means auto-detect, Gemini's own
+  // default and this project's — pinning a language is opt-in, not a new
+  // default nobody asked for. An operator whose session drifts into Korean
+  // or Spanish STT mid-conversation can pin e.g. 'en-US' to stop it. BCP-47
+  // tag, passed through verbatim — no validation here, since Gemini Live's
+  // supported set is theirs to define and can change without a schema edit
+  // on this side. KNOWN CAVEAT, not fixed by this: per the Gemini Live docs,
+  // Hindi/Bengali (and some other languages) are speech-INPUT-only for this
+  // API — pinning one of those changes what the model expects to HEAR, not
+  // what it can SPEAK back in.
+  GEMINI_LIVE_LANGUAGE:        { type: 'string', default: '' },
   // BUG-059: was 45000. The browser bridge (s2s-bridge.js) suspends mic
   // capture for up to 30s (MAX_SUSPEND_MS) while MYTHOS's own TTS or media
   // playback is out of the speakers — sendAudio() stops being called for

@@ -165,6 +165,9 @@ function createLiveSession(deps) {
 
   const MODEL = config.GEMINI_LIVE_MODEL || 'models/gemini-3.1-flash-live-preview';
   const VOICE = config.GEMINI_LIVE_VOICE || 'Aoede';
+  // Wave 6 — empty/unset means auto-detect (Gemini's own default); see
+  // GEMINI_LIVE_LANGUAGE's schema comment for the caveat this doesn't fix.
+  const LANGUAGE = String(config.GEMINI_LIVE_LANGUAGE || '').trim();
   const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 120000; // BUG-059: was 45000, see schema.js
   const MAX_MS = Number(config.LIVE_SESSION_MAX_MS) || 10 * 60 * 1000;
   const BREAKER = 'gemini-live';
@@ -364,7 +367,15 @@ function createLiveSession(deps) {
       model: MODEL,
       generationConfig: {
         responseModalities: ['AUDIO'],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
+        // Wave 6 (2026-08-13): languageCode is OMITTED unless the operator
+        // pinned one via GEMINI_LIVE_LANGUAGE — unset means auto-detect,
+        // which stays the default. Pinning stops a session drifting into
+        // Korean/Spanish STT mid-conversation; see the schema entry for the
+        // Hindi/Bengali speech-input-only caveat this does not fix.
+        speechConfig: Object.assign(
+          { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
+          LANGUAGE ? { languageCode: LANGUAGE } : {},
+        ),
       },
       systemInstruction: { parts: [{ text: currentSystemInstruction() }] },
       tools: (functionDeclarations && functionDeclarations.length) ? [{ functionDeclarations }] : undefined,

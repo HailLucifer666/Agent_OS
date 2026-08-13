@@ -63,6 +63,17 @@ describe('BUG-117 — pipeline injections must not read as operator speech', () 
       'the model must still ACT on the notice — this is an attribution fix, not a trust downgrade');
   });
 
+  // Wave 6 (2026-08-13) — a pipeline-injected notice (the boot greeting above
+  // all, delivered via proactiveSpeak's Live branch with this exact prefix)
+  // tells the model WHAT to say; once said, it is the model's own speech. If
+  // asked to repeat or explain it, the model must own it, not disclaim it as
+  // something the operator told it or that it doesn't recall.
+  test('the instruction says a notice like the boot greeting becomes the model\'s OWN speech once said', () => {
+    assert.match(LIVE_SYSTEM_NOTICE_INSTRUCTION, /boot greeting/i);
+    assert.match(LIVE_SYSTEM_NOTICE_INSTRUCTION, /own it as your own words/i);
+    assert.match(LIVE_SYSTEM_NOTICE_INSTRUCTION, /never say the operator told you to say it/i);
+  });
+
   test('a slow tool\'s late outcome is pushed with the self-describing prefix', async () => {
     let resolveDispatch;
     const { adapter, sent } = harness({ dispatchAction: () => new Promise((r) => { resolveDispatch = r; }) });

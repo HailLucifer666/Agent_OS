@@ -93,6 +93,50 @@ function applyVoiceChoice(rawEnv, stored, baseChainCsv) {
   return out;
 }
 
+// Wave 6 (2026-08-13) — "switch back" for the LIVE Gemini voice specifically.
+// server/index.js's setLiveVoice() closes any open Live session and lets the
+// next turn reopen with the new GEMINI_LIVE_VOICE — that mechanism already
+// does the actual work of switching. What was missing was any memory of what
+// the voice WAS before a switch, so "switch back to the old voice" had
+// nothing to revert to except the operator re-typing the exact prior id.
+//
+// Deliberately in-memory, process-lifetime state, not another vault file:
+// this is "undo my last live-voice switch", a runtime action bounded to the
+// current run, not a durable preference (that's voice-choice-store.js's job,
+// unaffected by this). A restart naturally forgets it, which is correct —
+// there is nothing to revert to before any switch has happened.
+//
+// undefined (never assigned) is a THIRD state, distinct from both a real
+// voice id and null (recorded-as-"no override was active"): "nothing has
+// ever been recorded". Collapsing that into null would make "revert to no
+// override" (a real, valid target) indistinguishable from "there is no
+// history to revert" — exactly the bug a first version of this shipped with.
+let previousLiveVoice;
+
+// Call BEFORE applying a new voice, passing the value that is ABOUT TO BE
+// REPLACED (may be null, meaning "no override was active"). Returns nothing;
+// this only records history for popPreviousLiveVoice() below.
+function recordLiveVoiceSwitch(outgoingVoice) {
+  previousLiveVoice = outgoingVoice || null;
+}
+
+// Consumes the recorded previous voice so a SECOND revert (with nothing new
+// recorded since) reports "nothing to revert to" instead of toggling forever
+// on stale history. Returns undefined when nothing was ever recorded (the
+// caller's signal to say so honestly), null when the recorded state IS "no
+// override" (a real, valid revert target), or the previous voice id string.
+function popPreviousLiveVoice() {
+  const v = previousLiveVoice;
+  previousLiveVoice = undefined;
+  return v;
+}
+
+// Test seam only — production code has no legitimate reason to reset this
+// mid-process; a real revert always goes through popPreviousLiveVoice().
+function _resetLiveVoiceHistory() {
+  previousLiveVoice = undefined;
+}
+
 module.exports = {
   KNOWN_PROVIDERS,
   SHORT_NAME,
@@ -100,4 +144,7 @@ module.exports = {
   MAX_VOICE_LEN,
   isValidChoice,
   applyVoiceChoice,
+  recordLiveVoiceSwitch,
+  popPreviousLiveVoice,
+  _resetLiveVoiceHistory,
 };

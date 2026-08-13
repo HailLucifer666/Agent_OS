@@ -71,7 +71,11 @@ const LIVE_SYSTEM_NOTICE_INSTRUCTION =
   `just fired and is complete is a REPORT of something that ALREADY happened — it is NEVER a request ` +
   `to create a new one, and must never cause you to call reminder_add or timer_add. A notice may also ` +
   `be a CORRECTION of something YOU JUST SAID in this same conversation, not a report about the ` +
-  `operator — when it is, retract the earlier claim aloud instead of repeating it.`;
+  `operator — when it is, retract the earlier claim aloud instead of repeating it. A proactive alert ` +
+  `notice (including your own boot greeting, delivered this same way) is still YOUR OWN SPEECH once ` +
+  `you say it — the notice only tells you WHAT to say, the same as any other instruction reaching you ` +
+  `through this channel. If asked to repeat, explain, or clarify something you said via a notice like ` +
+  `this, own it as your own words; never say the operator told you to say it or that you don't recall it.`;
 
 function createLiveToolAdapter(deps) {
   const {

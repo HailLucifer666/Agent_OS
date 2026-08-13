@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 
 const {
   KNOWN_PROVIDERS, SHORT_NAME, VOICE_ENV_KEY, isValidChoice, applyVoiceChoice,
+  recordLiveVoiceSwitch, popPreviousLiveVoice, _resetLiveVoiceHistory,
 } = require('../src/core/config/voice-choice');
 const { voiceFor } = require('../providers/tts');
 
@@ -97,5 +98,44 @@ describe('the stored voice reaches voiceFor()', () => {
       const overlay = applyVoiceChoice({}, { provider, voice: 'picked-voice' }, BASE);
       assert.equal(voiceFor({ name: fake[provider] }, overlay), 'picked-voice', provider);
     }
+  });
+});
+
+// Wave 6 (2026-08-13) — "switch back to the previous live voice". Server/
+// index.js's setLiveVoice's close-reopen mechanism does the actual switch;
+// this is the in-memory history it reads from to know WHAT to switch back to.
+describe('recordLiveVoiceSwitch / popPreviousLiveVoice — the one-entry revert history', () => {
+  test('never recorded -> undefined, distinct from a real "no override" target', () => {
+    _resetLiveVoiceHistory();
+    assert.equal(popPreviousLiveVoice(), undefined);
+  });
+
+  test('a real outgoing voice is recorded and popped exactly once', () => {
+    _resetLiveVoiceHistory();
+    recordLiveVoiceSwitch('Aoede');
+    assert.equal(popPreviousLiveVoice(), 'Aoede');
+    // Popping again with nothing new recorded must NOT replay the old value.
+    assert.equal(popPreviousLiveVoice(), undefined);
+  });
+
+  test('recording an outgoing null (no override was active) is a REAL, valid revert target — not "nothing recorded"', () => {
+    _resetLiveVoiceHistory();
+    recordLiveVoiceSwitch(null);
+    const popped = popPreviousLiveVoice();
+    assert.equal(popped, null);
+    assert.notEqual(popped, undefined, 'null and undefined must stay distinguishable — this was the actual bug');
+  });
+
+  test('recordLiveVoiceSwitch("") normalizes falsy-but-typed values the same as null', () => {
+    _resetLiveVoiceHistory();
+    recordLiveVoiceSwitch('');
+    assert.equal(popPreviousLiveVoice(), null);
+  });
+
+  test('a second switch overwrites the first — only the most recent outgoing voice is kept', () => {
+    _resetLiveVoiceHistory();
+    recordLiveVoiceSwitch('Aoede');
+    recordLiveVoiceSwitch('Kore');
+    assert.equal(popPreviousLiveVoice(), 'Kore');
   });
 });

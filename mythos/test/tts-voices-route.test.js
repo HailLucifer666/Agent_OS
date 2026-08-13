@@ -187,3 +187,46 @@ describe('a Gemini voice also switches the Live session', () => {
     } finally { await s.close(); }
   });
 });
+
+// Wave 6 (2026-08-13) — "switch back to the previous live voice". The route's
+// own job is small: call deps.revertLiveVoice() and report what it did, or
+// say honestly that there was nothing to revert.
+describe('POST /api/tts/voice/revert', () => {
+  it('reports the reverted-to voice on a successful revert', async () => {
+    const s = await serve({ revertLiveVoice: () => 'Aoede' });
+    try {
+      const { status, body } = await call(s.port, 'POST', '/api/tts/voice/revert', {});
+      assert.equal(status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.voice, 'Aoede');
+      assert.equal(body.revertedTo, 'Aoede');
+    } finally { await s.close(); }
+  });
+
+  it('reports reverting to the config default distinctly, when the recorded history IS "no override"', async () => {
+    const s = await serve({ revertLiveVoice: () => null });
+    try {
+      const { status, body } = await call(s.port, 'POST', '/api/tts/voice/revert', {});
+      assert.equal(status, 200);
+      assert.equal(body.voice, null);
+      assert.equal(body.revertedTo, 'config default');
+    } finally { await s.close(); }
+  });
+
+  it('answers 409 honestly when there is nothing to revert (deps.revertLiveVoice returns undefined)', async () => {
+    const s = await serve({ revertLiveVoice: () => undefined });
+    try {
+      const { status, body } = await call(s.port, 'POST', '/api/tts/voice/revert', {});
+      assert.equal(status, 409);
+      assert.match(body.error, /nothing has been switched/i);
+    } finally { await s.close(); }
+  });
+
+  it('answers 501 when the server was built without a revertLiveVoice at all (older wiring)', async () => {
+    const s = await serve({ revertLiveVoice: undefined });
+    try {
+      const { status } = await call(s.port, 'POST', '/api/tts/voice/revert', {});
+      assert.equal(status, 501);
+    } finally { await s.close(); }
+  });
+});

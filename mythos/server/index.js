@@ -15,6 +15,7 @@ const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
 const { mountTtsVoiceRoutes } = require('./routes/tts-voices');
+const { recordLiveVoiceSwitch, popPreviousLiveVoice } = require('../src/core/config/voice-choice');
 const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
@@ -1319,6 +1320,12 @@ function createServer(deps) {
     return liveVoiceOverride ? { ...config, GEMINI_LIVE_VOICE: liveVoiceOverride } : config;
   }
   function setLiveVoice(voice) {
+    // Wave 6 (2026-08-13): record what we're ABOUT to replace, before
+    // replacing it, so a later revertLiveVoice() has something to go back
+    // to. Recorded even when the outgoing value is null (the un-overridden,
+    // GEMINI_LIVE_VOICE-from-config default) — "revert" from a first switch
+    // must go back to no-override, not silently do nothing.
+    recordLiveVoiceSwitch(liveVoiceOverride);
     liveVoiceOverride = voice || null;
     let closed = 0;
     // `wss` is created further down; this only ever runs from an HTTP request,
@@ -1335,11 +1342,26 @@ function createServer(deps) {
     return closed;
   }
 
+  // Wave 6 — "switch back to the previous voice". Reuses setLiveVoice's own
+  // close-reopen mechanism (that IS the switch; this only supplies WHAT to
+  // switch to). Returns undefined when there is nothing recorded — either no
+  // switch has happened yet this run, or a previous revert already consumed
+  // the one entry of history this keeps — so the caller can say so honestly
+  // instead of silently no-op'ing. A real revert can legitimately return
+  // null (reverting TO "no override"), which is why undefined and not null
+  // is the no-op sentinel here.
+  function revertLiveVoice() {
+    const previous = popPreviousLiveVoice();
+    if (previous === undefined) return undefined; // nothing recorded to revert to
+    setLiveVoice(previous);
+    return previous;
+  }
+
   // Mounted HERE, between the chain holder it depends on and the /api 404
   // catch-all below. Either side of that pair is wrong: above, currentTts does
   // not exist yet; below, every request to it answers "No such route".
   mountTtsVoiceRoutes(app, {
-    config, logger, getTts: currentTts, setTts: setTtsChain, setLiveVoice, expensiveLimit,
+    config, logger, getTts: currentTts, setTts: setTtsChain, setLiveVoice, revertLiveVoice, expensiveLimit,
   });
 
   // Unknown /api routes answer honest JSON (the byte-identical NOVA views probe a

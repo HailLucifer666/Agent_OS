@@ -5817,3 +5817,64 @@ exercises both tools under this exact mechanism. `screen_look`/`camera_look`
 `SLOW_TOOLS` entries were verified to match their real registered tool
 names exactly (no typo) — no fix needed there either. No code change made;
 this entry exists so the "already fixed, don't re-fix" finding is recorded.
+
+### BUG-210 — no way to pin the Live session's speech language
+
+Gemini Live auto-detects the spoken language with no operator override, so a
+session's STT could drift into Korean/Spanish mid-conversation with no way
+to stop it short of restarting.
+
+**FIXED.** New `GEMINI_LIVE_LANGUAGE` config key (BCP-47, default unset =
+auto-detect, unchanged default behavior). `live-session.js`'s `buildSetup()`
+adds `speechConfig.languageCode` only when set. Documented caveat, not fixed
+by this: per Gemini Live's own docs, some languages (Hindi, Bengali) are
+speech-INPUT-only for this API — pinning one changes what the model expects
+to HEAR, not what it speaks back in. `test/live-session-language-pin.test.js`.
+
+### BUG-211 — no way to switch the Live voice back after trying another
+
+`server/index.js`'s `setLiveVoice()` (close-open the Live session with a new
+`GEMINI_LIVE_VOICE`) had no memory of what the voice was before a switch, so
+"switch back" required the operator to re-type the exact prior voice id.
+
+**FIXED.** New `recordLiveVoiceSwitch`/`popPreviousLiveVoice` in
+`voice-choice.js` (in-memory, process-lifetime, one-entry history — a
+runtime undo, not a durable preference; deliberately distinct from
+`undefined` = "nothing recorded" vs. `null` = "revert TO no-override", a
+real and valid target that a naive single-sentinel design would have
+collapsed into "nothing to revert"). New `revertLiveVoice()` in
+`server/index.js` and `POST /api/tts/voice/revert` route.
+`test/voice-choice.test.js`, `test/tts-voices-route.test.js`.
+
+### BUG-212 — a pipeline-injected notice wasn't explicitly owned as the model's own speech
+
+`LIVE_SYSTEM_NOTICE_INSTRUCTION` explained what a `[SYSTEM NOTICE]`-prefixed
+message IS (an automated notice, not the operator speaking) but never said
+what happens to it once the model speaks it — leaving room for the model to
+disclaim its own boot greeting ("the operator told me to say that") if asked
+to repeat or explain it.
+
+**FIXED.** Added one clause: a notice like the boot greeting is still the
+model's OWN SPEECH once said — the notice only supplies WHAT to say, same as
+any other instruction reaching it through this channel.
+`test/bug-117-system-notice-attribution.test.js`. Verified by code reading
+(not a new test) that the boot greeting has no path that reaches Live
+unwrapped: `deliverBootGreeting()` calls `proactiveSpeak()`, whose Live
+branch unconditionally prepends `SYSTEM_NOTICE_PREFIX` — there is no second
+injection site for this content.
+
+### Wave 6 item 4 (reasoning-leak regression fixtures) — BLOCKED, needs real data
+
+The plan asks for "the 6 observed leaked leads (15:54-15:57 session texts)"
+from the 2026-08-12 session as fixtures against `stripReasoningLead`. This
+machine's `vault/Episodic/2026-08-12.jsonl` (gitignored, local-only — not a
+tracked artifact) has only 10 entries, all between 20:14-22:47 IST, nothing
+in the cited 15:54-15:57 window — the data this fixture needs is not present
+in this checkout. `test/live-reasoning-strip.test.js` already carries
+verbatim fixtures from a DIFFERENT 2026-08-12 incident (01:30/02:29) and
+should not be confused with this one. **Not fabricated**: inventing
+plausible-looking "leaked" text and labeling it as this real incident would
+violate the same no-invented-evidence discipline this whole codebase is
+built on (AD-5). Needs the operator to supply the actual leaked text (or
+point at the vault/machine that has it) before this item can be done
+honestly.

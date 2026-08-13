@@ -11,6 +11,13 @@
 //   GET  /api/tts/voices    what this machine could speak with, honestly marked
 //   POST /api/tts/voice     make one the default, effective on the NEXT reply
 //   POST /api/tts/audition  synthesize a short sample, right now, changing nothing
+//   POST /api/tts/voice/revert  Wave 6 (2026-08-13): switch the LIVE Gemini
+//     voice back to whatever it was immediately before the last /api/tts/voice
+//     call that changed it. Reuses setLiveVoice's own close-reopen mechanism —
+//     see voice-choice.js's recordLiveVoiceSwitch/popPreviousLiveVoice for the
+//     one-entry history this reads. Gemini-only, same as the live-voice half
+//     of POST /api/tts/voice above; there is no equivalent "previous" concept
+//     for the other TTS engines yet.
 //
 // AUDITION NEVER TOUCHES THE SESSION CHAIN. It calls the chosen provider module
 // directly (providerByShortName) rather than through createTtsChain, because a
@@ -172,6 +179,20 @@ function mountTtsVoiceRoutes(app, deps) {
       ok: true, provider, voice, applied: true, chain: chainNames,
       voiceKey: VOICE_ENV_KEY[provider], liveSessionsClosed,
     });
+  });
+
+  // Wave 6 (2026-08-13) — see the module header. Rate-limited under the same
+  // bucket as a forward switch; it is exactly as state-changing.
+  app.post('/api/tts/voice/revert', setLimit, (req, res) => {
+    if (typeof deps.revertLiveVoice !== 'function') {
+      return res.status(501).json({ error: 'Live voice revert is not available.' });
+    }
+    const previous = deps.revertLiveVoice();
+    if (previous === undefined) {
+      return res.status(409).json({ error: 'No previous live voice to revert to — nothing has been switched yet this run.' });
+    }
+    log.info('tts.voice-reverted', { voice: previous || '(config default)' });
+    res.json({ ok: true, voice: previous, revertedTo: previous ? previous : 'config default' });
   });
 
   app.post('/api/tts/audition', auditionLimit, async (req, res) => {
