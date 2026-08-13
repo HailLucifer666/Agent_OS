@@ -19,6 +19,26 @@ const DEFAULT_ALLOWLIST = [
   // Task B3 — on-demand "how's the system" mid-conversation: host metrics,
   // provider health, spend stats, adapter status in one read-only call.
   'system_status',
+  // 2026-08-14 (BUG-222): promoted out of VOICE_ALLOWLIST_EXEMPT, on this
+  // list's own stated criterion — "promote an entry the day a session actually
+  // needs it from voice". That day arrived, twice over, in one session.
+  //
+  // The exemption's reasoning was that "read_status/self_capabilities-style
+  // summaries cover these; not a distinct spoken verb of their own". Both
+  // halves were wrong. read_status reports RUNTIME state (goals, adapters,
+  // spend); it has never carried the tool catalog. And "what can you do?" is
+  // about as distinct a spoken verb as exists — the operator asked it, and,
+  // with no tool able to answer, the model fell back to describing web_search
+  // over and over. This is the withheld-read-tool shape the camera_look and
+  // whatsapp_send comments above already document, aimed at the one tool whose
+  // whole job is knowing what the other 171 are.
+  //
+  // It is also the ONLY route to "what changed / what did you fix?".
+  // identity/capabilities.js regenerates vault/Identity/capabilities.md every
+  // boot from the live hub catalog, adapter states and RECENT GIT CHANGES, so
+  // the honest answer already exists on disk at every boot — it just had no
+  // reader on the voice surface. T0, read-only, no act-side sibling to pair.
+  'self_capabilities',
   'create_goal','list_goals','toggle_goal','delete_goal',
   'capture_idea','pipeline_status','pipeline_advance',
   'kanban_status','kanban_add_card','kanban_move_card',
@@ -167,11 +187,14 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // documents. (open_folder was in this family and was promoted on 2026-08-09 --
   // see its comment in DEFAULT_ALLOWLIST.)
   'list_folder','read_file','search_files','clipboard_read','clipboard_write',
-  // Status/introspection singletons -- read_status/self_capabilities-style
-  // summaries cover these; not a distinct spoken verb of their own.
+  // Status/introspection singletons -- read_status-style summaries cover these;
+  // not a distinct spoken verb of their own.
   // (get_volume left this group on 2026-08-09: it is set_volume's read oracle,
-  // and set_volume became reachable.)
-  'mission_status','persona_status','self_capabilities',
+  // and set_volume became reachable. self_capabilities left it on 2026-08-14 —
+  // see its DEFAULT_ALLOWLIST entry; the claim that read_status covered it was
+  // simply false, and it is the only reader of the boot-written capabilities
+  // manifest.)
+  'mission_status','persona_status',
   // BUG-161: get_app_volume is the read oracle set_app_volume/spotify_volume
   // call internally to step a per-app level through a read-back. Neither of
   // its act-side siblings (set_app_volume, set_app_mute) is on the voice

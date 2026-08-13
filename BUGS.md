@@ -6253,3 +6253,41 @@ enclosing `try {`, found `Handle-UiType`'s body-wide one, and passed against the
 buggy source. An enclosing try is not a guard when its catch abandons the
 handler. Verified red against `HEAD~` (flags line 2440, and only that line)
 before being trusted.
+
+## BUG-222 — `self_capabilities` was unreachable from voice, so "what can you do?" had no honest answer
+
+**Live, same session as BUG-221** (2026-08-14). The operator's complaints were
+that MYTHOS "doesn't even know what its capabilities are", "keeps repeating
+web search, web search", and has no idea what was fixed or changed between
+sessions — despite every fix being committed.
+
+The server log for that session states the mechanism plainly:
+
+    live-tools: declared 82, withheld 77 — ... self_capabilities, use_skill, ...
+
+`self_capabilities` (T0, read-only) sat in `VOICE_ALLOWLIST_EXEMPT`, whose
+rationale read: *"read_status/self_capabilities-style summaries cover these; not
+a distinct spoken verb of their own."* Both halves were wrong. `read_status`
+reports runtime state (goals, adapters, spend) and has never carried the tool
+catalog; and "what can you do?" is as distinct a spoken verb as exists. With no
+tool able to answer it, the model did what this file's own `camera_look` and
+`whatsapp_send` comments already document — it substituted the nearest reachable
+tool and narrated, which is where the repeated web-search suggestions came from.
+
+The second half is the one that matters more. `identity/capabilities.js`
+regenerates `vault/Identity/capabilities.md` on **every boot** from the live hub
+catalog, adapter states and **recent git changes** — the log confirms it
+(`capabilities-manifest.written tools:172`). So the honest answer to "what did
+you fix?" was being written to disk at every single boot, and the only tool that
+reads it was withheld from the surface where the question gets asked.
+
+**FIXED** in `live-tools.js`: `self_capabilities` promoted to
+`DEFAULT_ALLOWLIST` on this list's own stated criterion — "promote an entry the
+day a session actually needs it from voice". T0, read-only, no act-side sibling
+to pair with. `mission_status`/`persona_status` stay exempt. Allowlist 97 -> 98,
+no duplicates. `test/allowlist-reachability.test.js` and `test/live-tools.test.js`
+pass (16/16).
+
+**NOT yet live-verified** — this needs a real Live voice session to confirm the
+model both reaches the tool and prefers it over improvising. Recorded here as
+CODED, not verified, deliberately: the same distinction this file exists to keep.
