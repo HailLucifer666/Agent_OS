@@ -1,7 +1,14 @@
 'use strict';
 
-// installer-path-budget.test.js — BUG-226. Keep the packaged tree inside
+// installer-path-budget.test.js — BUG-227. Keep the packaged tree inside
 // Windows' 260-character MAX_PATH, with room for the installer's temp directory.
+//
+// NUMBERING NOTE: the commit that introduced this file (18fff47) says "BUG-226".
+// A concurrent session in the same worktree had already committed a different
+// BUG-226 (mojibaked spoken failure text, ef7db13) minutes earlier, so this one
+// was renumbered to 227 in the ledger. The commit message is left as-is rather
+// than rewritten — history is not worth editing for a label, but a reader who
+// greps "BUG-226" and lands here should know why the numbers disagree.
 //
 // THE BUG THIS FILE EXISTS FOR (operator, 2026-08-14): installing 0.1.9 on a NEW
 // PC failed partway through with "…cannot be closed. Please close it manually and
@@ -93,7 +100,7 @@ function longestUnpackedPath(dir, relParts, worst) {
   return worst;
 }
 
-describe('BUG-226 installer path budget (Windows MAX_PATH)', () => {
+describe('BUG-227 installer path budget (Windows MAX_PATH)', () => {
   it('keeps the two deep pure-JS trees inside the asar', () => {
     const unpack = (PKG.build && PKG.build.asarUnpack) || [];
     assert.ok(unpack.includes('!**/onnxruntime-web/**'),
@@ -131,38 +138,35 @@ describe('BUG-226 installer path budget (Windows MAX_PATH)', () => {
       + 'A fresh install on a machine WITHOUT LongPathsEnabled will fail partway through with '
       + '"cannot be closed" and retry forever. Either keep the offending tree inside the asar '
       + '(build.asarUnpack) or exclude it from the build (build.files).');
-  });
 
-  // Strongest form of the same check, when a build is actually present.
-  it('the real packaged tree agrees, when dist/win-unpacked exists', (t) => {
-    const unpacked = path.join(REPO_ROOT, 'dist', 'win-unpacked', 'resources', 'app.asar.unpacked');
-    if (!fs.existsSync(unpacked)) {
-      t.skip('no dist/win-unpacked — run `npm run dist` for the real measurement');
-      return;
-    }
-    // A build made BEFORE the current packaging config says nothing about that
-    // config. Asserting against it would report the old layout's failure forever
-    // and train everyone to ignore this test. The source-tree check above still
-    // runs and is what guards CI.
-    const builtAt = fs.statSync(unpacked).mtimeMs;
-    const configAt = fs.statSync(path.join(REPO_ROOT, 'package.json')).mtimeMs;
-    if (builtAt < configAt) {
-      t.skip('dist/win-unpacked predates the current build config — rebuild for a real measurement');
-      return;
-    }
-    const root = path.join(REPO_ROOT, 'dist', 'win-unpacked');
+    // Stronger form of the SAME assertion when a real build is present — folded
+    // into this test rather than given its own `it` with a t.skip().
+    //
+    // It had one, and that was a mistake worth recording: dist/ comes and goes,
+    // so the suite's skip count flipped between 0 and 1 depending on whether a
+    // build happened to exist. This repo gates commits on the test counts written
+    // into README/ROADMAP (scripts/sync-test-count.js), so a build artifact could
+    // silently make those numbers stale and block an unrelated commit — which is
+    // exactly what it did. A test whose COUNT depends on untracked local state is
+    // a broken test even when its assertion is right.
+    const built = path.join(REPO_ROOT, 'dist', 'win-unpacked');
+    const unpacked = path.join(built, 'resources', 'app.asar.unpacked');
+    if (!fs.existsSync(unpacked)) return;
+    // A build older than the packaging config says nothing about that config.
+    if (fs.statSync(unpacked).mtimeMs < fs.statSync(path.join(REPO_ROOT, 'package.json')).mtimeMs) return;
+
     let worstLen = 0;
     let worstPath = '';
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) { walk(full); continue; }
-        const rel = full.slice(root.length);
+        const rel = full.slice(built.length);
         if (rel.length > worstLen) { worstLen = rel.length; worstPath = rel; }
       }
     };
-    walk(root);
+    walk(built);
     assert.ok(worstLen <= LIMIT,
-      `built tree's longest path is ${worstLen} chars, over the ${LIMIT} budget:\n  ${worstPath}`);
+      `the BUILT tree's longest path is ${worstLen} chars, over the ${LIMIT} budget:\n  ${worstPath}`);
   });
 });
