@@ -610,6 +610,25 @@ const SCHEMA = {
   // Restores the volume even if the client never sends unduck (dropped
   // connection, crash). In the schema for the same reason as the four above.
   UNDUCK_SAFETY_MS:            { type: 'number', default: 15000, min: 1000 },
+  // MEASURED 2026-08-14 on the operator's real key, with actual BidiGenerateContent
+  // connects (catalog listings lie here, so reachability means a real setupComplete):
+  //
+  //   REACHABLE  gemini-3.1-flash-live-preview           setup 468ms, first audio  951ms
+  //   REACHABLE  gemini-2.5-flash-native-audio-latest    setup 556ms, first audio 2126ms
+  //   REACHABLE  gemini-2.5-flash-native-audio-preview-12-2025   (same timings)
+  //   setup ok, never completes a text turn: gemini-3.5-live-translate-preview
+  //   NOT FOUND (close 1008): gemini-3.1-pro-live-preview, gemini-live-2.5-flash-preview
+  //
+  // **There is no Pro-tier Live model.** ListModels advertises 6 models supporting
+  // bidiGenerateContent and every one is flash or a flash native-audio variant, so
+  // "move voice to a stronger model" is not a lever that exists — unlike the TEXT
+  // lanes, where Pro is merely 429-blocked on a free key (see lanes.default.js) and
+  // billing would plausibly unlock it. Do not swap this default hoping for more
+  // intelligence: on a 4-question set the two families scored identically (4/4
+  // each, including refusing to invent a fact and getting a two-step age puzzle
+  // right), and native-audio is 2.2x slower to first audio. The set was too easy
+  // to discriminate them, which is itself the finding — reach for prompt and
+  // tool-visibility work (BUG-222) before reaching for the model name.
   GEMINI_LIVE_MODEL:           { type: 'string', default: 'models/gemini-3.1-flash-live-preview' },
   // Aoede | Kore | Leda | Zephyr | Puck | Charon — Aoede kept as default (see
   // .env.example): auditioning by ear across all six needs a human with

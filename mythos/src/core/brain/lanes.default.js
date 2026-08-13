@@ -29,8 +29,15 @@
 //     google:gemma-4-26b-a4b-it, groq:qwen/qwen3.6-27b.
 //   - Return array-shaped `content` (renders as "[object Object]" through string
 //     extraction): mistral:magistral-medium-latest, mistral:magistral-small-latest.
-//   - No quota on a free Google key (429 every call): every Pro-tier Gemini
-//     (gemini-2.5-pro, gemini-pro-latest, gemini-3.1-pro-preview). Flash only.
+//   - No quota on a free Google key (429 every call): Pro-tier Gemini
+//     gemini-pro-latest and gemini-3.1-pro-preview. Flash only. Re-measured
+//     2026-08-14 with real generateContent calls: both still 429 ("You exceeded
+//     your current quota"), in ~190-200ms — i.e. rejected at the quota gate, not
+//     attempted, so the 429 is a billing state and not a capability claim.
+//     gemini-2.5-pro has since changed failure mode and is now 404, "no longer
+//     available to new users" — it would not come back with billing, so do not
+//     list it as a billing-blocked candidate. Controls that DID answer on the
+//     same key, same run: gemini-3.6-flash 1261ms, gemini-flash-latest 1274ms.
 //   - Absent from this account (404/503): cerebras:llama-3.3-70b,
 //     nim:deepseek-ai/deepseek-v4-flash, mistral:pixtral-large-latest.
 //
