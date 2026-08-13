@@ -16,6 +16,9 @@ const { checkToolCapability } = require('./tool-capability');
 // This is the curated high-traffic default; override with LIVE_TOOL_ALLOWLIST.
 const DEFAULT_ALLOWLIST = [
   'navigate','close_panel','read_status','read_system_specs','open_web',
+  // Task B3 — on-demand "how's the system" mid-conversation: host metrics,
+  // provider health, spend stats, adapter status in one read-only call.
+  'system_status',
   'create_goal','list_goals','toggle_goal','delete_goal',
   'capture_idea','pipeline_status','pipeline_advance',
   'kanban_status','kanban_add_card','kanban_move_card',

@@ -520,7 +520,12 @@ async function main() {
       });
       orchestrator.init();
       registerFromMission(hub, { orchestrator: orchestrator });
-      registerFromSystem(hub, { config: config });
+      // Task B3 — probes injected so system_status can report live provider
+      // health (immune.probes.getStatus()) alongside its other digests; the
+      // adapter ONLINE/OFFLINE reads and spend.getStats() are side-effect-free
+      // requires inside from-system.js itself, matching getCapabilityDigest()
+      // below rather than threading four more collaborators through here.
+      registerFromSystem(hub, { config: config, probes: immune.probes });
       registerFromGmail(hub, { logger: logger });
       // Gmail triage sensor's bound fn — MUST go through the hub (breaker-gated),
       // never call the gmail adapter directly. Constructed here (next to hub) but

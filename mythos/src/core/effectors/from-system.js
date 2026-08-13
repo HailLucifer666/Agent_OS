@@ -5,8 +5,9 @@
 // get_weather (Open-Meteo, no API key — same free provider the dashboard's
 // weather widget already uses: ui/public/js/widgets/kinds/weather.js), and
 // get_directions (§7.9 — OSRM's free public routing demo, no API key,
-// reusing get_weather's geocode() helper for both endpoints). All three
-// are tier 0 (read-only, auto-allow — see TIER_TABLE) and never throw: a
+// reusing get_weather's geocode() helper for both endpoints), and
+// system_status (Task B3 — on-demand host/provider/spend/adapter digest). All
+// four are tier 0 (read-only, auto-allow — see TIER_TABLE) and never throw: a
 // network failure or bad timezone degrades to an honest error result, same
 // philosophy as edge-tts.js/groq-stt.js.
 //
@@ -19,6 +20,19 @@
 // `note` field rather than presented as accurate foot/bike directions.
 
 const { effectorFromTool } = require('./adapter');
+// system_status (Task B3) — reuses the exact metric math server/routes/system.js's
+// /api/system route reports (extracted into snapshotSystemMetrics by the prior
+// task) rather than re-deriving CPU/mem/disk numbers a second time. spend.js and
+// the four adapter modules are side-effect-free requires (module-level singleton
+// state, no I/O at require time — see mythos/adapters/CLAUDE.md and spend.js's
+// own header) — same convention main.js's getCapabilityDigest() already uses for
+// the identical ONLINE/OFFLINE reads.
+const { snapshotSystemMetrics } = require('../../../server/routes/system');
+const spend = require('../brain/spend');
+const pcChild = require('../../../adapters/pc-child');
+const cuaDriver = require('../../../adapters/cua-driver');
+const androidChild = require('../../../adapters/android-child');
+const browserAgent = require('../../../adapters/browser-agent');
 
 // Copied verbatim from ui/public/js/widgets/kinds/weather.js's WMO table —
 // duplicated rather than shared because that file is a browser ES module and
@@ -131,6 +145,48 @@ function buildTools(ctx) {
     }
   }
 
+  // Adapter ONLINE/OFFLINE map — same four adapters and same 'ONLINE' string
+  // comparison as main.js's getCapabilityDigest(), so system_status's answer
+  // never drifts from what the capability snapshot already tells the model.
+  function adapterOnline() {
+    var out = {};
+    try { out['pc-child'] = pcChild.getStatus().state === 'ONLINE'; } catch (_) {}
+    try { out['cua-driver'] = cuaDriver.getStatus().state === 'ONLINE'; } catch (_) {}
+    try { out['android-child'] = androidChild.getStatus().state === 'ONLINE'; } catch (_) {}
+    try { out['browser-agent'] = browserAgent.getStatus().state === 'ONLINE'; } catch (_) {}
+    return out;
+  }
+
+  // system_status — on-demand self-knowledge digest (Task B3). Read-only: it
+  // never acts, mutates, or restarts anything. Each section degrades to null
+  // independently (never throws) so one broken source can't blank the rest —
+  // same honest-inert posture as get_weather/get_directions above. Deliberately
+  // NO dollar figures anywhere: spend.getStats() already reports calls/tokens/
+  // success-rate only, and there is no pricing table in this repo to invent one.
+  async function systemStatus() {
+    var result = {};
+
+    try {
+      var snapped = await snapshotSystemMetrics();
+      result.metrics = (snapped && snapped.metrics) || null;
+    } catch (_) { result.metrics = null; }
+
+    try {
+      var probes = ctx && ctx.probes;
+      result.providers = (probes && typeof probes.getStatus === 'function') ? await probes.getStatus() : null;
+    } catch (_) { result.providers = null; }
+
+    try {
+      result.spend = spend.getStats();
+    } catch (_) { result.spend = null; }
+
+    try {
+      result.adapters = adapterOnline();
+    } catch (_) { result.adapters = null; }
+
+    return { ok: true, result: result };
+  }
+
   return [
     {
       name: 'get_time',
@@ -152,6 +208,13 @@ function buildTools(ctx) {
       params: { from: 'string - starting location name', to: 'string - destination location name', mode: 'string (optional) - driving|walking|cycling, default driving' },
       danger: false,
       fn: getDirections,
+    },
+    {
+      name: 'system_status',
+      description: 'On-demand system health digest: host CPU/memory/disk metrics, AI provider health, spend stats (calls/tokens/success-rate — no dollar figures), and adapter online/offline status. Read-only, never restarts or changes anything.',
+      params: {},
+      danger: false,
+      fn: systemStatus,
     },
   ];
 }

@@ -3,6 +3,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { buildTools } = require('../src/core/effectors/from-system');
+const { tierOf } = require('../src/core/leash/tiers');
 
 function toolFn(tools, name) {
   return tools.find((t) => t.name === name).fn;
@@ -89,6 +90,47 @@ describe('from-system tools', () => {
       const result = await toolFn(tools, 'get_weather')({ location: 'Nowhereville' });
       assert.equal(result.ok, false);
       assert.match(result.result, /no such location/);
+    });
+  });
+
+  describe('system_status', () => {
+    it('is registered at tier T0 (read-only, auto-allow)', () => {
+      assert.equal(tierOf('system_status'), 0);
+    });
+
+    it('is declared read-only, with no params to act or mutate with', () => {
+      const tools = buildTools({ config: {} });
+      const tool = tools.find((t) => t.name === 'system_status');
+      assert.ok(tool, 'system_status must be registered by from-system.js');
+      assert.equal(tool.danger, false);
+      assert.deepEqual(tool.params, {});
+    });
+
+    it('returns the expected digest shape: metrics, providers, spend, adapters', async () => {
+      const fakeProbes = { getStatus: async () => ({ providers: { alive: ['groq'] } }) };
+      const tools = buildTools({ config: {}, probes: fakeProbes });
+      const result = await toolFn(tools, 'system_status')({});
+      assert.equal(result.ok, true);
+      assert.ok(result.result.metrics, 'metrics section (CPU/mem/disk) must be present');
+      assert.equal(typeof result.result.metrics.uptimeSec, 'number');
+      assert.deepEqual(result.result.providers, { providers: { alive: ['groq'] } });
+      assert.ok(result.result.spend, 'spend digest must be present');
+      assert.equal(typeof result.result.spend.successRate, 'number');
+      assert.ok(result.result.adapters, 'adapter ONLINE/OFFLINE map must be present');
+    });
+
+    it('never states a dollar figure — there is no pricing table in this repo', async () => {
+      const tools = buildTools({ config: {} });
+      const result = await toolFn(tools, 'system_status')({});
+      const serialized = JSON.stringify(result.result.spend);
+      assert.doesNotMatch(serialized, /\$|dollar|usd|cost/i);
+    });
+
+    it('degrades honestly when probes is absent, instead of throwing', async () => {
+      const tools = buildTools({ config: {} });
+      const result = await toolFn(tools, 'system_status')({});
+      assert.equal(result.ok, true);
+      assert.equal(result.result.providers, null);
     });
   });
 });

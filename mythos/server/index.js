@@ -177,7 +177,10 @@ function createServer(deps) {
       const persona = identity && typeof identity.persona === 'function' ? identity.persona() : null;
       if (persona) parts.push(persona);
     } catch (err) { logger.warn('live.persona-compose-failed', { error: err.message }); }
-    try { parts.push(version.contextLine()); } catch (err) { logger.warn('live.version-compose-failed', { error: err.message }); }
+    try {
+      parts.push(version.contextLine() +
+        ' (as of session-start — a code upgrade since then would not be reflected here; re-check with a tool before relying on it.)');
+    } catch (err) { logger.warn('live.version-compose-failed', { error: err.message }); }
     // BUG-136: this frame is composed once per open()/rotation and can then ride
     // unrefreshed for up to ~10 minutes (Gemini Live's own connection ceiling) —
     // any per-turn-fresh value baked in here goes stale but keeps LOOKING live to
@@ -185,14 +188,20 @@ function createServer(deps) {
     // every turn and is genuinely live; this is the only composition point where
     // it is not, so it asks for the labelled `asOf` form instead of the "live —
     // trust this" default. `version.contextLine()` and the skills catalog below
-    // share the same trap and are not yet labelled — the local time below is the
-    // one prior fix for this class (refreshed on every open(), with its own
-    // comment explaining why).
+    // share the same trap and are now labelled the same way (Task B3) — the
+    // local time below is the one prior fix for this class (refreshed on every
+    // open(), with its own comment explaining why).
     try {
       const digest = getCapabilityDigest ? getCapabilityDigest({ asOf: 'session-start' }) : null;
       if (digest) parts.push(digest);
     } catch (err) { logger.warn('live.capability-digest-failed', { error: err.message }); }
-    try { parts.push(skillsLoader.catalogBlock()); } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    try {
+      const skillsBlock = skillsLoader.catalogBlock();
+      if (skillsBlock) {
+        parts.push(skillsBlock +
+          '\n(as of session-start — a skill added/removed since would not be reflected here; re-check with a tool before relying on it.)');
+      }
+    } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
     // BUG-079 (Stage 6, item #19): with no local time anywhere in the prompt,
     // MYTHOS said "have a good afternoon" at ~01:50 local — the operator had
     // to correct "a.m. not p.m." live-session.js's buildSetup() calls this

@@ -71,6 +71,11 @@ const TIER_TABLE = {
   'document_answer':       0,  // read-only — answers a question grounded in ingested document chunks + cites them, §7.5, writes nothing
   'search_code':           0,  // read-only — semantic search over indexed code chunks, §7.11, writes nothing
   'phone_list_devices':    0,  // Task 10 (step 6, Android bridge) — read-only, `adb devices -l` via the adapter's own live status
+  // Task B3 — on-demand self-knowledge digest (host metrics + provider health +
+  // spend stats + adapter ONLINE/OFFLINE). Same class as read_system_specs/
+  // read_status above: a stateless read of THIS process's own state, no dollar
+  // figures, cannot act.
+  'system_status':         0,
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
