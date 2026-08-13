@@ -15,6 +15,17 @@
 // let the caps STACK — several slow sources in a row could add multiple
 // seconds in front of the 12s brain-compose race that follows. Gathering in
 // parallel bounds the total wait to the slowest single source instead.
+//
+// One exception to "never required internally" (Task B3 code review): the
+// two-sample CPU-delta dance fact #8 used to run inline here is now shared
+// with system_status (effectors/from-system.js) via sampledSystemMetrics()
+// in server/routes/system.js. It is required directly rather than injected
+// because it takes the actual data dependency — the snapshot function — as
+// its own parameter (deps.snapshotSystemMetrics still flows through exactly
+// as before), so requiring it adds no untestable coupling: it is pure
+// orchestration (sample, wait, sample, diff), not a subsystem that needs
+// faking on its own.
+const { sampledSystemMetrics } = require('../../../server/routes/system');
 
 const DEFAULT_FACT_TIMEOUT_MS = 2000;
 // The gap between the two os.cpus() samples the system-conditions fact takes
@@ -115,19 +126,14 @@ async function buildBriefingFacts(deps) {
     // both callers share one source of truth instead of two copies drifting.
     // A single snapshot has no earlier os.cpus() sample to diff against (same
     // reason the route's very first request reports cpu.loadPercent:null), so
-    // this takes one sample, waits systemSampleGapMs, then diffs a second
-    // sample against the first — a real delta, not a self-diff that can only
-    // ever measure zero elapsed time (code review, 2026-08-13: the CPU clause
-    // was structurally dead before this fix).
+    // the two-sample dance (take one, wait systemSampleGapMs, diff a second
+    // against the first) now lives in sampledSystemMetrics() alongside
+    // snapshotSystemMetrics — shared with system_status (Task B3 code review)
+    // instead of being duplicated inline here a second time.
     withTimeout(async () => {
       const snapshot = deps.snapshotSystemMetrics;
       if (typeof snapshot !== 'function') return null;
-      const first = await snapshot();
-      if (systemSampleGapMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, systemSampleGapMs));
-      }
-      const snapped = await snapshot(first && first.nextCpus);
-      const metrics = snapped && snapped.metrics;
+      const metrics = await sampledSystemMetrics(snapshot, systemSampleGapMs);
       if (!metrics) return null;
       const parts = [];
       if (metrics.cpu && typeof metrics.cpu.loadPercent === 'number') parts.push('CPU ' + metrics.cpu.loadPercent + '%');

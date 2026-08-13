@@ -21,14 +21,32 @@
 
 const { effectorFromTool } = require('./adapter');
 // system_status (Task B3) — reuses the exact metric math server/routes/system.js's
-// /api/system route reports (extracted into snapshotSystemMetrics by the prior
-// task) rather than re-deriving CPU/mem/disk numbers a second time. spend.js and
-// the four adapter modules are side-effect-free requires (module-level singleton
-// state, no I/O at require time — see mythos/adapters/CLAUDE.md and spend.js's
-// own header) — same convention main.js's getCapabilityDigest() already uses for
-// the identical ONLINE/OFFLINE reads.
-const { snapshotSystemMetrics } = require('../../../server/routes/system');
+// /api/system route reports, via sampledSystemMetrics() (a shared two-sample
+// CPU-delta helper, factored beside snapshotSystemMetrics itself out of the
+// boot briefing's own copy — code review, 2026-08-13) rather than re-deriving
+// CPU/mem/disk numbers a second time.
+//
+// PRECISELY what is side-effect-free here, and what is deliberately NOT
+// reached at all: spend.js's getStats() and the four adapter modules'
+// getStatus() are side-effect-free requires (module-level singleton state,
+// no I/O at require time — see mythos/adapters/CLAUDE.md and spend.js's own
+// header), same convention main.js's getCapabilityDigest() already uses for
+// the identical ONLINE/OFFLINE reads. Provider health is DELIBERATELY read
+// via brain/registry.js + quota.js directly, NOT via immune/probes.js's
+// getStatus() — that wrapper is documented (probes.js's own header) as
+// emitting 'health.anomaly'/'health.healed' on provider-down/quota-low STATE
+// TRANSITIONS, which diagnostician.js/healer.js turn into real remediation
+// (restart-cortex, pause-goal, degrade-lane, suppress-tool playbooks). A T0
+// read-only tool that can originate that emit is not actually read-only — it
+// can be the exact call that fires a transition edge and sets off a restart,
+// which is precisely the class of tool this plan refused to add on purpose
+// (see the header note about restart_component). registry.getStatus() and
+// quota.getAllQuotas() are the same underlying reads probes.js itself wraps,
+// verified to touch no bus and emit nothing.
+const { sampledSystemMetrics } = require('../../../server/routes/system');
 const spend = require('../brain/spend');
+const registry = require('../brain/registry');
+const quota = require('../quota');
 const pcChild = require('../../../adapters/pc-child');
 const cuaDriver = require('../../../adapters/cua-driver');
 const androidChild = require('../../../adapters/android-child');
@@ -157,8 +175,23 @@ function buildTools(ctx) {
     return out;
   }
 
+  // Non-emitting provider-health read (FIX 1, code review on Task B3): the
+  // exact registry.getStatus()/quota.getAllQuotas() reads immune/probes.js's
+  // getStatus() itself wraps, minus that wrapper's bus.emit() transition
+  // logic — see the header note above for why that distinction matters for a
+  // T0 tool. Shape matches probes.getStatus()'s own return value
+  // ({providers, quotas, probedAt}) so nothing downstream needs to care which
+  // path produced it.
+  async function providerHealth() {
+    var registryStatus = await registry.getStatus();
+    var stats = spend.getStats();
+    var quotas = quota.getAllQuotas(stats);
+    return { providers: registryStatus, quotas: quotas, probedAt: registryStatus.probedAt };
+  }
+
   // system_status — on-demand self-knowledge digest (Task B3). Read-only: it
-  // never acts, mutates, or restarts anything. Each section degrades to null
+  // never acts, mutates, or restarts anything — including indirectly, via a
+  // side-effecting read (FIX 1 above). Each section degrades to null
   // independently (never throws) so one broken source can't blank the rest —
   // same honest-inert posture as get_weather/get_directions above. Deliberately
   // NO dollar figures anywhere: spend.getStats() already reports calls/tokens/
@@ -167,13 +200,15 @@ function buildTools(ctx) {
     var result = {};
 
     try {
-      var snapped = await snapshotSystemMetrics();
-      result.metrics = (snapped && snapped.metrics) || null;
+      // sampledSystemMetrics() with no snapshotFn defaults to this module's
+      // own snapshotSystemMetrics — see server/routes/system.js. Takes two
+      // real samples ~150ms apart so cpu.loadPercent is a genuine delta
+      // rather than a single sample self-diffed to a permanent null (FIX 2).
+      result.metrics = (await sampledSystemMetrics()) || null;
     } catch (_) { result.metrics = null; }
 
     try {
-      var probes = ctx && ctx.probes;
-      result.providers = (probes && typeof probes.getStatus === 'function') ? await probes.getStatus() : null;
+      result.providers = await providerHealth();
     } catch (_) { result.providers = null; }
 
     try {

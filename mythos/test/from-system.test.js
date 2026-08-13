@@ -94,6 +94,24 @@ describe('from-system tools', () => {
   });
 
   describe('system_status', () => {
+    // system_status reads provider health directly via brain/registry.js (no
+    // ctx.probes at all — FIX 1, see from-system.js's header). registry.js's
+    // own getStatus() does real fetch()-backed probes and caches for a TTL,
+    // which would make these tests slow and network-dependent; monkeypatch
+    // the module's exported getStatus for determinism, same pattern
+    // test/immune.test.js already uses for this exact module. from-system.js
+    // calls it as `registry.getStatus()` (not destructured at require time),
+    // so reassigning the exported property here is visible to it.
+    const registry = require('../src/core/brain/registry');
+    const originalGetStatus = registry.getStatus;
+    const fakeRegistryStatus = {
+      nim: { configured: 0, aliveModels: 0 }, groq: { alive: true }, mistral: { alive: true },
+      cerebras: { configured: false, aliveModels: 0 }, google: { configured: false, aliveModels: 0 },
+      openrouter: { configured: false, alive: false }, chains: {}, probedAt: 12345,
+    };
+    beforeEach(() => { registry.getStatus = async () => fakeRegistryStatus; });
+    afterEach(() => { registry.getStatus = originalGetStatus; });
+
     it('is registered at tier T0 (read-only, auto-allow)', () => {
       assert.equal(tierOf('system_status'), 0);
     });
@@ -107,16 +125,31 @@ describe('from-system tools', () => {
     });
 
     it('returns the expected digest shape: metrics, providers, spend, adapters', async () => {
-      const fakeProbes = { getStatus: async () => ({ providers: { alive: ['groq'] } }) };
-      const tools = buildTools({ config: {}, probes: fakeProbes });
+      const tools = buildTools({ config: {} });
       const result = await toolFn(tools, 'system_status')({});
       assert.equal(result.ok, true);
       assert.ok(result.result.metrics, 'metrics section (CPU/mem/disk) must be present');
       assert.equal(typeof result.result.metrics.uptimeSec, 'number');
-      assert.deepEqual(result.result.providers, { providers: { alive: ['groq'] } });
+      assert.deepEqual(result.result.providers.providers, fakeRegistryStatus);
+      assert.ok(Array.isArray(result.result.providers.quotas));
       assert.ok(result.result.spend, 'spend digest must be present');
       assert.equal(typeof result.result.spend.successRate, 'number');
       assert.ok(result.result.adapters, 'adapter ONLINE/OFFLINE map must be present');
+    });
+
+    // FIX 2 (code review): a single snapshotSystemMetrics() call has no
+    // earlier os.cpus() sample to diff against, so cpu.loadPercent self-diffs
+    // to a permanent null — degrades honestly, which is exactly why it can
+    // ship broken unnoticed. system_status now goes through the shared
+    // sampledSystemMetrics() two-sample helper (server/routes/system.js),
+    // the same fix already landed for the boot briefing in 18b603a. This
+    // must fail if that regresses back to a bare snapshotSystemMetrics().
+    it('the CPU figure is a real delta, not permanently null (FIX 2)', async () => {
+      const tools = buildTools({ config: {} });
+      const result = await toolFn(tools, 'system_status')({});
+      assert.equal(result.ok, true);
+      assert.equal(typeof result.result.metrics.cpu.loadPercent, 'number',
+        'cpu.loadPercent must be a real two-sample delta, not null from a single self-diffed sample');
     });
 
     it('never states a dollar figure — there is no pricing table in this repo', async () => {
@@ -126,11 +159,47 @@ describe('from-system tools', () => {
       assert.doesNotMatch(serialized, /\$|dollar|usd|cost/i);
     });
 
-    it('degrades honestly when probes is absent, instead of throwing', async () => {
+    it('degrades honestly when the provider-health read throws, instead of throwing itself', async () => {
+      registry.getStatus = async () => { throw new Error('probe failed'); };
       const tools = buildTools({ config: {} });
       const result = await toolFn(tools, 'system_status')({});
       assert.equal(result.ok, true);
       assert.equal(result.result.providers, null);
+    });
+
+    // FIX 1 (HIGH, code review): probes.getStatus() (immune/probes.js) is
+    // documented as emitting 'health.anomaly'/'health.healed' on provider-
+    // down/quota-low STATE TRANSITIONS, which diagnostician.js/healer.js turn
+    // into real remediation (restart-cortex, pause-goal, degrade-lane,
+    // suppress-tool). A T0, voice-invoked, read-only tool must never be able
+    // to originate that emit — that is the whole reason this plan refused to
+    // add a restart_component effector. This proves system_status's read
+    // path never touches a bus at all, using a fixture chosen specifically
+    // because it WOULD trip the emit if system_status went through
+    // probes.getStatus() — the sanity assertion at the end proves the
+    // fixture is capable of tripping it through the real wrapper, so this
+    // test cannot pass vacuously.
+    it('never triggers the immune system\'s health.anomaly/health.healed side effect', async () => {
+      registry.getStatus = async () => ({
+        nim: { configured: 1, aliveModels: 0 }, groq: { alive: false }, mistral: { alive: false },
+        cerebras: {}, google: {}, openrouter: {}, chains: {}, probedAt: Date.now(),
+      });
+      const emitted = [];
+      const fakeBus = { emit: (type, payload) => emitted.push({ type, payload }) };
+      const { createProbes } = require('../src/core/immune/probes');
+      const probes = createProbes({ bus: fakeBus, config: {} });
+
+      const tools = buildTools({ config: {} });
+      const result = await toolFn(tools, 'system_status')({});
+      assert.equal(result.ok, true);
+      assert.deepEqual(emitted, [], 'system_status must never emit health.anomaly/health.healed via probes.js');
+
+      // Sanity: the SAME registry fixture DOES trip the emit through the real
+      // probes.js wrapper — proves the fixture is capable of tripping it and
+      // that the assertion above is not passing vacuously.
+      await probes.getStatus();
+      assert.ok(emitted.length > 0,
+        'sanity check failed: this fixture must emit through probes.getStatus(), or this test proves nothing');
     });
   });
 });

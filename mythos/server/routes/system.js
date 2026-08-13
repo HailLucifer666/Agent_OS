@@ -108,6 +108,31 @@ async function snapshotSystemMetrics(prevCpus) {
   return { metrics, nextCpus };
 }
 
+// sampledSystemMetrics(snapshotFn, gapMs) — the two-sample CPU-delta dance
+// factored out of the boot briefing (code review on 18b603a) so any ONE-OFF
+// caller with no prevCpus persisted between calls (the briefing itself, and
+// now system_status's live effector call) shares one implementation instead
+// of duplicating it. A single snapshotSystemMetrics() call has no earlier
+// sample to diff against, so cpu.loadPercent self-diffs to a permanent null;
+// this takes a first sample, waits gapMs, takes a second sample diffed
+// against the first, and returns the second's metrics — a genuine non-zero
+// delta. `snapshotFn` defaults to this module's own snapshotSystemMetrics but
+// stays a parameter so a caller with its own dependency-injection contract
+// (briefing.js: "dependencies are injected, never required internally") can
+// hand in its injected/faked snapshot function without this module knowing
+// anything about that convention. Deliberately NOT used by the /api/system
+// route below — that route keeps its own long-lived prevCpus closure across
+// requests and must keep behaving exactly as it does today.
+const DEFAULT_SAMPLE_GAP_MS = 150;
+async function sampledSystemMetrics(snapshotFn, gapMs) {
+  const snap = typeof snapshotFn === 'function' ? snapshotFn : snapshotSystemMetrics;
+  const gap = typeof gapMs === 'number' ? gapMs : DEFAULT_SAMPLE_GAP_MS;
+  const first = await snap();
+  if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
+  const second = await snap(first && first.nextCpus);
+  return second && second.metrics;
+}
+
 function mountSystemRoutes(app, deps) {
   let prevCpus = os.cpus();
 
@@ -122,4 +147,4 @@ function mountSystemRoutes(app, deps) {
   });
 }
 
-module.exports = { mountSystemRoutes, cpuDeltaPercent, average, snapshotSystemMetrics };
+module.exports = { mountSystemRoutes, cpuDeltaPercent, average, snapshotSystemMetrics, sampledSystemMetrics };

@@ -520,12 +520,14 @@ async function main() {
       });
       orchestrator.init();
       registerFromMission(hub, { orchestrator: orchestrator });
-      // Task B3 — probes injected so system_status can report live provider
-      // health (immune.probes.getStatus()) alongside its other digests; the
-      // adapter ONLINE/OFFLINE reads and spend.getStats() are side-effect-free
-      // requires inside from-system.js itself, matching getCapabilityDigest()
-      // below rather than threading four more collaborators through here.
-      registerFromSystem(hub, { config: config, probes: immune.probes });
+      // Task B3 (code review FIX 1): system_status deliberately does NOT take
+      // immune.probes here — probes.getStatus() emits health.anomaly/
+      // health.healed on provider state transitions, which would let a T0
+      // voice-invoked read trigger real healer.js remediation. It reads
+      // brain/registry.js + quota.js directly instead (see from-system.js's
+      // header); those, spend.getStats(), and the adapter ONLINE/OFFLINE
+      // reads are all side-effect-free requires inside from-system.js itself.
+      registerFromSystem(hub, { config: config });
       registerFromGmail(hub, { logger: logger });
       // Gmail triage sensor's bound fn — MUST go through the hub (breaker-gated),
       // never call the gmail adapter directly. Constructed here (next to hub) but
