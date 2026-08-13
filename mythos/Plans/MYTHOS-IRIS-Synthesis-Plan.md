@@ -12,6 +12,88 @@
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-08-14 — operator-reported basics wave (BUG-221 … BUG-224)
+
+**Status:** merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐, all gating
+shipping, not building). This session was not parity work — the operator reported
+that the basics had regressed and was considering scrapping the project. Four bugs
+found, four fixed, two live-verified.
+
+**Suite: 4323 / 4322 pass / 0 fail / 1 skip.** Landed and pushed:
+`cb505e5` `899daeb` `55f96c1` `0757cb4` (+ the runbook commit).
+
+**The headline correction, because it invalidates a premise several documents
+still carry: the installed app was never stale.** It is **v0.1.9, installed
+2026-08-13 04:06**, which IS the latest published GitHub release (0.1.9,
+2026-08-12). What made it look abandoned is that **v0.1.9 renamed the app's
+userData directory from `%APPDATA%\agent-os` to `%APPDATA%\MYTHOS`** — so the old
+vault and logs simply stop, and a forensic search of the old paths finds an app
+that appears to have died two days ago. There are now FOUR vault locations on
+that machine. Resolve the live one from the running build before concluding
+anything from an absent log.
+
+**What was actually wrong:**
+- **BUG-221** (fixed, live-verified) — `ui_type` aborted on an unguarded advisory
+  `SetFocus()`, the only unguarded one of four in `ps-automation.ps1`. Win11's
+  WinUI3 Notepad refuses focus, and the exception killed the whole handler
+  *before* `uia-setvalue`/`wm-char-post` — the two routes that need no focus and
+  are the measured-working ones on MSIX apps. The ladder was intact; its entrance
+  was not.
+- **BUG-222** (fixed, NOT live-verified) — `self_capabilities` was withheld from
+  the Live allowlist, so "what can you do?" and "what did you fix?" had no honest
+  answer and the model improvised around them (the operator heard this as endless
+  web-search suggestions). `capabilities.js` has been writing the true answer —
+  tools, adapters, recent git changes — to `vault/Identity/capabilities.md` on
+  every boot the whole time, with no reader on the voice surface.
+- **BUG-223** (fixed, live-verified) — `close_window` reported `ok:true` for a
+  window that was still open. The handler was honest (BUG-103 made it return a
+  failure STRING); the dispatcher arm that converts a string to `ok:false` was
+  missing, as it was on eight other commands. Fixed by hoisting that conversion
+  to one gate instead of adding a 25th per-arm copy.
+- **BUG-224** (fixed, NOT live-verified) — the interruptions AND the clipped last
+  word are ONE mechanism: MYTHOS's own Live voice re-entered the mic and was
+  streamed to Gemini's `START_SENSITIVITY_HIGH` VAD, which heard it finish a
+  sentence, called it a barge-in, and **stopped synthesizing server-side**. That
+  is why BUG-084's client-side tail guard never cured the clipping. A half-duplex
+  gate now holds mic frames while MYTHOS is audible — gating the send only, so
+  the local barge-in backstop still runs and opens the gate, with a 1.2s preroll
+  replayed on release.
+
+**Next action — the operator's, and it is now ONE sitting, not six:**
+`docs/live-verification-runbook.md` Group C, in the order given there
+(C1 wake word → C5 self-capabilities → C6 typing/close → C2+C3 echo and barge-in
+→ C4 noise). C2 carries the four BUG-224 pass signals and names the regression
+risk to watch: while the gate is held the LOCAL backstop is the only detector and
+its threshold is higher than the server VAD's, so a soft interruption may need to
+be firmer. Kill switch `localStorage.MYTHOS_LIVE_HALF_DUPLEX = 'off'` for an A/B.
+**Read the transport warning at the top of Group C first** — C2/C3 were written
+for the legacy `voice-loop.js` path, and every 2026-08-14 turn was `"s2s"`.
+
+**Blocked on / not done:**
+- **P0, UNCLAIMED as of this writing: the zombie-on-close bug.** Closing the app
+  with X leaves the process alive; it then refuses to relaunch until the operator
+  ends the task. This blocks daily use of the installed app and NOBODY has taken
+  it — a second session was expected to and there is no commit or working-tree
+  evidence that it did. Root area: `electron/main.js` teardown (child server
+  fork, pc-child PowerShell child, ports 4478/5050) plus the single-instance
+  lock, which currently swallows the relaunch silently. Related: BUG-029's
+  pidfile is a mitigation that only kills orphans on the NEXT launch; proper
+  graceful shutdown is ROADMAP D-07.
+- **The updater is NOT broken — verified, do not "fix" it.** Feed reachable
+  (public repo, releases through 0.1.9), progress/notification/install/
+  post-restart notice/rollback detection all present and wired
+  (`unfinishedUpdate()` → `MYTHOS_UPDATE_RESULT` → `update-report.js` → the boot
+  greeting), 38/38 tests green. The v0.1.9 install *looked* dead only because
+  NSIS `/S` hides its progress UI; the visible-notification work that fixes that
+  perception landed 2026-08-13, i.e. AFTER that install. Next real update is the
+  first one that will show itself.
+- **6.5 / 6.6** unchanged: wake-word weights decision (train own model, separate
+  workstream), wider licence audit, and the money items (code-signing cert,
+  update host). Standing operator-only: suspend the exposed Render instance, add
+  a LICENSE, physical-phone checks.
+- **Superseded claim:** any earlier note in this file that there is "no delegable
+  work left" is false — the P0 above is delegable, and unclaimed.
+
 ### 2026-08-08 — pre-release security audit remediation (interleaved with the Stage 0-5 voice-node session)
 
 **This section is about the RELEASE LAYER, not the parity build.** The merged-order
