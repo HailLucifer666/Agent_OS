@@ -109,8 +109,24 @@ const PREF_VISION = [
   // Was ONE entry deep in practice (mistral-large-2512 alone, no fallback),
   // because both nim: entries were filtered out by the missing NIM_API_KEY.
   // Every model below correctly identified a generated test image.
-  { provider: 'nim',     model: 'nvidia/nemotron-nano-12b-v2-vl' },      // 386ms — fastest vision measured
-  { provider: 'mistral', model: 'mistral-small-latest' },                // 433ms — cheap and correct
+  // WARNING ON THE NUMBERS BELOW: every one of them is a point-in-time
+  // measurement, and this first line is what a stale one costs. `386ms — fastest
+  // vision measured` was true when written and was, by 2026-08-14, the reason a
+  // dead provider sat at the head of the lane: 40 vision.attempt lines that day
+  // show this exact entry either timing out at its 4s per-attempt ceiling or
+  // returning `500 EngineCore encountered an issue`, never once answering, while
+  // mistral-small (rank 2) answered in 1.8-2.0s every time. Each look therefore
+  // paid ~8s for nothing. NVIDIA's free NIM tier is documented non-production, so
+  // that is its steady state rather than an incident.
+  //
+  // The lane is deliberately NOT reordered by hand — that discards a genuinely
+  // fast model over one bad afternoon, and is the same hand-edit a future stale
+  // measurement would prompt again. chain.js now circuit-breaks per
+  // (provider, model) instead, which routes around a dead entry within a call or
+  // two and restores it automatically when it recovers. If you re-measure, put
+  // the DATE next to the number.
+  { provider: 'nim',     model: 'nvidia/nemotron-nano-12b-v2-vl' },      // 386ms measured ~2026-07-29; 4s timeouts + 500s all day on 2026-08-14
+  { provider: 'mistral', model: 'mistral-small-latest' },                // 433ms measured ~2026-07-29; 1.8-2.0s and 100% success on 2026-08-14
   { provider: 'mistral', model: 'mistral-large-2512' },                  // 771ms — natively multimodal, same key as text
   { provider: 'nim',     model: 'meta/llama-3.2-11b-vision-instruct' },  // 1599ms
   { provider: 'google',  model: 'gemini-flash-latest' },                 // 1715ms

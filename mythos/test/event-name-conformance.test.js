@@ -219,6 +219,13 @@ const ALLOWED_EVENTS = new Set([
   // immune system has no playbook for it, the explainer narrated a normal
   // cost-saving close to the operator as a fault with an invented cause.
   'voice.live.idle-closed',
+  // B3 (2026-08-14): a reasoning strip. Deliberately NOT health.anomaly, for the
+  // identical reason as idle-closed above — it fired 24 times in one session and
+  // produced 24 no-match heal round trips, while being a report that the FILTER
+  // WORKED. BUG-170's "a strip is never silent" rule still holds: live-session.js
+  // logs every one (live.reasoning-stripped) and this event carries the same
+  // turnId/channel/spokenAnyway.
+  'voice.live.reasoning-filtered',
 ]);
 
 // -- Static scan -------------------------------------------------------------

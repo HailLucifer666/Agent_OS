@@ -433,7 +433,25 @@ var COMMITMENT_PATTERNS = [
     // commitment shape. Requires "i'll"/"i will" directly followed by one of
     // a small, closed list of action verbs — NOT a bare "I will be ..." or
     // any other generic future-tense sentence.
-    regex: /\bi\s*(?:'ll|will)\s+(check|look into|follow up on|follow up with|take care of|handle|find out|dig into|sort out|get|pull up|review|investigate|work on|fix|reach out to|circle back on)\b/i
+    // B6 (2026-08-14): `get` was the one over-broad verb in this list, and it
+    // produced exactly the false entry the operator decision above forbids. A
+    // goal titled "Commitment: I'll get it right" exists in vault/Goals with
+    // MYTHOS's whole apology as its reason ("I hear you loud and clear, boss, my
+    // wires are definitely crossed today..."). "I'll get it right", "I'll get to
+    // it" and "I'll get that wrong again" all matched a bare `get`.
+    //
+    // Narrowed to phrasal forms rather than deleted: "I'll get those numbers" is a
+    // real commitment and the ledger should keep it. `get` now needs an object
+    // that makes it a fetch — a determiner ("those/that/the/your"), "you", or
+    // "back to you" — so an adverbial completion ("get it right", "get to it")
+    // no longer qualifies. `it` is deliberately excluded: "I'll get it" is
+    // ambiguous between fetching and succeeding, and the operator decision says a
+    // miss costs less than a false entry.
+    //
+    // The hedge list is NOT the place for this (isHedgedCommitment exists to
+    // cancel "I'll check, but..."); an apology was never a commitment to begin
+    // with, so the verb is what was wrong.
+    regex: /\bi\s*(?:'ll|will)\s+(check|look into|follow up on|follow up with|take care of|handle|find out|dig into|sort out|get\s+(?:back\s+to\s+you|you\b|those\b|that\b|the\b|your\b|a\b|an\b|us\b|my\b|some\b)|pull up|review|investigate|work on|fix|reach out to|circle back on)\b/i
   },
   {
     // "Let me check on that", "Let me get those numbers for you" — "let me"
@@ -444,6 +462,18 @@ var COMMITMENT_PATTERNS = [
     regex: /\blet\s+me\s+(check|look into|get|find out|pull up|grab|dig up|follow up on|sort out)\b/i
   }
 ];
+
+// B6: phrases that use a commitment verb adverbially — a statement about quality
+// of performance, not an undertaking to fetch or do a thing. "I'll get that
+// sorted" and "I'll get that done" ARE commitments and must keep matching, so this
+// cannot be a blanket rule about what follows the verb; it is a short explicit
+// list, deliberately, in the spirit of this section's operator decision (a
+// readable pattern list, never a classifier).
+//
+// Measured: the false ledger entry was "I'll get it right" inside an apology.
+// Narrowing `get` to phrasal forms already rejects that one; "I'll get that
+// wrong" still slipped through on `get that`, which is the same class.
+var NON_COMMITMENT_RE = /\bget\s+(?:it|that|this|them)\s+(?:right|wrong)\b/i;
 
 // Hedges that turn an apparent commitment back into a non-commitment. Kept
 // separate from the verb list above so that list stays readable.
@@ -472,6 +502,7 @@ function detectCommitment(text) {
     var stop = rest.search(/[.!?\n]/);
     var clause = (stop === -1 ? rest : rest.slice(0, stop)).trim();
     if (!clause) continue;
+    if (NON_COMMITMENT_RE.test(clause)) continue;
     if (isHedgedCommitment(text, m.index, clause)) continue;
     return clause;
   }
@@ -496,7 +527,14 @@ function logCommitmentIfPresent(text, opts) {
     title: COMMITMENT_TITLE_PREFIX + phrase,
     drive: 'user-service',
     status: 'proposed',
-    reason: text
+    // B6 (2026-08-14): was the ENTIRE reply. The false "Commitment: I'll get it
+    // right" entry carried MYTHOS's whole apology as its reason — "I hear you loud
+    // and clear, boss, my wires are definitely crossed today..." — which is 300
+    // characters of context nobody can act on, in a field read back as the reason
+    // a commitment exists. The matched clause IS the reason; a bounded slice of the
+    // surrounding turn is kept separately for context.
+    reason: phrase,
+    context: String(text).slice(0, 300)
   });
 }
 

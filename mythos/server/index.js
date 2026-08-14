@@ -39,6 +39,9 @@ const {
   createLiveToolAdapter, SYSTEM_NOTICE_PREFIX, LIVE_SYSTEM_NOTICE_INSTRUCTION,
 } = require('../src/core/voice/live-tool-adapter');
 const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
+// B2: the anomaly persist allowlist. See its header — the previous fixed
+// four-field detail dropped every diagnostic field its emitters attached.
+const { anomalyDetail, anomalySummaryDetail } = require('../src/core/immune/anomaly-detail');
 // BUG-113: a spoken first-person commitment ("I'll check X") must leave a
 // record — logCommitmentIfPresent is a no-op unless the text matches the
 // explicit commitment-phrase list, so ordinary replies are unaffected.
@@ -3814,6 +3817,11 @@ function createServer(deps) {
   // already in anomalyLog, no fresh probe needed. Both spec triggers preserved.
   const anomalyLog = [];
   let lastStatus = null; // last probes.getStatus() result ({providers, quotas, probedAt})
+
+  // B2 (2026-08-14): what survives from an anomaly payload to the permanent
+  // record now lives in src/core/immune/anomaly-detail.js — a named allowlist
+  // plus its bounds, extracted so the round trip is testable without booting
+  // this server. See that file's header for the measured defect.
   bus.subscribe('health.anomaly', (e) => {
     anomalyLog.push(e.payload);
     if (anomalyLog.length > 200) anomalyLog.shift();
@@ -3825,8 +3833,13 @@ function createServer(deps) {
         // BUG-105: `tool` is read too — a late-outcome anomaly used to persist
         // as "anomaly: live-tool-outcome-late-for-turn — " with the one fact
         // worth having (which tool) missing from the record entirely.
-        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.error || e.payload.target || e.payload.tool || ''),
-        detail: { kind: e.payload.kind, scope: e.payload.scope, error: e.payload.error, target: e.payload.target },
+        // B2 (2026-08-14): `reason` joins that chain. It is the field
+        // anomaly-payloads-need-reason establishes as load-bearing for the
+        // spoken explanation, and a payload carrying only a reason stored as
+        // "anomaly: live-turn-no-user-transcript — " — a trailing dash and
+        // nothing else.
+        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + anomalySummaryDetail(e.payload),
+        detail: anomalyDetail(e.payload, e.id),
         outcome: 'anomaly', salience: 0.8,
       });
     } catch (_) {}
@@ -3862,7 +3875,10 @@ function createServer(deps) {
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
         summary: label + ': ' + (p.kind || 'unknown') + ' — ' + (p.target || ''),
-        detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome },
+        // B2: eventId is the anomaly record's join key (see anomalyDetail). This
+        // record is the healer's VERDICT on that anomaly, not a second anomaly —
+        // the pair is kept, but is now countable rather than doubling every tally.
+        detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome, eventId: p.sourceEventId || null },
         outcome: label, salience: label === 'cooldown' ? 0.3 : (actuallyHealed ? 0.6 : 0.5),
       });
     } catch (_) {}

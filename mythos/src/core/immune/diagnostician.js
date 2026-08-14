@@ -43,14 +43,22 @@ function playbookLookup(kind) {
   return hit ? hit.id : null;
 }
 
-function diagnose(anomaly) {
+// B2 (2026-08-14): sourceEventId is the bus id of the health.anomaly event this
+// diagnosis came from, threaded through so the healer's health.healed can carry
+// it and the two episodic records written for one event (the anomaly, and the
+// healer's verdict) become countable as a pair. Without it, every tally made
+// from the vault was inflated 2x — 2026-08-14's "238 anomalies" was ~119 events.
+// Optional and defaulted, so every existing caller (and test) that passes only
+// the payload keeps working and simply gets a null.
+function diagnose(anomaly, sourceEventId) {
   anomaly = anomaly || {};
   return {
     kind: anomaly.kind,
     target: anomaly.target,
     evidence: anomaly,
     severity: severityOf(anomaly.kind),
-    suggestedAction: playbookLookup(anomaly.kind)
+    suggestedAction: playbookLookup(anomaly.kind),
+    sourceEventId: sourceEventId || null
   };
 }
 
@@ -58,7 +66,7 @@ function createDiagnostician({ bus }) {
   if (!bus) throw new Error('createDiagnostician requires bus');
 
   function onAnomaly(event) {
-    const diagnosis = diagnose(event.payload);
+    const diagnosis = diagnose(event.payload, event && event.id);
     // 'health.diagnosed' — exact string, do not paraphrase.
     bus.emit('health.diagnosed', diagnosis);
   }

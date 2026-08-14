@@ -15,7 +15,15 @@
 
 const BREAKER_STATES = { CLOSED: 'closed', OPEN: 'open', HALF_OPEN: 'half-open' };
 
-function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, maxResetMs }) {
+// B1 (2026-08-14): anomalyKind exists because this FSM is no longer only behind
+// effectors. The brain chain now owns per-(provider,model) breakers, and a trip
+// there emitting the default 'effector-flapping' would match healer.js's
+// effector-flapping-breaker playbook, whose action is suppress-tool with
+// tool:'$target' — i.e. it would try to suppress a "tool" called
+// "nim:nvidia/nemotron-nano-12b-v2-vl", which is not an effector at all. Naming
+// the kind at construction keeps the two populations of breakers from sharing a
+// remediation that only makes sense for one of them. Default unchanged.
+function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, maxResetMs, anomalyKind }) {
   if (!bus) throw new Error('createBreaker requires bus');
   if (!name) throw new Error('createBreaker requires name');
 
@@ -26,6 +34,7 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
   const WINDOW_MS = windowMs || (config && config.BREAKER_WINDOW_MS) || 30000;
   const RESET_MS = resetMs || (config && config.BREAKER_RESET_MS) || 15000;
   const MAX_RESET_MS = maxResetMs || 300000;
+  const ANOMALY_KIND = anomalyKind || 'effector-flapping';
 
   let state = BREAKER_STATES.CLOSED;
   let failCount = 0;
@@ -97,7 +106,7 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
       state = BREAKER_STATES.OPEN;
       resetAt = now + currentResetMs;
       // 'health.anomaly' — exact string, do not paraphrase.
-      bus.emit('health.anomaly', { kind: 'effector-flapping', target: name, failCount: failCount, state: state });
+      bus.emit('health.anomaly', { kind: ANOMALY_KIND, target: name, failCount: failCount, state: state });
     }
   }
 

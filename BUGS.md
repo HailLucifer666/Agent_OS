@@ -6965,3 +6965,374 @@ Also explicitly not changed, each for a recorded reason: the say-before-act
 ordering (architectural); `ctrl+s` on MSIX Notepad (proven unwinnable — the
 answer is `write_file`, which now works); the sandbox denials for another user's
 Desktop (the leash working correctly).
+
+## BUG-232 — every vision call burned 8 seconds on two dead providers, and the cooldown that should have caught it could not see the failure
+
+Filed from the 2026-08-14 audit as "screen_look timeout, measure before
+touching". Measured, it is not a timeout problem. It was the most expensive
+defect of the session and the direct cause of two of its most visible failures.
+
+**Symptom.** `screen_look` failed at 14:11:36 and 14:13:52 — both while MYTHOS
+was hunting the Notepad Save dialog, so it ran that whole sequence blind.
+Latency from the audit's allow→completed pairs:
+
+| tool | n | median | max |
+|---|---|---|---|
+| `screen_look` | 5 | 10,254 ms | 12,341 ms |
+| `camera_look` | 13 | 9,484 ms | 9,793 ms |
+
+against `DEFAULT_VISION_TIMEOUT_MS = 12000`. The median call sat at 85% of its
+own budget and the max exceeded it.
+
+**Cause, from the 40 `vision.attempt` lines.** `PREF_VISION[0]` is NVIDIA NIM:
+
+    nim      nvidia/nemotron-nano-12b-v2-vl  ms:4015  timedOut:true  "This operation was aborted"
+    nim2     nvidia/nemotron-nano-12b-v2-vl  ms:4002  timedOut:true  "This operation was aborted"
+    nim      nvidia/nemotron-nano-12b-v2-vl  ms:2431  ok:false       "500 EngineCore encountered an issue"
+    mistral  mistral-small-latest            ms:1943  ok:true
+
+4 s + 4 s + ~1.5 s ≈ 9.5 s, matching `attemptsTried:3, ms:9457` in the log
+exactly. Eight of those 9.5 seconds bought nothing, all day. `mistral-small` —
+rank 2 — answered in 1.8–2.0 s and never failed once. NVIDIA's free NIM tier is
+documented non-production (see the 2026-08-05 licence evidence), so intermittent
+500s and hangs are its steady state, not an incident.
+
+**TWO root causes. The wave plan named only the second.**
+
+1. **`chain.js` already had the right mechanism and it never fired.** The catch
+   block takes a per-`(lane, model)` cooldown on 429 / 5xx / network — and an
+   attempt that hits its OWN per-attempt timeout matches none of the three.
+   `attemptTimedOut` was already computed, for telemetry, and never consulted for
+   the decision. C7's comment ("caller-initiated abort is not a provider fault")
+   is right and was the reason: it lumped both `AbortError` sources together. A
+   caller giving up says nothing about the provider; a provider that will not
+   answer inside its own step budget is faulty by definition. Both are
+   `AbortError`, only one is evidence. **Fixed unconditionally — a bug, not a
+   feature to flag-gate.** Removing just `|| attemptTimedOut` fails 7 of the new
+   tests, which is how load-bearing it is.
+2. **A flat 60 s cooldown is the wrong shape for an all-day outage.** Even with
+   fix 1, the five `screen_look` calls were minutes apart, so every one would
+   arrive after the cooldown had lapsed and pay the full 9.5 s again. Escalation
+   is what actually closes it: `immune/breakers.js` already implements
+   CLOSED → OPEN → resetMs ×2 backoff capped at maxResetMs → HALF_OPEN → CLOSED,
+   and the effector hub and live-session already use it. The brain chain did not.
+
+**FIXED 2026-08-14.** Per-`(provider, model)` breakers in `chain.js`.
+
+- **Keyed per provider:model, not per provider** — that is the unit that failed.
+  `chain.js` serves every lane, so a dead vision model must not open the breaker
+  for the same provider's text lane. Asserted.
+- **Every skip is logged.** Both skip paths (`cooldown` and `breaker-open`) now
+  report through `onAttemptEnd` with a reason. They used to `continue` in
+  silence — and a breaker that silently skips turns a loud 8 s failure into an
+  invisible one, which is worse than the 8 s. This is why BUG-233 landed first.
+- **Its own anomaly kind.** A trip emits `brain-provider-flapping`, not
+  `breakers.js`'s default `effector-flapping` — that one is matched by
+  `healer.js`'s `effector-flapping-breaker` playbook, whose `suppress-tool`
+  action would have been handed `"nim:nvidia/nemotron-nano-12b-v2-vl"` as a tool
+  name. `createBreaker` takes an optional `anomalyKind`; the default is unchanged.
+- **`CHAIN_BREAKERS_ENABLED`** (schema, default true) is the kill switch, because
+  `chain.js` serves every brain lane and a defect here degrades the whole brain.
+  The Map is constructed **inside** the flag check — the Slice-5 lesson that an
+  opt-in flag protects nothing built above where the flag is read.
+- **`brain/index.js` never forwarded `config`**, so `chain.js`'s
+  `config && config.CHAIN_COOLDOWN_MS` read undefined on every call from there
+  and fell back to the env default — and `CHAIN_BREAKERS_ENABLED` could not have
+  reached it at all. `config` and `bus` are both forwarded now.
+
+**Deliberately NOT done:** reordering `PREF_VISION` or deleting the NIM entries.
+That discards a genuinely fast model over one bad afternoon, and it is a
+hand-edit the next stale-measurement session repeats. The breaker is
+self-correcting; the edit is not. `DEFAULT_VISION_ATTEMPT_TIMEOUT_MS = 4000` is
+also unchanged — it is not the defect; paying it twice per call was.
+
+**The stale comment IS part of the bug.** `// 386ms — fastest vision measured`
+was true when written and is what kept a dead provider at the head of the lane.
+Every latency number in `PREF_VISION` now carries the date it was measured, plus
+what happened on 2026-08-14.
+
+**Expected win:** `screen_look`/`camera_look` from ~9.5 s to ~1.8 s once the
+breaker opens, and the two timeout failures stop being reachable.
+
+**Regression test**: `test/chain-provider-breakers.test.js`, 16 tests. Verified
+red against the pre-fix source (17 fail), and re-verified by reverting only
+`|| attemptTimedOut` (7 fail).
+
+**Falsifier**: if `vision.attempt` still shows two 4 s NIM attempts on every call
+after this, the breaker is keyed wrong or never constructed. One grep.
+
+## BUG-233 — every diagnostic field attached to an anomaly was discarded before it was stored
+
+**Found while doing the Wave A root-cause analysis, which is the point.**
+`live-session.js` deliberately attaches `audioIn`, `scFields`, `turnId` and
+`reason` to `live-turn-no-user-transcript`; Wave 0 (2026-08-13) added them so
+that "one anomaly record is a complete diagnosis instead of a bare kind". None of
+them reached disk. The stored record:
+
+    {"kind":"anomaly","channel":"immune","summary":"anomaly: live-turn-no-user-transcript — ",
+     "detail":{"kind":"live-turn-no-user-transcript","playbookId":null,"outcome":"no-match"}}
+
+**Cause.** `server/index.js`'s subscriber wrote a fixed four-field allowlist —
+`{kind, scope, error, target}` — and dropped everything else. `reason` went with
+them, the very field `anomaly-payloads-need-reason` establishes as load-bearing
+for the spoken explanation, leaving a summary that is a trailing dash.
+
+**Consequence, concretely:** diagnosing BUG-229 (the mic-gate ring) required
+correlating the server log line-by-line by proximity, because the join key
+(`turnId`) and the discriminator (`audioIn`) had been emitted and thrown away.
+The instrumentation was built and was unreadable.
+
+**FIXED 2026-08-14.** `src/core/immune/anomaly-detail.js` — a named allowlist
+extended with `reason`, `turnId`, `audioIn`, `scFields`, `tool`, `evidence`,
+`detail`, `provider`, plus bounds (500 chars/field, 40 array entries, non-recursive).
+
+- **A named list, not `Object.assign({}, payload)`.** Anomaly payloads can carry
+  operator content — a tool's args, a claim quoted from a reply, a file path —
+  and this is a permanent on-disk record, so adding a field is a decision about
+  what MYTHOS keeps forever.
+- **Extracted from the server closure** so the round trip is testable without
+  booting the HTTP/WS server, the same reason `action-outcome-summary.js` and
+  `claim-check.js` are their own modules.
+- **The conformance test is the real fix.** This is the "a producer and a
+  consumer that must agree, with nothing checking" class. The test reads the ~130
+  real emitters out of `src/` and fails when one attaches a named diagnostic
+  field the persister would drop — and asserts the sweep found >80 emitters, so a
+  broken regex cannot pass vacuously.
+
+**The second defect in the same subscriber: the 2× count.** Every anomaly is
+written twice — once by the `health.anomaly` subscriber, once by the
+`health.healed` subscriber, because the healer emits `health.healed` on every
+diagnosis outcome including `no-match`. So 2026-08-14's "238 anomalies" was really
+~119 events counted twice, and every tally made from the vault was inflated 2×.
+
+Both records are **kept** — one is "this happened", the other is "the healer's
+verdict", and the `actuallyHealed` logic there fixed a real BUG-069 lie. They now
+share a join key instead: the bus event id is threaded
+anomaly → diagnostician (`sourceEventId`) → healer → both records (`eventId`), so
+the pair is countable. `diagnose()`'s new second parameter is optional and
+defaults to null, so every existing caller and test is unaffected.
+
+**Regression test**: `test/anomaly-detail-round-trip.test.js`, 19 tests. Verified
+red pre-fix, and re-verified by restoring the four-field literal in the
+subscriber (the wiring assertion catches it).
+
+**Falsifier**: if `live-turn-no-user-transcript` records still store no `audioIn`
+after this, the field is being dropped upstream of the subscriber, not in it.
+
+## BUG-234 — the health channel was carrying things that are not faults
+
+**Symptom.** 68 heal → `no-match` records against 6 applied. At one point 15
+`live-reconnect-failed` inside 30 seconds (12:29:51 → 12:30:21), one every ~2 s,
+each getting a full diagnose → heal → announce → two-episodic-writes round trip.
+
+Three separate causes wearing one coat, and the plan's reading of the first was
+**wrong in a way worth recording**.
+
+**1a. `live-reasoning-leak` (24×) — moved off the fault channel.** It is a report
+that a filter WORKED: the leak never reached the operator. Now
+`voice.live.reasoning-filtered`, registered in `ALLOWED_EVENTS`. Exact precedent:
+`voice.live.idle-closed` was moved off `health.anomaly` on 2026-08-10 because the
+explainer narrated a normal cost-saving socket close to the operator as a fault
+with an invented cause. BUG-170's rule that "a strip is never silent" is intact —
+the `logger.warn` is untouched and the new event carries the same
+`turnId`/`channel`/`spokenAnyway`.
+
+**1b. `live-tool-outcome-late-for-turn` (14×) — the KIND STAYS.** The plan filed
+the whole kind as "designed behaviour since BUG-128". Reading the code, only one
+of the two conditions reaching that branch is:
+
+- a `started`/pending **ack** whose turn closed during the up-to-1500 ms
+  `raceDeadline` wait. Nothing is wrong, nothing was misattributed, and
+  `reportLateOutcome` still delivers the real result. **This is the 14, and it is
+  pure noise.**
+- a real **outcome** that missed its turn — which is exactly the misattribution
+  risk the anomaly was added for (BUG-105: the explainer said "the music playback
+  tool was late" when the late tool was `list_windows`). **This must keep firing.**
+
+`entry.started` already distinguished them. So the noisy half is suppressed and
+the signal is kept, rather than the channel being changed for both. Moving the
+kind wholesale would have deleted a real guard.
+
+**2. A playbook that matched too narrowly.** `provider-down` was
+`target: { eq: 'nim' }`. groq and mistral both went down at 15:50:37 and got
+`no-match` — the immune system watched two providers fail with nothing to do
+about either. Widened to match the kind, with `provider: '$target'`. Bounded
+deliberately: the match widens, the cooldown and recurrence ceilings do not.
+
+The irony worth recording: nim IS the one provider that playbook did match, it
+was broken all day, and BUG-232 is the consequence of nothing acting on it.
+
+The **spoken title** had to change with it. BUG-162 made playbook titles
+operator-facing, so "NVIDIA provider key rotation" over a mistral outage would be
+a plain falsehood — and it was already inaccurate, because the `probe-provider`
+action ignores its args entirely and calls `registry.refresh(true)`, a global
+re-probe, not a key rotation. The title now says what the action does. The **id**
+is deliberately unchanged: stored audit rows key on `playbookId`.
+
+**3. No storm damping.** Added, and **scoped to `no-match` only** — which is the
+safety property. Damping identical `kind:target` regardless of outcome would have
+been simpler and could suppress a real remediation: `budget-pause` deliberately
+runs with `cooldownMs: 0` ("immediate, every time"). By construction this branch
+is only reachable when nothing was going to be done. Nothing is lost silently:
+the first of a burst emits normally and the next emission after the window
+carries `suppressedCount`, so a storm reads as a number instead of 15 identical
+records — and the `health.anomaly` records themselves are untouched, so counting
+occurrences stays possible.
+
+**Not done, deliberately:** no playbook was added to make a `no-match` count go
+down. A playbook that exists only to silence a log line is worse than the log
+line; the correct outcome for a non-fault is not raised at all.
+
+**Regression test**: `test/health-channel-non-faults.test.js`, 13 tests (8 red
+pre-fix), plus the updated BUG-170 test asserting the strip moved channel rather
+than disappeared.
+
+## BUG-235 — a goal's entire budget was one planning call
+
+**Symptom.** Three goals created at 17:32:12. Two auto-paused five seconds later,
+before either had done anything. From `vault/Goals/*.json`:
+
+    "Set up the backend API endpoints"  spent {tokens:31272, actions:2}  budget {tokens:20000, actions:25}
+    "Develop the frontend components"   spent {tokens:31200, actions:2}  budget {tokens:20000, actions:25}
+
+~15,600 tokens per action against a 20,000 total. The operator asked for
+structured project tracking and got two of three tasks paused on arrival.
+
+**Cause, two halves.** `GOAL_TOKEN_BUDGET` defaulted to 20000 — and what is
+counted is not what the goal spent: `brain/index.js` debits
+`spend.estimate(result.content) + spend.estimate(inputText)`, where `inputText` is
+the ENTIRE prompt (system instruction, tool catalogue, recalled memory, history).
+That overhead is identical whether the goal is one line or fifty, so the budget
+was denominated in a unit dominated by the cost of thinking once.
+
+**FIXED 2026-08-14: 250,000**, ≈16 planner-sized calls at the measured rate. The
+honest framing is that this budget guards against a runaway goal, not against the
+cost of thinking about one. `GOAL_ACTION_BUDGET = 25` is **unchanged** and is the
+real runaway ceiling — it reached 2 of 25 that day, and raising the token budget
+only works because the action ceiling still does the real work. The token budget
+stays a genuine backstop, not a number chosen never to trip; a test pins it
+within 8–40 measured actions.
+
+**The number was written in four places.** Two literal `20000` fallbacks in
+`goals/index.js` (now one named `GOAL_TOKEN_BUDGET_FALLBACK`, pinned equal to the
+schema default by test) and — found by asking who actually reads this — an
+**active, uncommented `GOAL_TOKEN_BUDGET=20000` in `.env.example`**, which is
+copied to `.env` and would have overridden the schema default, so the fix would
+have done nothing on the machine it was measured on.
+
+**Noted, not fixed:** `spend.estimate()` is a chars/4-ish approximation while the
+providers return real usage. A budget decision resting on an estimate deserves
+the caveat; switching the ledger to reported usage is its own change.
+
+**Regression test**: `test/goal-budget-calibration.test.js`, 9 tests.
+
+## BUG-236 — Gmail: dead credentials, a dropped reason, and MYTHOS diagnosing it wrong out loud
+
+**Symptom.** 11 failures across the day (00:36 → 17:27). Ten said `invalid_grant`.
+The one at 12:29:39 said `"Gmail fetch failed: "` — nothing after the colon. And
+MYTHOS told the operator "Network request failed… Google APIs appear unreachable"
+and filed an incident saying so. **That is a wrong diagnosis on the permanent
+record.**
+
+**Three parts; one is not code.**
+
+1. **The token is expired or revoked.** `invalid_grant` from Google's token
+   endpoint is not a network condition, and no code change fixes it — it needs
+   the operator's browser consent to re-mint. Still outstanding.
+2. **The actionable half of the error was discarded.**
+   `adapters/google/index.js` did `reject(new Error(json.error || …))`, while
+   Google returns `error_description: "Token has been expired or revoked."`
+   alongside `error: "invalid_grant"`. The description — the part that tells a
+   human what to do — was never read. Now included, plus `isAuthError` /
+   `googleError` flags so callers match on a flag rather than on message text
+   (the same reasoning that put `attemptTimedOut` in `chain.js`'s decision
+   instead of a regex). Safe to surface: it is Google's own operational text and
+   carries no token material.
+3. **An empty failure reason was reachable at all.** This is the **third**
+   instance of "a failure path that discards its reason" (BUG-101 first,
+   `google-auth.js` second), so it is fixed at the shared helper with a
+   class-level assertion rather than patched a third time: `util/reason-text.js`
+   returned `''` for an Error whose `.message` is the empty string, because
+   `typeof '' === 'string'` passes. Any present-but-empty value now describes its
+   own shape, so no message can trail off after a colon. `null`/`undefined` still
+   map to `''` — that means "nothing was passed", which callers rely on.
+
+**And the wrong spoken diagnosis is addressed directly.** All four Gmail tools
+plus the `resolveRecipient` profile lookup route through one formatter that, on an
+auth error, states it is NOT a network problem, names
+`node scripts/google-auth.js` as the remedy, and says not to retry.
+
+**`scripts/google-auth.js`: both recorded Windows defects fixed.** Recorded
+2026-08-05, worked around out-of-repo and left in place — so this re-auth would
+have paid the same cost a second time.
+
+- The consent URL was handed to `cmd.exe` via `shell: true`, which treats each of
+  its five `&` as a command separator; Google received only `response_type=code`
+  and answered `400: Missing required parameter: redirect_uri`, which reads as a
+  credentials problem and is not one. Now `shell: false` with
+  `rundll32 url.dll,FileProtocolHandler` on Windows, so the URL stays one argv.
+- Every failure path was `console.error` + `process.exit(1)`. On Windows a pipe
+  write is asynchronous, so the process died before stdout flushed and the real
+  Google error was never printed. Now one `bail()` that sets `process.exitCode`
+  and closes the listener so the loop can drain — an open server keeps the loop
+  alive forever, so "set exitCode instead of exiting" only works if the handle is
+  released too. **The success path had the same bug**, and that is the path that
+  prints the refresh token, so a truncated flush there hands the operator half a
+  credential.
+- A response with **no `refresh_token`** now fails naming
+  `myaccount.google.com/permissions` instead of printing
+  `GOOGLE_REFRESH_TOKEN=undefined` as a success.
+
+**Operator step, cannot be automated:** run the fixed script, complete Google
+consent in the browser, put the new `GOOGLE_REFRESH_TOKEN` in `mythos/.env`.
+Console gotchas already recorded: Desktop-app credential type, own address under
+Test users, expect the unverified-app screen, do not Publish.
+
+**Regression test**: `test/gmail-auth-reason-fidelity.test.js`, 14 tests. Note its
+own source scan strips comments first — the file's explanations quote the old
+broken code (`shell: true`, `process.exit(1)`), so a raw scan would match the
+description of the bug rather than the bug.
+
+## BUG-237 — MYTHOS's apology became a project goal
+
+**Symptom.** A goal titled `Commitment: I'll get it right`, with MYTHOS's entire
+apology stored in its `reason` field: "I hear you loud and clear, boss, my wires
+are definitely crossed today…".
+
+**Cause.** `from-calendar.js`'s `COMMITMENT_PATTERNS` verb list included a bare
+`get`, so "I'll get it right", "I'll get to it" and "I'll get that wrong again"
+all matched. The file's own header states the rule this violates, and it is a
+recorded operator decision: "EXPLICIT-ONLY detection. A missed commitment is
+merely today's behaviour; a FALSE entry teaches the operator to distrust the
+ledger, which is worse than not having one."
+
+**FIXED 2026-08-14.** `get` is narrowed to phrasal forms, not deleted — "I'll get
+those numbers" is a real commitment and the ledger should keep it. It now needs an
+object that makes it a fetch (a determiner, "you", or "back to you"). `it` is
+deliberately excluded as ambiguous between fetching and succeeding, per the
+operator decision that a miss costs less than a false entry.
+
+`get`/`that` + `right`/`wrong` needed one more guard: "I'll get that wrong" still
+matched on `get that`, while "I'll get that sorted" and "I'll get that done" ARE
+undertakings — so this could not be a rule about what follows the verb. It is a
+short explicit list, in the spirit of the section's own "readable pattern list,
+never a classifier". The **hedge list was the wrong place** for any of this:
+`isHedgedCommitment` exists to cancel "I'll check, but…"; an apology was never a
+commitment, so the verb is what was wrong.
+
+**Also fixed, same commit:** `reason` carried the whole reply. A ledger entry's
+reason is read back as WHY the commitment exists, so it is now the matched clause,
+with a bounded 300-char `context` field for the surrounding turn.
+
+**Regression test**: `test/commitment-verb-narrowing.test.js`, 25 cases sampled in
+both directions — 8 phrasings that must not match, 13 that must.
+
+## What Wave B does not fix
+
+Stated so nothing reads as covered: `spend.estimate()`'s chars-based
+approximation of real provider usage; the say-before-act ordering (Wave A narrows
+the symptom, the architecture stands); NIM's upstream instability itself (the
+breaker routes around it, it does not repair it); `NO_EMBED_DOMAINS` missing
+`openai.com`/`youtube.com`; and the missing `onSpeakEnd` callback behind 29% of
+mic-gate watchdog releases — Wave A made it harmless, and finding it needs
+exactly the instrumentation BUG-233 unlocks.

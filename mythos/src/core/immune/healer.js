@@ -33,10 +33,34 @@ const PROVIDER_ROTATE_VERIFY_MS = 60000;
 
 const SEED_PLAYBOOKS = [
   {
+    // The id is load-bearing in stored audit rows (briefing-facts reads
+    // playbookId) so it is deliberately NOT renamed with the match.
     id: 'rotate-nim-key',
-    title: 'NVIDIA provider key rotation',
-    when: { kind: 'provider-down', target: { eq: 'nim' } },
-    then: [{ do: 'probe-provider', args: { provider: 'nim', rotateKey: true } }],
+    // B3: the title IS spoken (BUG-162 added titles so the announcer could say
+    // WHAT was healed), so widening the match to any provider made the old
+    // "NVIDIA provider key rotation" a spoken falsehood for a mistral or groq
+    // outage. It was already inaccurate: the probe-provider action below ignores
+    // its args entirely and calls registry.refresh(true) — a global re-probe, not
+    // a key rotation. The title now says what the action does.
+    title: 'provider re-probe after a reported outage',
+    // B3 (2026-08-14): was `target: { eq: 'nim' }`. groq and mistral both went
+    // down that day (15:50:37) and got no-match — the immune system watched two
+    // providers fail and had nothing to do about either, because the only
+    // provider-down playbook was hardcoded to the one provider whose key can be
+    // rotated. `$target` makes the action follow the provider that actually
+    // failed. rotateKey stays true because probe-provider only rotates when a
+    // second key exists for that provider (NIM_API_KEY_2) and is a no-op
+    // otherwise, so widening the match cannot invent a rotation.
+    //
+    // The irony worth recording: nim IS the one provider this playbook did match,
+    // it was broken all day, and B1 — 8 seconds of dead time on every vision call
+    // — is the consequence of nothing acting on that.
+    //
+    // Bounded deliberately: the match widens, the ceilings do not. cooldownMs and
+    // the pendingVerifications recurrence path below are unchanged, so three
+    // providers flapping cannot become three remediations a second.
+    when: { kind: 'provider-down' },
+    then: [{ do: 'probe-provider', args: { provider: '$target', rotateKey: true } }],
     cooldownMs: 60000,
     // Task C2: probe-provider's ok:true is not proof nim is back — see the
     // comment above. Hold the claim open for verifyMs, same mechanism as
@@ -397,6 +421,11 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
   // playbook while the entry is still here — that presence, not cooldown
   // arithmetic, IS the recurrence signal (-> 'heal-failed').
   const pendingVerifications = {};
+  // B3: "kind:target" -> { at, suppressed }. See the damping block in
+  // onDiagnosed. Config-tunable but with a real default, because the measured
+  // storm was one every ~2s and the point is to collapse that, not to tune it.
+  const noMatchSeen = {};
+  const NO_MATCH_DAMP_MS = (config && config.HEAL_NO_MATCH_DAMP_MS) || 30000;
   var restoreTimer = null;
 
   // Task C2: resolve any pending verification whose window has closed with no
@@ -505,6 +534,44 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
       }
     }
 
+    // B3 (2026-08-14) — NO-MATCH STORM DAMPING.
+    //
+    // Measured: 68 no-match records against 6 applied, and at one point 15
+    // live-reconnect-failed inside 30 seconds (12:29:51 -> 12:30:21), one every
+    // ~2s, each getting a full diagnose -> heal -> announce -> two-episodic-writes
+    // round trip. The per-playbook cooldown above cannot damp any of it, because a
+    // no-match never reaches a playbook to have a cooldown.
+    //
+    // Scoped to no-match ONLY, on purpose. Damping identical kind:target
+    // regardless of outcome would have been simpler and could suppress a real
+    // remediation — budget-pause deliberately runs with cooldownMs: 0 ("immediate,
+    // every time"). By construction this branch is only reachable when NOTHING was
+    // going to be done, so it cannot delay or skip a fix.
+    //
+    // Nothing is lost silently: the FIRST of a burst is emitted normally, and the
+    // next emission after the window carries suppressedCount, so a storm is
+    // visible as a number instead of as 15 identical records. The health.anomaly
+    // records themselves are untouched — every occurrence is still stored by the
+    // server's anomaly subscriber, so counting occurrences stays possible.
+    if (outcome === 'no-match') {
+      const dampKey = String(diagnosis.kind) + ':' + String(diagnosis.target);
+      const prev = noMatchSeen[dampKey];
+      const ts = nowFn();
+      if (prev && ts - prev.at < NO_MATCH_DAMP_MS) {
+        prev.suppressed += 1;
+        return;   // no emit, no audit row — nothing was going to happen anyway
+      }
+      noMatchSeen[dampKey] = { at: ts, suppressed: 0 };
+      if (prev && prev.suppressed > 0) {
+        detail = Object.assign({}, detail, { suppressedCount: prev.suppressed });
+      }
+      // Amortized eviction, same idiom as chain.js's cooldown sweep — this map is
+      // keyed by kind:target and would otherwise grow with every distinct target.
+      for (const key in noMatchSeen) {
+        if (ts - noMatchSeen[key].at > NO_MATCH_DAMP_MS * 10) delete noMatchSeen[key];
+      }
+    }
+
     // 'health.healed' — exact string, do not paraphrase.
     // BUG-162: carry the playbook's human title and its action list so the
     // announcer can say WHAT was healed. "Self-healed: recurring-failure-record."
@@ -514,6 +581,11 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
       playbookId: playbookId, kind: diagnosis.kind, target: diagnosis.target, outcome: outcome, detail: detail,
       title: playbook ? (playbook.title || null) : null,
       actions: playbook ? playbook.then.map(function(s) { return s.do; }) : [],
+      // B2: the bus id of the health.anomaly that started this, forwarded from
+      // the diagnostician so the anomaly record and this verdict record share a
+      // key. Null when a diagnosis was raised directly (cortex/index.js emits
+      // health.diagnosed itself) rather than via an anomaly.
+      sourceEventId: diagnosis.sourceEventId || null,
     });
 
     if (memory && memory.audit && typeof memory.audit.write === 'function') {

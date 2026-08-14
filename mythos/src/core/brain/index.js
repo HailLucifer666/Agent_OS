@@ -178,6 +178,13 @@ function createBrain({ config, bus, identity }) {
           onAttemptEnd,
           attemptTimeoutMs,
           onToken,
+          // B1 (2026-08-14): config was never forwarded, so chain.js's
+          // `config && config.CHAIN_COOLDOWN_MS` read undefined on every call
+          // from here and silently fell back to the env/literal default — which
+          // also means CHAIN_BREAKERS_ENABLED could not have reached it. bus is
+          // forwarded so a breaker trip is announced instead of being silent.
+          config,
+          bus,
         });
 
         // 4. Parse with repair

@@ -295,7 +295,28 @@ function createLiveSession(deps) {
       spokenAnyway: channel === 'outputTranscription',
     });
     if (bus && typeof bus.emit === 'function') {
-      bus.emit('health.anomaly', { kind: 'live-reasoning-leak', turnId: turnCounter + 1, channel });
+      // B3 (2026-08-14): this fired 24 times that session and produced 24
+      // no-match heal round trips, because it was on the FAULT channel while
+      // being a report that a filter WORKED. The strip is the fix operating, not
+      // a failure — the leak it would have shown the operator never reached them.
+      //
+      // Moved to its own event name rather than deleted: BUG-170's rule is that a
+      // strip is never silent, and it still is not — the logger.warn above is
+      // unchanged, and a subscriber that wants these can name them. What changes
+      // is that the immune system no longer diagnoses, heals, announces and
+      // double-writes an episodic record for a filter doing its job.
+      //
+      // Exact precedent: 'voice.live.idle-closed' was moved off health.anomaly on
+      // 2026-08-10 because the explainer narrated a normal cost-saving socket
+      // close to the operator as a fault with an invented cause. Same shape, same
+      // remedy, same naming. Registered in ALLOWED_EVENTS.
+      //
+      // `spokenAnyway` rides along because it is the one fact that decides whether
+      // a text filter could ever have been enough: for outputTranscription the
+      // audio had already played.
+      bus.emit('voice.live.reasoning-filtered', {
+        turnId: turnCounter + 1, channel, spokenAnyway: channel === 'outputTranscription',
+      });
     }
   }
   // BUG-124: monotonic within this session object, so it survives an

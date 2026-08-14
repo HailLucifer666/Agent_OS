@@ -48,7 +48,29 @@ function createGoogleAdapter(opts) {
         res.on('end', function() {
           var json;
           try { json = JSON.parse(Buffer.concat(chunks).toString()); } catch (e) { return reject(new Error('Invalid token response: ' + chunks.join(''))); }
-          if (!json.access_token) return reject(new Error(json.error || 'No access_token in response'));
+          // B5 (2026-08-14): `json.error` alone threw away the only actionable
+          // half. Google returns error_description alongside error — for the 10
+          // failures logged that day: error:"invalid_grant" with
+          // error_description:"Token has been expired or revoked." The bare
+          // "invalid_grant" reached the operator as a mystery, and MYTHOS
+          // diagnosed it ALOUD as "Network request failed... Google APIs appear
+          // unreachable" and filed an incident saying so — a wrong diagnosis on
+          // the permanent record, for a condition that is not a network condition
+          // at all and needs the operator's browser consent to re-mint.
+          //
+          // Safe to surface: error_description is Google's own operational text
+          // and carries no token material. The refresh token itself is never
+          // logged anywhere here.
+          if (!json.access_token) {
+            var authErr = new Error(json.error_description
+              ? json.error + ': ' + json.error_description
+              : (json.error || 'No access_token in response'));
+            // Named so callers can distinguish "your credentials are dead" from a
+            // transport failure without matching on message text.
+            authErr.googleError = json.error || null;
+            authErr.isAuthError = json.error === 'invalid_grant' || json.error === 'unauthorized_client';
+            return reject(authErr);
+          }
           _tokenCache = { token: json.access_token, expiresAt: Date.now() + (json.expires_in || 3600) * 1000 };
           // Schedule proactive refresh at 80% of lifetime
           if (_refreshTimer) clearTimeout(_refreshTimer);

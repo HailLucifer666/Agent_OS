@@ -433,7 +433,26 @@ function createLiveToolAdapter(deps) {
       // Late arrival after this turn already completed — do not misattribute
       // it to whatever turn is running now (AD-4: accurate reconciliation).
       if (myGeneration !== turnGeneration) {
-        if (bus && typeof bus.emit === 'function') {
+        // B3 (2026-08-14): this anomaly fired 14 times that session, and the
+        // wave plan filed the whole KIND as "not a fault since BUG-128". Reading
+        // the code, that is only true of one of the two conditions reaching here,
+        // so the kind is NOT moved off the health channel — the noisy half is
+        // separated from the real signal instead.
+        //
+        // The designed path was already exempt: reportLateOutcome pushes straight
+        // to liveTurnActions precisely so an EXPECTED late arrival raises nothing.
+        // What still reaches here is either
+        //   (a) a `started`/pending ACK whose turn closed during the up-to-1500ms
+        //       raceDeadline wait — nothing is wrong, nothing was misattributed,
+        //       and the real outcome is still delivered later by
+        //       reportLateOutcome. This is the 14, and it is pure noise: a fault
+        //       channel entry for the ack mechanism working as designed; or
+        //   (b) a real OUTCOME that missed its turn — which is exactly the
+        //       misattribution risk this anomaly was added for (BUG-105: the
+        //       explainer spoke "the music playback tool was late" when the late
+        //       tool was list_windows), and must keep firing.
+        // `started` is the discriminator between them, and it is already set.
+        if (bus && typeof bus.emit === 'function' && !entry.started) {
           // BUG-105: `target` as well as `tool`. Every immune consumer keys on
           // `target` (diagnostician, healer, explainer's prompt, the server's
           // episodic summary line), so a tool named only under `tool` reached

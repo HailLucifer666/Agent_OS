@@ -16,6 +16,33 @@ var _selfEmail = null;
 function ok(data) { return { ok: true, result: data }; }
 function fail(msg) { return { ok: false, result: { error: msg } }; }
 
+// B5 (2026-08-14): eleven Gmail failures that day, ten of them `invalid_grant`,
+// and MYTHOS told the operator "Network request failed... Google APIs appear
+// unreachable" and filed an incident saying so. That is a wrong diagnosis on the
+// record: invalid_grant comes from Google's token endpoint answering, not from an
+// unreachable network, and no retry or restart can fix it — it needs the
+// operator's browser consent to re-mint the refresh token.
+//
+// The adapter now flags this shape (isAuthError / googleError), so the failure
+// text can name the actual remedy instead of leaving the model to guess a cause.
+// Matching on the flag rather than on message text, per the same reasoning that
+// put `attemptTimedOut` in chain.js's decision instead of a regex.
+function gmailFailureText(prefix, err) {
+  var reason = reasonText(err);
+  if (err && (err.isAuthError || /invalid_grant|unauthorized_client/.test(String(reason)))) {
+    return prefix + ': ' + reason
+      + ' — this is NOT a network problem and will not recover on its own: the Google refresh token is '
+      + 'expired or revoked. Tell the operator it needs re-authorising by running '
+      + '`node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in mythos/.env. '
+      + 'Do not retry.';
+  }
+  return prefix + ': ' + reason;
+}
+
+function gmailFailure(prefix, err) {
+  return fail(gmailFailureText(prefix, err));
+}
+
 // A recipient of "me" (or an omitted one) means "the authenticated account".
 function isSelfRecipient(to) {
   var t = (to || '').trim();
@@ -37,7 +64,11 @@ async function resolveRecipient(to, adapter) {
   try {
     profile = await adapter.getProfile();
   } catch (err) {
-    return { ok: false, error: 'Could not resolve "me" — the Gmail profile lookup failed: ' + reasonText(err) };
+    // B5: routed through the same formatter as the four tools. A profile lookup
+    // failing with invalid_grant is the SAME dead credential, and this path is
+    // reached first on any send/draft addressed to "me" — so leaving it out would
+    // have kept the wrong "network outage" diagnosis alive on the most common path.
+    return { ok: false, error: gmailFailureText('Could not resolve "me" — the Gmail profile lookup failed', err) };
   }
   var address = profile && profile.emailAddress;
   if (!address) {
@@ -73,7 +104,7 @@ function buildTools(ctx) {
       var summary = msgs.slice(0, max).map(function(m) { return { id: m.id, from: m.from, subject: m.subject, snippet: (m.snippet || '').slice(0, 200), date: m.date }; });
       return ok({ count: msgs.length, messages: summary });
     } catch (err) {
-      return fail('Gmail fetch failed: ' + reasonText(err));
+      return gmailFailure('Gmail fetch failed', err);
     }
   }
 
@@ -89,7 +120,7 @@ function buildTools(ctx) {
       if (body.length > 4000) body = body.slice(0, 4000) + '... [truncated]';
       return ok({ from: msg.from, to: msg.to, subject: msg.subject, date: msg.date, body: body });
     } catch (err) {
-      return fail('Gmail read failed: ' + reasonText(err));
+      return gmailFailure('Gmail read failed', err);
     }
   }
 
@@ -107,7 +138,7 @@ function buildTools(ctx) {
       await a.send({ to: to, subject: subject, body: body, html: args.html || null });
       return ok({ sent: true, to: to, subject: subject });
     } catch (err) {
-      return fail('Gmail send failed: ' + reasonText(err));
+      return gmailFailure('Gmail send failed', err);
     }
   }
 
@@ -122,7 +153,7 @@ function buildTools(ctx) {
       await a.draft({ to: to, subject: subject, body: body });
       return ok({ drafted: true, to: to, subject: subject });
     } catch (err) {
-      return fail('Gmail draft failed: ' + reasonText(err));
+      return gmailFailure('Gmail draft failed', err);
     }
   }
 

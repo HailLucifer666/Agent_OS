@@ -265,6 +265,16 @@ const SCHEMA = {
   CONSOLIDATE_EVERY:        { type: 'number', default: 300, min: 1 },
   EPISODIC_RETENTION_DAYS:  { type: 'number', default: 30, min: 1 },
   CHAIN_COOLDOWN_MS:        { type: 'number', default: 60000, min: 1000 },
+  // B1 (2026-08-14): per-(provider,model) circuit breakers in brain/chain.js, on
+  // top of CHAIN_COOLDOWN_MS. The cooldown is a flat 60s single-failure skip and
+  // lapses between calls that are minutes apart — which is the measured pattern
+  // that let NVIDIA NIM sit at the head of the vision lane costing 8s of dead
+  // time per look, all day (screen_look median 10,254ms against a 12,000ms
+  // budget). The breaker adds escalating backoff so a sustained outage is skipped
+  // for minutes, with HALF_OPEN's single probe restoring a recovered provider
+  // automatically. Default ON; this key exists as a kill switch because chain.js
+  // serves EVERY brain lane, so a defect here would degrade the whole brain.
+  CHAIN_BREAKERS_ENABLED:   { type: 'boolean', default: true },
   MODEL_REGISTRY_TTL_MS:    { type: 'number', default: 300000, min: 10000 },
 
   // Caveman/terse output style (src/core/brain/style-terse.js), comma-separated
@@ -284,7 +294,36 @@ const SCHEMA = {
 
   // Autonomy
   AUTONOMOUS_MAX_TIER:      { type: 'number', default: 2, min: 0, max: 4 },
-  GOAL_TOKEN_BUDGET:        { type: 'number', default: 20000, min: 0 },
+  // B4 (2026-08-14) — RAISED FROM 20000 AGAINST A MEASUREMENT, not a guess.
+  //
+  // Three goals were created at 17:32:12 and two auto-paused five seconds later,
+  // before either had done anything. From vault/Goals/*.json:
+  //   "Set up the backend API endpoints"  spent {tokens:31272, actions:2}  budget {tokens:20000, actions:25}
+  //   "Develop the frontend components"   spent {tokens:31200, actions:2}  budget {tokens:20000, actions:25}
+  // ~15,600 tokens per action against a 20,000 total. The operator asked for
+  // structured project tracking and got two of three tasks paused on arrival.
+  //
+  // WHAT IS COUNTED IS NOT WHAT THE GOAL SPENT. brain/index.js debits
+  // `spend.estimate(result.content) + spend.estimate(inputText)`, and inputText is
+  // the ENTIRE prompt — system instruction, tool catalogue, recalled memory,
+  // history. That fixed per-call overhead is identical whether the goal is one
+  // line or fifty, so this budget was denominated in a unit dominated by the cost
+  // of thinking once rather than by anything the goal did.
+  //
+  // 250,000 = 16 planner-sized calls at the measured ~15.6k, which is well past
+  // any ordinary multi-step goal while still bounding a true runaway. The number
+  // is deliberately NOT "large enough to never trip": GOAL_ACTION_BUDGET is the
+  // real runaway ceiling (see below) and this stays a genuine backstop.
+  //
+  // NOT fixed here, and noted because a budget decision resting on an estimate
+  // deserves the caveat: spend.estimate() is a chars/4-ish approximation while the
+  // providers return real usage. Whether the ledger should switch to reported
+  // usage is its own change.
+  GOAL_TOKEN_BUDGET:        { type: 'number', default: 250000, min: 0 },
+  // The primary ceiling, and the dimension that actually bounds a loop. On
+  // 2026-08-14 it never came close: 2 actions of 25. Left exactly as it was —
+  // raising the token budget only works because this one is still doing the real
+  // work of stopping a goal that will not terminate.
   GOAL_ACTION_BUDGET:       { type: 'number', default: 25, min: 0 },
   MAX_ACTIVE_GOALS:         { type: 'number', default: 5, min: 1, max: 20 },
   // V3 (Phase 4): procedural-skill gate. Skills with uses>0 below this
