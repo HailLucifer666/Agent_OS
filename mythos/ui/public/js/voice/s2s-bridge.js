@@ -72,11 +72,25 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // genuinely talking over us, which is exactly when the half-duplex gate has
   // to get out of the way — see the gate's own comment for why it opens here
   // rather than waiting for playback to end.
+  //
+  // TWO TIERS since 2026-08-14. onRelease is the eager one: it opens the gate and
+  // touches playback not at all, so the operator's audio reaches Gemini after
+  // ~200ms of ordinary speech and Gemini's own VAD — the better detector — makes
+  // the interruption call. onFlush is the higher tier that actually stops MYTHOS
+  // talking. Before the split, one threshold decided both, it never fired in the
+  // 2026-08-14 session, and the operator's speech died in the 1.2s preroll ring:
+  // two turns reached the server as live-turn-no-user-transcript.
   const bargeBackstop = createBargeInBackstop({
-    onFlush: () => {
+    onFlush: (level) => {
       if (player) player.flush();
+      notePeakRms(level);   // before the release, so the hold's log line includes it
       releaseOwnVoiceGate('barge-in');
     },
+    onRelease: (level) => {
+      notePeakRms(level);
+      releaseOwnVoiceGate('barge-in-eager');
+    },
+    ...bargeTuning(),
   });
 
   // Bound listener refs, so stop() can precisely unsubscribe the exact
@@ -251,12 +265,34 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // Same fail-open reasoning as MAX_SUSPEND_MS above, and the same reason it is
   // not optional: if onSpeakEnd never arrives (a player torn down mid-utterance,
   // an AudioContext that never resumes), a gate with no ceiling leaves Live
-  // permanently deaf with no symptom except silence. No single reply runs this
-  // long, so reaching this ceiling always means something else broke.
-  const MAX_OWN_VOICE_HOLD_MS = 20000;
+  // permanently deaf with no symptom except silence.
+  //
+  // IT IS AN IDLE WINDOW, NOT AN ABSOLUTE CAP — and it was the wrong shape until
+  // 2026-08-14. As a flat 20s ceiling this constant was written as a watchdog for
+  // "onSpeakEnd never arrived", but measured against a real session it was a cap
+  // on how long MYTHOS was allowed to speak: own-voice-ended n=31, median 6650ms,
+  // MAX 17941ms, against a 20000ms ceiling that then tripped twice at 20001ms. So
+  // on the longest answers the gate opened while MYTHOS was still talking, its own
+  // voice went back into Gemini's START_SENSITIVITY_HIGH VAD, and it re-created
+  // the exact self-interrupt this whole gate exists to prevent.
+  //
+  // Refreshed on every arriving live-audio-out chunk (see onAudioOutMsg), the same
+  // window is both safer and more responsive: it can only expire when audio has
+  // genuinely STOPPED arriving and no onSpeakEnd came — which is the condition the
+  // watchdog was always meant to detect — so reply length no longer enters into
+  // it and reaching it still always means something else broke.
+  const OWN_VOICE_IDLE_CEILING_MS = 8000;
   let ownVoiceGate = false;
   let ownVoiceTimer = null;
   let preroll = [];
+  // Peak RMS observed while the gate was held, logged once per hold on release.
+  // The 2026-08-14 analysis could only INFER that the backstop threshold was too
+  // high, because no RMS figure was ever written down anywhere; this is the number
+  // that makes the next tuning decision evidence rather than another inference.
+  let ownVoicePeakRms = 0;
+  function notePeakRms(level) {
+    if (ownVoiceGate && typeof level === 'number' && level > ownVoicePeakRms) ownVoicePeakRms = level;
+  }
 
   function halfDuplexEnabled() {
     try {
@@ -266,16 +302,54 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     }
   }
 
-  function holdOwnVoiceGate() {
-    if (!halfDuplexEnabled() || ownVoiceGate) return;
-    ownVoiceGate = true;
-    preroll = [];
+  // Same field-tunable-without-a-rebuild idiom voice-loop.js already uses for
+  // MYTHOS_VAD_RMS / MYTHOS_BARGE_RMS_MULT. Both backstop tiers are exposed
+  // because eager barge-in is a deliberate tradeoff the operator chose (stopping
+  // on a cough beats losing a sentence) and a tradeoff nobody can walk back in
+  // the field is not one they really made. Absent/unparseable keys are omitted
+  // entirely so the module's own defaults stay in charge.
+  function lsNumber(key) {
+    try {
+      const v = parseFloat(window.localStorage.getItem(key));
+      return Number.isFinite(v) ? v : null;
+    } catch (_) {
+      return null;   // no localStorage (tests, privacy modes)
+    }
+  }
+  function bargeTuning() {
+    const t = {};
+    const flushRms = lsNumber('MYTHOS_BARGE_RMS');
+    const flushHold = lsNumber('MYTHOS_BARGE_HOLD_FRAMES');
+    const releaseRms = lsNumber('MYTHOS_BARGE_RELEASE_RMS');
+    const releaseHold = lsNumber('MYTHOS_BARGE_RELEASE_HOLD_FRAMES');
+    if (flushRms !== null) t.threshold = flushRms;
+    if (flushHold !== null) t.holdFrames = flushHold;
+    if (releaseRms !== null) t.releaseThreshold = releaseRms;
+    if (releaseHold !== null) t.releaseHoldFrames = releaseHold;
+    return t;
+  }
+
+  function armOwnVoiceCeiling() {
     if (ownVoiceTimer) clearTimeout(ownVoiceTimer);
     ownVoiceTimer = setTimeout(() => {
       ownVoiceTimer = null;
       releaseOwnVoiceGate('ceiling-fail-open');
-    }, MAX_OWN_VOICE_HOLD_MS);
+    }, OWN_VOICE_IDLE_CEILING_MS);
     if (typeof ownVoiceTimer.unref === 'function') ownVoiceTimer.unref();
+  }
+
+  // Called from onAudioOutMsg for every chunk the server sends. A no-op when the
+  // gate is not held, so an arriving chunk can never arm a gate nothing holds.
+  function refreshOwnVoiceCeiling() {
+    if (ownVoiceGate) armOwnVoiceCeiling();
+  }
+
+  function holdOwnVoiceGate() {
+    if (!halfDuplexEnabled() || ownVoiceGate) return;
+    ownVoiceGate = true;
+    preroll = [];
+    ownVoicePeakRms = 0;
+    armOwnVoiceCeiling();
     logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
   }
 
@@ -290,7 +364,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     for (const frame of held) {
       try { send({ type: 'live-audio', data: arrayBufferToBase64(frame) }); } catch (_) { /* socket closed */ }
     }
-    logSuspendTransition({ reason: reason || 'own-voice-release', ownVoiceGate: false, prerollFrames: held.length });
+    logSuspendTransition({
+      reason: reason || 'own-voice-release',
+      ownVoiceGate: false,
+      prerollFrames: held.length,
+      // One line per hold, not per frame — see ownVoicePeakRms's declaration.
+      peakRms: Math.round(ownVoicePeakRms * 10000) / 10000,
+    });
+    ownVoicePeakRms = 0;
   }
 
   function arrayBufferToBase64(buf) {
@@ -314,7 +395,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     startRequested = true;
     setVoiceState('processing');
 
-    onAudioOutMsg = (msg) => { if (player && msg && msg.data) player.enqueue(msg.data); };
+    onAudioOutMsg = (msg) => {
+      if (!player || !msg || !msg.data) return;
+      player.enqueue(msg.data);
+      // The gate's ceiling is an IDLE window, so every chunk that arrives pushes
+      // it out. Without this it was an absolute cap on reply length and tripped
+      // mid-sentence on the longest answers — see OWN_VOICE_IDLE_CEILING_MS.
+      refreshOwnVoiceCeiling();
+    };
     // The server won this race: stop the audio and clear the local run, so a
     // half-accumulated loud streak cannot tip over on the first frame of the
     // NEXT reply. A local flush that already happened makes this a no-op —
@@ -385,6 +473,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // ourselves (own TTS, media playback) those frames are not the operator
         // and must not count toward an interruption.
         bargeBackstop.observe(e.data, player ? player.isSpeaking() : false);
+        // Instrumentation only, and only while the gate is actually held (notePeakRms
+        // checks): the question this answers is "how loud did the operator get while
+        // we were refusing to listen?", which is exactly that interval. A frame that
+        // triggered a release/flush already folded its own level in from the callback
+        // above, before the log line was written.
+        notePeakRms(bargeBackstop.lastLevel());
         // BUG-224: while MYTHOS's own voice is in the room, hold the frames
         // instead of feeding them to Gemini's VAD. observe() above deliberately
         // still ran — it is what decides this is a real interruption and opens

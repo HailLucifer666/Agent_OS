@@ -66,7 +66,7 @@ describe('BUG-224 half-duplex gate — source shape', () => {
   it('the mic frame handler gates the SEND, not the barge-in observer', () => {
     const start = bridgeSrc.indexOf('captureNode.port.onmessage');
     assert.ok(start !== -1, 'the mic frame handler must exist');
-    const body = bridgeSrc.slice(start, start + 1200);
+    const body = bridgeSrc.slice(start, start + 2000);
 
     const observeAt = body.indexOf('bargeBackstop.observe');
     const gateAt = body.indexOf('if (ownVoiceGate)');
@@ -83,7 +83,12 @@ describe('BUG-224 half-duplex gate — source shape', () => {
   });
 
   it('a held frame is buffered for replay, not dropped', () => {
-    const start = bridgeSrc.indexOf('if (ownVoiceGate)');
+    // Anchored inside the mic frame handler: `if (ownVoiceGate)` also guards
+    // refreshOwnVoiceCeiling() and notePeakRms(), so a bare indexOf for it now
+    // lands on the wrong one.
+    const handler = bridgeSrc.indexOf('captureNode.port.onmessage');
+    const start = bridgeSrc.indexOf('if (ownVoiceGate) {', handler);
+    assert.ok(start !== -1 && start > handler, 'the gate must be in the frame handler');
     const body = bridgeSrc.slice(start, start + 300);
     assert.match(body, /preroll\.push/,
       'frames held during the gate must be kept — without replay, "stop, actually..." '
@@ -103,11 +108,71 @@ describe('BUG-224 half-duplex gate — source shape', () => {
   });
 
   it('the gate fails open on a ceiling, like every other suspend in this file', () => {
-    assert.match(bridgeSrc, /MAX_OWN_VOICE_HOLD_MS/,
+    assert.match(bridgeSrc, /OWN_VOICE_IDLE_CEILING_MS/,
       'a gate with no ceiling leaves Live permanently deaf if onSpeakEnd never arrives');
     const holdBody = bridgeSrc.slice(bridgeSrc.indexOf('function holdOwnVoiceGate'), bridgeSrc.indexOf('function releaseOwnVoiceGate'));
-    assert.match(holdBody, /setTimeout/, 'the ceiling must actually be armed when the gate is held');
+    assert.match(holdBody, /armOwnVoiceCeiling\(\)/, 'the ceiling must actually be armed when the gate is held');
+    assert.match(bridgeSrc, /setTimeout\([\s\S]{0,200}OWN_VOICE_IDLE_CEILING_MS\)/,
+      'and armed with a real timer');
     assert.match(bridgeSrc, /ceiling-fail-open/, 'the fail-open must be logged, not silent');
+  });
+
+  // The 2026-08-14 regression. As a flat MAX_OWN_VOICE_HOLD_MS = 20000 this was
+  // not the "onSpeakEnd never arrived" watchdog its comment claimed to be — it was
+  // a cap on how long MYTHOS was allowed to speak. Measured over one session:
+  // own-voice-ended n=31, median 6650ms, max 17941ms; ceiling-fail-open n=2 at
+  // 20001ms. When it tripped, the gate opened while MYTHOS was still talking and
+  // its own voice went straight back into Gemini's START_SENSITIVITY_HIGH VAD —
+  // re-creating this file's entire subject, on the longest answers only.
+  it('the ceiling is an IDLE window, refreshed by arriving audio', () => {
+    // The ASSIGNMENT inside start(), not the `let onAudioOutMsg = null` declaration.
+    const handlerAt = bridgeSrc.indexOf('onAudioOutMsg = (msg)');
+    assert.ok(handlerAt !== -1, 'the audio-out handler must exist');
+    const handler = bridgeSrc.slice(handlerAt, handlerAt + 600);
+    const enqueueAt = handler.indexOf('player.enqueue');
+    const refreshAt = handler.indexOf('refreshOwnVoiceCeiling()');
+    assert.ok(enqueueAt !== -1 && refreshAt !== -1,
+      'every live-audio-out chunk must both enqueue and push the ceiling out — otherwise the '
+      + 'ceiling is an absolute cap on reply length, which is what tripped mid-sentence');
+
+    // And it must be a no-op when no gate is held: an arriving chunk cannot be
+    // allowed to arm a timer that would later "release" a gate nobody holds.
+    const refreshFn = bridgeSrc.slice(bridgeSrc.indexOf('function refreshOwnVoiceCeiling'));
+    assert.match(refreshFn.slice(0, 200), /if\s*\(ownVoiceGate\)/,
+      'refreshOwnVoiceCeiling must check the gate is actually held');
+  });
+
+  it('the ceiling is short enough to be a watchdog, not a speech budget', () => {
+    const m = bridgeSrc.match(/OWN_VOICE_IDLE_CEILING_MS\s*=\s*(\d+)/);
+    assert.ok(m, 'the ceiling must be a plain literal that can be read off the source');
+    const ms = Number(m[1]);
+    assert.ok(ms <= 12000,
+      'as an idle window this bounds silence-after-the-last-chunk, not reply length, so it '
+      + 'must be far below the 17.9s a real reply reached; got ' + ms);
+    assert.ok(ms >= 3000,
+      'too short and a normal inter-chunk gap fails the gate open mid-reply; got ' + ms);
+  });
+
+  it('the peak mic RMS of each held gate is logged once, per hold', () => {
+    const release = bridgeSrc.slice(bridgeSrc.indexOf('function releaseOwnVoiceGate'));
+    const body = release.slice(0, release.indexOf('\n  }') + 1);
+    assert.match(body, /peakRms/,
+      'the 2026-08-14 analysis could only INFER that the backstop threshold was too high, '
+      + 'because no RMS number was ever written down anywhere. One line per hold turns the '
+      + 'next tuning decision into evidence.');
+    assert.ok(!/console\.log/.test(bridgeSrc.slice(bridgeSrc.indexOf('captureNode.port.onmessage'), bridgeSrc.indexOf('captureNode.port.onmessage') + 900)),
+      'per-FRAME logging would be 10 lines a second and would bury the measurement');
+  });
+
+  it('both backstop tiers are tunable from localStorage, without a rebuild', () => {
+    assert.match(bridgeSrc, /MYTHOS_BARGE_RMS\b/);
+    assert.match(bridgeSrc, /MYTHOS_BARGE_HOLD_FRAMES\b/);
+    assert.match(bridgeSrc, /MYTHOS_BARGE_RELEASE_RMS\b/);
+    assert.match(bridgeSrc, /MYTHOS_BARGE_RELEASE_HOLD_FRAMES\b/);
+    assert.match(bridgeSrc, /\.\.\.bargeTuning\(\)/,
+      'reading the keys is not enough — they must reach the backstop constructor. Eager '
+      + 'barge-in is a deliberate tradeoff (a cough may cut a reply), and a tradeoff that '
+      + 'cannot be walked back in the field is not one the operator really made.');
   });
 
   it('the operator can turn it off without a rebuild', () => {
