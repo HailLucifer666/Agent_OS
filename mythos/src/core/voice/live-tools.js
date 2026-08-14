@@ -49,6 +49,26 @@ const DEFAULT_ALLOWLIST = [
   // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
   // before — and it is what made Incidents/ a place reports went to die.
   'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory',
+  // 2026-08-14 (BUG-219, the butter-chicken session). The operator asked MYTHOS to
+  // type a recipe into Notepad and save it. ctrl+s is unwinnable on MSIX Notepad —
+  // proven, narrow, and NOT fixable from this side (adapters/CLAUDE.md: do not add
+  // more UIA rungs) — so the model spent five minutes on ctrl+s and four File-menu
+  // clicks, then closed the window and lost the text. It never had a tool that
+  // could put content at a path the operator named.
+  //
+  // note_take (above) already covers "write this down", but it owns the filename:
+  // it derives one from the title and writes into the notes vault. "Save it as
+  // butter-chicken.txt on my desktop" is a different request, and until now it was
+  // not expressible on the voice surface at all — write_file was in NEITHER list,
+  // which is drift rather than a curation decision.
+  //
+  // read_file comes with it rather than staying exempt, per this list's own
+  // any-act-tool-ships-with-its-read-tool rule: without it the model can write a
+  // file and has no way to confirm what landed, which is the shape that produces
+  // narrated guesses (see the ui_elements and camera_look comments). write_file is
+  // T3/danger and stays operator-confirmed at the leash — this promotion changes
+  // what is REACHABLE, not what is permitted.
+  'write_file','read_file',
   // 2026-08-13: timer_add/timer_cancel joined this line from
   // VOICE_ALLOWLIST_EXEMPT. They were exempt as "not yet asked for in a live
   // session" — but commit 0bd8408 then rewrote reminder_add's description to say
@@ -186,7 +206,9 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // pair symmetric: promoting one alone is what creates the gaps this file
   // documents. (open_folder was in this family and was promoted on 2026-08-09 --
   // see its comment in DEFAULT_ALLOWLIST.)
-  'list_folder','read_file','search_files','clipboard_read','clipboard_write',
+  // (read_file left this group on 2026-08-14: write_file became reachable, and a
+  // write with no read-back is the asymmetry this whole file is a monument to.)
+  'list_folder','search_files','clipboard_read','clipboard_write',
   // Status/introspection singletons -- read_status-style summaries cover these;
   // not a distinct spoken verb of their own.
   // (get_volume left this group on 2026-08-09: it is set_volume's read oracle,
@@ -284,6 +306,10 @@ const ACT_TOOL_READ_COUNTERPARTS = {
   cua_bring_to_front: ['cua_list_windows', 'cua_get_window_state'],
   set_volume: ['get_volume'],
   media_key: ['get_volume'],
+  // 2026-08-14: write_file joined the allowlist so "save it as X" is expressible
+  // at all. A write with no read-back is the same shape as ui_click without
+  // ui_elements — the model cannot verify what landed, so it narrates.
+  write_file: ['read_file'],
 };
 
 // Pure — exported so a test can pin the rule against DEFAULT_ALLOWLIST AND

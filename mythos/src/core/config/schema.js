@@ -474,6 +474,16 @@ const SCHEMA = {
   // moved on. Raise it only if a slow provider is genuinely preferred to a
   // truthful "I could not see it in time".
   VISION_CALL_TIMEOUT_MS:      { type: 'number', default: 12000, min: 1000 },
+  // Bound on ONE PROVIDER ATTEMPT inside that look, and the 2026-08-14 fix for
+  // two screen_look calls that failed with the lane fully alive. The pair above
+  // was not merely different from CHAIN_ATTEMPT_TIMEOUT_MS, it was incompatible
+  // with it: a 12s total budget against a 30s per-attempt step means the first
+  // slow model consumes the entire budget and the remaining four are never tried,
+  // so the lane's failover existed but could never run. 4s per attempt lets the
+  // 12s budget actually walk 2-3 models; vision-call.js clamps it below
+  // VISION_CALL_TIMEOUT_MS, because a per-attempt bound at or above the total
+  // bound reintroduces the bug rather than configuring it.
+  VISION_ATTEMPT_TIMEOUT_MS:   { type: 'number', default: 4000, min: 500 },
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply
