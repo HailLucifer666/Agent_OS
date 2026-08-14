@@ -24,6 +24,7 @@ const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
 const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = require('./vault-migration');
 const { recryptForeignStore } = require('./keystore-recrypt');
+const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
 // ---- ONE app identity -----------------------------------------------------------
@@ -1616,6 +1617,25 @@ function raiseWindow(win) {
   }
 }
 
+// Built on first use, not at module scope, and memoized so the prompt's own
+// repeat-click guard survives across launches. `dialog` is required at the use
+// site for the reason the cursor-overlay comment below spells out: Electron's
+// app-ready-gated exports are lazy getters that throw on property access, and a
+// module-scope destructure of one is what took a whole boot down before.
+let noWindowRelaunchPromptFn = null;
+function noWindowRelaunchPrompt() {
+  if (!noWindowRelaunchPromptFn) {
+    const { dialog } = require('electron');
+    noWindowRelaunchPromptFn = createNoWindowRelaunchPrompt({
+      dialog,
+      app,
+      log,
+      detail: () => `Server log: ${childLogPath()}`,
+    });
+  }
+  return noWindowRelaunchPromptFn;
+}
+
 // ---- single instance + window ------------------------------------------------
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -1626,7 +1646,19 @@ if (!gotLock) {
     // raiseWindow, not a bare focus(): the operator reported clicking the
     // desktop shortcut and having nothing happen at all, which is exactly what
     // a foreground-lock-denied focus() looks like from the outside.
-    raiseWindow(mainWindow);
+    //
+    // The no-window branch is BUG-225's real half. raiseWindow() returns
+    // silently when handed nothing and mainWindow is nulled by its own 'closed'
+    // handler, so a primary instance alive without a window used to swallow
+    // every double-click forever, with Task Manager the only remaining signal.
+    // This handler must never be able to no-op — see relaunch-no-window.js.
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    if (win) {
+      raiseWindow(win);
+      return;
+    }
+    log('second-instance: the primary instance is alive but has NO window to raise');
+    noWindowRelaunchPrompt()();
   });
 
   app.whenReady().then(async () => {

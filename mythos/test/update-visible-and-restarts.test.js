@@ -106,8 +106,18 @@ describe('3. the window comes back to the front', () => {
   });
 
   it('clicking the shortcut while running raises the existing window', () => {
-    const handler = MAIN.slice(MAIN.indexOf("app.on('second-instance'"), MAIN.indexOf("app.on('second-instance'") + 500);
-    assert.match(handler, /raiseWindow\(mainWindow\)/);
+    // The handler used to be a single `raiseWindow(mainWindow)` call, which this
+    // test pinned literally. BUG-225's silent-relaunch half made it resolve a
+    // LIVE window first (null or destroyed both mean "nothing to raise", and
+    // raiseWindow returns silently on either), so the assertion is on the intent
+    // — a real window still gets raised — rather than on the old spelling.
+    // electron-second-instance-never-noops.test.js owns the no-window branch.
+    const from = MAIN.indexOf("app.on('second-instance'");
+    const handler = MAIN.slice(from, MAIN.indexOf('\n  });', from));
+    assert.match(handler, /mainWindow && !mainWindow\.isDestroyed\(\)/,
+      'the handler must establish that a raisable window exists before raising it');
+    assert.match(handler, /raiseWindow\(win\)/,
+      'the resolved live window is what gets raised');
     assert.doesNotMatch(handler, /mainWindow\.focus\(\)/,
       'a bare focus() is what the foreground lock denies — that is the "nothing happens" report');
   });

@@ -6098,6 +6098,17 @@ including the fresh-process-vs-daemon-process comparison against the exact
 same window and the flag-removal test that ruled out `-NonInteractive`/
 `windowsHide`.
 
+**Prior art recorded 2026-08-14 (research sweep, not an attempt):** ByteDance's
+UI-TARS desktop operator drives apps purely from screenshots + synthesized
+pointer/keyboard events — a vision-based escape route that never touches UIA
+`Invoke`/`ExpandCollapse`, so this spawn-shape no-op cannot affect it. If the
+File-menu route ever needs to actually work from the daemon, that is the shape
+to evaluate — with the caveat that the UI-TARS model *weights* carry their own
+licence separate from the Apache-2.0 code, so the licensing gate (roadmap 6.5/
+6.6) applies before any bundling. Recorded here so the next session doesn't
+re-derive the option; per `adapters/CLAUDE.md`, do NOT add more UIA rungs to
+this ladder.
+
 ### Checklist results
 
 | Item | Verdict | Evidence |
@@ -6433,7 +6444,16 @@ interruption still gets through (the local backstop threshold is
 "stop" may now need to be firmer), and whether 250ms of grace is enough tail for
 the operator's room.
 
-## BUG-225 — zombie-on-close / silent refusal to relaunch: DORMANT, cause NOT identified
+**Prior art recorded 2026-08-14 (research sweep, not a change):** LiveKit
+Agents' interruption handling is the mature reference for this exact problem —
+adaptive/tunable VAD interruption thresholds (`min_interruption_duration`,
+speech-probability gating) plus explicit false-interruption recovery, i.e. the
+same knobs this fix hand-rolled (`0.035 * 2.5` RMS sustained ~600ms, 250ms
+grace) as first-class, field-tested parameters. If the operator's live sitting
+finds the thresholds wrong in either direction, tune against LiveKit's
+published defaults before inventing new heuristics.
+
+## BUG-225 — zombie-on-close / silent refusal to relaunch: zombie DORMANT and cause NOT identified; the silent-relaunch half FIXED 2026-08-14
 
 **Operator, 2026-08-14 (morning):** closing the app with the title-bar X left the
 process alive in Task Manager, and double-clicking the shortcut did nothing at
@@ -6476,9 +6496,62 @@ silence: `app.requestSingleInstanceLock()` fails, the new process calls
 set to null by its own `'closed'` handler). That is precisely the "double-click
 does nothing, forever" state, and it is reachable from ANY cause that leaves the
 process alive without a window. `second-instance` should never be able to no-op:
-with no window it should say so, or offer to restart. Not shipped in this
-session — it is unverifiable while the bug is dormant, and this repo does not
-ship unverified fixes for symptoms it cannot reproduce.
+with no window it should say so, or offer to restart.
+
+**FIXED 2026-08-14.** The earlier note here deferred this as "unverifiable while
+the bug is dormant", and that reasoning was too pessimistic: reproducing the
+*zombie* needs the dormant bug, but reproducing the *no-op* does not — it only
+needs `mainWindow` to be null or destroyed, which is an ordinary state with an
+ordinary code path. The invariant is fixed as an invariant, so it holds for
+whatever leaves the process windowless, not just for the cause we never found.
+
+`electron/main.js`'s handler now resolves a live window first
+(`mainWindow && !mainWindow.isDestroyed()`; a destroyed window is as unraisable
+as a null one) and, when there is none, logs it and calls the prompt in the new
+`electron/relaunch-no-window.js`: a dialog naming the actual condition, with
+**Restart MYTHOS** / **Leave it running**.
+
+Three decisions inside it worth not re-litigating:
+- **`app.quit()`, never `app.exit()`.** `before-quit` is what runs `stopChild()`
+  and the vault push. Exiting hard would orphan the forked server, leave port
+  4478 held, and the relaunch just promised would fail to bind — converting "no
+  window" into "will not start". Pinned by a test.
+- **Not recreating the window.** Window creation is ~70 lines inside main.js's
+  `whenReady` handler — the async auth prime, the late-ready reloader, the
+  `will-navigate` origin guard that stops the privileged preload leaking (H6),
+  the window-open trap. Extracting it to run twice risks the whole boot path to
+  fix a dialog; a relaunch reaches the same end state through code already proven.
+- **Async dialog with a repeat guard.** A sync modal would block the main process
+  from servicing the child's stdout. Async means repeat double-clicks *do* arrive
+  mid-prompt, so they collapse to one dialog — and the guard resets afterwards,
+  because a guard that latched would make the app permanently silent again, which
+  is this very bug.
+
+**Why it is its own module.** `electron/main.js` cannot be `require()`d by the
+suite, so anything inside it can only be guarded by source-shape assertions on
+its text — and this repo has been burned by exactly that (a slice shipped green
+and would not boot). The extracted factory takes an injected `dialog`/`app`, so
+`test/electron-second-instance-never-noops.test.js` drives the real branch: it
+proves a dialog is shown rather than a silent return, that accepting relaunches
+via `quit` and not `exit`, that declining changes nothing, that three concurrent
+launches produce one dialog, that a fourth after resolution still prompts, and
+that an unshowable dialog degrades to the log instead of throwing. Nine tests.
+
+**NOT live-verified through a real Electron window** — that needs the operator at
+a desktop, and reaching the branch there means engineering a windowless primary.
+The behaviour is unit-proven end to end against the fake; the wiring into
+main.js is source-shape only, which is this file's standing limitation.
+
+**One sibling failure this does NOT close, recorded so it is not mistaken for
+fixed.** `second-instance` can only be silent-proof while the primary's event
+loop is still turning. If the primary is *wedged* — blocked in a sync call,
+deadlocked — the event never fires at all, and the second process still calls
+`app.quit()` with no message in the `!gotLock` branch, so the double-click
+vanishes exactly as before. Closing that means giving the second process a
+timeout before it quits, i.e. having it decide the primary is unresponsive and
+say so, which is a different fix with its own false-positive risk (a primary busy
+for 2s during boot is not a wedged one). Left open deliberately: a wedged primary
+has not been observed, whereas the windowless one is recorded above.
 
 **If it returns, capture before restarting anything:** which process name is
 still listed (`MYTHOS.exe` = Electron itself; `node.exe` = the forked server
@@ -6542,3 +6615,90 @@ offset with ASCII context. It has a non-vacuity check (fails if the file list is
 empty or stops covering `ps-automation.ps1`), and it earned its keep immediately:
 it caught `setup-chrome-debug.ps1`, which the hand scan that preceded it missed
 because that scan only walked `adapters/`.
+
+## BUG-227 — fresh-PC install fails with "cannot be closed": a 1-character MAX_PATH overflow
+
+**Operator, 2026-08-14.** Installing 0.1.9 from the GitHub release onto a **new
+PC** failed partway through with *"…cannot be closed. Please close it manually
+and click Retry to continue"* — with MYTHOS not running. **Retry looped forever.**
+Disk space was ample (50 GB+). The operator's requirement is that it must install
+on any drive the user picks.
+
+**The message is a lie told by electron-builder's own template.**
+`app-builder-lib/templates/nsis/include/extractAppPackage.nsh:116` raises it from
+`extractUsing7za` after `CopyFiles` sets an error five times in a row — for ANY
+cause. No process check is involved anywhere; this repo's `build/installer.nsh`
+adds none either. "App is running" is simply what it guesses.
+
+**The real cause is arithmetic.** NSIS extracts the whole app to
+`$PLUGINSDIR\7z-out` **before** copying it to `$INSTDIR`. Measured on the dev
+machine that temp path is **63** characters
+(`%LOCALAPPDATA%\Temp\nsXXXXX.tmp\7z-out`, expanded). The longest path in the
+app was **198**:
+
+    \resources\app.asar.unpacked\mythos\node_modules\@huggingface\transformers
+      \node_modules\onnxruntime-web\lib\onnxjs\ort-schema\flatbuffers\onnxruntime
+      \fbs\deprecated-node-index-and-kernel-def-hash.js
+
+**63 + 198 = 261. MAX_PATH is 260.** One character over, so the copy could never
+succeed and no number of retries could help. Two consequences worth stating
+plainly: the **install drive is irrelevant** (the failure is in TEMP on `C:`,
+before `$INSTDIR` is touched), and a **shorter install path does not fix it**.
+
+**Why it was never seen here.** This development machine has
+`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`, which is
+**not** the Windows default. Every install ever tested happened on the one machine
+where the bug is invisible. That is the reusable lesson, and it is bigger than
+this bug: a dev box configured unlike a user's box hides an entire class of
+defect, and nothing in the suite could see it because the suite never installs
+anything.
+
+**FIXED** in `package.json`:
+- `build.asarUnpack` was `["mythos/**/*"]`, which unpacked **5,636 of 5,713**
+  files — including **three** vendored copies of `onnxruntime-web`'s
+  `lib/onnxjs/ort-schema` TypeScript sources (top level, under
+  `@huggingface/transformers`, and again under `kokoro-js`). Added
+  `!**/onnxruntime-web/**` and `!**/@huggingface/**` so those stay inside
+  `app.asar`, where their paths never reach the filesystem.
+- `build.files` now also drops `onnxruntime-node`'s `darwin/` and `linux/`
+  binaries, which a Windows build cannot use.
+
+Measured effect on the installed tree: longest path **198 → 145**, files on disk
+**5,713 → 3,878**. The second number matters on its own — 5,636 individually
+copied files is also what gives antivirus the most opportunity to hold a handle
+mid-copy on an unsigned build.
+
+**Why this is safe, verified rather than assumed.** Those two packages are pure
+JS/TS and are only ever loaded by the forked server child (`providers/
+kokoro-tts.js`, `providers/local-whisper-stt.js`, both dynamic imports). That
+child is Electron with `ELECTRON_RUN_AS_NODE=1`, and **asar reads were confirmed
+working under that mode against the real installed 0.1.9 build** before the change
+was made — `require` of a module inside `app.asar`, `fs.readdirSync` of it, and a
+nested `require` all succeeded. Native modules are deliberately still unpacked
+(`onnxruntime-node`, `@img/sharp` — 12 `.node` files and 14 `.dll`s): Windows
+cannot load a binary from inside an archive. Everything read by a NON-Electron
+process also stays unpacked — `adapters/pc-child/ps-automation.ps1`
+(`powershell.exe`), `services/piper-server.py` (`python`),
+`scripts/vault-sync.js` (spawned), and `MYTHOS_DIR` itself, which is used as the
+fork `cwd` and must be a real directory.
+
+**Regression test**: `test/installer-path-budget.test.js` — budget is
+`260 − 80 = 180` chars for the longest path relative to the install root, the 80
+being worst-case for the NSIS temp directory (measured 63 here; a longer Windows
+account name is exactly the variable that differs between the machine that builds
+and the machine that installs). It walks the source tree so it runs in CI without
+a build, pins both exclusions and the native-module inclusions, and additionally
+measures `dist/win-unpacked` for real when a build newer than the config exists.
+It was verified red against the pre-fix build (reported 200 chars).
+
+**Operator workaround, NOT the fix** — acceptable for a second machine, never to
+be required of a user, and deliberately NOT done from the installer (a setup
+program that quietly rewrites machine-wide OS policy to make itself fit is worse
+than the bug):
+
+    New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
+      -Name LongPathsEnabled -PropertyType DWord -Value 1 -Force
+
+**NOT YET VERIFIED where it counts.** This machine cannot reproduce the bug at
+all, so the only real proof is a fresh install on a stock Windows PC with
+`LongPathsEnabled` at its default `0`, onto a non-`C:` drive. Ships in 0.1.10.
