@@ -3671,9 +3671,36 @@ function Handle-SendKey($key, $TargetPid) {
                 if ($saveEl) { $viaFileMenu = $true }
             }
             if (-not $saveEl) {
+                # 2026-08-14 - the message names the WAY OUT, not just the wall.
+                # BUG-219's root cause is proven and narrow (on this WinUI3
+                # MenuBarItem, Invoke()/Expand() are a silent no-op specifically
+                # when PowerShell is spawned by pc-child; identical from a
+                # standalone powershell.exe; -NonInteractive/windowsHide/UIPI all
+                # ruled out), so this rung cannot be won and no further UIA rung
+                # will win it either - see adapters/CLAUDE.md.
+                #
+                # What made it expensive was not the failure, it was the dead end:
+                # given only "no invokable Save element was found", the model spent
+                # five minutes on ctrl+s and four File-menu clicks, then closed the
+                # window and lost the operator's recipe. A file-write tool was
+                # reachable the entire time. Same lesson as the anomaly-payload
+                # rule: a failure the model can ACT on beats one it can only
+                # report.
+                #
+                # The tools it names must themselves be voice-reachable: this repo's
+                # own standing lesson (BUG-099) is that a hint pointing at an
+                # unreachable tool is a dead end WITH a hint. write_file was promoted
+                # to live-tools.js's DEFAULT_ALLOWLIST in the same change for exactly
+                # that reason; write_note is deliberately NOT named here, because it
+                # is not on the voice surface.
                 $dbg = if ($script:LastFileMenuDebug) { ' [debug: ' + ($script:LastFileMenuDebug -join ', ') + ']' } else { '' }
                 return ("Send key 'ctrl+s' failed: $blackholeReason, and no invokable " +
-                    "'Save'/'Save As' element was found in the foreground window ($fgTitle2) or its File menu to use instead.$dbg")
+                    "'Save'/'Save As' element was found in the foreground window ($fgTitle2) or its File menu to use instead. " +
+                    "This app's save command cannot be driven from here at all - it is a known, narrow limitation of " +
+                    "some packaged Windows apps, not a transient failure. Do NOT retry ctrl+s, the File menu, or more " +
+                    "clicking: none of them will work. Save the content by writing it to a file directly instead - use " +
+                    "write_file when a specific path or filename matters, or note_take for a plain titled note - and tell " +
+                    "the operator where you put it.$dbg")
             }
             try { $saveEl.invoke.Invoke() } catch {
                 return "Send key 'ctrl+s' failed: $blackholeReason, and invoking the UIA '$($saveEl.name)' element threw: $($_.Exception.Message)"
@@ -3695,9 +3722,14 @@ function Handle-SendKey($key, $TargetPid) {
                 return @{ key = $raw; sent = $true; combo = $true; mechanism = $mechanism; result = 'save-as-dialog-opened' }
             }
             if ($fgTitleBefore -and $fgTitleBefore.StartsWith('*') -and ($fgTitle3 -eq $fgTitleBefore)) {
+                # Same dead end as the rung above, reached one step later: the
+                # element existed and Invoke() returned, and still nothing happened.
+                # It gets the same way out, for the same reason.
                 return ("Send key 'ctrl+s' failed: invoked the '$($saveEl.name)' element via " +
                     "$mechanism, but the window title ($fgTitle3) still shows unsaved changes and no " +
-                    'Save-As dialog opened - nothing verifiably happened.')
+                    'Save-As dialog opened - nothing verifiably happened. Do not retry this path; save the ' +
+                    'content by writing it to a file directly instead (write_file for a specific path, or ' +
+                    'note_take for a plain titled note) and tell the operator where you put it.')
             }
             return @{ key = $raw; sent = $true; combo = $true; mechanism = $mechanism }
         }

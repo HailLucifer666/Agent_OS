@@ -569,7 +569,13 @@ const TOOLS = [
   { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - the folder path to open' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
-  { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists).', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },
+  // 2026-08-14 (BUG-219): the description now names the phrasing that should reach
+  // it. Asked to "save it", the model went after a Save dialog it cannot drive on
+  // MSIX Notepad — five minutes of ctrl+s and File-menu clicks, then it closed the
+  // window and the text was gone. Writing the content to a file was available the
+  // whole time. The rule of thumb is the operator's intent: they want the CONTENT
+  // kept, not a particular dialog operated.
+  { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists). Use this — not a Save dialog, ctrl+s, or menu clicking — whenever the user says "save it", "save this as X", "keep this", or "put that in a file" and a specific path or filename matters; for a plain titled note with no path, use note_take instead. If a save keystroke or Save menu has already failed in an app, do NOT retry it: write the content here and say where it went.', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },
   { name: 'create_folder', description: 'Create a folder (and any missing parent folders) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: create_folder },
   { name: 'delete_file', description: 'Permanently delete a file (not a folder) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: delete_file },
   { name: 'move_file', description: 'Move (or rename) a file or folder from one location to another inside the allowed sandbox.', params: { from: 'string', to: 'string' }, danger: true, fn: move_file },
