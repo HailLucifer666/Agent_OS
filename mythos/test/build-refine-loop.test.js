@@ -32,7 +32,7 @@ const path = require('node:path');
 
 const { createBuildRunner } = require('../src/core/effectors/build-runner');
 const { createFsStore } = require('../src/core/memory/fs-store');
-const { createBuildRefiner, looksRenderable } = require('../src/core/effectors/build-refine');
+const { createBuildRefiner, looksRenderable, deadOnArrival } = require('../src/core/effectors/build-refine');
 
 const HTML = '<!doctype html><html><body><canvas id="game"></canvas></body></html>';
 
@@ -49,7 +49,9 @@ afterEach(() => {
 });
 
 // A refiner whose critique verdicts are scripted, so the loop's decisions are
-// what is under test rather than a model's opinion.
+// what is under test rather than a model's opinion. opts.pageErrors makes the
+// render report real-shaped runtime errors, which is how the known-broken tests
+// below reproduce the first end-to-end run's failure.
 function fakeRefiner(verdicts, opts) {
   const o = opts || {};
   const calls = { render: 0, critique: 0 };
@@ -65,7 +67,7 @@ function fakeRefiner(verdicts, opts) {
         screenshotPath: path.join(vaultDir, 'builds', 'refine', tag + '.png'),
         screenshotB64: 'ZmFrZQ==',
         consoleErrors: [],
-        pageErrors: [],
+        pageErrors: o.pageErrors ? o.pageErrors.slice() : [],
       };
     },
     critique: async () => {
@@ -239,6 +241,103 @@ describe('build refine loop — bounds and honesty', () => {
     assert.equal(done.refinePasses, undefined);
   });
 
+  // ---- known-broken never ships (the first real end-to-end run) ------------
+  //
+  // 2026-08-14, first e2e build against the real Hermes engine: its snake game
+  // called an undefined function, the loop caught the real pageError, the
+  // regeneration was REJECTED by the source verifier over a style rule, and the
+  // revert branch shipped the throwing original as status:done. "Last verified"
+  // is not "works" — the verifier reads source and cannot see a runtime error.
+
+  it('REVERTED with a throwing original fails the job instead of shipping it as done', async () => {
+    const refiner = fakeRefiner([{ pass: false, verdict: 'VERDICT: FAIL', issues: ['game is not playable'] }],
+      { pageErrors: ['checkFoodCollision is not defined'] });
+    let verifyCalls = 0;
+    let shipped = null;
+    const runner = createBuildRunner({
+      config: { MYTHOS_BUILD_CONCURRENCY: 1, BUILD_REFINE_MAX_ITERATIONS: 2 },
+      bus: null,
+      vault: vault,
+      verifier: {
+        verify: async () => {
+          verifyCalls += 1;
+          // The original clears the gate; the refined candidate is rejected on a
+          // style rule — exactly the real run's shape.
+          return verifyCalls === 1
+            ? { pass: true, issues: [], warnings: [] }
+            : { pass: false, issues: ['no @media queries (not responsive)'], warnings: [] };
+        },
+      },
+      buildEngine: { generate: async () => ({ content: HTML, engine: 'hermes' }) },
+      refiner: refiner,
+    });
+    const job = runner.enqueue({ kind: 'build', prompt: 'a snake game', run: async (raw) => { shipped = raw; return {}; } });
+    const done = await waitForFinish(runner, job);
+    assert.equal(done.status, 'failed', 'an artifact watched throwing must never be status:done');
+    assert.equal(shipped, null, 'run() must not be reached — nothing is written');
+    assert.match(done.error, /throws when it runs/);
+    assert.match(done.error, /checkFoodCollision is not defined/,
+      'the failure must name the real runtime error, not a generic refinement message');
+    assert.deepEqual(done.refineRuntimeErrors, ['checkFoodCollision is not defined']);
+    assert.equal(done.refineStatus, 'reverted', 'the disposition stays visible on the job record');
+  });
+
+  it('a BLIND verdict on a throwing page also fails — no model needed to see an exception', async () => {
+    const refiner = fakeRefiner([{ pass: null, verdict: 'the vision lane was unreachable', issues: [], blind: true }],
+      { pageErrors: ['TypeError: ctx.fillRect is not a function'] });
+    const { runner } = runnerWith(refiner, [{ content: HTML, engine: 'hermes' }]);
+    const job = runner.enqueue({ kind: 'build', prompt: 'a snake game', run: async () => ({}) });
+    const done = await waitForFinish(runner, job);
+    assert.equal(done.status, 'failed');
+    assert.match(done.error, /ctx\.fillRect is not a function/);
+  });
+
+  it('a BLIND verdict on a CLEAN page still ships — unknown-looking is not broken', async () => {
+    const refiner = fakeRefiner([{ pass: null, verdict: 'the vision lane was unreachable', issues: [], blind: true }]);
+    const { runner } = runnerWith(refiner, [{ content: HTML, engine: 'hermes' }]);
+    let shipped = null;
+    const job = runner.enqueue({ kind: 'build', prompt: 'a snake game', run: async (raw) => { shipped = raw; return {}; } });
+    const done = await waitForFinish(runner, job);
+    assert.equal(done.status, 'done');
+    assert.equal(shipped, HTML);
+    assert.equal(done.refineRuntimeErrors, undefined);
+  });
+
+  it('an accepted-but-unrendered final candidate is EXHAUSTED, never asserted broken or clean', async () => {
+    // The candidate passes the source verifier on the last iteration and the
+    // loop ends before it can be rendered. Whether it throws is genuinely
+    // unknown, so the job must neither fail nor claim the artifact runs.
+    const refiner = fakeRefiner([{ pass: false, verdict: 'VERDICT: FAIL', issues: ['too plain'] }],
+      { pageErrors: ['old error from the ORIGINAL artifact'] });
+    const REFINED = HTML.replace('</body>', '<div>fixed</div></body>');
+    let generated = 0;
+    let shipped = null;
+    const runner = createBuildRunner({
+      config: { MYTHOS_BUILD_CONCURRENCY: 1, BUILD_REFINE_MAX_ITERATIONS: 1 },
+      bus: null,
+      vault: vault,
+      verifier: { verify: async () => ({ pass: true, issues: [], warnings: [] }) },
+      buildEngine: { generate: async () => { generated += 1; return { content: generated === 1 ? HTML : REFINED, engine: 'hermes' }; } },
+      refiner: refiner,
+    });
+    const job = runner.enqueue({ kind: 'build', prompt: 'a snake game', run: async (raw) => { shipped = raw; return {}; } });
+    const done = await waitForFinish(runner, job);
+    assert.equal(done.status, 'done', 'an unrendered candidate is not known-broken');
+    assert.equal(shipped, REFINED);
+    assert.equal(done.refineStatus, 'exhausted');
+    assert.equal(done.refineRuntimeErrors, undefined,
+      'the ORIGINAL artifact errors must not be attributed to the candidate that replaced it');
+  });
+
+  it('a PASS on a clean page is unaffected by the known-broken guard', async () => {
+    const refiner = fakeRefiner([{ pass: true, verdict: 'VERDICT: PASS', issues: [] }]);
+    const { runner } = runnerWith(refiner, [{ content: HTML, engine: 'hermes' }]);
+    const job = runner.enqueue({ kind: 'build', prompt: 'a snake game', run: async () => ({}) });
+    const done = await waitForFinish(runner, job);
+    assert.equal(done.status, 'done');
+    assert.equal(done.refineStatus, 'passed-first-look');
+  });
+
   it('non-web artifacts are never rendered — there is no visual truth to check', async () => {
     const refiner = fakeRefiner([{ pass: true, verdict: 'PASS', issues: [] }], { renderable: false });
     const { runner } = runnerWith(refiner, [{ content: 'def solve(): return 42', engine: 'hermes' }]);
@@ -301,6 +400,137 @@ describe('build-refine.js — renderability and degradation', () => {
     assert.equal(out.issues.length, 2);
     assert.match(out.issues[0], /type hierarchy/);
     assert.match(out.issues[1], /invented metric/);
+  });
+
+  // ---- measured facts in the critique prompt --------------------------------
+  //
+  // Third real end-to-end run (2026-08-14): the model returned "No visible
+  // snake, food, score display" for a page whose screenshot plainly showed a
+  // score line, a green snake segment and red food — they were just small. A
+  // false FAIL costs a whole regeneration and mislabels a working build, so the
+  // prompt now carries facts the model must not contradict.
+
+  it('puts measured DOM/canvas facts in the critique prompt', async () => {
+    let seenPrompt = null;
+    const brain = { think: async (req) => {
+      seenPrompt = req.messages[0].content.find((p) => p.type === 'text').text;
+      return { content: 'VERDICT: PASS', provider: 'p', model: 'm' };
+    } };
+    const r = createBuildRefiner({ vault: vault, brain: brain, launcher: {}, chainFor: async () => ['fake'] });
+    await r.critique({
+      screenshotB64: 'ZmFrZQ==',
+      consoleErrors: [], pageErrors: [],
+      spec: 'a snake game with a visible score',
+      observations: {
+        visibleText: 'Score: 0',
+        canvases: [{ id: 'game-canvas', w: 500, h: 500, inkPct: 1.4 }],
+        counts: { canvas: 1, button: 0, input: 0, img: 0 },
+      },
+    });
+    assert.match(seenPrompt, /MEASURED FACTS/);
+    assert.match(seenPrompt, /Score: 0/, 'the text actually on the page must reach the model');
+    assert.match(seenPrompt, /game-canvas.*500x500.*HAS DRAWN CONTENT/,
+      'a painted canvas is stated as a conclusion — a bare percentage was read as "empty"');
+    assert.match(seenPrompt, /NOT an empty canvas/);
+    assert.match(seenPrompt, /Small is not absent, and sparse is not blank/, 'the rule that killed the false FAIL must be stated');
+    assert.match(seenPrompt, /ONE STILL FRAME/, 'a still frame cannot show motion — say so');
+  });
+
+  it('omits the facts block entirely when nothing could be measured', async () => {
+    let seenPrompt = null;
+    const brain = { think: async (req) => {
+      seenPrompt = req.messages[0].content.find((p) => p.type === 'text').text;
+      return { content: 'VERDICT: PASS', provider: 'p', model: 'm' };
+    } };
+    const r = createBuildRefiner({ vault: vault, brain: brain, launcher: {}, chainFor: async () => ['fake'] });
+    await r.critique({ screenshotB64: 'ZmFrZQ==', consoleErrors: [], pageErrors: [], spec: 'x', observations: null });
+    assert.doesNotMatch(seenPrompt, /MEASURED FACTS/,
+      'an empty facts heading would invite the model to invent facts under it');
+  });
+
+  it('states a blank canvas as COMPLETELY BLANK and a sparse one as having content', async () => {
+    // The fifth real build failed a snake game holding three snake segments and
+    // one piece of food, because the prompt handed it a bare "0.9% painted" and
+    // it read that as empty. 0.0% is the only measurement that means blank.
+    let prompts = [];
+    const brain = { think: async (req) => {
+      prompts.push(req.messages[0].content.find((p) => p.type === 'text').text);
+      return { content: 'VERDICT: PASS', provider: 'p', model: 'm' };
+    } };
+    const r = createBuildRefiner({ vault: vault, brain: brain, launcher: {}, chainFor: async () => ['fake'] });
+    const base = { screenshotB64: 'ZmFrZQ==', consoleErrors: [], pageErrors: [], spec: 'a snake game' };
+    // Assert on the FACT line, not the whole prompt: the standing rules below it
+    // legitimately quote both phrases, so a whole-prompt match proves nothing.
+    const canvasFact = (p) => p.split('\n').find((l) => l.indexOf('- <canvas') === 0);
+    await r.critique(Object.assign({}, base, {
+      observations: { visibleText: 'Score: 0', canvases: [{ id: 'c', w: 500, h: 500, inkPct: 0.9 }], counts: null },
+    }));
+    assert.match(canvasFact(prompts[0]), /HAS DRAWN CONTENT/);
+    assert.doesNotMatch(canvasFact(prompts[0]), /COMPLETELY BLANK/);
+    await r.critique(Object.assign({}, base, {
+      observations: { visibleText: '', canvases: [{ id: 'c', w: 500, h: 500, inkPct: 0 }], counts: null },
+    }));
+    assert.match(canvasFact(prompts[1]), /COMPLETELY BLANK/);
+    assert.doesNotMatch(canvasFact(prompts[1]), /HAS DRAWN CONTENT/);
+  });
+
+  it('reports an unmeasurable canvas as unmeasured, never as 0% painted', async () => {
+    let seenPrompt = null;
+    const brain = { think: async (req) => {
+      seenPrompt = req.messages[0].content.find((p) => p.type === 'text').text;
+      return { content: 'VERDICT: PASS', provider: 'p', model: 'm' };
+    } };
+    const r = createBuildRefiner({ vault: vault, brain: brain, launcher: {}, chainFor: async () => ['fake'] });
+    await r.critique({
+      screenshotB64: 'ZmFrZQ==', consoleErrors: [], pageErrors: [], spec: 'x',
+      observations: { visibleText: '', canvases: [{ id: 'gl', w: 300, h: 150, inkPct: null }], counts: null },
+    });
+    assert.match(seenPrompt, /could not be measured/);
+    assert.doesNotMatch(seenPrompt, /0% of its pixels/,
+      'a webgl/tainted canvas is unknown — reporting 0% would be a fabricated measurement');
+  });
+
+  // ---- dead on arrival: a code-decided failure -----------------------------
+  //
+  // Sixth real build: the vision model returned VERDICT: PASS for a snake game
+  // whose screenshot showed a "Game Over!" overlay and a Restart button. The
+  // output contract forbids exactly that, and a false PASS ships — so terminal
+  // state on first render is now decided in code, not by the model.
+
+  it('detects terminal-state text, and only terminal-state text', () => {
+    // The captured phrase is the match itself — punctuation around it is not
+    // part of the pattern, and asserting on '!' would pin the wrong thing.
+    assert.equal(deadOnArrival({ visibleText: 'Score: 0 Game Over! Restart' }), 'Game Over');
+    assert.equal(deadOnArrival({ visibleText: 'You lost — final score 12' }), 'You lost');
+    assert.equal(deadOnArrival({ visibleText: 'Try Again' }), 'Try Again');
+    // Idle screens that must NOT trip it: a restart button or a score readout is
+    // normal furniture on a game waiting to be played.
+    assert.equal(deadOnArrival({ visibleText: 'Score: 0 Press an arrow key to start' }), null);
+    assert.equal(deadOnArrival({ visibleText: 'Snake — Restart  Pause  Score: 0' }), null);
+    assert.equal(deadOnArrival({ visibleText: '' }), null);
+    assert.equal(deadOnArrival(null), null);
+  });
+
+  it('a model PASS is overridden when the page opens on a terminal state', async () => {
+    const brain = { think: async () => ({ content: 'VERDICT: PASS\nlooks good', provider: 'p', model: 'm' }) };
+    const r = createBuildRefiner({ vault: vault, brain: brain, launcher: {}, chainFor: async () => ['fake'] });
+    const out = await r.critique({
+      screenshotB64: 'ZmFrZQ==', consoleErrors: [], pageErrors: [], spec: 'a playable snake game',
+      observations: { visibleText: 'Game Over! Score: 0 Restart', canvases: [{ id: 'c', w: 400, h: 400, inkPct: 3 }], counts: null },
+    });
+    assert.equal(out.pass, false, 'a false PASS ships a dead-on-arrival artifact — code must win here');
+    assert.match(out.issues.join(' '), /opens on a terminal state/);
+    assert.match(out.issues.join(' '), /Game Over/);
+  });
+
+  it('an idle ready-state page still passes — the guard must not eat good builds', async () => {
+    const brain = { think: async () => ({ content: 'VERDICT: PASS', provider: 'p', model: 'm' }) };
+    const r = createBuildRefiner({ vault: vault, brain: brain, launcher: {}, chainFor: async () => ['fake'] });
+    const out = await r.critique({
+      screenshotB64: 'ZmFrZQ==', consoleErrors: [], pageErrors: [], spec: 'a playable snake game',
+      observations: { visibleText: 'Score: 0 Press an arrow key to begin', canvases: [{ id: 'c', w: 400, h: 400, inkPct: 1.1 }], counts: null },
+    });
+    assert.equal(out.pass, true);
   });
 
   it('an offline vision lane yields pass:null (blind), never a silent pass', async () => {

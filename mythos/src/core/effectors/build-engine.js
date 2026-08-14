@@ -38,12 +38,54 @@ var path = require('path');
 // reply, so state that as a hard constraint. When it disobeys, verifier.verify()
 // in build-runner catches the mismatch and fails the job honestly — this
 // preamble reduces that case, it is not trusted to eliminate it.
+// The last two lines are not style advice — they are the two failure modes that
+// showed up in FOUR consecutive real builds on 2026-08-14, once the refine loop
+// started rendering what this engine produces:
+//   * three of four snake games auto-started on page load, ran into a wall
+//     unattended, and were sitting on a "Game Over!" overlay by the time anyone
+//     (or anything) looked at them. Nobody had pressed a key. The artifact was
+//     technically complete and effectively dead on arrival.
+//   * the pieces were drawn at a size that read as an empty board — measured at
+//     0.5% of canvas pixels painted.
+// Both are cheap to state up front and expensive to catch afterwards; the refine
+// loop is what makes a regression here visible again rather than silent.
 var OUTPUT_CONTRACT = [
   'OUTPUT CONTRACT — read before doing anything:',
   '- Reply with the finished artifact content ONLY. No preamble, no summary, no commentary.',
   '- Do NOT create, write or modify any files. Your reply IS the deliverable.',
   '- Do not wrap the whole reply in a markdown code fence unless the artifact itself is fenced.',
+  '- An interactive artifact must open in a READY state that waits for the user: never auto-start a'
+    + ' game loop that can lose before any input arrives, and never open on a game-over/error screen.',
+  '- Draw at a size a person can actually see: game pieces, data points and controls should be'
+    + ' obvious at a glance on a 1280x800 screen, not a few pixels on an empty-looking board.',
 ].join('\n');
+
+// A PROMPT INSTRUCTION IS NOT A GUARANTEE (found 2026-08-14, first real
+// end-to-end build). The contract above asks the model not to wrap its reply in
+// a markdown fence. Hermes wrapped it anyway, and nothing downstream stripped
+// it, so the saved .html began with ```html and ended with ``` — which the
+// browser renders as literal text either side of the page. It had been shipping
+// on every fenced reply, invisible to the whole pipeline: the verifier reads
+// source without a "no stray fences" rule, and the only reason anyone saw it is
+// that the new refine loop screenshotted the artifact and the fence text was
+// there in the picture.
+//
+// Deliberately narrow: strip ONLY a fence that wraps the ENTIRE reply (first
+// non-empty line opens it, last non-empty line closes it). An artifact that
+// legitimately CONTAINS fenced blocks — a markdown README, a doc with code
+// samples — is untouched, because its first line is not an opening fence.
+var WHOLE_REPLY_FENCE_RE = /^\s*```[\w+-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```[ \t]*\s*$/;
+
+function stripWholeReplyFence(text) {
+  var s = String(text == null ? '' : text);
+  var m = s.match(WHOLE_REPLY_FENCE_RE);
+  if (!m) return s;
+  var inner = m[1];
+  // Refuse to "fix" a reply whose inner content is itself fence-opening — that
+  // is a nested/ambiguous shape, and guessing there could truncate an artifact.
+  if (/^\s*```/.test(inner)) return s;
+  return inner.trim() ? inner : s;
+}
 
 // Hermes reports provider failures on STDOUT with EXIT CODE 0 — a misconfigured
 // provider replies "HTTP 401: Missing Authentication header" and looks like a
@@ -133,7 +175,9 @@ function createBuildEngine(deps) {
       });
       if (r && r.content) {
         if (bus) bus.emit('health.anomaly', { kind: 'build-engine-fallback-used', engine: 'brain-fallback', hermesError: offlineResult && offlineResult.error });
-        return { content: String(r.content), engine: 'brain-fallback', offline: false, aborted: !!r.aborted };
+        // Same fence strip as the Hermes path: a fenced reply is a model habit,
+        // not a Hermes quirk, so the guarded fallback needs it too.
+        return { content: stripWholeReplyFence(r.content), engine: 'brain-fallback', offline: false, aborted: !!r.aborted };
       }
       // brain itself returned offline — propagate the combined failure honestly.
       return { offline: true, engine: 'hermes', error: 'Hermes offline (' + (offlineResult && offlineResult.error) + ') and brain also offline (' + (r && r.error) + ')' };
@@ -170,7 +214,7 @@ function createBuildEngine(deps) {
         offline = { offline: true, engine: 'hermes', error: 'Hermes provider error (exit 0, error on stdout): ' + reported };
         return await brainFallback(full, o.source, offline);
       }
-      return { content: String(reply), engine: 'hermes', offline: false, aborted: false };
+      return { content: stripWholeReplyFence(reply), engine: 'hermes', offline: false, aborted: false };
     } catch (err) {
       var msg = String((err && err.message) || err);
       if (bus) bus.emit('health.anomaly', { kind: 'build-engine-failed', engine: 'hermes', error: msg });
@@ -188,4 +232,5 @@ module.exports = {
   createBuildEngine: createBuildEngine,
   OUTPUT_CONTRACT: OUTPUT_CONTRACT,
   HERMES_ERROR_REPLY_RE: HERMES_ERROR_REPLY_RE,
+  stripWholeReplyFence: stripWholeReplyFence,
 };

@@ -64,6 +64,113 @@ const RENDER_TIMEOUT_MS = 20000;
 const SETTLE_MS = 1200;
 const VIEWPORT = { width: 1280, height: 800 };
 
+// MEASURED FACTS ABOUT THE LIVE PAGE, so the critique cannot deny what is
+// demonstrably there (2026-08-14, third real end-to-end build). The vision model
+// returned "No visible snake, food, score display" for a page whose screenshot
+// plainly showed a score line, a green snake segment and red food — the game
+// elements were simply small. A false FAIL costs a whole regeneration and
+// mislabels a working build, so the model is handed observations it must not
+// contradict: the page's own visible text, and how much of each canvas is
+// actually painted.
+//
+// Canvas ink is the repo's existing discipline for exactly this (a canvas cannot
+// be judged from a screenshot alone — measure pixels). Sampled every 4th pixel:
+// enough to distinguish "blank" from "drawn" without moving megabytes.
+async function observe(page) {
+  try {
+    return await page.evaluate(() => {
+      const text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim();
+      const canvases = Array.from(document.querySelectorAll('canvas')).slice(0, 4).map((c, i) => {
+        const out = { id: c.id || ('canvas' + i), w: c.width, h: c.height, inkPct: null };
+        try {
+          const ctx = c.getContext('2d');
+          if (!ctx) return out;                       // webgl or unavailable — say null, never 0
+          const d = ctx.getImageData(0, 0, c.width, c.height).data;
+          const counts = new Map();
+          let sampled = 0;
+          for (let p = 0; p < d.length; p += 16) {    // every 4th pixel (4 bytes each)
+            const key = (d[p] << 24) | (d[p + 1] << 16) | (d[p + 2] << 8) | d[p + 3];
+            counts.set(key, (counts.get(key) || 0) + 1);
+            sampled += 1;
+          }
+          let dominant = 0;
+          counts.forEach((n) => { if (n > dominant) dominant = n; });
+          out.inkPct = sampled ? Math.round(((sampled - dominant) / sampled) * 1000) / 10 : null;
+        } catch (_) { /* tainted or unreadable canvas — null, not a fake number */ }
+        return out;
+      });
+      return {
+        visibleText: text.slice(0, 400),
+        canvases: canvases,
+        counts: {
+          canvas: document.querySelectorAll('canvas').length,
+          button: document.querySelectorAll('button').length,
+          input: document.querySelectorAll('input,select,textarea').length,
+          img: document.querySelectorAll('img,svg').length,
+        },
+      };
+    });
+  } catch (_) {
+    return null;   // observation is a bonus; never fail a render over it
+  }
+}
+
+// Render the observations into prompt lines. Returns '' when there is nothing
+// measured, so the prompt never carries an empty "facts" heading.
+function observedFactsBlock(obs) {
+  if (!obs) return '';
+  const lines = [];
+  if (obs.visibleText) lines.push('- Text actually rendered on the page: "' + obs.visibleText + '"');
+  // A RAW PERCENTAGE GETS MISREAD, so the fact is stated as a conclusion with
+  // the number as support (2026-08-14, fifth real build). Handing the model a
+  // bare "0.9% of pixels painted" for a snake board holding three snake
+  // segments and one piece of food produced "no game elements are visible or
+  // rendered" — a false FAIL against a screenshot that plainly showed them. A
+  // sparse game board IS a low percentage: a few dozen small shapes on 500x500
+  // is well under 2%. Only 0.0% means nothing was drawn at all, so that is the
+  // distinction worth stating, rather than leaving the model to invent a
+  // threshold from a number it has no reference for.
+  (obs.canvases || []).forEach((c) => {
+    var size = c.w + 'x' + c.h;
+    if (c.inkPct === null) {
+      lines.push('- <canvas id="' + c.id + '"> is ' + size + ' — its pixels could not be measured');
+    } else if (c.inkPct <= 0) {
+      lines.push('- <canvas id="' + c.id + '"> is ' + size + ' and is COMPLETELY BLANK'
+        + ' (0% of pixels differ from the background — nothing was drawn)');
+    } else {
+      lines.push('- <canvas id="' + c.id + '"> is ' + size + ' and HAS DRAWN CONTENT on it'
+        + ' (' + c.inkPct + '% of pixels differ from the background; a handful of small game pieces on a'
+        + ' board this size is expected to measure only 1-3%, so this is NOT an empty canvas)');
+    }
+  });
+  if (obs.counts) {
+    lines.push('- Element counts: ' + obs.counts.canvas + ' canvas, ' + obs.counts.button + ' button, '
+      + obs.counts.input + ' input, ' + obs.counts.img + ' image/svg');
+  }
+  if (!lines.length) return '';
+  return ['MEASURED FACTS about the live page (from the DOM, not opinions — do NOT contradict these):']
+    .concat(lines).join('\n');
+}
+
+// DEAD ON ARRIVAL, decided in code (2026-08-14, sixth real build). The output
+// contract forbids an artifact that opens on a game-over/error screen, and the
+// vision model returned VERDICT: PASS for a snake game whose screenshot showed a
+// "Game Over!" overlay and a Restart button. A false PASS is strictly worse than
+// a false FAIL — it ships — so this stops being the model's judgement call.
+//
+// Nothing has touched the keyboard at this point: the render loads the page,
+// waits, and looks. Terminal-state text on screen therefore means the artifact
+// reached that state on its own, which is the failure by definition. Kept
+// deliberately tight (no bare "restart" or "score" — both are normal furniture on
+// an idle screen) so it cannot fire on a game that is simply waiting to be played.
+var DEAD_ON_ARRIVAL_RE = /\bgame over\b|\byou (?:lose|lost|died)\b|\bfinal score\b|\btry again\b/i;
+
+function deadOnArrival(observations) {
+  if (!observations || !observations.visibleText) return null;
+  var m = String(observations.visibleText).match(DEAD_ON_ARRIVAL_RE);
+  return m ? m[0] : null;
+}
+
 function createBuildRefiner(opts) {
   const o = opts || {};
   const vault = o.vault;
@@ -133,6 +240,7 @@ function createBuildRefiner(opts) {
       });
       await page.goto('file:///' + htmlAbs.replace(/\\/g, '/'), { timeout: RENDER_TIMEOUT_MS, waitUntil: 'load' });
       await page.waitForTimeout(SETTLE_MS);
+      const observations = await observe(page);
       const shot = await page.screenshot({ path: pngAbs, fullPage: false });
       await browser.close();
       browser = null;
@@ -142,6 +250,7 @@ function createBuildRefiner(opts) {
         screenshotB64: Buffer.from(shot).toString('base64'),
         consoleErrors: consoleErrors,
         pageErrors: pageErrors,
+        observations: observations,
         htmlPath: htmlAbs,
       };
     } catch (err) {
@@ -170,6 +279,7 @@ function createBuildRefiner(opts) {
   async function critique(args) {
     const a = args || {};
     const runtimeErrors = (a.pageErrors || []).concat(a.consoleErrors || []);
+    const doa = deadOnArrival(a.observations);
     if (!a.screenshotB64) {
       return {
         pass: false,
@@ -186,6 +296,7 @@ function createBuildRefiner(opts) {
       runtimeErrors.length
         ? 'The page reported these runtime errors: ' + runtimeErrors.slice(0, 5).join(' | ')
         : 'The page loaded with no console or runtime errors.',
+      observedFactsBlock(a.observations),
       '',
       'Judge it on three things, in this order:',
       '1. DOES IT WORK — is the thing the brief asked for actually visible and in a usable state,',
@@ -194,10 +305,25 @@ function createBuildRefiner(opts) {
       '3. DOES IT LOOK DESIGNED — deliberate type hierarchy and spacing, a real colour decision,',
       '   no default-template slop, no fabricated metrics or placeholder lorem text.',
       '',
+      // Both rules below were written against real false FAILs from the third
+      // end-to-end run: the model called a visible score and visible game pieces
+      // absent, and treated "nothing is moving" as "nothing works".
+      'Two rules about what you are looking at:',
+      '- This is ONE STILL FRAME. It cannot show motion, keyboard input or gameplay. Judge whether the',
+      '  pieces are PRESENT and correctly laid out; never fail something for not appearing animated,',
+      '  and never claim a control is missing merely because you cannot see it being used.',
+      '- Small is not absent, and sparse is not blank. If the measured facts above say text is rendered',
+      '  or a canvas HAS DRAWN CONTENT, that content EXISTS — say it is too small or low-contrast if',
+      '  that is the problem, but never report it as missing, and never treat a low painted-pixel',
+      '  percentage as an empty canvas. Only "COMPLETELY BLANK" means nothing was drawn.',
+      '',
       'Answer in exactly this shape:',
       'VERDICT: PASS or FAIL',
       'ISSUES: one short line per concrete problem, each naming what to change. Omit if PASS.',
       'Be strict about 1 and 2 and honest about 3. Do not pass something you cannot see working.',
+      // Blank lines are kept deliberately (they separate the sections for the
+      // model); only the facts block collapses away when there is nothing
+      // measured, and it emits '' for that case.
     ].join('\n');
 
     const visionOpts = {
@@ -227,6 +353,12 @@ function createBuildRefiner(opts) {
 
     const text = String(res.content);
     const modelPassed = /VERDICT:\s*PASS/i.test(text) && !/VERDICT:\s*FAIL/i.test(text);
+    // Code-decided failures, collected before the model's verdict is honoured.
+    const hardFailures = runtimeErrors.slice();
+    if (doa) {
+      hardFailures.push('the artifact opens on a terminal state ("' + doa + '") with no input given —'
+        + ' it must open in a ready state that waits for the user');
+    }
     const issues = [];
     const issuesBlock = text.split(/ISSUES:/i)[1];
     if (issuesBlock) {
@@ -235,13 +367,14 @@ function createBuildRefiner(opts) {
         if (t && t.length > 3) issues.push(t.slice(0, 300));
       });
     }
-    // Runtime errors override the model: it cannot see an exception, and a
-    // screenshot of a broken game can look perfectly reasonable.
-    const pass = modelPassed && runtimeErrors.length === 0;
+    // Code-decided failures override the model in BOTH directions of its error:
+    // it cannot see an exception at all, and it demonstrably passed a page whose
+    // own text said "Game Over!". Deterministic observations win.
+    const pass = modelPassed && hardFailures.length === 0;
     return {
       pass: pass,
       verdict: text.slice(0, 800),
-      issues: runtimeErrors.concat(issues).slice(0, 8),
+      issues: hardFailures.concat(issues).slice(0, 8),
       blind: false,
       provider: res.provider || null,
       model: res.model || null,
@@ -259,4 +392,7 @@ function createBuildRefiner(opts) {
   };
 }
 
-module.exports = { createBuildRefiner, looksRenderable, resolveChromePath };
+module.exports = {
+  createBuildRefiner, looksRenderable, resolveChromePath,
+  deadOnArrival, observedFactsBlock,
+};

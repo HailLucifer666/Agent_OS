@@ -280,15 +280,36 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
           // the fallback we ship if refinement cannot improve on it. Never ship
           // an UNVERIFIED regeneration just because it was the last one tried.
           var lastGood = raw;
+          // Runtime errors OBSERVED in the artifact currently held as lastGood,
+          // or null when the held artifact has never been rendered (a candidate
+          // accepted on the final iteration). Not the model's opinion —
+          // page/console errors straight out of the browser.
+          //
+          // This exists because of the first real end-to-end run (2026-08-14).
+          // Hermes's first snake game called an undefined function; the loop
+          // caught it, regenerated, and the regeneration was rejected by the
+          // SOURCE verifier over a style rule ("no @media queries"). The revert
+          // branch then shipped the original — which throws — as status:done.
+          // "Last verified" turned out not to mean "works": the verifier reads
+          // source and cannot see a runtime error, so the one gate that CAN see
+          // it has to be the one that decides. A known-broken artifact must fail
+          // the job, exactly as P22 already refuses to save an artifact that
+          // fails verification after a retry.
+          var heldRuntimeErrors = null;
           var iteration = 0;
           while (iteration < REFINE_MAX) {
             iteration += 1;
             var rendered = await refiner.render(raw, job.id + '-' + iteration);
+            heldRuntimeErrors = (rendered.pageErrors || []).concat(rendered.consoleErrors || []);
             var critique = await refiner.critique({
               screenshotB64: rendered.screenshotB64,
               renderError: rendered.error || null,
               consoleErrors: rendered.consoleErrors || [],
               pageErrors: rendered.pageErrors || [],
+              // Measured DOM/canvas facts. Without them the critique denied
+              // content the screenshot plainly showed — see build-refine.js's
+              // observe() for the run that produced that false FAIL.
+              observations: rendered.observations || null,
               spec: job.spec || prompt,
             });
             job.refinePasses.push({
@@ -349,6 +370,11 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
             }
             raw = candidate;
             lastGood = candidate;
+            // The candidate has passed the SOURCE verifier but has not been
+            // rendered yet. Whether it throws is unknown, and unknown must not
+            // be recorded as clean — if the loop ends here, the job says
+            // 'exhausted' without claiming the artifact runs.
+            heldRuntimeErrors = null;
             if (iteration >= REFINE_MAX) {
               // Bound reached with the last critique still failing. The artifact
               // shipped is verified but NOT visually approved, and the job says
@@ -360,6 +386,19 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
           }
           job.refineIterations = iteration;
           raw = lastGood;
+          // KNOWN-BROKEN NEVER SHIPS AS DONE. Reached when refinement ended
+          // without a pass and the artifact being held is one we WATCHED throw:
+          // the reverted branch (the regeneration was worse by the rules), the
+          // engine-offline branch, or a blind verdict on a page that errored.
+          // The runtime error is a browser observation, not a judgement, so this
+          // is deterministic — and it is the one signal the source verifier
+          // structurally cannot see.
+          if (heldRuntimeErrors && heldRuntimeErrors.length && job.refineStatus !== 'refined'
+              && job.refineStatus !== 'passed-first-look') {
+            job.refineRuntimeErrors = heldRuntimeErrors.slice(0, 5);
+            throw new Error('build failed: the artifact throws when it runs and refinement could not fix it ('
+              + heldRuntimeErrors.slice(0, 3).join('; ') + ')');
+          }
         }
       }
 
