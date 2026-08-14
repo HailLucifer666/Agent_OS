@@ -330,15 +330,28 @@ describe('immune/healer — matchClause/matches DSL', function() {
     assert.deepEqual(resolved, { literal: 'x', dynamic: 12345 });
   });
 
-  it('all ten SEED_PLAYBOOKS are well-formed (kind + then + cooldownMs)', function() {
+  it('every SEED_PLAYBOOK is well-formed (kind + then + cooldownMs)', function() {
     // REMEDIATION P2-10: 6 -> 8 (2026-07-29 audit item 11).
     // Learning loop: 8 -> 9 — recurring-failure-record added to close the
     // dead-channel gap (reflection.js emitted 'recurring-failure' but no
     // playbook handled it). See healer.js SEED_PLAYBOOKS comment.
     // Wave 7 (2026-08-13): 9 -> 10 — aether-proxy-rebind, a same-port retry
     // for aether-proxy-bind-failed.
+    //
+    // F8 (2026-08-15): the hand-kept count is gone. It had been edited four
+    // times to track additions and its only real job — noticing a playbook that
+    // silently disappeared — is done better by naming the ones that must exist.
+    // The 2026-08-14 session recorded 26 anomalies that matched NO playbook, so
+    // this list is going to keep growing and a magic number would keep failing
+    // for the wrong reason.
     var { SEED_PLAYBOOKS } = require('../src/core/immune/healer');
-    assert.equal(SEED_PLAYBOOKS.length, 10);
+    var ids = SEED_PLAYBOOKS.map(function(p) { return p.id; });
+    assert.equal(new Set(ids).size, ids.length, 'duplicate playbook id: ' + ids.join(', '));
+    ['rotate-nim-key', 'budget-pause', 'effector-flapping-breaker', 'search-provider-degrade',
+      'build-engine-reprobe', 'recurring-failure-record', 'aether-proxy-rebind',
+    ].forEach(function(id) {
+      assert.ok(ids.indexOf(id) !== -1, 'playbook ' + id + ' disappeared');
+    });
     SEED_PLAYBOOKS.forEach(function(p) {
       assert.ok(p.id, 'playbook missing id');
       assert.ok(p.when && p.when.kind, 'playbook ' + p.id + ' missing when.kind');

@@ -16,6 +16,11 @@ const evidence = require('./evidence');
 // (dispatch-action.js's real ctx is {signal, bus, goalId} — it never carries
 // adapter handles — so these must NOT expect an injected ctx.pcChild).
 const pcChild = require('../../../adapters/pc-child');
+// F6 (2026-08-15 live-session RCA): the SAME vault-relative detector open_artifact
+// (from-dashboard.js) already trusts, reused here rather than hand-rolling a
+// second pattern — see resolveSandboxed()'s vault branch below for why this file
+// needed it too.
+const { vaultRelativePath } = require('./vault-url');
 
 const MAX_LIST_ENTRIES = 50;
 const MAX_READ_BYTES = 1 * 1024 * 1024; // 1MB cap
@@ -69,6 +74,25 @@ function hasReservedDeviceName(resolved) {
   });
 }
 
+// Populated by registerFromComputer(hub, ctx) at boot — same ctx.config every
+// other module-scope collaborator here reads (deepThinkConfig below is the
+// identical object, scoped to think_deeply's own name). resolveSandboxed's
+// vault branch needs it because MYTHOS_VAULT_ROOT is not derivable from
+// process.cwd() — see the F6 comment there.
+let vaultRootConfig = null;
+
+// F6: the forked server process's cwd is pinned by Electron to MYTHOS_DIR
+// (resources\app.asar.unpacked\mythos in the packaged app) — the
+// PRE-MIGRATION vault location (schema.js's DEFAULT_VAULT_ROOT comment) — so
+// path.resolve()ing a vault-relative path against cwd lands in the wrong,
+// stale tree. MYTHOS_VAULT_ROOT is injected correctly (Electron sets it to
+// %APPDATA%\MYTHOS\vault) but nothing here ever consulted it. Returns null,
+// never a guess, when no config was ever handed to registerFromComputer.
+function realVaultRoot() {
+  const configured = vaultRootConfig && vaultRootConfig.MYTHOS_VAULT_ROOT;
+  return configured ? path.resolve(configured) : null;
+}
+
 function realpathOrNull(p) {
   try {
     return fs.realpathSync(p);
@@ -114,6 +138,52 @@ function resolveSandboxed(raw) {
     // (e.g. "/vault/builds" instead of "vault/builds"). Strip it so
     // path.resolve treats it as relative, not as drive-root absolute.
     var cleaned = String(raw).replace(/^\/+/, '');
+
+    // F6 (2026-08-15 live-session RCA, measured): read_file({path:
+    // "vault/builds/job-1786743287677-62/index.html"}) ENOENT'd under
+    // ...\app.asar.unpacked\mythos\vault\builds\... because the generic branch
+    // below resolves relative paths against process.cwd() — and in the
+    // packaged app that cwd IS app.asar.unpacked\mythos, not the real vault.
+    // A vault-relative path must resolve against MYTHOS_VAULT_ROOT instead,
+    // exactly like open_artifact already does via this same vaultRelativePath()
+    // call. Checked BEFORE the generic branch so a vault reference can never
+    // fall through to the cwd-relative path.resolve() that produced F6.
+    const vaultRel = vaultRelativePath(cleaned);
+    if (vaultRel !== null) {
+      const vaultRoot = realVaultRoot();
+      if (!vaultRoot) {
+        return {
+          ok: false,
+          reason: `"${raw}" names a path inside the vault, but no vault root reached this resolver ` +
+            `(registerFromComputer was never given ctx.config) — refusing rather than guessing.`,
+        };
+      }
+      const vaultResolved = path.resolve(vaultRoot, vaultRel);
+      if (hasReservedDeviceName(vaultResolved)) {
+        return { ok: false, reason: 'That path name is reserved by Windows and cannot be used.' };
+      }
+      // Escape check, lexical then realpath (mirrors isInsideAllowedRoots below) —
+      // a vault root that is itself a junction, or a vaultRel containing enough
+      // "../" to walk out, must still be caught. Named loudly with BOTH roots:
+      // the process cwd is exactly what the pre-fix code resolved against, so a
+      // future divergence between the two is legible here instead of surfacing
+      // as a bare ENOENT the way F6 did.
+      const vaultRootReal = realpathOrNull(vaultRoot) || vaultRoot;
+      const ancestorReal = realpathOrNull(nearestExistingAncestor(vaultResolved));
+      const insideVault = containedIn(vaultResolved, vaultRoot) ||
+        (ancestorReal && (containedIn(ancestorReal, vaultRoot) || containedIn(ancestorReal, vaultRootReal)));
+      if (!insideVault) {
+        return {
+          ok: false,
+          reason: `"${raw}" escapes the vault. Resolved against MYTHOS_VAULT_ROOT ("${vaultRoot}") it points to ` +
+            `"${vaultResolved}", which is outside it. (This process's cwd is "${process.cwd()}" — the two roots ` +
+            `diverging is exactly what caused F6, so both are named here rather than one being silently assumed.)`,
+          rule: 'outside-vault-root',
+        };
+      }
+      return { ok: true, resolved: vaultResolved };
+    }
+
     const expanded = cleaned.replace(/%USERPROFILE%/gi, os.homedir());
     const resolved = path.resolve(expanded);
     if (hasReservedDeviceName(resolved)) {
@@ -644,14 +714,18 @@ const TOOLS = [
   { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. Use this when the question needs real analysis rather than recall or chat: comparing options with trade-offs, working through a multi-step problem, planning an approach, debugging a described failure, checking whether an argument holds. Pass the FULL question plus any facts you already have in `context` — it cannot see the conversation. Do NOT use it for small talk, for looking something up (use web_search), for anything about the screen (use screen_look), or for a question you can already answer well. It takes several seconds, so say you are thinking about it first.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
 ];
 
-// ctx (optional) — { brain, config, logger }. Only think_deeply uses it; every
-// other tool here is dependency-free, which is why this stayed a plain
-// (hub) call until 2026-08-14. A call with no ctx still registers every tool:
-// think_deeply then fails with a named reason instead of throwing.
+// ctx (optional) — { brain, config, logger }. think_deeply needs ctx.brain;
+// resolveSandboxed's vault branch (F6, 2026-08-15) needs ctx.config for
+// MYTHOS_VAULT_ROOT. Every other tool here is dependency-free, which is why
+// this stayed a plain (hub) call until 2026-08-14. A call with no ctx still
+// registers every tool: think_deeply fails with a named reason instead of
+// throwing, and a vault-relative path fails loudly instead of silently
+// resolving against cwd (see realVaultRoot()'s null case above).
 function registerFromComputer(hub, ctx) {
   deepThinkBrain = (ctx && ctx.brain) || null;
   deepThinkConfig = (ctx && ctx.config) || null;
   deepThinkLogger = (ctx && ctx.logger) || null;
+  vaultRootConfig = (ctx && ctx.config) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }

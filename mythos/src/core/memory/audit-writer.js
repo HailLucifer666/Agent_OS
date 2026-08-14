@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { dayKey } = require('../util/day-key');
 
 function createAuditWriter({ fs, config, bus, logger }) {
   let count = 0;
@@ -41,7 +42,10 @@ function createAuditWriter({ fs, config, bus, logger }) {
       entry.args = redact(entry.args);
     }
 
-    const dateStr = new Date(entry.ts).toISOString().slice(0, 10);
+    // F11: local via the shared helper — Audit used to roll on UTC while
+    // Episodic rolled local, so the same minute could land in two differently
+    // named files. See util/day-key.js for why local wins.
+    const dateStr = dayKey(entry.ts);
     const relPath = 'Audit/' + dateStr + '.jsonl';
 
     try {

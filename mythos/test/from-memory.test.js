@@ -443,8 +443,14 @@ describe('from-memory: log_incident', () => {
     const log = tools.find(t => t.name === 'log_incident');
     const result = await log.fn({ text: 'check date' });
     assert.equal(result.ok, true);
-    const today = new Date().toISOString().slice(0, 10);
-    assert.equal(result.result.date, today);
+    // F11 (2026-08-15): LOCAL, not UTC. Incidents and Audit used to name their
+    // files from toISOString() while Episodic used local date components, so a
+    // session spanning local midnight wrote Incidents/2026-08-14.jsonl beside
+    // Episodic/2026-08-15.jsonl for events minutes apart. Asserted through the
+    // shared helper rather than a second copy of the arithmetic — a second date
+    // basis is what caused the divergence in the first place.
+    const { dayKey } = require('../src/core/util/day-key');
+    assert.equal(result.result.date, dayKey());
   });
 
   it('incidents entry includes timestamp and id', async () => {

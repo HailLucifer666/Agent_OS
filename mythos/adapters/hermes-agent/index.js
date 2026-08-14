@@ -60,6 +60,9 @@ function cliProbeTimeoutMs() { return Number(process.env.HERMES_CLI_PROBE_TIMEOU
 // distinct root causes that previously collapsed into one indistinguishable
 // "not installed/running" hint.
 var lastCliProbeDiagnostic = null;
+// F5: the outcome of the last REAL content call, which is the only evidence
+// probe() cannot produce. Cleared only by a task that actually succeeded.
+var lastTaskFailure = null;
 
 // Which provider slot last produced a usable reply (null until one has).
 var activeSlot = null;
@@ -666,20 +669,53 @@ async function runTask(prompt, opts) {
   var useCli = opts.requireCli || mode === 'cli';
 
   try {
-    if (useCli) {
-      return await runViaCliWithRotation(text, { cwd: opts.cwd, env: opts.env, timeoutMs: timeoutMs });
-    }
-    return await runViaHttp(text, AbortSignal.timeout(timeoutMs));
+    var out = useCli
+      ? await runViaCliWithRotation(text, { cwd: opts.cwd, env: opts.env, timeoutMs: timeoutMs })
+      : await runViaHttp(text, AbortSignal.timeout(timeoutMs));
+    lastTaskFailure = null;   // F5: a real task succeeded — the only thing that clears it
+    return out;
   } catch (err) {
     // A failed run invalidates the cached probe — the next call re-checks.
     lastProbeAt = 0;
+    lastTaskFailure = { at: Date.now(), error: String((err && err.message) || err).slice(0, 300) };
     throw err;
   }
+}
+
+// F5 (2026-08-15) — WHAT THE PROBE ACTUALLY PROVED.
+//
+// The 2026-08-14 session recorded `state: ONLINE` with `cliProbeDiagnostic: null`
+// while every build failed, and that is not a contradiction: probe() runs
+// `hermes --version` (or GET /health) and NOTHING ELSE. A version banner says the
+// binary exists. It says nothing about whether a task will produce content —
+// Hermes reports provider failures on stdout with exit code 0, so a completely
+// misconfigured provider passes this probe every time.
+//
+// The optimistic timeout rule (cliOk || cliSlow) is deliberately LEFT ALONE. Its
+// reasoning holds — a slow probe is not evidence of absence, and treating it as
+// absence costs every build on a loaded machine, whereas trusting it costs one
+// failed attempt. What was missing is that ONLINE-on-thin-evidence was
+// indistinguishable from ONLINE-verified, so nobody could tell the two apart in
+// a log. Naming the evidence is the fix; flipping the default is not.
+function probeEvidence() {
+  if (state !== 'ONLINE') return 'none';
+  if (caps && caps.cli) {
+    return (lastCliProbeDiagnostic && lastCliProbeDiagnostic.kind === 'timeout')
+      ? 'cli-probe-timed-out-assumed-present'
+      : 'cli-version-exited-0';
+  }
+  return 'http-health-endpoint';
 }
 
 function getStatus() {
   return {
     state: state, mode: mode, hint: hint, cliProbeDiagnostic: lastCliProbeDiagnostic,
+    // Never conflate these two. `state` is what the probe concluded; `evidence`
+    // is what it looked at, and `lastTaskFailure` is the only field here derived
+    // from a real content call. ONLINE + a recent lastTaskFailure is the exact
+    // shape of the 2026-08-14 failure and must be readable as such.
+    evidence: probeEvidence(),
+    lastTaskFailure: lastTaskFailure,
     activeSlot: activeSlot,
     slots: providerSlots().map(describeSlot),
   };

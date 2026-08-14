@@ -38,6 +38,9 @@ var announcerLib = require('../conversation/announcer');
 
 var EXPLAIN_COOLDOWN_MS = 10 * 60 * 1000;
 var SUPPRESS_TTL_MS = 60 * 1000;
+// F8: see the call site. The bound exists because episodic recall is a
+// synchronous full-scan on the thread serving the live voice socket.
+var EXPLAIN_RECALL_WINDOW_DAYS = 1;
 
 function createExplainer({ bus, brain, memory, config, logger }) {
   if (!bus) throw new Error('createExplainer requires bus');
@@ -53,9 +56,31 @@ function createExplainer({ bus, brain, memory, config, logger }) {
 
     // Recent related failures from episodic memory — grounds the explanation
     // in what actually happened rather than the anomaly name alone.
+    // F8 (2026-08-15) — THIS CALL WAS THE LAG.
+    //
+    // It inherited recall()'s default windowDays of 7, and recall() is
+    // synchronous: readDirLines() does a readFileSync + JSON.parse of every line
+    // across every day in the window, on the same thread that services the live
+    // WebSocket. This vault holds 12,294 episodic entries across 29 files. The
+    // 2026-08-14 session recorded loop.stalled twice (1405ms and 312ms against a
+    // 250ms threshold), and this is what it was doing.
+    //
+    // It is causally downstream of the missing playbooks: the explainer only runs
+    // on the no-match path, and 26 anomalies matched nothing that day. Stage 7's
+    // other half (playbooks for those kinds) reduces how OFTEN this runs; this
+    // bounds what it costs when it does. Both are needed — a rare freeze is still
+    // a freeze.
+    //
+    // One day, not seven. An explanation for an anomaly that just fired is
+    // grounded by what happened around it, not by last Tuesday; and the scan is
+    // ranked by relevance afterwards, so a wider window mostly buys unread lines.
+    // fs-store.js:186-189 already documents this exact class of freeze for the
+    // audit reader — the episodic reader was its unfixed twin.
     var recentLines = [];
     try {
-      var hits = memory && memory.episodic ? (memory.episodic.recall(target || kind, { limit: 5 }) || []) : [];
+      var hits = memory && memory.episodic
+        ? (memory.episodic.recall(target || kind, { limit: 5, windowDays: EXPLAIN_RECALL_WINDOW_DAYS }) || [])
+        : [];
       recentLines = hits.map(function(h) {
         return (h.record && h.record.summary) || h.snippet || '';
       }).filter(Boolean);

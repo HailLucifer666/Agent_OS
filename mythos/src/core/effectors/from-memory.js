@@ -1,6 +1,7 @@
 'use strict';
 var effectorFromTool = require('./adapter').effectorFromTool;
 var { reasonText } = require('../util/reason-text');
+var { dayKey } = require('../util/day-key');
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
@@ -135,7 +136,7 @@ function buildTools(ctx){
           evidence:'already logged '+Math.round((now-prev.ts)/1000)+'s ago as '+prev.id+' — not written twice'});
       }
 
-      var d=new Date(now).toISOString().slice(0,10);
+      var d=dayKey(now);   // F11: one date basis for every dated vault file
       var id=nextIncidentId(now);
       fs.ensureDir('Incidents');
       fs.appendLine('Incidents/'+d+'.jsonl',{id:id,ts:now,text:text,severity:severity,source:'voice',status:'open'});
@@ -250,7 +251,7 @@ function buildTools(ctx){
     }
 
     try{
-      var d=new Date().toISOString().slice(0,10);
+      var d=dayKey();      // F11: one date basis for every dated vault file
       fs.ensureDir('Incidents');
       fs.appendLine('Incidents/'+d+'.jsonl',
         {kind:'status',id:target.id,status:status,ts:Date.now(),note:(args&&args.note)||'',source:'voice'});

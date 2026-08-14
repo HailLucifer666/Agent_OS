@@ -72,10 +72,14 @@ const LIMIT = MAX_PATH - TEMP_BUDGET;   // 180
 // makes the test STRICTER, which is the safe direction.
 const SKIP_DIRS = new Set(['test', 'test-fixtures', 'Plans', 'vault', '.venv', 'models', '.cache', 'e2e']);
 
-// The packages moved back inside the asar by the fix. Their paths no longer
-// exist on disk, so they must not count against the budget — and the config
-// assertion below is what guarantees that stays true.
-const ARCHIVED = ['onnxruntime-web', '@huggingface'];
+// F2c: nothing is archived any more — both trees unpack, because kokoro-tts
+// cannot import them from inside the asar. What no longer reaches disk is the
+// one directory that actually caused the overflow, excluded from build.files.
+// It is skipped here for the same reason ARCHIVED used to be: its paths are not
+// in the package, so they must not count against the budget. The config
+// assertion above is what guarantees that stays true.
+const ARCHIVED = [];
+const EXCLUDED_SUBTREES = [path.join('onnxruntime-web', 'lib')];
 
 function longestUnpackedPath(dir, relParts, worst) {
   let entries;
@@ -90,6 +94,7 @@ function longestUnpackedPath(dir, relParts, worst) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(name)) continue;
       if (ARCHIVED.includes(name)) continue;
+      if (EXCLUDED_SUBTREES.some((s) => path.join(dir, name).endsWith(path.sep + s))) continue;
       worst = longestUnpackedPath(path.join(dir, name), relParts.concat(name), worst);
     } else {
       const rel = relParts.concat(name).join('\\');
@@ -101,14 +106,58 @@ function longestUnpackedPath(dir, relParts, worst) {
 }
 
 describe('BUG-227 installer path budget (Windows MAX_PATH)', () => {
-  it('keeps the two deep pure-JS trees inside the asar', () => {
+  // F2c (2026-08-15) — REVISED, and the revision is the point.
+  //
+  // BUG-227's fix archived the two deep trees. That held MAX_PATH and BROKE the
+  // local TTS provider: kokoro-tts.js reaches @huggingface/transformers through
+  // `await import(...)`, and Node's ESM loader does NOT go through the patched
+  // fs that gives CJS `require()` its asar support. The 18fff47 commit message
+  // says dynamic import() was verified against the real build — it was, against
+  // kokoro-js, which stayed unpacked; the archived dependency was never the one
+  // exercised. Measured on 2026-08-14 at 21:45:59:
+  //   tts.provider-failed kokoro-tts "Cannot find package '@huggingface/transformers'"
+  // arriving 4ms after gemini-tts hit its quota and edge-tts was not running, so
+  // speech fell through to window.speechSynthesis — the second voice.
+  //
+  // The MAX_PATH offender was never @huggingface itself. It was ONE directory:
+  // onnxruntime-web's `lib/` (TypeScript sources and .map files for the ort-schema
+  // flatbuffers). Every published entry point resolves into `dist/`, so `lib/` is
+  // not loaded at runtime by anything. Dropping it from `files` — so it is not in
+  // the package at all, archived or not — takes the deepest path under these trees
+  // from 198 to well inside the budget while letting both unpack normally.
+  //
+  // Both halves are asserted here because either alone is a regression: unpacking
+  // without the lib/ exclusion reintroduces the failed install, and excluding lib/
+  // while still archiving the trees leaves kokoro-tts dead.
+  it('unpacks the trees kokoro-tts imports, and drops the tree that overflowed MAX_PATH', () => {
     const unpack = (PKG.build && PKG.build.asarUnpack) || [];
-    assert.ok(unpack.includes('!**/onnxruntime-web/**'),
-      'onnxruntime-web vendors lib/onnxjs/ort-schema, ~198 chars deep, in three separate copies. '
-      + 'Unpacking it put the tree on disk and overflowed MAX_PATH during the installer\'s temp copy.');
-    assert.ok(unpack.includes('!**/@huggingface/**'),
-      '@huggingface/transformers is vendored twice (top level and nested under kokoro-js) and is '
-      + 'the second-deepest tree. It is pure JS, loaded by the asar-capable server child.');
+    const files = (PKG.build && PKG.build.files) || [];
+
+    for (const archived of ['!**/onnxruntime-web/**', '!**/@huggingface/**']) {
+      assert.ok(!unpack.includes(archived),
+        archived + ' must NOT be archived: kokoro-tts.js loads @huggingface/transformers via '
+        + 'dynamic import(), which cannot read from inside app.asar, and transformers statically '
+        + 'imports onnxruntime-web/webgpu (backends/onnx.js:24) whether or not it is used.');
+    }
+
+    assert.ok(files.includes('!**/onnxruntime-web/lib{,/**/*}'),
+      'onnxruntime-web/lib is the ~198-char ort-schema TypeScript tree that overflowed MAX_PATH. '
+      + 'Nothing loads it — every export in its package.json resolves into dist/ — so it is '
+      + 'excluded from the package rather than archived.');
+  });
+
+  it('the excluded onnxruntime-web tree really is unreferenced by its entry points', () => {
+    // Guard on the load-bearing claim above: if a future version starts routing an
+    // export through lib/, excluding it becomes a silent runtime break instead of
+    // a saved 60 characters.
+    const ortPkgPath = path.join(REPO_ROOT, 'mythos', 'node_modules', '@huggingface',
+      'transformers', 'node_modules', 'onnxruntime-web', 'package.json');
+    if (!fs.existsSync(ortPkgPath)) return;   // deps not installed — nothing to check
+    const ort = JSON.parse(fs.readFileSync(ortPkgPath, 'utf8'));
+    const targets = JSON.stringify([ort.main, ort.module, ort.types, ort.exports]);
+    assert.ok(!/["/]lib\//.test(targets),
+      'an onnxruntime-web entry point now resolves into lib/, which the build excludes: '
+      + targets);
   });
 
   it('still unpacks native modules, which cannot load from an archive', () => {

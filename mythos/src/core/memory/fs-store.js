@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { dayKey } = require('../util/day-key');
 
 // FsStore — base filesystem abstraction (CA from NOVA vault.js)
 // Extended with append, entries, prune for episodic/audit stores.
@@ -261,13 +262,10 @@ function createFsStore(vaultRootFn, bus) {
     }
   }
 
-  // Get today's date string YYYY-MM-DD
-  function todayKey() {
-    const d = new Date();
-    return d.getFullYear() + '-' +
-      String(d.getMonth() + 1).padStart(2, '0') + '-' +
-      String(d.getDate()).padStart(2, '0');
-  }
+  // Get today's date string YYYY-MM-DD. F11 (2026-08-15): the local-components
+  // arithmetic that used to live here now lives in util/day-key.js, because
+  // Audit and Incidents need the identical rule and were using UTC instead.
+  function todayKey() { return dayKey(); }
 
   // Per-path async mutex: serialize concurrent ops on the same file (D-21)
   function withLock(relPath, fn) {

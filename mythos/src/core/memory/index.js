@@ -6,6 +6,7 @@
 const { createFsStore } = require('./fs-store');
 const { createEpisodicStore } = require('./episodic');
 const { createSemanticStore } = require('./semantic');
+const { createHabitPromoter } = require('./habit-promoter');
 const { createSkillsStore } = require('./skills');
 const { createIdentityStore } = require('./identity');
 const { createWorkingMemory } = require('./working');
@@ -41,6 +42,11 @@ function createMemory({ config, bus, logger, brain }) {
   const notes = createNotesStore({
     dir: (config && config.MYTHOS_NOTES_DIR) ? config.MYTHOS_NOTES_DIR : fs.vaultPath('Notes'),
   });
+
+  // F9: writes through the semantic store, so it is constructed after it and
+  // holds no store of its own — a promoted habit IS a semantic fact, not a
+  // fourth place facts can live.
+  const habits = createHabitPromoter({ semantic, logger });
 
   // ---- semantic recall layer (vector indexes over episodic + semantic + documents) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
@@ -207,6 +213,7 @@ function createMemory({ config, bus, logger, brain }) {
     documentsIndex: vecIndexes.documents, // the ONE shared vector-index partition
     lessons,                            // durable failure memory (learning loop)
     notes,                              // operator-owned Obsidian-compatible markdown notes
+    habits,                             // F9: repeated actions -> durable facts (dispatch-action)
 
     async init() {
       // Ensure all store directories exist

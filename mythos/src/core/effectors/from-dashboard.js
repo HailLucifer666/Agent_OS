@@ -1034,6 +1034,47 @@ function buildTools(ctx) {
     'This is one vision model\'s reading of a SINGLE webcam frame and it cannot be '
     + 'verified. Say what it LOOKED LIKE, not what is true, and offer to look again.';
 
+  // F4 (2026-08-15). The provenance note above was already here on 2026-08-14 and
+  // did not stop two wrong descriptions being asserted as fact — "a mouse with a
+  // bright green light" (there was none) and an object misidentified while its
+  // colour context was right. The lane itself was healthy: 9 calls, 1 honest fail
+  // (camera off), 8 ok, every vision.call 1.5-2.2s. The model was simply wrong,
+  // confidently, and advisory prose loses to a confident model.
+  //
+  // So the model is asked to SCORE ITSELF, and the score changes what happens:
+  //   high  -> answer directly. No second call, no added latency. This is the
+  //            common path and it costs nothing over the previous behaviour.
+  //   low   -> take a second frame ~1s later and assert only what the two
+  //            readings agree on; report disagreement as uncertainty.
+  // A self-reported confidence is not a measurement, and it is not treated as
+  // one: it only decides whether to spend a second look. The provenance note
+  // still ships on every path.
+  //
+  // Absent or unparseable score is treated as LOW for what gets SAID (hedge) but
+  // does NOT trigger a second call — an unreliable tag must not silently double
+  // the cost and latency of every camera_look.
+  const CONFIDENCE_SUFFIX =
+    ' End your answer with a final line of exactly "CONFIDENCE: HIGH" if you are sure '
+    + 'of the specific objects you named, or "CONFIDENCE: LOW" if the frame is unclear, '
+    + 'partially visible, or you are guessing at any of them.';
+  const CONFIDENCE_RE = /\s*CONFIDENCE:\s*(HIGH|LOW)\s*\.?\s*$/i;
+  // ~1s apart: long enough that the second frame is genuinely a new sample of the
+  // scene (hand moved, focus settled, glare shifted) rather than a re-read of the
+  // same instant, short enough that the operator does not notice a pause. Read
+  // from ctx so tests can drive the branch without four seconds of real sleep;
+  // there is deliberately no .env key, since nothing about this is per-machine.
+  const SECOND_LOOK_DELAY_MS = (config && Number(config.CAMERA_SECOND_LOOK_DELAY_MS) >= 0)
+    ? Number(config.CAMERA_SECOND_LOOK_DELAY_MS) : 1000;
+
+  function splitConfidence(raw) {
+    var text = String(raw || '').trim();
+    var m = text.match(CONFIDENCE_RE);
+    if (!m) return { text: text, confidence: 'unstated' };
+    return { text: text.replace(CONFIDENCE_RE, '').trim(), confidence: m[1].toLowerCase() };
+  }
+
+  function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
   async function camera_look({ query }) {
     try {
       if (!cameraFrameProvider) return fail('Camera is not available — no dashboard is open or the camera is off.');
@@ -1046,26 +1087,84 @@ function buildTools(ctx) {
       if (!brain || typeof brain.think !== 'function') {
         return fail('Camera frame captured but no vision brain is available to describe it.');
       }
-      var result = await visionThink(brain, {
-        prompt: query ? String(query).slice(0, 300) : 'Describe what is visible in this webcam frame, briefly and concretely.',
-        b64: b64,
-        mime: 'image/jpeg', // camera.js captures JPEG (canvas.toDataURL('image/jpeg'))
-        source: 'camera-look',
-        timeoutMs: config && config.VISION_CALL_TIMEOUT_MS,
-        attemptTimeoutMs: config && config.VISION_ATTEMPT_TIMEOUT_MS,
-        logger: logger,
-        chainFor: visionChainFor,
-      });
+      var basePrompt = query ? String(query).slice(0, 300)
+        : 'Describe what is visible in this webcam frame, briefly and concretely.';
+      var look = function(frame) {
+        return visionThink(brain, {
+          prompt: basePrompt + CONFIDENCE_SUFFIX,
+          b64: frame,
+          mime: 'image/jpeg', // camera.js captures JPEG (canvas.toDataURL('image/jpeg'))
+          source: 'camera-look',
+          timeoutMs: config && config.VISION_CALL_TIMEOUT_MS,
+          attemptTimeoutMs: config && config.VISION_ATTEMPT_TIMEOUT_MS,
+          logger: logger,
+          chainFor: visionChainFor,
+        });
+      };
+      var result = await look(b64);
       if (result.timedOut) return fail('The vision model did not answer in time — nothing was seen. Say so; do not describe anything.');
       // Wave 5 (2026-08-13): laneEmpty is the preflight failing fast — name the
       // real cause instead of the generic "offline" every other cause also sets.
       if (result.laneEmpty) return fail(result.reason || 'Vision lane is empty — cannot describe the camera view.');
       if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the camera view.');
+
+      var first = splitConfidence(result.content);
+      if (first.confidence !== 'low') {
+        return ok({
+          description: first.text.slice(0, 600),
+          source: 'webcam (one frame)',
+          // 'unverified-vision' is retained verbatim for the high/unstated path —
+          // it is the value shipped since this tool existed and the model's
+          // prompt-side handling of it is unchanged.
+          confidence: 'unverified-vision',
+          selfReported: first.confidence,
+          note: CAMERA_LOOK_PROVENANCE,
+        });
+      }
+
+      // F4 low-confidence path: a second frame, a second reading, and a spoken
+      // form that is explicit about which of the two the operator is getting.
+      // Every failure here degrades to the single reading rather than failing the
+      // tool — one uncertain description is still better than none, and the
+      // operator asked a question.
+      var second = null;
+      try {
+        await sleep(SECOND_LOOK_DELAY_MS);
+        var b64b = await cameraFrameProvider();
+        if (b64b) {
+          var r2 = await look(b64b);
+          if (!r2.timedOut && !r2.offline && !r2.laneEmpty && r2.content) {
+            second = splitConfidence(r2.content);
+          }
+        }
+      } catch (err) {
+        if (logger && logger.warn) logger.warn('camera-look.second-look-failed', { error: reasonText(err) });
+      }
+
+      if (!second) {
+        return ok({
+          description: first.text.slice(0, 600),
+          source: 'webcam (one frame, second look unavailable)',
+          confidence: 'unverified-vision',
+          selfReported: 'low',
+          note: 'The vision model reported LOW confidence in this reading and a second frame could not '
+            + 'be taken. ' + CAMERA_LOOK_PROVENANCE + ' Say plainly that you are not sure.',
+        });
+      }
+
       return ok({
-        description: String(result.content).trim().slice(0, 600),
-        source: 'webcam (one frame)',
+        description: first.text.slice(0, 600),
+        secondLook: second.text.slice(0, 600),
+        source: 'webcam (two frames, ~1s apart)',
         confidence: 'unverified-vision',
-        note: CAMERA_LOOK_PROVENANCE,
+        selfReported: 'low',
+        // The note has to reach the SPOKEN sentence, not just the tool result —
+        // that is precisely why the previous, purely advisory note failed. It is
+        // phrased as an instruction about what to say, not as metadata.
+        note: 'The vision model reported LOW confidence, so two frames were read ~1s apart and BOTH '
+          + 'readings are above. Say ONLY what both agree on as what you saw; where they disagree, say '
+          + 'you could not tell. Do not merge them into one confident description. '
+          + CAMERA_LOOK_PROVENANCE,
       });
     } catch (err) {
       return fail(reasonText(err));

@@ -9,7 +9,17 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-13 - Wave 0/1 of the remediation plan for the
+Last updated: 2026-08-15 - RCA and repair of the 2026-08-14 live voice session
+(BUG-238..BUG-250, in the final section): the double voice traced to a third
+speech path that never got the BUG-060 Live guard, DEGRADED traced to a revoked
+Google token with no notion of a terminal failure, a build that shipped
+brain-generated content past a verifier that had correctly rejected it, the
+immune explainer's 7-day synchronous episodic scan behind two loop stalls, and
+the first route from behaviour into durable memory. Baseline 4674 tests, 4674
+pass, 0 fail, 0 skip. Note the two things that were NOT broken and must not be
+"fixed": the model-routing rewire and the wake word both passed their live gates.
+
+Previous entry: 2026-08-13 - Wave 0/1 of the remediation plan for the
 2026-08-12/13 Live session (13 hard tool failures, 121 immune-system
 anomalies): BUG-190..BUG-197. Killed `"[object Object]"` in effector audit
 rows, gave recurring-failure/lost-transcript anomalies the fields needed to
@@ -7336,3 +7346,456 @@ breaker routes around it, it does not repair it); `NO_EMBED_DOMAINS` missing
 `openai.com`/`youtube.com`; and the missing `onSpeakEnd` callback behind 29% of
 mic-gate watchdog releases — Wave A made it harmless, and finding it needs
 exactly the instrumentation BUG-233 unlocks.
+
+---
+
+# Session 2026-08-15 — RCA of the 2026-08-14 live voice session (BUG-238..BUG-250)
+
+An ~80-minute operator session (21:30–22:25 UTC) against the packaged build
+carrying the `08b0e3e`/`34fbf90` model-routing rewire was reported as broadly
+failing: a second voice, the HUD stuck on DEGRADED, the camera describing things
+that were not there, builds failing, and MYTHOS forgetting what it had been told.
+
+Evidence, all on disk: `%APPDATA%\MYTHOS\mythos-server.log` (1,981 JSON events),
+`vault/Audit/2026-08-14.jsonl` (245 records in window),
+`vault/Incidents/2026-08-14.jsonl` (12 records),
+`vault/Checkpoints/build-jobs.json`, `vault/Semantic/` + `vault/Lessons/`.
+
+**Two things were NOT broken and must not be "fixed".** The model-routing rewire
+passed its live gate: `vision.call` x10, every one google/gemini-3.5-flash-lite,
+`attemptsTried: 1`, 1541-2197ms, ok (was NIM at 3 attempts and ~8s);
+`deepthink.call` x11, every one cerebras/gpt-oss-120b, `attemptsTried: 1`,
+567-1456ms, ok; `think_deeply` called 14x, succeeded 14x, no Cerebras 429s. And
+the wake word works: 647 `wakeword.metrics` with `streamLive: true` and 3 clean
+detections (0.55/0.996/0.996).
+
+Baseline after this session: 4674 tests, 4674 pass, 0 fail, 0 skip.
+
+## BUG-238 — DEGRADED was a dead Google token being retried forever
+
+**Symptom.** The HUD orb showed DEGRADED for the whole session and named no cause.
+
+**Cause.** `gmail_unread` failed 5x (21:03-21:30), every time `invalid_grant:
+Token has been expired or revoked`. The effector's own message already said "this
+is NOT a network problem and will not recover on its own" (BUG-236) — and prose
+does not stop a circuit breaker. The flapping breaker tripped at 21:11:22,
+suppressed for 60s, was dispatched again at 21:30:52, and failed identically.
+`core-orb.js:832` reads DEGRADED from `state !== 'closed'` over every breaker, so
+the badge was pinned by a tool that could never recover.
+
+The root cause is that there was no notion of a **terminal** failure: a revoked
+OAuth grant was modelled exactly like a flaky network.
+
+**FIXED 2026-08-15.** Effectors may return `terminal: true` beside the existing
+`ok`/`unverified`/`reason` fields (never folded into them — the evidence
+contract). `hub.js` records such a tool as disabled for the process, **resets its
+breaker to CLOSED** so the HUD stops reporting a flap that will never resolve,
+emits `effector-terminal` once with the remedy text, and serves that text on
+every later call without touching the provider. A new
+`effector-terminal-suppress` playbook keeps it out of the planner's catalog for
+the session (the flapping playbook's 60s cooldown would have re-offered a dead
+tool every minute).
+
+Deliberately an **allow-list of signatures**, never a blanket `4xx = terminal`: a
+401 from a rate limiter and one from a dead credential look alike, and getting
+that wrong turns a transient outage into a session-long dead tool. Only
+`invalid_grant`/`unauthorized_client` and the adapter's own `isAuthError` flag
+qualify; ETIMEDOUT, 503 and 403 are asserted to stay retryable.
+
+**Regression test**: `test/effector-terminal-failure.test.js` (10 cases).
+
+**Operator action still required**: run `node scripts/google-auth.js`. Gmail
+cannot work until the refresh token is re-minted; this fix only makes the failure
+honest, quiet, and non-contagious.
+
+## BUG-239 — the double voice: a third speech path with no Live guard
+
+**Symptom.** "A second voice / echo."
+
+**Cause, in two halves that combined.** At 21:45:59 all three TTS providers
+failed within 4ms: `gemini-tts` 429 (quota), `edge-tts` fetch failed (the Python
+server on :5050 was never running), `kokoro-tts` `Cannot find package
+'@huggingface/transformers'` (BUG-240). `ttsUp` is then false, every chunk ships
+`audioB64: null`, and `voice-loop.js:528-601` speaks them through
+`window.speechSynthesis` — the OS voice.
+
+Meanwhile three functions in `server/index.js` can put speech on a connection.
+`proactiveSpeak()` and `handleVisionQuery()` have routed to an open Live session
+since BUG-060. **`sendSpokenReply()` never did** — a `liveSession.isOpen()` call
+sat two lines above the synthesis loop but only as one term of the Aether
+short-circuit's condition, so control fell straight through. This was recorded
+here on 2026-07-31 as "Known remaining gap, NOT fixed in this pass" (BUG-083),
+and **no test covered it**, which is why three weeks passed.
+
+Result: Gemini Live's PCM playback and the OS voice on one connection at once —
+necessarily different voices.
+
+**FIXED 2026-08-15.** `sendSpokenReply()` routes to `liveSession.sendText()` with
+`SYSTEM_NOTICE_PREFIX` (BUG-117) and returns, finishing the turn caption-only
+exactly as the Aether branch does.
+
+The guard carries `!ws._mythosNodeId`, which was **missing in the first cut and
+caught by `aether-node-routing.test.js`**: a phone node may have its own Live
+session open, but a node-origin utterance is deliberately answered by the batch
+pipeline, and routing its reply into Live would answer on the desktop a question
+asked at the phone.
+
+**Also fixed, same commit (the class, not the instance).** A guard on one
+function is an instance: `proactiveSpeak()` can still fire mid-reply from a
+reminder or health notice. Both entry points now acquire a **per-connection
+speech lock** that queues rather than discards, with a 20s fail-open ceiling —
+chunk synthesis has no global timeout, so a hung provider would otherwise mute
+every later utterance for the rest of the session (same doctrine as the
+half-duplex mic gate: a mute assistant is the worse failure).
+
+**Regression test**: `test/one-speaker-per-connection.test.js`. Deliberately a
+source-shape test over the whole class plus real behavioural tests of the lock —
+`sendSpokenReply` is a closure with no injectable seam, and pinning one function
+would leave the class open, which is exactly how this survived. Verified red
+against the pre-fix file.
+
+## BUG-240 — kokoro-tts has never loaded in any packaged build
+
+**Symptom.** `tts.provider-failed kokoro-tts "Cannot find package
+'@huggingface/transformers'"`. The keyless local TTS fallback is fiction for
+every packaged user.
+
+**Cause.** BUG-227 (`18fff47`) archived `@huggingface` and `onnxruntime-web`
+inside `app.asar` to fix a MAX_PATH install failure, on the verified basis that
+both are pure JS and the forked server child can read from an asar.
+`kokoro-tts.js` reaches transformers through `await import(...)`, and **Node's
+ESM loader does not go through the patched fs that gives CJS `require()` its asar
+support**. The commit message records dynamic `import()` being verified against
+the real build — it was, against `kokoro-js`, which stayed unpacked. The archived
+dependency was never the one exercised.
+
+**FIXED 2026-08-15, without regressing BUG-227.** The MAX_PATH offender was never
+`@huggingface` itself: it was one directory, `onnxruntime-web/lib/` (TypeScript
+sources and `.map` files for the ort-schema flatbuffers), whose deepest path was
+198 chars. Every published entry point resolves into `dist/`, so `lib/` is
+excluded from `build.files` — not in the package at all — and both trees unpack
+normally. Measured longest install-root-relative path afterwards: **161 against
+the 180 budget**.
+
+Naively removing the two `asarUnpack` exclusions, as first proposed, would have
+reintroduced a failed install for every user without LongPathsEnabled.
+
+**Regression test**: `test/installer-path-budget.test.js`, rewritten. It now
+asserts *both* halves (unpacked trees AND the excluded subtree), because either
+alone is a regression, plus a guard that no onnxruntime-web entry point resolves
+into `lib/` — so excluding it can never become a silent runtime break.
+
+## BUG-241 — the HUD could never show "speaking"
+
+**Symptom.** "The main HUD remains blue during speech, whereas it should turn
+green."
+
+**Cause — two independent defects stacked.** (1) On the Live path,
+`s2s-bridge.js` reached `setState()` from exactly two places: `onLiveStateMsg`
+and the mute overlay. `onSpeakStart`/`onSpeakEnd` were wired to the PCM player
+but drove only the BUG-224 mic gate, so `voiceState` was set to `listening` once
+when the session opened and **never changed again for the rest of the session**,
+across every reply. The legacy `voice-loop.js` path has always done this
+correctly. (2) `voice.css` gave `.mic-listening` and `.mic-speaking` the same
+`--accent` token (#4fd8ff, blue), so even a correct state would have changed
+nothing on screen.
+
+**FIXED 2026-08-15.** Both halves: the speak edges now also paint
+`speaking`/`listening`, and the mic indicator uses the orb's existing
+`--orb-speaking`/`--orb-listening` tokens rather than inventing a third palette.
+Fixing either alone leaves the operator looking at a blue orb.
+
+**Regression test**: `test/hud-speaking-state.test.js`, including a pin that the
+speak edges still drive the mic gate — this change adds a paint, it does not
+replace half-duplex.
+
+## BUG-242 — the mic gate's ring was derived from the wrong constant
+
+**Symptom.** 238 `voice.capture-suspend` events; 18 of 104 user turns reached the
+server with no `inputTranscription`.
+
+**Cause.** BUG-229 correctly made `PREROLL_MAX_FRAMES` derived rather than
+hand-tuned — but derived it from `OWN_VOICE_IDLE_CEILING_MS`, which is an
+**idle** window that refreshes on every arriving audio-out chunk. The total hold
+is therefore not bounded by it: a single hold of **17941ms** was measured against
+the 8000ms ring it produced. Anything said more than 8s before release was still
+dropped, and the ring looked correct while dropping it.
+
+**FIXED 2026-08-15.** An absolute cap (`OWN_VOICE_MAX_HOLD_MS = 30000`, ~1.7x the
+longest hold observed) is armed once at hold time and never refreshed, and the
+ring is derived from **that**, so it provably spans every hold that can occur.
+~960KB, allocated only while MYTHOS is speaking.
+
+**This is one cause among several and the fix does not claim otherwise.** The
+audioIn counts of the 18 blind turns were
+`52,43,132,114,116,88,7,18,17,100,8,115,188,40,84,92,1429,9` — only five are
+ring-starved (<=20); thirteen had ample audio and one had 1429 frames. So the
+release log now carries **`framesDropped`** alongside
+`prerollFrames`/`prerollCap`/`heldMs`: the direct measure of speech lost, which
+is what separates "ring too small" from "what reached Gemini's VAD was our own
+voice". The 2026-08-14 analysis could only guess between those two.
+
+**The AAD/VAD sensitivity values are deliberately unchanged.** Nothing here
+argues for relaxing them and the standing instruction not to is correct.
+
+**Regression test**: `test/s2s-preroll-ring.test.js`, corrected — it now pins
+that the cap is *enforced* and that the audio-out refresh does **not** re-arm it,
+since deriving from a cap nothing enforces would be the same defect in a new
+costume.
+
+## BUG-243 — camera_look was confidently wrong and nothing could catch it
+
+**Symptom.** Two incidents: "reported seeing a mouse with a bright green light"
+(there was none) and "correctly identified colour context, but misidentified the
+object".
+
+**Cause.** Not the lane — 9 calls, 1 honest fail (camera off), 8 ok, every
+`vision.call` healthy at 1.5-2.2s. The model was wrong. A webcam frame has no
+oracle: `screen_look` can be cross-checked against OCR of the same screenshot, a
+room cannot. A `CAMERA_LOOK_PROVENANCE` note already shipped in the result and
+did not help, because advisory prose loses to a confident model.
+
+**FIXED 2026-08-15, auto-optimised per the operator's steer.** The model is asked
+to score itself, and the score changes what the code *does*: **high confidence
+answers directly** — one vision call, no added latency, the common path costs
+nothing — while **low confidence takes a second frame ~1s later** and returns
+both readings with an instruction to assert only what they agree on and to report
+disagreement as uncertainty. An absent or unparseable score hedges in words but
+does **not** trigger a second call, so a model that ignores the instruction
+cannot silently double the cost of every look.
+
+Verified before building it (rules/core.md §11.3) that the field is not
+decoration: `truncateForModel` JSON-stringifies the whole result, so the note
+does reach the model. It is phrased as an instruction about what to *say*, which
+is what the old note was not.
+
+**Regression test**: `test/camera-look-confidence.test.js` (9 cases), including
+that the high-confidence path is still exactly one call and one frame.
+
+## BUG-244 — a build shipped fabricated content; the verifier caught it and was ignored
+
+**Symptom.** Builds "failing", and one that succeeded with generic placeholder
+content.
+
+**Cause.** `build-engine.js` carried a `brainFallback()` added 2026-07-31 that
+regenerated content via `brain.think({lane:'build'})` on a Hermes failure and
+shipped it as the artifact, behind a comment arguing the downstream verifier made
+that safe. It fired. `vault/Checkpoints/build-jobs.json`, job
+`job-1786743287677-62`:
+
+```
+"engine": "brain-fallback",
+"_verifyWarnings": [
+  "Headline story 'OpenAI Launches \"GPT-5 Turbo\"' not found in provided HTML",
+  "Content appears generic placeholder, lacking specific AI news items"
+]
+```
+
+The verifier worked perfectly and the job was recorded as done anyway. A guard
+that is correct and ignored is not a guard. This contradicted root `CLAUDE.md`,
+which is binding: Hermes-Agent is the only build-content engine and there is no
+brain.think fallback **by design**.
+
+**FIXED 2026-08-15 — operator ruling A: honour the documented rule.**
+`brainFallback()` is deleted; a Hermes failure fails the build with the install
+hint (`node mythos/scripts/setup-hermes.js --install`). The `brain` dependency is
+removed from `createBuildEngine` and from its `main.js` call site, so there is
+nothing for a fallback to use.
+
+**Pinned disposition**: if builds ever need to work without Hermes, that is a
+change to the documented architecture argued on its own terms — not a fallback
+re-added inside a catch block. `test/build-engine-no-fallback.test.js` asserts
+the behaviour *and* that neither `brain.think` nor `build-engine-fallback-used`
+can appear in the file again.
+
+## BUG-245 — the build-engine probe proved nothing, and its heal could never fail
+
+**Symptom.** `state: ONLINE` with `cliProbeDiagnostic: null` while every build
+failed; `build-engine-reprobe` "succeeded" four times.
+
+**Cause.** `probe()` runs `hermes --version` (or `GET /health`) and nothing else.
+A version banner says the binary exists; it says nothing about whether a task
+will produce content — and Hermes reports provider failures on stdout with exit
+code 0, so a misconfigured provider passes the probe every time. The
+`reprobe-build-engine` action returned unconditional `ok: true` on the argument
+that its job was "to re-probe and report, not to guarantee recovery", which made
+it a heal that could never fail.
+
+**FIXED 2026-08-15.** `getStatus()` now reports `evidence` (what the ONLINE
+verdict is actually based on: `cli-version-exited-0`,
+`cli-probe-timed-out-assumed-present`, or `http-health-endpoint`) and
+`lastTaskFailure`, the only field derived from a real content call. The reprobe
+action returns `ok: false` when the engine is offline **or** when it is ONLINE
+with an unresolved real-task failure — which is precisely the state that was
+misreported.
+
+**Deliberately NOT changed**: the optimistic `cliUsable = cliOk || cliSlow` rule.
+Its reasoning holds — a slow probe is not evidence of absence, and treating it as
+absence costs every build on a loaded machine while trusting it costs one failed
+attempt. What was missing was that ONLINE-on-thin-evidence was indistinguishable
+from ONLINE-verified. Naming the evidence is the fix; flipping the default is not.
+
+## BUG-246 — "Searching…" was flagged as a lie, and it wasn't
+
+**Symptom.** `claimed-action-not-taken` x2, target `searching`, and a `[SYSTEM]
+CORRECTION` telling the model to retract a **true** statement.
+
+**Cause.** `claim-check.js`'s `searching` category listed only `search_code` and
+`search_files` — the *code* search tools. The model had really called
+`web_search` (alongside 4 `live.tool-ack-deadline` events for
+web_search/web_fetch). A true statement was therefore scored as unbacked.
+
+This is worse than a missing detector: it makes MYTHOS lie in the other direction
+and trains the operator to distrust correct answers.
+
+**FIXED 2026-08-15.** `web_search`/`web_fetch` added, and — the actual fix —
+`test/claim-check-categories.test.js` now derives from `leash/tiers.js`'s
+`TIER_TABLE` and asserts every tool named in every category exists and that no
+tool is claimed twice. Same class as BUG-247 and the earlier lane-name bug: a
+second, hand-maintained copy of something the system already knows.
+
+## BUG-247 — read_file resolved the vault against the wrong root
+
+**Symptom.** `read_file {"path":"vault/builds/…"}` → `ENOENT …
+\app.asar.unpacked\mythos\vault\builds\…`.
+
+**Cause.** `resolveSandboxed()` ended in a bare `path.resolve()`, which resolves
+relative paths against `process.cwd()`. Electron pins the forked server's cwd to
+`MYTHOS_DIR` = `resources\app.asar.unpacked\mythos`, which is literally the
+pre-migration vault location. `MYTHOS_VAULT_ROOT` is injected correctly and this
+resolver never consulted it. A correct detector already existed
+(`vault-url.js`'s `vaultRelativePath()`, used by `open_artifact`) and
+`read_file`/`list_folder`/`open_folder` were never wired into it.
+
+**FIXED 2026-08-15** by reusing that detector rather than writing a second
+resolver, at the one shared `resolveSandboxed()` all three tools call. Every
+existing sandbox/escape guard is preserved and extended: a vault-relative path is
+checked lexically and via realpath (junction-defeat), and a path that escapes the
+vault fails loudly **naming both roots** so a future divergence is legible
+instead of an ENOENT. No config reaching the resolver fails loudly rather than
+falling back to the buggy behaviour.
+
+**Regression test**: `test/vault-path-resolution.test.js` (8 cases), with the
+vault root injected — this repo has been burned by a test that renamed real
+gitignored data to fake a state.
+
+**Note**: the model also fabricated the filename (`job-<id>/index.html`, a layout
+this repo never uses; the real artifact was
+`/vault/builds/pipeline/ai-news-digest-landing-page-2.html`). Surfacing the job's
+real `artifact.path` in the build result is **not** done — see the not-fixed list
+below.
+
+## BUG-248 — the immune explainer's 7-day episodic scan was the lag
+
+**Symptom.** `loop.stalled` x2 (1405ms and 312ms against a 250ms threshold).
+
+**Cause.** 26 anomalies matched no playbook, and the no-match path is what
+invokes the immune explainer. `explainer.js` called
+`memory.episodic.recall(target || kind, { limit: 5 })`, inheriting the default
+`windowDays: 7`. `recall()` is synchronous: a `readFileSync` + `JSON.parse` of
+every line across the window, on the thread servicing the live WebSocket. This
+vault holds **12,294 episodic entries across 29 files**. `fs-store.js:186-189`
+already documents this exact class of freeze for the audit reader; the episodic
+reader was its unfixed twin.
+
+**FIXED 2026-08-15**, in both directions. The explainer's recall is bounded to
+one day (an explanation for an anomaly that just fired is grounded by what
+happened around it, not by last Tuesday). And the four recurring unplaybooked
+kinds — `live-turn-no-user-transcript` x16, `live-turn-silent` x3,
+`claimed-action-not-taken` x2, `live-tool-outcome-late-for-turn` x1 — now match
+an **`acknowledge`** playbook, so the expensive branch stops being the default
+outcome for the most common anomalies. (`build-engine-fallback-used` x4 was the
+fifth and can no longer be emitted at all — BUG-244.)
+
+`acknowledge` is a deliberate, documented **no-op**, and the distinction from a
+heal matters: none of these four has a remediation the healer can perform, and
+inventing one would be worse than admitting there isn't one. **Nothing is hidden
+by it** — the `health.anomaly` records are stored by the server's anomaly
+subscriber independently of the healer, so every occurrence stays countable
+exactly as before.
+
+`test/immune.test.js`'s hand-kept playbook count is replaced with a required-ids
+assertion; it had been edited four times to track additions.
+
+## BUG-249 — nothing learned in a session reached recall
+
+**Symptom.** "MYTHOS did not remember previously requested songs."
+
+**Cause.** "Radiohead" appears **18x in Episodic and 0x in Semantic**. It was
+played three times (21:43, 21:44, 22:05) and never became a fact. The complaint
+landed at 22:15:36; the music-taste facts were written 22:16-22:24 — *after* it,
+by the model reacting to being told off — and fragmented into eight append-only
+bullets ("also likes: X", "additions: Y") with one artist recorded twice.
+
+The gap is structural: every route into Semantic required the **model** to choose
+to call `remember`. Behaviour — the most reliable signal about what someone likes
+— produced nothing at all.
+
+**FIXED 2026-08-15** with `memory/habit-promoter.js`: repeated *actions* are
+counted and promoted to a durable semantic fact at a threshold of three (the
+number the incident supplies — the operator expected it to have noticed by the
+third play). Wired into `dispatch-action.js` beside the other post-dispatch
+bookkeeping, guarded `actionOk && !actionUnverified` so an action that only might
+have landed is not evidence of a habit.
+
+Deliberately **not a brain call** — a count of real dispatches is evidence;
+asking a model to infer preferences from a transcript is how the eight fragmented
+bullets happened. The watch list is narrow on purpose (widening it would promote
+"the operator likes screen_look") and is **derived, not imagined**:
+`test/habit-promotion.test.js` checks every watched tool against `TIER_TABLE` and
+every watched argument against the live tool catalog. That test is what revealed
+the first draft named `play_music` and `play_song`, neither of which exists.
+
+## BUG-250 — Audit and Incidents rolled on UTC while Episodic rolled local
+
+**Symptom.** This session wrote `Audit/2026-08-14.jsonl` and
+`Incidents/2026-08-14.jsonl` alongside `Episodic/2026-08-15.jsonl` for events
+minutes apart.
+
+**Cause.** Two date bases: `toISOString().slice(0,10)` in `audit-writer.js` and
+`from-memory.js`, local date components in `fs-store.js`'s `todayKey()`.
+
+**FIXED 2026-08-15.** One shared `util/day-key.js`, local. Local is not
+arbitrary: episodic `recall()` computes its `since`/`until` window from local
+date components, so a UTC-named file can fall **outside a window that should
+contain it** and silently drop a day of history.
+
+It is a plain module, **not a method on the fs store** — that was tried first and
+every hand-written fake fs store in the suite broke with `fs.dayKey is not a
+function`, which is the correct signal badly placed: this is a pure function of a
+timestamp with no filesystem in it. `test/vault-date-basis.test.js` includes a
+class-level guard that no dated vault filename is built from `toISOString()`
+anywhere under `src/`.
+
+## Not fixed in this session — stated so nothing reads as covered
+
+- **`build-runner` does not surface the job's real `artifact.path` to the
+  model.** BUG-247 fixes the resolver; the model can still guess a filename.
+- **`episodic -> semantic` distillation has apparently never produced output on
+  this machine.** `vault/Semantic/` has never contained a single
+  `consolidated-*.md`, despite 417 of 726 records on 2026-08-14 clearing the
+  `salience > 0.5` filter and the cortex running consolidation on a 60-tick
+  cadence. BUG-249 routes around it (behaviour -> facts needs no brain call), but
+  the distillation itself is unexplained and needs a live session to diagnose.
+  The RCA's inference that "consolidation never ran" is **not proven** — a normal
+  run emits no event at all, so the absence of `memory.*` events is not evidence
+  either way.
+- **`appendFileSync` on the live path was left alone.** Measured at **0.209ms per
+  call** on this machine (2000 appends of a realistic conversation record), i.e.
+  ~0.4ms for the two writes per tool dispatch, against a 250ms stall threshold.
+  Rewriting an ordering-sensitive, immediately-readable write path for 0.4ms is
+  not justified; BUG-248 was the actual lag.
+- **`TOOL_ACK_DEADLINE_MS = 1500`** produced 4 late acks on
+  `web_search`/`web_fetch` — network calls that routinely exceed 1.5s. The
+  constant is probably wrong, but that is a tuning decision with no evidence
+  gathered yet; BUG-246 fixed the part that was making MYTHOS lie.
+- **Wake-word models are excluded from the packaged build**
+  (`!mythos/ui/public/models{,/**/*}`) yet the wake word ran — it can only have
+  loaded them from the source tree. It works on this machine and is dead for
+  anyone else. The exclusion is deliberate (CC BY-NC-SA weights, licensing gate
+  open), so the fix is an honest "wake word unavailable in this build" state, not
+  bundling them. Not done.
+- **`camera_on` only prompts the operator.** Not a bug: a browser will not grant
+  camera access without a user gesture, and a system that could silently enable a
+  webcam is a thing that should be impossible. BUG-243 makes the surrounding
+  refusal and provenance honest so it stops reading as a failure.

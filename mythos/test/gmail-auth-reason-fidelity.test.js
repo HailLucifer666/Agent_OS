@@ -139,14 +139,25 @@ describe('B5 a dead credential is not reported as a network outage', () => {
     // text is what the model narrates from, so the remedy belongs in it — the same
     // remedy-on-failure reasoning as Wave A's browser disambiguation.
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'effectors', 'from-gmail.js'), 'utf8');
-    const m = src.match(/function gmailFailure[\s\S]{0,1200}?\n\}/);
-    assert.ok(m, 'the shared gmail failure formatter must exist');
-    const fn = m[0];
-    assert.match(fn, /isAuthError/, 'match on the adapter\'s flag, not on message text');
-    assert.match(fn, /NOT a network problem/i,
+    // F1 (2026-08-15): asserted through the formatter itself rather than by
+    // scanning its source. The classification moved into a named predicate when
+    // the terminal-failure flag was added, and a source scan that matched on
+    // where the check happened to LIVE broke on a refactor that changed nothing
+    // about the behaviour it was protecting.
+    const { gmailFailure } = require('../src/core/effectors/from-gmail');
+    const err = new Error('invalid_grant: Token has been expired or revoked.');
+    err.isAuthError = true;
+    const text = String(gmailFailure('Gmail fetch failed', err).result.error);
+    assert.match(text, /NOT a network problem/i,
       'MYTHOS said "Google APIs appear unreachable" for a token the endpoint had just rejected');
-    assert.match(fn, /google-auth\.js/, 'and it must name the script that fixes it');
-    assert.match(fn, /Do not retry/i, 'a revoked token does not recover on its own');
+    assert.match(text, /google-auth\.js/, 'and it must name the script that fixes it');
+    assert.match(text, /Do not retry/i, 'a revoked token does not recover on its own');
+    // The flag, not the message text, is what callers branch on — and it must
+    // come from the adapter's own signal, not only from a string match.
+    const flagOnly = new Error('Request failed');
+    flagOnly.isAuthError = true;
+    assert.match(String(gmailFailure('Gmail fetch failed', flagOnly).result.error), /NOT a network problem/i,
+      'match on the adapter\'s flag, not on message text');
 
     // All four tools must route through it — a per-tool patch is how the first two
     // instances of this class were missed.

@@ -27,9 +27,18 @@ function fail(msg) { return { ok: false, result: { error: msg } }; }
 // text can name the actual remedy instead of leaving the model to guess a cause.
 // Matching on the flag rather than on message text, per the same reasoning that
 // put `attemptTimedOut` in chain.js's decision instead of a regex.
+// F1 (2026-08-15): the message B5 added was right and still got retried forever,
+// because saying "do not retry" in prose does not stop the circuit breaker. This
+// is the machine-readable half of the same fact — see hub.js's isTerminalResult.
+// Deliberately narrow: only the two OAuth grant signatures, never a blanket
+// 4xx rule, so a rate limit or a transient 401 stays retryable.
+function isTerminalAuthError(err, reason) {
+  return !!(err && (err.isAuthError || /invalid_grant|unauthorized_client/.test(String(reason))));
+}
+
 function gmailFailureText(prefix, err) {
   var reason = reasonText(err);
-  if (err && (err.isAuthError || /invalid_grant|unauthorized_client/.test(String(reason)))) {
+  if (isTerminalAuthError(err, reason)) {
     return prefix + ': ' + reason
       + ' — this is NOT a network problem and will not recover on its own: the Google refresh token is '
       + 'expired or revoked. Tell the operator it needs re-authorising by running '
@@ -40,7 +49,12 @@ function gmailFailureText(prefix, err) {
 }
 
 function gmailFailure(prefix, err) {
-  return fail(gmailFailureText(prefix, err));
+  var out = fail(gmailFailureText(prefix, err));
+  // `terminal` travels BESIDE ok/result, never folded into either — the evidence
+  // contract in src/core/CLAUDE.md has been flattened before and it cost a
+  // ui_type action being audited as delivered.
+  if (isTerminalAuthError(err, reasonText(err))) out.terminal = true;
+  return out;
 }
 
 // A recipient of "me" (or an omitted one) means "the authenticated account".
@@ -175,4 +189,8 @@ function registerFromGmail(hub, ctx) {
   return { count: tools.length };
 }
 
-module.exports = { registerFromGmail, buildTools };
+// gmailFailure is exported for the F1 terminal-classification test — the
+// allow-list of terminal signatures is the risky half of that change (a 401 from
+// a rate limiter must stay retryable) and needs to be asserted directly, not
+// inferred from the tool wiring.
+module.exports = { registerFromGmail, buildTools, gmailFailure };

@@ -27,9 +27,7 @@
     "icon": "build/icon.ico",
     "asar": true,
     "asarUnpack": [
-      "mythos/**/*",
-      "!**/onnxruntime-web/**",
-      "!**/@huggingface/**"
+      "mythos/**/*"
     ],
     "includeSubNodeModules": true,
     "files": [
@@ -59,7 +57,8 @@
       "!mythos/scripts/diagnose-type-mechanisms.js",
       "!mythos/scripts/e2e{,/**/*}",
       "!**/onnxruntime-node/bin/napi-v*/darwin{,/**/*}",
-      "!**/onnxruntime-node/bin/napi-v*/linux{,/**/*}"
+      "!**/onnxruntime-node/bin/napi-v*/linux{,/**/*}",
+      "!**/onnxruntime-web/lib{,/**/*}"
     ],
     "win": {
       "target": "nsis",

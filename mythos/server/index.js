@@ -1609,6 +1609,69 @@ function createServer(deps) {
   // text-only copy would look harmless and isn't: playNextChunk() speaks any
   // chunk whose audioB64 is null via speechSynthesis, so the PC would narrate
   // the reply alongside the phone — the same two-voices defect as BUG-060.
+  // F2b (2026-08-15) — one speaker per connection.
+  //
+  // F2a stops sendSpokenReply from speaking OVER an open Live session, but a
+  // guard on one function is an instance, not the class: proactiveSpeak() fires
+  // from reminders, goal/build announcements and health notices on its own
+  // schedule, and can still land in the middle of a reply that is already
+  // streaming chunks. The two share no lock and no turn serialisation, and each
+  // side's mic gate polices only its own engine's capture.
+  //
+  // Queue, never discard — the risk of this change is a lost announcement, so a
+  // second utterance waits rather than being dropped. But the wait is BOUNDED:
+  // chunk synthesis has no global timeout, so an edge-tts request that hangs
+  // would otherwise mute every later utterance for the rest of the session.
+  // Past the ceiling we speak anyway, which is the same fail-open doctrine the
+  // half-duplex mic gate uses (a deaf assistant, or here a mute one, is the
+  // worse failure).
+  const SPEECH_LOCK_CEILING_MS = 20000;
+  const speechChains = new WeakMap();
+  const BROADCAST_SPEECH_KEY = Object.freeze({});   // WeakMap needs an object key
+  function serializeSpeech(target, fn) {
+    const key = (target && typeof target === 'object') ? target : BROADCAST_SPEECH_KEY;
+    const prev = speechChains.get(key) || Promise.resolve();
+    let timer = null;
+    const bounded = Promise.race([
+      prev,
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          logger.warn('speech.lock-ceiling', { ceilingMs: SPEECH_LOCK_CEILING_MS });
+          resolve();
+        }, SPEECH_LOCK_CEILING_MS);
+      }),
+    ]).then(() => { if (timer) clearTimeout(timer); });
+    const next = bounded.then(fn);
+    // The stored tail swallows rejections so ONE failed utterance cannot wedge
+    // the queue for the connection; the caller still sees the real rejection.
+    speechChains.set(key, next.then(() => {}, () => {}));
+    return next;
+  }
+
+  // F2d — see the call site in sendSpokenReply. Latched, not per-turn: the
+  // condition is a property of the machine's TTS install, not of this reply.
+  let ttsChainDownReported = false;
+  function noteTtsChainDown(ttsUp, chain) {
+    if (ttsUp) { ttsChainDownReported = false; return; }   // recovered — re-arm
+    if (ttsChainDownReported) return;
+    ttsChainDownReported = true;
+    const chainNames = (chain && chain.chainNames) || [];
+    logger.warn('tts.chain-down', {
+      chain: chainNames.join(' -> '),
+      note: 'no configured TTS provider can speak; replies will use the browser voice, '
+        + 'which is a DIFFERENT voice from the entity\'s',
+    });
+    try {
+      bus.emit('health.anomaly', {
+        kind: 'tts-chain-down',
+        target: 'tts',
+        reason: 'No TTS provider can speak (' + (chainNames.join(', ') || 'empty chain')
+          + '). MYTHOS is falling back to the browser voice, which sounds different. '
+          + 'Start the edge-tts server or configure another provider.',
+      });
+    } catch (_) { /* health reporting must never break a reply */ }
+  }
+
   function sendSpeechChunk(localSend, target, msg, originWs) {
     // Stage 5: a deliberate, FSM-sequenced handoff may have moved this reply to
     // another device since the target was resolved. `target` is a live object so
@@ -1771,8 +1834,14 @@ function createServer(deps) {
     });
     if (p.phase === 'CONFIRM') moveActiveSpeechToCurrentOwner();
   });
+  // F2b: every entry point into this function is serialized per connection.
+  // The real work is proactiveSpeakNow(); this wrapper only owns the lock.
   async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
+    return serializeSpeech(targetWs || lastActiveWs, () => proactiveSpeakNow(text, targetWs, opts));
+  }
+
+  async function proactiveSpeakNow(text, targetWs, opts) {
     targetWs = targetWs || lastActiveWs;
     // Stage 2 (BUG-060, "two voices speaking simultaneously" —
     // vault/Incidents/2026-07-31.jsonl): if this connection has an open Gemini
@@ -2770,7 +2839,13 @@ function createServer(deps) {
     // is down, chunks are sent with audioB64:null and the client falls back
     // to browser speechSynthesis exactly as before. Shared by handleUtterance
     // and handleVisionQuery — one reply-emission path, one protocol.
+    // F2b: same per-connection lock as proactiveSpeak — a reminder firing
+    // mid-reply now queues behind it instead of playing over it.
     async function sendSpokenReply(reqId, say, meta, micStoppedAt) {
+      return serializeSpeech(ws, () => sendSpokenReplyNow(reqId, say, meta, micStoppedAt));
+    }
+
+    async function sendSpokenReplyNow(reqId, say, meta, micStoppedAt) {
       const speak = sanitizeSpoken(say);
       // Phase 2 (AETHER-WIRING): route the reply to the nearest device instead
       // of the local TTS chain. The client still gets its caption-only 'done'
@@ -2787,11 +2862,60 @@ function createServer(deps) {
         try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
         return;
       }
+      // F2 (2026-08-15) — THE THIRD SPEECH PATH. proactiveSpeak() and
+      // handleVisionQuery() have both had this guard since BUG-060; this one
+      // never got it, and BUGS.md has recorded it since 2026-07-31 as "Known
+      // remaining gap, NOT fixed in this pass" (BUG-083). The check two lines
+      // above LOOKS like the guard but only gates the Aether short-circuit —
+      // with an open Live session and no Aether device, control fell straight
+      // through into the synthesis loop below.
+      //
+      // What the operator heard on 2026-08-14: at 21:45:59 all three TTS
+      // providers failed within 4ms (gemini-tts 429, edge-tts not running,
+      // kokoro-tts unresolvable — see F2c). ttsUp is then false, every chunk
+      // ships audioB64:null, and voice-loop.js:528-601 speaks them through
+      // window.speechSynthesis — the OS voice — while Gemini Live's PCM
+      // playback was the entity's voice for the same connection. Two engines,
+      // one connection, guaranteed to differ in timbre.
+      //
+      // Route the text through the same [SYSTEM] channel proactiveSpeak uses so
+      // Gemini itself says it, and finish the turn caption-only (chunked:true,
+      // zero chunks) exactly as the Aether branch above does.
+      //
+      // The `!ws._mythosNodeId` term is load-bearing and was missing in the first
+      // cut of this guard, which broke aether-node-routing.test.js. A phone node
+      // may have its own Live session open on its own connection, but a
+      // node-origin utterance is deliberately answered by the BATCH pipeline (see
+      // the routing decision at the 'utterance' handler, which sends node turns
+      // to handleUtterance and only HUD turns to Live). Routing the reply into
+      // Live here would answer on the desktop a question that was asked at the
+      // phone. Same guard the utterance router uses, and for the same reason.
+      if (!ws._mythosNodeId && liveSession && liveSession.isOpen()) {
+        liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${speak}`);
+        logger.info('reply.routed-to-live', { reqId, chars: speak.length });
+        try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
+        return;
+      }
       // Captured ONCE for this reply — see currentTts()/setTtsChain(). Every
       // chunk below comes from this object even if the operator picks a new
       // voice mid-reply; the new one starts at the next reply.
       const activeChain = currentTts();
       const ttsUp = await activeChain.isAvailable();
+      // F2d (2026-08-15): degrading to window.speechSynthesis is a CHANGE OF
+      // VOICE IDENTITY, not a graceful fallback — the operator hears a different
+      // entity and has no way to know why. On 2026-08-14 all three providers
+      // failed within 4ms (gemini-tts quota, edge-tts not running, kokoro-tts
+      // unresolvable) and nothing said so anywhere the operator could see.
+      //
+      // Reported through health.anomaly rather than a caption because that is
+      // this system's existing honest-failure channel (it reaches the HUD and
+      // the announcer), and because a caption would be overwritten by the reply
+      // text a moment later. Once per session — the condition does not change
+      // per turn, and a per-turn anomaly would be its own kind of noise.
+      // Deliberately does NOT suppress the browser-voice fallback: a mute
+      // assistant is the worse failure. The point is that it stops being silent
+      // about it (rules/core.md §11.2).
+      noteTtsChainDown(ttsUp, activeChain);
       // ALWAYS split, even with TTS down. This used to be `ttsUp ? split : []`,
       // which contradicted the comment directly above and truncated the entity's
       // speech: with no chunks the client fell through to speaking the WHOLE

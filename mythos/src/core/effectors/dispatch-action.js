@@ -94,6 +94,7 @@ async function dispatchAction(decision, ctx) {
     goals.debitBudget(goalId, { tokens: spentTokens, actions: 1 });
   }
 
+
   // 4.5 V2 (Phase 4): close the execution→learning loop.
   //   (a) skills.recordUse — feeds the EMA successRate the planner consults
   //       in goals.plan() to decide whether to replay this procedure. Only
@@ -132,6 +133,27 @@ async function dispatchAction(decision, ctx) {
   //                     the first *pending* step every tick, so a step left
   //                     unresolved re-runs a real world-changing action
   //                     (ui_type, ui_click) forever.
+  // F9 (2026-08-15): promote a repeated action into a durable fact.
+  //
+  // "MYTHOS did not remember previously requested songs" — a track played three
+  // times in one session left 18 episodic records and produced nothing in
+  // Semantic, because the ONLY route into Semantic was the model choosing to
+  // call `remember`. Behaviour is the more reliable signal and it was being
+  // thrown away entirely. See memory/habit-promoter.js for why the watch list is
+  // narrow and why this is a count rather than a brain call.
+  //
+  // Sits with the other post-dispatch bookkeeping and is guarded the same way:
+  // it observes an action that already happened and can never change its result.
+  // `actionOk && !actionUnverified` deliberately — an action that only MIGHT
+  // have landed is not evidence of a habit, which is exactly the distinction the
+  // evidence contract in src/core/CLAUDE.md exists to keep alive this far down.
+  if (memory && memory.habits && typeof memory.habits.observe === 'function') {
+    try {
+      memory.habits.observe(decision.tool, decision.args || decision.params,
+        actionOk && !actionUnverified);
+    } catch (_) { /* memory bookkeeping must never affect an action's result */ }
+  }
+
   if (decision.skillRef && !actionUnverified && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
     try {
       // FIX-2: recordUse is async and was previously fire-and-forget with no

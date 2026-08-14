@@ -294,13 +294,40 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   //
   // Deriving it means a future change to the ceiling cannot silently re-open
   // this; test/s2s-preroll-ring.test.js pins the derivation, not the number.
-  // 80 frames x 3200 bytes (100ms of 16kHz mono 16-bit) is ~256KB — bounded, and
-  // the ring only fills while MYTHOS is audibly speaking.
-  const PREROLL_MAX_FRAMES = Math.ceil(OWN_VOICE_IDLE_CEILING_MS / FRAME_MS);
+  //
+  // F3 (2026-08-15) — THE DERIVATION WAS FROM THE WRONG CONSTANT.
+  // OWN_VOICE_IDLE_CEILING_MS is an IDLE window that refreshes on every arriving
+  // audio-out chunk (that is the 2026-08-14 fix directly above), so the TOTAL
+  // hold is unbounded by it: the same session that motivated the ring recorded a
+  // single hold of 17941ms against an 8000ms ring. Anything the operator said
+  // more than 8s before release was still dropped, and the ring looked correct
+  // while doing it.
+  //
+  // Measured on 2026-08-14: 18 of 104 user turns reached the server with no
+  // inputTranscription, and their audioIn frame counts were
+  //   52,43,132,114,116,88,7,18,17,100,8,115,188,40,84,92,1429,9
+  // Only five are ring-starved (<=20); thirteen had ample audio. So the ring is
+  // ONE cause among several — sizing it correctly is necessary and not
+  // sufficient, and the per-hold instrumentation below is what will separate the
+  // remaining population instead of another inference a day later.
+  //
+  // The ring is now derived from an ABSOLUTE cap on the hold, and that cap is
+  // enforced (armOwnVoiceMaxHold) rather than assumed — so the ring provably
+  // spans every hold that can occur, which the previous derivation only appeared
+  // to do. 30s is ~1.7x the longest hold ever observed.
+  //
+  // The AAD/VAD sensitivity values are deliberately NOT touched: nothing here
+  // argues for relaxing them, and the standing instruction not to is correct.
+  const OWN_VOICE_MAX_HOLD_MS = 30000;
+  // 300 frames x 3200 bytes (100ms of 16kHz mono 16-bit) is ~960KB — bounded,
+  // allocated only while MYTHOS is audibly speaking, and freed on release.
+  const PREROLL_MAX_FRAMES = Math.ceil(OWN_VOICE_MAX_HOLD_MS / FRAME_MS);
   let ownVoiceGate = false;
   let ownVoiceTimer = null;
+  let ownVoiceMaxTimer = null;   // F3: absolute cap, never refreshed
   let ownVoiceHeldAt = 0;
   let preroll = [];
+  let prerollDropped = 0;        // F3: frames the ring evicted — speech genuinely lost
   // Peak RMS observed while the gate was held, logged once per hold on release.
   // The 2026-08-14 analysis could only INFER that the backstop threshold was too
   // high, because no RMS figure was ever written down anywhere; this is the number
@@ -360,18 +387,34 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (ownVoiceGate) armOwnVoiceCeiling();
   }
 
+  // F3: the absolute cap. Armed ONCE at hold start and never refreshed — that is
+  // the entire difference from armOwnVoiceCeiling(), whose refresh is what let a
+  // hold outrun its own ring. Reaching this means the idle ceiling kept being
+  // pushed out for half a minute, which is a broken player, not a long answer.
+  function armOwnVoiceMaxHold() {
+    if (ownVoiceMaxTimer) clearTimeout(ownVoiceMaxTimer);
+    ownVoiceMaxTimer = setTimeout(() => {
+      ownVoiceMaxTimer = null;
+      releaseOwnVoiceGate('max-hold-fail-open');
+    }, OWN_VOICE_MAX_HOLD_MS);
+    if (typeof ownVoiceMaxTimer.unref === 'function') ownVoiceMaxTimer.unref();
+  }
+
   function holdOwnVoiceGate() {
     if (!halfDuplexEnabled() || ownVoiceGate) return;
     ownVoiceGate = true;
     preroll = [];
+    prerollDropped = 0;
     ownVoicePeakRms = 0;
     ownVoiceHeldAt = Date.now();
     armOwnVoiceCeiling();
+    armOwnVoiceMaxHold();
     logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
   }
 
   function releaseOwnVoiceGate(reason) {
     if (ownVoiceTimer) { clearTimeout(ownVoiceTimer); ownVoiceTimer = null; }
+    if (ownVoiceMaxTimer) { clearTimeout(ownVoiceMaxTimer); ownVoiceMaxTimer = null; }
     if (!ownVoiceGate) return;
     ownVoiceGate = false;
     // Replay what the operator said while we were talking over them. Oldest
@@ -391,11 +434,19 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // dropped; heldMs says how long the gate was held to earn that.
       prerollCap: PREROLL_MAX_FRAMES,
       heldMs: ownVoiceHeldAt ? Date.now() - ownVoiceHeldAt : 0,
+      // F3: the discriminator. prerollFrames === prerollCap says the ring was
+      // FULL; framesDropped says how much speech was actually lost, which is the
+      // number that separates "the ring is too small" from "the audio reaching
+      // Gemini was our own voice" — the two explanations the 2026-08-14 data
+      // could not tell apart. A hold that drops nothing and still yields no
+      // transcript is evidence for the second, and this is how we will know.
+      framesDropped: prerollDropped,
       // One line per hold, not per frame — see ownVoicePeakRms's declaration.
       peakRms: Math.round(ownVoicePeakRms * 10000) / 10000,
     });
     ownVoicePeakRms = 0;
     ownVoiceHeldAt = 0;
+    prerollDropped = 0;
   }
 
   function arrayBufferToBase64(buf) {
@@ -509,7 +560,9 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // the gate, and it already takes isSpeaking() into account.
         if (ownVoiceGate) {
           preroll.push(e.data);
-          if (preroll.length > PREROLL_MAX_FRAMES) preroll.shift();
+          // F3: count evictions. Every shift() here is 100ms of the operator's
+          // speech thrown away, and until now it happened silently.
+          if (preroll.length > PREROLL_MAX_FRAMES) { preroll.shift(); prerollDropped++; }
           return;
         }
         sendMessage({ type: 'live-audio', data: arrayBufferToBase64(e.data) });
@@ -538,8 +591,23 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // BUG-224. The gate is driven by the edges of our OWN playback, so it is
       // held for exactly as long as we are making noise — no fixed timeout to
       // guess, and pcm-player's own END_GRACE_MS covers the room's reverb tail.
-      onSpeakStart: () => holdOwnVoiceGate(),
-      onSpeakEnd: () => releaseOwnVoiceGate('own-voice-ended'),
+      // F2b (2026-08-15): these two edges also drive the mic indicator. Before
+      // this, setState() was reached from exactly two places — onLiveStateMsg
+      // and the mute overlay — so on the Live path the state was set to
+      // 'listening' once when the session opened and NEVER CHANGED AGAIN for the
+      // rest of the session, across every reply. The operator reported it as
+      // "the HUD stays blue while it is talking"; they were right, and the
+      // hooks to fix it were already wired here and simply unused. The legacy
+      // voice-loop.js path has always done this (setState('speaking') at :489,
+      // back to listening at :568).
+      //
+      // The paint is deliberately OUTSIDE the gate: holdOwnVoiceGate() returns
+      // early when half-duplex is disabled or the gate is already held, and the
+      // orb must still show speech in both of those cases. ownVoiceGate is its
+      // own flag, distinct from captureSuspended (the media-playing mute
+      // overlay), so this does not fight the overlay for the indicator.
+      onSpeakStart: () => { holdOwnVoiceGate(); setVoiceState('speaking'); },
+      onSpeakEnd: () => { releaseOwnVoiceGate('own-voice-ended'); setVoiceState('listening'); },
     });
     active = true;
 

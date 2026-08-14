@@ -31,6 +31,12 @@ const BUILD_ENGINE_VERIFY_MS = 60000;
 // different number.
 const PROVIDER_ROTATE_VERIFY_MS = 60000;
 
+// F1: a terminally-failed tool stays out of the planner's catalog until the
+// process restarts — which is exactly when the operator's remedy (re-auth,
+// new key in .env) takes effect anyway. 24h is "the rest of this session"
+// expressed as a TTL, so the existing restoreTimer needs no special case.
+const TERMINAL_SUPPRESS_MS = 24 * 60 * 60 * 1000;
+
 const SEED_PLAYBOOKS = [
   {
     // The id is load-bearing in stored audit rows (briefing-facts reads
@@ -104,6 +110,18 @@ const SEED_PLAYBOOKS = [
     then: [{ do: 'suppress-tool', args: { tool: '$target' } }],
     cooldownMs: 60000
   },
+  // F1 (2026-08-15): a terminal failure is not a flap. The hub keeps the breaker
+  // CLOSED and refuses to dispatch the tool again, so the 60s cooldown that the
+  // flapping playbook uses would only put a dead tool back in the planner's
+  // catalog every minute for the rest of the session. ttlMs is the whole point
+  // of this entry existing separately.
+  {
+    id: 'effector-terminal-suppress',
+    title: 'suppression of a terminally-failed tool',
+    when: { kind: 'effector-terminal' },
+    then: [{ do: 'suppress-tool', args: { tool: '$target', ttlMs: TERMINAL_SUPPRESS_MS } }],
+    cooldownMs: 0
+  },
   // REMEDIATION P2-10 (2026-07-29 audit, item 11): search-provider-failed and
   // build-engine-failed both returned 'no-match' — the immune system detected
   // the two failures that actually mattered in the audited session and had
@@ -160,6 +178,75 @@ const SEED_PLAYBOOKS = [
     when: { kind: 'aether-proxy-bind-failed' },
     then: [{ do: 'retry-aether-proxy' }],
     cooldownMs: 15000
+  },
+  // F8 (2026-08-15) — THE FIVE KINDS THAT MATCHED NOTHING.
+  //
+  // 26 anomalies in the 2026-08-14 session reached no-match, and four kinds
+  // account for all of the recurring ones: live-turn-no-user-transcript x16,
+  // live-turn-silent x3, claimed-action-not-taken x2,
+  // live-tool-outcome-late-for-turn x1. (build-engine-fallback-used x4 was the
+  // fifth and can no longer be emitted at all — see build-engine.js's F5 note.)
+  //
+  // The no-match path is expensive: it is what invokes the immune explainer,
+  // whose episodic recall was the measured source of loop.stalled. So leaving the
+  // MOST COMMON anomalies unmatched made the costly branch the default outcome.
+  //
+  // These are acknowledged, NOT healed, and that distinction is deliberate. None
+  // of them has a remediation the healer can perform — the first is a client-side
+  // audio-gate condition, the second a provider behaviour, the third a
+  // model-honesty check, the fourth a timing race. Inventing a "fix" for any of
+  // them would be worse than admitting there isn't one. What acknowledgement buys
+  // is that the system stops treating a known, understood, already-instrumented
+  // condition as an unexplained emergency.
+  //
+  // NOTHING IS HIDDEN BY THIS (rules/core.md §11.2). The health.anomaly records
+  // are stored by the server's anomaly subscriber independently of the healer, so
+  // every occurrence remains countable in the vault exactly as before; what
+  // changes is only that a brain call and a 7-day episodic scan no longer fire
+  // for a condition nobody can act on from here.
+  {
+    id: 'live-turn-no-transcript-known',
+    title: 'a Live turn that arrived with no operator transcript',
+    when: { kind: 'live-turn-no-user-transcript' },
+    then: [{ do: 'acknowledge', args: {
+      note: 'Known condition, no automatic remedy. The operator\'s speech reaches Gemini but is '
+        + 'not transcribed, most often because the half-duplex gate held it past the preroll ring '
+        + '(see s2s-bridge.js F3) or because what reached the VAD was MYTHOS\'s own voice. The '
+        + 'release log\'s framesDropped/heldMs is the evidence to read, not this anomaly.',
+    } }],
+    cooldownMs: 60000
+  },
+  {
+    id: 'live-turn-silent-known',
+    title: 'a Live turn that produced text but no audio',
+    when: { kind: 'live-turn-silent' },
+    then: [{ do: 'acknowledge', args: {
+      note: 'Known condition, already remediated elsewhere: BUG-170\'s re-speak path routes a '
+        + 'silent turn to the TTS chain with skipLive. Nothing further for the healer to do.',
+    } }],
+    cooldownMs: 60000
+  },
+  {
+    id: 'claimed-action-not-taken-known',
+    title: 'a spoken claim with no tool call behind it',
+    when: { kind: 'claimed-action-not-taken' },
+    then: [{ do: 'acknowledge', args: {
+      note: 'Known condition, handled in-band: the claim checker already injects a correction on '
+        + 'the turn itself. Note that a FALSE positive here is worse than a miss — on 2026-08-14 '
+        + 'both instances were the detector\'s own category gap (F1b), not the model lying.',
+    } }],
+    cooldownMs: 60000
+  },
+  {
+    id: 'live-tool-outcome-late-known',
+    title: 'a tool outcome that arrived after its turn ended',
+    when: { kind: 'live-tool-outcome-late-for-turn' },
+    then: [{ do: 'acknowledge', args: {
+      note: 'Known condition, by design: reportLateOutcome() pushes the real result into the next '
+        + 'turn through the [SYSTEM] channel. This anomaly records the race, it does not report a '
+        + 'fault.',
+    } }],
+    cooldownMs: 60000
   }
 ];
 
@@ -341,7 +428,9 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
       if (!toolName) return { ok: false, reason: 'missing-arg:tool' };
       // Track the suppression with a TTL (cooldown window from the playbook).
       // The tick loop's restoreTimer (RC#4) also restores expired suppressions.
-      suppressedTools[toolName] = { restoreAt: Date.now() + 60000 };
+      // F1: ttlMs is opt-in — omitting it keeps the original 60s flap cooldown.
+      var ttlMs = Number(args.ttlMs) > 0 ? Number(args.ttlMs) : 60000;
+      suppressedTools[toolName] = { restoreAt: Date.now() + ttlMs };
       return { ok: true, result: { tool: toolName, suppressedUntil: suppressedTools[toolName].restoreAt } };
     },
 
@@ -360,9 +449,19 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
     // REMEDIATION P2-10 / P0-1: force a fresh Hermes probe (bypassing
     // PROBE_TTL_MS's cache) and surface the item-6 CLI probe diagnostic
     // (ENOENT vs timeout vs non-zero exit) instead of leaving a build-engine
-    // failure with no path to re-check or diagnose it. Always ok:true — the
-    // action's job is to re-probe and report, not to guarantee Hermes comes
-    // back online (that's the OFFLINE/ONLINE result inside detail).
+    // failure with no path to re-check or diagnose it.
+    //
+    // F5 (2026-08-15): this used to be unconditionally ok:true, on the argument
+    // that the action's job is to re-probe and report rather than to guarantee
+    // recovery. That made it a heal that could never fail — and in the
+    // 2026-08-14 session it duly "succeeded" four times while every build failed,
+    // because probe() only runs `hermes --version` and the binary was fine. An
+    // action whose success is unconditional cannot tell anyone anything.
+    //
+    // It now answers the question the anomaly actually asks: is the build engine
+    // usable? ONLINE with an unresolved real-task failure is NOT usable, and is
+    // exactly the state that was misreported. lastTaskFailure is the only field
+    // in the status derived from a content call.
     'reprobe-build-engine': async function() {
       var hermesAgent;
       try {
@@ -372,7 +471,34 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
       }
       const online = await hermesAgent.probe(true);
       const status = hermesAgent.getStatus();
-      return { ok: true, result: { online: online, state: status.state, hint: status.hint, cliProbeDiagnostic: status.cliProbeDiagnostic } };
+      const detail = {
+        online: online, state: status.state, hint: status.hint,
+        cliProbeDiagnostic: status.cliProbeDiagnostic,
+        // What the ONLINE verdict is actually based on — a version banner, a
+        // timed-out probe assumed present, or an HTTP health endpoint. None of
+        // the three is evidence that a build will produce content.
+        evidence: status.evidence,
+        lastTaskFailure: status.lastTaskFailure,
+      };
+      if (!online) return { ok: false, reason: 'build-engine-offline', result: detail };
+      if (status.lastTaskFailure) {
+        return { ok: false, reason: 'build-engine-online-but-last-task-failed', result: detail };
+      }
+      return { ok: true, result: detail };
+    },
+
+    // F8: a deliberate, documented no-op. It exists so a KNOWN condition with no
+    // healer-side remedy stops falling through to the expensive no-match path,
+    // and it is honest about doing nothing — the note says what the condition is
+    // and where the real evidence lives. It must never grow an action; the moment
+    // one of these has a real remedy it gets its own playbook entry instead.
+    'acknowledge': async function(diagnosis, args) {
+      return { ok: true, result: {
+        acknowledged: diagnosis && diagnosis.kind,
+        target: (diagnosis && diagnosis.target) || null,
+        note: (args && args.note) || 'known condition, no automatic remedy',
+        healed: false,
+      } };
     },
 
     // Learning loop: write a recurring-failure lesson so the planner can avoid

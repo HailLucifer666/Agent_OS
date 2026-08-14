@@ -75,12 +75,12 @@
 
 /* state variants */
 #mic-indicator.mic-listening .mic-ring {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--orb-listening, var(--accent));
+  color: var(--orb-listening, var(--accent));
   box-shadow: var(--accent-glow);
   animation: mic-breathe 2.4s var(--ease) infinite;
 }
-#mic-indicator.mic-listening .mic-status { color: var(--accent); }
+#mic-indicator.mic-listening .mic-status { color: var(--orb-listening, var(--accent)); }
 
 #mic-indicator.mic-processing .mic-ring {
   border-color: var(--module-goals, #a78bfa);
@@ -91,13 +91,19 @@
   animation: mic-pulse 0.9s var(--ease) infinite;
 }
 
+/* F2b (2026-08-15): listening and speaking used the SAME --accent token, so even
+   once the state was emitted correctly the indicator looked identical in both.
+   The orb already distinguishes them (--orb-speaking / --orb-listening); the mic
+   indicator now uses the same tokens instead of a third opinion. --accent is
+   kept as the fallback so a theme that never defined the orb tokens degrades to
+   the old appearance rather than to an unstyled ring. */
 #mic-indicator.mic-speaking .mic-ring {
-  border-color: var(--accent);
-  color: var(--accent);
-  box-shadow: var(--accent-glow);
+  border-color: var(--orb-speaking, var(--accent));
+  color: var(--orb-speaking, var(--accent));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--orb-speaking, var(--accent)) 45%, transparent);
 }
 #mic-indicator.mic-speaking .mic-status {
-  color: var(--accent);
+  color: var(--orb-speaking, var(--accent));
   animation: mic-pulse 0.9s var(--ease) infinite;
 }
 

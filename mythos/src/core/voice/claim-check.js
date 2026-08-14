@@ -101,7 +101,17 @@ const CLAIM_CATEGORIES = [
   },
   {
     name: 'searching',
-    tools: ['search_code', 'search_files'],
+    // F1b (2026-08-15): this list used to hold ONLY the two code-search tools,
+    // so "I searched the web for X" after a real, successful web_search was
+    // scored as an unbacked claim and MYTHOS was fed a [SYSTEM] CORRECTION
+    // telling it to retract a true statement. Twice in one session. A detector
+    // that makes the assistant lie in the other direction is worse than no
+    // detector, because it also trains the operator to distrust correct answers.
+    // Pinned by a derive-from-source test (test/claim-check-categories.test.js)
+    // against leash/tiers.js's TIER_TABLE — the same class of bug as the lane
+    // names and the vault path: a second, hand-kept copy of something the
+    // system already knows.
+    tools: ['search_code', 'search_files', 'web_search', 'web_fetch'],
     // "found" is deliberately absent. It is first-person past tense and still
     // not a search-tool claim: "I found that in your calendar" is a memory or
     // calendar read, and "I found three results" after a real search is backed

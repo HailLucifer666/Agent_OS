@@ -50,45 +50,73 @@ function readNumber(name) {
 }
 
 describe('A2 the preroll ring is DERIVED from the gate ceiling, not hand-tuned', () => {
-  it('PREROLL_MAX_FRAMES is computed from OWN_VOICE_IDLE_CEILING_MS and FRAME_MS', () => {
+  it('PREROLL_MAX_FRAMES is computed from OWN_VOICE_MAX_HOLD_MS and FRAME_MS', () => {
     const m = src.match(/const PREROLL_MAX_FRAMES\s*=\s*([^;]+);/);
     assert.ok(m, 'PREROLL_MAX_FRAMES must still exist — it is the bound on the ring');
     const expr = m[1];
     assert.doesNotMatch(expr, /^\s*\d+\s*$/,
       'a bare literal is the bug: 12 frames (1.2s) sat next to an 8000ms ceiling it had to cover '
       + 'and did not, and nothing in code related the two. Got: ' + expr);
-    assert.match(expr, /OWN_VOICE_IDLE_CEILING_MS/,
-      'the ring must be derived from the ceiling it has to survive, so a future change to the '
-      + 'ceiling cannot silently re-open this bug');
+    // F3 (2026-08-15): CORRECTED. The original assertion demanded derivation
+    // from OWN_VOICE_IDLE_CEILING_MS, and that was the wrong constant — it is an
+    // IDLE window that refreshes on every arriving audio chunk, so the total
+    // hold is not bounded by it at all. A hold of 17941ms was measured against
+    // the 8000ms ring the derivation produced. The ring must span the longest
+    // hold that can OCCUR, which is the absolute cap.
+    assert.match(expr, /OWN_VOICE_MAX_HOLD_MS/,
+      'the ring must be derived from the ABSOLUTE cap on the hold, not from the idle '
+      + 'ceiling — the idle ceiling refreshes, so a hold can outrun a ring derived from it');
     assert.match(expr, /FRAME_MS/,
       'and from the frame duration, so a change to the 100ms frame size stays consistent too');
   });
 
-  it('the derivation is declared AFTER the ceiling it reads (const has no hoisting)', () => {
-    const ceilingAt = src.indexOf('const OWN_VOICE_IDLE_CEILING_MS');
+  it('the absolute cap is enforced, not merely declared', () => {
+    // Deriving the ring from a cap nothing enforces would be the same defect in
+    // a new costume: the number would look right and the hold would still run
+    // past it. The cap's timer must be armed once at hold time and NOT be the
+    // one the audio-out refresh re-arms.
+    assert.match(src, /function armOwnVoiceMaxHold\(\)/,
+      'OWN_VOICE_MAX_HOLD_MS needs a timer, or it is a comment');
+    const hold = src.slice(src.indexOf('function holdOwnVoiceGate'));
+    assert.match(hold.slice(0, 500), /armOwnVoiceMaxHold\(\)/,
+      'the cap must be armed when the gate is taken');
+    const refresh = src.slice(src.indexOf('function refreshOwnVoiceCeiling'));
+    assert.doesNotMatch(refresh.slice(0, 300), /armOwnVoiceMaxHold/,
+      'the absolute cap must NOT be refreshed by arriving audio — refreshing it is '
+      + 'exactly what made the idle ceiling unusable as the ring\'s basis');
+  });
+
+  it('the derivation is declared AFTER the constants it reads (const has no hoisting)', () => {
+    const capAt = src.indexOf('const OWN_VOICE_MAX_HOLD_MS');
     const ringAt = src.indexOf('const PREROLL_MAX_FRAMES');
-    assert.ok(ceilingAt !== -1 && ringAt !== -1);
-    assert.ok(ceilingAt < ringAt,
+    assert.ok(capAt !== -1 && ringAt !== -1);
+    assert.ok(capAt < ringAt,
       'a const read before its declaration throws a TDZ ReferenceError at module evaluation — '
       + 'which would take the entire HUD voice path down, not just the ring');
   });
 
-  it('the computed cap actually spans the full ceiling', () => {
-    const ceilingMs = readNumber('OWN_VOICE_IDLE_CEILING_MS');
+  it('the computed cap actually spans the longest possible hold', () => {
+    const maxHoldMs = readNumber('OWN_VOICE_MAX_HOLD_MS');
+    const idleMs = readNumber('OWN_VOICE_IDLE_CEILING_MS');
     const frameMs = readNumber('FRAME_MS');
-    assert.ok(ceilingMs && frameMs, 'both constants must be readable literals');
-    const cap = Math.ceil(ceilingMs / frameMs);
-    assert.equal(cap, 80, 'with the values as committed: 8000ms / 100ms = 80 frames');
-    assert.ok(cap * frameMs >= ceilingMs,
-      'the ring must cover at least the whole window the gate can be held for, or the operator '
+    assert.ok(maxHoldMs && frameMs && idleMs, 'all three constants must be readable literals');
+    assert.ok(maxHoldMs > idleMs,
+      'the absolute cap must exceed the idle window, or the idle window can never refresh at all');
+    // 17941ms is the longest hold in the 2026-08-14 measurement. A cap at or
+    // below it would start cutting off real answers.
+    assert.ok(maxHoldMs > 17941,
+      'the cap must sit above the longest hold ever observed (17941ms), or it becomes a cap on '
+      + 'how long MYTHOS may speak — the same mistake the 20s flat ceiling made');
+    const cap = Math.ceil(maxHoldMs / frameMs);
+    assert.ok(cap * frameMs >= maxHoldMs,
+      'the ring must cover the whole window the gate can be held for, or the operator '
       + 'can still speak into a gap the ring cannot hold — got ' + (cap * frameMs) + 'ms of coverage '
-      + 'for a ' + ceilingMs + 'ms hold');
-    // Bounded, per the original constant's stated purpose. 80 frames of 16kHz
-    // mono 16-bit at 100ms each is ~256KB — two orders of magnitude below
-    // anything that matters in a renderer, and the ring only fills while MYTHOS
-    // is audibly speaking.
+      + 'for a ' + maxHoldMs + 'ms hold');
+    // Bounded, per the original constant's stated purpose. 300 frames of 16kHz
+    // mono 16-bit at 100ms each is ~960KB — still far below anything that
+    // matters in a renderer, and the ring only fills while MYTHOS is speaking.
     const bytes = cap * (16000 / 1000) * frameMs * 2;
-    assert.ok(bytes < 1024 * 1024,
+    assert.ok(bytes < 2 * 1024 * 1024,
       'the ring is still bounded memory, not an unbounded buffer; got ' + bytes + ' bytes');
   });
 
@@ -115,6 +143,12 @@ describe('A2 the drop depth is now observable, instead of computed and discarded
     assert.match(body, /heldMs/,
       'and how long the gate was held to earn that, so a watchdog release is distinguishable '
       + 'from a normal one by duration and not just by its reason string');
+    // F3: prerollCap tells you the ring was full; framesDropped tells you how
+    // much was actually lost. Without the second number, "ring too small" and
+    // "the audio Gemini heard was our own voice" are indistinguishable — which
+    // is exactly where the 2026-08-14 analysis had to stop and guess.
+    assert.match(body, /framesDropped/,
+      'and how many frames the ring evicted, which is the only direct measure of speech lost');
   });
 
   it('heldMs is measured from the hold, not invented at release time', () => {

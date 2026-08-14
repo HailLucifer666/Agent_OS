@@ -7,6 +7,7 @@
 // see Spec Ambiguities Resolved #4. `createBreaker` comes from immune/breakers.js (Phase 6).
 
 const { createBreaker } = require('../immune/breakers');
+const { reasonText } = require('../util/reason-text');
 
 function createBreakerRegistry() {
   var byName = new Map();
@@ -40,10 +41,44 @@ function createBreakerRegistry() {
   };
 }
 
+// F1 (2026-08-15): the breaker FSM models ONE kind of failure — a transient one
+// that a cooldown might fix. A revoked OAuth grant is not that. In the 2026-08-14
+// session gmail_unread failed five times with `invalid_grant` ("this is NOT a
+// network problem and will not recover on its own", says the effector's own
+// message), tripped the flapping breaker, served its 60s suppression, was
+// dispatched again, and failed again — with the HUD pinned to DEGRADED for the
+// whole session (core-orb.js reads `state !== 'closed'` over every breaker) and
+// naming no cause.
+//
+// A terminal failure is therefore NOT routed through the breaker at all. The tool
+// is disabled for the process, the breaker is reset to CLOSED (so the orb stops
+// reporting a flap that will never resolve), and every later call returns the
+// stored remedy text without touching the provider.
+//
+// Deliberately an explicit allow-list of signatures at the effector, never a
+// broad `4xx === terminal` rule (rules/core.md §11.1): a 401/403 from a rate
+// limiter and one from a dead credential look alike, and getting that wrong turns
+// a transient outage into a session-long dead tool. Effectors opt in by returning
+// `terminal: true` beside the existing ok/unverified/reason fields — it travels
+// alongside them and is never folded into `ok` (dispatch-action.js's evidence
+// contract).
+function isTerminalResult(result) {
+  return !!(result && result.ok === false && result.terminal === true);
+}
+
+// Same normalization dispatch-action.js uses for audit lines — some effectors'
+// failure shape is `{error: msg}`, not a string, and the stored remedy must not
+// become the literal "[object Object]".
+function reasonOf(result) {
+  return reasonText(result && result.result) || reasonText(result && result.error)
+    || 'terminal failure';
+}
+
 function createEffectorHub({ bus, config }) {
   var effectors = new Map();               // tool name -> effector (the 45 gate-counted ones)
   var namedServices = new Map();            // synthetic id -> service object (goals/kanban/pipeline bridges)
   var breakers = createBreakerRegistry();   // name -> breaker (see wrapper above)
+  var terminal = new Map();                 // tool name -> { reason, at } (F1, see above)
 
   function register(effector) {
     if (!effector || !effector.id || typeof effector.invoke !== 'function') {
@@ -164,6 +199,14 @@ function createEffectorHub({ bus, config }) {
       };
     }
 
+    // F1: a tool that already failed terminally is not dispatched again this
+    // process. The stored text is the effector's own remedy line, so the model
+    // still has something actionable to say instead of a bare refusal.
+    var dead = terminal.get(resolvedName);
+    if (dead) {
+      return { ok: false, terminal: true, result: dead.reason };
+    }
+
     if (!breakers.allow(resolvedName)) {
       return { ok: false, result: 'circuit-open' };
     }
@@ -177,6 +220,23 @@ function createEffectorHub({ bus, config }) {
       // B5: Emit anomaly for observability so operator can see the root cause.
       if (bus) bus.emit('health.anomaly', { kind: 'effector-throw', target: resolvedName, error: err.message });
       result = { ok: false, result: err.message };
+    }
+
+    if (isTerminalResult(result)) {
+      // F1: record, reset the breaker (it may already be OPEN from the failures
+      // that led here — leaving it open pins the HUD's DEGRADED badge forever on
+      // a tool that will never be retried), and announce ONCE with the remedy.
+      var reason = reasonOf(result);
+      if (!terminal.has(resolvedName)) {
+        terminal.set(resolvedName, { reason: reason, at: Date.now() });
+        breakers.reset(resolvedName);
+        if (bus) {
+          bus.emit('health.anomaly', {
+            kind: 'effector-terminal', target: resolvedName, reason: reason
+          });
+        }
+      }
+      return result;
     }
 
     if (result && result.ok) {
@@ -196,6 +256,14 @@ function createEffectorHub({ bus, config }) {
     catalog: catalog,
     get effectors() { return effectors; },
     get breakers() { return breakers; },
+    // F1: read by the healer's terminal playbook and by anything that wants to
+    // explain WHY a tool is missing from the planner's catalog.
+    terminalFailures: function() {
+      var out = {};
+      for (var entry of terminal) out[entry[0]] = { reason: entry[1].reason, at: entry[1].at };
+      return out;
+    },
+    clearTerminal: function(name) { return terminal.delete(name); },
     count: function() { return effectors.size; }
   };
 }

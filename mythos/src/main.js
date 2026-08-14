@@ -426,7 +426,7 @@ async function main() {
       // never calls brain.think for content — there is no fallback by design
       // (see build-engine.js). brain is still passed for the verifier/review
       // machinery that legitimately uses it.
-      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus, brain: brain });
+      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus });
       // Refine loop (2026-08-14): renders the built artifact in real headless
       // Chrome, screenshots it, and critiques it through the vision lane before
       // it can be called done. CONSTRUCTED INSIDE the flag check on purpose —
