@@ -73,11 +73,45 @@ deletion is not.
   measurement. Settle with `build-refine.js`'s real render check over real
   builds. Model lives in `Hermes Agent/config.yaml`, which forwarded env does
   not override.
-- **`vault/Personas/` is empty**, so the reviewer and reality-checker seats now
-  reach a strong model with a generic brief. Breakage 1 is fixed, so authoring
-  those files will take effect without further code changes.
-- **Re-probe `gemini-3.7-flash` (1/4) and `gemini-3.6-flash` (3/4) clean.** Both
-  scored low only because this run's own request volume hit their RPM wall.
+- ~~`vault/Personas/` is empty~~ **CLOSED 2026-08-15.** It was worse than empty:
+  `personas.js` searched only `mythos/vault/Personas/`, which is **gitignored and
+  did not exist**, so `loadPersona()` returned `null` for every role on every
+  machine and each seat silently ran as generic MYTHOS. Fixed with an ordered
+  resolution list (`$MYTHOS_PERSONAS_DIR` → `vault/Personas/` → tracked
+  `mythos/personas/`) plus four authored defaults. `test/personas.test.js`
+  derives the required roles from the source, so a new seat added without a
+  persona fails the suite instead of quietly going generic.
+- ~~Re-probe `gemini-3.7-flash` and `gemini-3.6-flash` clean~~ **CLOSED
+  2026-08-15 — both were throttling artefacts, exactly as suspected.** Re-probed
+  sequentially with a 12s gap between calls so the run could not repeat the
+  mistake it was correcting:
+
+  | Model | 2026-08-14 (throttled) | 2026-08-15 (clean) | Median |
+  |---|---|---|---|
+  | `gemini-3.7-flash` | 1/4 @ 15822ms | **4/4** | 1821–1920ms |
+  | `gemini-3.6-flash` | 3/4 @ 44382ms | **4/4** | 2680–2774ms |
+  | `gemini-3.5-flash-lite` | 4/4 @ 960ms | **4/4** (confirmed) | 963–1102ms |
+
+  No lane changes follow from this — `3.7-flash` is in no lane, and the
+  reasoning lane is Cerebras-led by the operator's scoping decision, not by a
+  Google score. It is recorded so the low numbers above are not read as quality
+  by a later session.
+
+  **One methodological warning, because this run made the mistake the method
+  section already warns about.** The first pass scored all three models 3/4,
+  every one failing R2 — including a model the original run scored 4/4. The
+  models were right and the probe was wrong: the R2 problem was re-worded and
+  the *old answer* (40) was carried over instead of solving the new phrasing
+  (30). A benchmark that disagrees with a previous run on every model at once is
+  almost always a broken probe, not three simultaneous regressions. Verify the
+  expected answer before believing a column.
+
+  Also observed, and relevant because it heads `PREF_VOICE` and is **spoken
+  aloud**: `gemini-flash-lite-latest` and `gemini-3.5-flash-lite` answer R2 by
+  showing their working ("To find Ann's current age, we can set up a system of
+  equations…") where the larger Flash models answer "30". Not a
+  chain-of-thought leak and not a disqualifier — `voice-agent.js` carries its own
+  brevity rules — but worth knowing if spoken replies start arriving long.
 - **The benchmark is thin** — one sample per probe, ~50-token prompts, seven
   models tied at 4/4. Re-probe at realistic size before treating the reasoning
   order as settled.
