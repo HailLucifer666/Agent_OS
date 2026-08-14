@@ -32,7 +32,7 @@ function fail(reason) { return { ok: false, result: { error: reason } }; }
 // testing. Production never takes that path: main.js always passes buildEngine,
 // and every job record is stamped with `engine` so a brain-generated artifact
 // is visible rather than silent.
-function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine }) {
+function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, refiner }) {
   var hasEngine = Boolean(buildEngine && typeof buildEngine.generate === 'function');
   if (!hasEngine && (!brain || typeof brain.think !== 'function')) {
     throw new Error('createBuildRunner requires a buildEngine with generate() (or a brain with think())');
@@ -42,6 +42,10 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
   }
 
   var CONCURRENCY = (config && config.MYTHOS_BUILD_CONCURRENCY) || 1;
+  // Refine loop (2026-08-14, the "snake game test"). The verifier reads the
+  // SOURCE; this looks at the artifact RUNNING. Bounded, because each iteration
+  // costs a full regeneration the operator is waiting on.
+  var REFINE_MAX = (config && config.BUILD_REFINE_MAX_ITERATIONS) || 2;
   var MAX_PERSISTED = (config && config.MYTHOS_JOBS_MAX_PERSISTED) || 100;
   var JOBS_REL_PATH = 'Checkpoints/build-jobs.json';
 
@@ -246,6 +250,116 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine })
         } else if (!verification.pass) {
           // Already retried or retry didn't help — block shipment (rule-based issues only)
           throw new Error('build failed verification: ' + verification.issues.join('; '));
+        }
+      }
+
+      // ---- Refine loop (render -> look -> critique -> regenerate) ----------
+      //
+      // Everything above this point judged the artifact's SOURCE. This judges
+      // the artifact RUNNING: real headless browser, real console/page errors,
+      // real screenshot, vision-lane critique guided by the vendored hallmark +
+      // webapp-testing content. That is the gap the "snake game test" exposed —
+      // a build that parses, passes every rule and throws on the first
+      // animation frame used to ship as done.
+      //
+      // Constructed-inside-the-flag is the CALLER's job (main.js only builds a
+      // refiner when BUILD_REFINE_ENABLED is on — an opt-out flag protects
+      // nothing that runs before it is read, per the Slice-5 lesson). Here the
+      // absence of a refiner is simply "not enabled", and it is recorded on the
+      // job rather than being invisible.
+      if (refiner && typeof refiner.available === 'function' && refiner.looksRenderable(raw)) {
+        if (!refiner.available()) {
+          // Honest skip: the operator asked for refinement and did not get it.
+          job.refineStatus = 'skipped';
+          job.refineSkipReason = refiner.unavailableReason();
+        } else {
+          job.stage = 'refining';
+          notify(job);
+          job.refinePasses = [];
+          // The artifact as it stands has already passed the verifier, so it is
+          // the fallback we ship if refinement cannot improve on it. Never ship
+          // an UNVERIFIED regeneration just because it was the last one tried.
+          var lastGood = raw;
+          var iteration = 0;
+          while (iteration < REFINE_MAX) {
+            iteration += 1;
+            var rendered = await refiner.render(raw, job.id + '-' + iteration);
+            var critique = await refiner.critique({
+              screenshotB64: rendered.screenshotB64,
+              renderError: rendered.error || null,
+              consoleErrors: rendered.consoleErrors || [],
+              pageErrors: rendered.pageErrors || [],
+              spec: job.spec || prompt,
+            });
+            job.refinePasses.push({
+              iteration: iteration,
+              screenshot: rendered.screenshotPath || null,
+              renderOk: !!rendered.ok,
+              consoleErrors: (rendered.consoleErrors || []).slice(0, 5),
+              pageErrors: (rendered.pageErrors || []).slice(0, 5),
+              pass: critique.pass,
+              verdict: String(critique.verdict || '').slice(0, 400),
+              issues: critique.issues || [],
+              model: critique.model || null,
+            });
+            notify(job);
+
+            if (critique.pass === true) {
+              job.refineStatus = iteration === 1 ? 'passed-first-look' : 'refined';
+              lastGood = raw;
+              break;
+            }
+            if (critique.pass === null) {
+              // Blind pass: the vision lane could not answer. Keep the
+              // verified artifact and say so — never silently claim refinement.
+              job.refineStatus = 'blind';
+              job.refineSkipReason = critique.verdict;
+              break;
+            }
+
+            // Real failure. Regenerate WITH the critique, then re-verify: a
+            // regeneration that fixes the visuals and breaks a rule must not
+            // slip past the gate the first generation had to clear.
+            var refineResult = await generate(
+              prompt + '\n\nA screenshot of your previous output was reviewed and REJECTED. '
+              + 'Problems found when it was actually rendered and run:\n- '
+              + (critique.issues.length ? critique.issues.join('\n- ') : String(critique.verdict).slice(0, 500))
+              + '\n\nFix every one of them and regenerate the complete artifact.',
+              'build-runner-refine' + iteration + ':' + job.id
+            );
+            if (!refineResult || refineResult.offline || !refineResult.content) {
+              job.refineStatus = 'exhausted';
+              job.refineIssues = critique.issues;
+              break;
+            }
+            var candidate = refineResult.content;
+            if (verifier && typeof verifier.verify === 'function') {
+              var refineVerify = await verifier.verify(candidate, job.spec || prompt);
+              if (!refineVerify.pass) {
+                // The refined version is worse by the rules. Keep the verified
+                // one and stop — this is the "ships the LAST verified-passing
+                // artifact" branch, recorded rather than hidden.
+                job.refineStatus = 'reverted';
+                job.refineIssues = refineVerify.issues || [];
+                break;
+              }
+              if (refineVerify.warnings && refineVerify.warnings.length) {
+                job._verifyWarnings = refineVerify.warnings;
+              }
+            }
+            raw = candidate;
+            lastGood = candidate;
+            if (iteration >= REFINE_MAX) {
+              // Bound reached with the last critique still failing. The artifact
+              // shipped is verified but NOT visually approved, and the job says
+              // exactly that — a refine loop that runs out of iterations must
+              // never report a critique failure as success.
+              job.refineStatus = 'exhausted';
+              job.refineIssues = critique.issues;
+            }
+          }
+          job.refineIterations = iteration;
+          raw = lastGood;
         }
       }
 

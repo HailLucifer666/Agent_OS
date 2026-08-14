@@ -49,6 +49,14 @@ const DEFAULT_ALLOWLIST = [
   // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
   // before — and it is what made Incidents/ a place reports went to die.
   'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory',
+  // Notes (2026-08-14). All three ship together, act tool WITH both its read
+  // tools, per this list's own rule: a withheld read tool next to an act tool
+  // does not make the model decline, it makes it substitute the nearest
+  // reachable tool and narrate the result (the camera_look/screen_look
+  // incident). Without note_read/note_search, "what's in my project note"
+  // would reach remember/recall_memory — MYTHOS's own asserted facts — and be
+  // reported as the operator's note.
+  'note_take','note_read','note_search',
   // 2026-08-14 (BUG-219, the butter-chicken session). The operator asked MYTHOS to
   // type a recipe into Notepad and save it. ctrl+s is unwinnable on MSIX Notepad —
   // proven, narrow, and NOT fixable from this side (adapters/CLAUDE.md: do not add

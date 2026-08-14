@@ -13,6 +13,7 @@ const { createAuditWriter } = require('./audit-writer');
 const { createCheckpointStore } = require('./checkpoints');
 const { createDocumentsStore } = require('./documents');
 const { createLessonsStore } = require('./lessons');
+const { createNotesStore } = require('./notes');
 const { createVectorIndex, rrfMerge } = require('./vector-index');
 const embeddings = require('../../../providers/embeddings');
 
@@ -33,6 +34,13 @@ function createMemory({ config, bus, logger, brain }) {
   // planner reads here BEFORE its brain call so a known-bad approach is grounded
   // against instead of re-tried. See lessons.js for the full rationale.
   const lessons = createLessonsStore({ fs, config, bus, logger });
+  // Notes — the operator's own markdown documents (Obsidian-compatible), NOT
+  // MYTHOS's asserted facts. MYTHOS_NOTES_DIR lets the operator point this at
+  // an existing Obsidian vault; default keeps it inside the MYTHOS vault so a
+  // fresh clone works with no configuration. Path is derived, never literal.
+  const notes = createNotesStore({
+    dir: (config && config.MYTHOS_NOTES_DIR) ? config.MYTHOS_NOTES_DIR : fs.vaultPath('Notes'),
+  });
 
   // ---- semantic recall layer (vector indexes over episodic + semantic + documents) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
@@ -198,6 +206,7 @@ function createMemory({ config, bus, logger, brain }) {
     documents,                          // §7.5/§7.11 chunk store — shared by both
     documentsIndex: vecIndexes.documents, // the ONE shared vector-index partition
     lessons,                            // durable failure memory (learning loop)
+    notes,                              // operator-owned Obsidian-compatible markdown notes
 
     async init() {
       // Ensure all store directories exist

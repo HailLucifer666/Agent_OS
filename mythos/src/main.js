@@ -427,7 +427,20 @@ async function main() {
       // (see build-engine.js). brain is still passed for the verifier/review
       // machinery that legitimately uses it.
       buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus, brain: brain });
-      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine });
+      // Refine loop (2026-08-14): renders the built artifact in real headless
+      // Chrome, screenshots it, and critiques it through the vision lane before
+      // it can be called done. CONSTRUCTED INSIDE the flag check on purpose —
+      // an opt-out flag protects nothing that runs before it is read, which is
+      // exactly how the cursor-overlay slice killed boot for everyone including
+      // the operators who had it disabled. Absent refiner = feature off, and
+      // build-runner records the skip on the job rather than hiding it.
+      var buildRefiner = null;
+      if (config.BUILD_REFINE_ENABLED) {
+        buildRefiner = require('./core/effectors/build-refine').createBuildRefiner({
+          vault: memory.fs, brain: brain, logger: logger,
+        });
+      }
+      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine, refiner: buildRefiner });
 
       // Integration 2 + 4: agent actions with design system + persona dispatch
       agentActionsEffector = createAgentActions({
@@ -557,7 +570,7 @@ async function main() {
         );
       };
       registerFromSkills(hub);
-      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
+      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory, notes: memory.notes });
       registerFromPersona(hub, { identity: identity });
       registerFromHermes(hub);
       // Phase 3 (V7): allow-listed shell runner for engagement/Forge verify-stages.

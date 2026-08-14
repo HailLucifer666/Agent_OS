@@ -355,6 +355,16 @@ const SCHEMA = {
   MYTHOS_BUILD_CONCURRENCY:  { type: 'number', default: 3, min: 1, max: 8 },
   MYTHOS_JOBS_MAX_PERSISTED: { type: 'number', default: 100, min: 10 },
   MYTHOS_WATCH_DIRS:         { type: 'string', default: '' },
+  // Notes directory (memory/notes.js). Empty = <vault>/Notes, which is what a
+  // fresh clone uses. Set it to an existing Obsidian vault folder and MYTHOS's
+  // notes land there as ordinary .md files — no Obsidian plugin or CLI needed.
+  MYTHOS_NOTES_DIR:          { type: 'string', default: '' },
+  // Build refine loop (2026-08-14, the "snake game test"). ON by default: a
+  // build that has never been rendered is the problem this closes. The refiner
+  // is CONSTRUCTED INSIDE this flag check in main.js — an opt-out flag protects
+  // nothing that runs before it is read (Slice-5 lesson).
+  BUILD_REFINE_ENABLED:        { type: 'bool',   default: true },
+  BUILD_REFINE_MAX_ITERATIONS: { type: 'number', default: 2, min: 1, max: 4 },
   MYTHOS_FILE_DEBOUNCE_MS:   { type: 'number', default: 500, min: 50 },
 
   // Conversation brain (idle reasoning) — how often the entity "mulls" during

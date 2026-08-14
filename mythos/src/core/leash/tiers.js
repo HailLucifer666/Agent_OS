@@ -64,6 +64,13 @@ const TIER_TABLE = {
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
+  // Notes (memory/notes.js, 2026-08-14). Reads are T0 like recall_memory /
+  // read_file above; note_take is T1 — a local write into MYTHOS's own notes
+  // directory, same class as write_note, not the T3 class of write_file (which
+  // can reach any sandboxed root, including mythos/.env).
+  'note_read':             0,
+  'note_search':           0,
+  'note_take':             1,
   'persona_status':        0,  // read-only — reports current personality dial settings
   'self_capabilities':     0,  // read-only — reports the boot-generated capabilities manifest
   'document_list':         0,  // read-only — lists ingested documents (doc-level metadata), §7.5
