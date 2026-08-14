@@ -26,6 +26,26 @@
 
 const DEFAULT_VISION_TIMEOUT_MS = 12000;
 
+// Per-ATTEMPT bound, threaded into chain.js — distinct from the total-call bound
+// above, and the fix for the 2026-08-14 screen_look failures.
+//
+// The two numbers used to be incompatible rather than merely different. This
+// function raced the WHOLE call against 12s while chain.js gave EACH provider
+// attempt CHAIN_ATTEMPT_TIMEOUT_MS = 30000. So when the first-ranked vision model
+// was merely slow — not dead, and therefore invisible to the laneEmpty preflight
+// below — the outer race expired at 12s while the chain was still inside attempt
+// #1, and models 2-5 were never tried at all. Both of that session's screen_look
+// calls failed that way, with all five cloud vision providers keyed and alive.
+// The lane had failover; the budget just never let it run.
+//
+// 4s per attempt lets the 12s budget genuinely walk 2-3 models. It is deliberately
+// aggressive: a vision call answers a question asked mid-conversation, so a model
+// that cannot reply in 4 seconds has already lost to the next one in the ranking,
+// and being wrong about that costs a retry against a slower model rather than a
+// wrong answer. Falls back to the outer budget when that is somehow shorter — a
+// per-attempt bound above the total bound would reintroduce the exact bug.
+const DEFAULT_VISION_ATTEMPT_TIMEOUT_MS = 4000;
+
 // Wave 5 (2026-08-13) — lane preflight. registry.js already walks the vision
 // lane alive-provider-only (chainFor), same discipline probes.js's own status
 // read uses; requiring it directly here mirrors that existing pattern rather
@@ -43,6 +63,8 @@ const registry = require('../brain/registry');
  * @param {string} opts.source      brain.think source tag ('screen-look' | 'camera-look')
  * @param {string} [opts.mime]      image mime type (default image/png)
  * @param {number} [opts.timeoutMs] override; falls back to DEFAULT_VISION_TIMEOUT_MS
+ * @param {number} [opts.attemptTimeoutMs] per-provider-attempt override; falls back
+ *   to DEFAULT_VISION_ATTEMPT_TIMEOUT_MS, and is clamped below timeoutMs
  * @param {object} [opts.logger]    logger with info(); omitted = no instrumentation
  * @param {Function} [opts.chainFor] test seam — defaults to the real
  *   registry.chainFor. Only meaningful when `brain` IS the production brain
@@ -56,8 +78,27 @@ async function visionThink(brain, opts) {
   const timeoutMs = Number.isFinite(o.timeoutMs) && o.timeoutMs > 0
     ? o.timeoutMs
     : DEFAULT_VISION_TIMEOUT_MS;
+  const requestedAttemptMs = Number.isFinite(o.attemptTimeoutMs) && o.attemptTimeoutMs > 0
+    ? o.attemptTimeoutMs
+    : DEFAULT_VISION_ATTEMPT_TIMEOUT_MS;
+  // A per-attempt bound at or above the total bound is the bug, not a config
+  // choice — it guarantees the chain never gets past attempt #1.
+  const attemptTimeoutMs = Math.min(requestedAttemptMs, timeoutMs);
   const startedAt = Date.now();
-  const log = (o.logger && typeof o.logger.info === 'function') ? o.logger : null;
+  const rawLog = (o.logger && typeof o.logger.info === 'function') ? o.logger : null;
+  // Instrumentation must never be able to fail the thing it measures. Found by
+  // test rather than in production: a logger whose info() throws took the whole
+  // look down, which was already true of the terminal vision.call line before the
+  // per-attempt lines below multiplied the number of chances to hit it. Same rule
+  // as pcm-player's throwing-callback guard — the log is an optimisation, the
+  // answer is the product.
+  const log = rawLog
+    ? { info: (evt, data) => { try { rawLog.info(evt, data); } catch (_) { /* logging only */ } } }
+    : null;
+  // Per-provider latency, which BUG-209 named as the missing evidence that made
+  // reordering the vision lane a guess. One line per attempt, so a slow lane is
+  // now readable as "which model, how long" instead of a single silent 12s.
+  const attempts = [];
   const chainFor = typeof o.chainFor === 'function' ? o.chainFor : registry.chainFor;
 
   // Wave 5 — the 2026-08-12/13 session's ×4 screen_look / camera_look
@@ -91,6 +132,11 @@ async function visionThink(brain, opts) {
       ],
     }],
     source: o.source || 'vision-look',
+    attemptTimeoutMs,
+    onAttemptEnd: (a) => {
+      attempts.push(a);
+      if (log) log.info('vision.attempt', { source: o.source || 'vision-look', ...a });
+    },
   });
 
   let timer = null;
@@ -107,8 +153,20 @@ async function visionThink(brain, opts) {
     // it keeps running and its result is discarded. Attach a no-op catch so a
     // later rejection cannot surface as an unhandled promise rejection.
     think.then(() => {}, () => {});
-    if (log) log.info('vision.call', { source: o.source || 'vision-look', ms, ok: false, timedOut: true, timeoutMs });
-    return { content: null, provider: null, model: null, offline: false, timedOut: true, ms };
+    // `attempts` is the whole point of the 2026-08-14 change: a bare "timed out"
+    // could not distinguish "one slow model ate the budget" (the actual cause)
+    // from "every model was tried and all were slow" (a lane-ordering problem).
+    if (log) {
+      log.info('vision.call', {
+        source: o.source || 'vision-look', ms, ok: false, timedOut: true,
+        timeoutMs, attemptTimeoutMs, attemptsTried: attempts.length,
+        attempts: attempts.map((a) => `${a.provider}:${a.model} ${a.ms}ms${a.timedOut ? ' timeout' : ''}`),
+      });
+    }
+    return {
+      content: null, provider: null, model: null, offline: false, timedOut: true, ms,
+      attemptsTried: attempts.length,
+    };
   }
 
   if (settled && settled.__error) {
@@ -126,6 +184,7 @@ async function visionThink(brain, opts) {
       ok: !result.offline && !!result.content,
       offline: !!result.offline,
       chars: result.content ? String(result.content).length : 0,
+      attemptsTried: attempts.length,
     });
   }
   return {
@@ -138,4 +197,4 @@ async function visionThink(brain, opts) {
   };
 }
 
-module.exports = { visionThink, DEFAULT_VISION_TIMEOUT_MS };
+module.exports = { visionThink, DEFAULT_VISION_TIMEOUT_MS, DEFAULT_VISION_ATTEMPT_TIMEOUT_MS };

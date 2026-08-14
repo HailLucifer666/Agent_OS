@@ -29,6 +29,7 @@ var vaultFs = null;
 // free-tier provider holding a "quick look" for a minute (see vision-call.js).
 var pcLogger = null;
 var visionTimeoutMs = null;
+var visionAttemptTimeoutMs = null;
 // Wave 5 (2026-08-13) test seam, forwarded to visionThink's own chainFor
 // option — see from-dashboard.js's identical comment on visionChainFor.
 var visionChainForOverride = null;
@@ -456,6 +457,7 @@ async function screen_look({ query }) {
     b64: b64,
     source: 'screen-look',
     timeoutMs: visionTimeoutMs,
+    attemptTimeoutMs: visionAttemptTimeoutMs,
     logger: pcLogger,
     chainFor: visionChainForOverride,
   });
@@ -1299,6 +1301,7 @@ function registerFromPc(hub, opts) {
   // module without either.
   pcLogger = (opts && opts.logger) || null;
   visionTimeoutMs = (opts && opts.config && opts.config.VISION_CALL_TIMEOUT_MS) || null;
+  visionAttemptTimeoutMs = (opts && opts.config && opts.config.VISION_ATTEMPT_TIMEOUT_MS) || null;
   visionChainForOverride = (opts && opts.visionChainFor) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));

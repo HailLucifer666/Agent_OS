@@ -81,10 +81,27 @@ function toOllamaVisionMessages(messages) {
 // that fails mid-stream still falls through to the next attempt exactly as before,
 // onToken just stops firing for that attempt (the caller only trusts the final
 // resolved `content`, same as always).
-async function complete({ messages, kind, brain, signal, onAttempt, onToken, config }) {
+// attemptTimeoutMs: optional PER-CALL override of CHAIN_ATTEMPT_TIMEOUT_MS, and the
+// most specific of the three sources (call > config > env). It exists because a
+// caller that bounds its OWN total budget below the per-attempt timeout gets no
+// failover at all: visionThink() races the whole call against 12s while each
+// attempt here had 30s, so a merely-slow first-ranked vision model consumed the
+// entire budget inside attempt #1 and models 2-5 were never tried — reported to
+// the operator as "the vision model did not answer in time" with a live lane
+// (2026-08-14, two screen_look calls). A caller whose budget is shorter than the
+// chain's step size must be able to shorten the step, not just give up sooner.
+//
+// onAttemptEnd({ provider, model, ms, ok, timedOut, error }): per-attempt outcome,
+// fired for every attempt including the one that succeeds. onAttempt fires BEFORE
+// an attempt and is already spoken for (brain-spend); this is the other edge, and
+// its absence is exactly what BUG-209 named as the reason the vision lane could
+// not be reordered on evidence — no per-provider latency was recorded anywhere.
+async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd, onToken, config, attemptTimeoutMs: attemptTimeoutOverride }) {
   // F2: Use config-provided values if available, falling back to env-based defaults.
   const cooldownMs = (config && config.CHAIN_COOLDOWN_MS) || COOLDOWN_MS;
-  const attemptTimeoutMs = (config && config.CHAIN_ATTEMPT_TIMEOUT_MS) || ATTEMPT_TIMEOUT_MS;
+  const attemptTimeoutMs = (Number.isFinite(attemptTimeoutOverride) && attemptTimeoutOverride > 0)
+    ? attemptTimeoutOverride
+    : ((config && config.CHAIN_ATTEMPT_TIMEOUT_MS) || ATTEMPT_TIMEOUT_MS);
   // brain takes priority if explicitly set; otherwise fall back to kind-based routing.
   const effectiveKind = brain || (kind === 'vision' ? 'vision' : 'text');
   const ranked = await registry.chainFor(effectiveKind);
@@ -98,12 +115,24 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken, con
     // Skip lanes whose provider isn't configured (e.g. GROQ_API_KEY not set).
     if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
     if (onAttempt) onAttempt({ provider: lane, model });
+    const attemptStartedAt = Date.now();
+    // Declared out here, not inside the try below: the catch block has to be able
+    // to tell "this attempt hit ITS OWN timeout" apart from a provider error, and
+    // that is the single most useful field in the telemetry.
+    let attemptTimedOut = false;
+    // Telemetry must never be able to break the chain walk it is measuring.
+    const reportAttemptEnd = (fields) => {
+      if (!onAttemptEnd) return;
+      try {
+        onAttemptEnd({ provider: lane, model, ms: Date.now() - attemptStartedAt, ...fields });
+      } catch (_) { /* instrumentation only */ }
+    };
     try {
       // Per-attempt timeout prevents a slow/hanging provider from blocking the
       // entire chain walk (critical on cloud depots where cold starts or
       // network latency can stall a single provider for 30+ seconds).
       const attemptCtrl = new AbortController();
-      const attemptTimer = setTimeout(() => attemptCtrl.abort(), attemptTimeoutMs);
+      const attemptTimer = setTimeout(() => { attemptTimedOut = true; attemptCtrl.abort(); }, attemptTimeoutMs);
       // If the caller already has an abort signal, forward it.
       const onCallerAbort = () => attemptCtrl.abort();
       signal && signal.addEventListener('abort', onCallerAbort, { once: true });
@@ -116,6 +145,7 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken, con
         } else {
           content = await LANES[lane].chat(messages, { model, signal: attemptCtrl.signal, source: 'voice-chain', onToken });
         }
+        reportAttemptEnd({ ok: true, timedOut: false });
         return { content, provider: lane, model };
       } finally {
         // Cleanup MUST run on BOTH success and error paths. Previously this was
@@ -128,6 +158,7 @@ async function complete({ messages, kind, brain, signal, onAttempt, onToken, con
       }
     } catch (err) {
       errors.push(`${lane}:${model}: ${err.message}`);
+      reportAttemptEnd({ ok: false, timedOut: attemptTimedOut, error: String(err && err.message || err).slice(0, 200) });
       // Error discrimination: only cooldown on rate-limit (429) or network errors.
       // Auth failures (401/403) won't recover in 60s — let isAvailable() handle them.
       // Bad-request (400) means the provider is healthy, the request was wrong — don't

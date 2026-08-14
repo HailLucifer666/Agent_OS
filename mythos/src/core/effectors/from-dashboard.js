@@ -987,6 +987,7 @@ function buildTools(ctx) {
         mime: 'image/jpeg', // camera.js captures JPEG (canvas.toDataURL('image/jpeg'))
         source: 'camera-look',
         timeoutMs: config && config.VISION_CALL_TIMEOUT_MS,
+        attemptTimeoutMs: config && config.VISION_ATTEMPT_TIMEOUT_MS,
         logger: logger,
         chainFor: visionChainFor,
       });
