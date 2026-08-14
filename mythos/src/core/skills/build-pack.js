@@ -56,7 +56,12 @@ var APP_RE = /\b(app|full.?stack|backend|api|server|database|multi.?file|system|
 
 // Essence packs per deliverable kind. Each addition earns its place:
 var PACKS = {
-  ui: ['taste-frontend', 'ui-ux-pro-max'],
+  // hallmark (anti-slop hard rules: honest copy, locked tokens, mobile floor,
+  // pre-emit self-critique) and diagram-design (deletion-first schematic
+  // discipline) joined 2026-08-14. diagram-design sits LAST so the budget cap
+  // drops it first — it matters for the subset of UI briefs that are diagrams,
+  // while the other three carry every page build.
+  ui: ['taste-frontend', 'hallmark', 'ui-ux-pro-max', 'diagram-design'],
   code: ['ponytail', 'karpathy-guidelines'],
   // Full builds are multi-file and long-lived: root-cause discipline and an
   // explicit finish-check matter more here than in a single-file snippet.

@@ -924,6 +924,47 @@ here in the same commit as the step that disproves them.
 | **"Postiz self-host has a known open Instagram OAuth bug"** | Unverified here, and moot. | Moot: AGPL rules Postiz out for a sold product under OD-2's recommendation. |
 | **instagrapi / whatsapp-web.js / Baileys are high ban risk and ToS-violating** | **Accepted as correct and treated as binding.** | Banned outright for anything shipped (P9 step 2, P11 step 3). Non-negotiable in a product that will be sold. |
 | **MoneyPrinterTurbo's auto-publish routes through the paid Upload-Post SaaS** | Plausible and consistent with the operator's stated objection to paid middlemen. | P6 uses it as a **render engine only**. Even if the claim is stale, publishing through MYTHOS's own effectors is the right architecture regardless — it keeps AD-1's single execution surface intact. |
+| **TencentDB-Agent-Memory (2026-08-14 sweep)** | **DO NOT INSTALL — recorded so it is never "discovered" again.** 21,474 stars vs 2 contributors / 7 commits (the strongest farmed-star signature in the sweep), a 3-service Docker infrastructure, and the licence file says MIT while GitHub reports NOASSERTION. | Its four-asset taxonomy (Chat Memory with L0–L3 distillation, Skill extraction, ACL binding) is kept as **design prior art for this repo's own vault evolution** — read the ideas, never the code. |
+
+### 2026-08-14 trending-sweep ledger (verified by adversarial refutation, 9/9)
+
+Recorded here so future sessions inherit conclusions, not re-runs. Every ADOPT
+in this sweep shipped in the parity tree the same day (vendored skills — see
+`THIRD_PARTY_NOTICES.md` "Vendored agent skills"); everything below is what did
+NOT ship, and why.
+
+**Design prior art (read, never install):**
+- **loopx** — durable-goals / evidence-log / quota-aware-wake shapes: prior art
+  for this plan's autonomy layer (P10) and the parity evidence contract.
+- **earendil-works/pi** — provider abstraction done right; prior art for fixing
+  `registry.js`'s faked liveness for openrouter/cerebras (a known, recorded
+  gap). **orca** — git-worktree fleet UX prior art.
+- **OpenClaw** gateway/channel model — P1/P7/P11 prior art (earlier research).
+- **UI-TARS** (BUGS.md BUG-219 note) and **LiveKit Agents** interruption
+  handling (BUGS.md BUG-224 note) — recorded next to the bugs they inform.
+
+**ADOPT-LATER (conditions named, re-verify before adopting):**
+| Candidate | What it is | Condition |
+|---|---|---|
+| Switchyard | lane-escalation routing | Apache-2.0 verified, but pre-1.0 — wait for API stability |
+| needle | offline intent router | licence/provenance verify still pending |
+| pdf-inspector | doc ingestion | Windows prebuilds verified; adopt when a doc-ingestion phase actually opens |
+| archify | — | verify still pending |
+| prime-agent | second build engine | strict adapter conditions; never via `curl \| sh`; single-engine rule stands until explicitly revisited |
+
+**Kill-list (licence/security — never re-litigate):** cangjie-skill (AGPL) ·
+macro (AGPL) · holaOS (modified Apache, no commercial embed) · FluidVoice
+(GPLv3 + macOS-only) · OmniRoute (Socket.dev supply-chain flag + ToS-gray key
+aggregation) · DeepSeek-Reasonix (provenance fails the trust bar) ·
+reverse-skill (no fit + liability) · prime-RLM-agent / "prime-agent" lookalikes
+shipping prebuilt binaries (unofficial — never install).
+
+**Declined (not licence — fit):** cloudflare/computer (cloud-side Linux sandbox
+needing a Cloudflare account; cannot touch the local Windows desktop) ·
+TencentDB/semantica/code-graph-rag installs · Obsidian CLI *wiring* (operator
+decision: notes stay plain markdown + the vendored obsidian skills; the
+`obsidian-cli` skill is vendored but inert without the optional binary) ·
+worldmonitor MCP (operator's personal BYO-pro-key choice; verify pending).
 
 ---
 

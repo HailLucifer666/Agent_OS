@@ -162,3 +162,7 @@ nodes/.kotlin/
 # /Android Platform Tools/ above: a separate repo with its own history and its
 # own Python venv never belongs inside this one.
 /Aether-BLE/
+
+# hallmark skill's runtime diversification log (project memory written where
+# builds run — runtime-local state, never publish; see mythos/skills/hallmark/)
+.hallmark/

@@ -191,6 +191,13 @@ directory carries its upstream `LICENSE` alongside its `SKILL.md`.
 | `ui-ux-pro-max` (essence only) | https://github.com/nextlevelbuilder/ui-ux-pro-max-skill | MIT |
 | `agent-reach` | https://github.com/Panniantong/Agent-Reach | MIT |
 | `using-superpowers`, `brainstorming`, `writing-plans`, `executing-plans`, `systematic-debugging`, `test-driven-development`, `verification-before-completion` | https://github.com/obra/superpowers | MIT (© 2025 Jesse Vincent) |
+| `hallmark` | https://github.com/Nutlope/hallmark | MIT (verified 2026-08-14, no exceptions; `.hallmark/log.json` is runtime-local and gitignored) |
+| `diagram-design` | https://github.com/cathrynlavery/diagram-design | MIT (Python validator scripts are optional — degrade per the optional-binary rule) |
+| `webapp-testing`, `web-artifacts-builder`, `canvas-design`, `theme-factory`, `mcp-builder`, `skill-creator` | https://github.com/anthropics/skills | Apache-2.0 (each dir carries its upstream `LICENSE.txt`; only the Apache-2.0 subset is vendored — the source-available docx/pdf/pptx/xlsx skills are deliberately excluded). `canvas-design` is vendored guidance-only: its ~5 MB `canvas-fonts/` dir is NOT redistributed here |
+| `api-and-interface-design`, `code-review-and-quality`, `performance-optimization`, `security-and-hardening`, `observability-and-instrumentation` | https://github.com/addyosmani/agent-skills | MIT (repo `hooks/` and Claude-Code `commands/` are deliberately not vendored) |
+| `grill-me`, `grilling` | https://github.com/mattpocock/skills | MIT |
+| `obsidian-markdown`, `obsidian-bases`, `json-canvas`, `defuddle`, `obsidian-cli` | https://github.com/kepano/obsidian-skills | MIT (`obsidian-cli` needs the optional Obsidian CLI binary; absent → inert) |
+| `persona-frontend-developer`, `persona-backend-architect`, `persona-ui-designer`, `persona-brand-guardian`, `persona-reality-checker`, `persona-ui-finish-gate-reviewer` | https://github.com/msitarzewski/agency-agents | MIT (bodies verbatim; frontmatter rewritten for this repo's loader — see the comment at the top of each SKILL.md) |
 
 `src/core/brain/style-terse.js` is a condensation of the `caveman` skill above,
 rewritten for this repo's brain lanes rather than copied — the skill's own
