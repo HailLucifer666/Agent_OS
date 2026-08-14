@@ -285,12 +285,27 @@ const SCHEMA = {
   // aloud, and clipped fragments sound like a malfunction rather than brevity.
   // 'build' is also excluded — that lane emits artifact CONTENT (source files),
   // where a brevity instruction is actively destructive.
-  // 'simple' is the prose-heavy lane (memory consolidation, reflection, goal and
-  // engagement summaries) and is where the savings actually are. Individual
-  // callers on a spoken path opt out per call with think({ terse: false }) —
-  // the boot greeting (server/index.js) does exactly that.
+  // 'simple' is the trivial/formatting lane and is where the savings are.
+  // Individual callers on a spoken path opt out per call with
+  // think({ terse: false }) — the boot greeting (server/index.js) and
+  // immune/explainer.js both do exactly that, which is why they were left on
+  // 'simple' when the reasoning/memory lanes were split out.
+  //
+  // 'memory' WAS ADDED 2026-08-14 WITH THAT SPLIT, DELIBERATELY, and this is the
+  // only place the decision is visible. Memory consolidation and document
+  // answering moved off 'simple' onto their own lane; without naming 'memory'
+  // here they would have silently lost terse compression — longer summaries,
+  // more tokens, no error, nothing in a diff to notice. Compact summaries are
+  // the point of consolidation, so terse follows it.
+  //
+  // 'reasoning' is deliberately EXCLUDED for the mirror-image reason. mull(),
+  // reflection, the reviewer/reality-check seats and think_deeply were moved to
+  // that lane precisely so they could think properly; compressing their output
+  // is working against the change that created the lane. A reasoning answer that
+  // has to drop articles to fit is the wrong trade.
+  //
   // Empty string disables the layer entirely.
-  BRAIN_TERSE_LANES:        { type: 'string', default: 'simple' },
+  BRAIN_TERSE_LANES:        { type: 'string', default: 'simple,memory' },
 
   // Autonomy
   AUTONOMOUS_MAX_TIER:      { type: 'number', default: 2, min: 0, max: 4 },
@@ -533,6 +548,16 @@ const SCHEMA = {
   // VISION_CALL_TIMEOUT_MS, because a per-attempt bound at or above the total
   // bound reintroduces the bug rather than configuring it.
   VISION_ATTEMPT_TIMEOUT_MS:   { type: 'number', default: 4000, min: 500 },
+
+  // think_deeply (effectors/deep-think.js) — same two-bound shape as vision
+  // above, and for the same reason: a total budget shorter than chain.js's
+  // per-attempt step means the lane's failover can never run. Longer than
+  // vision's 12s deliberately — a look answers "what is on screen right now",
+  // this one is the explicit "go away and think about it properly" verb. Past
+  // 20s the operator has moved on and an honest "that took too long" beats a
+  // late answer. deep-think.js clamps the per-attempt bound below the total.
+  DEEP_THINK_TIMEOUT_MS:       { type: 'number', default: 20000, min: 1000 },
+  DEEP_THINK_ATTEMPT_TIMEOUT_MS: { type: 'number', default: 7000, min: 500 },
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply

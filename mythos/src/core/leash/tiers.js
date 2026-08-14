@@ -31,6 +31,13 @@ const TIER_TABLE = {
   'list_folder':           0,
   'read_file':             0,
   'clipboard_read':        0,  // Task 3 (step 5) — read-only
+  // think_deeply (2026-08-14) — asks the reasoning lane a question and returns
+  // the answer. Touches nothing: no filesystem, no network beyond the same
+  // provider chain every other brain call already uses, no world state. Same
+  // class as document_answer (also T0, also brain-backed). Without an entry
+  // here the unknown-tool fail-safe would gate "think about this" at T3 and put
+  // a confirm prompt in front of a question.
+  'think_deeply':          0,
   'list_windows':          0,
   // BUG-102: the cua-driver tools had NO entries at all, so tierOf()'s unknown-
   // tool fail-safe put a pure window listing on T3 and voice had to ask for

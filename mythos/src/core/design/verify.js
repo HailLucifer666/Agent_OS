@@ -193,8 +193,13 @@ function createVerifier({ brain }) {
     // missing structure) is already caught by the rule checks above and remains
     // a hard-fail. Warnings surface to the review phase / ship-with-warning.
     try {
+      // lane 'reasoning' (2026-08-14). The comment above records that this
+      // LLM-judge "tends to veto legitimate stylistic variation" — a weak model
+      // is exactly what produces that, and it was running on the weakest one.
+      // Its findings stay ADVISORY regardless; a better judge makes the advice
+      // worth reading, it does not promote it to a hard fail.
       var result = await brain.think({
-        lane: 'simple',
+        lane: 'reasoning',
         messages: [{ role: 'user', content:
           'Check this HTML deliverable against the spec. Spec: "' +
           String(spec || '').slice(0, 300) +

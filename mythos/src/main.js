@@ -481,7 +481,12 @@ async function main() {
       hub.registerNamed('kanban-effector', kanbanEffector);
       hub.registerNamed('pipeline-effector', pipelineEffector);
 
-      registerFromComputer(hub);
+      // brain/config/logger are for think_deeply (effectors/deep-think.js) — the
+      // only route from a conversation to the reasoning lane. Passing brain here
+      // is load-bearing: without it think_deeply registers but can only decline.
+      // Same wiring gap that left camera_look's brain null for weeks, so
+      // test/think-deeply.test.js asserts this call keeps passing it.
+      registerFromComputer(hub, { brain: brain, config: config, logger: logger });
       // config + logger are for screen_look's vision call (effectors/vision-call.js):
       // VISION_CALL_TIMEOUT_MS bounds it, and the logger is what emits the
       // `vision.call` provider/model/ms line that did not exist before 2026-08-10.
@@ -524,8 +529,10 @@ async function main() {
       // Previously setAskAgentDispatch was never called, so ask_agent always failed.
       if (dashboardWiring && typeof dashboardWiring.setAskAgentDispatch === 'function') {
         dashboardWiring.setAskAgentDispatch(async function(seat, prompt) {
+          // lane 'reasoning' (2026-08-14): a delegated agent seat is asked to
+          // think, not to format. It was on 'simple' — the trivial lane.
           var result = await brain.think({
-            lane: 'simple',
+            lane: 'reasoning',
             messages: [{ role: 'user', content: String(prompt || '') }],
             source: 'ask_agent:' + (seat || 'unknown'),
           });

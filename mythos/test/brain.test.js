@@ -9,14 +9,26 @@ const assert = require('node:assert/strict');
 describe('brain/lanes.default', function() {
   const lanes = require('../src/core/brain/lanes.default');
 
-  it('has 6 brain lanes', function() {
+  it('has 8 brain lanes', function() {
     assert.ok(lanes.BRAIN_TABLES.voice);
     assert.ok(lanes.BRAIN_TABLES.build);
     assert.ok(lanes.BRAIN_TABLES.simple);
+    // reasoning + memory added 2026-08-14. Registration is not cosmetic:
+    // registry.js's chainFor() substitutes BRAIN_TABLES.text for an unknown
+    // kind, so an unregistered lane name routes silently into a lane with no
+    // caller instead of failing.
+    assert.ok(lanes.BRAIN_TABLES.reasoning);
+    assert.ok(lanes.BRAIN_TABLES.memory);
     assert.ok(lanes.BRAIN_TABLES.text);
     assert.ok(lanes.BRAIN_TABLES.vision);
     assert.ok(lanes.BRAIN_TABLES.embed);
-    assert.equal(Object.keys(lanes.BRAIN_TABLES).length, 6);
+    assert.equal(Object.keys(lanes.BRAIN_TABLES).length, 8);
+  });
+
+  it('every lane has a distinct CHAIN_* env override key', function() {
+    const envs = Object.keys(lanes.BRAIN_TABLES).map(function(k) { return lanes.BRAIN_TABLES[k].env; });
+    assert.equal(new Set(envs).size, envs.length, 'two lanes share one override env key');
+    envs.forEach(function(e) { assert.match(e, /^CHAIN_[A-Z]+$/); });
   });
 
   it('embed lane documents the real embeddings chain (ollama then mistral)', function() {
@@ -29,9 +41,70 @@ describe('brain/lanes.default', function() {
     ]);
   });
 
-  it('voice lane has groq first', function() {
-    assert.equal(lanes.PREF_VOICE[0].provider, 'groq');
-    assert.equal(lanes.PREF_VOICE[0].model, 'llama-3.3-70b-versatile');
+  it('voice lane leads with google, groq demoted below it', function() {
+    // Was "groq first" until 2026-08-14. Two independent measurements moved it:
+    // groq llama-3.3-70b scored 2/4 (missing BOTH reasoning probes), and Groq's
+    // budget is 12,000 TOKENS per window while this lane's prompt is ~10k tokens
+    // — one turn nearly exhausts it, which is what the production 429s were.
+    // google gemini-flash-lite-latest was the only model in the run with zero
+    // disqualifier flags, which matters most on the lane that is SPOKEN ALOUD
+    // (a chain-of-thought leak here is read out).
+    assert.equal(lanes.PREF_VOICE[0].provider, 'google');
+    assert.equal(lanes.PREF_VOICE[0].model, 'gemini-flash-lite-latest');
+    const groqIdx = lanes.PREF_VOICE.findIndex(function(p) { return p.provider === 'groq'; });
+    assert.ok(groqIdx > 0, 'groq retained as a fallback, not leading');
+  });
+
+  it('reasoning lane leads with cerebras and falls through to another provider', function() {
+    assert.equal(lanes.PREF_REASONING[0].provider, 'cerebras');
+    assert.equal(lanes.PREF_REASONING[0].model, 'gpt-oss-120b');
+    // Cerebras is capped at 5 req/min and seven roles now share this lane, so a
+    // chain that never leaves Cerebras would 429 as a burst rather than fail
+    // over. At least one non-cerebras cloud entry is load-bearing, not garnish.
+    const offCerebras = lanes.PREF_REASONING.filter(function(p) {
+      return p.provider !== 'cerebras' && p.provider !== 'ollama';
+    });
+    assert.ok(offCerebras.length >= 1, 'reasoning lane must fail over off cerebras');
+  });
+
+  it('memory lane leads on a Google model none of the other lanes use', function() {
+    assert.equal(lanes.PREF_MEMORY[0].provider, 'google');
+    // Google's quota is per-MODEL, so the whole point of this head is that it is
+    // a DIFFERENT model from the vision and voice heads. Sharing one would merge
+    // three buckets back into one and undo the load spread.
+    const googleHeads = [lanes.PREF_MEMORY[0], lanes.PREF_VISION[0], lanes.PREF_VOICE[0]]
+      .filter(function(p) { return p.provider === 'google'; })
+      .map(function(p) { return p.model; });
+    assert.equal(new Set(googleHeads).size, googleHeads.length,
+      'two lane heads share one Google model — that is one quota bucket, not two');
+  });
+
+  it('vision lane leads with google and keeps NIM last among cloud entries', function() {
+    // Reordered 2026-08-14. NOT a quality call: Google and Mistral read the same
+    // screenshot equally well. Google leads because Mistral's 4 req/min is
+    // shared with Hermes builds and embeddings, and vision is one of the two
+    // frequent consumers. NIM stays (breakers are self-correcting, a deletion is
+    // not) but last.
+    assert.equal(lanes.PREF_VISION[0].provider, 'google');
+    assert.equal(lanes.PREF_VISION[0].model, 'gemini-3.5-flash-lite');
+    const cloud = lanes.PREF_VISION.filter(function(p) { return p.provider !== 'ollama'; });
+    assert.equal(cloud[cloud.length - 1].provider, 'nim');
+  });
+
+  it('no PREF_* table lists a model known dead on these keys', function() {
+    // KNOWN_DEAD is data rather than prose precisely because prose is what let
+    // inclusionai/ling-3.0-flash:free sit in two lanes for three weeks after it
+    // began 404ing. Every table, every entry, every run.
+    const tables = ['PREF_VOICE','PREF_BUILD','PREF_SIMPLE','PREF_REASONING','PREF_MEMORY','PREF_TEXT','PREF_VISION','PREF_EMBED'];
+    tables.forEach(function(name) {
+      lanes[name].forEach(function(entry) {
+        const dead = lanes.KNOWN_DEAD.find(function(d) {
+          return d.provider === entry.provider && d.model === entry.model;
+        });
+        assert.equal(dead, undefined,
+          name + ' lists ' + entry.provider + ':' + entry.model + ' — known dead (' + (dead && dead.reason) + ')');
+      });
+    });
   });
 
   it('build lane leads with the code-specialist model, ollama entries last (filtered if absent)', function() {

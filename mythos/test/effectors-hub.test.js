@@ -209,8 +209,13 @@ describe('gate: 100 registered count', () => {
     // existed at GET /api/system and the dashboard widget rendered them, but
     // NO tool exposed any of it, so screen_look was the model's only option
     // and it screenshotted a screen that happened to be showing MYTHOS's own
-    // dashboard) = 104.
-    assert.equal(hub.count(), 104);
+    // dashboard) = 104,
+    // + think_deeply (from-computer, 2026-08-14 — the ONLY route from a
+    // conversation to a strong reasoning model. The Live voice path makes zero
+    // brain.think calls and its own model is capped at Flash tier on a free key,
+    // so re-ranking lanes could not change a spoken answer by one word; a tool
+    // is the only mechanism) = 105.
+    assert.equal(hub.count(), 105);
   });
 });
 

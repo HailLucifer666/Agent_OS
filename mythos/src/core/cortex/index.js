@@ -419,8 +419,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // Skip if there's nothing to think about — pure zero-cost idle
       if (!convoSummaries.trim() && !eventSummaries.trim()) return;
 
+      // lane 'reasoning', not 'simple' (2026-08-14). mull()'s whole job is
+      // noticing loose ends worth raising — and it was doing it on
+      // llama-3.1-8b-instant, the weakest model in the fleet, which led
+      // PREF_SIMPLE for "224ms — fastest measured anywhere". NOTHING WAITS ON
+      // THIS CALL: it runs in a quiet moment and its output is a maybe-mention.
+      // The latency bought nothing and cost the reasoning.
       var result = await brain.think({
-        lane: 'simple',
+        lane: 'reasoning',
         messages: [{ role: 'user', content:
           'You are MYTHOS, reflecting during a quiet moment. Here is your recent context:\n\n' +
           'Recent conversations:\n' + (convoSummaries || '(none)') + '\n\n' +

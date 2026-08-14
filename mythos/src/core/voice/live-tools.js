@@ -77,6 +77,15 @@ const DEFAULT_ALLOWLIST = [
   // T3/danger and stays operator-confirmed at the leash — this promotion changes
   // what is REACHABLE, not what is permitted.
   'write_file','read_file',
+  // think_deeply (2026-08-14). This one is not a drift fix — the tool was built
+  // FOR this list. The Live conversation model is capped at Flash tier on a free
+  // key (all six bidiGenerateContent models are Flash; Pro Live is 404) and
+  // live-session.js / live-tool-adapter.js make ZERO brain.think calls, so no
+  // amount of lane re-ranking can improve a spoken answer. Delegating to the
+  // reasoning lane through a tool is the only mechanism that exists, and it is
+  // worth nothing if the tool is unreachable from the surface that needs it.
+  // T0, read-only, no act-side sibling to pair.
+  'think_deeply',
   // 2026-08-13: timer_add/timer_cancel joined this line from
   // VOICE_ALLOWLIST_EXEMPT. They were exempt as "not yet asked for in a live
   // session" — but commit 0bd8408 then rewrote reminder_add's description to say

@@ -423,8 +423,15 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     // 2. Text-based reviewer check
     if (brain && typeof brain.think === 'function') {
       try {
+        // lane 'reasoning' (2026-08-14) — a reviewer grading a deliverable
+        // against a spec is the definition of the reasoning lane's job, and it
+        // ran on llama-3.1-8b-instant until now. NOTE the `persona` argument
+        // one line down: brain/index.js only injects a persona for lanes on its
+        // own list, so 'reasoning' was added there in the SAME change. Moving
+        // this lane without that would have silently dropped the reviewer
+        // persona and left a generic model grading builds.
         var reviewResult = await brain.think({
-          lane: 'simple',
+          lane: 'reasoning',
           persona: personas.loadPersona('reviewer'),
           messages: [{ role: 'user', content:
             reviewRubric.buildReviewerPreamble(artifactType) +
@@ -443,8 +450,10 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
       // 3. Reality check (hallucination detection)
       try {
+        // lane 'reasoning' (2026-08-14) — hallucination detection, same reason
+        // and the same persona-injection dependency as the reviewer above.
         var realityResult = await brain.think({
-          lane: 'simple',
+          lane: 'reasoning',
           persona: personas.loadPersona('reality-checker'),
           messages: [{ role: 'user', content:
             REALITY_CHECK_PREAMBLE +

@@ -102,8 +102,12 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         'string only if you have nothing at all."}'
       ].join('\n');
 
+      // lane 'reasoning' (2026-08-14): this call rewrites the operator profile
+      // wholesale — anything it fails to carry forward is FORGOTTEN (see the
+      // PRESERVE clause in the prompt above). That is not a job for the
+      // fastest-cheapest lane. Rare enough that Cerebras's 5/min is no risk.
       var result = await brain.think({
-        lane: 'simple',
+        lane: 'reasoning',
         messages: [{ role: 'user', content: prompt }],
         source: 'reflection:' + (reason || 'cadence')
       });
@@ -180,8 +184,10 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
         return '[' + ok + ']' + skill + ' ' + (r.summary || r.tool || 'unknown');
       });
 
+      // lane 'reasoning' (2026-08-14) — pattern-finding across a failure trace,
+      // the same class as the profile rewrite above.
       var result = await brain.think({
-        lane: 'simple',
+        lane: 'reasoning',
         messages: [{ role: 'user', content:
           'You are reviewing a trace of your recent autonomous actions to learn from them.\n' +
           'Each line shows [OK|FAIL] <optional skillRef> followed by the action summary.\n\n' +

@@ -84,8 +84,11 @@ function createOrchestrator({ buildRunner, kanban, agentActions, brain, bus, fs 
     try {
       if (brain && typeof brain.think === 'function' && m.artifacts.length) {
         var list = m.artifacts.map(function(a) { return '- ' + (a.title || a.name) + ' (' + a.path + ')'; }).join('\n');
+        // lane 'reasoning' (2026-08-14) — synthesizing several agents' output
+        // into one honest summary. Rare (once per mission), so it costs nothing
+        // against Cerebras's 5/min.
         var result = await brain.think({
-          lane: 'simple',
+          lane: 'reasoning',
           messages: [{ role: 'user', content: 'A background agent team just finished this mission: "' + m.goal + '". Deliverables produced:\n' + list + '\nSummarize what was built in 2 plain spoken sentences (no markdown).' }],
           source: 'orchestrator:synthesize',
         });

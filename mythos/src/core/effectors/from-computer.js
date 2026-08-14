@@ -565,6 +565,47 @@ function compose_email({ to, subject, body }) {
   }
 }
 
+// ---- think_deeply (2026-08-14) -------------------------------------------
+// The only route from a conversation to a strong reasoning model. See
+// deep-think.js's header for why a TOOL is the mechanism rather than a lane
+// change: the Live voice path makes no brain.think calls at all, so nothing in
+// lanes.default.js can reach it.
+//
+// Collaborators arrive through registerFromComputer(hub, ctx) rather than a
+// closure factory, because TOOLS is a module-level const this file exports and
+// four other modules import from. Held in module scope, which is exactly the
+// shape that made camera_look's brain "always null" for weeks — so the failure
+// below is explicit and named, and test/think-deeply.test.js pins that main.js
+// actually passes it.
+let deepThinkBrain = null;
+let deepThinkConfig = null;
+let deepThinkLogger = null;
+
+async function think_deeply({ question, context }) {
+  if (!deepThinkBrain || typeof deepThinkBrain.think !== 'function') {
+    return fail('No brain is wired for deep reasoning, so I cannot think this through properly.');
+  }
+  const { deepThink } = require('./deep-think');
+  try {
+    const r = await deepThink(deepThinkBrain, {
+      question: question,
+      context: context,
+      source: 'think-deeply',
+      timeoutMs: deepThinkConfig && deepThinkConfig.DEEP_THINK_TIMEOUT_MS,
+      attemptTimeoutMs: deepThinkConfig && deepThinkConfig.DEEP_THINK_ATTEMPT_TIMEOUT_MS,
+      logger: deepThinkLogger,
+    });
+    // Degrade HONESTLY and specifically. "Failed" would be indistinguishable
+    // between "no provider alive", "took too long" and "you gave me nothing to
+    // think about", and the operator can act on all three differently.
+    if (r.reason && !r.content) return fail(r.reason);
+    if (r.offline || !r.content) return fail('The reasoning lane did not return an answer.');
+    return ok({ answer: r.content, provider: r.provider, model: r.model, ms: r.ms });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
 const TOOLS = [
   { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - the folder path to open' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
@@ -593,9 +634,24 @@ const TOOLS = [
   // full conflict-resolution reasoning (Task 3 proposed T1, V2 §7.8 proposed
   // T2; resolved T2, which requires danger:false to stay consistent here).
   { name: 'clipboard_write', description: 'Overwrite the Windows clipboard with the given text.', params: { text: 'string' }, danger: false, fn: clipboard_write },
+  // The description has to say WHEN to reach for this, not what it is. A vague
+  // one is how open_web got `query` where its contract demanded `url`, five
+  // times out of five (docs/free-tier-model-map.md's J probe is a miniature of
+  // that failure). Two failure modes are named explicitly: reaching for it on
+  // small talk (burns a slow call and a scarce 5/min budget) and NOT reaching
+  // for it on a question the conversation model will otherwise answer badly
+  // from its own Flash-tier depth.
+  { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. Use this when the question needs real analysis rather than recall or chat: comparing options with trade-offs, working through a multi-step problem, planning an approach, debugging a described failure, checking whether an argument holds. Pass the FULL question plus any facts you already have in `context` — it cannot see the conversation. Do NOT use it for small talk, for looking something up (use web_search), for anything about the screen (use screen_look), or for a question you can already answer well. It takes several seconds, so say you are thinking about it first.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
 ];
 
-function registerFromComputer(hub) {
+// ctx (optional) — { brain, config, logger }. Only think_deeply uses it; every
+// other tool here is dependency-free, which is why this stayed a plain
+// (hub) call until 2026-08-14. A call with no ctx still registers every tool:
+// think_deeply then fails with a named reason instead of throwing.
+function registerFromComputer(hub, ctx) {
+  deepThinkBrain = (ctx && ctx.brain) || null;
+  deepThinkConfig = (ctx && ctx.config) || null;
+  deepThinkLogger = (ctx && ctx.logger) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -617,6 +673,7 @@ module.exports = {
   search_files,
   clipboard_read,
   clipboard_write,
+  think_deeply,
   compose_email,
   resolveSandboxed,
   isInsideAllowedRoots,

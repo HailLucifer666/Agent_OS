@@ -498,6 +498,19 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         }
       } catch (_) { /* grounding is advisory — never block planning on it */ }
 
+      // DELIBERATELY NOT MOVED to the 'reasoning' lane in the 2026-08-14 lane
+      // rewire, and this is the only record of that decision. Goal planning is
+      // the highest-frequency autonomous brain call in the system — the cortex
+      // loop drives it — and Cerebras, which heads 'reasoning', is capped at
+      // 5 req/min. Putting the loop there would starve the seven low-frequency
+      // roles the lane exists to serve. It also feeds the FAILURE-AVOIDANCE
+      // block above, whose value comes from the tool list, not from model depth.
+      //
+      // This is also the one dynamic `lane:` argument in src/ — a static scan
+      // cannot resolve it, so test/brain-lane-registration.test.js whitelists
+      // this line BY NAME and asserts both branches ('build', 'simple') are
+      // registered lanes. If this expression ever gains a third branch, add it
+      // to that test's expectation rather than letting the guard go vacuous.
       var lane = goal.drive === 'user-service' ? 'build' : 'simple';
       // RC#1: build the available-tool list from the effector registry so the
       // planner can only choose real tools. Without this, the LLM hallucinated

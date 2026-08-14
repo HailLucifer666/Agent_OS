@@ -198,7 +198,9 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
     : ((config && config.CHAIN_ATTEMPT_TIMEOUT_MS) || ATTEMPT_TIMEOUT_MS);
   // brain takes priority if explicitly set; otherwise fall back to kind-based routing.
   const effectiveKind = brain || (kind === 'vision' ? 'vision' : 'text');
-  const ranked = await registry.chainFor(effectiveKind);
+  // bus forwarded so registry's unknown-lane report reaches the Health view
+  // rather than only stderr — see registry.js's reportUnknownLane().
+  const ranked = await registry.chainFor(effectiveKind, { bus });
   const attempts = expand(ranked);
   const errors = [];
   const useBreakers = breakersEnabledFor(config);

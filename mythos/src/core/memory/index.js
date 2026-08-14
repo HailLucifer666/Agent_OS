@@ -137,7 +137,7 @@ function createMemory({ config, bus, logger, brain }) {
     var result;
     try {
       result = await brain.think({
-        lane: 'simple',
+        lane: 'memory',
         messages: [{ role: 'user', content:
           'You are consolidating a knowledge base. Below are facts drawn from ' +
           topics.length + ' previously-distilled memory snapshots (the [N] tag ' +
@@ -316,8 +316,13 @@ function createMemory({ config, bus, logger, brain }) {
           const highSalience = tail.filter(function(e) { return (e.salience || 0) > 0.5; });
           if (highSalience.length > 0) {
             const summaryText = highSalience.map(function(e) { return '- ' + (e.summary || ''); }).join('\n');
+            // lane 'memory' (2026-08-14) — split off 'simple' for LOAD as much
+            // as quality: consolidation is one of the two frequent brain
+            // consumers and shared Groq's 12k-token window with everything else.
+            // Terse styling follows this lane by default (schema.js's
+            // BRAIN_TERSE_LANES = 'simple,memory'), so summaries stay compact.
             const result = await brain.think({
-              lane: 'simple',
+              lane: 'memory',
               messages: [{ role: 'user', content: 'Distill these recent high-salience memories into durable facts:\n' + summaryText }],
               source: 'memory:consolidate'
             });
@@ -346,7 +351,7 @@ function createMemory({ config, bus, logger, brain }) {
           if (convos.length >= 3) {
             const convoText = convos.map(function(c) { return '- ' + (c.record.summary || ''); }).join('\n');
             const result = await brain.think({
-              lane: 'simple',
+              lane: 'memory',
               messages: [{ role: 'user', content:
                 'Extract durable facts about the user from these conversation excerpts.\n' +
                 'Only include facts that will still be true tomorrow: preferences, ongoing projects, ' +

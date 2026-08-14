@@ -130,7 +130,17 @@ function createBrain({ config, bus, identity }) {
           ...messages
         ];
       }
-      if (['voice', 'build', 'simple'].indexOf(lane) !== -1) {
+      // 'reasoning' and 'memory' joined this list on 2026-08-14 WITH the lane
+      // split, not after it. agent-actions.js passes
+      // `persona: personas.loadPersona('reviewer')` / `'reality-checker'`, and
+      // those two calls moved from 'simple' to 'reasoning' in the same change —
+      // had this list not moved with them, the `persona` argument would have
+      // been silently ignored and both seats would have gone generic. A lane
+      // rename dropping a sibling argument is invisible: nothing throws, the
+      // call still succeeds, the output is merely less specialised. If you add a
+      // lane that accepts a persona, add it here, and
+      // test/brain-persona-lanes.test.js will hold you to it.
+      if (['voice', 'build', 'simple', 'reasoning', 'memory'].indexOf(lane) !== -1) {
         // Per-call persona override — when the caller passes a `persona` string,
         // use it instead of the global identity persona. This enables specialized
         // agent seats (frontend-builder, backend-builder, reviewer) without
