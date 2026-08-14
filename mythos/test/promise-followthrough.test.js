@@ -67,6 +67,65 @@ test('the same claim in explicit first person IS flagged', () => {
   assert.equal(claims[0].category, 'sending');
 });
 
+// A3 (2026-08-14) — the elliptical tier, and why the miss above is still a miss.
+//
+// The measured false claim that session was "Message sent to Alex, sir." at
+// 17:29:26, logged in the same turn as whatsapp_send=FAIL. The mandatory
+// first-person prefix missed it, precisely as the note above predicts. The prefix
+// was NOT relaxed (that path is what produced the six false positives). Instead a
+// second, EVIDENCE-GATED pattern runs only when a tool from the same category was
+// really attempted this turn and did not succeed — so the tier cannot fire in the
+// turns where the documented false positives live, because in those turns no send
+// tool ran at all.
+test('the real 2026-08-14 phrase is flagged when a send tool actually failed that turn', () => {
+  const claims = detectUnbackedClaims('Message sent to Alex, sir.',
+    [{ tool: 'whatsapp_send', ok: false, summary: 'no editable element found' }]);
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].category, 'sending');
+});
+
+test('a PENDING send (ok:null) also gates the elliptical tier — that is the ack case', () => {
+  const claims = detectUnbackedClaims('Message sent to Alex, sir.',
+    [{ tool: 'whatsapp_send', ok: null, started: true, status: 'pending' }]);
+  assert.equal(claims.length, 1,
+    'a pending ack is "attempted and unproven"; speaking completion over it is the incident');
+});
+
+test('the same phrase is NOT flagged when the send actually succeeded', () => {
+  assert.deepEqual(
+    detectUnbackedClaims('Message sent to Alex, sir.', [{ tool: 'whatsapp_send', ok: true }]),
+    [],
+    'a true report must never be corrected — that trains the model to distrust itself');
+});
+
+test('the same phrase is NOT flagged when no send tool ran at all', () => {
+  assert.deepEqual(detectUnbackedClaims('Message sent to Alex, sir.', []), [],
+    'without same-turn evidence this stays the known miss above; the tier is a gate, not a widening');
+});
+
+test('the documented false positives survive the elliptical tier', () => {
+  // Every sentence the header lists as a false positive, replayed WITH an
+  // unproven send in the turn — the hardest case for the new tier.
+  const unproven = [{ tool: 'whatsapp_send', ok: false, summary: 'x' }];
+  for (const sentence of [
+    'Your package was sent yesterday.',
+    'The meeting is at 3. I found that in your calendar.',
+    'No files were found matching that name.',
+    'That saved me a lot of time.',
+    'You went to the dentist last Tuesday.',
+  ]) {
+    assert.deepEqual(detectUnbackedClaims(sentence, unproven), [],
+      'must not flag: ' + sentence);
+  }
+});
+
+test('a future-tense sentence is still exempt even with an unproven send in the turn', () => {
+  assert.deepEqual(
+    detectUnbackedClaims('I will send that message now.', [{ tool: 'whatsapp_send', ok: false }]),
+    [],
+    'FUTURE_RE runs before either tier — a promise is not a claim');
+});
+
 function makeAdapter(overrides) {
   const emitted = [];
   const written = [];

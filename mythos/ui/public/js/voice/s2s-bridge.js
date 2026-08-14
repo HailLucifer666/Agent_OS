@@ -261,7 +261,6 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   //
   // Kill switch: localStorage.MYTHOS_LIVE_HALF_DUPLEX = 'off' (same per-session
   // idiom the VAD constants already use — see docs/live-verification-runbook.md).
-  const PREROLL_MAX_FRAMES = 12;          // 12 x 100ms = 1.2s, bounds the memory
   // Same fail-open reasoning as MAX_SUSPEND_MS above, and the same reason it is
   // not optional: if onSpeakEnd never arrives (a player torn down mid-utterance,
   // an AudioContext that never resumes), a gate with no ceiling leaves Live
@@ -282,8 +281,25 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // watchdog was always meant to detect — so reply length no longer enters into
   // it and reaching it still always means something else broke.
   const OWN_VOICE_IDLE_CEILING_MS = 8000;
+  // DERIVED, never hand-tuned — that is the whole fix (2026-08-14, second pass).
+  // The ring must span the LONGEST time the gate can possibly be held, because
+  // every frame it drops is speech the operator actually made. It was a flat 12
+  // frames (1.2s) against a gate that can hold for the full idle ceiling, and the
+  // 2026-08-14 session paid for the gap: 36 of 125 holds ended only because this
+  // ceiling's watchdog fired, and the four half-blind turns reached the server
+  // with audioIn of 6, 9, 11 and 69 frames — i.e. exactly the surviving ring —
+  // against 116..584 on healthy turns. Gemini will not transcribe a mid-sentence
+  // tail, so `inputTranscription` never arrived and the turn was stored with an
+  // empty operator transcript (live-turn-no-user-transcript x33 that day).
+  //
+  // Deriving it means a future change to the ceiling cannot silently re-open
+  // this; test/s2s-preroll-ring.test.js pins the derivation, not the number.
+  // 80 frames x 3200 bytes (100ms of 16kHz mono 16-bit) is ~256KB — bounded, and
+  // the ring only fills while MYTHOS is audibly speaking.
+  const PREROLL_MAX_FRAMES = Math.ceil(OWN_VOICE_IDLE_CEILING_MS / FRAME_MS);
   let ownVoiceGate = false;
   let ownVoiceTimer = null;
+  let ownVoiceHeldAt = 0;
   let preroll = [];
   // Peak RMS observed while the gate was held, logged once per hold on release.
   // The 2026-08-14 analysis could only INFER that the backstop threshold was too
@@ -349,6 +365,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     ownVoiceGate = true;
     preroll = [];
     ownVoicePeakRms = 0;
+    ownVoiceHeldAt = Date.now();
     armOwnVoiceCeiling();
     logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
   }
@@ -368,10 +385,17 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       reason: reason || 'own-voice-release',
       ownVoiceGate: false,
       prerollFrames: held.length,
+      // Both of these were computed and then thrown away, which is why the ring
+      // overflow could only be INFERRED from Gemini's audioIn counts a day later.
+      // prerollFrames === prerollCap means the ring was full, i.e. frames WERE
+      // dropped; heldMs says how long the gate was held to earn that.
+      prerollCap: PREROLL_MAX_FRAMES,
+      heldMs: ownVoiceHeldAt ? Date.now() - ownVoiceHeldAt : 0,
       // One line per hold, not per frame — see ownVoicePeakRms's declaration.
       peakRms: Math.round(ownVoicePeakRms * 10000) / 10000,
     });
     ownVoicePeakRms = 0;
+    ownVoiceHeldAt = 0;
   }
 
   function arrayBufferToBase64(buf) {

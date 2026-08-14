@@ -201,6 +201,45 @@ function createLiveToolAdapter(deps) {
     'This action takes longer than this turn. Say what you are DOING, not what happened — ' +
     'do NOT claim completion. The real outcome will arrive as a [SYSTEM] message; report it then.';
 
+  // A3 (2026-08-14): PENDING IS NOT FAILURE. Both started/ack-deadline paths used
+  // to record `ok:false`, which put a manufactured failure in the ledger for a
+  // call that was running fine — the 2026-08-14 audit has
+  // `browser_navigate=FAIL(started — outcome pending)` at 17:37:02 followed by
+  // `ok` for the SAME call at 17:37:10. That lies in both directions: it invents
+  // failures, and it makes a real failure indistinguishable from an ack.
+  //
+  // `ok: null` rather than `false` is the point — every consumer that asks
+  // "did this succeed?" (`a.ok === true`, `.ok !== true`) is unchanged, so a
+  // pending tool still cannot back a completion claim, while nothing can read it
+  // as a definite failure. `started: true` is kept because
+  // action-outcome-summary.js and commitAction's late-arrival branch both already
+  // key on it; `status` is what makes the vault record legible on its own.
+  function pendingAck(toolName) {
+    return {
+      tool: toolName, ok: null, started: true, status: 'pending',
+      summary: `${toolName} started — outcome pending.`,
+    };
+  }
+
+  // The single place that maps a liveTurnActions entry to a status word. Every
+  // other push site in this file (reportLateOutcome, resolveLiveConfirm, the
+  // spoken-no cancellation) predates `status` and does not set it, so this
+  // derives one rather than trusting the field to be there.
+  function actionStatus(entry) {
+    if (!entry) return 'unknown';
+    if (entry.status) return entry.status;
+    if (entry.confirmPending) return 'awaiting-confirmation';
+    if (entry.started) return 'pending';
+    // Before the ok checks: evaluateOutcome folds unverified INTO ok
+    // (`ok: dispatchOk && !isUnverified`), so an unverified entry arrives here as
+    // ok:false and would otherwise be reported as a flat failure — the exact
+    // flattening src/core/CLAUDE.md's evidence contract forbids.
+    if (entry.unverified) return 'unverified';
+    if (entry.ok === true) return 'ok';
+    if (entry.ok === null || entry.ok === undefined) return 'pending';
+    return 'failed';
+  }
+
   // BUG-120 — the other half. Making browser_switch slow removes the specific
   // trigger seen on 2026-08-05, but nothing in this seam ever stopped the model
   // re-issuing ANY call before its toolResponse arrived, and a re-dispatched
@@ -511,7 +550,7 @@ function createLiveToolAdapter(deps) {
       // not ours. So say "started", and deliver the real outcome afterwards through
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
       if (SLOW_TOOLS[call.name]) {
-        commitAction({ tool: call.name, ok: false, started: true, summary: `${call.name} started — outcome pending.` });
+        commitAction(pendingAck(call.name));
         responses.push({ id: call.id, name: call.name, response: {
           status: 'started', message: STARTED_MESSAGE,
         }});
@@ -533,7 +572,7 @@ function createLiveToolAdapter(deps) {
         const settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
         if (settled === DEADLINE_EXCEEDED) {
           logger.info('live.tool-ack-deadline', { tool: call.name, callId: call.id, deadlineMs: TOOL_ACK_DEADLINE_MS });
-          commitAction({ tool: call.name, ok: false, started: true, summary: `${call.name} started — outcome pending.` });
+          commitAction(pendingAck(call.name));
           responses.push({ id: call.id, name: call.name, response: {
             status: 'started', message: STARTED_MESSAGE,
           }});
@@ -759,12 +798,20 @@ function createLiveToolAdapter(deps) {
     // emitted in this file (kind/tool/target) — no parallel shape.
     if (assistantText) {
       const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn);
+      const statusByTool = new Map(actionsThisTurn.map((a) => [a.tool, actionStatus(a)]));
       for (const claim of unbackedClaims) {
+        // A3: name the actual tool and its real status. `tool`/`target` stay the
+        // CATEGORY on purpose — BUG-105 records every immune consumer keying on
+        // `target`, and the healer's playbooks match those two — so the tool is
+        // added alongside rather than swapped in.
+        const namedTool = claim.candidateTools.find((t) => statusByTool.has(t)) || null;
+        const namedStatus = namedTool ? statusByTool.get(namedTool) : 'never-called';
         if (bus && typeof bus.emit === 'function') {
           bus.emit('health.anomaly', {
             kind: 'claimed-action-not-taken',
             tool: claim.category, target: claim.category,
             claim: claim.phrase, candidateTools: claim.candidateTools,
+            claimedTool: namedTool, claimedToolStatus: namedStatus,
           });
         }
         // Wave 1 (2026-08-13): the anomaly alone only ever reached an
@@ -777,6 +824,24 @@ function createLiveToolAdapter(deps) {
         // explicitly rather than looking like an ordinary outcome notice.
         const byTool = new Map(actionsThisTurn.map((a) => [a.tool, a]));
         const failedTool = claim.candidateTools.find((t) => byTool.has(t) && byTool.get(t).ok !== true);
+        // A3: pending and failed are DIFFERENT corrections, and telling the model
+        // a pending tool "did NOT happen" is its own false statement — the real
+        // outcome may arrive seconds later through reportLateOutcome and
+        // contradict it. On 2026-08-14 the model said "Playing 'Tera Mera Rishta'
+        // on YouTube for you now" and "Message sent to Alex, sir." in turns whose
+        // tool row was still open; the honest correction there is "you don't know
+        // yet", not "it failed".
+        const pendingEntry = failedTool && actionStatus(byTool.get(failedTool)) === 'pending'
+          ? byTool.get(failedTool) : null;
+        if (pendingEntry) {
+          sendSystemNotice(
+            `CORRECTION of your own prior statement — you said "${claim.phrase}" but ${failedTool} has NOT returned yet, `
+            + 'so you do not know whether it worked.',
+            `Say so now: tell the operator you are still waiting on ${failedTool} and that you spoke too early. `
+            + 'Do NOT repeat the completion claim. The real outcome will arrive as a [SYSTEM] message; report it then.',
+          );
+          continue;
+        }
         const detail = failedTool
           ? `${failedTool}: ${byTool.get(failedTool).summary || 'did not succeed'}`
           : 'no successful tool call backs this claim this turn';
@@ -828,7 +893,13 @@ function createLiveToolAdapter(deps) {
           // timestamp stays as the fallback for any caller that has no turnId.
           turnId: (turnId === undefined || turnId === null) ? 'live-' + Date.now() : 'live-turn-' + turnId,
           transport: 's2s',
-          actions: actionsThisTurn.map((a) => ({ tool: a.tool, ok: a.ok, summary: a.summary })),
+          // A3: `status` rides along, because `ok` alone cannot tell a pending
+          // ack from a failure and this record is what the vault is read back
+          // from days later. Derived here rather than trusted from the entry so
+          // every push site gets a consistent value without having to remember.
+          actions: actionsThisTurn.map((a) => ({
+            tool: a.tool, ok: a.ok, summary: a.summary, status: actionStatus(a),
+          })),
         },
         salience: 0.6, channel: 'voice',
       });

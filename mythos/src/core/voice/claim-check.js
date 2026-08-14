@@ -72,6 +72,18 @@ const CLAIM_CATEGORIES = [
     name: 'sending',
     tools: ['whatsapp_send', 'gmail_send', 'phone_sms_send'],
     re: /\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\b/i,
+    // A3 (2026-08-14): the measured false claim was "Message sent to Alex, sir."
+    // at 17:29:26, in the same turn as whatsapp_send=FAIL — and the mandatory
+    // first-person prefix above missed it, exactly as this file's header predicts
+    // ("a bare elliptical claim (\"Sent it.\") is missed"). That trade is still
+    // right for the general case, so the prefix is NOT relaxed. This second tier
+    // is EVIDENCE-GATED instead: it is only consulted when a tool from this
+    // category actually ran this turn and did not succeed (see needsAttempt
+    // below). Every false positive the header lists survives that gate —
+    // "Your package was sent yesterday" can only be flagged in a turn where a
+    // send tool was really attempted and really did not succeed, which is a turn
+    // where the sentence is a lie regardless of who it is about.
+    ellipticalRe: /\b(message|text|email|mail)\s+(?:has been\s+|was\s+)?(sent|delivered)\b|\bsent\s+(?:it|that|the message)\b/i,
   },
   {
     name: 'opening',
@@ -118,10 +130,17 @@ function detectUnbackedClaims(assistantText, actionsThisTurn) {
   const text = String(assistantText || '');
   if (!text) return [];
 
+  const actions = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
   const successfulTools = new Set(
-    (Array.isArray(actionsThisTurn) ? actionsThisTurn : [])
-      .filter((a) => a && a.ok === true)
-      .map((a) => a.tool),
+    actions.filter((a) => a && a.ok === true).map((a) => a.tool),
+  );
+  // A3: tools from this category that WERE attempted this turn and did not
+  // succeed (failed, pending, unverified). This is the gate on the elliptical
+  // tier — see the sending category's comment. `ok !== true` is the same test
+  // used everywhere else in this file, so a pending ack (ok:null) counts as
+  // "attempted and unproven", which is the case that produced the incident.
+  const attemptedUnproven = new Set(
+    actions.filter((a) => a && a.tool && a.ok !== true).map((a) => a.tool),
   );
 
   const claims = [];
@@ -130,7 +149,11 @@ function detectUnbackedClaims(assistantText, actionsThisTurn) {
     if (FUTURE_RE.test(sentence)) continue;
     for (const category of CLAIM_CATEGORIES) {
       if (flaggedCategories.has(category.name)) continue; // one flag per category per reply
-      const match = category.re.exec(sentence);
+      let match = category.re.exec(sentence);
+      if (!match && category.ellipticalRe
+          && category.tools.some((tool) => attemptedUnproven.has(tool))) {
+        match = category.ellipticalRe.exec(sentence);
+      }
       if (!match) continue;
       const backed = category.tools.some((tool) => successfulTools.has(tool));
       if (backed) continue;

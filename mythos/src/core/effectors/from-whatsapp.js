@@ -202,6 +202,14 @@ function resolveRecipient(to) {
   return { number, name: hit };
 }
 
+// A4: how long the composer is given to appear after focus, and how often it is
+// asked. 3s covers the measured cold start (the successful 17:31:47 attempt came
+// after the operator asked it to wait a couple of seconds) without turning a
+// genuinely dead window into a long stall — and a warm app answers on the first
+// read, before either constant is consulted.
+const COMPOSER_SETTLE_MS = 3000;
+const COMPOSER_POLL_MS = 250;
+
 async function whatsapp_send({ to, text, send }) {
   const recipient = resolveRecipient(to);
   if (recipient.error) return fail(recipient.error);
@@ -264,11 +272,40 @@ async function whatsapp_send({ to, text, send }) {
   // composer "Type a message to <recipient>", with the conversation header as an
   // independent second opinion. Either naming the intended recipient is enough;
   // neither is a refusal.
-  const composer = await fromPc.readComposeBox(pid);
-  const cbox = (composer && composer.ok && composer.result) || null;
+  // A4 (2026-08-14 session): the operator was right. whatsapp_send failed at
+  // 17:29:26 and 17:31:11 with "could not read its message box (No editable
+  // element found...)" and succeeded at 17:31:47 only because they told it to
+  // wait — "WhatsApp takes a couple of seconds to start". focus_window returning
+  // proves the WINDOW exists; WebView2 has not necessarily registered its
+  // editable surface yet, so ps-automation.ps1 answers honestly that there is no
+  // editable element and this refused a chat that was about to be readable.
+  //
+  // A POLL, not a sleep. A fixed delay is a guess that is simultaneously too slow
+  // when the app is warm (every send pays it) and too short when it is cold. This
+  // returns the instant the composer answers.
+  //
+  // Scope: this covers "the composer is not there yet" ONLY. The recipient-match
+  // check below keeps its immediate, no-retry refusal — a composer that IS found
+  // and names the wrong human must never be re-read in the hope of a better
+  // answer (BUG-064: sending to the wrong human is not a recoverable error).
+  //
+  // Honest framing: this removes the cold-start class, it does not "fix
+  // WhatsApp". The second failure that day came 105s later with the app already
+  // focused, so something else is also in play.
+  let composer = await fromPc.readComposeBox(pid);
+  let cbox = (composer && composer.ok && composer.result) || null;
+  if (!cbox) {
+    const deadline = Date.now() + COMPOSER_SETTLE_MS;
+    while (!cbox && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, COMPOSER_POLL_MS));
+      composer = await fromPc.readComposeBox(pid);
+      cbox = (composer && composer.ok && composer.result) || null;
+    }
+  }
   if (!cbox) {
     return fail('WhatsApp is open and focused for ' + label + ', but I could not read its message box (' +
-      String((composer && composer.result) || 'no message box found') + '), so I cannot prove the chat on ' +
+      String((composer && composer.result) || 'no message box found') + ') after waiting ' +
+      Math.round(COMPOSER_SETTLE_MS / 1000) + 's for it to appear, so I cannot prove the chat on ' +
       'screen is the right one. Nothing was typed and nothing was sent.');
   }
 
@@ -561,5 +598,5 @@ module.exports = {
   whatsapp_contact_save,
   whatsapp_contact_delete,
   // exported for tests
-  _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH },
+  _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH, COMPOSER_SETTLE_MS, COMPOSER_POLL_MS },
 };

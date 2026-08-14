@@ -41,6 +41,56 @@ function fail(reason) {
   return { ok: false, result: reason };
 }
 
+// ---- browser-intent disambiguation (2026-08-14 session, cluster A1) ----
+//
+// Four tools in the Live allowlist can plausibly mean "open a website":
+// open_web, navigate, browser_navigate and browser_launch_debug. Until now the
+// ONLY thing separating them was prose in their descriptions, and the
+// 2026-08-14 audit measured what that is worth: five identical failures in four
+// minutes, every one `open_web({type:'web', query:'openai.com'})` answered with
+// a bare "A URL is required for web embedding." — while open_web's description
+// already said, in capitals, that it does NOT open a browser. One turn was
+// worse: `navigate` (a HUD ROUTER) accepted the browsing intent, returned ok,
+// and MYTHOS announced "I've launched the browser and am navigating to the
+// OpenAI homepage" for a route change the operator could not see.
+//
+// The fix is the pattern checkBrowserTarget already proves works
+// (from-browser.js, BUG-099/107): refuse, and name the remedy verbatim in the
+// failure itself. A remedy arrives at the moment of the mistake, addressed to
+// the call that failed — a description is read once per session and then
+// competes with everything else in the catalogue.
+//
+// Deliberately NOT coerced into a url. Satisfying the wrong surface would hand
+// the operator a HUD card while telling them Chrome had opened, which is the
+// fabricated-success failure this whole session was about. The failure IS the
+// information: the model picked the wrong surface.
+//
+// Narrow on purpose — see the tests. open_web's youtube/weather/search/flights/
+// image types legitimately take a bare query, and navigate's real routes
+// ('dashboard', 'kanban') must keep working; this only fires on an argument that
+// is shaped like a URL or a bare domain and can therefore only have meant "go
+// to this site".
+const URL_SHAPED = /^(?:https?:\/\/|www\.)/i;
+// A bare domain: at least one dot, a 2+ char alphabetic TLD at the end, no
+// spaces. 'openai.com' and 'news.ycombinator.com/best' match; 'kanban',
+// 'weather in Delhi' and 'Tera Mera Rishta' do not.
+const BARE_DOMAIN_SHAPED = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#].*)?$/i;
+function looksLikeUrlOrDomain(value) {
+  const s = String(value || '').trim();
+  if (!s || /\s/.test(s)) return false;
+  return URL_SHAPED.test(s) || BARE_DOMAIN_SHAPED.test(s);
+}
+
+// The remedy text, shared so the two call sites cannot drift into saying
+// different things about the same mistake. Always names browser_navigate AND
+// the exact url: value to pass, so the next call needs no invention.
+function browserIntentRemedy(what, value) {
+  const s = String(value || '').trim();
+  const url = URL_SHAPED.test(s) ? (/^www\./i.test(s) ? 'https://' + s : s) : 'https://' + s;
+  return `"${s}" is a website, and ${what}. Call browser_navigate with url:"${url}" to open it in the operator's real browser. `
+    + `If the operator asked for an at-a-glance card ON THE HUD instead, call open_web with url:"${url}" (not query).`;
+}
+
 // E5: bytes -> GB rounded to 2dp, for read_system_specs' human-readable fields.
 function bytesToGB(bytes) {
   return Math.round((bytes / (1024 * 1024 * 1024)) * 100) / 100;
@@ -92,6 +142,13 @@ function buildTools(ctx) {
   function navigate({ route }) {
     try {
       const raw = String(route || '').trim().toLowerCase();
+      // A1: this is a HUD ROUTER. At 17:33:32 on 2026-08-14 it took a URL, moved
+      // the dashboard view, returned ok, and MYTHOS reported having launched a
+      // browser. Refuse the browsing intent by name instead of resolving it into
+      // an unrelated success — see looksLikeUrlOrDomain's comment.
+      if (looksLikeUrlOrDomain(raw) && !ALL_ROUTES.includes(raw) && !SYNONYMS[raw]) {
+        return fail(browserIntentRemedy('navigate only changes which MYTHOS dashboard view is showing — it cannot open a browser or load a page', route));
+      }
       const resolved = ALL_ROUTES.includes(raw) ? raw : (SYNONYMS[raw] || null);
       if (!resolved || !ALL_ROUTES.includes(resolved)) {
         return fail(`"${route}" is not a known dashboard view.`);
@@ -320,6 +377,14 @@ function buildTools(ctx) {
       //   news.google.com  -> existing NEWS widget (server-side RSS)
       //   other blockers    -> open in new browser tab (no iframe attempt)
       if (t === 'web') {
+        // A1: the exact call that failed five times on 2026-08-14 —
+        // {type:'web', query:'openai.com'} with no url. The bare refusal it used
+        // to get carried no remedy, so the model repeated it verbatim. Only the
+        // 'web' type is guarded: youtube/weather/search/flights/image all take a
+        // bare query legitimately and are handled above.
+        if (!url && looksLikeUrlOrDomain(q)) {
+          return fail(browserIntentRemedy('open_web renders a card inside the MYTHOS dashboard, and for type:"web" it needs url:, not query:', q));
+        }
         if (!url) return fail('A URL is required for web embedding.');
         var parsed = null;
         try { parsed = new URL(url); } catch (_) { return fail('Invalid URL: ' + url); }
@@ -1072,9 +1137,12 @@ function buildTools(ctx) {
   }
 
   const TOOLS = [
-    { name: 'navigate', description: 'Change the dashboard view/route.', params: { route: 'string' }, danger: false, fn: navigate },
+    // A1 (2026-08-14): leads with what it is NOT, because it was called with a
+    // URL and reported as a browser launch. The code guard in navigate() is the
+    // real mechanism — this only makes the first attempt likelier to be right.
+    { name: 'navigate', description: 'Switch which MYTHOS dashboard VIEW is showing (e.g. dashboard, kanban, pipeline). This is a HUD router, NOT a browser and NOT a URL bar: it cannot open a website or load a page. For "open <site>" / "go to <url>" use browser_navigate instead.', params: { route: 'string - a dashboard view name, never a URL' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s), floating widgets (search/weather/flights/image cards spawned by open_web), AND the Electron media window if one is open (e.g. a YouTube video that will not stop with standard playback controls). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed/mediaWindowClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
-    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL (pass url). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
+    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED, not guessed at (that call failed five times in one 2026-08-14 session). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline. Prefer jobId (from pipeline_status/job_status) over path — it resolves the real artifact path server-side, so you never have to retype a filename. A wrong path fails with the real path(s) named in the error.', params: { path: 'string (optional if jobId given)', jobId: 'string (optional) - resolves the path from the job record instead of retyping it', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     // REMEDIATION P3-8: needs_result:true added to every status/check/list/

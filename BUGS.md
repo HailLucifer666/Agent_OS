@@ -6702,3 +6702,266 @@ than the bug):
 **NOT YET VERIFIED where it counts.** This machine cannot reproduce the bug at
 all, so the only real proof is a fresh install on a stock Windows PC with
 `LongPathsEnabled` at its default `0`, onto a non-`C:` drive. Ships in 0.1.10.
+
+## BUG-228 — four browser-ish tools, disambiguated only in prose: five identical refusals, and one fabricated browser launch
+
+**The session.** 2026-08-14, live capability audit with an external auditor
+driving. The operator's own verdict, filed by MYTHOS as an incident:
+"Everything's failing. Multiple browser and tool interactions have failed in
+this session. Verifications are inconsistent." Browser control failed
+completely; WhatsApp needed three attempts; Gmail failed eleven times. One
+thing worked: `write_file` ran three times and saved cleanly — the BUG-219 fix
+from earlier the same day, confirmed live.
+
+**Measured, not inferred.** `%APPDATA%\MYTHOS\vault\Audit\2026-08-14.jsonl`
+(348 records, 12:29→17:39, with tool args). Note the vault: `npm start` runs
+Electron, so the live vault is `%APPDATA%\MYTHOS\vault` — `mythos/vault` last
+changed at 15:06 and shows almost none of this.
+
+| time | call | outcome |
+|---|---|---|
+| 17:35:20 | `open_web({type:'web', query:'openai.com'})` | "A URL is required for web embedding." |
+| 17:37:19 | same | same |
+| 17:38:05 | same | same |
+| 17:38:47 | same, twice | same |
+| 17:33:32 | `navigate` with the same intent | **ok** — and MYTHOS said "I've launched the browser and am navigating to the OpenAI homepage" |
+
+Two root causes.
+
+1. `from-dashboard.js` `open_web`, `type:'web'` requires `url`; the model passes
+   `query`. No coercion, no remedy — a bare refusal, repeated forever.
+2. `from-dashboard.js` `navigate` is a HUD **router**. It accepted the browsing
+   intent and returned success for doing something unrelated.
+
+**Why prose could not fix it.** `open_web`'s description already said, in
+capitals, "this does NOT open a browser window" and "Despite the name, open_web
+never browses: use browser_navigate". That is ~1,100 characters of correct
+warning, pinned by its own test (`open-web-is-not-a-browser.test.js`), and the
+model ignored it five times in four minutes. The Live allowlist reaches four
+tools that plausibly mean "open a website" — `open_web`, `navigate`,
+`browser_navigate`, `browser_launch_debug` — and the only thing separating them
+was that prose.
+
+**FIXED 2026-08-14.** The remedy-on-failure pattern `checkBrowserTarget`
+(`from-browser.js`, BUG-099/107) already proves: refuse, and name the remedy
+verbatim in the failure itself. A remedy arrives at the moment of the mistake,
+addressed to the call that failed; a description is read once per session and
+then competes with the whole catalogue.
+
+- `looksLikeUrlOrDomain()` + `browserIntentRemedy()` at module scope.
+- `open_web` `type:'web'` with no `url` and a URL-shaped `query` → refusal
+  naming `browser_navigate` **and** the exact `url:` value to pass.
+- `navigate` with a URL-shaped route → the same refusal, plus what `navigate`
+  actually is.
+- Both descriptions now lead with the negative.
+
+**Deliberately NOT coerced** `query`→`url`. That would make the wrong tool
+succeed: the operator gets a HUD card and is told Chrome opened — the
+fabricated-success failure this whole session was about. The failure IS the
+information.
+
+**Scope guard.** The guard fires only on `type:'web'` + no `url` + URL-shaped
+query, and on `navigate` + URL-shaped route. `open_web`'s `youtube`/`weather`/
+`search`/`flights`/`image` types legitimately take a bare query, and real routes
+(`kanban`, `goals`, `the kanban board`) must keep working — both directions are
+asserted.
+
+**Regression test**: `test/browser-intent-disambiguation.test.js`, 16 tests,
+verified red against the pre-fix source (6 failed).
+
+**Noted, NOT fixed:** `NO_EMBED_DOMAINS` lacks `openai.com` and `youtube.com`,
+so even a correctly-formed `url` would have tried to iframe a site that refuses
+framing. Separate, quieter failure.
+
+## BUG-229 — the operator's speech was thrown away by a 1.2 s ring against an 8 s gate
+
+**Symptom.** `live-turn-no-user-transcript` ×33 on 2026-08-14; 76 of 287
+conversation records (26%) stored an empty operator transcript. What the
+operator experienced: MYTHOS answering things they had not said, and losing what
+they had.
+
+**A recorded belief was wrong, and the log disproves it.** The stored note said
+`inputTranscription` frames "are not arriving" and recommended relaxing the
+`automaticActivityDetection` values. They ARE arriving — present in `scFields`
+on 97 of 144 turns. That work would have been aimed at a healthy component.
+
+**Correlated turn by turn** (`mythos-server.log`, 144 `live.turn-parts` lines).
+Every half-blind turn has `inputTranscription` absent and a collapsed `audioIn`:
+
+    turnId 3   generationComplete,modelTurn,outputTranscription,turnComplete   audioIn: 6
+    turnId 56  (same)                                                          audioIn: 9
+    turnId 15  (same)                                                          audioIn: 11
+    turnId 44  + interrupted                                                   audioIn: 69
+
+Healthy turns carry `audioIn` 116–584. So ~6–11 frames of mic audio reached the
+server on turns the operator demonstrably spoke in.
+
+**Mechanism**, in `ui/public/js/voice/s2s-bridge.js`: BUG-224's half-duplex gate
+holds the mic while MYTHOS speaks; held frames go into `preroll`, capped at
+`PREROLL_MAX_FRAMES = 12` → **1.2 s**, older frames `shift()`ed away and gone;
+the release watchdog is `OWN_VOICE_IDLE_CEILING_MS = 8000`. Measured releases
+that session: `own-voice-hold` 124, `own-voice-ended` 65, `barge-in-eager` 24,
+`ceiling-fail-open` 36. **29% of holds ended only because the 8 s watchdog
+fired**, and on those everything the operator said except the final 1.2 s was
+discarded. `audioIn: 6–11` is exactly the surviving ring. The replayed fragment
+is a mid-sentence tail, which Gemini declines to transcribe, so
+`inputTranscription` never appears.
+
+The comment at `s2s-bridge.js:81` already named this failure. The 2026-08-14
+two-tier barge-in split was the attempted fix; it works when the RMS backstop
+trips (24 times) and does nothing when the operator's level stays under
+threshold. The ring was never resized to cover the window it has to survive.
+
+**FIXED 2026-08-14.** `PREROLL_MAX_FRAMES` is now **derived**:
+`Math.ceil(OWN_VOICE_IDLE_CEILING_MS / FRAME_MS)` → 12 becomes 80. A ring that
+spans the maximum hold cannot drop speech that occurred during a hold. 80 frames
+of 16 kHz mono 16-bit at 100 ms is ~256 KB — bounded, and the ring only fills
+while MYTHOS is audibly speaking. The declaration had to move BELOW the ceiling
+it reads: `const` has no hoisting, and a TDZ `ReferenceError` at module
+evaluation would take the whole HUD voice path down.
+
+**The defect class, not the number.** Two hand-tuned constants sat next to each
+other, one of which had to cover the other, with nothing in code relating them.
+Deriving it means a future ceiling change cannot silently re-open this;
+`test/s2s-preroll-ring.test.js` pins the derivation, not the value.
+
+**Also added:** `prerollCap` and `heldMs` in the `voice.capture-suspend` release
+line. Both were computed and thrown away, which is why the overflow could only
+be inferred from `audioIn` counts a day later. `prerollFrames === prerollCap` is
+the only way to tell from a log that frames were dropped rather than that the
+operator happened to say little.
+
+**NOT fixed, and it must not read as fixed.** `own-voice-ended` arrived 65 times
+for 124 holds, so `onSpeakEnd` is unreliable ~29% of the time. Resizing the ring
+makes the symptom **harmless**; it does not explain the missing callback. If a
+post-fix session still shows `live-turn-no-user-transcript` on turns with
+`audioIn` in the 60–80 range, the ring was not the binding constraint and the
+missing `onSpeakEnd` is.
+
+**Regression test**: `test/s2s-preroll-ring.test.js`, 7 tests, verified red
+against the pre-fix source (4 failed). Source-shape by necessity —
+`s2s-bridge.js` is a browser ES module (see `ui/CLAUDE.md`) whose own-voice gate
+is not on its public surface, and the frame path runs inside an AudioWorklet
+callback with no Node double. Widening production exports to test a constant was
+rejected; the derivation IS the invariant.
+
+## BUG-230 — a pending tool ack was recorded as a FAILURE, and a completion claim over it was corrected as a lie
+
+**Symptoms.** 17:29:26 — reply "Message sent to Alex, sir." logged in the same
+turn as `whatsapp_send=FAIL`. 17:38:56 — "Playing 'Tera Mera Rishta' on YouTube
+for you now" against an `open_web` that could NOT be confirmed.
+`claimed-action-not-taken` ×5, `live-tool-outcome-late-for-turn` ×14.
+
+**Structural, and already half-solved.** `live-tool-adapter.js` answers any call
+still running at `TOOL_ACK_DEADLINE_MS` (1500 ms) with `status:'started'` plus
+`STARTED_MESSAGE` — "Say what you are DOING, not what happened — do NOT claim
+completion". That is correct design (BUG-128): the turn boundary belongs to the
+model and awaiting harder cannot fix it. `TOOL_ACK_DEADLINE_MS` is not
+implicated and is unchanged.
+
+Three real gaps, all fixed 2026-08-14.
+
+**1. The record was mislabelled.** `commitAction({ok:false, started:true, …})`
+wrote a pending ack as a failure. The audit shows
+`browser_navigate=FAIL(started — outcome pending)` at 17:37:02 followed by `ok`
+for the SAME call at 17:37:10. Nothing broke; the ledger lied in both
+directions — it manufactured failures, and it made a genuine failure and a
+pending ack indistinguishable to anything reading the vault. Now `pendingAck()`
+records `ok: null` + `status:'pending'` + `started:true`. `ok: null` is the
+point: every "did this succeed?" consumer (`a.ok === true` in `claim-check.js`,
+`.ok !== true` in the correction path) behaves exactly as before, so a pending
+tool still cannot back a completion claim, while nothing can read it as a
+definite failure. Failure records keep `ok:false` untouched. `actionStatus()`
+derives the word for the episodic `actions` array, and puts `unverified` before
+the `ok` checks — `evaluateOutcome` folds `unverified` INTO `ok`, so an
+unverified entry arrives as `ok:false` and would otherwise flatten to a plain
+failure, which `src/core/CLAUDE.md`'s evidence contract forbids.
+
+**2. `STARTED_MESSAGE` is advisory, and the model ignored it.** A completion
+claim over a pending tool now gets its own code-side correction, distinct from
+the failure one. Telling the model a pending action "did NOT happen" is itself a
+false statement — `reportLateOutcome` may contradict it seconds later. So the
+pending notice says the tool "has NOT returned yet" and names it. The anomaly
+gains `claimedTool` and `claimedToolStatus`; `tool`/`target` stay the CATEGORY on
+purpose, because BUG-105 records every immune consumer keying on those two and
+the healer's playbooks match them.
+
+**3. The actual false claim was never detected at all.** Found while writing the
+tests: `detectUnbackedClaims("Message sent to Alex, sir.", …)` returned **zero**
+claims. `claim-check.js` requires an explicit first-person prefix, and its own
+header predicts this miss ("a bare elliptical claim (\"Sent it.\") is missed").
+That trade is right in general — making the prefix optional produced six
+documented false positives — so the prefix is **not** relaxed. Instead the
+`sending` category gains an `ellipticalRe` that is **evidence-gated**: consulted
+only when a tool from that category actually ran this turn and did not succeed
+(`ok !== true`, so a pending ack counts). Every documented false positive
+survives that gate, because in those turns no send tool ran at all — asserted
+directly in `promise-followthrough.test.js`.
+
+**Deliberately NOT changed:** the say-before-act ordering itself. That is the
+standing architecture issue; the target here was the false "it worked", not the
+ordering. Also unchanged: `SLOW_TOOLS` membership (the ack-deadline net already
+covers it).
+
+**Still uncaught, stated so it is not mistaken for covered:** "Playing 'Tera
+Mera Rishta' on YouTube for you now" matches nothing. It is present-participle,
+and `claim-check.js` explicitly scopes present-tense result claims out (a false
+positive there fires on ordinary perception narration). Not widened on one
+sample.
+
+**Regression tests**: `test/live-pending-is-not-failure.test.js` (13) and six
+new cases in `test/promise-followthrough.test.js`; verified red against the
+pre-fix source (12 of 37 failed).
+
+## BUG-231 — WhatsApp read the composer before WebView2 had drawn it
+
+**Symptom.** `whatsapp_send` failed at 17:29:26 and 17:31:11 with "could not
+read its message box (No editable element found…)", then succeeded at 17:31:47 —
+only because the operator told it to wait. Their diagnosis on the call:
+"WhatsApp takes a couple of seconds to start."
+
+**Root cause.** `from-whatsapp.js` — `focus_window` returns, then
+`readComposeBox` is called immediately with no settle. The pre-existing retry
+waits only 400 ms and is gated on a **recipient mismatch**, not on the composer
+being absent. WebView2 has not registered its editable surface yet, so
+`ps-automation.ps1` answers honestly that there is no editable element.
+
+**FIXED 2026-08-14** with a bounded poll, not a sleep: a fixed delay is a guess
+that is simultaneously too slow when the app is warm (every send pays it) and
+too short when it is cold. `COMPOSER_SETTLE_MS = 3000` /
+`COMPOSER_POLL_MS = 250`, returning the instant the composer answers. A warm app
+answers on the first read and pays nothing.
+
+**The safety property is untouched.** The loop covers "the composer is not there
+yet" and nothing else. BUG-064's recipient-match check is why this function is
+trustworthy — sending to the wrong human is not a recoverable error — so a
+composer that IS found and names the wrong person is still refused immediately,
+with no polling in the hope of a better answer. Both directions are asserted,
+including that a wrong-recipient refusal does not pay the settle deadline.
+
+**The operator's theory survives only partly.** Timing explains the first
+failure. The second attempt came 105 s later with WhatsApp already focused and
+still failed, so timing is not the whole story. Honest framing: this removes the
+**cold-start class**, it does not fix WhatsApp.
+
+**Regression test**: `test/whatsapp-composer-settle.test.js`, 7 tests, verified
+red against the pre-fix source (4 failed).
+
+## Deferred from the 2026-08-14 session (Wave B) — listed so nothing reads as covered
+
+Six lower-severity clusters from the same audit, with why each is deferred
+rather than quietly dropped:
+
+| # | cluster | evidence | why deferred |
+|---|---|---|---|
+| 5 | Health channel used as a metrics channel — 68 heal no-match vs 6 applied; `live-tool-outcome-late-for-turn` is now expected by design yet still raised as a fault; the provider-down playbook matches only `nim`, so groq/mistral down = no-match | audit + episodic tallies | needs a soak to establish which kinds are genuinely faults; non-faults belong on their own channel, which touches `ALLOWED_EVENTS` |
+| 6 | Goal budget ≈ one action — 31,272 tokens over 2 actions against a 20,000 default; two goals auto-paused 5 s after creation | `vault/Goals/*.json` | needs a real cortex run to calibrate, not a guessed number |
+| 7 | Gmail `invalid_grant` ×11, one with an empty error string; MYTHOS misdiagnosed it aloud as a network outage | audit + `from-gmail.js:76` | the token is expired/revoked — needs the operator's browser consent, and `scripts/google-auth.js` has two known Windows defects of its own |
+| 8 | Commitment false positive — MYTHOS's apology "I'll get it right" became a goal titled `Commitment: I'll get it right`, with the whole apology as `reason` | `vault/Goals`, `from-calendar.js:427` | the verb list is closed and deliberate; `get` is simply too generic. Needs the operator's call on tightening vs adding a hedge |
+| 9 | `screen_look` vision timeout at the worst moment (14:11:36, 14:13:52 — both while hunting the Save dialog) | audit | the 12 s / 4 s-per-attempt split was just changed in `2cd82ae`; measure before touching again |
+| 10 | Instrumentation gaps found while doing this RCA: `health.anomaly`'s `audioIn`/`scFields` are emitted but persisted nowhere readable (episodic keeps only kind/playbookId/outcome) | this session's own dig | partly closed by BUG-229's `prerollCap`/`heldMs`; the rest is a small separate pass |
+
+Also explicitly not changed, each for a recorded reason: the say-before-act
+ordering (architectural); `ctrl+s` on MSIX Notepad (proven unwinnable — the
+answer is `write_file`, which now works); the sandbox denials for another user's
+Desktop (the leash working correctly).
