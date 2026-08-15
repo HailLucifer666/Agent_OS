@@ -7799,3 +7799,117 @@ anywhere under `src/`.
   camera access without a user gesture, and a system that could silently enable a
   webcam is a thing that should be impossible. BUG-243 makes the surrounding
   refusal and provenance honest so it stops reading as a failure.
+
+## BUG-251 — the Live voice path had no memory of the operator
+
+**Symptom.** "MYTHOS did not remember previously requested songs"
+(`inc-1786745736899-8`), and a week earlier the operator described talking to
+"two brains" — the typed surface knowing things the spoken one did not.
+
+**Cause.** `buildLiveSystemInstruction()` (server/index.js) composed rules +
+persona + version + capability digest + skills catalog + local time, and no
+memory of any kind. Everything durable the vault held —
+`Semantic/user-facts.md`, seven lines of the operator's music taste among it —
+was reachable only from `handleUtterance()`'s `recallHybrid()` call, which is
+the TYPED compose-bar path. The primary SPOKEN surface was structurally
+amnesiac: not a recall that failed, a recall that was never wired.
+
+BUG-249 fixed the write side of this the same day (repeated actions now become
+durable facts). This is the read side, and the two were independently broken —
+facts were being written into a file the voice path could not see.
+
+**FIXED 2026-08-15.** An `OPERATOR FACTS` block, composed into the Live setup
+frame from a new `semantic.topic('user-facts')` direct read.
+
+Three deliberate choices, each of which was the alternative's failure mode:
+- **`topic()`, not `recallHybrid()`.** This composer runs synchronously inside
+  `live-session.js`'s `buildSetup()` on every open()/rotation and cannot await;
+  `recallHybrid()` embeds the query through the Ollama-then-Mistral chain, so
+  wiring it here would put a network round-trip on every session open and
+  reconnect. There is also no query to score against at session open — the
+  whole file *is* the relevant context.
+- **Labelled `as of session-start`**, per BUG-136. This frame can ride
+  unrefreshed for Gemini Live's ~10-minute connection ceiling; anything in it
+  that claims to be live is lying by the second minute.
+- **Capped at 4000 chars, keeping the TAIL.** `user-facts.md` is append-only
+  and unbounded, and its newest facts are at the end — a head-first cap would
+  have frozen the operator's memory at whatever it knew first.
+
+`LIVE_MEMORY_INJECT=false` restores the previous frame exactly, no code change.
+Absent store, empty topic and a throwing `topic()` all degrade to no block —
+never a failed session; `test/live-memory-inject.test.js` (7 tests) pins all
+three, the cap direction, the label, and that a traversal-shaped topic name
+cannot read outside `Semantic/`.
+
+## BUG-252 — the incident ledger and BUGS.md had no mechanical relationship
+
+**Symptom.** Of 30 incidents in the operator's live vault
+(`Semantic/incidents.md`, 2026-08-07 onward), **2** were cited by id in
+BUGS.md. Six copies of one voice-node-duplicate loop, whatsapp typing into
+Chrome Legacy Window, both camera misidentifications and the HUD colour
+mismatch had no entry at all.
+
+**Cause.** Nothing hid them. There was no way to ask "which of these did we
+ever write down?", so it was never asked — and every triage pass started from
+whatever the operator had said most recently, not from the ledger. This is the
+exact trap `memory/lessons.js`'s own header records ("log_incident wrote
+Incidents/ that nothing read back"), re-emerged one layer up: the fix for a
+write-only store was another write-only store.
+
+**FIXED 2026-08-15** with `scripts/triage-incidents.js` — a reporter, not a
+filer: it prints which incident ids appear in neither BUGS.md nor a decision.
+`--check` exits 1 when any are untracked, `--json` for tooling.
+
+Tracked is decided by **id citation only**, never by text similarity. A BUG
+that describes a matching symptom is not evidence that *this* report was
+triaged, and a false "tracked" hides work while a false "untracked" costs one
+second look — `test/triage-incidents.test.js` pins that a same-symptom entry
+does NOT clear an incident. Filing automatically was considered and rejected:
+it would produce 30 entries and a triage problem one layer up, which is the
+bug, not the fix.
+
+## BUG-253 — 28 untracked incidents, triaged
+
+The first run of BUG-252's reporter against the live vault. Disposition for
+every previously-untracked incident id, so the ledger is answered rather than
+merely counted. Fixed-elsewhere rows cite the entry that carries the fix; the
+rest are open with a named reason.
+
+| Incident | Date | Disposition |
+|---|---|---|
+| `inc-1786102413272-1`, `inc-1786104367729-1` | 08-07 | Reclassified, see BUG-234 part 1a — `live-reasoning-leak` moved off the fault channel to `voice.live.reasoning-filtered`. Not a fault; no containment change. |
+| `inc-1786193617857-1` | 08-08 | Open — speech not recognised. Overlaps the transcript work in BUG-224's session but has no isolated repro; needs a live session with `live-turn-no-user-transcript` counts captured. |
+| `inc-1786194147637-2`, `inc-1786237852737-1` | 08-08/09 | By design, not a defect — `live-idle-exhausted` is the deliberate idle-session cost-saving close. What is real here is that it READS as an alert to the operator; see the chronic-signature note below. |
+| `inc-1786225418123-1`, `inc-1786228238850-1`, `inc-1786228259202-1`, `inc-1786228861084-2`, `inc-1786229465887-3`, `inc-1786230234810-5` | 08-08 | **Open, and the largest untracked cluster: six reports of one voice-node-duplicate identify loop in ~30 minutes.** Aether node identity, `voiceNodes` resolution. Never had an entry. |
+| `inc-1786230054882-4` | 08-08 | Informational — a self-heal that worked. No action. |
+| `inc-1786231315825-1` | 08-08 | Open, product gap rather than defect: no approval/rejection control exists in the dashboard for a queued WhatsApp send. |
+| `inc-1786236109564-1`, `inc-1786236365947-3` | 08-09 | Spotify half tracked and still open as BUG-001/BUG-026. The `open_web` half — a widget opened where the operator expected a browser window — was untracked until now. |
+| `inc-1786317422916-1` | 08-09 | **Open.** `whatsapp_send` text routed to Chrome Legacy Window / msedgewebview2 instead of `WhatsApp.Root.exe`. Distinct from BUG-231 (a composer settle-timing race) — this is window targeting, the keystrokes-follow-the-caret class. |
+| `inc-1786696486257-1` | 08-14 | Closed — BUG-222. |
+| `inc-1786706965838-1` | 08-14 | Open — `open_folder` reported `unverified` while the window demonstrably opened. An honest-verification defect, in the direction that costs trust cheaply rather than the dangerous one. |
+| `inc-1786708684079-2` | 08-14 | Closed — BUG-238 (terminal failures) and BUG-236 (the "Network request failed" misdiagnosis). The token was revoked; the network was fine. |
+| `inc-1786709364853-3` | 08-14 | The umbrella report that produced BUG-238..BUG-250. No separate entry. |
+| `inc-1786743685668-1`, `inc-1786743967842-2` | 08-14 | Closed — BUG-239, the third speech path without a Live guard. |
+| `inc-1786744105600-3` | 08-14 | Closed — BUG-241, the HUD could never show speaking. |
+| `inc-1786744159301-4` | 08-14 | Not a defect: a browser will not grant camera access without a user gesture, and a system that could silently enable a webcam should be impossible. BUG-243 makes the refusal honest. |
+| `inc-1786744280028-5`, `inc-1786744332412-6` | 08-14 | Partially addressed — BUG-243 gives `camera_look` a confidence score and a second frame when confidence is low. Model-side accuracy is not fixed and is not claimed to be. |
+| `inc-1786745645916-7` | 08-14 | Closed — BUG-248, the immune explainer's 7-day synchronous episodic scan over 12,294 entries. |
+| `inc-1786745736899-8` | 08-14 | Closed on both sides — BUG-249 (behaviour never became a fact) and BUG-251 (the fact never reached the spoken path). |
+
+**The pattern worth carrying**, and the reason this is one table rather than 28
+stub entries: the ledger is dominated by *repeat* reports. Six for one voice
+node loop, two for the double voice, two for camera — and across the wider
+88-file lesson store, five classes recur across separate weeks (media playing
+the wrong item, browser/window targeting, voice duplication, false-success
+verification, `screen_look` finding nothing). A defect reported twice a week
+for a month is not a new defect each time, but until this table every triage
+pass met it as one.
+
+**Not built, deliberately.** The obvious next step is a chronic-signature
+detector — count identical (tool, error-class) failures across sessions and
+raise ONE standing notice carrying the remedy the error text already contains
+(`node scripts/google-auth.js`, `browser_launch_debug`). BUG-238's `terminal:true`
+already does this for the non-retryable case, which is the sharpest instance;
+the general counter needs a session's worth of live evidence about what
+threshold produces a useful notice rather than a second stream of noise, and
+guessing it here would ship the noise.
