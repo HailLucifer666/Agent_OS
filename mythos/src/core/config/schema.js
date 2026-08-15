@@ -670,6 +670,12 @@ const SCHEMA = {
   // voice choice.
   VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
 
+  // BUG-251: inject Semantic/user-facts.md into the Live session instruction so
+  // the spoken path knows what the vault knows. Default ON — the amnesia it
+  // fixes was operator-visible. Setting it false restores the pre-fix frame
+  // exactly, with no code change (see server/index.js's OPERATOR FACTS block).
+  LIVE_MEMORY_INJECT:          { type: 'bool',   default: true },
+
   // ---- record-window volume ducking, and its anti-feedback bounds ----
   //
   // ADDED TO THE SCHEMA 2026-08-11 (installer parity). All five were

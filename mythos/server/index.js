@@ -96,6 +96,13 @@ function isLoopback(req) {
 // untouched for other callers (e.g. memory.reindex()'s batch backfill), which
 // have no such latency budget.
 const RECALL_TIMEOUT_MS = Number(process.env.VOICE_RECALL_TIMEOUT_MS) || 3500;
+
+// BUG-251: ceiling for the OPERATOR FACTS block in the Live setup frame.
+// user-facts.md is append-only and unbounded; without a cap a long-lived vault
+// would grow the once-per-session system instruction without limit. ~4KB is
+// roughly 1k tokens — large enough for years of durable facts at this rate,
+// small enough to stay a rounding error against the rest of the instruction.
+const LIVE_FACTS_MAX_CHARS = 4000;
 const RECALL_TIMED_OUT = Symbol('recall-timed-out');
 function recallWithTimeout(promise, ms) {
   return Promise.race([
@@ -206,6 +213,40 @@ function createServer(deps) {
           '\n(as of session-start — a skill added/removed since would not be reflected here; re-check with a tool before relying on it.)');
       }
     } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    // BUG-251: the Live path had no memory of the operator at all. Everything
+    // durable the vault knew (Semantic/user-facts.md) was reachable only from
+    // handleUtterance()'s recallHybrid() — the TYPED path — so the primary
+    // SPOKEN surface was structurally amnesiac and "you never remember my
+    // songs" was correct about the surface even though the facts were on disk.
+    // BUG-249 fixed the write side (habit promotion); this is the read side.
+    //
+    // Deliberately a direct topic() read, not recallHybrid(): this composer is
+    // called synchronously from live-session.js's buildSetup() on every
+    // open()/rotation and cannot await, and an embeddings round-trip on the
+    // session-open path would add latency to every reconnect. There is also no
+    // query to score against here — the whole file IS the relevant context.
+    // Labelled session-start per BUG-136, and capped: user-facts.md is
+    // append-only and unbounded, so the TAIL (newest facts) is what survives.
+    try {
+      if (config.LIVE_MEMORY_INJECT !== false) {
+        const semantic = memory && memory.semantic;
+        const factsTopic = (semantic && typeof semantic.topic === 'function') ? semantic.topic('user-facts') : null;
+        const facts = factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : [];
+        if (facts.length) {
+          const header = 'OPERATOR FACTS (as of session-start — durable memory, may have changed since; ' +
+            'use recall_memory for anything not here):';
+          const lines = [];
+          let used = header.length;
+          for (let i = facts.length - 1; i >= 0; i--) {
+            const line = '- ' + facts[i];
+            if (used + line.length + 1 > LIVE_FACTS_MAX_CHARS) break;
+            used += line.length + 1;
+            lines.unshift(line);
+          }
+          if (lines.length) parts.push(header + '\n' + lines.join('\n'));
+        }
+      }
+    } catch (err) { logger.warn('live.facts-compose-failed', { error: err.message }); }
     // BUG-079 (Stage 6, item #19): with no local time anywhere in the prompt,
     // MYTHOS said "have a good afternoon" at ~01:50 local — the operator had
     // to correct "a.m. not p.m." live-session.js's buildSetup() calls this

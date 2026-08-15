@@ -354,6 +354,23 @@ function createSemanticStore({ fs, config, bus, logger }) {
     return hits.slice(0, limit);
   }
 
+  // BUG-251: read ONE topic's facts directly, no query scoring. recall() needs
+  // a query to score against; the Live session-open composer has none — it
+  // wants "everything durable about the operator" (Semantic/user-facts.md).
+  // Synchronous on purpose: live-session.js's buildSetup() cannot await.
+  // The name is sanitized to a single path segment so a caller-supplied value
+  // can never read outside Semantic/.
+  function topic(name) {
+    const safe = String(name || '').replace(/[^A-Za-z0-9_.-]/g, '');
+    if (!safe || safe === '.' || safe === '..') return null;
+    const content = fs.readText('Semantic/' + safe + '.md', '');
+    if (!content) return null;
+    const facts = parseFacts(content);
+    // Same reasoning as recall()'s BUG-172 guard: a factless file is not a hit.
+    if (!facts.length) return null;
+    return { topic: safe, facts: facts };
+  }
+
   function get(ref) {
     // Search all semantic files for a sidecar id match
     const files = activeTopicFiles();
@@ -411,7 +428,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
     fs.ensureDir(fs.vaultPath('Semantic'));
   }
 
-  return { write, forget, recall, get, pruneLowConfidence, consolidate, stats, init };
+  return { write, forget, recall, get, topic, pruneLowConfidence, consolidate, stats, init };
 }
 
 module.exports = { createSemanticStore };
