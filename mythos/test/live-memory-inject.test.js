@@ -216,7 +216,13 @@ describe('BUG-251: the Live setup frame carries operator facts from memory', () 
     const text = await setupTextWith({ topic: () => ({ topic: 'user-facts', facts }) });
     const block = text.slice(text.indexOf('OPERATOR FACTS'));
     const factsBlock = block.split('\n\n')[0];
-    assert.ok(factsBlock.length <= 5000, 'block must be size-capped, got ' + factsBlock.length);
+    // Asserts the cap's BEHAVIOUR, not its current value: the number is a
+    // tuning decision (raised 4000 -> 8000 in BUG-256 to keep more facts in
+    // front of the model and buy back recall_memory round-trips), while
+    // "bounded at all" and "drops oldest first" are the invariants. The bound
+    // here is a generous ceiling that still fails loudly if the cap is removed.
+    assert.ok(factsBlock.length <= 12000, 'block must stay bounded, got ' + factsBlock.length);
+    assert.ok(factsBlock.length < 45000, 'the 500-fact fixture must actually be truncated');
     assert.ok(factsBlock.includes('Fact number 499'), 'the newest fact must survive the cap');
     assert.equal(factsBlock.includes('Fact number 0 '), false, 'the oldest fact is what the cap drops');
   });

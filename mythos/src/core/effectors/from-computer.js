@@ -711,7 +711,16 @@ const TOOLS = [
   // small talk (burns a slow call and a scarce 5/min budget) and NOT reaching
   // for it on a question the conversation model will otherwise answer badly
   // from its own Flash-tier depth.
-  { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. Use this when the question needs real analysis rather than recall or chat: comparing options with trade-offs, working through a multi-step problem, planning an approach, debugging a described failure, checking whether an argument holds. Pass the FULL question plus any facts you already have in `context` — it cannot see the conversation. Do NOT use it for small talk, for looking something up (use web_search), for anything about the screen (use screen_look), or for a question you can already answer well. It takes several seconds, so say you are thinking about it first.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
+  // BUG-255: the first wording named the two failure modes but framed CALLING as
+  // the normal move — "comparing options, planning an approach, checking whether
+  // an argument holds" describes most of a conversation, and a measured session
+  // reached for it 10 times out of 34 total tool calls, more than every other
+  // tool combined. Each call is two inference passes (call, then re-reason over
+  // the result), which on a rate-limited free tier is the dominant latency the
+  // operator feels — a turn that stalled 19s after the tool itself answered in
+  // 580ms. So the default is now ANSWERING, and calling requires a positive
+  // test the model can actually apply: would you otherwise guess?
+  { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. DEFAULT TO ANSWERING IT YOURSELF — you are capable, and this call is expensive: it costs a scarce rate-limited request and roughly doubles how long the operator waits. Only reach for it when you would otherwise GUESS: a genuinely multi-step problem you cannot hold in one pass, a real trade-off between options where being wrong matters, or a described failure whose cause you cannot name. If you already know the shape of the answer, say it — a fast good answer beats a slow better one. Never for chat, opinions, recall, or anything you could answer in a sentence. Not for looking something up (use web_search) or anything on screen (use screen_look). Pass the FULL question plus any facts in `context` — it cannot see the conversation. It takes several seconds, so say you are thinking first.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
 ];
 
 // ctx (optional) — { brain, config, logger }. think_deeply needs ctx.brain;

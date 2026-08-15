@@ -7913,3 +7913,126 @@ already does this for the non-retryable case, which is the sharpest instance;
 the general counter needs a session's worth of live evidence about what
 threshold produces a useful notice rather than a second stream of noise, and
 guessing it here would ship the noise.
+
+## BUG-254 — the operator's authored persona had never once reached the model
+
+**Symptom.** The operator asked why persona tuning seemed to have no effect,
+and separately why MYTHOS didn't sound like the character described in
+`vault/Identity/self.md`. Trait dials read back correctly (`persona_status`
+answered with all seven values), so the dials looked fine and the question
+looked subjective.
+
+**Cause.** `extractSection()` (`identity/index.js`) matched `'## ' + header +
+'\n'` — a literal LF immediately after the header text. `self.md` is
+operator-editable markdown, and on this machine it is **CRLF** (34,399 bytes,
+written by a Windows editor / synced Obsidian vault). Every section therefore
+missed, `loadSelf()` fell through to its defaults on all four fields, and
+`persona()` composed `You are MYTHOS. Helpfulness, honesty, efficiency.` while
+a full authored brief — "You are JARVIS — dryly witty, unfailingly polite,
+British-butler in spirit" — sat on disk being ignored. Measured against the
+real vault before the fix: `Purpose`, `Persona`, `Values` and `Origin` all
+`null`.
+
+**The silence is the defect.** A parse miss and a section the operator never
+wrote both return `null`, and `loadSelf()` supplies a plausible default for
+each, so there was nothing to notice — no warning, no anomaly, and a persona
+that read as merely bland rather than absent. This is the same shape as
+BUG-165's gitignored-personas-directory miss: a loader that cannot find
+anything returns the same value as a loader with nothing to find.
+
+`topLearnedPrefs()` carried the identical `\n`-literal assumption and appeared
+to work — because `identity.learn()` prepends a SECOND `## Learned Preferences`
+header using a bare `\n`, so the regex skipped the operator's CRLF copy and
+matched the code-written one further down the file. Right answer, wrong header,
+and only on vaults where `learn()` had already run at least once.
+
+**FIXED 2026-08-15.** `\r?\n` on both the header and the section lookahead, in
+both functions; `trim()` already removed the trailing CR from the captured
+body. `test/identity-crlf-sections.test.js` (5 tests) drives the real
+`createIdentity` with LF and CRLF fixtures and asserts the composed
+`persona()`, not the internal parser — red on the CRLF cases before the change,
+with the LF cases passing throughout to prove the fixture, not the fix, is what
+changed. Verified against the operator's actual `self.md`: all four sections go
+from `null` to their real content.
+
+## BUG-255 — think_deeply was reached for ten times in one conversation
+
+**Symptom.** "It felt a lot slower, sometimes doesn't reply at all." Two turns
+logged `live.turn-stalled` at the 10s detector threshold.
+
+**Cause, and what it was NOT.** The tool is healthy: ten calls, every one
+successful, 471-1081ms each, all on Cerebras, zero 429s. The latency is
+structural — **a tool call is two inference passes**, the call and then
+re-reasoning over the result, so a 580ms tool can still cost twenty seconds of
+wall clock. Turn 32 is the clean measurement: tool called 11:59:52, tool
+answered 11:59:53, speech at 12:00:13. Nineteen of those twenty seconds were
+spent after the tool had already answered.
+
+Ten of the session's ~34 total tool calls were `think_deeply` — more than every
+other tool combined. On a rate-limited free tier that is also ten of a scarce
+per-minute budget.
+
+The description was the cause. It named its two failure modes correctly but
+framed calling as the normal move: *"comparing options with trade-offs,
+working through a multi-step problem, planning an approach, debugging a
+described failure, checking whether an argument holds"* describes most of a
+conversation.
+
+**FIXED 2026-08-15** by rewriting the description so the DEFAULT is answering,
+the cost is stated in terms the model can weigh (a scarce rate-limited request;
+roughly doubles the operator's wait), and the trigger is a test it can actually
+apply mid-turn — *would you otherwise guess?* The genuine use case is
+deliberately preserved: a real multi-step problem, a trade-off where being
+wrong matters, a failure whose cause it cannot name.
+
+**Not measured yet.** Whether this swings too far and stops the tool firing
+when it is genuinely needed is a live question — one session's call count is
+the oracle, and the next session is what answers it. `test/tool-call-restraint.test.js`
+pins both directions: the restraint clauses must be present AND the real use
+case, the `web_search`/`screen_look` redirects and the `context` warning must
+survive, so a later "fix" cannot silently make it either reflexive or dead.
+
+## BUG-256 — a third of the operator's durable facts never reached the prompt
+
+`LIVE_FACTS_MAX_CHARS` was 4000. The operator's real `user-facts.md` holds 37
+facts after two days of use, of which **26 fit** — the oldest 11 fell off the
+front of every session frame.
+
+Raised to 8000. The reasoning is a cost comparison, not generosity: a fact the
+model cannot see is one it asks `recall_memory` for, and per BUG-255 that
+round-trip is a second inference pass plus a scarce request, while the facts
+block is composed **once per session** (BUG-136) and costs only tokens. Trading
+prompt size for round-trips is the correct direction on a rate-limited tier.
+Still a hard cap — unbounded growth eventually crowds the frame, and the answer
+at that point is distillation, not a larger number.
+
+`test/live-memory-inject.test.js`'s cap test now asserts the *behaviour*
+(bounded at all; drops oldest first) against a generous ceiling rather than
+pinning the constant, since the value is a tuning decision and the invariants
+are not.
+
+## BUG-257 — 151 anonymous socket errors in twelve minutes
+
+`sensors.aether.socket_error` logged the bare event name with **no payload**. A
+real session carried 151 of them, one every ~5 seconds from boot to close,
+none of which said what failed or where. An aggregator that is merely absent —
+`ECONNREFUSED`, the common case when `AETHER_ENABLED` is on without the BLE
+bridge running — was indistinguishable from a wrong URL, a TLS failure, or a
+port claimed by something else.
+
+The reconnect backoff itself is correct (200ms doubling to a 5s cap, which is
+exactly the observed ~12/minute) and is deliberately unchanged: retrying
+forever is right for a sensor whose aggregator may come up at any time. What
+was wrong is that the retry was **mute**.
+
+**FIXED 2026-08-15**: the handler now takes its `err` argument and logs `url`
+plus a truncated `code`. Separately, `AETHER_ENABLED` is set to `false` in the
+operator's local `.env` (untracked) because the bridge is not running on that
+machine — with the flag on and nothing to connect to, those 151 lines bury
+every other signal in the log.
+
+**Honest scope:** this was noise, not the latency the operator reported. Twelve
+reconnects a minute is negligible CPU, and the `loop.stalled` in the same
+session sat at boot, where GC/init pressure is expected. It is fixed because an
+undiagnosable warning repeated 151 times makes the NEXT investigation harder,
+not because it was this one's cause.

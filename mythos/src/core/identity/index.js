@@ -138,7 +138,12 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // prepends, so the first n bullets are the n most recent).
   function topLearnedPrefs(n) {
     var raw = identityStore.readRaw();
-    var section = raw.match(/## Learned Preferences\n([\s\S]*)$/);
+    // BUG-254: same CRLF trap as extractSection below. This one LOOKED healthy
+    // because learn() prepends a second '## Learned Preferences' header written
+    // with a bare \n, so the regex skipped the operator's CRLF copy and matched
+    // the code-written one further down — right answer, wrong header, and only
+    // ever on vaults where learn() had already run at least once.
+    var section = raw.match(/## Learned Preferences\r?\n([\s\S]*)$/);
     if (!section) return [];
     var lines = section[1].match(/^-\s+.+$/gm) || [];
     return lines.slice(0, n).map(function(line) {
@@ -146,8 +151,16 @@ function createIdentity({ bus, config, fs, identityStore }) {
     });
   }
 
+  // BUG-254: self.md is operator-editable markdown, so it arrives with whatever
+  // line endings the editor used — Notepad and a Windows-synced Obsidian vault
+  // both write CRLF. This regex required a literal \n straight after the header,
+  // so against a CRLF file EVERY section returned null and loadSelf() fell back
+  // to its defaults: a full authored persona sat on disk while the model was
+  // told "You are MYTHOS." The failure was silent because a parse miss and an
+  // unwritten section are indistinguishable once both return null.
+  // \r?\n on both the header and the lookahead; trim() removes any trailing CR.
   function extractSection(raw, header) {
-    var re = new RegExp('## ' + header + '\\n([\\s\\S]*?)(?=\\n## |\\n*$)');
+    var re = new RegExp('## ' + header + '\\r?\\n([\\s\\S]*?)(?=\\r?\\n## |\\s*$)');
     var m = raw.match(re);
     return m ? m[1].trim() : null;
   }

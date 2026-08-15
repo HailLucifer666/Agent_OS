@@ -99,10 +99,18 @@ const RECALL_TIMEOUT_MS = Number(process.env.VOICE_RECALL_TIMEOUT_MS) || 3500;
 
 // BUG-251: ceiling for the OPERATOR FACTS block in the Live setup frame.
 // user-facts.md is append-only and unbounded; without a cap a long-lived vault
-// would grow the once-per-session system instruction without limit. ~4KB is
-// roughly 1k tokens — large enough for years of durable facts at this rate,
-// small enough to stay a rounding error against the rest of the instruction.
-const LIVE_FACTS_MAX_CHARS = 4000;
+// would grow the once-per-session system instruction without limit.
+//
+// BUG-256: raised 4000 -> 8000. At 4000 the operator's real vault already had
+// 11 of its 37 facts falling off the front after two days of use, and a fact
+// the model cannot see is one it asks a tool for — `recall_memory` is a second
+// inference pass, which on a rate-limited free tier costs far more than the
+// tokens do. The whole composed instruction is ~35K chars and is built ONCE per
+// session (BUG-136), while a tool round-trip is paid per turn, so trading
+// prompt size for round-trips is the right direction here. Still a hard cap:
+// unbounded growth would eventually crowd the frame, and at that point the
+// answer is distillation, not a bigger number.
+const LIVE_FACTS_MAX_CHARS = 8000;
 const RECALL_TIMED_OUT = Symbol('recall-timed-out');
 function recallWithTimeout(promise, ms) {
   return Promise.race([
