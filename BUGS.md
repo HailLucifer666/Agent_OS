@@ -7847,6 +7847,12 @@ anywhere under `src/`.
   `web_search`/`web_fetch` — network calls that routinely exceed 1.5s. The
   constant is probably wrong, but that is a tuning decision with no evidence
   gathered yet; BUG-246 fixed the part that was making MYTHOS lie.
+  **Config-driven since 2026-08-17 (fix-plan 2.3): the schema key exists
+  (default 1500 UNCHANGED, min 250), `server/index.js` passes it into
+  `createLiveToolAdapter`'s existing seam (which nothing had ever fed), and
+  `.env.example` documents it naming `live.tool-ack-deadline` log counts as
+  the tuning evidence source. The number stays the operator's call — raise it
+  until the per-session late-ack storms stop, then stop raising it.**
 - **`Wake-word models are excluded from the packaged build`
   (`!mythos/ui/public/models{,/**/*}`) yet the wake word ran — it can only have
   loaded them from the source tree. It works on this machine and is dead for

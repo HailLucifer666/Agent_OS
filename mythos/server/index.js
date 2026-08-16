@@ -2677,6 +2677,9 @@ function createServer(deps) {
           getLiveSession: () => liveSession,
           sanitizeErrorForClient,
           goals, // BUG-113: commitment-ledger logging in onLiveTurnComplete
+          // Fix-plan 2.3: the schema key the .env.example doc points at —
+          // without this the documented dial silently did nothing.
+          toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS,
         });
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }

@@ -746,6 +746,16 @@ const SCHEMA = {
   // Comma-separated tool-name allowlist; empty = live-tools.js's curated
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
   LIVE_TOOL_ALLOWLIST:         { type: 'string', default: '' },
+  // BUG-128's net (live-tool-adapter.js): any tool call not resolved by this
+  // deadline gets a status:'started' ack so the Live turn never ends holding an
+  // unanswered call id. Config-driven since 2026-08-17 (fix-plan 2.3) because
+  // the 1500 default produced 4 late acks on web_search/web_fetch in one
+  // measured session — network calls that routinely exceed 1.5s. The number is
+  // the OPERATOR's call, evidence-first: count `live.tool-ack-deadline` log
+  // lines per session and raise it until the storms stop (each line names the
+  // tool and the deadline it blew). Default UNCHANGED at 1500; min 250 stops a
+  // typo from acking before the dispatch round-trip even starts.
+  TOOL_ACK_DEADLINE_MS:        { type: 'number', default: 1500, min: 250 },
 
   // One voice on every surface (operator report, 2026-08-06: "when mythos boots
   // there is one voice, when I speak another, when I type another").
