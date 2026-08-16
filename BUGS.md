@@ -8206,3 +8206,34 @@ artifactRaw.path : artifactRaw`) so nothing that ever lands on
 deterministic) pins the spoken name for the string shape, the object shape,
 and the no-artifact fallback — all three assert `"[object Object]"` never
 appears.
+
+## BUG-261 — open_folder's window oracle was a single coin-flip check, and "pc-child not running" was indistinguishable from "no window"
+
+**Found by exploration 2026-08-17 (fix-plan Wave 2.2).** Two defects in the
+WAVE 6 oracle:
+1. `open_folder` waited a fixed 700ms and checked `findExplorerWindow` exactly
+   once. On a busy machine Explorer routinely takes longer to create and title
+   its window, so real successes came back **unverified** — the exact
+   false-negative the evidence contract exists to prevent, on the tool's happy
+   path.
+2. The title match was exact-only (case-insensitive). Special/localized folders
+   whose Explorer window title carries more than the bare leaf never matched,
+   same false-unverified.
+3. `findExplorerWindow` returned null both when pc-child was offline and when
+   no window matched, and the unverified reason mentioned both causes in one
+   breath — the model could not tell "retry, the checker is down" from "the
+   folder is already open elsewhere".
+
+**FIXED 2026-08-17, both files.** `from-pc.js`'s `findExplorerWindow` now
+returns `{online, window, matchedBy}` — `online:false` is the pc-child-down
+signal, and the match is exact-first then title-contains-leaf, with `matchedBy`
+naming which rule hit (surfaced in the evidence's observed string as
+`[title-match: contains]`). `from-computer.js`'s `open_folder` polls the
+oracle four times, 400ms apart (~1.6s budget), resolving on the first hit,
+and the two unverified reasons are now distinct ("pc-child is not running,
+so I could not verify" vs "no window with that name showed up — it may have
+reused a window you already had open"). Tests:
+`open-folder-and-suggestions.test.js` — the contains-match verifies with the
+match rule in the evidence, a window appearing on the SECOND poll still
+verifies (the exact race the poll exists for), and offline vs no-window
+reasons are asserted to be distinct and non-overlapping.

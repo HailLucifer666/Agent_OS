@@ -321,15 +321,32 @@ async function submitMessage(pid) {
   });
 }
 
+// WAVE 6 oracle, upgraded 2026-08-17 (fix-plan 2.2). Returns
+// {online, window, matchedBy} instead of a bare win|null:
+//   - `online:false` lets open_folder say "pc-child is not running" instead of
+//     folding that into "no window found" — different problems, different next
+//     steps for the model.
+//   - the title match is case-insensitive exact OR title-CONTAINS-leaf, because
+//     special/localized folders can title their Explorer window with more than
+//     the bare leaf. `matchedBy` names which rule hit so the evidence can say so.
 async function findExplorerWindow(leafName) {
   const leaf = String(leafName || '').trim().toLowerCase();
-  if (!leaf) return null;
+  if (!leaf) return { online: false, window: null, matchedBy: null };
   const wins = await delegate({ cmd: 'list_windows' });
-  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) return null;
-  return wins.result.windows.find(function (w) {
-    return String(w.title || '').trim().toLowerCase() === leaf &&
-      /explorer/i.test(String(w.process || w.processName || ''));
+  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) {
+    return { online: false, window: null, matchedBy: null };
+  }
+  const explorers = wins.result.windows.filter(function (w) {
+    return /explorer/i.test(String(w.process || w.processName || ''));
+  });
+  const exact = explorers.find(function (w) {
+    return String(w.title || '').trim().toLowerCase() === leaf;
   }) || null;
+  if (exact) return { online: true, window: exact, matchedBy: 'exact' };
+  const contains = explorers.find(function (w) {
+    return String(w.title || '').toLowerCase().indexOf(leaf) !== -1;
+  }) || null;
+  return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
 }
 
 async function focus_window({ pid }) {

@@ -259,24 +259,37 @@ async function open_folder({ path: rawPath }) {
     const leaf = path.basename(sandboxed.resolved);
     const base = { ok: true, result: { opened: sandboxed.resolved, name: leaf } };
 
-    // Explorer needs a moment to create and title the window.
-    await new Promise((r) => setTimeout(r, 700));
-    let win = null;
-    try {
-      const fromPc = require('./from-pc');
-      if (typeof fromPc.findExplorerWindow === 'function') win = await fromPc.findExplorerWindow(leaf);
-    } catch (_) { /* pc-child may be offline; that only costs us the oracle */ }
+    // Explorer needs a moment to create and title the window — and a single
+    // check after a fixed 700ms was a coin flip on a busy machine, reporting
+    // real successes as unverified. Bounded poll instead (fix-plan 2.2): four
+    // tries, 400ms apart, stopping at the first hit. from-pc is required
+    // lazily (circular dep) and its absence costs only the oracle, never the
+    // open itself.
+    let locate = null;
+    try { locate = require('./from-pc').findExplorerWindow; } catch (_) { /* pc-child offline costs only the oracle */ }
+    let located = null;
+    if (typeof locate === 'function') {
+      for (let attempt = 0; attempt < 4 && !(located && located.window); attempt++) {
+        await new Promise((r) => setTimeout(r, 400));
+        try { located = await locate(leaf); } catch (_) { located = null; }
+      }
+    }
 
-    if (win) {
+    if (located && located.window) {
       return evidence.verifiedOk(base, {
         oracle: 'window-title',
         expected: leaf,
-        observed: String(win.title) + ' (pid ' + win.pid + ')',
+        observed: String(located.window.title) + ' (pid ' + located.window.pid + ')'
+          + (located.matchedBy === 'contains' ? ' [title-match: contains]' : ''),
       });
+    }
+    if (located && !located.online) {
+      return evidence.unverified(base,
+        'asked Explorer to open ' + leaf + ', but pc-child is not running, so I could not verify the window');
     }
     return evidence.unverified(base,
       'asked Explorer to open ' + leaf + ', but no window with that name showed up — it may have ' +
-      'reused a window you already had open, or pc-child is not running to check');
+      'reused a window you already had open');
   } catch (err) {
     return fail(err.message);
   }
