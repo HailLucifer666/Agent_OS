@@ -95,9 +95,14 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
     var key = 'job:' + (p.jobId || 'unknown');
     if (isRecent(key)) return;
 
-    // Extract artifact name from the perception if available
+    // Extract artifact name from the perception if available. The job sensor
+    // emits the artifact PATH string; the object shape ({path}) is also
+    // accepted in case anything else ever lands here with the full artifact
+    // record — either way the announcement must never degrade to
+    // "[object Object]".
     var artifactName = 'your build';
-    var artifactPath = p.artifact || (p.detail && p.detail.artifact);
+    var artifactRaw = p.artifact || (p.detail && p.detail.artifact);
+    var artifactPath = artifactRaw && typeof artifactRaw === 'object' ? artifactRaw.path : artifactRaw;
     if (artifactPath) {
       var parts = String(artifactPath).split(/[/\\]/);
       artifactName = parts[parts.length - 1] || 'your build';

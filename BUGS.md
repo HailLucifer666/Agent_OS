@@ -8182,3 +8182,27 @@ machine (fresh contributor, stripped CI) the loud config error was masked by
 "No supported browser found" and `test/bug-115`'s loud-failure test failed
 there. Validation now runs first — a config error is machine-independent and
 fails with its own message everywhere.
+
+## BUG-260 — announced build completions named their artifact "[object Object]"
+
+**Found by exploration 2026-08-17 (fix-plan Wave 2.1); no operator report —
+the spoken sentence still made sense enough to pass unnoticed.** The push path
+of build completion lost the artifact path at the perception seam:
+`sensors/job.js` emitted `job.artifact` verbatim — an OBJECT (`{path, …}`,
+the shape `job_status`, `agent-actions` and `from-dashboard` all read as
+`artifact.path`) — and `conversation/announcer.js`'s `onJobPerception`
+stringified whatever it found. `String({path:'…'})` is `"[object Object]"`,
+so the announcer's artifact name, the spoken sentence AND the
+`brain.think`-composed model-visible prompt all carried the garbage. The pull
+path (`job_status`) was always correct — the two surfaces disagreed.
+
+**FIXED 2026-08-17, both halves.** The sensor now emits the PATH STRING
+(`(job.artifact && job.artifact.path) || null`), and the announcer accepts
+object-or-string defensively (`typeof artifactRaw === 'object' ?
+artifactRaw.path : artifactRaw`) so nothing that ever lands on
+`perception.job` with the record shape can regress it. Tests:
+`sensors-job.test.js` pins the string emission (and null-stays-null);
+`announcer-artifact.test.js` (3 tests, offline brain so the fallback text is
+deterministic) pins the spoken name for the string shape, the object shape,
+and the no-artifact fallback — all three assert `"[object Object]"` never
+appears.
