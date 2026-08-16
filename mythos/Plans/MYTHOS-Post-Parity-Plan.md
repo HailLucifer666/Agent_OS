@@ -543,6 +543,11 @@ different capability from a voice node, and the manifest/responsive work below i
 untouched. Read `nodes/README.md` before starting, so this step does not rebuild
 the auth/bind delta a second time.
 
+**Related research:** Appendix PA tracks PrivateAgent, an on-device Android
+automation app as a candidate *effector* (a phone MYTHOS acts through) — the
+opposite direction from this step (a phone that acts on MYTHOS). Research only;
+nothing approved to build.
+
 **Files:** create `mythos/ui/public/manifest.webmanifest`,
 `mythos/ui/public/js/pwa.js`; modify `mythos/ui/public/index.html`,
 `mythos/ui/public/css/*` (responsive only); test
@@ -1188,3 +1193,84 @@ security build carries `strix-security` (4,743 chars). The research block is
 absent on this machine because `agent-reach` is not installed — the intended
 degradation, and therefore **the one thing here that is not live-verified**: the
 `RESEARCH FINDINGS` injection has never run against a real `agent-reach`.
+
+---
+
+## Appendix PA — PrivateAgent research: an on-device Android effector (RESEARCH ONLY — nothing here is approved to build)
+
+**Added 2026-08-16 at the operator's request.** This is a tracked research item,
+not a phase: nothing in it gets built, and it does not move the sequence above.
+It belongs to the same family as P7's phone work but is a *different* capability:
+P7 and Voice Nodes make the phone a surface that **talks to** MYTHOS; this is a
+phone that MYTHOS **acts through** — the Android counterpart of the
+`android-devices.json` adb notion in the seams table, without the USB tether.
+
+**What it is.** [PrivateAgent](https://github.com/orailnoor/private-agent)
+(`orailnoor/private-agent`, Flutter/Dart, Android 8+/API 26+, created
+2026-06-26, ~259 stars / 123 forks at time of writing, single author, last push
+2026-07-17) is an on-device automation agent: it parses the Android
+accessibility tree, sends the screen layout to an LLM (DeepSeek or any
+OpenAI-compatible endpoint; README suggests OpenRouter free models), and
+executes the model's chosen action — coordinate taps, text input, scrolling —
+in a loop until the task completes. It has voice input, TTS, and a Telegram bot
+for remote commands.
+
+**Why it is interesting here.** It fills the "phones MYTHOS controls" gap by a
+better route than adb: no tether, no pairing (this machine's `adb devices` was
+empty for the entire Voice Nodes build), and the app runs on the phone itself,
+so MYTHOS would only need a LAN path to it. The delegation model matches a
+pattern MYTHOS already runs — Hermes-Agent is an external engine MYTHOS hands
+builds to; PrivateAgent could be the "phone engine", with MYTHOS keeping intent
+and the leash while the app handles low-level screen navigation in its own
+loop. It does not collide with Voice Nodes or P7: it is an effector, not a
+voice surface or a dashboard PWA.
+
+**The hard blocker: there is no licence.** GitHub API reports `license: null`;
+`LICENSE` and `LICENSE.md` both 404 (checked 2026-08-16). The README's
+"open-source and available for modification" is a sentiment, not a grant —
+default copyright means all rights reserved. MYTHOS is sold later (2026-07-30
+decision; parity steps 6.5/6.6 are the live gate), so vendoring or forking this
+code into the product is exactly the exposure that gate exists to prevent.
+**No code from that repo enters this repo until a real licence exists.** Per
+repo rules the final call on licence questions is a lawyer's, not a session's —
+the *fact* (no licence file, no grant) is what is recorded here, not a legal
+conclusion.
+
+**Other risks, recorded so a future session does not rediscover them.**
+Seven weeks old, bus factor one, a month without a push — fine as inspiration,
+risky as a load-bearing dependency. Security posture is inherently scary: an
+accessibility service that ships screen contents (potentially OTPs, banking
+screens, passwords) to whatever API endpoint is configured, driven by an LLM —
+any integration must extend the leash to the phone, not bypass it. Google Play
+routinely rejects accessibility-automation apps, which matters if the paid
+product ever targets distribution beyond sideloaded APKs. Android-only: it
+says nothing about iPhones.
+
+**Research checklist (all unchecked; ticking requires the evidence named):**
+
+- [ ] **PA-1 — ask the author for a real licence.** Open an issue on
+  `orailnoor/private-agent` requesting an explicit licence (Apache-2.0 or MIT
+  would fit MYTHOS's needs; 123 forks suggests others want clarity too). Do not
+  proceed past PA-2 without an answer.
+- [ ] **PA-2 — protocol-level integration study (no code copied).** Even
+  unlicensed, MYTHOS can *talk to* a separately-installed app — interoperation,
+  not a derivative work. Study what a bridge needs: PrivateAgent currently
+  takes commands from voice/text/Telegram; the missing piece is a MYTHOS
+  WebSocket client using the `MYTHOS_AUTH_TOKEN` auth parity step 2 already
+  built. Deliverable: a written protocol sketch, not code in this repo.
+- [ ] **PA-3 — leash extension design.** Any phone effector routes through
+  `dispatchAction()` (AD-1) with tiering and the confirm registry; a phone tap
+  on a banking app is at least as irreversible as a desktop action. Sketch the
+  tier table rows before any adapter exists.
+- [ ] **PA-4 — security review of the app itself** before recommending it to
+  any operator: what leaves the device, where keys are stored, what the
+  accessibility service can see.
+- [ ] **PA-5 — live trial on a real phone**, only after PA-1 has a licence
+  answer: install the APK, run one task, measure what it can and cannot do.
+  Same live-verify discipline as everything else in this repo — unit-green or
+  README-claims are not verification.
+
+**Sequencing.** Strictly post-parity by construction — downstream of the 6.5/
+6.6/7 shipping gates, and this file's own rule is that nothing here gets ticked
+while the parity roadmap's RESUME HERE still has open steps. First startable
+item is PA-1 (an issue, zero code).
