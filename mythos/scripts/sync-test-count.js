@@ -48,19 +48,25 @@ function runSuite() {
 }
 
 function readStdin() {
-  try {
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    return '';
-  }
+  return new Promise((resolve) => {
+    const chunks = [];
+    process.stdin.on('data', (chunk) => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    process.stdin.resume();
+  });
 }
 
 function getSuiteOutput() {
-  if (!process.stdin.isTTY) {
-    const piped = readStdin();
-    if (piped.trim()) return piped;
+  if (process.argv.includes('--no-stdin') || process.argv.includes('--run') || process.env.SYNC_TEST_COUNT_NO_STDIN === '1') {
+    return Promise.resolve(runSuite());
   }
-  return runSuite();
+  if (!process.stdin.isTTY) {
+    return readStdin().then((piped) => {
+      if (piped.trim()) return piped;
+      return runSuite();
+    });
+  }
+  return Promise.resolve(runSuite());
 }
 
 function parseCounts(out) {
@@ -307,7 +313,7 @@ function syncRoadmap(counts, mode, report) {
   return true;
 }
 
-function main() {
+async function main() {
   const mode = process.argv.includes('--write') ? 'write' : process.argv.includes('--check') ? 'check' : null;
   if (!mode) {
     console.error('Usage: node scripts/sync-test-count.js --check | --write');
@@ -315,7 +321,7 @@ function main() {
     return;
   }
 
-  const counts = parseCounts(getSuiteOutput());
+  const counts = parseCounts(await getSuiteOutput());
   // AD-10: docs match reality — tool/provider/sensor/dep counts ride along with
   // the test count as generated values, not hand-typed ones.
   counts.deps = computeDepsCount();

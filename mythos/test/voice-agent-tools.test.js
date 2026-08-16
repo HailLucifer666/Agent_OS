@@ -13,7 +13,12 @@ const path = require('path');
 // utterance, not a one-off.
 // ---------------------------------------------------------------------------
 describe('voice-agent persona prompt', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'voice', 'voice-agent.js'), 'utf8');
+  // Normalized to LF before any measurement: on a CRLF checkout (core.autocrlf)
+  // the template-literal strings carry a `\r` per line, which would inflate
+  // RULES.length past the ceiling and fail on a machine whose checkout is
+  // byte-identical apart from line endings (same class as the sync-test-count
+  // CRLF fix — see scripts/sync-test-count.js). A no-op on an LF checkout.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'voice', 'voice-agent.js'), 'utf8').replace(/\r\n/g, '\n');
   const RULES = src.match(/const RULES = `([\s\S]*?)`;/)[1];
   const CONTRACT = src.match(/const OUTPUT_CONTRACT = `([\s\S]*?)`;/)[1];
 

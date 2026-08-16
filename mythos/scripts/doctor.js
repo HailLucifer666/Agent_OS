@@ -344,12 +344,21 @@ function compareSettings(mine, theirs) {
 }
 
 // ---- report assembly --------------------------------------------------------
-function evaluateKeyChecks() {
+// storeNames: key NAMES from the Electron desktop key store, optional. A key
+// the operator saved through the setup screen lives THERE, not in process.env,
+// until the next launch injects it into the child env — so a report that only
+// checked process.env would tell the setup screen "GOOGLE_API_KEY missing"
+// five seconds after the operator stored it. Counting store names as present
+// is the documented intent (see keyStoreNames() below: "a key set through the
+// desktop setup screen therefore shows as present-by-name"). Values never
+// reach this function — names only, by construction.
+function evaluateKeyChecks(storeNames) {
+  const store = new Set(storeNames || []);
   return KEY_CHECKS.map((check) => {
     const names = check.anyOf || check.allOf || [];
-    const present = names.filter(envPresent);
+    const present = names.filter((n) => envPresent(n) || store.has(n));
     const ok = check.allOf ? present.length === names.length : present.length > 0;
-    const missing = names.filter((n) => !envPresent(n));
+    const missing = names.filter((n) => !envPresent(n) && !store.has(n));
     return {
       id: check.id,
       label: check.label,
@@ -372,10 +381,10 @@ function evaluateKeyChecks() {
   });
 }
 
-function buildReport(envDir) {
+function buildReport(envDir, opts) {
   const env = loadEnv(envDir);
   const store = keyStoreNames();
-  const keys = evaluateKeyChecks();
+  const keys = evaluateKeyChecks((opts && opts.keyStoreNames) ? opts.keyStoreNames : store.names);
   const assets = assetChecks();
   const gaps = [...keys, ...assets].filter((r) => !r.ok);
   return {
@@ -462,6 +471,12 @@ function printReport(report) {
 // never passes it.
 function main(argv, opts) {
   const envDir = (opts && opts.envDir) || MYTHOS_DIR;
+  // opts.keyStoreNames lets a test simulate a machine with no desktop key store
+  // (or a specific one). Production passes nothing and gets the real store.
+  // Evaluated once here so --strict and the printed report agree with each other
+  // and with /api/setup/status (which calls buildReport with the same default).
+  if (opts && opts.keyStoreNames === undefined) opts = { ...opts, keyStoreNames: keyStoreNames().names };
+  else if (!opts) opts = { keyStoreNames: keyStoreNames().names };
   const wantsJson = argv.includes('--json');
   const strict = argv.includes('--strict');
   const exportIdx = argv.indexOf('--export');
@@ -498,7 +513,7 @@ function main(argv, opts) {
     return strict ? 1 : 0;
   }
 
-  const report = buildReport(envDir);
+  const report = buildReport(envDir, opts);
 
   if (exportIdx !== -1) {
     const file = argv[exportIdx + 1] || path.join(MYTHOS_DIR, 'mythos-settings.json');

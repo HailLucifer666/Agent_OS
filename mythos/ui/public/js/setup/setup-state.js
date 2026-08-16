@@ -18,33 +18,44 @@
 //     values straight to the Electron key store and forgets them; AD-8 means
 //     they never come back from the server either.
 
-// deriveSetupNeed({status}) -> {show, reason, requiredGaps, optionalGaps}
+// deriveSetupNeed({status}) -> {show, reason, requiredGaps, optionalGaps, requiredDone, requiredTotal, requiredDoneCount}
 //   status: {ok, status, body} from GET /api/setup/status, or null if it failed
 //   reason: 'complete' | 'required-gaps' | 'unauthenticated' | 'indeterminate'
+//   requiredDone: required rows that ARE satisfied (so the screen can show them
+//     as stored-with-tick instead of making them vanish — vanishing reads as
+//     "did saving do anything?")
+//   requiredTotal / requiredDoneCount: the progress pair for the header bar.
 export function deriveSetupNeed(probe) {
   const p = probe || {};
   const res = p.status || null;
 
+  const EMPTY = { show: false, reason: 'unauthenticated', requiredGaps: [], optionalGaps: [], requiredDone: [], requiredTotal: 0, requiredDoneCount: 0 };
   if (res && res.status === 401) {
     // The token gate is in front of this and will open on its own. Saying
     // "setup incomplete" here would blame the install for an auth condition.
-    return { show: false, reason: 'unauthenticated', requiredGaps: [], optionalGaps: [] };
+    return EMPTY;
   }
 
   const body = res && res.ok && res.body && typeof res.body === 'object' ? res.body : null;
   if (!body || !Array.isArray(body.keys) || !Array.isArray(body.assets)) {
-    return { show: false, reason: 'indeterminate', requiredGaps: [], optionalGaps: [] };
+    return { ...EMPTY, reason: 'indeterminate' };
   }
 
-  const rows = [...body.keys, ...body.assets].filter((r) => r && r.ok === false);
-  const requiredGaps = rows.filter((r) => r.required === true);
-  const optionalGaps = rows.filter((r) => r.required !== true);
+  const allRows = [...body.keys, ...body.assets].filter((r) => r && typeof r === 'object');
+  const requiredRows = allRows.filter((r) => r.required === true);
+  const requiredDone = requiredRows.filter((r) => r.ok === true);
+  const gaps = allRows.filter((r) => r.ok === false);
+  const requiredGaps = gaps.filter((r) => r.required === true);
+  const optionalGaps = gaps.filter((r) => r.required !== true);
 
   return {
     show: requiredGaps.length > 0,
     reason: requiredGaps.length > 0 ? 'required-gaps' : 'complete',
     requiredGaps,
     optionalGaps,
+    requiredDone,
+    requiredTotal: requiredRows.length,
+    requiredDoneCount: requiredDone.length,
   };
 }
 

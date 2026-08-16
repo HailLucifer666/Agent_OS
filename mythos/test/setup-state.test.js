@@ -79,6 +79,29 @@ describe('deriveSetupNeed', () => {
     assert.equal(need.show, false);
     assert.equal(need.reason, 'complete');
   });
+
+  it('reports the required progress pair so the header bar can be honest', () => {
+    const rows = [
+      { id: 'brain', label: 'Brain', required: true, ok: true },
+      { id: 'live-voice', label: 'Gemini Live', required: true, ok: false },
+      { id: 'stt', label: 'STT', required: false, ok: false },
+    ];
+    const need = deriveSetupNeed({ status: okBody(rows) });
+    assert.equal(need.requiredTotal, 2);
+    assert.equal(need.requiredDoneCount, 1);
+    assert.deepEqual(need.requiredDone.map((r) => r.id), ['brain'],
+      'satisfied required rows are listed so the screen can show them as stored-with-tick');
+    assert.equal(need.requiredGaps.length, 1);
+    assert.equal(need.show, true);
+  });
+
+  it('requiredDone stays empty when nothing required is satisfied', () => {
+    const rows = [{ id: 'brain', label: 'Brain', required: true, ok: false }];
+    const need = deriveSetupNeed({ status: okBody(rows) });
+    assert.equal(need.requiredTotal, 1);
+    assert.equal(need.requiredDoneCount, 0);
+    assert.deepEqual(need.requiredDone, []);
+  });
 });
 
 describe('extractKeyNames', () => {

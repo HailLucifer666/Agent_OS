@@ -550,9 +550,9 @@ function writeHtml(finalNodes, finalEdges, communities) {
     out = out.replace(HYPEREDGES_RE, '$1');
   }
 
-  // Retitle: drop "Agent OS + " so the page reads "graphify — MYTHOS".
+  // Retitle: set title to "graphify — MYTHOS".
   out = out.replace(
-    /<title>graphify — Agent OS \+ MYTHOS<\/title>/,
+    /<title>.*<\/title>/,
     '<title>graphify — MYTHOS</title>'
   );
 
