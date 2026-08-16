@@ -140,7 +140,15 @@ describe('static asset delivery — compression + caching policy', () => {
 
   it('wake-word ONNX models are immutable-cached', async () => {
     const res = await get(port, '/models/wakeword/melspectrogram.onnx', {});
-    if (res.status !== 200) return; // models are gitignored on some clones
+    // Absent weights don't 404 — the SPA index.html fallback answers them with
+    // a 200 (the same fallback the path-escape test below documents). The old
+    // status-only guard passed that 200 straight into the assert, so this
+    // "self-silencing on clones without models" test actually FAILED on CI
+    // (2026-08-16, named by the annotation channel) while passing on any
+    // machine that had fetched the weights. Recognize the fallback by its
+    // content-type and stand down; machines with real weights still assert.
+    if (res.status !== 200) return;
+    if (/html/i.test(String(res.headers['content-type'] || ''))) return; // SPA fallback, not a model
     assert.match(String(res.headers['cache-control'] || ''), /immutable/,
       'version-pinned model binaries must not be re-downloaded every load');
   });
