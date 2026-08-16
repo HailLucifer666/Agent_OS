@@ -66,6 +66,7 @@ const NAV_COMMANDS = [
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:backend|terminal|system\s+logs?)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'backend'],
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:conversation|chat|transcript|history)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'conversation'],
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?engagements?(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'engagements'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:security|pin|lock)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'security'],
 ];
 
 // Close commands — close the top panel or all panels.

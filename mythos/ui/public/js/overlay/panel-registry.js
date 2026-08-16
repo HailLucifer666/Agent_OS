@@ -17,6 +17,7 @@ export const PANELS = {
   web:       { title: 'WEB',       loader: () => import('/js/views/web-panel.js'),  mutating: false },
   'mic-settings': { title: 'MICROPHONE', loader: () => import('/js/views/mic-settings.js'), mutating: false },
   'voice-settings': { title: 'VOICE', loader: () => import('/js/views/voice-settings.js'), mutating: false },
+  security: { title: 'SECURITY', loader: () => import('/js/views/security.js'), mutating: true },
 };
 
 export function getPanel(id) {
