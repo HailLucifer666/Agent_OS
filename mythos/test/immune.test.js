@@ -582,37 +582,57 @@ describe('immune/healer — cooldown + actions', function() {
     var healer = createHealer({ bus: bus, config: fakeConfig(), memory: memory, getCortex: function() { return null; }, getGoals: function() { return null; } });
     healer.start();
 
-    bus.emit('health.diagnosed', {
-      kind: 'build-engine-failed', target: undefined,
-      evidence: { kind: 'build-engine-failed', engine: 'hermes', error: 'hermes-agent OFFLINE: ...' }
-    });
-    // Real probe() against the real hermes-agent adapter — a genuine live
-    // re-probe, not a mock. Poll instead of a fixed sleep: the CLI spawn this
-    // triggers is a real child process (~1.5s measured idle, far more under load).
-    //
-    // The budget must exceed the adapter's OWN probe timeout, otherwise this
-    // test races it and fails on a busy machine while the code is fine: with a
-    // 10s budget it failed in a full-suite run (real child spawn starved by
-    // suite parallelism) yet passed in 1.5s in isolation. The poll exits as soon
-    // as the event lands, so a healthy machine still costs ~1.5s, not 40s.
-    var healed = [];
-    for (var attempt = 0; attempt < 200 && healed.length === 0; attempt++) {
-      await sleep(200);
-      healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
+    // BUG-258 (2026-08-16): this test used to run its "genuine live re-probe"
+    // against whatever `hermes` resolution happened to be available to the
+    // test process — PATH, an exported HERMES_CLI, or a running gateway. That
+    // is machine state, not a fixture: it passed on the operator's shell and
+    // failed with `spawn hermes ENOENT` → honest OFFLINE → outcome 'error'
+    // everywhere else, including CI (test job red on every push since
+    // 2026-08-13; e2e green, so it read as a suite regression). Pinning
+    // HERMES_CLI at process.execPath keeps everything this test exists to
+    // exercise real — the actual adapter probe(), an actual child spawn, the
+    // exit-code → ONLINE transition — with a target binary that exists on any
+    // machine that can run the suite at all. Same save/restore convention as
+    // hermes-adapter.test.js.
+    var savedCli = process.env.HERMES_CLI;
+    process.env.HERMES_CLI = process.execPath; // `node --version` exits 0
+    try {
+      bus.emit('health.diagnosed', {
+        kind: 'build-engine-failed', target: undefined,
+        evidence: { kind: 'build-engine-failed', engine: 'hermes', error: 'hermes-agent OFFLINE: ...' }
+      });
+      // Real probe() against the real hermes-agent adapter — a genuine live
+      // re-probe, not a mock. Poll instead of a fixed sleep: the CLI spawn this
+      // triggers is a real child process (~1.5s measured idle, far more under load).
+      //
+      // The budget must exceed the adapter's OWN probe timeout, otherwise this
+      // test races it and fails on a busy machine while the code is fine: with a
+      // 10s budget it failed in a full-suite run (real child spawn starved by
+      // suite parallelism) yet passed in 1.5s in isolation. The poll exits as soon
+      // as the event lands, so a healthy machine still costs ~1.5s, not 40s.
+      var healed = [];
+      for (var attempt = 0; attempt < 200 && healed.length === 0; attempt++) {
+        await sleep(200);
+        healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
+      }
+      assert.equal(healed.length, 1);
+      assert.equal(healed[0].payload.playbookId, 'build-engine-reprobe');
+      // Task C2: reprobe-build-engine's own ok:true is not proof Hermes is
+      // actually back — it reports ONLINE/OFFLINE, it does not guarantee
+      // ONLINE. The healer now holds this claim open as 'verifying' rather
+      // than announcing 'applied' the instant the probe returns, so a heal
+      // cannot be reported before it has held for verifyMs with no recurrence
+      // (see heal-verification.test.js for the full hold/confirm/fail cycle).
+      assert.equal(healed[0].payload.outcome, 'verifying', 'a reprobe result is held for verification, not announced healed on the spot');
+      assert.ok(healed[0].payload.detail && (healed[0].payload.detail.state === 'ONLINE' || healed[0].payload.detail.state === 'OFFLINE'),
+        'must report a definite re-probed state, not silence');
+    } finally {
+      healer.stop();
+      if (savedCli === undefined) delete process.env.HERMES_CLI; else process.env.HERMES_CLI = savedCli;
+      // Don't leak the stub-CLI-bound adapter instance to anything later in
+      // this process (same rationale as hermes-adapter.test.js).
+      delete require.cache[require.resolve('../adapters/hermes-agent')];
     }
-    assert.equal(healed.length, 1);
-    assert.equal(healed[0].payload.playbookId, 'build-engine-reprobe');
-    // Task C2: reprobe-build-engine's own ok:true is not proof Hermes is
-    // actually back — it reports ONLINE/OFFLINE, it does not guarantee
-    // ONLINE. The healer now holds this claim open as 'verifying' rather
-    // than announcing 'applied' the instant the probe returns, so a heal
-    // cannot be reported before it has held for verifyMs with no recurrence
-    // (see heal-verification.test.js for the full hold/confirm/fail cycle).
-    assert.equal(healed[0].payload.outcome, 'verifying', 'a reprobe result is held for verification, not announced healed on the spot');
-    assert.ok(healed[0].payload.detail && (healed[0].payload.detail.state === 'ONLINE' || healed[0].payload.detail.state === 'OFFLINE'),
-      'must report a definite re-probed state, not silence');
-
-    healer.stop();
   });
 });
 

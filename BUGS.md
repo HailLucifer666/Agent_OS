@@ -9,7 +9,7 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-15 - RCA and repair of the 2026-08-14 live voice session
+Last updated: 2026-08-16 - gap-analysis pass; BUG-258 (CI red since 2026-08-13)
 (BUG-238..BUG-250, in the final section): the double voice traced to a third
 speech path that never got the BUG-060 Live guard, DEGRADED traced to a revoked
 Google token with no notion of a terminal failure, a build that shipped
@@ -8036,3 +8036,40 @@ reconnects a minute is negligible CPU, and the `loop.stalled` in the same
 session sat at boot, where GC/init pressure is expected. It is fixed because an
 undiagnosable warning repeated 151 times makes the NEXT investigation harder,
 not because it was this one's cause.
+
+## BUG-258 — a "live" test that only lived on one machine: CI red for three days unnoticed
+
+`test/immune.test.js`'s build-engine-reprobe test claimed to run "a genuine
+live re-probe, not a mock" against the real hermes-agent adapter — but nothing
+pinned what `hermes` meant for that probe. `cliBin()` resolves to
+`process.env.HERMES_CLI || 'hermes'`, and tests do not load `mythos/.env`
+(only `src/main.js` does), so the probe's target was whatever the surrounding
+machine happened to offer: `hermes` on PATH, an exported `HERMES_CLI`, or a
+running gateway. On the operator's shell one of those was true, so the local
+pre-commit hook ran green and the suite numbers were committed as `0 fail`.
+On CI (windows-latest, `npm ci`, no hermes anywhere) and on any fresh clone
+the probe honestly returned OFFLINE with `spawn hermes ENOENT`, the healer
+action returned `ok:false`, and the outcome assertion `verifying` failed —
+**the `ci` workflow's test job has been failing on every push since
+2026-08-13** (runs 164-173+; the e2e job green throughout, which is why it
+read as a suite regression rather than an environment one). Nobody noticed
+because `gh` isn't even installed locally and the red badge was never looked
+at — the "two workflows" split hid the one that mattered.
+
+The deeper shape: the test's two assertions were already in tension. It
+asserts a *definite* re-probed state (`ONLINE` or `OFFLINE`) — accepting an
+honest OFFLINE as valid — yet requires the action to succeed, and a real
+OFFLINE makes the action fail by design (F5: a probe is not a heal). Only
+`ONLINE` can ever produce `verifying`. An environment-dependent test that
+demands ONLINE is a test that fails on exactly the machines the repo's
+portability rules exist for.
+
+**FIXED 2026-08-16**: the test now pins `HERMES_CLI` to `process.execPath`
+(save/restore in `finally`, adapter dropped from `require.cache` after — the
+same convention as `hermes-adapter.test.js`). Everything the test exists to
+exercise stays real: the actual adapter `probe()`, an actual child spawn, the
+exit-code → ONLINE transition, the healer's verifying-hold. Only the target
+binary is pinned to one that exists on any machine that can run the suite.
+Verified: `node --test test/immune.test.js` → 54/54 pass in ~1.1s, where the
+unfixed file failed in isolation on this machine with the exact ENOENT
+diagnostic above.
