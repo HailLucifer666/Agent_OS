@@ -163,8 +163,18 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // thoughts about the operator's situation during quiet moments. The mull
       // cadence is config-driven (MYTHOS_MULL_EVERY_TICKS, default 300 = ~5min);
       // setting it to 0 reverts to pure zero-cost idle.
+      //
+      // FIX-PLAN 3.1 (2026-08-17): TIMER HEARTBEATS ARE NOT EVENTS. This gate
+      // used to test bare `perceptions.length === 0`, but sensors/timer.js
+      // pushes a perception.tick heartbeat every single tick, so the branch
+      // NEVER opened in real operation — confirmed on live boots (45/45, 65/65
+      // ticks, never 0 perceptions), and the same gate is what made mull()
+      // structurally unreachable (BUGS.md, Phase 4 live-tested-broken note).
+      // Both mull and the idle consolidate below were dead code. The timer's
+      // payload carries kind:'timer', so excluding those restores idle.
       var hasActive = goals && typeof goals.hasActive === 'function' && goals.hasActive();
-      if (perceptions.length === 0 && !hasActive) {
+      var nonTimer = perceptions.filter(function (p) { return !p || p.kind !== 'timer'; });
+      if (nonTimer.length === 0 && !hasActive) {
         working.activeGoalId = null;
         var mullFired = false;
         if (shouldMull(working.tick, config)) {
@@ -212,6 +222,17 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // resuming here must not commit further mutations (spend, action
       // dispatch) on behalf of a generation that's already been superseded.
       if (generation !== myGen) return;
+      // FIX-PLAN 3.1 (2026-08-17): consolidate runs BEFORE the goalless
+      // early-return. decide() returns null whenever no goal arbitrates out —
+      // which is the NORMAL state of a purely conversational session — so the
+      // consolidate call that used to sit at the bottom of this branch was
+      // unreachable for exactly the sessions that produce the memories worth
+      // distilling. Hoisted here (and removed from below) so goalless ticks
+      // consolidate on cadence; ticks WITH a decision consolidate once, here,
+      // not twice.
+      if (ooda.shouldConsolidate(working.tick, config)) {
+        await memory.consolidate({});
+      }
       if (!decision) return;
 
       // RC#3: account for the planner's brain-call spend. Previously addSpend()
@@ -244,9 +265,8 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       if (ooda.shouldReflect(working.tick, config)) {
         reflect(working, memory, bus);
       }
-      if (ooda.shouldConsolidate(working.tick, config)) {
-        await memory.consolidate({});
-      }
+      // (consolidate used to run here too — moved above the goalless
+      // early-return; see the FIX-PLAN 3.1 comment there.)
       // D4: Reset consecutive error counter on successful tick.
       tickOnce._consecutiveErrors = 0;
     } catch (err) {

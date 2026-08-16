@@ -317,31 +317,52 @@ function createMemory({ config, bus, logger, brain }) {
 
       // 3. Episodic → semantic distillation via Brain 'simple' lane — best-effort,
       // skips cleanly if Brain is offline or unavailable.
+      //
+      // FIX-PLAN 3.1 (2026-08-17): every skip now says WHY on the bus
+      // ('memory.consolidate-skip'), because "did distillation ever run" was
+      // undiagnosable — a silent skip and a dead gate look identical in every
+      // log. Diagnostic only: never an anomaly, never a failure.
       if (brain && typeof brain.think === 'function') {
         try {
           const tail = episodic.tail(20).filter(Boolean);
-          const highSalience = tail.filter(function(e) { return (e.salience || 0) > 0.5; });
-          if (highSalience.length > 0) {
-            const summaryText = highSalience.map(function(e) { return '- ' + (e.summary || ''); }).join('\n');
-            // lane 'memory' (2026-08-14) — split off 'simple' for LOAD as much
-            // as quality: consolidation is one of the two frequent brain
-            // consumers and shared Groq's 12k-token window with everything else.
-            // Terse styling follows this lane by default (schema.js's
-            // BRAIN_TERSE_LANES = 'simple,memory'), so summaries stay compact.
-            const result = await brain.think({
-              lane: 'memory',
-              messages: [{ role: 'user', content: 'Distill these recent high-salience memories into durable facts:\n' + summaryText }],
-              source: 'memory:consolidate'
-            });
-            if (result && !result.offline && result.content) {
-              semantic.write('consolidated-' + Date.now(), [result.content], {
-                confidence: 0.6,
-                sources: highSalience.map(function(e) { return e.id; })
+          if (tail.length === 0) {
+            bus.emit('memory.consolidate-skip', { reason: 'episodic-tail-empty', detail: 'no recent episodic entries to distill' });
+          } else {
+            const highSalience = tail.filter(function(e) { return (e.salience || 0) > 0.5; });
+            if (highSalience.length === 0) {
+              bus.emit('memory.consolidate-skip', { reason: 'no-high-salience', detail: tail.length + ' recent entries, none above 0.5' });
+            } else {
+              const summaryText = highSalience.map(function(e) { return '- ' + (e.summary || ''); }).join('\n');
+              // lane 'memory' (2026-08-14) — split off 'simple' for LOAD as much
+              // as quality: consolidation is one of the two frequent brain
+              // consumers and shared Groq's 12k-token window with everything else.
+              // Terse styling follows this lane by default (schema.js's
+              // BRAIN_TERSE_LANES = 'simple,memory'), so summaries stay compact.
+              const result = await brain.think({
+                lane: 'memory',
+                messages: [{ role: 'user', content: 'Distill these recent high-salience memories into durable facts:\n' + summaryText }],
+                source: 'memory:consolidate'
               });
+              if (!result || result.offline || !result.content) {
+                bus.emit('memory.consolidate-skip', {
+                  reason: 'brain-offline',
+                  detail: result && result.offline ? 'think() reported offline' : 'think() returned no content',
+                });
+              } else {
+                try {
+                  semantic.write('consolidated-' + Date.now(), [result.content], {
+                    confidence: 0.6,
+                    sources: highSalience.map(function(e) { return e.id; })
+                  });
+                } catch (writeErr) {
+                  bus.emit('memory.consolidate-skip', { reason: 'semantic-write-failed', detail: writeErr && writeErr.message });
+                }
+              }
             }
           }
-        } catch (_) {
+        } catch (err) {
           // Brain distillation is best-effort — never block consolidation on it
+          bus.emit('memory.consolidate-skip', { reason: 'think-threw', detail: err && err.message });
         }
 
         // 3b. Conversation → user-facts distillation: mine recent conversation
@@ -398,6 +419,10 @@ function createMemory({ config, bus, logger, brain }) {
           // visible rather than vanishing into an empty catch.
           bus.emit('health.anomaly', { kind: 'consolidate-merge-failed', error: err.message });
         }
+      } else {
+        // FIX-PLAN 3.1: the brain-missing skip used to be indistinguishable
+        // from every other silent skip (see the step-3 comment).
+        bus.emit('memory.consolidate-skip', { reason: 'brain-missing', detail: 'no brain.think available' });
       }
 
       // 4. Stats

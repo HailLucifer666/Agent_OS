@@ -72,6 +72,7 @@ const ALLOWED_EVENTS = new Set([
   'memory.decay',
   'memory.checkpoint.saved',
   'memory.merged',      // V10 (Phase 4): consolidate-* dedup/contradiction merge pass
+  'memory.consolidate-skip', // fix-plan 3.1 (2026-08-17): diagnostic per distillation skip reason
 
   // lifecycle.*
   'lifecycle.started',     // D-37 fix: was 'lifecycle.cortex-started'

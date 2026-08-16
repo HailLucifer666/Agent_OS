@@ -1394,7 +1394,7 @@ Fix shipped in commit `6505f93` (B-1 + B-2 + skills.recall signature) + `03c4eb7
 - **No autonomous goal-completion trigger** — `goals.complete(id)` API exists but no cortex path calls it autonomously yet. Deciding when the cortex is allowed to declare success is a Phase 4.5 design call.
 - **No engagement-transition brain driving** — the transition handler stays synchronous (canned paths). The brain-driven methods are surfaces for cortex/gateway/future orchestrator; this keeps the existing phase1-engagement-executor.test.js harness (which bypasses interview/spec) working unchanged.
 - **Status:** ✅ LIVE-VERIFIED (2026-07-27) — calendar-upcoming-sensor (V8a): a real seeded reminder was perceived and written to the episodic log end-to-end (`mythos/scripts/verify-calendar-upcoming-sensor.js`). Opt-in window-sensor (V8b): a real OS foreground-window change (driven via pc-child/`ps-automation.ps1`) was relayed over the WS `perception` broadcast with the correct summary (`mythos/scripts/verify-window-sensor.js`). propose_goal dashboard accept/reject click flow (V5, UI half): real Accept/Reject clicks in a real headless Chromium flipped on-disk goal status to `active` and deleted the rejected proposal's JSON file, through the real REST routes (`mythos/scripts/verify-propose-goal-ui-click.js`). All three re-run and adversarially rechecked as genuine (no mocks, no stale/replayed state).
-- **Live-tested 2026-07-27 and found BROKEN, not merely unverified** (`mythos/scripts/verify-propose-goal.js`, `mythos/scripts/verify-mull-propose-goal.js`): both the `mull()`→`propose_goal` idle-branch routing (V8c) and the backend suggestion-generation half of V5 are structurally unreachable. `cortex/index.js`'s `if (perceptions.length === 0 && !hasActive)` gate — the only call site for `mull()` — never opens in real operation, because `sensors/timer.js` unconditionally emits a `perception.tick` heartbeat every tick that main.js's unfiltered `bus.subscribe('perception.*', ...)` queues into the same perception buffer the gate inspects, so `perceptions.length` never reaches 0 in steady state. Confirmed on live boots (45/45 and 65/65 real ticks observed, never 0 perceptions) and corroborated by a separate check showing the configured brain model DOES return real proposals when `mull()`'s exact prompt is called directly — the gap is that `mull()` is never invoked, not that the model declines. This needs a real fix (e.g. excluding the timer's own heartbeat from the idle-perception count), not another verification pass.
+- **Live-tested 2026-07-27 and found BROKEN, not merely unverified** (`mythos/scripts/verify-propose-goal.js`, `mythos/scripts/verify-mull-propose-goal.js`): both the `mull()`→`propose_goal` idle-branch routing (V8c) and the backend suggestion-generation half of V5 are structurally unreachable. `cortex/index.js`'s `if (perceptions.length === 0 && !hasActive)` gate — the only call site for `mull()` — never opens in real operation, because `sensors/timer.js` unconditionally emits a `perception.tick` heartbeat every tick that main.js's unfiltered `bus.subscribe('perception.*', ...)` queues into the same perception buffer the gate inspects, so `perceptions.length` never reaches 0 in steady state. Confirmed on live boots (45/45 and 65/65 real ticks observed, never 0 perceptions) and corroborated by a separate check showing the configured brain model DOES return real proposals when `mull()`'s exact prompt is called directly — the gap is that `mull()` is never invoked, not that the model declines. This needs a real fix (e.g. excluding the timer's own heartbeat from the idle-perception count), not another verification pass. **GATE HALF FIXED 2026-08-17 (BUG-262/fix-plan 3.1): the idle count now excludes kind:'timer' heartbeats, so the branch opens and mull() becomes reachable — the mull→propose_goal flow itself still owes its live re-verification.**
 - **The boot + eval baseline fails** remain (boot is the Windows-SIGINT test flake, eval/memory-impact are data-dependent tests that need a populated vault). Unchanged from Phase 3.
 - **The pre-existing flake at `test/engagements/events.test.js:43`** still intermittently fires under suite load (~1/3 runs). Independent of Phase 4. Same `Date.now()` race documented in Phase 2.
 
@@ -8243,3 +8243,38 @@ reused a window you already had open"). Tests:
 match rule in the evidence, a window appearing on the SECOND poll still
 verifies (the exact race the poll exists for), and offline vs no-window
 reasons are asserted to be distinct and non-overlapping.
+
+## BUG-262 — episodic→semantic distillation could never run: two dead gates, and every skip was silent
+
+**Found by the 2026-08-17 fix-plan exploration (Wave 3.1); root in the same
+perception gate BUGS.md's Phase 4 note proved blocked `mull()`.** Long-term
+memory distillation had two structural dead-ends and zero observability:
+
+1. **The idle gate never opened.** `cortex/index.js` tested
+   `perceptions.length === 0`, but `sensors/timer.js` pushes a
+   `perception.tick` heartbeat (kind:'timer') every tick, so the branch — and
+   the consolidate inside it — was unreachable in real operation (live boots
+   measured 45/45 and 65/65 ticks, never 0 perceptions).
+2. **The active branch's consolidate sat below `if (!decision) return;`.**
+   `decide()` returns null whenever no goal arbitrates out, which is the
+   NORMAL state of a purely conversational session — exactly the sessions
+   that produce the episodic entries worth distilling.
+3. **Every skip was silent.** The distillation step's skips (no brain, empty
+   tail, nothing high-salience, brain offline, think threw, write failed)
+   all vanished into empty catches, so "did it ever distill" was undiagnosable
+   — a dead gate and a quiet skip look identical in every log.
+
+**FIXED 2026-08-17, in both files.** The idle gate now excludes kind:'timer'
+perceptions from the count (the fix the Phase 4 note itself proposed), which
+revives both the idle consolidate AND `mull()`; the active branch's consolidate
+moved above the goalless early-return (single site — decision ticks
+consolidate once, not twice); and every skip in `memory/index.js`'s
+distillation step now emits a `memory.consolidate-skip` diagnostic
+(reason + detail) on the bus — registered in the event-name allowlist.
+Tests: `consolidate-gate-and-diagnostics.test.js` (10) — quiet-tick
+(timer-only) consolidates, goalless-tick-with-perception consolidates,
+decision-tick consolidates exactly once, and all five skip reasons fire
+(plus the happy path: no skip, topic written). **Live verification owed:**
+one real voice session, then grep the log for `memory.consolidate-skip` —
+reasons observed there answer "did it ever distill" factually for the first
+time.
