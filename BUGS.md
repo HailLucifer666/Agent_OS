@@ -9,7 +9,12 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-16 - gap-analysis pass; BUG-258 + BUG-259 (CI red since 2026-08-13, two causes)
+Last updated: 2026-08-17 - the nine open coding defects (fix-plan waves 1-3): BUG-260..BUG-265
+(artifact [object Object], open_folder coin-flip oracle, TOOL_ACK_DEADLINE_MS dial, distillation
+dead gates + skip diagnostics, the WebView2 caret false-refusal, open_web browser:true, the
+duplicate-identify anomaly storm) plus BUG-225 quit-seam and the packaged-wakeword honest state.
+
+Previous entry: 2026-08-16 - gap-analysis pass; BUG-258 + BUG-259 (CI red since 2026-08-13, two causes)
 (BUG-238..BUG-250, in the final section): the double voice traced to a third
 speech path that never got the BUG-060 Live guard, DEGRADED traced to a revoked
 Google token with no notion of a terminal failure, a build that shipped
