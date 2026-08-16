@@ -41,8 +41,12 @@ jobs:
           if ($fails -gt 0 -or $cancelled -gt 0) {
             # Indented 'not ok' lines are SUBTESTS — the parent alone hid which
             # subtest actually failed on the first round of this diagnostics.
-            $bad = $out | Select-String -Pattern '^\s*not ok ' | Select-Object -First 10
+            $bad = $out | Select-String -Pattern '^\s*not ok ' | Select-Object -First 6
             foreach ($line in $bad) { Write-Host ("::error::" + $line.Line.Trim()) }
+            # ...and the TAP diagnostic error lines say WHY (assert messages),
+            # which the titles alone never showed.
+            $errs = $out | Select-String -Pattern '^\s+error: ' | Select-Object -First 6
+            foreach ($line in $errs) { Write-Host ("::error::" + $line.Line.Trim()) }
             if (-not $bad -or $bad.Count -eq 0) { Write-Host "::error:: summary reported failures/cancellations but no 'not ok' lines matched" }
           }
           if ($fails -gt 0 -or $cancelled -gt 0) { exit 1 }
