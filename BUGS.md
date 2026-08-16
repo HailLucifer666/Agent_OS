@@ -6463,7 +6463,7 @@ grace) as first-class, field-tested parameters. If the operator's live sitting
 finds the thresholds wrong in either direction, tune against LiveKit's
 published defaults before inventing new heuristics.
 
-## BUG-225 — zombie-on-close / silent refusal to relaunch: zombie DORMANT and cause NOT identified; the silent-relaunch half FIXED 2026-08-14
+## BUG-225 — zombie-on-close / silent refusal to relaunch: zombie DORMANT and cause NOT identified; the silent-relaunch half FIXED 2026-08-14; the quit-seam defects FIXED 2026-08-17
 
 **Operator, 2026-08-14 (morning):** closing the app with the title-bar X left the
 process alive in Task Manager, and double-clicking the shortcut did nothing at
@@ -6569,6 +6569,64 @@ child; `powershell.exe` = the pc-child daemon; piper listens on 5051), whether
 ports 4478/5050/5051 are still held (`netstat -ano | findstr 4478`), and the tail
 of `%APPDATA%\MYTHOS\main.log`. Which of those three survives is what separates
 the candidate causes.
+
+**The quit seam itself FIXED 2026-08-17 — four structural defects, all present
+regardless of whether the dormant zombie was ever caused by one of them.**
+Exploration of `electron/main.js` found that an X-close could strand the app
+through four independent holes; all four are fixed at the quit seam and pinned
+by `test/electron-quit-zombie.test.js` (8 source-shape tests, the standing
+limitation for a file that requires `electron`):
+
+1. **Re-fork race.** `window-all-closed` called `stopChild()` BEFORE anything
+   set `isQuitting` — `before-quit` only runs after the `app.quit()` at the end
+   of that handler — so the child's exit handler saw `isQuitting === false`
+   during the gap and scheduled a fresh `MYTHOS.exe` inside the quit window.
+   Fixed twice over: `window-all-closed` now sets `isQuitting` first
+   (non-darwin only — on darwin the handler does not quit, and suppressing
+   restarts there would strand a live app with a dead server), AND
+   `startChild()` itself refuses to run once quitting has begun, closing the
+   race at the destination as well as the source.
+2. **Secondary windows pinned the app open.** The media window and the cursor
+   overlay were only closed in `before-quit` — which never starts while either
+   one keeps `window-all-closed` un-fired. A media window, or even a *hidden*
+   overlay window (hidden is not closed), outliving the HUD meant no quit at
+   all: window gone, process alive, single-instance lock held — the exact
+   report. The main window's `closed` handler now closes the media window and
+   destroys the overlay (non-darwin, matching the quit rule) so the quit chain
+   can begin.
+3. **No kill ladder on the ordinary path.** `stopChild()` was one bare
+   `child.kill()` with no await and no escalation, while a working ladder
+   (`awaitChildExit`: SIGKILL at the 3s deadline) existed but only the update
+   handover used it. `stopChild()` now captures the dying child, kills it,
+   nulls the module reference synchronously (sync callers depend on that), and
+   returns the ladder's promise — fire-and-forget for sync callers, since the
+   escalation is timer-driven.
+4. **No hard-exit backstop.** If anything on the quit path wedges —
+   `syncVault('--push')` is a blocking `spawnSync` with a 15s budget on
+   vault-git machines — nothing ever force-exited. `before-quit` now arms a
+   ref'd 10s watchdog (mirroring the child's own `SHUTDOWN_MS` design, schema
+   default 10000) that tree-kills the child (`taskkill /PID /T /F` on win32 —
+   the forked server leaves piper and pc-child grandchildren a bare kill never
+   reaches) and calls `app.exit(0)`. That `app.exit` does not violate the
+   relaunch ruling below: it fires only AFTER `before-quit` has already run
+   and failed to finish — the case the ruling's reason ("it skips
+   before-quit") no longer describes. The timer is deliberately ref'd (the
+   BUG-259 lesson) and armed BEFORE anything that can block.
+
+One trap the fix itself forced, recorded so it is not reintroduced:
+`before-quit` used to infer "the installer handover already pushed the vault"
+from `isQuitting` being pre-set — sound when only `beginInstall()` could
+pre-set it, silently wrong once `window-all-closed` also pre-sets it (every
+ordinary quit would have skipped the vault push). The handover now has its own
+explicit `installerHandover` flag; `isQuitting` means "no restarts", full stop.
+
+**Live verification still owed:** one operator X-close sitting — close the app
+normally with Task Manager open, confirm `MYTHOS.exe` exits within ~10s, and
+confirm a double-click relaunch starts immediately. Unit/source-shape tests
+cannot reach a real Electron quit. The pre-existing
+`electron-cursor-overlay.test.js` pin ("overlay released on quit") was widened
+from a 400-char window to the full `before-quit` body — the handler head grew
+legitimately; the pin's intent was never the offset.
 
 ## BUG-226 — spoken failure messages were mojibaked because PowerShell 5.1 parses a BOM-less script as cp1252
 

@@ -262,8 +262,11 @@ test('Slice 5 / electron: registered alongside the other hotkeys, and torn down 
   for (const fn of ['registerTalkHotkey()', 'registerOcrGrabHotkey()', 'registerCursorOverlayHotkey()']) {
     assert.ok(readyBlock.includes(fn), `${fn} must be called inside app.whenReady()`);
   }
-  const quitBlock = MAIN.slice(MAIN.indexOf("app.on('before-quit'"));
-  assert.match(quitBlock.slice(0, 400), /cursorOverlayController\) cursorOverlayController\.destroy\(\)/,
+  // The full before-quit body, not a fixed 400-char window: BUG-225's quit
+  // watchdog + pid capture legitimately grow the handler head, and the pin's
+  // point is the destroy call exists and is guarded, not where it sits.
+  const quitBlock = MAIN.slice(MAIN.indexOf("app.on('before-quit'"), MAIN.indexOf("app.on('will-quit'"));
+  assert.match(quitBlock, /cursorOverlayController\) cursorOverlayController\.destroy\(\)/,
     'the overlay must be released on quit, and guarded — it is null when disabled');
 });
 

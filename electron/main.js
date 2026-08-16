@@ -408,6 +408,14 @@ let pendingUpdateResult = null;
 // shutting down — during an update that respawned child lands inside the very
 // directory the installer is renaming. See beginInstall().
 let isQuitting = false;
+// SEPARATE from isQuitting on purpose (BUG-225). before-quit used to infer
+// "beginInstall already pushed the vault" from isQuitting being pre-set — the
+// only thing that could set it before before-quit ran. window-all-closed now
+// also sets isQuitting early (to close the re-fork race), which would make
+// that inference skip the vault push on EVERY ordinary quit. An explicit flag
+// keeps the two meanings distinct: isQuitting = "no restarts", this = "the
+// installer handover already did the quit-time work".
+let installerHandover = false;
 
 // security-reviewer B2/H6 (2026-08-08): the key-store IPC channels below used to
 // answer ANY sender holding a contextBridge handle to this preload — including
@@ -647,6 +655,15 @@ function childLogPath() {
 
 function startChild() {
   if (child) return;
+  // BUG-225: never re-fork once quitting has begun. The child's exit handler
+  // checks isQuitting at exit time, but a restart scheduled during the
+  // window-all-closed -> before-quit gap can still land here after the quit
+  // started; this guard closes the race at the destination too, not only at
+  // the source.
+  if (isQuitting) {
+    log('startChild: suppressed — app is quitting');
+    return;
+  }
   // Reopen the log stream per run (truncates, so it reflects the latest boot,
   // not an accumulating tail). Append-mode would grow without bound across a
   // crash-restart loop; truncate-on-start keeps it bounded and current.
@@ -815,8 +832,46 @@ function startChild() {
 
 function stopChild() {
   if (!child) return;
-  try { child.kill(); } catch (err) { log('failed to kill child:', err.message); }
+  const dying = child;
+  try { dying.kill(); } catch (err) { log('failed to kill child:', err.message); }
   child = null;
+  // BUG-225: the normal close path gets the same kill ladder the update
+  // handover already had — awaitChildExit escalates to SIGKILL at the 3s
+  // deadline instead of trusting one bare kill(). Returns a promise sync
+  // callers may ignore: the kill above already fired, and the ladder's
+  // escalation is timer-driven, so it needs no awaiter to make progress.
+  return awaitChildExit(dying, 3000, log);
+}
+
+// BUG-225: the quit-path backstop. before-quit can wedge — syncVault('--push')
+// is a BLOCKING spawnSync with a 15s timeout on vault-git machines — and a
+// wedged quit IS the zombie report: window gone, process alive, single-
+// instance lock held, double-click does nothing. 10s mirrors the child's own
+// SHUTDOWN_MS design (schema default 10000): graceful shutdown gets a real
+// budget, and only a quit still going nowhere after it gets cut short. When
+// it fires: tree-kill the child (taskkill /T on win32 — the forked server
+// leaves piper and pc-child grandchildren a bare kill() never reaches) and
+// app.exit(0). That app.exit does NOT violate the relaunch-no-window "quit,
+// never exit" ruling: this fires only AFTER before-quit has already run and
+// failed to finish — exactly the case that ruling's reason ("it skips
+// before-quit") no longer describes. The timer is deliberately REF'd (the
+// BUG-259 lesson: an unref'd deadline never fires in a drained process), and
+// deliberately never cleared — a graceful quit exits the process, which kills
+// the timer; only a wedged one is still around to hear it.
+function armQuitWatchdog(childPid) {
+  setTimeout(() => {
+    log('quit watchdog: graceful quit did not complete in 10s — tree-killing the child and exiting');
+    if (childPid) {
+      try {
+        if (process.platform === 'win32') {
+          child_process.spawn('taskkill', ['/PID', String(childPid), '/T', '/F'], { windowsHide: true });
+        } else {
+          process.kill(childPid, 'SIGKILL');
+        }
+      } catch (err) { log('quit watchdog: tree-kill failed:', err && err.message); }
+    }
+    app.exit(0);
+  }, 10000);
 }
 
 // ---- B6: update check (electron-updater) --------------------------------------
@@ -1474,6 +1529,7 @@ const { awaitChildExit } = require('./child-exit');
 // nothing of ours is left inside the install tree.
 async function beginInstall(autoUpdater, version) {
   isQuitting = true; // stops the child's exit handler from scheduling a restart
+  installerHandover = true; // and before-quit's push skip keys off THIS, not isQuitting (BUG-225)
   // Same match-by-version guard promptInstall() uses for the same reason: notes
   // captured for a superseded update must never be attributed to this one.
   const notesForThisVersion = updateReleaseNotes.version === version ? updateReleaseNotes.notes : '';
@@ -1973,7 +2029,20 @@ if (!gotLock) {
       }
     });
 
-    mainWindow.on('closed', () => { mainWindow = null; });
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+      // BUG-225: secondary windows were only closed in before-quit — which
+      // never starts while one of them keeps window-all-closed un-fired. A
+      // media window (or a live, merely hidden overlay window) outliving the
+      // HUD meant the X-close left the app running with no window to reach it
+      // and no quit at all. Close them HERE so the quit chain can begin.
+      // Non-darwin, matching the quit rule below: on macOS the app
+      // deliberately outlives its windows.
+      if (process.platform !== 'darwin') {
+        mediaWindowController.closeMediaWindow();
+        if (cursorOverlayController) cursorOverlayController.destroy();
+      }
+    });
 
     registerTalkHotkey();
     registerOcrGrabHotkey();
@@ -2003,17 +2072,32 @@ if (!gotLock) {
 
   // Clean shutdown: stop the child before quitting so we never orphan the server.
   app.on('window-all-closed', () => {
+    // BUG-225 re-fork race: isQuitting must be set BEFORE stopChild(). before-
+    // quit only runs after the app.quit() below, so without this the child's
+    // exit handler sees isQuitting === false during the gap between the kill
+    // and the quit, and schedules a re-fork — a fresh MYTHOS.exe born inside
+    // the quit window: the zombie. Non-darwin only: there window-all-closed
+    // does not quit, and suppressing restarts would strand a live macOS app
+    // with a dead server.
+    if (process.platform !== 'darwin') isQuitting = true;
     stopChild();
     if (process.platform !== 'darwin') app.quit();
   });
 
   app.on('before-quit', () => {
-    const handedOverToInstaller = isQuitting; // beginInstall() already did all of this
+    const handedOverToInstaller = installerHandover; // beginInstall() already did all of this
     isQuitting = true;
+    // Captured BEFORE stopChild(), which nulls the reference — the quit
+    // watchdog below needs the pid once `child` is gone.
+    const dyingPid = child && child.pid;
     stopChild();
     mediaWindowController.closeMediaWindow();
     // null when the overlay is disabled (the default) or failed to construct.
     if (cursorOverlayController) cursorOverlayController.destroy();
+    // BUG-225: armed BEFORE anything that can block below (syncVault's push is
+    // a blocking spawnSync with a 15s budget) — a backstop armed after the
+    // wedge can never fire.
+    armQuitWatchdog(dyingPid);
     // AFTER stopChild(), so the vault is not being written while it is committed.
     // A half-written episodic line committed as "synced" is worse than a late push,
     // and the push is idempotent: whatever misses this window goes next time.
