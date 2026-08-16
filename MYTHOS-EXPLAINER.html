@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MYTHOS — Autonomous Entity OS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TOKENS
+   ============================================================ */
+:root {
+  --void:          #070912;
+  --surface1:      #0d1220;
+  --surface2:      #111827;
+  --border:        #1a2540;
+  --accent:        #5dffb0;
+  --accent-dim:    #3db882;
+  --accent-glow:   rgba(93,255,176,0.15);
+  --text1:         #e2e8f0;
+  --text2:         #94a3b8;
+  --text3:         #64748b;
+  --amber:         #ffb84d;
+  --rose:          #ff6b8a;
+  --font-heading:  'Outfit', system-ui, sans-serif;
+  --font-mono:     'JetBrains Mono', monospace;
+  --max-w:         1120px;
+  --gap-section:   7rem;
+}
+
+/* ============================================================
+   RESET
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; background: var(--void); }
+body {
+  font-family: var(--font-heading);
+  color: var(--text1);
+  background: var(--void);
+  line-height: 1.6;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img, svg { display: block; max-width: 100%; }
+canvas { display: block; }
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+#synapse-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+main {
+  position: relative;
+  z-index: 1;
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+section {
+  padding: var(--gap-section) 0;
+}
+footer {
+  padding: 4rem 0 3rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ============================================================
+   TYPOGRAPHY
+   ============================================================ */
+h1, h2, h3, h4 { font-family: var(--font-heading); color: var(--text1); line-height: 1.15; }
+.section-title {
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+.section-sub {
+  color: var(--text2);
+  font-size: 1.05rem;
+  max-width: 640px;
+  margin-bottom: 2.5rem;
+}
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.6rem;
+}
+.note {
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem;
+  border-left: 3px solid var(--accent-dim);
+  background: var(--surface1);
+  color: var(--text2);
+  font-size: 0.92rem;
+  border-radius: 0 6px 6px 0;
+}
+.note code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--accent);
+  background: rgba(93,255,176,0.08);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+
+/* ============================================================
+   REVEAL ANIMATION
+   ============================================================ */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 600ms ease-out, transform 600ms ease-out;
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ============================================================
+   COMPONENTS
+   ============================================================ */
+.cta-btn {
+  display: inline-block;
+  margin-top: 1.5rem;
+  padding: 0.7rem 1.8rem;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 200ms, color 200ms;
+}
+.cta-btn:hover { background: var(--accent); color: var(--void); text-decoration: none; }
+
+/* ============================================================
+   1. HERO
+   ============================================================ */
+#hero {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding-top: 3rem;
+  padding-bottom: 3rem;
+}
+.hero-wordmark {
+  font-size: clamp(3.2rem, 10vw, 7rem);
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  color: var(--text1);
+  margin-bottom: 0.5rem;
+}
+.hero-tagline {
+  font-size: clamp(1rem, 2.5vw, 1.35rem);
+  font-weight: 300;
+  color: var(--text2);
+  margin-bottom: 0.5rem;
+}
+.hero-prop {
+  font-size: 0.95rem;
+  color: var(--text3);
+  max-width: 500px;
+}
+
+/* ============================================================
+   2. AGENT VS ENTITY
+   ============================================================ */
+.ave-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+}
+.ave-card {
+  padding: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface1);
+  text-align: center;
+}
+.ave-card h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.ave-card .ave-desc {
+  color: var(--text2);
+  font-size: 0.95rem;
+}
+.ave-card.entity {
+  border-color: var(--accent-dim);
+  background: rgba(93,255,176,0.03);
+}
+.ave-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1.2rem;
+}
+.ave-icon svg { width: 100%; height: 100%; }
+
+/* ============================================================
+   3. SIX-LAYER STACK
+   ============================================================ */
+.stack-svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.stack-svg {
+  width: 100%;
+  min-width: 600px;
+  height: auto;
+}
+
+/* ============================================================
+   4. CORTEX OODA RING
+   ============================================================ */
+.ooda-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.ooda-svg {
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+}
+.ooda-labels {
+  text-align: center;
+  max-width: 480px;
+}
+
+/* ============================================================
+   5. BRAIN CHAIN
+   ============================================================ */
+.brain-chain-wrap {
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+.brain-chain-svg {
+  width: 100%;
+  min-width: 780px;
+  height: auto;
+}
+
+/* ============================================================
+   6. MEMORY BENTO
+   ============================================================ */
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+.bento-hero {
+  grid-column: 1 / 3;
+  grid-row: 1 / 2;
+}
+.bento-cell {
+  padding: 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface1);
+}
+.bento-cell h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+.bento-cell p {
+  font-size: 0.88rem;
+  color: var(--text2);
+}
+.bento-hero h4 { font-size: 1.15rem; }
+.bento-hero p { font-size: 0.95rem; }
+.consolidation-flow {
+  margin-top: 2rem;
+  text-align: center;
+  color: var(--text2);
+  font-size: 0.92rem;
+}
+.consolidation-flow span { color: var(--accent); font-family: var(--font-mono); font-size: 0.85rem; }
+
+/* ============================================================
+   7. NERVOUS SYSTEM
+   ============================================================ */
+.nervous-svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.nervous-svg {
+  width: 100%;
+  min-width: 700px;
+  height: auto;
+}
+
+/* ============================================================
+   8. IMMUNE SYSTEM
+   ============================================================ */
+.immune-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.immune-svg {
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+}
+
+/* ============================================================
+   9. LEASH
+   ============================================================ */
+.leash-ladder {
+  position: relative;
+  max-width: 600px;
+  margin: 0 auto;
+}
+.leash-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.2rem;
+  padding: 1rem 0;
+  border-left: 2px solid var(--border);
+  padding-left: 1.5rem;
+  position: relative;
+}
+.leash-step::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 1.2rem;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-dim);
+  background: var(--void);
+}
+.leash-step.t3::before { border-color: var(--amber); }
+.leash-step.t4::before { border-color: var(--rose); }
+.leash-step .tier-label {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 52px;
+}
+.leash-step .tier-desc { font-size: 0.92rem; color: var(--text2); }
+.leash-step .tier-scope { font-size: 0.82rem; color: var(--text3); margin-top: 0.15rem; }
+
+/* ============================================================
+   10. ENGAGEMENT FSM
+   ============================================================ */
+.engagement-svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.engagement-svg {
+  width: 100%;
+  min-width: 800px;
+  height: auto;
+}
+
+/* ============================================================
+   11. FULL FLOW
+   ============================================================ */
+.fullflow-svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.fullflow-svg {
+  width: 100%;
+  min-width: 860px;
+  height: auto;
+}
+
+/* ============================================================
+   12. SCALE GRID
+   ============================================================ */
+.scale-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.5rem;
+}
+.scale-item {
+  text-align: center;
+  padding: 1.5rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface1);
+}
+.scale-num {
+  font-family: var(--font-mono);
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 0.4rem;
+}
+.scale-label {
+  font-size: 0.85rem;
+  color: var(--text2);
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.footer-inner {
+  text-align: center;
+}
+.footer-inner p {
+  color: var(--text3);
+  font-size: 0.88rem;
+  margin-bottom: 0.6rem;
+}
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes dash-flow {
+  to { stroke-dashoffset: -60; }
+}
+@keyframes pulse-node {
+  0%, 80%, 100% { opacity: 0.35; }
+  10% { opacity: 1; }
+}
+@keyframes token-walk {
+  0% { transform: translateX(0); opacity: 0; }
+  5% { opacity: 1; }
+  95% { opacity: 1; }
+  100% { transform: translateX(calc(var(--walk-dist))); opacity: 0; }
+}
+@keyframes dot-travel {
+  0% { offset-distance: 0%; opacity: 0; }
+  5% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+/* SVG animation classes */
+.anim-dash-flow .dash-ring {
+  animation: dash-flow 2s linear infinite;
+}
+.anim-pulse-nodes .ooda-node circle.node-bg {
+  animation: pulse-node 5s ease-in-out infinite;
+}
+.anim-pulse-nodes .ooda-node:nth-child(1) circle.node-bg { animation-delay: 0s; }
+.anim-pulse-nodes .ooda-node:nth-child(2) circle.node-bg { animation-delay: 1s; }
+.anim-pulse-nodes .ooda-node:nth-child(3) circle.node-bg { animation-delay: 2s; }
+.anim-pulse-nodes .ooda-node:nth-child(4) circle.node-bg { animation-delay: 3s; }
+.anim-pulse-nodes .ooda-node:nth-child(5) circle.node-bg { animation-delay: 4s; }
+
+/* ============================================================
+   REDUCED MOTION
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .reveal { transition: none; opacity: 1; transform: none; }
+  .anim-dash-flow .dash-ring { animation: none; stroke-dashoffset: 0; }
+  .anim-pulse-nodes .ooda-node circle.node-bg { animation: none; opacity: 0.6; }
+  .nervous-dot, .fullflow-dot, .brain-token { animation: none !important; display: none; }
+  .synapse-pulse { animation: none !important; }
+}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (max-width: 767px) {
+  :root { --gap-section: 4.5rem; }
+  .ave-grid { grid-template-columns: 1fr; }
+  .bento-grid { grid-template-columns: 1fr; }
+  .bento-hero { grid-column: auto; }
+  .scale-grid { grid-template-columns: 1fr 1fr; }
+  .engagement-svg, .fullflow-svg, .nervous-svg, .brain-chain-svg, .stack-svg { min-width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<!-- Fixed synaptic canvas background -->
+<canvas id="synapse-bg" aria-hidden="true"></canvas>
+
+<main>
+
+<!-- ============================================================
+     1. HERO
+     ============================================================ -->
+<section id="hero">
+  <div class="reveal">
+    <h1 class="hero-wordmark">MYTHOS</h1>
+    <p class="hero-tagline">An Autonomous Entity OS</p>
+    <p class="hero-prop">A self-governing cognitive system that perceives, thinks, decides, and acts on its own initiative, second by second.</p>
+    <a href="#stack" class="cta-btn">Explore the architecture</a>
+  </div>
+</section>
+
+<!-- ============================================================
+     2. AGENT VS ENTITY
+     ============================================================ -->
+<section id="agent-vs-entity">
+  <div class="reveal">
+    <div class="ave-grid">
+      <!-- Traditional Agent -->
+      <div class="ave-card">
+        <div class="ave-icon">
+          <svg viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="28" cy="28" r="24" stroke="#64748b" stroke-width="1.5" fill="none"/>
+            <rect x="18" y="22" width="20" height="14" rx="2" stroke="#64748b" stroke-width="1.5" fill="none"/>
+            <line x1="22" y1="27" x2="34" y2="27" stroke="#64748b" stroke-width="1.2"/>
+            <line x1="22" y1="31" x2="30" y2="31" stroke="#64748b" stroke-width="1.2"/>
+            <circle cx="28" cy="42" r="2" fill="#64748b"/>
+            <line x1="28" y1="36" x2="28" y2="40" stroke="#64748b" stroke-width="1.2"/>
+          </svg>
+        </div>
+        <h3>A Traditional Agent</h3>
+        <p class="ave-desc">Waits for input, then responds. Idle until prompted. Stateless between calls.</p>
+      </div>
+      <!-- MYTHOS Entity -->
+      <div class="ave-card entity">
+        <div class="ave-icon">
+          <svg viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="28" cy="28" r="24" stroke="#5dffb0" stroke-width="1.5" fill="none"/>
+            <circle cx="28" cy="28" r="10" stroke="#5dffb0" stroke-width="1.2" fill="rgba(93,255,176,0.06)"/>
+            <circle cx="28" cy="28" r="4" fill="#5dffb0" opacity="0.7"/>
+            <line x1="28" y1="14" x2="28" y2="18" stroke="#5dffb0" stroke-width="1"/>
+            <line x1="28" y1="38" x2="28" y2="42" stroke="#5dffb0" stroke-width="1"/>
+            <line x1="14" y1="28" x2="18" y2="28" stroke="#5dffb0" stroke-width="1"/>
+            <line x1="38" y1="28" x2="42" y2="28" stroke="#5dffb0" stroke-width="1"/>
+            <path d="M18.4 18.4 L21 21" stroke="#5dffb0" stroke-width="1"/>
+            <path d="M35 35 L37.6 37.6" stroke="#5dffb0" stroke-width="1"/>
+            <path d="M18.4 37.6 L21 35" stroke="#5dffb0" stroke-width="1"/>
+            <path d="M35 21 L37.6 18.4" stroke="#5dffb0" stroke-width="1"/>
+          </svg>
+        </div>
+        <h3>MYTHOS Entity</h3>
+        <p class="ave-desc">Runs a continuous cognitive loop every second. Perceives, orients, decides, and acts on its own.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     3. THE SIX-LAYER STACK
+     ============================================================ -->
+<section id="stack">
+  <div class="reveal">
+    <h2 class="section-title">The Six-Layer Stack</h2>
+    <p class="section-sub">Seven layers stacked from user-facing down to foundation. Modules never call across boundaries. They publish and subscribe on the event bus.</p>
+    <div class="stack-svg-wrap">
+      <svg class="stack-svg" viewBox="0 0 640 560" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- Layer 1: Server & UI -->
+        <rect x="40" y="20" width="560" height="56" rx="8" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+        <text x="60" y="44" fill="#e2e8f0" font-family="Outfit" font-size="14" font-weight="600">Server &amp; UI v2</text>
+        <text x="60" y="62" fill="#64748b" font-family="JetBrains Mono" font-size="10">Express + WebSocket + JARVIS HUD</text>
+        <!-- Connector -->
+        <line x1="320" y1="76" x2="320" y2="100" stroke="#1a2540" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- Layer 2: Identity -->
+        <rect x="40" y="100" width="560" height="48" rx="8" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+        <text x="60" y="122" fill="#e2e8f0" font-family="Outfit" font-size="14" font-weight="600">Identity</text>
+        <text x="140" y="122" fill="#64748b" font-family="JetBrains Mono" font-size="10">self.md, boundaries.md</text>
+        <line x1="320" y1="148" x2="320" y2="172" stroke="#1a2540" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- Layer 3: Sensors / Bus / Effectors -->
+        <rect x="40" y="172" width="560" height="56" rx="8" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+        <text x="60" y="196" fill="#5dffb0" font-family="Outfit" font-size="14" font-weight="600">Sensors</text>
+        <text x="140" y="196" fill="#5dffb0" font-family="Outfit" font-size="13" font-weight="400">&lt;=&gt;</text>
+        <text x="175" y="196" fill="#5dffb0" font-family="Outfit" font-size="14" font-weight="600">Event Bus</text>
+        <text x="278" y="196" fill="#5dffb0" font-family="Outfit" font-size="13" font-weight="400">&lt;=&gt;</text>
+        <text x="313" y="196" fill="#5dffb0" font-family="Outfit" font-size="14" font-weight="600">Effectors</text>
+        <text x="60" y="214" fill="#64748b" font-family="JetBrains Mono" font-size="10">11 sensors / 166 effectors / pub-sub</text>
+        <line x1="320" y1="228" x2="320" y2="252" stroke="#1a2540" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- Layer 4: Cortex -->
+        <rect x="40" y="252" width="560" height="56" rx="8" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+        <text x="60" y="276" fill="#e2e8f0" font-family="Outfit" font-size="14" font-weight="600">Cortex</text>
+        <text x="60" y="294" fill="#64748b" font-family="JetBrains Mono" font-size="10">OODA: observe &rarr; orient &rarr; decide &rarr; act</text>
+        <line x1="320" y1="308" x2="320" y2="332" stroke="#1a2540" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- Layer 5: Cognition -->
+        <rect x="40" y="332" width="560" height="56" rx="8" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+        <text x="60" y="356" fill="#e2e8f0" font-family="Outfit" font-size="14" font-weight="600">Cognition</text>
+        <text x="60" y="374" fill="#64748b" font-family="JetBrains Mono" font-size="10">Goals + Brain (8-lane LLM) + Leash + Immune</text>
+        <line x1="320" y1="388" x2="320" y2="412" stroke="#1a2540" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- Layer 6: Memory -->
+        <rect x="40" y="412" width="560" height="56" rx="8" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+        <text x="60" y="436" fill="#e2e8f0" font-family="Outfit" font-size="14" font-weight="600">Memory</text>
+        <text x="60" y="454" fill="#64748b" font-family="JetBrains Mono" font-size="10">5 stores: Working, Episodic, Semantic, Skills, Identity + Audit</text>
+        <line x1="320" y1="468" x2="320" y2="492" stroke="#1a2540" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- Layer 7: Foundation -->
+        <rect x="40" y="492" width="560" height="56" rx="8" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+        <text x="60" y="516" fill="#e2e8f0" font-family="Outfit" font-size="14" font-weight="600">Foundation</text>
+        <text x="60" y="534" fill="#64748b" font-family="JetBrains Mono" font-size="10">Config + Bus + Lifecycle + Logger</text>
+        <!-- Layer labels on right side -->
+        <text x="580" y="52" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">L7</text>
+        <text x="580" y="128" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">L6</text>
+        <text x="580" y="204" fill="#3db882" font-family="JetBrains Mono" font-size="9" text-anchor="end">L5</text>
+        <text x="580" y="284" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">L4</text>
+        <text x="580" y="364" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">L3</text>
+        <text x="580" y="444" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">L2</text>
+        <text x="580" y="524" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">L1</text>
+      </svg>
+    </div>
+    <div class="note">
+      The cardinal rule: modules never call across layer boundaries. They publish and subscribe on the event bus.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     4. THE CORTEX — OODA LOOP
+     ============================================================ -->
+<section id="cortex">
+  <div class="reveal">
+    <p class="eyebrow">Cortex</p>
+    <h2 class="section-title">The OODA Loop</h2>
+    <p class="section-sub">Five phases cycle every tick: observe, orient, decide, act, reflect. The core cognitive engine.</p>
+    <div class="ooda-wrap">
+      <svg class="ooda-svg" viewBox="0 0 420 420" fill="none" xmlns="http://www.w3.org/2000/svg" id="ooda-ring">
+        <!-- Background ring -->
+        <circle cx="210" cy="210" r="150" stroke="#1a2540" stroke-width="1" fill="none"/>
+        <!-- Animated dashed ring -->
+        <circle class="dash-ring" cx="210" cy="210" r="150" stroke="#3db882" stroke-width="2" fill="none"
+                stroke-dasharray="12 18" opacity="0.5"/>
+        <!-- Directional arrows on ring -->
+        <!-- Observe node at top -->
+        <g class="ooda-node" transform="translate(210,60)">
+          <circle class="node-bg" cx="0" cy="0" r="28" fill="#0d1220" stroke="#3db882" stroke-width="2"/>
+          <text x="0" y="1" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600" dominant-baseline="middle">Observe</text>
+        </g>
+        <!-- Orient node -->
+        <g class="ooda-node" transform="translate(338,156)">
+          <circle class="node-bg" cx="0" cy="0" r="28" fill="#0d1220" stroke="#3db882" stroke-width="2"/>
+          <text x="0" y="1" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600" dominant-baseline="middle">Orient</text>
+        </g>
+        <!-- Decide node -->
+        <g class="ooda-node" transform="translate(300,318)">
+          <circle class="node-bg" cx="0" cy="0" r="28" fill="#0d1220" stroke="#3db882" stroke-width="2"/>
+          <text x="0" y="1" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600" dominant-baseline="middle">Decide</text>
+        </g>
+        <!-- Act node -->
+        <g class="ooda-node" transform="translate(120,318)">
+          <circle class="node-bg" cx="0" cy="0" r="28" fill="#0d1220" stroke="#ffb84d" stroke-width="2"/>
+          <text x="0" y="1" text-anchor="middle" fill="#ffb84d" font-family="Outfit" font-size="11" font-weight="600" dominant-baseline="middle">Act</text>
+        </g>
+        <!-- Reflect node -->
+        <g class="ooda-node" transform="translate(82,156)">
+          <circle class="node-bg" cx="0" cy="0" r="28" fill="#0d1220" stroke="#3db882" stroke-width="2"/>
+          <text x="0" y="1" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600" dominant-baseline="middle">Reflect</text>
+        </g>
+        <!-- Center label -->
+        <text x="210" y="206" text-anchor="middle" fill="#5dffb0" font-family="JetBrains Mono" font-size="13" font-weight="600">OODA</text>
+        <text x="210" y="222" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="10">~1s/tick</text>
+      </svg>
+      <div class="ooda-labels">
+        <div class="note">
+          Idle ticks skip the Brain entirely. Zero LLM calls when nothing is salient.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     5. THE BRAIN — Provider Failover Chain
+     ============================================================ -->
+<section id="brain">
+  <div class="reveal">
+    <p class="eyebrow">Brain</p>
+    <h2 class="section-title">8-Lane Provider Failover</h2>
+    <p class="section-sub">Eight LLM providers chained left to right. A request token walks the chain until one responds.</p>
+    <div class="brain-chain-wrap">
+      <svg class="brain-chain-svg" viewBox="0 0 880 180" fill="none" xmlns="http://www.w3.org/2000/svg" id="brain-chain">
+        <!-- Provider boxes -->
+        <!-- NVIDIA NIM -->
+        <g transform="translate(10,30)">
+          <rect x="0" y="0" width="92" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#76b900"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">NVIDIA</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">NIM</text>
+        </g>
+        <!-- Arrow -->
+        <line x1="106" y1="60" x2="120" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="118,56 126,60 118,64" fill="#1a2540"/>
+        <!-- Groq -->
+        <g transform="translate(130,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#f55036"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Groq</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">Fast</text>
+        </g>
+        <line x1="216" y1="60" x2="230" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="228,56 236,60 228,64" fill="#1a2540"/>
+        <!-- Mistral -->
+        <g transform="translate(240,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#ff7000"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Mistral</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">API</text>
+        </g>
+        <line x1="326" y1="60" x2="340" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="338,56 346,60 338,64" fill="#1a2540"/>
+        <!-- Cerebras -->
+        <g transform="translate(350,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#6366f1"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Cerebras</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">Inference</text>
+        </g>
+        <line x1="436" y1="60" x2="450" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="448,56 456,60 448,64" fill="#1a2540"/>
+        <!-- OpenRouter -->
+        <g transform="translate(460,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#ffffff"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">OpenRouter</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">Multi</text>
+        </g>
+        <line x1="546" y1="60" x2="560" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="558,56 566,60 558,64" fill="#1a2540"/>
+        <!-- Google Gemini -->
+        <g transform="translate(570,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#4285f4"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Gemini</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">Google</text>
+        </g>
+        <line x1="656" y1="60" x2="670" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="668,56 676,60 668,64" fill="#1a2540"/>
+        <!-- ZCode GLM -->
+        <g transform="translate(680,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#5dffb0"/>
+          <text x="14" y="24" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">ZCode</text>
+          <text x="14" y="40" fill="#64748b" font-family="JetBrains Mono" font-size="9">GLM</text>
+        </g>
+        <line x1="766" y1="60" x2="780" y2="60" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="778,56 786,60 778,64" fill="#1a2540"/>
+        <!-- Ollama (local) -->
+        <g transform="translate(790,30)">
+          <rect x="0" y="0" width="82" height="60" rx="6" fill="#0d1220" stroke="#5dffb0" stroke-width="1.5" stroke-dasharray="4 2"/>
+          <rect x="0" y="0" width="4" height="60" rx="2" fill="#5dffb0"/>
+          <text x="14" y="24" fill="#5dffb0" font-family="Outfit" font-size="10" font-weight="600">Ollama</text>
+          <text x="14" y="40" fill="#3db882" font-family="JetBrains Mono" font-size="9">local</text>
+        </g>
+        <!-- Walking request token -->
+        <circle class="brain-token" cx="10" cy="60" r="5" fill="#5dffb0" opacity="0.9">
+          <animate attributeName="cx" from="10" to="860" dur="6s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values="0;1;1;1;1;1;1;1;0" dur="6s" repeatCount="indefinite"/>
+        </circle>
+        <!-- Path line for token -->
+        <line x1="10" y1="60" x2="860" y2="60" stroke="#5dffb0" stroke-width="0.5" opacity="0" />
+        <!-- Label below -->
+        <text x="440" y="130" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="10">request walks chain until a lane responds</text>
+        <text x="440" y="150" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="10">returns {offline: true} rather than throwing</text>
+      </svg>
+    </div>
+    <div class="note">
+      Returns <code>{offline: true}</code> rather than throwing. Never fake success.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     6. THE MEMORY — Bento Grid
+     ============================================================ -->
+<section id="memory">
+  <div class="reveal">
+    <h2 class="section-title">Five-Store Memory</h2>
+    <p class="section-sub">A tiered memory system modeled after human cognition. Data consolidates upward over time.</p>
+    <div class="bento-grid">
+      <!-- Hero cell: Working Memory -->
+      <div class="bento-cell bento-hero">
+        <h4>Working Memory</h4>
+        <p>15-item perception buffer, drained each tick. The entity's present-moment awareness. Holds sensor readings, pending goals, and the current OODA context. Fastest access, shortest retention.</p>
+      </div>
+      <!-- Episodic -->
+      <div class="bento-cell">
+        <h4>Episodic</h4>
+        <p>Time-series of events with 30-day retention. Every tick's salient observations are recorded with timestamps and salience scores.</p>
+      </div>
+      <!-- Semantic -->
+      <div class="bento-cell">
+        <h4>Semantic</h4>
+        <p>Consolidated knowledge graph, permanent. High-salience facts distilled from episodic memory by the Brain. Never expires.</p>
+      </div>
+      <!-- Skills -->
+      <div class="bento-cell">
+        <h4>Skills</h4>
+        <p>Learned procedures and patterns. Acquired through successful task execution and reflection cycles.</p>
+      </div>
+      <!-- Identity -->
+      <div class="bento-cell">
+        <h4>Identity</h4>
+        <p>Persona sections: self.md and boundaries.md define who the entity is and what it must not do.</p>
+      </div>
+      <!-- Audit -->
+      <div class="bento-cell">
+        <h4>Audit</h4>
+        <p>Immutable action log, permanent. Every decision, every effector dispatch, recorded for accountability.</p>
+      </div>
+    </div>
+    <div class="consolidation-flow">
+      <span>Every 60 ticks:</span> Working &rarr; Episodic &rarr; (Brain distills high-salience) &rarr; Semantic facts
+    </div>
+    <div class="note">
+      Keyword scoring + vector similarity with reciprocal rank fusion. Degrades gracefully to keyword-only when embeddings are unavailable.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     7. THE NERVOUS SYSTEM — Left-to-Right Flow
+     ============================================================ -->
+<section id="nervous">
+  <div class="reveal">
+    <h2 class="section-title">The Nervous System</h2>
+    <p class="section-sub">Sensors perceive. The event bus bridges. Effectors act. Data pulses flow in one direction through the nervous system.</p>
+    <div class="nervous-svg-wrap">
+      <svg class="nervous-svg" viewBox="0 0 720 260" fill="none" xmlns="http://www.w3.org/2000/svg" id="nervous-diagram">
+        <!-- Sensors cluster -->
+        <g transform="translate(20,30)">
+          <rect x="0" y="0" width="180" height="200" rx="10" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <text x="90" y="24" text-anchor="middle" fill="#5dffb0" font-family="Outfit" font-size="13" font-weight="600">11 Sensors</text>
+          <line x1="20" y1="34" x2="160" y2="34" stroke="#1a2540" stroke-width="1"/>
+          <text x="16" y="56" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">timer</text>
+          <text x="16" y="72" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">file-watcher</text>
+          <text x="16" y="88" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">websocket</text>
+          <text x="16" y="104" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">job-queue</text>
+          <text x="16" y="120" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">metric</text>
+          <text x="100" y="56" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">gmail</text>
+          <text x="100" y="72" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">screen</text>
+          <text x="100" y="88" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">calendar</text>
+          <text x="100" y="104" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">reminder</text>
+          <text x="100" y="120" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">aether</text>
+          <text x="16" y="140" fill="#64748b" font-family="JetBrains Mono" font-size="9">+1 extensible</text>
+        </g>
+        <!-- Arrow sensors to bus -->
+        <line x1="204" y1="130" x2="250" y2="130" stroke="#3db882" stroke-width="1.5"/>
+        <polygon points="248,126 256,130 248,134" fill="#3db882"/>
+        <!-- Event Bus -->
+        <g transform="translate(260,60)">
+          <rect x="0" y="0" width="140" height="140" rx="10" fill="#0d1220" stroke="#5dffb0" stroke-width="2"/>
+          <text x="70" y="30" text-anchor="middle" fill="#5dffb0" font-family="Outfit" font-size="14" font-weight="700">Event Bus</text>
+          <text x="70" y="50" text-anchor="middle" fill="#3db882" font-family="JetBrains Mono" font-size="10">pub / sub</text>
+          <text x="70" y="70" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">the only bridge</text>
+          <text x="70" y="90" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">between layers</text>
+        </g>
+        <!-- Arrow bus to effectors -->
+        <line x1="404" y1="130" x2="450" y2="130" stroke="#3db882" stroke-width="1.5"/>
+        <polygon points="448,126 456,130 448,134" fill="#3db882"/>
+        <!-- Effectors cluster -->
+        <g transform="translate(460,30)">
+          <rect x="0" y="0" width="240" height="200" rx="10" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <text x="120" y="24" text-anchor="middle" fill="#5dffb0" font-family="Outfit" font-size="13" font-weight="600">166 Effectors</text>
+          <text x="120" y="42" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">~30 tool families</text>
+          <line x1="20" y1="52" x2="220" y2="52" stroke="#1a2540" stroke-width="1"/>
+          <text x="16" y="72" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">file-ops, code-gen, git</text>
+          <text x="16" y="88" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">search, web, browser</text>
+          <text x="16" y="104" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">shell, docker, k8s</text>
+          <text x="16" y="120" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">memory-crud, goal-crud</text>
+          <text x="16" y="136" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">agent-dispatch, job-*</text>
+          <text x="16" y="152" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">email, calendar, slack</text>
+          <text x="16" y="168" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">diagnostic, health, log</text>
+          <text x="16" y="184" fill="#64748b" font-family="JetBrains Mono" font-size="9">+ many more</text>
+        </g>
+        <!-- Animated pulses: sensors to bus -->
+        <circle class="nervous-dot" r="4" fill="#5dffb0" opacity="0.8">
+          <animateMotion dur="2s" repeatCount="indefinite" path="M110,130 L260,130"/>
+        </circle>
+        <!-- Animated pulses: bus to effectors -->
+        <circle class="nervous-dot" r="4" fill="#5dffb0" opacity="0.8">
+          <animateMotion dur="2s" repeatCount="indefinite" path="M330,130 L460,130" begin="0.3s"/>
+        </circle>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     8. THE IMMUNE SYSTEM — Cycle Diagram
+     ============================================================ -->
+<section id="immune">
+  <div class="reveal">
+    <h2 class="section-title">Self-Healing Immune System</h2>
+    <p class="section-sub">The entity monitors and repairs itself. Watchdog polls every 2 seconds. Faults are classified, isolated, and healed autonomously.</p>
+    <div class="immune-wrap">
+      <svg class="immune-svg" viewBox="0 0 520 400" fill="none" xmlns="http://www.w3.org/2000/svg" id="immune-diagram">
+        <!-- Background cycle path -->
+        <path d="M260,60 L420,160 L380,340 L140,340 L100,160 Z" stroke="#1a2540" stroke-width="1" fill="none"/>
+        <path d="M260,60 L420,160 L380,340 L140,340 L100,160 Z" stroke="#ff6b8a" stroke-width="1.5" fill="none"
+              stroke-dasharray="8 12" opacity="0.4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-40" dur="3s" repeatCount="indefinite"/>
+        </path>
+        <!-- Watchdog -->
+        <g transform="translate(260,45)">
+          <circle r="24" fill="#0d1220" stroke="#ff6b8a" stroke-width="2"/>
+          <text x="0" y="-4" text-anchor="middle" fill="#ff6b8a" font-family="Outfit" font-size="9" font-weight="600">Watch</text>
+          <text x="0" y="8" text-anchor="middle" fill="#ff6b8a" font-family="Outfit" font-size="9" font-weight="600">dog</text>
+        </g>
+        <text x="260" y="85" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">polls every 2s</text>
+        <!-- Diagnostician -->
+        <g transform="translate(430,155)">
+          <circle r="24" fill="#0d1220" stroke="#ff6b8a" stroke-width="2"/>
+          <text x="0" y="4" text-anchor="middle" fill="#ff6b8a" font-family="Outfit" font-size="9" font-weight="600">Diag</text>
+        </g>
+        <text x="470" y="192" fill="#64748b" font-family="JetBrains Mono" font-size="9">classifies</text>
+        <text x="470" y="205" fill="#64748b" font-family="JetBrains Mono" font-size="9">fault</text>
+        <!-- Breakers -->
+        <g transform="translate(380,345)">
+          <circle r="24" fill="#0d1220" stroke="#ffb84d" stroke-width="2"/>
+          <text x="0" y="4" text-anchor="middle" fill="#ffb84d" font-family="Outfit" font-size="9" font-weight="600">Break</text>
+        </g>
+        <text x="380" y="385" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">3 fails &rarr; open 15s</text>
+        <!-- Healer -->
+        <g transform="translate(140,345)">
+          <circle r="24" fill="#0d1220" stroke="#5dffb0" stroke-width="2"/>
+          <text x="0" y="4" text-anchor="middle" fill="#5dffb0" font-family="Outfit" font-size="9" font-weight="600">Healer</text>
+        </g>
+        <text x="140" y="385" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">restarts cortex</text>
+        <!-- Announcer -->
+        <g transform="translate(90,155)">
+          <circle r="24" fill="#0d1220" stroke="#ff6b8a" stroke-width="2"/>
+          <text x="0" y="4" text-anchor="middle" fill="#ff6b8a" font-family="Outfit" font-size="9" font-weight="600">Announce</text>
+        </g>
+        <text x="52" y="192" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">speaks</text>
+        <text x="52" y="205" fill="#64748b" font-family="JetBrains Mono" font-size="9" text-anchor="end">status</text>
+      </svg>
+      <div class="note">
+        The entity heals itself. The Monitor does crash-recovery on boot.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     9. THE LEASH — Vertical Tier Ladder
+     ============================================================ -->
+<section id="leash">
+  <div class="reveal">
+    <h2 class="section-title">Tiered Safety Leash</h2>
+    <p class="section-sub">Every action the entity takes is classified into one of five autonomy tiers. Higher tiers require human confirmation.</p>
+    <div class="leash-ladder">
+      <div class="leash-step t0">
+        <span class="tier-label" style="color:#5dffb0">T0</span>
+        <div>
+          <div class="tier-desc">Auto: memory and goal CRUD</div>
+          <div class="tier-scope">Internal bookkeeping. No external side effects.</div>
+        </div>
+      </div>
+      <div class="leash-step t1">
+        <span class="tier-label" style="color:#5dffb0">T1</span>
+        <div>
+          <div class="tier-desc">Auto: safe queries</div>
+          <div class="tier-scope">Read-only operations. No state mutation.</div>
+        </div>
+      </div>
+      <div class="leash-step t2">
+        <span class="tier-label" style="color:#94a3b8">T2</span>
+        <div>
+          <div class="tier-desc">Logged: internal actions</div>
+          <div class="tier-scope">Executed and recorded in audit trail.</div>
+        </div>
+      </div>
+      <div class="leash-step t3">
+        <span class="tier-label" style="color:#ffb84d">T3</span>
+        <div>
+          <div class="tier-desc">Confirm required: code execution, file writes, agent dispatch</div>
+          <div class="tier-scope">30-second TTL. Expires if not confirmed in time.</div>
+        </div>
+      </div>
+      <div class="leash-step t4">
+        <span class="tier-label" style="color:#ff6b8a">T4</span>
+        <div>
+          <div class="tier-desc">Confirm + reason required: destructive actions</div>
+          <div class="tier-scope">Entity must explain its reasoning before confirmation is requested.</div>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      The entity cannot loosen its own boundaries. <code>max_autonomous_tier: 3</code>.<br>
+      <code>MYTHOS_DRY_RUN=true</code> makes all tier 1+ actions logged no-ops.
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     10. THE ENGAGEMENT LAYER — Horizontal Stepper FSM
+     ============================================================ -->
+<section id="engagement">
+  <div class="reveal">
+    <h2 class="section-title">Engagement State Machine</h2>
+    <p class="section-sub">A 12-state, 22-transition FSM governs every task from inception to completion. Nine core states shown below.</p>
+    <div class="engagement-svg-wrap">
+      <svg class="engagement-svg" viewBox="0 0 880 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- States as rounded rects with connecting arrows -->
+        <!-- DRAFT -->
+        <g transform="translate(10,70)">
+          <rect x="0" y="0" width="80" height="36" rx="6" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="40" y="22" text-anchor="middle" fill="#5dffb0" font-family="JetBrains Mono" font-size="9" font-weight="600">DRAFT</text>
+        </g>
+        <line x1="94" y1="88" x2="108" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="106,84 114,88 106,92" fill="#1a2540"/>
+        <!-- INTERVIEWING -->
+        <g transform="translate(118,70)">
+          <rect x="0" y="0" width="100" height="36" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <text x="50" y="22" text-anchor="middle" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">INTERVIEWING</text>
+        </g>
+        <line x1="222" y1="88" x2="236" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="234,84 242,88 234,92" fill="#1a2540"/>
+        <!-- SPEC_READY -->
+        <g transform="translate(246,70)">
+          <rect x="0" y="0" width="88" height="36" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <text x="44" y="22" text-anchor="middle" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">SPEC_READY</text>
+        </g>
+        <line x1="338" y1="88" x2="352" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="350,84 358,88 350,92" fill="#1a2540"/>
+        <!-- PLAN_READY -->
+        <g transform="translate(362,70)">
+          <rect x="0" y="0" width="92" height="36" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <text x="46" y="22" text-anchor="middle" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">PLAN_READY</text>
+        </g>
+        <line x1="458" y1="88" x2="472" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="470,84 478,88 470,92" fill="#1a2540"/>
+        <!-- AWAITING_APPROVAL -->
+        <g transform="translate(482,70)">
+          <rect x="0" y="0" width="120" height="36" rx="6" fill="#0d1220" stroke="#ffb84d" stroke-width="1.5"/>
+          <text x="60" y="22" text-anchor="middle" fill="#ffb84d" font-family="JetBrains Mono" font-size="8">AWAITING_APPROVAL</text>
+        </g>
+        <line x1="606" y1="88" x2="620" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="618,84 626,88 618,92" fill="#1a2540"/>
+        <!-- EXECUTING -->
+        <g transform="translate(630,70)">
+          <rect x="0" y="0" width="80" height="36" rx="6" fill="#0d1220" stroke="#ffb84d" stroke-width="1.5"/>
+          <text x="40" y="22" text-anchor="middle" fill="#ffb84d" font-family="JetBrains Mono" font-size="9">EXECUTING</text>
+        </g>
+        <line x1="714" y1="88" x2="728" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="726,84 734,88 726,92" fill="#1a2540"/>
+        <!-- VERIFYING -->
+        <g transform="translate(738,70)">
+          <rect x="0" y="0" width="80" height="36" rx="6" fill="#0d1220" stroke="#1a2540" stroke-width="1.5"/>
+          <text x="40" y="22" text-anchor="middle" fill="#94a3b8" font-family="JetBrains Mono" font-size="9">VERIFYING</text>
+        </g>
+        <!-- Repairing branch -->
+        <line x1="778" y1="106" x2="778" y2="140" stroke="#1a2540" stroke-width="1"/>
+        <polygon points="774,138 778,146 782,138" fill="#1a2540"/>
+        <g transform="translate(738,150)">
+          <rect x="0" y="0" width="80" height="32" rx="6" fill="#0d1220" stroke="#ff6b8a" stroke-width="1.5"/>
+          <text x="40" y="20" text-anchor="middle" fill="#ff6b8a" font-family="JetBrains Mono" font-size="9">REPAIRING</text>
+        </g>
+        <!-- COMPLETED (terminal) -->
+        <line x1="822" y1="88" x2="836" y2="88" stroke="#1a2540" stroke-width="1.5"/>
+        <polygon points="834,84 842,88 834,92" fill="#1a2540"/>
+        <g transform="translate(846,70)">
+          <rect x="0" y="0" width="28" height="36" rx="6" fill="#0d1220" stroke="#5dffb0" stroke-width="1.5"/>
+          <text x="14" y="15" text-anchor="middle" fill="#5dffb0" font-family="Outfit" font-size="16" font-weight="700">&#10003;</text>
+        </g>
+        <!-- Failed/Blocked labels -->
+        <text x="778" y="200" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">failed/blocked states omitted for clarity</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     11. THE FULL FLOW — Master End-to-End Diagram
+     ============================================================ -->
+<section id="full-flow">
+  <div class="reveal">
+    <h2 class="section-title">The Complete Cognitive Loop</h2>
+    <p class="section-sub">Every tick flows through this path: from perception to action to memory consolidation to reflection. The payoff architecture.</p>
+    <div class="fullflow-svg-wrap">
+      <svg class="fullflow-svg" viewBox="0 0 900 340" fill="none" xmlns="http://www.w3.org/2000/svg" id="fullflow-diagram">
+        <!-- Main flow path (background) -->
+        <path d="M40,100 L160,100 L160,60 L300,60 L300,100 L440,100 L440,60 L580,60 L580,100 L720,100 L720,60 L840,60"
+              stroke="#1a2540" stroke-width="2" fill="none"/>
+        <!-- Animated flow line -->
+        <path d="M40,100 L160,100 L160,60 L300,60 L300,100 L440,100 L440,60 L580,60 L580,100 L720,100 L720,60 L840,60"
+              stroke="#3db882" stroke-width="2" fill="none" stroke-dasharray="10 8"
+              stroke-dashoffset="0">
+          <animate attributeName="stroke-dashoffset" from="0" to="-36" dur="1.5s" repeatCount="indefinite"/>
+        </path>
+        <!-- Animated dot traveling the path -->
+        <circle r="5" fill="#5dffb0" opacity="0.9">
+          <animateMotion dur="4s" repeatCount="indefinite"
+            path="M40,100 L160,100 L160,60 L300,60 L300,100 L440,100 L440,60 L580,60 L580,100 L720,100 L720,60 L840,60"/>
+        </circle>
+
+        <!-- Perception box -->
+        <g transform="translate(20,70)">
+          <rect x="0" y="0" width="120" height="60" rx="8" fill="#0d1220" stroke="#5dffb0" stroke-width="1.5"/>
+          <text x="60" y="24" text-anchor="middle" fill="#5dffb0" font-family="Outfit" font-size="11" font-weight="600">Perception</text>
+          <text x="60" y="42" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">11 sensors</text>
+        </g>
+
+        <!-- Working Memory box -->
+        <g transform="translate(150,30)">
+          <rect x="0" y="0" width="120" height="60" rx="8" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="60" y="20" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Working</text>
+          <text x="60" y="36" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Memory</text>
+          <text x="60" y="52" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="8">15 items</text>
+        </g>
+
+        <!-- Cortex OODA box -->
+        <g transform="translate(290,70)">
+          <rect x="0" y="0" width="120" height="60" rx="8" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="60" y="24" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600">Cortex</text>
+          <text x="60" y="42" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">OODA loop</text>
+        </g>
+
+        <!-- Brain box -->
+        <g transform="translate(430,30)">
+          <rect x="0" y="0" width="120" height="60" rx="8" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="60" y="20" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600">Brain</text>
+          <text x="60" y="36" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">8-lane LLM</text>
+          <text x="60" y="50" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="8">think</text>
+        </g>
+
+        <!-- Goals box -->
+        <g transform="translate(570,70)">
+          <rect x="0" y="0" width="120" height="60" rx="8" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="60" y="24" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="11" font-weight="600">Goals</text>
+          <text x="60" y="42" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">arbitrate</text>
+        </g>
+
+        <!-- Leash box -->
+        <g transform="translate(710,30)">
+          <rect x="0" y="0" width="120" height="60" rx="8" fill="#0d1220" stroke="#ffb84d" stroke-width="1.5"/>
+          <text x="60" y="24" text-anchor="middle" fill="#ffb84d" font-family="Outfit" font-size="11" font-weight="600">Leash</text>
+          <text x="60" y="42" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">check tier</text>
+        </g>
+
+        <!-- Effector box -->
+        <g transform="translate(780,70)">
+          <rect x="0" y="0" width="100" height="60" rx="8" fill="#0d1220" stroke="#ffb84d" stroke-width="1.5"/>
+          <text x="50" y="24" text-anchor="middle" fill="#ffb84d" font-family="Outfit" font-size="11" font-weight="600">Effector</text>
+          <text x="50" y="42" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">dispatch</text>
+        </g>
+
+        <!-- Return flow: Memory Consolidate -->
+        <path d="M830,140 L830,180 L60,180 L60,140"
+              stroke="#1a2540" stroke-width="1.5" fill="none"/>
+        <path d="M830,140 L830,180 L60,180 L60,140"
+              stroke="#3db882" stroke-width="1" fill="none" stroke-dasharray="6 6" opacity="0.3">
+          <animate attributeName="stroke-dashoffset" from="0" to="-24" dur="2s" repeatCount="indefinite"/>
+        </path>
+
+        <!-- Memory Consolidate box -->
+        <g transform="translate(380,160)">
+          <rect x="0" y="0" width="140" height="40" rx="6" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="70" y="24" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Memory: Consolidate</text>
+        </g>
+
+        <!-- Reflection box -->
+        <g transform="translate(170,160)">
+          <rect x="0" y="0" width="100" height="40" rx="6" fill="#0d1220" stroke="#3db882" stroke-width="1.5"/>
+          <text x="50" y="24" text-anchor="middle" fill="#e2e8f0" font-family="Outfit" font-size="10" font-weight="600">Reflection</text>
+        </g>
+
+        <!-- Arrow from reflection back to perception -->
+        <path d="M170,180 L40,180 L40,140" stroke="#1a2540" stroke-width="1" fill="none" stroke-dasharray="4 4"/>
+
+        <!-- Labels -->
+        <text x="450" y="240" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">perception &rarr; working memory &rarr; cortex (OODA) &rarr; brain (think) &rarr; goals (arbitrate)</text>
+        <text x="450" y="256" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">&rarr; leash (check tier) &rarr; effector (dispatch) &rarr; memory (consolidate) &rarr; reflection</text>
+
+        <!-- Immune sidecar -->
+        <g transform="translate(20,230)">
+          <rect x="0" y="0" width="860" height="50" rx="8" fill="rgba(255,107,138,0.04)" stroke="#ff6b8a" stroke-width="1" stroke-dasharray="6 4"/>
+          <text x="430" y="22" text-anchor="middle" fill="#ff6b8a" font-family="Outfit" font-size="10" font-weight="600">Immune System (sidecar)</text>
+          <text x="430" y="38" text-anchor="middle" fill="#64748b" font-family="JetBrains Mono" font-size="9">watchdog &rarr; diagnostician &rarr; breakers / healer &rarr; announcer</text>
+        </g>
+
+        <!-- Engagement overlay label -->
+        <text x="880" y="310" text-anchor="end" fill="#64748b" font-family="JetBrains Mono" font-size="8">12-state FSM governs task lifecycle</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     12. SCALE — Big-Number Grid
+     ============================================================ -->
+<section id="scale">
+  <div class="reveal">
+    <h2 class="section-title">At Scale</h2>
+    <p class="section-sub">Real metrics from the codebase. No inflated numbers.</p>
+    <div class="scale-grid">
+      <div class="scale-item">
+        <div class="scale-num">3,471</div>
+        <div class="scale-label">tests green</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">166</div>
+        <div class="scale-label">effectors (30 tool families)</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">8</div>
+        <div class="scale-label">LLM provider lanes</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">5+</div>
+        <div class="scale-label">memory stores</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">11</div>
+        <div class="scale-label">sensors</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">20</div>
+        <div class="scale-label">phases shipped</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">0</div>
+        <div class="scale-label">build step</div>
+      </div>
+      <div class="scale-item">
+        <div class="scale-num">9</div>
+        <div class="scale-label">runtime dependencies</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     13. FOOTER
+     ============================================================ -->
+<footer>
+  <div class="footer-inner">
+    <p>Evolved from NOVA (Agent OS) into MYTHOS (Autonomous Entity).</p>
+    <p>Honest-inert by design. Missing keys surface as OFFLINE, never faked.</p>
+    <p>Local-only by default. Binds 127.0.0.1, port 4478.</p>
+    <a href="README.md" class="cta-btn">Read the source</a>
+  </div>
+</footer>
+
+</main>
+
+<script>
+/* =============================================================
+   SYNAPTIC CANVAS BACKGROUND
+   Drifting nodes + faint connectome edges + periodic synapse pulses
+   ============================================================= */
+(function initSynapseCanvas() {
+  var canvas = document.getElementById('synapse-bg');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var nodes = [];
+  var edges = [];
+  var pulses = [];
+  var NODE_COUNT = 110;
+  var EDGE_THRESHOLD = 140;
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  var W, H;
+  var paused = false;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function createNodes() {
+    nodes = [];
+    for (var i = 0; i < NODE_COUNT; i++) {
+      nodes.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.3,
+        r: Math.random() * 1.5 + 0.8
+      });
+    }
+  }
+
+  function buildEdges() {
+    edges = [];
+    for (var i = 0; i < nodes.length; i++) {
+      for (var j = i + 1; j < nodes.length; j++) {
+        var dx = nodes[i].x - nodes[j].x;
+        var dy = nodes[i].y - nodes[j].y;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < EDGE_THRESHOLD) {
+          edges.push({ a: i, b: j, dist: dist });
+        }
+      }
+    }
+  }
+
+  function draw() {
+    if (paused || reducedMotion) return;
+    ctx.clearRect(0, 0, W, H);
+
+    /* Draw edges */
+    for (var i = 0; i < edges.length; i++) {
+      var e = edges[i];
+      var a = nodes[e.a];
+      var b = nodes[e.b];
+      var alpha = 0.08 * (1 - e.dist / EDGE_THRESHOLD);
+      ctx.strokeStyle = 'rgba(93,255,176,' + alpha + ')';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+
+    /* Draw nodes */
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      ctx.fillStyle = 'rgba(93,255,176,0.2)';
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /* Draw pulses */
+    for (var i = pulses.length - 1; i >= 0; i--) {
+      var p = pulses[i];
+      p.t += 0.015;
+      if (p.t > 1) {
+        pulses.splice(i, 1);
+        continue;
+      }
+      var a = nodes[p.a];
+      var b = nodes[p.b];
+      var px = a.x + (b.x - a.x) * p.t;
+      var py = a.y + (b.y - a.y) * p.t;
+      var glowR = 6;
+      var grad = ctx.createRadialGradient(px, py, 0, px, py, glowR);
+      grad.addColorStop(0, 'rgba(93,255,176,0.6)');
+      grad.addColorStop(1, 'rgba(93,255,176,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(px, py, glowR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function update() {
+    if (paused || reducedMotion) return;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      n.x += n.vx;
+      n.y += n.vy;
+      if (n.x < 0 || n.x > W) n.vx *= -1;
+      if (n.y < 0 || n.y > H) n.vy *= -1;
+      /* Brownian nudge */
+      n.vx += (Math.random() - 0.5) * 0.02;
+      n.vy += (Math.random() - 0.5) * 0.02;
+      /* Dampen */
+      n.vx *= 0.99;
+      n.vy *= 0.99;
+    }
+    /* Rebuild edges periodically */
+    buildEdges();
+    /* Fire random pulses */
+    if (edges.length > 0 && Math.random() < 0.06) {
+      var e = edges[Math.floor(Math.random() * edges.length)];
+      pulses.push({ a: e.a, b: e.b, t: 0 });
+    }
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  /* Pause when tab hidden */
+  document.addEventListener('visibilitychange', function() {
+    paused = document.hidden;
+  });
+
+  window.addEventListener('resize', function() {
+    resize();
+    createNodes();
+    buildEdges();
+  });
+
+  resize();
+  createNodes();
+  buildEdges();
+  loop();
+})();
+
+/* =============================================================
+   INTERSECTION OBSERVER — Section reveals + animation triggers
+   ============================================================= */
+(function initObservers() {
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* Reveal sections on scroll */
+  var reveals = document.querySelectorAll('.reveal');
+  var revealObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+  reveals.forEach(function(el) { revealObserver.observe(el); });
+
+  /* Trigger SVG animation classes when diagrams enter viewport */
+  if (!reducedMotion) {
+    var oodaRing = document.getElementById('ooda-ring');
+    if (oodaRing) {
+      var oodaObs = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            oodaRing.classList.add('anim-dash-flow', 'anim-pulse-nodes');
+          }
+        });
+      }, { threshold: 0.3 });
+      oodaObs.observe(oodaRing);
+    }
+  }
+})();
+</script>
+</body>
+</html>

@@ -63,6 +63,10 @@ __pycache__/
 
 # knowledge-graph build artifacts (regenerated locally via /graphify)
 graphify-out/
+# mythos/.graph-data.json is graphify.js's written output ("source of truth"
+# for regenerating graphify-out/graph.html, per MYTHOS-ARCHITECTURE.md) —
+# regenerable per machine via `node mythos/scripts/graphify.js`, never committed.
+mythos/.graph-data.json
 
 # editor/planner scratch
 .kilo/
@@ -155,6 +159,13 @@ nodes/.kotlin/
 .qoder/
 .zcode/
 /i-just-installed-the-virtual-sketch.md
+
+# .freebuff — a third-party agent desktop tool's local state: a SQLite DB that
+# holds its session/chat history, and a full nested copy of THIS repo (own .git
+# included) as one of its worktrees. Neither can ever be published; the nested
+# repo alone would be catastrophic bloat under a careless `git add -A`.
+# Leading slash pins it to the repo root.
+/.freebuff/
 
 # Aether-BLE (HailLucifer666/Aether-BLE) — the BLE proximity mesh MYTHOS talks to
 # for nearest-device speech. Cloned project-local so the voice-node verifier can
