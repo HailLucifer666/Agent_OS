@@ -1,0 +1,55 @@
+# Docker build context exclusions — Docker does NOT read .gitignore, so this
+# mirrors it for local `docker build`s (Render builds from a git clone and is
+# already protected). Without it, COPY . . (Dockerfile:18) would bake
+# mythos/.env (live secrets), vault/ (personal data) and the host's
+# node_modules (shadowing the fresh `npm ci` layer) into the image. The
+# Dockerfile's "NOT baked into the image" promise for MYTHOS_AUTH_TOKEN is
+# enforced here. Pinned by test/deploy-config-conformance.test.js.
+#
+# Keep-list (runtime reads verified — never ignore these): ui/, skills/ +
+# skills.allowlist, personas/, providers/, src/, server/, services/,
+# adapters/, mcp/, package*.json. node_modules/ is safe to ignore — npm ci
+# runs before COPY . .
+
+# secrets
+.env
+.env.*
+
+# dependencies — npm ci runs before COPY . .
+node_modules/
+
+# local data — real user vault content, never publish
+vault/
+vault_test_audit_*/
+
+# knowledge-graph build artifact (regenerable via scripts/graphify.js)
+.graph-data.json
+
+# fetched model weights — per-machine, never committed (CC BY-NC-SA wake word,
+# MIT Silero; see THIRD_PARTY_NOTICES.md). NOT the whole ui/public/models/ dir:
+# gesture_recognizer.task is tracked and runtime-served
+# (ui/public/js/vision/camera.js fetches /models/gesture_recognizer.task).
+ui/public/models/wakeword/
+ui/public/models/silero/
+ui/public/models/wakeword.test-backup/
+
+# per-machine TTS/STT model caches (setup-piper/kokoro/whisper scripts)
+models/
+
+# tests and their fixtures — not needed in the image
+test/
+test-fixtures/
+
+# planning / docs / vault-seed content dirs — docs only, no runtime reads
+Plans/
+docs/
+Goals/
+Identity/
+Semantic/
+
+# e2e run artifacts
+scripts/e2e/artifacts/
+
+# session/tooling junk
+.browser-agent.pid
+.tmp-*
