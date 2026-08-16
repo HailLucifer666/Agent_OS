@@ -241,17 +241,35 @@ test('ui_type still refuses a genuinely different app, even when the pid mismatc
   });
 });
 
-test('ui_type with no typedIntoSameApp field (older adapter) keeps the strict pid comparison', async () => {
+test('ui_type with no typedIntoSameApp field: a REAL different app still fails, a WebView2 artifact title is honestly UNVERIFIED', async () => {
+  let typeCalls = 0;
+  // SPLIT 2026-08-17 (fix-plan 3.2). This test used to demand the strict
+  // pid-comparison failure for EVERY absent-field mismatch. That refused
+  // legitimate WhatsApp sends when the keys landed in the msedgewebview2
+  // child ("Chrome Legacy Window") while CLAIMING to know the text went
+  // elsewhere. The verdict is now split on the one signal the payload
+  // carries: a landed title that names a real app (or the MYTHOS dashboard)
+  // is app-identity evidence and still hard-fails — the 2026-07-31 and
+  // Antigravity incidents stay protected; a WebView2 hosting-artifact title
+  // is not evidence of anything, and returns ok:true + unverified:true
+  // BEFORE the read-back oracle (a read-back from the window we could not
+  // rule out is the BUG-066 lie shape). typedIntoSameApp:false remains the
+  // hard failure it became on 2026-08-10 — pinned above.
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
     sendCommand: async (cmdObj) => {
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') {
+        // First ui_type lands in a real named app; second in the WebView2
+        // artifact title. Same absent typedIntoSameApp both times — only the
+        // landed title differs, which is the whole discrimination under test.
+        typeCalls += 1;
         return {
           ok: true,
           result: {
             typed: true, length: 5,
-            typedIntoPid: 15956, typedIntoTitle: 'Some Other Window',
+            typedIntoPid: 15956,
+            typedIntoTitle: typeCalls === 1 ? 'Some Other Window' : 'Chrome Legacy Window',
             readBack: 'confirmed', readBackText: 'hello',
           },
         };
@@ -259,8 +277,14 @@ test('ui_type with no typedIntoSameApp field (older adapter) keeps the strict pi
       throw new Error('unexpected cmd: ' + cmdObj.cmd);
     },
   }, async (fromPc) => {
-    const result = await fromPc.ui_type({ text: 'hello', pid: 15928 });
-    assert.equal(result.ok, false, 'absent verdict must not be read as permission');
+    const realApp = await fromPc.ui_type({ text: 'hello', pid: 15928 });
+    assert.equal(realApp.ok, false, 'a named different app with no same-app verdict is still a refusal — the incident guards keep their teeth');
+    assert.match(String(realApp.result || ''), /wrong window/i);
+
+    const artifact = await fromPc.ui_type({ text: 'hello', pid: 15928 });
+    assert.equal(artifact.ok, true, 'a WebView2 artifact title is an unknown, not a finding');
+    assert.equal(artifact.unverified, true, 'absent verdict must not be read as permission either — speak it as attempted, not confirmed');
+    assert.ok(!artifact.evidence, 'the read-back from the unverifiable window must not become evidence');
   });
 });
 

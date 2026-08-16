@@ -66,3 +66,58 @@ describe('open_web tells the model, up front, that it is not a browser', () => {
       'the rule must name browser_navigate as the answer');
   });
 });
+
+// FIX-PLAN 3.3 (2026-08-17) — the in-tool route to the real browser. The
+// 2026-08-09 incidents were a widget-vs-browser ambiguity the model had to
+// guess at, and the only honest answer was a refusal pointing at
+// browser_navigate (a different surface needing an attached debug browser).
+// browser:true routes through the SAME newtab mechanism the frame-blocking
+// domains use, and the catalog names it — so the model gets an actionable
+// in-tool path instead of a dead end that repeats.
+describe('open_web browser:true — the explicit real-browser route', () => {
+  const ctx = {
+    goalsEffector: {}, pipeline: {}, kanban: {}, agentActions: {}, buildRunner: {},
+    vault: {}, config: {}, bus: { emit() {} },
+    probes: { getStatus: async () => ({}) },
+    abtop: { getState: () => ({}), killSession: async () => {} },
+  };
+
+  function openWebTool() {
+    const { TOOLS: tools } = buildTools(ctx);
+    return tools.find((t) => t.name === 'open_web');
+  }
+
+  it('browser:true + url routes through the newtab mechanism to the real browser', async () => {
+    const res = await openWebTool().fn({ type: 'web', url: 'https://example.com/page', browser: true });
+    assert.equal(res.ok, true);
+    assert.equal(res.result.widgetType, 'newtab',
+      'the same route the NO_EMBED domains use — the client newtab branch opens the real browser window');
+    assert.equal(res.result.url, 'https://example.com/page');
+    assert.equal(res.unverified, true, 'still honestly unverified — nothing here confirms the browser opened');
+  });
+
+  it('browser:true with a BARE DOMAIN in query normalizes to https and routes the same way', async () => {
+    const res = await openWebTool().fn({ type: 'web', query: 'openai.com', browser: true });
+    assert.equal(res.ok, true);
+    assert.equal(res.result.widgetType, 'newtab');
+    assert.equal(res.result.url, 'https://openai.com');
+  });
+
+  it('browser:true with a non-URL query fails with guidance, not a silent search', async () => {
+    const res = await openWebTool().fn({ type: 'search', query: 'weather in tokyo', browser: true });
+    assert.equal(res.ok, false, 'a search result list cannot open in the real browser');
+    assert.match(String(res.result), /url/i, 'the failure must say what browser:true needs');
+  });
+
+  it('DEFAULT UNCHANGED: without the flag, type:web still renders the in-dashboard embed for a frameable site', async () => {
+    const res = await openWebTool().fn({ type: 'web', url: 'https://example.com/frameable' });
+    assert.equal(res.ok, true);
+    assert.equal(res.result.widgetType, 'web', 'no browser flag → the embed widget, exactly as before');
+  });
+
+  it('the catalog names browser:true as the in-tool route', () => {
+    const tool = openWebTool();
+    assert.match(String(tool.description), /browser:true/, 'the description must name the flag');
+    assert.ok(tool.params.browser, 'and the params table must document it');
+  });
+});

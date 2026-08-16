@@ -231,7 +231,7 @@ function buildTools(ctx) {
   // (YouTube/web — needs iframe) or a floating widget (search/weather/flights —
   // custom-rendered cards). No API keys needed: Exa MCP search + YouTube embed
   // URLs + Open-Meteo are all free.
-  async function open_web({ type, query, url, title, location }) {
+  async function open_web({ type, query, url, title, location, browser }) {
     try {
       // Fail loud on an unrecognized/omitted type. Previously this silently
       // defaulted to 'search', turning an ambiguous "open <url>" into a quiet
@@ -245,6 +245,25 @@ function buildTools(ctx) {
         return fail('open_web type must be one of ' + ALLOWED_TYPES.join('|') + ' (got "' + t + '"). To open or control the real browser, use browser_navigate or browser_tabs instead.');
       }
       var q = String(query || '').trim();
+
+      // FIX-PLAN 3.3 (2026-08-17): the explicit in-tool route to the real
+      // browser. Until now the only honest answer to "open this in my browser"
+      // was the refusal's suggestion to call browser_navigate — a different
+      // surface that needs a running debug browser — so the widget-vs-browser
+      // ambiguity was the model's to guess (BUG-253: two 08-09 incidents of a
+      // widget opening where the operator expected a browser window).
+      // browser:true routes through the SAME newtab mechanism the NO_EMBED
+      // domains use below, so the client's newtab branch opens the real
+      // browser/electron window. Default unchanged: without the flag every
+      // type keeps rendering in-dashboard exactly as before.
+      if (browser) {
+        var bRaw = String(url || q || '').trim();
+        if (!bRaw || !looksLikeUrlOrDomain(bRaw)) {
+          return fail('open_web with browser:true needs a url (or a query that IS one) — a search result list or a weather card cannot open in the real browser. Pass url:"https://…" with browser:true.');
+        }
+        var bUrl = URL_SHAPED.test(bRaw) ? (/^www\./i.test(bRaw) ? 'https://' + bRaw : bRaw) : 'https://' + bRaw;
+        return openWebResult({ widgetType: 'newtab', url: bUrl, title: title || bRaw });
+      }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
       if (t === 'youtube') {
@@ -1241,7 +1260,7 @@ function buildTools(ctx) {
     // real mechanism — this only makes the first attempt likelier to be right.
     { name: 'navigate', description: 'Switch which MYTHOS dashboard VIEW is showing (e.g. dashboard, kanban, pipeline). This is a HUD router, NOT a browser and NOT a URL bar: it cannot open a website or load a page. For "open <site>" / "go to <url>" use browser_navigate instead.', params: { route: 'string - a dashboard view name, never a URL' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s), floating widgets (search/weather/flights/image cards spawned by open_web), AND the Electron media window if one is open (e.g. a YouTube video that will not stop with standard playback controls). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed/mediaWindowClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
-    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED, not guessed at (that call failed five times in one 2026-08-14 session). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — to open or control the actual browser use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title' }, danger: false, fn: open_web },
+    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED, not guessed at (that call failed five times in one 2026-08-14 session). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — but you do NOT have to switch tools for a plain "open this site in my browser": pass browser:true WITH url: and open_web itself routes through its newtab mechanism to the real browser window (the same route frame-blocking sites get). For full browsing control (tabs, navigation of an attached session) use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web, or the target when browser:true', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title', browser: 'boolean (optional) - open the url in the REAL browser window via the newtab route instead of rendering a dashboard card' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline. Prefer jobId (from pipeline_status/job_status) over path — it resolves the real artifact path server-side, so you never have to retype a filename. A wrong path fails with the real path(s) named in the error.', params: { path: 'string (optional if jobId given)', jobId: 'string (optional) - resolves the path from the job record instead of retyping it', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     // REMEDIATION P3-8: needs_result:true added to every status/check/list/

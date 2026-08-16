@@ -7962,9 +7962,9 @@ rest are open with a named reason.
 | `inc-1786230054882-4` | 08-08 | Informational — a self-heal that worked. No action. |
 | `inc-1786231315825-1` | 08-08 | Open, product gap rather than defect: no approval/rejection control exists in the dashboard for a queued WhatsApp send. |
 | `inc-1786236109564-1`, `inc-1786236365947-3` | 08-09 | Spotify half tracked and still open as BUG-001/BUG-026. The `open_web` half — a widget opened where the operator expected a browser window — was untracked until now. |
-| `inc-1786317422916-1` | 08-09 | **Open.** `whatsapp_send` text routed to Chrome Legacy Window / msedgewebview2 instead of `WhatsApp.Root.exe`. Distinct from BUG-231 (a composer settle-timing race) — this is window targeting, the keystrokes-follow-the-caret class. |
+| `inc-1786317422916-1` | 08-09 | Closed on the repo side — BUG-263 (2026-08-17): the 2026-08-10 `typedIntoSameApp` fix covered the fields-present case, and the fields-ABSENT fallback no longer asserts a wrong-app claim it has no evidence for (honest unverified instead). Distinct from BUG-231 (a composer settle-timing race). |
 | `inc-1786696486257-1` | 08-14 | Closed — BUG-222. |
-| `inc-1786706965838-1` | 08-14 | Open — `open_folder` reported `unverified` while the window demonstrably opened. An honest-verification defect, in the direction that costs trust cheaply rather than the dangerous one. |
+| `inc-1786706965838-1` | 08-14 | Closed — BUG-261 (2026-08-17): the single 700ms coin-flip oracle check became a 4x400ms bounded poll with a contains-title match, so a real window that titles late still verifies. |
 | `inc-1786708684079-2` | 08-14 | Closed — BUG-238 (terminal failures) and BUG-236 (the "Network request failed" misdiagnosis). The token was revoked; the network was fine. |
 | `inc-1786709364853-3` | 08-14 | The umbrella report that produced BUG-238..BUG-250. No separate entry. |
 | `inc-1786743685668-1`, `inc-1786743967842-2` | 08-14 | Closed — BUG-239, the third speech path without a Live guard. |
@@ -8278,3 +8278,35 @@ decision-tick consolidates exactly once, and all five skip reasons fire
 one real voice session, then grep the log for `memory.consolidate-skip` —
 reasons observed there answer "did it ever distill" factually for the first
 time.
+
+## BUG-263 — ui_type's fields-absent fallback asserted "text went elsewhere" on a bare pid mismatch
+
+**The remaining half of the 2026-08-09/10 WhatsApp window-targeting class
+(BUG-253 row `inc-1786317422916-1`).** The 2026-08-10 fix introduced PS's
+`typedIntoSameApp` verdict so a WebView2 child pid (WhatsApp's msedgewebview2
+receiving the keys while `WhatsApp.Root.exe` owns the window) would not be
+refused as a wrong window — but only for the fields-PRESENT case. When
+`typedIntoSameApp` is ABSENT (an older ps-automation adapter, or the
+Test-SameApp lookup failing), the code fell back to strict pid equality and
+FAILED with "Typed into the wrong window: the text went to …" — a claim of
+knowledge it did not have. The 2026-08-09 audit's two refused sends were
+exactly this shape: right window, message actually typed, refused as having
+gone elsewhere.
+
+**FIXED 2026-08-17 (fix-plan 3.2).** The branch is now split on the one app-identity signal the payload carries, the landed TITLE:
+`typedIntoSameApp === false` (PS's positive wrong-app finding) stays the hard
+failure it became on 2026-08-10; `undefined` + pid mismatch ALSO stays a hard
+failure when the landed title names a real app or the MYTHOS dashboard (the
+2026-07-31 self-typing and Antigravity incidents keep their guards —
+ui-type-target-honesty/ui-type-readback pin them); but when the landed title
+is a WebView2 hosting artifact (`Chrome Legacy Window` & kin — the exact
+recorded false-refusal shape) the mismatch is not evidence of anything, and
+the branch returns `evidence.unverified` — ok:true, unverified:true, spoken
+as attempted-not-confirmed — BEFORE the read-back oracle, because the
+read-back reads whichever control holds the caret, i.e. exactly the window it
+could not rule out, so its "confirmed" would be the BUG-066
+every-layer-agreed-on-a-lie shape again. Tests: `caret-owner-and-send-key-ladder.test.js` (recorded
+WebView2-child shape → unverified with no evidence field; guard that
+`false` still hard-fails) and `from-pc-window-target.test.js`'s older-adapter
+test, REVERSED from demanding the strict refusal to demanding honest-
+unverified — that test was the thing pinning the defect in place.

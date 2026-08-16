@@ -126,6 +126,48 @@ describe('P0 — the caret owner decides where keystrokes go, not the foreground
   });
 });
 
+// FIX-PLAN 3.2 (2026-08-17) — the fields-ABSENT half. The 2026-08-10 fix gave
+// typedIntoSameApp:false a same-app-aware verdict, but undefined (older adapter,
+// failed Test-SameApp lookup) still fell back to strict pid equality — and for a
+// WebView2 app the pid NEVER matches the shell target, so legitimate WhatsApp
+// sends were refused as "the text went elsewhere" with no evidence for the
+// claim. That branch is now an honest unverified outcome, and it must return
+// BEFORE the read-back oracle: the read-back reads whichever control holds the
+// caret — exactly the window it could not rule out — so its "confirmed" would
+// be the Brave incident's every-layer-agreed-on-a-lie again.
+describe('P0 — an absent typedIntoSameApp is an honest unknown, not a wrong-app accusation', () => {
+  it('THE RECORDED SHAPE: keys landed in the WebView2 child pid, field absent → unverified, not refused', async () => {
+    // 2026-08-09 audit: refused with 'the text went to "Chrome Legacy Window"
+    // (pid 15956), not the target (pid 15928)' — 15956 was WhatsApp.Root's own
+    // msedgewebview2 child. Right window, message actually typed, refused.
+    await withMockedPcChild(pc(WHATSAPP, {
+      typedIntoPid: 15956,
+      typedIntoTitle: 'Chrome Legacy Window',
+      readBack: 'confirmed', readBackVia: 'ValuePattern', readBackText: 'hi',
+    }), async (m) => {
+      const res = await m.ui_type({ text: 'hi', pid: WHATSAPP.pid });
+      assert.equal(res.ok, true, 'a pid mismatch without a same-app verdict is not evidence the text went elsewhere');
+      assert.equal(res.unverified, true, 'it must be spoken as attempted, not confirmed');
+      assert.match(String(res.reason), /could not verify/i);
+      assert.ok(!/wrong window/i.test(String(res.reason)),
+        'and it must not accuse a window it could not check');
+      assert.ok(!res.evidence, 'a read-back from the unverifiable window is not evidence — the BUG-066 lie shape');
+    });
+  });
+
+  it('GUARD: typedIntoSameApp:false is still the hard failure it was on 2026-08-10', async () => {
+    await withMockedPcChild(pc(WHATSAPP, {
+      typedIntoPid: 4242, typedIntoTitle: 'Notepad',
+      typedIntoSameApp: false,
+      readBack: 'confirmed', readBackVia: 'ValuePattern', readBackText: 'hi',
+    }), async (m) => {
+      const res = await m.ui_type({ text: 'hi', pid: WHATSAPP.pid });
+      assert.equal(res.ok, false, 'a POSITIVE wrong-app finding stays a failure — the honesty fix loosens nothing');
+      assert.match(String(res.result || res.error), /wrong window/i);
+    });
+  });
+});
+
 describe('P0 — Enter reaches the app through the verified ladder', () => {
   it('THE RECORDED CASE: Enter in WhatsApp does not go out as a raw keystroke', async () => {
     const calls = [];

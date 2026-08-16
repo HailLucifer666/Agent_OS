@@ -794,9 +794,31 @@ async function ui_type({ text, pid, elementPath }) {
     // absent from an older adapter or when the lookup failed — in which case the
     // strict comparison below still applies, so this loosens nothing on its own.
     var landedSameApp = res.result.typedIntoSameApp;
-    var landedElsewhere = (landedSameApp === false) ||
-      (landedSameApp === undefined && typeof landedPid === 'number' && landedPid !== targetPid);
-    if (targetPid && typeof landedPid === 'number' && landedPid > 0 && landedElsewhere) {
+    // FIX-PLAN 3.2 (2026-08-17): two distinct verdicts, no longer folded into
+    // one. typedIntoSameApp === false is PS's POSITIVE finding that the keys
+    // left the app — that stays a hard failure. undefined (older adapter, or
+    // the Test-SameApp lookup failed) plus a pid mismatch stays a hard failure
+    // too — EXCEPT when the landed title is a WebView2 hosting artifact
+    // ("Chrome Legacy Window" & kin): there the pid mismatch is NOT app-
+    // identity evidence, because the shell owns the target window while an
+    // msedgewebview2 child receives the keystrokes (the exact shape the field
+    // exists to resolve; the 2026-08-09 audit's two refused WhatsApp sends
+    // were this). That one shape returns honest-unverified, and returns HERE,
+    // deliberately before the read-back oracle: the read-back reads whatever
+    // control holds the caret, which is exactly the window we could not rule
+    // out, so its "confirmed" would be the BUG-066 every-layer-agreed-on-a-lie
+    // again.
+    var WEBVIEW_ARTIFACT_TITLE = /chrome legacy window|msedgewebview2|_renderwidgethost/i;
+    if (targetPid && landedSameApp === false && typeof landedPid === 'number' && landedPid > 0) {
+      return fail('Typed into the wrong window: the text went to "' + landedTitle +
+        '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
+    }
+    if (targetPid && landedSameApp === undefined && typeof landedPid === 'number' && landedPid > 0 && landedPid !== targetPid) {
+      if (WEBVIEW_ARTIFACT_TITLE.test(landedTitle)) {
+        return evidence.unverified(res,
+          'typed into pid ' + landedPid + ' ("' + landedTitle + '"), which does not match the target pid ' + targetPid +
+          ' — I could not verify both belong to the same app, so I cannot confirm the text landed where you asked');
+      }
       return fail('Typed into the wrong window: the text went to "' + landedTitle +
         '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
     }
