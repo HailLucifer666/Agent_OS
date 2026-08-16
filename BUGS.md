@@ -8310,3 +8310,27 @@ WebView2-child shape → unverified with no evidence field; guard that
 `false` still hard-fails) and `from-pc-window-target.test.js`'s older-adapter
 test, REVERSED from demanding the strict refusal to demanding honest-
 unverified — that test was the thing pinning the defect in place.
+
+## BUG-264 — open_web had no honest in-tool route to the real browser
+
+**BUG-253 rows `inc-1786236109564-1`/`inc-1786236365947-3` (08-09), the
+widget-vs-browser half.** The operator asked for a browser window; open_web
+rendered a dashboard widget. Nothing was "broken" — open_web is a widget
+renderer by design, and the 2026-08-09 remedy taught the model that with
+ever-stronger refusal text — but the only honest path it named was
+`browser_navigate`, a different surface needing an attached debug browser,
+while the operator's actual intent ("open this site in my browser") had NO
+route through the tool the model keeps reaching for. Tool-selection semantics
+with a dead end.
+
+**FIXED 2026-08-17 (fix-plan 3.3).** `open_web` now takes `browser:true`:
+with a url (or a query that IS one, normalized to https) it routes through
+the SAME `newtab` mechanism the frame-blocking domains already use, so the
+client's newtab branch opens the real browser window — no new client
+machinery, no default change (tests pin that type:web without the flag still
+embeds). A non-URL query with browser:true fails with guidance instead of
+silently becoming a search. The catalog description and params table name
+the flag; the description keeps its negative lead and browser_navigate
+mention (open-web-is-not-a-browser.test.js pins both). Tests: 5 new in
+`open-web-is-not-a-browser.test.js` — delegation, bare-domain normalization,
+non-URL guidance failure, default-unchanged guard, catalog pin.
