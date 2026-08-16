@@ -54,12 +54,29 @@ function userDataModelsDir(env) {
   return null;
 }
 
+// A packaged build, signalled by electron/main.js injecting MYTHOS_PACKAGED='1'
+// into the server child's env (the child cannot see Electron's app.isPackaged
+// itself). Accepts '1'/'true', mirroring the boolean spellings the config
+// layer reads elsewhere.
+function packagedBuild(env) {
+  const v = env && env.MYTHOS_PACKAGED;
+  return v === '1' || v === 'true';
+}
+
 // Every directory a read should consider, most-preferred first, de-duplicated.
 function modelSearchDirs(env) {
+  const e = env || process.env;
   const dirs = [];
-  const userData = userDataModelsDir(env);
+  const userData = userDataModelsDir(e);
   if (userData) dirs.push(userData);
-  dirs.push(INSTALL_TREE_MODELS_DIR);
+  // Packaged builds must not arm models from the install tree (2026-08-15 RCA:
+  // the packaged app ran the wake word off weights the source tree happened to
+  // carry, while the packaged tree itself ships none — build.files excludes
+  // ui/public/models on purpose, the CC BY-NC-SA licensing gate). With this,
+  // packaged means userData-or-nothing: a missing download reads as "wake word
+  // unavailable", the honest state, instead of a lucky local hit that is dead
+  // for every other machine.
+  if (!packagedBuild(e)) dirs.push(INSTALL_TREE_MODELS_DIR);
   return [...new Set(dirs.map((d) => path.resolve(d)))];
 }
 

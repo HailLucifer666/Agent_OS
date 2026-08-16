@@ -233,6 +233,37 @@ describe('model-paths — weights that survive an update', () => {
       assert.equal(modelPaths.findModelFile('silero', 'zero-byte-probe.onnx', env), null);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
+
+  // 2026-08-15 RCA: the packaged build ships no models in its install tree
+  // (build.files excludes them deliberately) yet the packaged app ran the wake
+  // word off weights the tree happened to carry. Packaged builds now search
+  // userData only — "unavailable", never a lucky local hit.
+  it('MYTHOS_PACKAGED drops the install tree from the search entirely', () => {
+    const root = tmpDir();
+    try {
+      const env = { MYTHOS_MODELS_DIR: path.join(root, 'models'), MYTHOS_PACKAGED: '1' };
+      const dirs = modelPaths.modelSearchDirs(env);
+      assert.equal(dirs.length, 1, 'packaged: userData is the only search dir');
+      assert.equal(path.resolve(dirs[0]), path.resolve(path.join(root, 'models')));
+      assert.ok(!dirs.includes(path.resolve(modelPaths.INSTALL_TREE_MODELS_DIR)),
+        'the packaged install tree must not be searched — it ships no models, so a hit there is a dev-machine leftover');
+
+      // Machine-independent consequence: a file that lives only where the
+      // install tree would have been searched is honestly absent. (On a machine
+      // WITH dev-downloaded install-tree weights this proves the drop; without
+      // them the dirs assertion above is the one carrying the proof.)
+      assert.equal(modelPaths.findModelFile('wakeword', 'melspectrogram.onnx', env), null);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('without MYTHOS_PACKAGED the install tree stays searchable — the dev workflow depends on it', () => {
+    const root = tmpDir();
+    try {
+      const env = { MYTHOS_MODELS_DIR: path.join(root, 'models') };
+      assert.ok(modelPaths.modelSearchDirs(env).some((d) => path.resolve(d) === path.resolve(modelPaths.INSTALL_TREE_MODELS_DIR)),
+        'a dev checkout that downloaded weights before the userData change keeps finding them, and so does anything a distro packages into the tree');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
 });
 
 describe('import-existing — carrying dev\'s setup across', () => {

@@ -745,6 +745,14 @@ function startChild() {
       // mythos/ui/public/models entirely, and an update replaces the tree.
       // See mythos/src/core/setup/model-paths.js.
       MYTHOS_MODELS_DIR: path.join(app.getPath('userData'), 'models'),
+      // PACKAGED-BUILD SIGNAL. The packaged install tree ships no models
+      // (build.files excludes ui/public/models — deliberate, the CC BY-NC-SA
+      // licensing gate), so modelSearchDirs must stop searching it there or a
+      // dev machine's leftovers arm the wake word in a build that is dead for
+      // everyone else (2026-08-15 RCA). The server child cannot see
+      // app.isPackaged itself, hence the injection. Empty in dev, where the
+      // install tree stays a legitimate search dir.
+      MYTHOS_PACKAGED: app.isPackaged ? '1' : '',
       MYTHOS_TOOLS_DIR: path.join(app.getPath('userData'), 'tools'),
       // WHICH BUILD IS THIS. A packaged install ships no .git, so
       // identity/version.js can only report the package.json version — and the

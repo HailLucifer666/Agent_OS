@@ -7847,12 +7847,26 @@ anywhere under `src/`.
   `web_search`/`web_fetch` — network calls that routinely exceed 1.5s. The
   constant is probably wrong, but that is a tuning decision with no evidence
   gathered yet; BUG-246 fixed the part that was making MYTHOS lie.
-- **Wake-word models are excluded from the packaged build**
+- **`Wake-word models are excluded from the packaged build`
   (`!mythos/ui/public/models{,/**/*}`) yet the wake word ran — it can only have
   loaded them from the source tree. It works on this machine and is dead for
   anyone else. The exclusion is deliberate (CC BY-NC-SA weights, licensing gate
   open), so the fix is an honest "wake word unavailable in this build" state, not
-  bundling them. Not done.
+  bundling them. FIXED 2026-08-17.** `electron/main.js` `startChild()` now
+  injects `MYTHOS_PACKAGED='1'` into the server child (packaged builds only —
+  the child cannot see `app.isPackaged` itself), and
+  `core/setup/model-paths.js`'s `modelSearchDirs()` drops the install tree
+  from the search when it sees that signal. Packaged is now
+  userData-or-nothing: with no downloaded weights, `wakewordModelsPresent` is
+  false, `WAKEWORD_ENABLED` stays false, and the renderer's
+  `/api/config/wakeword` gate never loads `wakeword.js` — the honest
+  unavailable state, no 404-ing `InferenceSession.create`. Dev checkouts and
+  distro-packaged trees (no `MYTHOS_PACKAGED`) keep the install-tree search
+  exactly as before. Tests: `installer-parity-modules.test.js` (search-dir
+  drop + dev-mode guard, machine-independent) and `wakeword.test.js` (route
+  reports `modelsPresent:false` under the packaged signal + the electron
+  injection is source-pinned). Still owed: one packaged-install check on the
+  operator's machine.
 - **`camera_on` only prompts the operator.** Not a bug: a browser will not grant
   camera access without a user gesture, and a system that could silently enable a
   webcam is a thing that should be impossible. BUG-243 makes the surrounding

@@ -187,6 +187,41 @@ test('with no wakewordModelsDir injected, the route resolves the real models pat
   assert.equal(path.resolve(realDir), path.resolve(path.join(INSTALL_TREE_MODELS_DIR, 'wakeword')));
 });
 
+// 2026-08-15 RCA, closed: the packaged build ships no models in its install
+// tree, so a packaged app with no userData weights must report
+// modelsPresent:false — "wake word unavailable in this build" — instead of
+// arming off whatever the tree happened to carry. findModelFile reads
+// MYTHOS_PACKAGED from process.env when no seam dir is injected; env is
+// mutated for this request only (this file runs in its own node --test child,
+// and the finally block restores both keys).
+test('packaged build with no userData weights reports modelsPresent:false, never armed from the install tree', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-wakeword-pkg-'));
+  const hadPkg = process.env.MYTHOS_PACKAGED;
+  const hadDir = process.env.MYTHOS_MODELS_DIR;
+  process.env.MYTHOS_PACKAGED = '1';
+  process.env.MYTHOS_MODELS_DIR = path.join(root, 'models');
+  try {
+    const bus = createBus({ historySize: 50 });
+    assert.equal(activeWakewordDir, null, 'this test must run outside a withWakewordDir wrapper');
+    const server = createServer(baseDeps(bus)); // no wakewordModelsDir — the production fallback
+    await server.ready;
+    const res = await httpGet(server.httpServer.address().port, '/api/config/wakeword');
+    await server.stop();
+    assert.equal(res.body.modelsPresent, false,
+      'packaged + no userData weights = honestly unavailable; WAKEWORD_ENABLED stays false and the renderer never loads wakeword.js');
+  } finally {
+    if (hadPkg === undefined) delete process.env.MYTHOS_PACKAGED; else process.env.MYTHOS_PACKAGED = hadPkg;
+    if (hadDir === undefined) delete process.env.MYTHOS_MODELS_DIR; else process.env.MYTHOS_MODELS_DIR = hadDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // And the signal's source: electron/main.js must inject it, or the packaged
+  // child never learns it is packaged (app.isPackaged is main-process-only).
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'main.js'), 'utf8');
+  assert.match(mainSrc, /MYTHOS_PACKAGED: app\.isPackaged \? '1' : ''/,
+    'startChild() must inject the packaged signal into the server child env');
+});
+
 describe('scripts/setup-wakeword.js resolveAssetUrls (pure, no network)', () => {
   const { resolveAssetUrls, REQUIRED_ASSETS } = require('../scripts/setup-wakeword');
 
