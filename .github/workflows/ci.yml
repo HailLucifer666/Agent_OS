@@ -7,9 +7,20 @@ jobs:
     runs-on: windows-latest
     defaults: { run: { working-directory: mythos } }
     steps:
+      # Full history, not the default shallow clone: test/build-release-notes
+      # runs collectCommitLog() against this repo's REAL git history, and a
+      # fetch-depth:1 checkout makes those tests fail on CI while passing on
+      # every dev machine (found 2026-08-16 via the annotation channel).
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      # Root deps too, not just mythos/: test/electron-builder-files-allowlist
+      # requires app-builder-lib, a ROOT devDependency (electron-builder) —
+      # with only mythos/node_modules present every build.files test fails on
+      # CI and passes locally (same e2e-job precedent: root first).
+      - run: npm ci
+        working-directory: .
       - run: npm ci
       - name: Run test suite + verify test-count docs are in sync (baseline 0 known failures)
         shell: pwsh
