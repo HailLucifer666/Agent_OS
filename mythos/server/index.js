@@ -25,6 +25,9 @@ const { buildBriefingFacts } = require('../src/core/conversation/briefing');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
+// A2: reuse credential-scanner's curated pattern list (single source of truth)
+// to scrub secret-shaped values out of the client-bound log copy.
+const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/credential-scanner');
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
@@ -120,6 +123,51 @@ function recallWithTimeout(promise, ms) {
       if (t.unref) t.unref();
     }),
   ]);
+}
+
+// A2 — logger redaction at the WS relay choke point. The onLog relay below is
+// the ONE seam feeding both broadcastAll({type:'log'}) and pushReplay('log'),
+// so scrubbing here covers every live client AND the replay buffer in a single
+// place. stdout/container logging is untouched: logger.js writes its own line
+// to stdout before notifying listeners, and redactLogEntry returns a NEW object
+// (never mutates the entry), so the operator still sees the full record.
+//
+// Key-name list duplicated from src/core/memory/audit-writer.js's REDACT_KEYS
+// (closure-scoped there, not exported; hoisting it would be a refactor the task
+// brief explicitly discourages). Keep the two lists in sync. Value patterns are
+// NOT duplicated — they reuse credential-scanner's exported _PATTERNS so there
+// is one source of truth. Over-matching (e.g. a benign 'token' substring) is
+// acceptable: redaction errs safe.
+const LOG_REDACT_KEYS = ['apiKey', 'api_key', 'token', 'authorization', 'password', 'secret', 'cookie', 'credential', 'session'];
+
+function redactLogValue(str) {
+  for (let i = 0; i < LOG_SECRET_PATTERNS.length; i++) {
+    const re = LOG_SECRET_PATTERNS[i].re;
+    re.lastIndex = 0; // patterns carry the global flag; reset before each use
+    str = str.replace(re, '[REDACTED]');
+  }
+  return str;
+}
+
+// Recursive copy-and-redact. Bounded by credential-scanner's depth cap (5) so a
+// pathological/circular object cannot stall the hot log path.
+function redactLogEntry(obj, depth) {
+  depth = depth || 0;
+  if (depth > 5) return obj;
+  if (typeof obj === 'string') return redactLogValue(obj);
+  if (Array.isArray(obj)) return obj.map((item) => redactLogEntry(item, depth + 1));
+  if (!obj || typeof obj !== 'object') return obj;
+  const copy = {};
+  const keys = Object.keys(obj);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (LOG_REDACT_KEYS.some((r) => k.toLowerCase().includes(r.toLowerCase()))) {
+      copy[k] = '[REDACTED]';
+    } else {
+      copy[k] = redactLogEntry(obj[k], depth + 1);
+    }
+  }
+  return copy;
 }
 
 function createServer(deps) {
@@ -4187,8 +4235,13 @@ function createServer(deps) {
   // log — NOT a bus event; a logger hook (see logger.js onLog(fn) diff).
   if (typeof logger.onLog === 'function') {
     logger.onLog((line) => {
-      pushReplay('log', line);
-      broadcastAll({ type: 'log', payload: line });
+      // A2: scrub the client-bound copy BEFORE both the replay buffer and the
+      // live broadcast. redactLogEntry returns a new object — the original
+      // entry is left untouched (stdout already got it unredacted, and any
+      // other listener must see the same object logger.js emitted).
+      const safe = redactLogEntry(line);
+      pushReplay('log', safe);
+      broadcastAll({ type: 'log', payload: safe });
     });
   }
 

@@ -18,6 +18,12 @@ var PATTERNS = [
   { name: 'connection-string', re: /(?:mongodb|postgresql|postgres|mysql|redis):\/\/[^:\s]+:[^@\s]+@[^\s]+/gi },
   { name: 'api-key-generic', re: /(?:api[_-]?key|secret|token|password|passwd|pwd)["'\s:=]+["']([A-Za-z0-9\-_]{20,})["']/gi },
   { name: 'bearer-token', re: /Bearer\s+[A-Za-z0-9\-_\.]{20,}/g },
+  // A2 (logger redaction): provider key prefixes that were missing from the
+  // original list. Additive — also strengthens the leash scanner that reuses
+  // these same patterns via scan().
+  { name: 'openai-key', re: /sk-[A-Za-z0-9\-_]{20,}/g },
+  { name: 'groq-key', re: /gsk_[A-Za-z0-9\-_]{20,}/g },
+  { name: 'nvidia-key', re: /nvapi-[A-Za-z0-9\-_]{20,}/g },
 ];
 
 function redact(value) {
