@@ -12,6 +12,56 @@
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-08-17 (latest) — step 8 planned and tracked. NO CODE WRITTEN. Position unchanged.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). Next action
+UNCHANGED.** This session was planning only. The operator asked for three
+upstream repos to be wired into MYTHOS end-to-end —
+`PrimeIntellect-ai/prime-agent`, `addyosmani/agent-skills`,
+`TencentCloud/TencentDB-Agent-Memory` — and then set the sequence explicitly:
+**write the plan now, build it only after 6.5, 6.6 and 7 close.** The whole
+design therefore landed in this file as **Step 8**, with nothing implemented.
+(One `loader.js` edit was started before that instruction arrived and was
+reverted; `git status` confirmed clean.)
+
+**What step 8 contains:** four lanes — 8A skills truth + curated vendoring, 8B
+the Continual Harness, 8C memory budget + Live depth, 8D budgets + quality
+gates — each with its architecture, a wiring table naming every writer and every
+reader, real code snippets, and six new anti-drift invariants **AD-11…AD-16**
+(mirrored into the V2 spine §1 table). Two operator decisions are recorded there
+and should not be relitigated: prime-agent and TencentDB are **patterns-only,
+never dependencies** — prime-agent installs by `curl | sh` (forbidden by the root
+`CLAUDE.md`, where Hermes is the single deliberate exception) and TencentDB needs
+a 3-service Docker stack that breaks portability and the sold-installer story.
+Only addyosmani's skills get vendored, six of them, by the process
+`mythos/skills/README.md` already documents. Infrastructure delta: zero — no
+dependency, service, port or container.
+
+**The research finding worth keeping:** MYTHOS already has most of what those
+repos are known for. `skills/loader.js` is multi-root resolution with progressive
+disclosure (prime-agent's own shape); `memory/index.js:243 recallHybrid()`
+already fuses keyword and vector ranking by RRF (TencentDB's headline retrieval
+design); and `Identity/operator-profile.txt` is already TencentDB's "L3 persona",
+reaching every surface through `persona()`. Step 8 is gap-closing, not importing
+— which is why 8C.3 (L2 scenario blocks) is marked provisional and gated behind
+8C.2 proving insufficient.
+
+**Two live bugs were reproduced while planning and are deliberately NOT fixed**
+(they are lane 8A's first two items; fixing them now would jump the operator's
+sequence). **BUG-266** — six skill names are hardcoded into prompt text
+(`voice-agent.js:275`/`:93`, `from-skills.js:37`) that are PHANTOM on any fresh
+clone, proven by running the real loader with `USERPROFILE`/`HOME` pointed at a
+non-existent directory; `ui-ux-pro-max` is phantom even on this machine, because
+it is vendored essence-only and `loadContent()` reads `SKILL.md` exclusively.
+**BUG-267** — `buildLiveSystemInstruction()` injects a 43-skill catalogue whose
+header tells the model to "call use_skill", while `use_skill` sits in
+`VOICE_ALLOWLIST_EXEMPT` and Live declares only `DEFAULT_ALLOWLIST` — so the
+primary spoken surface is told to call a tool it was never given. Both are cheap.
+Neither is urgent enough to reorder the build.
+
+**Next action — unchanged by this session:** whatever the block below names.
+Step 8 waits for 6.5 / 6.6 / 7.
+
 ### 2026-08-17 — the nine open coding defects (fix-plan waves 1–3), all shipped
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The
@@ -483,6 +533,15 @@ installed copy are not the same test.
 
 **Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (3 decisions answered + licences verified; wake-word path LOCKED — train own model, separate workstream) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ **(all 6 slices now shipped IN CODE as of 2026-08-04 — Slice 5 cursor overlay `3050889`, Slice 6 OSS hygiene + the directory-scoped `CLAUDE.md` split. What keeps step 7 unticked is live verification, not missing code: Slices 1, 2, 3 and 5 are unit-green only and need the operator at an Electron desktop. Slice 4 is the sole slice verified against a real artifact.)** Earlier state for the record: (**Slices 1-4 of 6 shipped in code**: `5f6108d` foundation, globalShortcut, desktopCapturer, and — 2026-08-04 — the electron-builder installer, which honours Decision 1 and is the first slice verified against a real artifact rather than only unit-green: a real `MYTHOS Setup 0.1.0.exe` with the licence exclusions confirmed by walking `dist/win-unpacked`. Slices 1-3 remain NOT live-verified — all three need the operator at an Electron desktop. Next: Slice 5, the cursor overlay, then Slice 6, OSS hygiene)
 
+**· 8 ☐ (planned 2026-08-17, TRACKED NOT STARTED — "Step 8 — Upstream synthesis:
+prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory", below. Four
+lanes 8A-8D, full design + code snippets + AD-11…AD-16 written out so the build
+is an execution pass, not an investigation. Operator set the sequence explicitly:
+**step 8 does not start until 6.5, 6.6 and 7 are ticked.** It carries two live,
+already-reproduced bugs — BUG-266 phantom skill names on a fresh clone, BUG-267
+the Live prompt naming a tool Live was never given — which are cheap and are
+lane 8A's first two items.)**
+
 Ignore the older "Wave 0/1/1.5/2/3/4" numbering where it conflicts — the merged order table is authoritative.
 
 ### How to keep this file honest
@@ -553,6 +612,7 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 | 2026-08-15 (late) | **No merged-order step advanced — a live-session performance investigation, and the silent defect it turned up on the way.** The operator reported the spoken path felt slower and sometimes did not reply at all. Measured from the real session log rather than theorised. **(1) BUG-254, and it is the one that matters: the operator's authored persona had NEVER reached the model, on this machine or any other with a Windows-edited `self.md`.** `extractSection()` required a literal `\n` after each `## header`; the operator's `self.md` is CRLF, so `Purpose`/`Persona`/`Values`/`Origin` all returned `null` and `persona()` composed "You are MYTHOS. Helpfulness, honesty, efficiency." while a full JARVIS brief sat on disk. Nothing surfaced it because a parse miss and an unwritten section both return `null` and both get a plausible default — the same shape as the gitignored-personas miss. `topLearnedPrefs()` had the identical bug and LOOKED healthy only because `learn()` prepends a second, LF-written copy of that header further down the file. Verified against the real vault: four sections, all `null` before, all real content after. **(2) BUG-255 — `think_deeply` was 10 of ~34 tool calls in one conversation.** The tool is innocent on timings (471-1081ms, 10/10 ok, no 429s); the cost is that **every tool call is two inference passes**, so turn 32 spent 19 of its 20 seconds AFTER the tool had answered, and tripped the 10s `live.turn-stalled` detector — which is precisely the "doesn't reply" the operator heard. Its description named the failure modes but framed calling as normal ("planning an approach, checking whether an argument holds" covers most of a conversation). Rewritten so the default is answering, the cost is stated in weighable terms, and the trigger is an applicable self-check (would you otherwise guess?). **(3) BUG-256** — the facts cap kept 26 of the operator's 37 durable facts; raised 4000→8000, because a fact the model cannot see is a `recall_memory` round-trip, and the frame is composed once per session while the round-trip is paid per turn. **(4) BUG-257** — 151 anonymous `sensors.aether.socket_error` lines in 12 minutes; the handler now logs `url` and `code`, and the operator's local `.env` turns the sensor off since the BLE bridge is not running. Explicitly NOT claimed as the latency cause — it is fixed so it stops burying the next investigation. Suite 4687→**4700, 0 fail, 0 skip**. | (this commit) | **Partly, and the split matters.** BUG-254 is verified against the operator's REAL `self.md` (all four sections null before, real content after) — the strongest evidence in this row. BUG-257's diagnosis is from the real session log. BUG-255 and BUG-256 are unit-green and reasoned from measured call counts, but their effect is behavioural: only the NEXT session's `live.tool-call-batch` count answers whether the restraint wording works, and whether it swung too far. That is the single live check outstanding. |
 | 2026-08-16 | **No merged-order step advanced (6.5 ☐ · 6.6 ☐ · 7 ☐ unchanged) — a full gap-analysis pass over plans vs code vs repo state, and the CI-red it surfaced.** **(1) BUG-258: the `ci` workflow's test job had been failing on EVERY push since 2026-08-13** (runs 164-173; e2e green throughout) while the operator's local pre-commit hook ran green — `test/immune.test.js`'s build-engine-reprobe test did a "genuine live re-probe" against whatever `hermes` resolution the surrounding machine offered (PATH / exported `HERMES_CLI` / running gateway), true on the operator's shell, `spawn hermes ENOENT` on CI and any fresh clone. Tests do not load `mythos/.env`; only `src/main.js` does. Fixed by pinning `HERMES_CLI` to `process.execPath` for the test (real adapter probe, real child spawn, exit-code→ONLINE — only the target binary is made portable; save/restore per the `hermes-adapter.test.js` convention). Nobody noticed the red badge; `gh` is not even installed locally. **(2) Hygiene:** `.freebuff/` (23MB third-party tool state incl. a personal-data SQLite DB and a full nested repo copy) and `mythos/.graph-data.json` (regenerable graphify output) gitignored; `mythos/Plans/ADOPTION-MATRIX.md` (6 days untracked) and `MYTHOS-EXPLAINER.html` adopted into git; 0-byte stray `MYTHOS-Post-Parity-Plan` (no extension) deleted. **(3) Doc-truth:** MYTHOS-ARCHITECTURE.md's four phantom paths (`brain/interpret.js`, `effectors/index.js`, `memory/store.js`, `mythos/server.js`) corrected and its `F:/Projects` example genericised (the last AD-7 portability violation, doc-side); stale tool-count comments unpinned ("45"/"107"/"171" — real figure via `sync-test-count.js`, measured 146); seam count corrected 23→21 in BOTH plan documents with a dated note at spine §4 (the table never had 23 rows); ROADMAP **D-05 ticked** (B3 evidence re-verified against `schema.js:9-22` before ticking; MAJOR backlog 10→9); spine §18.4's superseded "blocks 7"/Piper-swap wording annotated in place (frozen table kept, supersession note added); `mythos/docs/DRIFT-LOG.md` created per the spine's own AD drift-log contract, seeded with this pass's corrections. Suite **4718 / 4716 pass / 0 fail / 2 skip**, docs-sync OK. | this commit | **Yes for BUG-258** — reproduced in isolation with the exact ENOENT diagnostic before the fix, 54/54 after, full suite green, `sync-test-count --check` OK. Doc changes verified against the code they describe (schema.js, the spine's own table row count, effectors count from sync-test-count). CI itself will confirm on push — the one thing a local run cannot. |
 | 2026-08-16 (second wave) | **No merged-order step advanced — BUG-258's fix was pushed and CI STAYED RED, which forced the deeper reproduction and found the second, independent cause.** With the immune test fixed, CI's failure signature became readable: `fail 0` — so the pwsh fail-gate PASSED — and the `sync-test-count.js --check` gate failed on the number mismatch instead. A local reproduction in CI's exact conditions (Node 22.23.2, `env -i` clean environment, `TZ=UTC`, no discoverable browser; local Node 24 runs were green throughout) reproduced it exactly: `fail 0 / cancelled 64 / pass 4652`. **BUG-259, root cause:** three one-shot timers were `unref()`'d whose only job is to settle a promise someone awaits — `briefing.js`'s `withTimeout()`, `from-pc.js`'s `delegateWithRetry` backoff, `electron/child-exit.js`'s SIGKILL deadline (where the unref defeated the function's own "never waits forever: escalates and resolves anyway" contract). In a quiet process — precisely the Node 22 test-runner child with an otherwise-empty event loop — an unref'd timer never fires; the awaited race never settles; the runner kills the pending test ("Promise resolution is still pending but the event loop has already resolved") and its siblings cascade `cancelledByParent` (64 via briefing, 18 more via the from-pc/child-exit families after the first fix). All three timers are ref'd again — an unref'd timeout is a timeout that never fires in the process that most needs it. One more env-dependence fixed alongside, different shape: `browser_launch_debug()` ran browser discovery BEFORE `BROWSER_EXTENSIONS` validation, so on a browser-less machine (fresh contributor, stripped runner) the loud config error was masked by "No supported browser found" and `test/bug-115`'s loud-failure test failed there; validation now runs first, machine-independent. **Step 6.6 first audit pass recorded** in THIRD_PARTY_NOTICES.md (Hermes MIT re-verified live; MediaPipe gesture weights re-confirmed UNVERIFIED with both canonical docs URLs now 404; Google/Groq/Mistral/Cerebras/OpenRouter ToS quoted verbatim with sources+dates; NVIDIA NIM named as the remaining gap). 6.6 stays ☐. **Final verification: 4718 / 4716 pass / 0 fail / 0 cancelled / 2 skip in CI's exact conditions — matching the committed numbers both CI gates check.** | this commit | BUG-259 reproduced under Node 22.23.2 before each fix (64 then 18 cancellations), zero after; the five affected test files pass 46/46 browser-less under Node 22; the full CI-faithful run matches the committed counts exactly. **CI CONFIRMED GREEN — run 181, `f16c0fd`, 2026-08-17, the first since 2026-08-13** — after four more environment layers surfaced by the new annotation channel and fixed in `22c9dc4` (root deps + full clone), `b9969bd` (machine-independent count gate + honest fixture-skips), `39c13b0` (SPA-fallback wakeword subtest), `f16c0fd` (monotonic `updatedAt` race). |
+| 2026-08-17 (planning only) | **No merged-order step advanced, NO CODE WRITTEN — merged-order step 8 designed and tracked.** The operator asked for three upstream repos wired into MYTHOS end-to-end (`PrimeIntellect-ai/prime-agent`, `addyosmani/agent-skills`, `TencentCloud/TencentDB-Agent-Memory`) and then set the sequence explicitly: plan now, build only after 6.5/6.6/7. The full design landed in this file as **Step 8** — four lanes (8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates), each with architecture, a wiring table naming every writer and reader, code snippets, and six new invariants **AD-11…AD-16** mirrored into the V2 spine §1. Two operator decisions recorded so they are not relitigated: prime-agent and TencentDB are **patterns-only, never dependencies** (prime-agent installs by `curl \| sh`, forbidden by the root `CLAUDE.md`; TencentDB needs a 3-service Docker stack that breaks portability and the sold-installer story). Infrastructure delta zero. **Research finding that reframed the scope:** MYTHOS already has most of what those repos are known for — `skills/loader.js` is multi-root resolution with progressive disclosure, `memory/index.js:243 recallHybrid()` already does keyword+vector RRF (TencentDB's headline design), and `Identity/operator-profile.txt` is already its "L3 persona" reaching every surface via `persona()`; hence 8C.3 is provisional and gated behind 8C.2 proving insufficient. **Two live bugs reproduced and deliberately left unfixed** (they are 8A's first two items; fixing them now would jump the operator's sequence): **BUG-266** — six skill names hardcoded into prompt text (`voice-agent.js:275`/`:93`, `from-skills.js:37`) are PHANTOM on any fresh clone, proven by running the real loader with `USERPROFILE`/`HOME` pointed at a non-existent directory, and `ui-ux-pro-max` is phantom even here because it is vendored essence-only while `loadContent()` reads `SKILL.md` exclusively; **BUG-267** — `buildLiveSystemInstruction()` injects a 43-skill catalogue whose header says "call use_skill" while `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT` and Live declares only `DEFAULT_ALLOWLIST`, so the primary spoken surface is told to call a tool it was never given. One `loader.js` edit was begun before the plan-only instruction arrived and was reverted; `git status` confirmed clean before this commit. | this commit | n/a (docs) — **nothing in step 8 is implemented, so nothing is verifiable yet.** The two bugs above ARE verified as real: reproduced against the live loader in the fresh-clone environment shape, output recorded verbatim in the Step 8 section. |
 | 2026-08-17 | **No merged-order step advanced (6.5 ☐ · 6.6 ☐ · 7 ☐ unchanged) — the operator-approved fix plan for the NINE open coding defects, executed in three waves, one commit per verified fix, each pushed immediately.** **Wave 1:** BUG-225's quit seam fixed at all four structural defects (re-fork race: `window-all-closed` sets `isQuitting` before `stopChild` non-darwin + `startChild` refuses once quitting; secondary windows: the main window's `closed` handler now releases media window + overlay so `window-all-closed` can fire; kill ladder: `stopChild` returns `awaitChildExit`'s SIGKILL-at-3s escalation; backstop: a ref'd 10s quit watchdog tree-killing via `taskkill /T /F` then `app.exit(0)` — armed BEFORE the blocking vault push) — with the trap the fix forced: an explicit `installerHandover` flag now feeds `before-quit`'s push-skip, since pre-setting `isQuitting` in `window-all-closed` would have skipped the vault push on every ordinary quit. Packaged builds no longer arm wake-word models from the install tree (`MYTHOS_PACKAGED=1` injected; `modelSearchDirs` drops the install tree there — userData-or-nothing, dev keeps the search). **Wave 2:** BUG-260 (`sensors/job.js` emitted the artifact OBJECT, the announcer spoke "[object Object]" — now the PATH string, announcer accepts both shapes); BUG-261 (open_folder's single 700ms coin-flip oracle → 4×400ms bounded poll, exact-then-contains title match, distinct pc-child-offline vs no-window reasons); `TOOL_ACK_DEADLINE_MS` operator-tunable (schema key default 1500 UNCHANGED, seam fed, `.env.example` names `live.tool-ack-deadline` counts as the evidence source). **Wave 3:** BUG-262 (distillation's two dead gates: idle count excludes `kind:'timer'` heartbeats — also revives `mull()`, the Phase-4-broken routing — and the active-branch consolidate hoisted above the goalless early-return; every skip now emits `memory.consolidate-skip` with a reason); BUG-263 (the fields-absent WebView2 caret false-refusal: split on the landed title — real app names still hard-fail with the 2026-07-31/Antigravity guards intact and pinned, the "Chrome Legacy Window" artifact shape returns honest-unverified BEFORE the read-back oracle); BUG-264 (`open_web browser:true` — the explicit in-tool route through the existing newtab mechanism; default unchanged, pinned); BUG-265 (the duplicate-identify anomaly damped to one per nodeId per 60s with `suppressedCount`; root cause honestly recorded as Aether-side). BUG-253's table rows for the whatsapp, open_folder, open_web and duplicate-storm incidents closed; the 2026-08-15 RCA's wakeword and ack-deadline bullets closed. Suite **4760 / 4758 pass / 0 fail / 2 skip**, counts synced per commit. A second session (freebuff worktree) landed `42f370d` mid-plan — stacked cleanly. | `1eda5a8`, `36ba820`, `196911d`, `f61f205`, `2c4bc08`, `0ed3108`, `bd64180`, `b7e16fa`, `1b96d52` | **Unit/source-shape green only — nothing here is live-verified yet, and four cheap operator sittings are named in RESUME HERE:** one X-close sitting (BUG-225: MYTHOS.exe exits ≤10s, double-click relaunches), one packaged-install check (wakeword honest-unavailable), one voice session then grep `memory.consolidate-skip` (BUG-262 — also covers the 08-15 persona/facts checks), and the Aether-side storm diagnosis. Two hook retries were load flakes from the concurrent session's suite runs, not regressions — both re-verified green in isolation before commit. |
 
 ---
@@ -593,6 +653,7 @@ Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract
 | **6.5** | **Licensing gate: TTS=BYO (no swap needed), wake-word model TBD — blocks SHIPPING, see below** | §18.3.3 |
 | **6.6** | **Wider third-party licence audit (Hermes, cua-driver, MediaPipe assets, provider ToS for resale) — split from 6.5 by Decision 3** | new |
 | 7 | Electron shell + installer + overlay; Android app planned only — buildable now (blocks release, not building); installer MUST honour Decision 1 (never bundle the LGPL edge-tts package) | §13 |
+| **8** | **Upstream synthesis (prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory): 8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates. Tracked, NOT started — starts only after 6.5/6.6/7** | new (AD-11…AD-16) |
 
 ### Step 6.5 — the licensing gate, with 2026-07-30's findings folded in
 
@@ -731,6 +792,844 @@ confident legal conclusion into this file.
 Two further notes carried from V2 §18.2. Decision 1 (cancelling the speculative sentence-chunk TTS parser) is correct and **stronger than this document states** — sentence-chunked TTS streaming already exists as `splitSentences` in `server/index.js` and `src/core/effectors/voice.js`, with `test/sentence-streamer.test.js` and `test/split-sentences.test.js`; the cancelled work was redundant twice over. And V2 §7.12 wants **real Windows Scheduled Tasks** for alarms so they survive a MYTHOS restart, which is more than Task 5's in-process timer delivers — reconcile when building Task 5, and note V2 §7.8 tiers `clipboard_write` at T2 against Task 3's T1.
 
 One standing constraint: `/council` cannot convene — `~/.claude/agents/` holds 39 agents and zero `council-*.md`. Report that; never synthesize a verdict. Use the real installed reviewers (`code-reviewer`, `security-reviewer`, `silent-failure-hunter`, `debugger`).
+
+---
+
+## Step 8 — Upstream synthesis: prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory
+
+> **STATUS: TRACKED, NOT STARTED. Planned 2026-08-17, zero code written.**
+> **Do not start step 8 until 6.5, 6.6 and 7 are ticked.** The operator set this
+> sequence explicitly. This section exists so that when those close, the build is
+> a fast execution pass against a finished design rather than a fresh
+> investigation — the research below is done and the two bugs are already
+> reproduced.
+
+The operator asked for the best of three upstream repos wired into MYTHOS
+end-to-end. Two operator decisions were taken during planning and both are
+**patterns-only**, recorded here so a later session does not relitigate them:
+
+| Repo | Licence | What it actually is | Decision (operator, 2026-08-17) |
+|---|---|---|---|
+| `PrimeIntellect-ai/prime-agent` | MIT | A complete competing agent CLI (TypeScript + persistent IPython kernel), installed by `curl \| sh` | **Patterns only** |
+| `addyosmani/agent-skills` | MIT | 24 `SKILL.md` documents + 4 personas + 7 reference checklists | **Vendor a curated subset** (5 already vendored) |
+| `TencentCloud/TencentDB-Agent-Memory` | MIT | 3-service Docker stack (memory-core + web hub + proxy) + a team/ACL model | **Patterns only** |
+
+Two of the three cannot become dependencies without breaking rules already in the
+root `CLAUDE.md`: prime-agent's installer is `curl -fsSL … | sh` (forbidden
+outright, and Hermes-Agent is the single deliberate external-engine exception),
+and TencentDB-Agent-Memory needs Docker plus its own LLM keys, which breaks
+open-source portability and puts a second source of truth beside the vault.
+
+**The finding that reframes the work: MYTHOS already has most of what these repos
+are known for.** `src/core/skills/loader.js` is multi-root skill resolution with
+progressive disclosure — prime-agent's own shape. `memory/index.js:243`
+`recallHybrid()` already fuses keyword and vector ranking with reciprocal-rank
+fusion, which is TencentDB's headline retrieval design. `Identity/operator-profile.txt`
+— written whole by `identity/reflection.js`, folded into `persona()` — is already
+TencentDB's "L3 long-term persona" and it reaches every surface. So step 8 is
+gap-closing, not importing.
+
+### The two bugs found while planning (reproduced, not theorised)
+
+Both are **live today** and both are cheap. They are the reason lane 8A is first.
+
+**BUG-266 — the prompts name skills that do not exist on a fresh clone.**
+Reproduced by running the real loader with `USERPROFILE`/`HOME` pointed at a
+non-existent directory (i.e. any machine without the operator's `~/.claude/skills`):
+
+```
+resolved: 43
+missing OPTIONAL: ["ui-ux-pro-max","frontend-patterns","frontend-ui-engineering",
+                   "design-system","deep-research","spec-driven-development",
+                   "planning-and-task-breakdown","tdd-workflow","code-review"]
+prompt-named ui-ux-pro-max            -> PHANTOM
+prompt-named frontend-ui-engineering  -> PHANTOM
+prompt-named spec-driven-development  -> PHANTOM
+prompt-named tdd-workflow             -> PHANTOM
+prompt-named deep-research            -> PHANTOM
+prompt-named code-review              -> PHANTOM
+```
+
+Six of those are hardcoded by name into prompt text the model reads every turn —
+`voice/voice-agent.js:275` (the SKILLS RULE paragraph), `voice/voice-agent.js:93`
+and `effectors/from-skills.js:37`. They resolve on the authoring machine from the
+host CLI's skill directory, so the defect is **invisible here and fires on every
+fresh clone**. It is the shape already recorded in this repo's history as
+*withheld read tools get substituted*: the model does not report the miss, it
+picks the nearest thing and narrates it.
+
+`ui-ux-pro-max` is phantom **on this machine too**: `mythos/skills/ui-ux-pro-max/`
+holds `LICENSE` + `SKILL-CORE.md` only, and `loadContent()` reads `SKILL.md`
+exclusively — so `use_skill('ui-ux-pro-max')` answers "not found" for a skill that
+is vendored and is driving every UI build through `loadEssence()`. The loader
+disagrees with itself about whether a skill exists.
+
+**BUG-267 — the Live/spoken path is told to call a tool it was never given.**
+`buildLiveSystemInstruction()` injects `skillsLoader.catalogBlock()`, whose header
+reads *"SKILLS AVAILABLE … call use_skill with the name to load full guidance"*
+(`loader.js:392`). But `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT`
+(`voice/live-tools.js:252`, rationale "internal/debugging surface") and Live's
+`functionDeclarations` are built from `DEFAULT_ALLOWLIST` only
+(`server/index.js`, the `buildFunctionDeclarations` call). So the **primary
+spoken surface** receives a catalogue of 43 skills plus an instruction to call a
+function it does not have. Same substitution failure mode, on the surface the
+operator actually uses.
+
+*(Line numbers above were correct at `81cf4d5`. `server/index.js` moves often —
+re-grep for `function buildLiveSystemInstruction` and `'use_skill'` before
+editing, per the concurrent-session rule.)*
+
+### Anti-Drift Contract — AD-11 … AD-16
+
+AD-1 … AD-10 (V2 spine §1) apply unchanged and are not restated. Step 8 introduces
+state that is **read by the model and editable by the model**, which AD-1…10 does
+not cover. These six extend it. **They are additions to the spine's §1 table and
+are mirrored there** — if the two ever disagree, the spine wins (precedence rule).
+
+| ID | Invariant | Enforcement |
+|---|---|---|
+| **AD-11** | **Additive overlay only.** The harness overlay is *appended* to a composed prompt. It can never replace, reorder or edit `RULES`, `persona()`, or the capability digest. | `test/anti-drift-harness-additive.test.js`: compose the Live instruction with and without a non-empty overlay; assert the `RULES` and persona substrings are byte-identical in both, and that the overlay appears only as a suffix segment. |
+| **AD-12** | **No unevidenced refinement.** `harness.refine()`/`propose()` refuses any refinement whose `evidence[]` is empty or names episodic/lesson/skill ids that do not resolve in the vault. Refusal emits `health.anomaly` `harness-refine-unevidenced`. | `test/harness-refine-evidence.test.js`: submit `evidence: []`, then a fabricated `ep-…` ref; assert both rejected, overlay unchanged on disk, anomaly emitted. |
+| **AD-13** | **One composer, one path literal.** `Harness/overlay.md` is read and written in exactly one module. No second reader may re-implement composition. | `test/anti-drift-harness-single-composer.test.js`: read every file under `src/` + `server/`; assert the literal `Harness/overlay` appears only in `src/core/harness/index.js`. Mirrors AD-1's `effectors.invoke(` sweep. |
+| **AD-14** | **Every prompt-injected memory block is budgeted and states what it dropped.** No block may silently truncate; the omitted count appears in the emitted text. | `test/memory-budget.test.js`: 200 items against a 500-char cap; assert output ≤ cap and the trailing `[N older entries omitted…]` marker present with N correct. |
+| **AD-15** | **A limit is not a success.** A run ending by exhausting a turn/token/wall budget reports `status:'budget-exhausted:<dimension>'`, never `COMPLETED`; a passed gate is credited only with what that gate checked. | `test/agent-budget-gates.test.js`: exhaust each dimension; assert the engagement lands `BLOCKED` with the named reason and never `COMPLETED`. |
+| **AD-16** | **Nothing the model reads is invisible to the operator.** Any model-editable prompt state is readable through a HUD route and included in the vault export. | `test/harness-route.test.js`: `GET /api/harness` returns the current overlay text, the snapshot list and the refinement ledger. |
+
+Two of these exist because of scars already in this repo. AD-13 is the `Harness/`
+restatement of *a loader pointed at one root fails silently forever*. AD-16 exists
+because **a loader that cannot find anything returns exactly what a loader with
+nothing to find returns** — an invisible overlay would be that same trap wearing a
+new filename.
+
+### Architecture and infrastructure
+
+**Infrastructure delta: none.** No new npm dependency, no service, no port, no
+Docker image, no model download. All new state is files under the existing vault
+root reached through the existing `createFsStore` surface, so `MYTHOS_VAULT_ROOT`,
+the Electron userData vault, atomic writes, archiving and pruning keep working
+unmodified. This is deliberate: TencentDB's Hub and prime-agent's daemon are
+precisely the parts that cannot ship inside an installer the operator sells
+(step 6.5/6.6 territory).
+
+```
+                    ┌──────────────────── vault/ ────────────────────┐
+                    │ Episodic/  Semantic/  Lessons/  Skills/         │  existing
+                    │ Identity/{self.md, operator-profile.txt}        │  existing
+                    │ Harness/{overlay.md, snapshots/, refinements.jsonl}  NEW (8B)
+                    │ Semantic/scenarios/<slug>.md                    │  NEW (8C.3, provisional)
+                    └────────────────────────────────────────────────┘
+                                       │ createFsStore (unchanged seam)
+        ┌──────────────────────────────┼───────────────────────────────┐
+        │                              │                               │
+  memory/index.js               harness/index.js  NEW           skills/loader.js
+  (episodic, semantic,          overlayBlock() / propose()      (unchanged roots,
+   lessons, recallHybrid)       / apply() / rollback()           + SKILL-CORE fallback)
+        │                              │                               │
+        └──────────► memory/budget.js NEW (AD-14) ◄────────────────────┘
+                                       │
+             ┌─────────────────────────┴──────────────────────────┐
+             │                                                    │
+   server/index.js                                       voice/voice-agent.js
+   buildLiveSystemInstruction()                          per-turn prompt composer
+   (spoken / Live, session-start labelled)               (typed / batch, fresh)
+             │                                                    │
+             └──────────► identical block content, one composer ───┘
+                                       │
+                             live-session.js buildSetup()
+                                       │
+                      Gemini Live  ◄───┴───►  functionDeclarations
+                                              (DEFAULT_ALLOWLIST + use_skill, 8A.3)
+
+  Execution side (8D):
+   agent/budget.js NEW ──► engagements/executor.js (repair budget, verify sweep)
+   agent/gates.js  NEW ──► gate commands run through the EXISTING run_command
+                           effector (allowlist + metachar reject + cwd pin +
+                           env scrub + leash + treeKill) — never a new spawn path
+```
+
+**New config keys — all optional, all defaulted** (`config/schema.js`, plus an
+`.env.example` line each; no key means the default, never a silent disable):
+
+| Key | Default | Purpose |
+|---|---|---|
+| `HARNESS_ENABLED` | `true` | Master switch for 8B. `false` → `overlayBlock()` returns `''`. |
+| `HARNESS_MAX_CHARS` | `4000` | Overlay budget cap (AD-14). |
+| `LIVE_EPISODIC_MAX_CHARS` | `3000` | Cap for the new Live episodic block (8C.2). |
+| `LIVE_LESSONS_MAX` | `5` | Item cap for the new Live lessons block (8C.2). |
+| `AGENT_MAX_WALL_MS` | `1800000` | 8D wall-clock budget; matches today's `buildTimeoutMs()`. |
+
+---
+
+### Step 8A — Skills truth + curated vendoring (addyosmani/agent-skills)
+
+- [ ] **8A.1 — Stop hardcoding skill names in prompts (BUG-266a).**
+
+  **Attach first — what reads what.** Three prompt sites hardcode example names;
+  one catalogue function is the single honest source of what actually resolved.
+
+  | Site | Today | Consumers |
+  |---|---|---|
+  | `skills/loader.js:389 catalogBlock()` | emits only skills that **resolved** | `server/index.js` (Live), `voice-agent.js` (batch), `identity/capabilities.js:162` |
+  | `voice/voice-agent.js:275` SKILLS RULE | names 5 skills verbatim | the batch/typed prompt |
+  | `voice/voice-agent.js:93` `use_skill` decl | names 3 verbatim | batch tool declarations |
+  | `effectors/from-skills.js:37` tool description | names 3 verbatim | every surface declaring `use_skill`, incl. Live after 8A.3 |
+
+  Derive the examples from the same resolved catalogue the block already uses, so
+  a name can never appear in prose without existing on disk:
+
+  ```js
+  // skills/loader.js — add next to catalogBlock()
+
+  // Example names for prompt prose. Derived from the RESOLVED catalog, never
+  // hand-typed: BUG-266 was five skill names written into RULES that resolve on
+  // the author's machine (~/.claude/skills) and are PHANTOM on a fresh clone, so
+  // the model was instructed every turn to call use_skill on something that
+  // answers "not found". A hardcoded example name is a claim about another
+  // machine's disk. `prefer` is a wish list, not a guarantee — anything in it
+  // that did not resolve is dropped and the catalog head fills the remainder.
+  function exampleNames(prefer, limit) {
+    var have = {};
+    loadCatalog().forEach(function(s) { have[s.name] = true; });
+    var cap = limit || 3;
+    var out = (prefer || []).filter(function(n) { return have[n]; });
+    if (out.length < cap) {
+      loadCatalog().forEach(function(s) {
+        if (out.length >= cap) return;
+        if (out.indexOf(s.name) === -1) out.push(s.name);
+      });
+    }
+    return out.slice(0, cap);
+  }
+  ```
+
+  Each prompt site then interpolates instead of asserting:
+
+  ```js
+  // voice/voice-agent.js — SKILLS RULE (was: a fixed list of five names)
+  var eg = skillsLoader.exampleNames(
+    ['ui-ux-pro-max', 'spec-driven-development', 'test-driven-development'], 3);
+  var SKILLS_RULE = 'SKILLS RULE: You have SKILLS available (listed in the SKILLS ' +
+    'AVAILABLE block). When a task fits one — e.g. ' + eg.join(', ') + ' — call ' +
+    'use_skill with that name to load its full guidance, then apply it. Only ever ' +
+    'call use_skill with a name from that block.';
+  ```
+
+  The trailing sentence is load-bearing: it is what stops the model inventing a
+  plausible skill name when the one it wanted is absent.
+
+  **Test (red first):** `test/skills-prompt-names.test.js` — with
+  `USERPROFILE`/`HOME` forced to a non-existent dir and `MYTHOS_SKILLS_DIR` empty
+  (the fresh-clone shape that found this), extract every quoted skill-like token
+  from the composed batch prompt, the `use_skill` declaration and the Live
+  instruction, and assert each is in `loadCatalog()`. **This test fails today** —
+  that red is the proof.
+
+- [ ] **8A.2 — An essence-only skill must still load (BUG-266b).**
+
+  ```js
+  // skills/loader.js — loadContent(), after the SKILL.md attempt fails
+    } catch (_) { /* no SKILL.md anywhere — try the vendored essence below */ }
+    // Essence-only vendoring is a real, documented state (skills/README.md:
+    // "SKILL-CORE.md — a hand-distilled ~1-2 KB essence"), and ui-ux-pro-max ships
+    // exactly that, because its full 45 KB doc needs a Python CSV database this
+    // repo does not carry. Reading only SKILL.md made use_skill report "not found"
+    // for a skill that IS vendored and IS driving every UI build through
+    // loadEssence(). Say it is the essence, so the model does not treat 1 KB as
+    // the whole guidance.
+    try {
+      var essence = fs.readFileSync(path.join(REPO_SKILLS_DIR, name, 'SKILL-CORE.md'), 'utf8');
+      if (essence.trim()) {
+        return '(Condensed essence — the full skill needs a host install of its own ' +
+          'tooling; this is the complete guidance available on this machine.)\n\n' +
+          essence.trim();
+      }
+    } catch (_) { /* no essence either */ }
+    return null;
+  ```
+
+  **Consumers checked:** `loadContent()` has exactly one caller,
+  `effectors/from-skills.js:22`. Nothing parses its return value, so the prefix
+  line is safe. `loadEssence()` is untouched.
+
+- [ ] **8A.3 — Give the spoken path the tool its own prompt names (BUG-267).**
+
+  `use_skill` is **T0** (`leash/tiers.js:71`, "read-only — loads a skill's guidance
+  text from disk"), so there is no safety argument for withholding it — only the
+  tool-count argument in `live-tools.js:15-18`, which is outweighed here because
+  the Live prompt already spends the tokens listing 43 skills. Move `'use_skill'`
+  out of `VOICE_ALLOWLIST_EXEMPT` into `DEFAULT_ALLOWLIST` with this rationale in
+  place of the old exempt comment:
+
+  ```js
+    // use_skill — promoted (BUG-267). It was exempt as an "internal/debugging
+    // surface", but buildLiveSystemInstruction() injects catalogBlock(), whose
+    // header instructs the model to "call use_skill with the name". Declaring the
+    // catalog while withholding the tool is the withheld-read-tool trap: the model
+    // does not report the gap, it substitutes the nearest tool and narrates it.
+    // Either the catalog goes or the tool comes — the catalog is 43 real skills,
+    // so the tool comes. T0 (leash/tiers.js:71), so this adds no confirm.
+    'use_skill',
+  ```
+
+  **Consumers checked before moving it:** `DEFAULT_ALLOWLIST` is read by
+  `buildFunctionDeclarations()` (`live-tools.js`), called from `server/index.js`.
+  Two existing conformance sweeps gate this list and validate the move for free —
+  `test/allowlist-reachability.test.js` (fails when a T0–T2 tool is in neither
+  list) and `test/tier-table-conformance.test.js`. Both already
+  `require('../src/core/effectors/from-skills')`.
+
+  **Alternative rejected:** suppressing `catalogBlock()` on Live. One line
+  cheaper, but it makes the primary surface the only one with no skills at all —
+  the opposite of the wiring being asked for.
+
+- [ ] **8A.4 — Vendor the curated addyosmani subset.**
+
+  Five are already vendored (`THIRD_PARTY_NOTICES.md:203`). Six more earn a slot;
+  each is justified against `build-pack.js:24-41`'s essence-vs-tool-driver rule
+  and against what is already on disk.
+
+  | Skill | Why it earns a slot | Pack |
+  |---|---|---|
+  | `spec-driven-development` | Named in two prompts today and phantom on a fresh clone (BUG-266); also the natural front end of the engagement `SPEC_READY` state | `app` |
+  | `planning-and-task-breakdown` | Feeds `engagements/plan-builder`; already `?`-listed, never vendored | `app` |
+  | `incremental-implementation` | Thin vertical slices with a test/commit cycle — the discipline the engagement stage model assumes but never states to the model | `app` |
+  | `doubt-driven-development` | Adversarial fresh-context review before finalising; direct analogue of AD-4 and of `effectors/evidence.js`. Wired into 8D's verify gate | `app`, `security` |
+  | `context-engineering` | Governs every budget decision in 8C; the repo has no written rule for what belongs in a prompt | `research` |
+  | `frontend-ui-engineering` | Named in `voice-agent.js:275`, phantom today, `?`-listed | `ui` |
+
+  Also vendor `references/definition-of-done.md` as
+  `mythos/skills/definition-of-done/SKILL.md` — it is the checklist 8D's gate
+  runner needs and otherwise has no home.
+
+  **Deliberately NOT vendored, reason recorded so a later session does not
+  "helpfully" add them:** `debugging-and-error-recovery` duplicates the vendored
+  superpowers `systematic-debugging`; `code-simplification` duplicates `ponytail`;
+  `security-and-hardening`, `performance-optimization`, `code-review-and-quality`,
+  `api-and-interface-design`, `observability-and-instrumentation` are already
+  vendored; `git-workflow-and-versioning`, `ci-cd-and-automation`,
+  `documentation-and-adrs`, `deprecation-and-migration`, `shipping-and-launch`,
+  `browser-testing-with-devtools`, `interview-me`, `idea-refine`,
+  `source-driven-development` stay `?`-optional — real skills, but nothing on the
+  MYTHOS execution path reads them, and a catalogue entry the model never needs
+  is prompt tax on every turn.
+
+  **Mechanics per skill — the repo already documents this exactly
+  (`mythos/skills/README.md:47-58`); follow it verbatim, invent no new process:**
+  1. `mythos/skills/<name>/SKILL.md`, upstream text verbatim, frontmatter `name`
+     matching the directory, `description` collapsed to one quoted line.
+  2. `mythos/skills/<name>/LICENSE` — upstream MIT, copied.
+  3. `SKILL-CORE.md` — **required** for any skill added to a `PACKS` entry, since
+     `packBlockFor()` composes essences under an 8 000-char cap
+     (`build-pack.js:86`) and a 20 KB upstream body would evict the packs already
+     carrying every build.
+  4. One line in `mythos/skills.allowlist` under a new
+     `# ---- Engineering discipline (addyosmani/agent-skills, MIT) ----` block —
+     and **remove** the now-redundant `?spec-driven-development`,
+     `?planning-and-task-breakdown`, `?frontend-ui-engineering` entries so the
+     same name is not listed twice.
+  5. Extend the existing `THIRD_PARTY_NOTICES.md:203` row; do not add a second
+     addyosmani row.
+  6. Add rows to `mythos/skills/README.md`'s "Copied from upstream" table — which
+     today is **missing the five already-vendored addyosmani skills**, a doc gap
+     this lane closes on the way past.
+
+  ```js
+  // skills/build-pack.js — PACKS, after vendoring
+  var PACKS = {
+    ui: ['taste-frontend', 'hallmark', 'ui-ux-pro-max', 'frontend-ui-engineering', 'diagram-design'],
+    code: ['ponytail', 'karpathy-guidelines'],
+    // spec/plan/slice discipline. Order matters: the cap drops from the TAIL, so
+    // the ones that change what gets BUILT come before the ones that change how
+    // it is REVIEWED.
+    app: ['ponytail', 'karpathy-guidelines', 'incremental-implementation',
+          'spec-driven-development', 'planning-and-task-breakdown',
+          'systematic-debugging', 'doubt-driven-development',
+          'verification-before-completion'],
+    research: ['ponytail', 'karpathy-guidelines', 'context-engineering'],
+    security: ['ponytail', 'karpathy-guidelines', 'strix-security', 'doubt-driven-development'],
+  };
+  ```
+
+  `packBlockFor()` already names anything it dropped for budget
+  (`build-pack.js:257`), so an over-long `app` pack degrades visibly — but
+  **measure the real composed size against `MAX_PACK_CHARS` and raise the cap in
+  the same commit if the tail is being dropped on every build.** Add a case to
+  `test/skills-build-pack.test.js` asserting `app` composes under cap with
+  **nothing dropped**, so a future essence pushing it over is caught at commit
+  time rather than discovered as missing discipline.
+
+---
+
+### Step 8B — Continual Harness (prime-agent's `/refine`)
+
+- [ ] **8B — supplemental, evidence-backed, snapshotted prompt state.**
+
+  What prime-agent does:
+
+  > "`/refine` reviews the current trajectory and can apply small, evidence-backed
+  > updates to supplemental harness state. It never rewrites the immutable base
+  > system prompt, and recorded snapshots support rollback."
+
+  MYTHOS has three of the four pieces and they are good: `Lessons/` is durable
+  failure memory with trigger matching and counts (`memory/lessons.js`);
+  `vault/Skills/` is auto-distilled procedural success (`memory/skills.js`,
+  written by `goals/index.js:176` and `identity/reflection.js:259`);
+  `Identity/self.md` + `operator-profile.txt` carry durable identity.
+
+  **The missing piece is the one prime-agent centres on:** a supplemental overlay
+  the entity can propose changes to, that carries its evidence, that rolls back,
+  and that actually reaches the model on the spoken path. Today `Lessons/` has
+  **exactly one reader** — the autonomous goal planner (`goals/index.js:456`) — so
+  a lesson learned the hard way never reaches a conversation. That is the same
+  structural amnesia BUG-251 fixed for operator facts, one store over.
+
+  **New module `src/core/harness/index.js`** — `vault/Harness/overlay.md` (what the
+  model reads), `vault/Harness/snapshots/<ts>.md` (one per applied refinement),
+  `vault/Harness/refinements.jsonl` (the ledger: who/when/why/evidence). API:
+  `init()`, `overlayBlock({asOf})`, `propose({note, evidence, source})`,
+  `apply(id)`, `rollback(snapshotId)`, `ledger()`, `overlayText()`.
+
+  Two functions carry the invariants and are worth writing first:
+
+  ```js
+  // AD-12. An id that does not resolve in the vault is not evidence — it is a
+  // sentence that LOOKS like evidence, which is worse than none. Without this the
+  // entity can write itself any instruction it likes and call it learning.
+  function evidenceResolves(refs) {
+    if (!Array.isArray(refs) || refs.length === 0) return false;
+    return refs.every((ref) => {
+      try {
+        if (/^ep-/.test(ref)) return !!memory.episodic.get(ref);
+        if (/^lsn-/.test(ref)) return !!memory.lessons.get(ref);
+        if (/^sk-/.test(ref)) return !!memory.skills.get(ref);
+      } catch (_) { return false; }
+      return false;
+    });
+  }
+
+  // Snapshot BEFORE write is what makes rollback real rather than a promise in a
+  // comment. apply() is the only writer of overlay.md (AD-13).
+  apply(id) {
+    const rec = this.ledger().find((r) => r.id === id && r.status === 'proposed');
+    if (!rec) return { ok: false, error: 'no proposed refinement ' + id };
+    const before = fs.readText(OVERLAY_PATH, '');
+    const snapId = String(rec.ts) + '-' + id.slice(4, 12);
+    fs.writeText(SNAPSHOT_DIR + '/' + snapId + '.md', before);
+    fs.writeText(OVERLAY_PATH, (before ? before.replace(/\s*$/, '\n') : '') + '- ' + rec.note + '\n');
+    fs.appendLine(LEDGER_PATH, Object.assign({}, rec, {
+      status: 'applied', appliedAt: Date.now(), snapshot: snapId,
+    }));
+    return { ok: true, id, snapshot: snapId };
+  }
+  ```
+
+  **Wiring — every writer, every reader, every gate.**
+
+  *Construction:* `src/main.js`, beside the memory facade; `harness` joins the deps
+  object passed to the server exactly as `memory` and `identity` do. `init()` runs
+  in the same boot step as `memory.init()`.
+
+  *WRITER 1 — the operator, by voice or HUD.* New effector
+  `src/core/effectors/from-harness.js` exposing `refine_harness` with
+  `action: propose | apply | rollback | list`, registered next to
+  `registerFromSkills(hub)` (`main.js:579`). Tiering:
+
+  ```js
+    'refine_harness':        3,  // edits what the model is told about itself.
+                                 // Local and snapshot-reversible, so not T4 — but
+                                 // never session-grantable: a tool that rewrites
+                                 // its own operating instructions must not become
+                                 // click-through after the first yes.
+  ```
+
+  and add `'refine_harness'` to `NEVER_TRUSTABLE` in `leash/index.js`, so
+  `TRUSTED_TOOLS` cannot promote it and `SESSION_GRANTABLE` cannot cache it. It
+  **is** added to `DEFAULT_ALLOWLIST` (spoken-reachable) — "remember to always do
+  X" is a natural spoken instruction — and T3 + never-trustable means the operator
+  confirms every single time, which is the correct friction for self-modification.
+  `test/tier-table-conformance.test.js` and `test/allowlist-reachability.test.js`
+  enforce both of the above with no new test written.
+
+  *WRITER 2 — reflection, as proposals only.* `identity/reflection.js:164-282`
+  (`reflectOnActions`) already asks the brain for `{failures[], successes[]}` and
+  writes failures to `Lessons/`, successes to `vault/Skills/`. Add a third bucket,
+  `corrections[]` → `harness.propose({source:'reflection', evidence:[…]})`. Status
+  stays `proposed`; **nothing machine-authored is ever auto-applied.** The episodic
+  ids reflection already carries become the AD-12 evidence, so this costs no new
+  plumbing.
+
+  *READER 1 — the spoken path.* In `buildLiveSystemInstruction()`, after the
+  operator-facts block and before the local-time line:
+
+  ```js
+      // The harness overlay — durable operating notes refined from real sessions.
+      // Session-start labelled per BUG-136 like every other value in this
+      // composer, and budgeted per AD-14. Synchronous by construction: this
+      // function is called from live-session.js buildSetup() on every open() and
+      // rotation and cannot await — the same constraint that made BUG-251's fix a
+      // direct topic() read rather than recallHybrid().
+      try {
+        const overlay = harness ? harness.overlayBlock({ asOf: 'session-start' }) : '';
+        if (overlay) parts.push(overlay);
+      } catch (err) { logger.warn('live.harness-compose-failed', { error: err.message }); }
+  ```
+
+  *READER 2 — the typed/batch path.* `voice/voice-agent.js`'s per-turn composer
+  appends `harness.overlayBlock()` with **no** `asOf` label — it genuinely is fresh
+  there, and labelling a live value as a snapshot is its own small lie.
+
+  *READER 3 — the operator (AD-16).* `server/routes/memory.js` gains
+  `GET /api/harness` → `{ overlay, snapshots[], ledger[] }`, plus a HUD panel
+  entry. Not optional polish: it is the difference between an auditable overlay
+  and a file that quietly steers every answer.
+
+  *Deliberately NOT wired:* the autonomous goal planner. It already reads
+  `Lessons/` with a hard pause at `GOAL_FAIL_PAUSE_THRESHOLD`; a second overlapping
+  instruction source on the same decision would make it impossible to say which one
+  paused a goal. A planner overlay, if ever wanted, needs its own file and its own
+  reason.
+
+  *Tests:* `harness-store.test.js` (propose/apply/rollback/ledger round trip),
+  `harness-refine-evidence.test.js` (AD-12),
+  `anti-drift-harness-additive.test.js` (AD-11),
+  `anti-drift-harness-single-composer.test.js` (AD-13),
+  `harness-route.test.js` (AD-16), plus one case appended to the existing
+  `test/live-memory-inject.test.js` — that file already owns this composer's
+  contract.
+
+---
+
+### Step 8C — Memory budget + Live depth (TencentDB layering)
+
+- [ ] **8C.1 — One budgeted-block helper (AD-14).**
+
+  Three separate hand-rolled truncation loops exist today: the operator-facts loop
+  in `buildLiveSystemInstruction()` (`LIVE_FACTS_MAX_CHARS = 8000`),
+  `build-pack.js:235-261` (essences, and **this one is the good example** — it
+  names what it dropped), and `loader.js:394` (per-skill description truncation).
+  8B and 8C.2 would add three more.
+
+  ```js
+  // memory/budget.js — the one truncation rule for anything injected into a
+  // prompt (AD-14).
+  //
+  // Three hand-rolled loops did this before with three different overflow
+  // behaviours. Only build-pack.js's said what it dropped; the others truncated in
+  // silence, which reads to anyone reading the prompt as "this is everything" when
+  // it is not — the same dishonest-ok shape the loader's lastMissing() exists to
+  // prevent one layer up.
+  //
+  // Contract: never exceed maxChars; never exceed maxItems; ALWAYS state the
+  // omitted count when anything was dropped.
+  function budgetedBlock({ header, items, maxItems, maxChars, newestFirst }) {
+    const all = (items || []).map((i) => String(i).trim()).filter(Boolean);
+    const ordered = newestFirst ? all.slice().reverse() : all.slice();
+    const capItems = maxItems && maxItems > 0 ? maxItems : ordered.length;
+    const capChars = maxChars && maxChars > 0 ? maxChars : Infinity;
+    const head = String(header || '').trim();
+
+    const kept = [];
+    let used = head.length;
+    for (const item of ordered) {
+      if (kept.length >= capItems) break;
+      const line = item.startsWith('- ') ? item : '- ' + item;
+      if (used + line.length + 1 > capChars) break;
+      used += line.length + 1;
+      kept.push(line);
+    }
+    const omitted = all.length - kept.length;
+    if (!kept.length) return { text: '', included: 0, omitted: all.length };
+
+    // newestFirst callers want the newest KEPT but chronological reading order.
+    const body = (newestFirst ? kept.slice().reverse() : kept).join('\n');
+    const note = omitted > 0 ? '\n[' + omitted + ' older entries omitted for prompt budget]' : '';
+    return { text: head + '\n' + body + note, included: kept.length, omitted };
+  }
+  ```
+
+  **Converted in the same commit** (a replacement, not an addition — leaving the
+  old loops is how two truncation rules drift apart): the operator-facts loop, the
+  8B overlay, both 8C.2 blocks. **`build-pack.js`'s loop stays as-is** — it
+  composes whole documents with a separator rather than bullet items, and forcing
+  it through this helper would rewrite working code for symmetry, which the
+  surgical-changes rule forbids.
+
+- [ ] **8C.2 — Give Live the depth the typed path already has.**
+
+  Measured gap: `handleUtterance()` calls `recallHybrid()` per turn, so the typed
+  path gets episodic + semantic + documents fused by RRF. Live gets one static
+  `user-facts.md` snapshot per socket open, and `Lessons/` reaches neither. Two
+  blocks, both **synchronous** reads (no embeddings — the session-open path cannot
+  await, per the BUG-251 reasoning already written into that composer):
+
+  ```js
+      // Recent episodic context. The typed path gets recallHybrid() per turn; Live
+      // got nothing, so "what were we doing yesterday" had no honest answer on the
+      // surface most likely to be asked it. tail() is a bounded reverse read.
+      try {
+        const recent = (memory.episodic.tail({ limit: 40 }) || [])
+          .filter((e) => e.kind === 'conversation' && e.summary);
+        const block = budget.budgetedBlock({
+          header: 'RECENT CONTEXT (as of session-start — use recall_memory for anything older):',
+          items: recent.map((e) => e.summary),
+          maxItems: 12,
+          maxChars: Number(config.LIVE_EPISODIC_MAX_CHARS) || 3000,
+          newestFirst: true,
+        });
+        if (block.text) parts.push(block.text);
+      } catch (err) { logger.warn('live.episodic-compose-failed', { error: err.message }); }
+
+      // Repeated failures. Lessons/ has exactly one reader today (goals/index.js:456,
+      // the autonomous planner), so a failure the operator watched happen three
+      // times never reached the conversation about it. Highest count first.
+      try {
+        const top = (memory.lessons.recall('', { limit: Number(config.LIVE_LESSONS_MAX) || 5 }) || [])
+          .filter((l) => (l.count || 0) > 1);
+        const block = budget.budgetedBlock({
+          header: 'KNOWN FAILURE MODES (seen before — do not repeat):',
+          items: top.map((l) => l.text + ' (seen ' + l.count + 'x)'),
+          maxItems: Number(config.LIVE_LESSONS_MAX) || 5,
+          maxChars: 1200,
+        });
+        if (block.text) parts.push(block.text);
+      } catch (err) { logger.warn('live.lessons-compose-failed', { error: err.message }); }
+  ```
+
+  **Check before writing:** `memory.lessons.recall(query, opts)` is called with a
+  non-empty query at its only current call site (`goals/index.js:456`). Confirm
+  `lessons.js:208` returns count-ordered results for an empty query; if it does
+  not, add an explicit `topByCount(limit)` rather than bending `recall()` — **the
+  planner's behaviour must not change as a side effect of a prompt feature.**
+
+  **Prompt-budget accounting, stated rather than assumed:** these two blocks plus
+  8B's overlay add at most 3000 + 1200 + 4000 ≈ 8.2 KB to a frame already carrying
+  RULES + persona + capability digest + a 43-skill catalogue + up to 8 KB of facts.
+  Paid **once per session**, not per turn (the composed-once frame, V2 §11 row 5).
+  If the frame gets uncomfortable the lever is `LIVE_FACTS_MAX_CHARS`, which at
+  8000 is the largest single block and the least selective. **Measure the composed
+  length in the test and log it; do not guess.**
+
+- [ ] **8C.3 — L2 scenario blocks. PROVISIONAL — verify the gap before building.**
+
+  TencentDB's model is L0 raw → L1 facts/preferences/constraints → L2
+  scenario-organised blocks → L3 long-term persona. Mapped honestly:
+
+  | Layer | MYTHOS today | Status |
+  |---|---|---|
+  | L0 | `Episodic/*.jsonl` | exists |
+  | L1 | `Semantic/user-facts.md` (`habit-promoter.js` + `memory/index.js:374`) | exists |
+  | L2 | — | **the only real gap** |
+  | L3 | `Identity/operator-profile.txt`, rewritten whole by `reflection.js`, folded into `persona()` | **already exists** |
+
+  Three of four layers are already built. L2 would be
+  `Semantic/scenarios/<slug>.md` — clusters of related L1 facts and episodics under
+  a scenario heading — produced by extending the `consolidate()` that
+  `cortex/index.js:413` already calls on its idle path.
+
+  **Sequenced last and marked provisional on purpose.** 8C.2 gives Live real
+  episodic recall for the first time; that may close the felt gap entirely, in
+  which case L2 is a second index over data the model can already reach — exactly
+  the speculative abstraction the simplicity rule forbids. **Do not build 8C.3
+  until 8C.2 is live-verified and found insufficient, and record which observation
+  made it necessary.**
+
+---
+
+### Step 8D — Budgets and quality gates (prime-agent autonomous mode)
+
+- [ ] **8D — one budget, gates that must pass, and "a limit is not a success".**
+
+  **What exists first.** Three unrelated bounded-retry counters, none aware of the
+  others: `engagements/executor.js:50` `MAX_REPAIRS` (default 3) with
+  `execution.repairBudget:{used,max}` in the record; `build-runner.js:48`
+  `REFINE_MAX`; `hermes-runner.js:40` `buildTimeoutMs()` (30 min) plus
+  `hermes-agent/index.js:41` `taskTimeoutMs()` (3 min). Verification already exists
+  as `executor.js:393-455 runCommandVerification()`, which runs an allowlisted
+  command through the real `run_command` effector and degrades honestly to
+  `skipped:true` when `RUN_COMMAND_ALLOWLIST` is unset. That is a good foundation.
+
+  What prime-agent adds: one budget spanning turns/tokens/wall-clock; gates that
+  must pass before a run may finish; **not re-running a gate whose inputs have not
+  changed since it failed**; and the explicit rule that hitting a limit is not
+  success.
+
+  ```js
+  // agent/budget.js
+  // AD-15 is the whole point: "reaching a limit does not imply task success."
+  // Three separate counters existed before this and none could answer "how much
+  // budget does this work have left" — so a run could exhaust one, look finished,
+  // and be reported as done.
+  function createBudget({ maxTurns, maxTokens, maxWallMs, now }) {
+    const clock = now || (() => Date.now());
+    const startedAt = clock();
+    let turns = 0, tokens = 0;
+    return {
+      spendTurn() { turns += 1; },
+      spendTokens(n) { tokens += Number(n) || 0; },
+      remaining() {
+        return {
+          turns: maxTurns ? Math.max(0, maxTurns - turns) : Infinity,
+          tokens: maxTokens ? Math.max(0, maxTokens - tokens) : Infinity,
+          wallMs: maxWallMs ? Math.max(0, maxWallMs - (clock() - startedAt)) : Infinity,
+        };
+      },
+      // Named, not boolean: the caller must report WHICH limit stopped it. A bare
+      // `true` is how "we ran out of time" becomes "we finished".
+      exhausted() {
+        const r = this.remaining();
+        if (r.turns <= 0) return 'turns';
+        if (r.tokens <= 0) return 'tokens';
+        if (r.wallMs <= 0) return 'wall-clock';
+        return null;
+      },
+    };
+  }
+  ```
+
+  ```js
+  // agent/gates.js
+  // The one non-obvious rule, straight from prime-agent: a gate that failed and
+  // whose INPUTS have not changed is not re-run. Re-running burns budget to
+  // re-learn something already known and — worse — a gate that passes on a retry
+  // with identical inputs is measuring flake, not progress.
+  //
+  // Gates execute through the EXISTING run_command effector (allowlist + metachar
+  // rejection + cwd pin + env scrub + leash + treeKill). No new spawn path: a
+  // second way to run a shell command is a second place for the allowlist to not
+  // apply.
+  async function runGates(gates, { dispatch, budget, inputsHash, priorResults }) {
+    const results = [];
+    for (const gate of gates || []) {
+      const prior = (priorResults || []).find((r) => r.id === gate.id);
+      if (prior && !prior.passed && prior.inputsHash === inputsHash) {
+        results.push(Object.assign({}, prior, { skipped: 'unchanged-since-failure' }));
+        continue;
+      }
+      const stop = budget.exhausted();
+      if (stop) { results.push({ id: gate.id, passed: false, reason: 'budget-exhausted:' + stop }); break; }
+      const out = await dispatch({ tool: 'run_command', args: gate.args });
+      results.push({
+        id: gate.id, passed: !!out.ok, inputsHash,
+        // Bounded on purpose: the failing tail is what the next attempt needs, and
+        // an unbounded gate log is how one failure eats the context window.
+        output: String(out.result || out.error || '').slice(-2000),
+      });
+    }
+    return results;
+  }
+  ```
+
+  **Wiring — consumers checked before changing them.** `engagements/executor.js` is
+  the single consumer rewired. Its `runVerificationSweep()` (lines 541-590)
+  currently decides `COMPLETED` / `REPAIRING` / `BLOCKED`; it gains a budget and a
+  gate list, and the rule that a budget stop lands `BLOCKED` with
+  `reason:'budget-exhausted:<dimension>'` and **never** `COMPLETED` (AD-15). The
+  `repairBudget:{used,max}` field already in the record
+  (`engagements/index.js:37-92`) is the natural home for the counters, so the
+  persisted shape gains fields rather than changing — existing engagements keep
+  loading through `store.js:58 backfillRecord()`.
+
+  **`build-runner.js`'s `REFINE_MAX` and `orchestrator.js` are left alone in this
+  lane** — working, on a different execution path (the kanban build queue, not the
+  engagement state machine), and folding them in at the same time mixes a refactor
+  into a feature. Follow-up, recorded as a decision rather than an oversight.
+
+  `doubt-driven-development` (vendored in 8A.4) is the guidance loaded when a gate
+  fails twice with the same `inputsHash` — the point at which "try again" has
+  already been proven not to work.
+
+  *Tests:* `test/agent-budget-gates.test.js` — each dimension exhausts to its named
+  reason; a failed gate with unchanged `inputsHash` is skipped, not re-run; a
+  changed hash re-runs; budget exhaustion lands `BLOCKED` and never `COMPLETED`;
+  gate output truncated to 2000 chars. Extend `test/engagements/*` with the
+  executor's new terminal reason.
+
+---
+
+### Step 8 — execution order and verification
+
+Each step is independently shippable and independently revertible.
+
+| # | Step | Depends on | Risk |
+|---|---|---|---|
+| 1 | 8A.1 phantom-name fix + red test | — | low |
+| 2 | 8A.2 essence fallback in `loadContent()` | — | low |
+| 3 | 8A.3 `use_skill` → `DEFAULT_ALLOWLIST` | — | low; two existing sweeps gate it |
+| 4 | 8A.4 vendor 6 skills + `definition-of-done` + PACKS + notices + README | 1-3 | low; watch `MAX_PACK_CHARS` |
+| 5 | 8C.1 `memory/budget.js` + convert the operator-facts loop | — | low |
+| 6 | 8B harness store + effector + tier + `NEVER_TRUSTABLE` + both composers + route | 5 | **highest** — model-editable prompt state |
+| 7 | 8C.2 Live episodic + lessons blocks | 5 | medium; prompt-size cost is real |
+| 8 | 8D budget + gates + executor rewire | 4 | medium |
+| 9 | 8C.3 L2 scenarios — **only if 7 proves insufficient** | 7 | provisional |
+| 10 | Tick each box, Progress-log rows with SHAs, rewrite RESUME HERE | all | doc |
+
+**Before touching anything** (concurrent-session safety): `git pull`, then diff
+`skills.allowlist`, `voice/live-tools.js` and `server/index.js` against what
+BUGS.md claims is in them. Two machines share this repo and one git index —
+commit by pathspec.
+
+**Every suite run and every commit** needs the environment this repo has already
+learned it needs, or the result is noise:
+
+```bash
+# long-form TEMP (an 8.3 short TEMP aborts spawned-server tests inside libuv and
+# surfaces as ECONNREFUSED); port overrides so a running MYTHOS does not produce
+# two false failures on 4478/5050. The pre-commit hook runs the suite too, so it
+# needs the same env.
+export TEMP="$LOCALAPPDATA/Temp" TMP="$LOCALAPPDATA/Temp"
+cd mythos && MYTHOS_PORT=4999 EDGE_TTS_PORT=5099 EDGE_TTS_URL=http://127.0.0.1:5099 node --test
+```
+
+Per-lane verification, in order:
+
+1. **8A.1/8A.2 — red before green.** Run the fresh-clone probe that found the bug:
+   ```bash
+   cd mythos && USERPROFILE=C:/__no_such_home__ HOME=/__no_such_home__ MYTHOS_SKILLS_DIR= \
+     node -e "const l=require('./src/core/skills/loader');
+       const n=new Set(l.loadCatalog().map(s=>s.name));
+       ['ui-ux-pro-max','spec-driven-development','frontend-ui-engineering']
+         .forEach(s=>console.log(s, n.has(s)?'OK':'PHANTOM'));
+       console.log('use_skill(ui-ux-pro-max) ->', l.loadContent('ui-ux-pro-max') ? 'LOADS' : 'FAILS');"
+   ```
+   Today: three `PHANTOM` and `FAILS`. After: all `OK` and `LOADS`.
+2. **8A.3 — live, by voice.** Open a Live session, say *"use your ui-ux-pro-max
+   skill and tell me the first rule it gives you."* Before: the model cannot call
+   `use_skill` and substitutes something adjacent without saying so. After: a real
+   `use_skill` call appears in the Audit view and the answer quotes the skill.
+   **Check the Audit tool ARGS, not the spoken claim** — the spoken claim is
+   exactly what is being tested for.
+3. **8A.4 — build lane.** Trigger an `app`-kind build; assert `packBlockFor('app')`
+   composes under `MAX_PACK_CHARS` with an empty `dropped` list and that the new
+   essences appear in the prompt actually sent.
+4. **8B — the whole loop, on real state.** `propose` with a real episodic id →
+   ledger shows `proposed`; `evidence:[]` → rejected and `health.anomaly` fires;
+   `apply` → snapshot written, overlay grows; open a **new** Live session and
+   confirm the note is in the setup frame (**read the frame; do not ask the model
+   whether it saw it**); `rollback` → overlay byte-identical to the snapshot.
+   `GET /api/harness` shows all three. Confirm the T3 confirm fires and is **not**
+   cached on a second call in the same connection.
+5. **8C — measured, not assumed.** Log the composed Live instruction length before
+   and after; confirm both blocks present, `session-start` labelled, and an
+   over-cap case emits the `[N older entries omitted]` marker. Then the operator
+   question that motivated it: *"what were we working on yesterday?"* on a fresh
+   Live session against a vault with real episodics.
+6. **8D — force each failure.** Exhaust turns, tokens and wall clock separately;
+   each lands `BLOCKED` with the named reason, never `COMPLETED`. Fail a gate,
+   re-run with identical inputs → `skipped:'unchanged-since-failure'`; change an
+   input → re-runs.
+7. **Anti-drift.** All six new AD tests pass and the existing
+   `test/anti-drift-*.test.js` suite stays green — AD-7 especially, since step 8
+   adds vault paths and test fixtures (derive fixture paths from `os.tmpdir()`;
+   AD-7 only fails a path literal after `git add`).
+8. **Docs (AD-10).** `node scripts/sync-test-count.js --write`, commit its output,
+   never hand-edit a count. Run it as a **separate** command from the commit —
+   chaining both has hit the 10-minute ceiling before.
+
+**Definition of done for step 8:** all four lanes live-verified as above; every
+box above ticked with a Progress-log row carrying its commit SHA; AD-11…AD-16
+present in the V2 spine's §1 table; RESUME HERE rewritten to name the next
+unchecked step; pushed. **A tick that is not pushed does not exist to the next
+machine.**
 
 ---
 

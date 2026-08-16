@@ -46,6 +46,24 @@ Ten invariants. Each gets a real test file. `node --test` must fail if any is br
 | **AD-9** | **Optional binaries degrade, they never crash boot.** `adb`, `cua-driver`, Chrome, edge-tts: spawn ENOENT → adapter OFFLINE. Hermes remains the single deliberate exception (builds FAIL with an install hint rather than shipping a wrong artifact). | `test/anti-drift-optional-binaries.test.js`: force ENOENT on each adapter, assert boot completes and status reports OFFLINE. |
 | **AD-10** | **Docs match reality.** Test count, tool count, provider count, sensor count in README/CLAUDE.md are generated, never hand-typed. | Extend `mythos/scripts/sync-test-count.js` to also emit tool/provider/sensor counts from `hub.catalog()` and directory reads; `--check` gates CI and the pre-commit hook. |
 
+**AD-11 … AD-16 — added 2026-08-17 for merged-order step 8** (upstream synthesis:
+prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory). AD-1…AD-10 above
+govern a system where prompt state is authored by humans and read by the model.
+Step 8 introduces state that is **written by the model and read by the model**,
+which none of the ten cover. These six are their extension, not a replacement, and
+they take effect only when step 8 is built — the roadmap
+(`MYTHOS-IRIS-Synthesis-Plan.md`, "Step 8") is where the design and the wiring
+live, and it is authoritative on everything below the invariant itself.
+
+| ID | Invariant | Enforcement |
+|---|---|---|
+| **AD-11** | **Additive overlay only.** The harness overlay is *appended* to a composed prompt. It can never replace, reorder or edit `RULES`, `persona()`, or the capability digest. An overlay that could edit RULES is a prompt-injection surface with a filesystem for a payload. | `test/anti-drift-harness-additive.test.js`: compose the Live instruction with and without a non-empty overlay; assert the `RULES` and persona substrings are byte-identical in both, and that the overlay appears only as a suffix segment. |
+| **AD-12** | **No unevidenced refinement.** A refinement whose `evidence[]` is empty, or which names episodic/lesson/skill ids that do not resolve in the vault, is REFUSED and emits `health.anomaly` `harness-refine-unevidenced`. Without this the entity can write itself any instruction it likes and call it learning. | `test/harness-refine-evidence.test.js`: submit `evidence: []`, then a fabricated `ep-…` ref; assert both rejected, `overlay.md` unchanged on disk, anomaly emitted. |
+| **AD-13** | **One composer, one path literal.** `Harness/overlay.md` is read and written in exactly one module. No second reader may re-implement composition. This is the `Harness/` restatement of the lesson that a loader pointed at one root fails silently forever. | `test/anti-drift-harness-single-composer.test.js`: read every file under `src/` + `server/`; assert the literal `Harness/overlay` appears only in `src/core/harness/index.js`. Same sweep shape as AD-1. |
+| **AD-14** | **Every prompt-injected memory block is budgeted and states what it dropped.** No block may silently truncate; the omitted count appears in the emitted text. A silently shortened block reads to anyone reading the prompt as "this is everything" when it is not. | `test/memory-budget.test.js`: 200 items against a 500-char cap; assert output ≤ cap and the trailing `[N older entries omitted…]` marker present with N correct. |
+| **AD-15** | **A limit is not a success.** A run that ends by exhausting a turn/token/wall budget reports `status:'budget-exhausted:<dimension>'`, never `COMPLETED`; a passed gate is credited only with what that gate actually verified. Sibling of AD-4 — the same refusal to let an absence of failure read as proof of success. | `test/agent-budget-gates.test.js`: exhaust each dimension separately; assert the engagement lands `BLOCKED` with the named reason and never `COMPLETED`. |
+| **AD-16** | **Nothing the model reads is invisible to the operator.** Any model-editable prompt state is readable through a HUD route and is included in the vault export. A loader that cannot find anything returns exactly what a loader with nothing to find returns — an unreadable overlay is that trap wearing a new filename. | `test/harness-route.test.js`: `GET /api/harness` returns the current overlay text, the snapshot list and the refinement ledger. |
+
 **Drift log.** Add `mythos/docs/DRIFT-LOG.md`. Any time an invariant is deliberately bent,
 one line: date, invariant, reason, expiry. An entry with no expiry is a bug.
 
