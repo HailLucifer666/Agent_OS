@@ -196,6 +196,11 @@ out, 128k context. Secondary: `gemini-2.5-flash-native-audio-preview-12-2025`.
 Read from the real files. Line numbers as of planning; re-confirm with a `git pull` first
 (per CLAUDE.md's concurrent-session rule) before editing any of these.
 
+> **Count correction (2026-08-16):** this table has always had **21** rows. Both plan
+> documents' prose said "23 seams" from the start — a discrepancy between the frozen
+> table and its own description, corrected in the roadmap and here. Nothing was removed;
+> the number was simply never 23.
+
 | Seam | Location | Exact contract |
 |---|---|---|
 | WS connection | [server/index.js:662](mythos/server/index.js#L662) | `wss.on('connection', ws => {…})`, `const connectionId = crypto.randomUUID()` at :663 |
@@ -1494,7 +1499,7 @@ blocking-gap section with a pointer. That single step recovers, verbatim and unf
 
 - §1 Anti-Drift Contract, AD-1…AD-10, each with its executable check
 - §3 frozen Gemini Live wire protocol — every envelope and exact field name
-- §4 frozen MYTHOS seams — 23 seams with line numbers and contracts
+- §4 frozen MYTHOS seams — 21 seams with line numbers and contracts (prose said "23" until the 2026-08-16 count correction in §4)
 - §6 `live-session.js` full source · §7 `live-tools.js` full source with the param-prose
   converter · §8 the leash tool adapter · §9 both browser worklets · §10 server wiring diff
 - §11 persona table (all six changes) · §7.1–§7.7 including the WinRT OCR PowerShell block
@@ -1572,3 +1577,12 @@ Their Decision 3 ordering stands, with the licensing gate inserted and the false
 | 6 | ADB bridge: adapter, setup script, 14 tools, per-device queues, device registry | §17.1 + their Tasks 8–10 |
 | **6.5** | **Licensing gate: edge-TTS → Piper, own wake-word model** | §18.3.3 — **blocks 7** |
 | 7 | Electron shell + installer + overlay; Android app planned only | §13 |
+
+> **Superseded (2026-08-16 note):** both halves of the 6.5 row above were later
+> re-scoped by the roadmap, which wins by the precedence rule. (1) The Piper swap is
+> no longer required — the operator's 2026-07-30 decision keeps TTS BYO like the
+> API keys, so 6.5's surviving constraint is "the step-7 installer never bundles the
+> LGPL package" plus BYO docs. (2) The gate blocks SHIPPING, not building — step 7
+> was deliberately built in parallel with 6.5 open. The row is left as written
+> because this table is the frozen §18 tie-breaker record, not the live status;
+> the roadmap's merged-order table is the live one.

@@ -403,7 +403,7 @@ async function main() {
     }},
 
     { name: 'leash', fn: function() {
-      // [Phase 7 — NEW] Real effector hub + all 45 tool effectors + the goals-effector
+      // [Phase 7 — NEW] Real effector hub + the full tool-effector set + the goals-effector
       // bridge + voice effector, built here (immediately before leash, which requires
       // it) rather than inline in the cortex step — createNullEffectors (Phase 5 stub)
       // is deleted wholesale, not patched, per its own header comment. Boot order stays

@@ -12,7 +12,9 @@
 const { buildCatalogFromHub } = require('./voice-agent');
 const { checkToolCapability } = require('./tool-capability');
 
-// Function-calling accuracy degrades with very large tool sets, and MYTHOS registers 107.
+// Function-calling accuracy degrades with very large tool sets, and MYTHOS registers
+// well over a hundred tools (exact figure: scripts/sync-test-count.js — never pin the
+// number here; a pinned count is stale the moment an effector lands).
 // This is the curated high-traffic default; override with LIVE_TOOL_ALLOWLIST.
 const DEFAULT_ALLOWLIST = [
   'navigate','close_panel','read_status','read_system_specs','open_web',
@@ -31,7 +33,7 @@ const DEFAULT_ALLOWLIST = [
   // with no tool able to answer, the model fell back to describing web_search
   // over and over. This is the withheld-read-tool shape the camera_look and
   // whatsapp_send comments above already document, aimed at the one tool whose
-  // whole job is knowing what the other 171 are.
+  // whole job is knowing what every other tool is.
   //
   // It is also the ONLY route to "what changed / what did you fix?".
   // identity/capabilities.js regenerates vault/Identity/capabilities.md every

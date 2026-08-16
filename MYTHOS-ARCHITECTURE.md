@@ -355,7 +355,9 @@ function redactSecrets(e) {
 ### MemoryStore Interface (all 5 stores)
 
 ```js
-// src/core/memory/store.js
+// src/core/memory/ — this interface is shared by the per-store modules
+// (episodic.js, semantic.js, ...) behind the index.js facade; there is no
+// single store.js.
 // All stores implement this interface:
 {
   init()                    → Promise<void>           // create dirs, load indexes
@@ -1395,8 +1397,8 @@ max_autonomous_tier: 2
 
 ## Allowed Directories
 allowed_dirs:
-  - F:/Projects
-  - F:/Documents
+  - ~/Projects
+  - ~/Documents
 ```
 
 ### Identity Module
@@ -1592,7 +1594,7 @@ function createBuildRunner({ config, brain, bus, vault }) {
 ### Effector Hub
 
 ```js
-// src/core/effectors/index.js
+// src/core/effectors/hub.js
 function createEffectorHub({ bus, config }) {
   const effectors = new Map();     // name → effector
   const breakers = new Map();       // name → breaker
@@ -1773,7 +1775,7 @@ const bootOrder = [
 ### Server (MYTHOS_PORT 4478)
 
 ```js
-// mythos/server.js — RW from NOVA server.js
+// mythos/server/index.js — RW from NOVA server.js
 // Reuses: 127.0.0.1 bind, CORS allowlist, verifyWsClient, broadcastAll, graceful-shutdown
 
 const app = express();
@@ -1859,7 +1861,7 @@ function subscribe(types, onEvent) {
 | `agent-actions.js` | `src/core/effectors/agent-actions.js` | CA | reasoning.chat→brain.complete |
 | `orchestrator.js` | `src/core/effectors/build-runner.js` | WRAP | Enqueue→pump as effector, NOT absorbed into GoalSystem |
 | `confirm.js` | `src/core/leash/confirm.js` | CA | Session+tier-scoped, T3 confirmed-once |
-| `voice-agent.js` | `src/core/brain/interpret.js` | CA | interpret(utterance)→{say, intents[]} |
+| `voice-agent.js` | `src/core/brain/index.js` | CA | interpret(utterance)→{say, intents[]}, absorbed into Brain (no separate interpret.js ever shipped) |
 | `tts.js` | `src/core/effectors/voice.js` | CA | TTS as effector |
 | `checkpoint-announcer.js` | `src/core/immune/announcer.js` | RW | Bus-subscribed, speaks via voice effector |
 | `intake.js` | WS sensor buffer | RW | Connection-scoped memory via WS sensor |
@@ -2174,7 +2176,7 @@ Gate: all views render, WS v2 messages flow, confirm modal works,
 | logger.js | 73 | CA | P0 |
 | vault.js | 83 | CA→fs-store.js | P1 |
 | confirm.js | 65 | CA | P5 |
-| voice-agent.js | 318 | CA→interpret.js | P7 |
+| voice-agent.js | 318 | CA→brain/index.js | P7 |
 | orchestrator.js | 136 | WRAP→build-runner | P7 |
 | tools-* (5 files) | ~1081 | CA→from-*.js | P7 |
 | agent-actions.js | 145 | CA | P7 |
