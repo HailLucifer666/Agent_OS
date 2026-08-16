@@ -39,8 +39,10 @@ jobs:
           # lines become check-run annotations, which ARE readable via the
           # public API — name the failures where they can be seen.
           if ($fails -gt 0 -or $cancelled -gt 0) {
-            $bad = $out | Select-String -Pattern '^not ok ' | Select-Object -First 8
-            foreach ($line in $bad) { Write-Host ("::error::" + $line.Line) }
+            # Indented 'not ok' lines are SUBTESTS — the parent alone hid which
+            # subtest actually failed on the first round of this diagnostics.
+            $bad = $out | Select-String -Pattern '^\s*not ok ' | Select-Object -First 10
+            foreach ($line in $bad) { Write-Host ("::error::" + $line.Line.Trim()) }
             if (-not $bad -or $bad.Count -eq 0) { Write-Host "::error:: summary reported failures/cancellations but no 'not ok' lines matched" }
           }
           if ($fails -gt 0 -or $cancelled -gt 0) { exit 1 }

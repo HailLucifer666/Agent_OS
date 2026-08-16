@@ -183,7 +183,16 @@ function readmeSlots(counts) {
   const file = path.join(REPO_ROOT, 'README.md');
   return [
     { file, pattern: /(immune system, and )(\d+)( tests\.)/, value: counts.tests },
-    { file, pattern: /(tests-)(\d+)(%20pass-)/, value: counts.pass },
+    // The README "tests" badge carries the PASS count — and pass is the one
+    // number that legitimately varies BY MACHINE: honest fixture-skips (BYO
+    // edge-tts .venv, per-machine model weights — see their t.skip guards)
+    // run as passes on a provisioned machine and as skips on a fresh clone or
+    // CI runner. Strict equality here made --check impossible to satisfy on
+    // the operator's machine and CI at the same time (found 2026-08-16, the
+    // last layer of the CI-red-for-three-days chain). Tolerant slot: the
+    // pattern must still exist; the ROADMAP block's pass+fail+skipped==tests
+    // invariant is what still catches real drift.
+    { file, pattern: /(tests-)(\d+)(%20pass-)/, value: counts.pass, tolerant: true },
     { file, pattern: /(Linear history on `main`\. )(\d+)( tests green\.)/, value: counts.tests },
     // The README hero also states the count inside the readme-typing-svg URL's
     // `lines=` query param, where the text is URL-encoded ("N+tests+green.") and
@@ -252,6 +261,12 @@ function applySlots(counts, mode, report) {
       staleCount++;
       continue;
     }
+    if (slot.tolerant) {
+      // Presence-only (see the slot's own comment): the value legitimately
+      // varies by machine, so a mismatch is not staleness.
+      byFile.set(slot.file, content);
+      continue;
+    }
     const stale = matches.filter((m) => parseInt(m[2], 10) !== slot.value);
     if (stale.length === 0) {
       byFile.set(slot.file, content);
@@ -302,7 +317,16 @@ function syncRoadmap(counts, mode, report) {
   }
 
   const [, tests, pass, fail, skipped] = m;
-  const matches = +tests === counts.tests && +pass === counts.pass && +fail === counts.fail && +skipped === counts.skipped;
+  // tests and fail are machine-stable (same test files everywhere; failures
+  // are gated to 0 by the hook/CI). pass/skipped are NOT machine-stable:
+  // honest fixture-skips (BYO edge-tts .venv, per-machine model weights) run
+  // as passes on a provisioned machine and as skips on a fresh clone or CI
+  // runner, so strict equality could never be green on both at once
+  // (2026-08-16 — same chain as the tolerant README badge slot). The
+  // invariant below is what still catches real drift: the three states must
+  // partition the whole suite exactly.
+  const invariantHolds = (+pass) + (+fail) + (+skipped) === (+tests);
+  const matches = +tests === counts.tests && +fail === counts.fail && invariantHolds;
   if (matches) return false;
 
   report.push(`ROADMAP.md: sync block stale (found ${tests}/${pass}/${fail}/${skipped}, expected ${counts.tests}/${counts.pass}/${counts.fail}/${counts.skipped})`);

@@ -106,11 +106,18 @@ test('build.files excludes the vendored edge-tts LGPLv3 package under mythos/.ve
     'the installed edge_tts LGPLv3 package under mythos/.venv must never be packaged');
 });
 
-test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', () => {
+test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', (t) => {
+  const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'wakeword', 'hey_jarvis_v0.1.onnx');
+  // The weights are gitignored and fetched per-machine (scripts/setup-wakeword.js),
+  // so a fresh clone or CI runner doesn't have them — this used to HARD-FAIL on
+  // existsSync there while passing on every machine that had ever fetched the
+  // models (the BUG-258/259 environment-dependence class; CI red 2026-08-13..16).
+  // Skip, don't fake the fixture — same discipline as the edge-tts .venv test
+  // above and the wakeword rename-race rule: faking model state is how weights
+  // get destroyed. Machines that ran the setup script still run the real check.
+  if (!fs.existsSync(target)) return t.skip('fixture absent: openWakeWord weights not fetched on this machine (scripts/setup-wakeword.js)');
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
-  const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'wakeword', 'hey_jarvis_v0.1.onnx');
-  assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);
   assert.equal(isIncluded(filterFn, target), false,
     'openWakeWord .onnx weights (CC BY-NC-SA, non-commercial) must never be packaged');
 });
