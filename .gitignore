@@ -177,3 +177,4 @@ nodes/.kotlin/
 # hallmark skill's runtime diversification log (project memory written where
 # builds run — runtime-local state, never publish; see mythos/skills/hallmark/)
 .hallmark/
+.superpowers/

@@ -1616,6 +1616,15 @@ function createServer(deps) {
   // node id is the SAME string everywhere — its entry in AETHER_NODE_IDS, its
   // position in the aggregator's --peers, and what it identifies as here.
   const voiceNodes = new Map();
+  // FIX-PLAN 3.4 (2026-08-17): damping state for the duplicate-identify
+  // anomaly — nodeId -> { at, suppressed }. BUG-253's largest untracked
+  // cluster was SIX reports of one reconnect loop in ~30 minutes, each
+  // narrated by the immune explainer as a fresh unexplained fault; one per
+  // nodeId per minute with a suppressedCount keeps it countable without
+  // re-alarming on every bounce. Same TTL-map shape as the healer's
+  // suppressedTools (BUG-013). Entries are bounded by distinct node ids.
+  const VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS = 60000;
+  const voiceNodeDupAnomalyLast = new Map();
   // Wave 1 (2026-08-13): connectionId -> that connection's liveAdapter (set
   // once liveOpen() creates it, deleted on ws close). leash/confirm.js's
   // per-entry expiry timer fires with no connection context of its own — this
@@ -3691,22 +3700,35 @@ function createServer(deps) {
         } else {
           const previous = voiceNodes.get(nodeId);
           if (previous && previous !== ws && previous.readyState === 1) {
-            bus.emit('health.anomaly', {
-              kind: 'voice-node-duplicate-identify',
-              summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
-              detail: { nodeId },
-              // 2026-08-10: `summary` is not a field the spoken path reads.
-              // immune/explainer.js narrates an unplaybooked anomaly from
-              // `target` + `reason` (AD-5 deterministic wording), so this fired
-              // repeatedly on 2026-08-09 and was announced as an unexplained
-              // fault — while the cause was written right here. Naming the
-              // benign case matters too: one phone reconnecting after a network
-              // drop produces this exactly like two misconfigured devices do,
-              // and the server genuinely cannot tell them apart.
-              target: nodeId,
-              reason: 'two open sockets claimed this voice node and the newer one won — ' +
-                'usually the same device reconnecting, but two devices sharing one node id look identical here',
-            });
+            // FIX-PLAN 3.4: rate-limit to one anomaly per nodeId per minute.
+            // Every suppressed bounce still increments the count, and the next
+            // EMITTED anomaly carries it as suppressedCount — so the storm
+            // stays countable in the vault exactly as before (rules/core.md
+            // §11.2), it just stops re-invoking the explainer per bounce.
+            const dupNow = Date.now();
+            const dupLast = voiceNodeDupAnomalyLast.get(nodeId);
+            if (dupLast && dupNow - dupLast.at < VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS) {
+              dupLast.suppressed += 1;
+            } else {
+              const suppressedSinceLast = dupLast ? dupLast.suppressed : 0;
+              voiceNodeDupAnomalyLast.set(nodeId, { at: dupNow, suppressed: 0 });
+              bus.emit('health.anomaly', {
+                kind: 'voice-node-duplicate-identify',
+                summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
+                detail: { nodeId, suppressedCount: suppressedSinceLast },
+                // 2026-08-10: `summary` is not a field the spoken path reads.
+                // immune/explainer.js narrates an unplaybooked anomaly from
+                // `target` + `reason` (AD-5 deterministic wording), so this fired
+                // repeatedly on 2026-08-09 and was announced as an unexplained
+                // fault — while the cause was written right here. Naming the
+                // benign case matters too: one phone reconnecting after a network
+                // drop produces this exactly like two misconfigured devices do,
+                // and the server genuinely cannot tell them apart.
+                target: nodeId,
+                reason: 'two open sockets claimed this voice node and the newer one won — ' +
+                  'usually the same device reconnecting, but two devices sharing one node id look identical here',
+              });
+            }
             // "Newer one wins" only ever applied to voiceNodes; the superseded
             // socket stayed open and kept receiving, because a reply goes to the
             // socket that ASKED, not to the map. A phone that opened three

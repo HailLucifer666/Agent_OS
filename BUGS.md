@@ -7958,7 +7958,7 @@ rest are open with a named reason.
 | `inc-1786102413272-1`, `inc-1786104367729-1` | 08-07 | Reclassified, see BUG-234 part 1a — `live-reasoning-leak` moved off the fault channel to `voice.live.reasoning-filtered`. Not a fault; no containment change. |
 | `inc-1786193617857-1` | 08-08 | Open — speech not recognised. Overlaps the transcript work in BUG-224's session but has no isolated repro; needs a live session with `live-turn-no-user-transcript` counts captured. |
 | `inc-1786194147637-2`, `inc-1786237852737-1` | 08-08/09 | By design, not a defect — `live-idle-exhausted` is the deliberate idle-session cost-saving close. What is real here is that it READS as an alert to the operator; see the chronic-signature note below. |
-| `inc-1786225418123-1`, `inc-1786228238850-1`, `inc-1786228259202-1`, `inc-1786228861084-2`, `inc-1786229465887-3`, `inc-1786230234810-5` | 08-08 | **Open, and the largest untracked cluster: six reports of one voice-node-duplicate identify loop in ~30 minutes.** Aether node identity, `voiceNodes` resolution. Never had an entry. |
+| `inc-1786225418123-1`, `inc-1786228238850-1`, `inc-1786228259202-1`, `inc-1786228861084-2`, `inc-1786229465887-3`, `inc-1786230234810-5` | 08-08 | Server half closed — BUG-265 (2026-08-17): the duplicate-identify anomaly is damped to one per nodeId per minute with a suppressedCount. The reconnect-storm ROOT CAUSE needs live Aether (operator side) and stays open there. |
 | `inc-1786230054882-4` | 08-08 | Informational — a self-heal that worked. No action. |
 | `inc-1786231315825-1` | 08-08 | Open, product gap rather than defect: no approval/rejection control exists in the dashboard for a queued WhatsApp send. |
 | `inc-1786236109564-1`, `inc-1786236365947-3` | 08-09 | Spotify half tracked and still open as BUG-001/BUG-026. The `open_web` half — a widget opened where the operator expected a browser window — was untracked until now. |
@@ -8334,3 +8334,26 @@ the flag; the description keeps its negative lead and browser_navigate
 mention (open-web-is-not-a-browser.test.js pins both). Tests: 5 new in
 `open-web-is-not-a-browser.test.js` — delegation, bare-domain normalization,
 non-URL guidance failure, default-unchanged guard, catalog pin.
+
+## BUG-265 — the voice-node-duplicate-identify anomaly re-alarmed on every reconnect bounce
+
+**BUG-253's largest untracked cluster: six reports of one loop in ~30 minutes
+(08-08), each narrated by the immune explainer as a fresh unexplained fault.**
+The identify handler emitted `health.anomaly
+'voice-node-duplicate-identify'` on EVERY duplicate claim with no damping —
+and since one phone on a flaky network bounces exactly like two misconfigured
+devices (the server genuinely cannot tell them apart, per the payload's own
+reason text), a single reconnect storm produced an anomaly storm, each one
+invoking the expensive no-match explainer path.
+
+**FIXED 2026-08-17 (fix-plan 3.4), server side.** The emission is damped to
+one per nodeId per 60s (`VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS`, same TTL-map
+shape as the healer's suppressedTools/BUG-013); bounces inside the window
+increment a per-node suppressed counter that rides the NEXT emitted anomaly as
+`detail.suppressedCount`, so the storm stays countable in the vault
+(rules/core.md §11.2) without re-alarming per bounce. Test:
+`aether-node-routing.test.js` — three supersessions inside the window produce
+exactly one anomaly, first emission carries suppressedCount:0. **The
+reconnect-storm root cause itself is NOT this repo's** — it is whatever the
+Aether aggregator/bridge side does across drops, and needs a live Aether
+session to chase; recorded as operator-side, honestly open.
