@@ -70,13 +70,19 @@ Licensed under the Apache License, Version 2.0
   `ui/public/js/vision/camera.js` at runtime. It is the only third-party model
   binary committed to this repo — every other model (silero, wakeword, piper,
   kokoro, whisper) is gitignored and fetched per-machine by a setup script.
-- **License: UNVERIFIED as of 2026-08-12.** The library code above it is
+- **License: UNVERIFIED — re-confirmed 2026-08-16.** The library code above it is
   Apache-2.0, but that licence covers the *code*, not this *model artifact* —
   the same code-licence-vs-weights distinction that applies to openWakeWord's
   CC BY-NC-SA weights elsewhere in this file. MediaPipe's developer docs page
   covers page content (CC BY 4.0) and code samples (Apache-2.0), neither of
   which is the binary itself, and no separate model-card terms for this file
-  have been confirmed.
+  have been confirmed. **2026-08-16 re-check:** both canonical docs URLs for
+  the Gesture Recognizer are now dead — `developers.google.com/mediapipe/
+  solutions/gesture_recognizer` 301-redirects to `ai.google.dev/edge/
+  mediapipe/solutions/gesture_recognizer`, which 404s — and the
+  `google-ai-edge/mediapipe-samples` repo carries the example code (Apache-2.0)
+  but states no terms for the `.task` weights. The licence remains unverifiable
+  from public sources.
 - A 2026-08-04 licence audit (Step 6.6) found this and excluded the file from
   the installer as a licensing hold. On 2026-08-12 the repo owner made an
   explicit decision to ship it anyway, accepting the unverified-licence risk
@@ -209,6 +215,93 @@ they describe how MYTHOS drives those tools. No upstream text or code is
 redistributed for them. Each `SKILL-CORE.md` is likewise an original
 condensation written here.
 
+## Cloud AI API providers (BYO keys) — terms recorded 2026-08-16
+
+MYTHOS ships without keys; every provider account is the operator's own (the
+BYO rule, same as `.env.example`). This section records **verbatim facts**
+from each provider's current published terms, fetched and quoted 2026-08-16,
+in service of roadmap step 6.6 (provider ToS for resale). Facts and sources
+only — no legal conclusions; terms change, so re-verify before any release.
+
+- **Google (Gemini API).** Sources: Gemini API Additional Terms of Service
+  (https://ai.google.dev/gemini-api/terms) and Google APIs Terms of Service
+  (https://developers.google.com/terms). API Prohibitions §4.a.1: *"Sublicense
+  an API for use by a third party. Consequently, you will not create an API
+  Client that functions substantially the same as the APIs and offer it for use
+  by third parties."* §4.b.1 parenthetical: *"Developer credentials may not be
+  embedded in open source projects."* The Additional Terms state use is *"for
+  developers building with Google AI models for professional or business
+  purposes, not for consumer use"*, that *"You may use only Paid Services when
+  making API Clients available to users in the European Economic Area,
+  Switzerland, or the United Kingdom"*, and for **Unpaid Services** that Google
+  uses submitted content and generated responses to improve its products, that
+  *"Algorithms don't always make the best judgment on their own"* regarding
+  *"human reviewers who read, annotate, and process"* sample content, and *"Do
+  not submit sensitive, confidential, or personal information to the Unpaid
+  Services."* Paid Services are stated not to use prompts/responses for product
+  improvement, with the DPA applicable.
+- **Groq.** Source: Groq Services Agreement
+  (https://console.groq.com/docs/legal/services-agreement, *"Last Modified:
+  June 22, 2026"*; the groq.com website ToU is a separate document). §3.2:
+  *"Customer may not resell or lease access to its Account."* §6.3(c): no
+  *"sell, resell, sublicense, transfer, or distribute any of the Cloud Services
+  except as expressly approved by Groq"*. §3.1 grants the right to *"use Groq's
+  APIs to integrate the Cloud Services and AI Model Services into your Customer
+  Application and to make the Cloud Services and AI Model Services available to
+  End Users through your Customer Applications."* §4.2: *"Groq is not permitted
+  to use Inputs or Outputs for training or fine-tuning any AI Model Services or
+  other models, unless explicitly granted permission or instructed by
+  Customer"* (stated tier-agnostically; no free/paid data-use split and no
+  human-review language found in the document).
+- **Mistral AI.** Sources: the live legal hub https://legal.mistral.ai/terms —
+  Commercial ToS, Additional Product Terms, ROW Consumer ToS (all *"Effective:
+  August 5, 2026"*). `mistral.ai/terms-of-service` is dead (renders the
+  homepage). A separate non-commercial/free-tier API terms document: **NOT
+  VERIFIED 2026-08-16** (none linked on the live site). Commercial ToS §2.2(h):
+  may not *"buy, sell, or transfer API keys or any type of Mistral AI account
+  from, to, or with a third party"*; §2.1 license is *"non-sublicensable
+  (except to its End Users)"*. §1.4 defines *"Customer Offering"* — *"Customer's
+  own products and services that it makes available to third parties which
+  involve use of the Mistral AI Products"* — with End User Accounts permitted
+  (Additional Product Terms §2: *"End User Accounts may not be shared, sold,
+  licensed, or otherwise made available outside of Customer's entity or
+  organization."*). §4.3 **Labs or Preview Models** (the free/experimental
+  tier): *"Mistral AI may use Customer Data and Outputs generated from Labs or
+  Preview Models to train its artificial intelligence models"*, the training
+  opt-out *"does not apply"*, and they are *"restricted to professional use
+  only."* §4.2: no training on Customer Data/Outputs for the main products
+  except the stated opt-in/opt-out states and Labs/Preview.
+- **Cerebras.** Source: Terms of Use
+  (https://www.cerebras.ai/terms-of-service, *"Effective August 27, 2024"* —
+  one document covering site and API; headings unnumbered). Restrictions: no
+  *"Copy, rent, lease, sell, loan, transfer, assign, license or purport to
+  sublicense, resell, distribute"* of the Service, and *"Buy, sell or transfer
+  API keys without our prior written consent in each case"*. The IP License
+  grants the right to *"use the APIs to develop, test and support your
+  applications"* and *"distribute or allow access to your integration of the
+  APIs within your applications to end users"*. Data: *"the foregoing does not
+  grant Cerebras the right to use Service Content for the purpose of training
+  or fine-tuning models"* (tier-agnostic; no free/paid data-use split and no
+  human-review language found).
+- **OpenRouter.** Source: Terms of Service (https://openrouter.ai/terms,
+  *"Last Updated: July 29, 2026"*). §7.4 prohibits accessing *"the Site or
+  Service for purposes of reselling API access to Models or otherwise
+  developing a competing service"*; §7.13 prohibits selling or transferring
+  access or Materials. §5.1 however expressly contemplates BYO-key products:
+  *"The Service enables you, your Authorized Users, and your customers (to the
+  extent you incorporate the Service into your own products and services)
+  access to Models provided by Model Providers"*, with flow-down obligations to
+  those users (§5.2). §6.1: *"Some Models may store or train on your Inputs… as
+  described in their Model Terms. Where possible, OpenRouter has opted out of
+  model training with the Models it uses"* — per-Model terms flow down
+  (§5.1–5.9); org-level Admins configure prompt logging/zero data
+  retention/model training settings (§3.1).
+- **NVIDIA NIM (build.nvidia.com hosted APIs).** **NOT VERIFIED 2026-08-16:**
+  `build.nvidia.com/terms` renders an empty JS shell with no terms text, and
+  `nvidia.com/en-us/agreements/cloud-services-terms/` is a navigation hub
+  without the document body. Named gap — re-verify against the actual NIM
+  hosted-API terms before any release decision relies on it.
+
 ## Optional external tools reached at runtime (not redistributed)
 
 None of these ship with MYTHOS. Each is installed by the operator on their own
@@ -224,7 +317,7 @@ Listed so the licences are on record before any release.
 | Open Knowledge Format | https://github.com/GoogleCloudPlatform/knowledge-catalog | Verify upstream `LICENSE` before shipping an OKF importer/exporter as a product feature | Format only — MYTHOS reads and writes the file shape, linking no upstream code |
 | awesome-llm-apps | https://github.com/Shubhamsaboo/awesome-llm-apps | Apache-2.0 | Reference reading only; nothing installed or imported |
 | headroom | https://github.com/headroomlabs-ai/headroom | Apache-2.0 | MCP stdio server (`headroom mcp serve`) from an operator-installed, project-local venv. Optional; absent → the MCP adapter returns `{ok:false}` and MYTHOS runs uncompressed |
-| Hermes-Agent | https://github.com/NousResearch/hermes-agent | MIT (LICENSE file + README badge, verified upstream 2026-08-08; no commercial-use restriction stated) | Cloned by `scripts/setup-hermes.js --install` into a gitignored project-local `<repo>/Hermes Agent/`, then run as a child process. **Not vendored** — no upstream code is tracked in this repo. Note this is the one integration that does NOT degrade silently: since 2026-07-29 it is the only build-content engine, so a build with no engine FAILS with an install hint rather than shipping a wrong artifact (boot itself still succeeds without it) |
+| Hermes-Agent | https://github.com/NousResearch/hermes-agent | MIT (LICENSE file + README badge, verified upstream 2026-08-08, re-verified live 2026-08-16; no commercial-use restriction stated) | Cloned by `scripts/setup-hermes.js --install` into a gitignored project-local `<repo>/Hermes Agent/`, then run as a child process. **Not vendored** — no upstream code is tracked in this repo. Note this is the one integration that does NOT degrade silently: since 2026-07-29 it is the only build-content engine, so a build with no engine FAILS with an install hint rather than shipping a wrong artifact (boot itself still succeeds without it) |
 | cua-driver | https://github.com/trycua/cua (`cua-driver-rs`) | MIT (repository LICENSE.md + sidebar, verified upstream 2026-08-08) | Operator-installed binary (`cua-driver.exe`), spawned over stdio MCP; `adapters/cua-driver/` resolves `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\` then falls back to PATH. Spawn ENOENT → adapter stays OFFLINE. **Caveat worth keeping on record:** the same upstream repo ships other components under different terms — OmniParser is CC-BY-4.0, and the optional `cua-agent[omni]` extra pulls ultralytics under **AGPL-3.0**. MYTHOS uses only the `cua-driver` binary and none of those, so the AGPL path is not entered; do not widen the integration to `cua-agent` without revisiting this |
 
 These entries record what upstream states. They are not a legal conclusion —

@@ -101,9 +101,14 @@ async function delegateWithRetry(cmdObj, opts) {
       return lastResult;
     }
     if (attempt < attempts) {
+      // BUG-259 class fix (2026-08-16): the backoff timer must stay REF'D.
+      // Unref'd, it never fires in a process with nothing else holding the
+      // event loop (CI's Node 22 test-runner child), leaving the retry
+      // promise pending at loop drain — the runner then kills the test and
+      // cascades cancelledByParent through its siblings. See briefing.js's
+      // withTimeout for the full history.
       await new Promise((resolve) => {
-        const t = setTimeout(resolve, backoffMs);
-        if (t && typeof t.unref === 'function') t.unref();
+        setTimeout(resolve, backoffMs);
       });
     }
   }

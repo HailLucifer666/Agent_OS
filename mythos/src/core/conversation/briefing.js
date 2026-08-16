@@ -59,9 +59,18 @@ const SELF_HEALING_QUERY_LIMIT = 500;
 // "skip this fact", never as a reason to fail the whole briefing.
 function withTimeout(fn, ms) {
   const guarded = Promise.resolve().then(fn).catch(() => null);
+  // BUG-259 (2026-08-16): the timer must stay REF'D. It was unref()'d here,
+  // which silently removed the guarantee this helper exists to provide: in a
+  // process with nothing else holding the event loop (exactly the test-runner
+  // child on CI's Node 22), the loop drained before the timer fired, the race
+  // never settled, and the runner killed the pending test ("Promise resolution
+  // is still pending but the event loop has already resolved"), cascading
+  // cancelledByParent through ~64 sibling tests and failing CI's test-count
+  // gate on every push since 2026-08-13 while local Node 24 runs stayed green.
+  // A ref'd timer fires at ms and closes its handle; the only thing unref ever
+  // bought was skipping a ≤timeoutMs wait at process exit for a hung source.
   const timeout = new Promise((resolve) => {
-    const t = setTimeout(() => resolve(null), ms);
-    if (t.unref) t.unref();
+    setTimeout(() => resolve(null), ms);
   });
   return Promise.race([guarded, timeout]);
 }

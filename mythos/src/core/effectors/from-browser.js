@@ -1056,6 +1056,19 @@ async function browser_launch_debug(args) {
     return fail('A browser connection attempt is already in progress and did not complete — try again in a moment.');
   }
 
+  // BUG-115 (hoisted 2026-08-16): validate BEFORE anything machine-dependent —
+  // before browser discovery, not just before the spawn. A bad/missing
+  // BROWSER_EXTENSIONS path is a config error and must fail loudly with its
+  // own message on ANY machine, browser installed or not; with validation
+  // after findBrowserExecutable(), a browser-less machine (a fresh contributor
+  // running the suite, a clean CI runner) surfaced "No supported browser
+  // found" instead, and test/bug-115's loud-failure test failed there — the
+  // same environment-dependent-test class as BUG-258. Discovery order between
+  // the profile dir and the spawn is otherwise unchanged.
+  const extensionsResult = resolveBrowserExtensions();
+  if (!extensionsResult.ok) return fail(extensionsResult.error);
+  const extensionDirs = extensionsResult.dirs;
+
   const exe = findBrowserExecutable(want);
   if (!exe) {
     return want
@@ -1069,12 +1082,6 @@ async function browser_launch_debug(args) {
     ? path.join(process.env.LOCALAPPDATA, 'MYTHOS', want + '-debug-profile')
     : path.join(process.env.LOCALAPPDATA, 'MYTHOS', 'chrome-debug-profile');
   try { fs.mkdirSync(profileDir, { recursive: true }); } catch (err) { return fail(`Could not create debug profile directory: ${err.message}`); }
-
-  // BUG-115: validate BEFORE spawning anything — a bad/missing path must fail
-  // loudly here, not launch a browser that quietly has no extensions.
-  const extensionsResult = resolveBrowserExtensions();
-  if (!extensionsResult.ok) return fail(extensionsResult.error);
-  const extensionDirs = extensionsResult.dirs;
 
   const cdpUrl = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
   try {

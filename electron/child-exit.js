@@ -45,8 +45,16 @@ function awaitChildExit(pending, timeoutMs, log) {
       try { pending.kill('SIGKILL'); } catch { /* already gone */ }
       finish();
     }, timeoutMs);
-    // A pending timer must never be the reason the process refuses to exit.
-    if (typeof timer.unref === 'function') timer.unref();
+    // BUG-259 class fix (2026-08-16): this timer must stay REF'D. Unref'd, the
+    // deadline never fires in a process with nothing else holding the event
+    // loop — exactly the quiet-runner condition — so awaitChildExit would hang
+    // forever, defeating the "never waits forever: escalates and resolves
+    // anyway" contract above. A ref'd timer fires at timeoutMs and closes its
+    // handle; the only case unref ever changed was a stuck child delaying
+    // process exit by at most the deadline, which is this function's designed
+    // behavior anyway. (CI was red for three days on this class: the Node 22
+    // test-runner child drained its loop, the pending test was killed, and its
+    // siblings cascaded to cancelledByParent.)
   });
 }
 

@@ -9,7 +9,7 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-16 - gap-analysis pass; BUG-258 (CI red since 2026-08-13)
+Last updated: 2026-08-16 - gap-analysis pass; BUG-258 + BUG-259 (CI red since 2026-08-13, two causes)
 (BUG-238..BUG-250, in the final section): the double voice traced to a third
 speech path that never got the BUG-060 Live guard, DEGRADED traced to a revoked
 Google token with no notion of a terminal failure, a build that shipped
@@ -8073,3 +8073,40 @@ binary is pinned to one that exists on any machine that can run the suite.
 Verified: `node --test test/immune.test.js` → 54/54 pass in ~1.1s, where the
 unfixed file failed in isolation on this machine with the exact ENOENT
 diagnostic above.
+
+## BUG-259 — an unref'd timeout timer that never fires: the SECOND cause of CI red
+
+BUG-258 fixed, pushed, and **CI was still red** — which is how the second,
+independent cause was found. `src/core/conversation/briefing.js`'s
+`withTimeout()` helper (every boot-greeting fact source is raced against a
+per-source timeout) created its timer and then called `t.unref()` on it. An
+unref'd timer does not hold the event loop open, so in a process with nothing
+else pending the loop drains before the timer fires and the timeout simply
+never happens. Production never noticed (boot runs amid dozens of live
+handles), and local Node 24 runs never noticed (that runner's child keeps the
+loop alive), but CI's **Node 22** test-runner child drains: in
+`test/briefing-facts.test.js`, the "stats() hangs past the timeout" test left
+a never-settling race, the runner reported *"Promise resolution is still
+pending but the event loop has already resolved"*, failed that test, and
+cancelled its ~64 siblings (`failureType: 'cancelledByParent'`). Suite
+summary on CI: `fail 0` — so the pwsh fail-gate PASSED — but `pass 4652`
+instead of 4716, and the `sync-test-count.js --check` gate failed on the
+number mismatch. CI red on every push since 2026-08-13 (when the file landed),
+invisible locally on Node 24, and with a summary shape (`fail 0`, red job)
+that pointed away from a test failure.
+
+The unref bought nothing measurable: a ref'd timer fires at `ms`, resolves
+the race, and closes its handle. The only case unref changed was a hung
+source delaying process exit by its timeout — ≤2s, once.
+
+**FIXED 2026-08-16**: the timer stays ref'd (comment in place explaining the
+Node 22 CI history). Reproduced first: a clean-env Node 22.23.2 run on this
+machine (Node 24 local runs were green) showed `fail 0 / cancelled 64 /
+pass 4652` — CI's exact signature — and the fixed file passes 55/55 under
+the same clean-env Node 22 with no browser and `TZ=UTC`. Same session, same
+class, one more instance fixed: `browser_launch_debug()` ran browser
+discovery BEFORE `BROWSER_EXTENSIONS` validation, so on a browser-less
+machine (fresh contributor, stripped CI) the loud config error was masked by
+"No supported browser found" and `test/bug-115`'s loud-failure test failed
+there. Validation now runs first — a config error is machine-independent and
+fails with its own message everywhere.
