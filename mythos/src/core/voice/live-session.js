@@ -14,6 +14,7 @@
 // onToolCall() so the leash/dispatch spine stays the single execution surface (AD-1).
 
 const WebSocket = require('ws');
+const { createEchoFilter } = require('./echo-filter');
 
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -324,6 +325,16 @@ function createLiveSession(deps) {
   // misalignment spanning a rotation is still traceable across it.
   let turnCounter = 0;
 
+  // BUG-271: own-voice echo filter (see echo-filter.js for the class of bug
+  // and the accepted cost of quoting MYTHOS back at it within 3s). Tracks
+  // what MYTHOS said via outputTranscription; an inputTranscription that
+  // word-overlaps it (>= 60%, within 3s) is the speakers replaying MYTHOS's
+  // voice into the mic, not the operator — dropped before it can become
+  // userText, fire onTranscript, reset the idle ceiling, or arm the turn
+  // stall. The batch path has had this filter for years (voice-loop.js's
+  // echoMatch); the Live path never got it.
+  const echoFilter = createEchoFilter();
+
   function setState(next, reason) {
     if (state === next) return;
     state = next;
@@ -545,13 +556,26 @@ function createLiveSession(deps) {
       if (!turnFrameFields) turnFrameFields = new Set();
       for (const k in sc) turnFrameFields.add(k);
       if (sc.inputTranscription && sc.inputTranscription.text) {
-        userText += sc.inputTranscription.text;
-        idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
-        armTurnStall(); // BUG-131 — the operator said something; a reply is now owed
-        if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
+        // BUG-271: an echo of MYTHOS's own voice behaves as if it never
+        // arrived — no userText, no onTranscript, no idle-ceiling reset, no
+        // turn stall (see echoFilter's declaration above).
+        const echoRatio = echoFilter.match(sc.inputTranscription.text);
+        if (echoRatio !== null) {
+          // The ratio only, never the text — transcripts are operator
+          // speech, the log is not.
+          logger.info('live.echo-dropped', { turnId: turnCounter + 1, ratio: echoRatio });
+        } else {
+          userText += sc.inputTranscription.text;
+          idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
+          armTurnStall(); // BUG-131 — the operator said something; a reply is now owed
+          if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
+        }
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
         disarmTurnStall(); // BUG-131 — it IS answering
+        // BUG-271: track the RAW text — the echo is acoustic, and the audio
+        // that played is the unstripped speech.
+        echoFilter.noteSpoken(sc.outputTranscription.text);
         // BUG-170: strip a leaked reasoning label only while this turn's reply
         // is still empty — see stripReasoningLead's note above.
         const rawOutputText = sc.outputTranscription.text;
@@ -596,6 +620,10 @@ function createLiveSession(deps) {
       }
       if (sc.turnComplete) {
         disarmTurnStall(); // BUG-131 — the turn landed, stalled or not
+        // BUG-271: the utterance ended, but it stays an echo reference for
+        // the rest of its 3s window — speaker bleed arrives after the speech
+        // finishes (the batch path's post-playback ECHO_GUARD_MS).
+        echoFilter.endUtterance();
         if (breakers && typeof breakers.success === 'function') breakers.success(BREAKER);
         // BUG-124: a monotonic per-session turn number, attached to the turn and
         // to every anomaly this module raises about it. The reported symptom is
