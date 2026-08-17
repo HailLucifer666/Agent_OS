@@ -9,7 +9,20 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-17 (second entry) - the FIRST real operator Electron sitting, and the vault
+Last updated: 2026-08-17 (third entry) - BUG-271: the first Gemini Live voice session, diagnosed as
+three Live-path defects the batch path has defended against for years - a self-interrupting echo
+loop (MYTHOS's own voice replayed to Gemini and transcribed as the operator), phantom words from
+ungated room noise, and the suspend-transition evidence the client computed and sent but the server
+discarded. Fixed in code (echo filter on the Live path, a zero-not-drop client noise gate, eager
+barge-in tier 0.035/200ms -> 0.05/300ms, full suspend-log fields); live acoustic re-test pending.
+BUG-270 gets an honest correction note: valid fix, wrong path for the operator's machine.
+
+Previous entry: 2026-08-17 (second entry) - BUG-270: Part B's first live voice check failed and
+falsified the same-day 900ms endpointing experiment (reverted to 1800); silent clip-drops made
+loud (console.warn + HUD caption). Fixed on the batch path - which the operator's machine does
+not run (see BUG-271's correction note on that entry).
+
+Previous entry: 2026-08-17 - the FIRST real operator Electron sitting, and the vault
 merge it exposed. BUG-268 (Ctrl+Alt+X screen-text capture does nothing - popup fires, no result;
 operator-deprioritised, undiagnosed) and BUG-269 (global press-to-talk intermittent with variable
 lag) are both operator-reported from live use and both fully green in the automated suite - the
@@ -8497,6 +8510,13 @@ close the ticket for both.
 checks of the v0.1.10 Part B sitting). Operator-reported 2026-08-17, the
 first real voice conversation on the batch path.**
 
+**CORRECTION 2026-08-17 (see BUG-271):** this fix is VALID — but it touched
+the batch path, and the operator's machine runs the **Gemini Live path**
+(`VOICE_S2S_ENABLED`). That is why nothing changed after this shipped: the
+reported symptoms were produced by the Live path, which this entry never
+touched. The revert and the loud clip-drops stand for the batch path; BUG-271
+is the Live-path diagnosis and fix.
+
 **Observed, verbatim:** "I spoke to it, had a conversation… It is very
 glitchy. It interrupts and it's breaking in between all sorts of things. I
 did a microphone test as well. It's not picking up words from the noise. The
@@ -8548,3 +8568,82 @@ at a time (`VAD_SPEECH_RMS=0.025` first) — or the operator opts into
 pauses — MYTHOS must no longer jump in mid-thought; and speech in the noisy
 room — if still missed, note whether the new "too quiet" hint appears, which
 names the gate to tune.
+
+## BUG-271 — first Gemini Live voice session: a self-interrupting echo loop, phantom words from noise, and the evidence that was computed then thrown away
+
+**FIXED IN CODE 2026-08-17 (`d3d6226`, `bb10623`, `952580e`, plus this entry's
+commit) — live re-verification pending (the acoustic re-test in the noisy
+room; see Re-verification below). This is the Live-path diagnosis of the
+symptoms BUG-270 fixed on the wrong path.**
+
+**Three defects, all on the Gemini Live path (`VOICE_S2S_ENABLED`), which the
+operator's machine runs.** The batch path (`voice-loop.js`) has carried
+defences against each of these for years; the Live path
+(`s2s-bridge.js` → `live-session.js`) never got them. That is the whole
+live-vs-batch distinction, and it is why BUG-270's valid fix changed nothing
+here (see the correction note on that entry).
+
+**(1) The echo loop — MYTHOS interrupting itself.** The speakers replay
+MYTHOS's reply into the mic; Gemini's server-side VAD is configured
+`START_SENSITIVITY_HIGH` (deliberately, for fast speech onset) and fires on
+it; the transcript of MYTHOS's own voice arrives as the operator's words.
+That provokes `serverContent.interrupted` — the server STOPS SYNTHESIZING
+mid-word (the clipping the operator heard; pcm-player's 250ms tail guard
+cannot recover a word the server never sent) — and one turn later the same
+self-trigger reads as MYTHOS interrupting the operator. The batch path solved
+this class years ago with `voice-loop.js`'s `echoMatch` + `ECHO_GUARD_MS`;
+`live-session.js` accepted every `inputTranscription` unfiltered. **Fix
+(`d3d6226`):** `src/core/voice/echo-filter.js`, a verbatim port of the batch
+`echoMatch` semantics (≥60% word overlap against anything MYTHOS said in the
+last 3s) plus a stateful tracker; a matching transcript now behaves as if it
+never arrived, and the drop logs `live.echo-dropped` with the overlap ratio
+only — never transcript text. Known accepted cost: quoting MYTHOS's own words
+back at it within 3s is dropped too; word overlap cannot tell an echo from a
+quotation. 18 new tests.
+
+**(2) The phantom words — noise with no gate.** The Live send path streamed
+EVERY 100ms mic frame to Gemini with no noise gate (the batch path gates at
+its SPEECH_RMS floor before sending anything), so room noise fired the VAD
+and its STT fabricated words the operator never said. And the eager barge-in
+release tier (0.035 RMS / 2 frames = 200ms) tripped on speaker bleed in the
+operator's room, releasing the half-duplex gate every ~7s and replaying
+MYTHOS's own voice back to Gemini — the log proves bleed clears 0.035. **Fix
+(`bb10623`):** new `ui/public/js/voice/live-noise-gate.js`, wired into BOTH
+`live-audio` send points (capture and the own-voice gate-release replay).
+**Zero, never drop:** a below-floor frame is replaced with digital silence of
+the SAME byteLength — frame count, size and rate on the wire unchanged,
+Gemini's VAD timeline untouched, the frozen `live-audio` shape intact.
+Hysteresis: voice clears the 0.02 floor → raw frames pass (dips between words
+included) until 800ms of continuous quiet re-zeroes. Floor tunable via
+localStorage (`MYTHOS_LIVE_NOISE_GATE_FLOOR`; 0 restores the raw stream).
+Eager tier raised 0.035/200ms → **0.05/300ms**: above the measured bleed,
+still eager, still strictly below the flush tier (0.056, unchanged). 39 new
+tests. `START_SENSITIVITY_HIGH` deliberately NOT changed.
+
+**(3) The hidden evidence — computed, sent, discarded.** Since `36561bd`
+(2026-08-14) the client's own-voice-release transition message has carried
+`prerollFrames`, `prerollCap`, `heldMs`, `framesDropped`, `peakRms` — and
+BUG-271's noise gate added `framesZeroed` — but the server's
+`voice-capture-suspend` handler logged only `{ suspended, holdMs, reason, at
+}` and threw the rest away. Ring overflow and self-echo could therefore only
+be INFERRED from Gemini's audioIn counts a day later. **Fix (this entry's
+commit):** the handler now logs every field the client sends, under its exact
+client name, on the transitions that send it (a media-start line grows no
+fabricated zeros). No wire change — the server only logs more of what it
+already receives; numeric/boolean fields only, never transcript text. One
+naming note for the next reader: `holdMs` (suspend-start, media path) and
+`heldMs` (own-voice-release duration) are DISTINCT fields on different
+transitions, never both on one message — the plan's "heldMs" is the
+release-side one. Pinned red-first by extending
+`test/s2s-capture-suspend-log.test.js` with a real-server block (1/2 failing
+before the fix, 10/10 after). `952580e` is the in-between review fix:
+`framesZeroed` now resets per session in the gate's `reset()` — as shipped in
+`bb10623` it was page-lifetime cumulative, contradicting its own comments.
+
+**Re-verification (pending — the operator's next step):** restart the app and
+converse in the noisy room. Watch for phantom words (defect 2) and
+self-interruption/echo turns (defect 1). If anything persists, the new log
+lines in mythos-server.log name the responsible gate: `live.echo-dropped`
+(the echo filter fired), and `voice.capture-suspend`'s `peakRms` (how loud
+the bleed got), `framesZeroed` (how much the noise gate silenced) and
+`framesDropped` (how much speech the preroll ring lost).

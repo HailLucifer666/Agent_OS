@@ -3691,9 +3691,17 @@ function createServer(deps) {
       // diagnosis a server-side record of every suspend/clear instead of only
       // inferring it after the fact from a blind turn.
       else if (msg.type === 'voice-capture-suspend') {
-        logger.info('voice.capture-suspend', {
-          suspended: Boolean(msg.suspended), holdMs: msg.holdMs, reason: msg.reason, at: msg.at,
-        });
+        // BUG-271: the own-voice-release transition also carries the ring/gate
+        // diagnostics the client has computed since 36561bd (and framesZeroed
+        // since the BUG-271 noise gate) — log them under their exact client
+        // names instead of discarding them. Only the transitions that send a
+        // field get it: a media-start line must not grow fabricated zeros.
+        // No wire change; numeric/boolean fields only, never transcript text.
+        const fields = { suspended: Boolean(msg.suspended), holdMs: msg.holdMs, reason: msg.reason, at: msg.at };
+        for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms']) {
+          if (msg[k] !== undefined) fields[k] = msg[k];
+        }
+        logger.info('voice.capture-suspend', fields);
       }
       else if (msg.type === 'close-panel-ack') {
         const p = pendingClosePanel.get(msg.reqId);

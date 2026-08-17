@@ -17,10 +17,13 @@
 // shares (mock.module() replaces that graph-wide and is still experimental
 // in this Node version).
 
-const { test, describe, mock } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const WebSocket = require('ws');
+const { createBus } = require('../src/core/bus');
+const { createServer } = require('../server');
 
 const BRIDGE_PATH = path.join(__dirname, '..', 'ui', 'public', 'js', 'voice', 's2s-bridge.js');
 const BRIDGE_URL = pathToFileURL(BRIDGE_PATH).href;
@@ -55,14 +58,17 @@ describe('s2s-bridge: capture-suspend transition log', () => {
   });
 
   test('the suspend ceiling fails open and logs its own transition, without a fake timer never firing', (t) => {
-    mock.timers.enable({ apis: ['setTimeout'] });
+    // t.mock (test-scoped, auto-restored), NOT the global mock — a leaked global
+    // mock.timers.enable here replaced setTimeout for every later test in this
+    // file and hung the BUG-271 server-side suite's wait loop.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const sent = [];
     const bridge = createS2SBridge({ sendMessageOverride: (m) => sent.push(m) });
 
     bridge.suspendForMedia(1000);
     assert.equal(bridge.isCaptureSuspended(), true);
 
-    mock.timers.tick(1000);
+    t.mock.timers.tick(1000);
 
     assert.equal(bridge.isCaptureSuspended(), false, 'fail-open: a deaf assistant is the worse failure');
     assert.equal(sent.length, 2);
@@ -134,5 +140,158 @@ describe('s2s-bridge: mic-muted HUD state overlay', () => {
     const bridge = createS2SBridge({ sendMessageOverride: () => {} });
     assert.doesNotThrow(() => bridge.suspendForMedia(200));
     assert.doesNotThrow(() => bridge.setCaptureSuspended(false));
+  });
+});
+
+// BUG-271 Task 3 (2026-08-17): the OTHER half of the evidence chain. The block
+// above pins what the CLIENT sends; this pins that the SERVER's
+// `voice-capture-suspend` handler actually LOGS the diagnostic fields instead of
+// discarding them. Since 36561bd (2026-08-14) the own-voice-release transition
+// has carried prerollFrames/prerollCap/heldMs/framesDropped/peakRms (and BUG-271
+// Task 2 added framesZeroed), but server/index.js logged only
+// { suspended, holdMs, reason, at } — so the ring-overflow / self-echo numbers
+// that diagnose BUG-271 never reached mythos-server.log and could only be
+// INFERRED from Gemini's audioIn counts a day later. No wire change: the server
+// only logs more of what it already receives.
+//
+// NOTE on field names: `holdMs` (suspend-start, media path) and `heldMs`
+// (own-voice-release) are DISTINCT fields sent on different transitions — never
+// both on one message. The plan's "heldMs" is the own-voice-release duration and
+// is logged under that exact client name; it is NOT a duplicate of `holdMs`.
+function fakeFs() {
+  return { vaultPath: (...s) => path.join('/test-vault', ...s) };
+}
+
+function baseDeps(bus, logger) {
+  return {
+    bus,
+    config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: '' },
+    logger,
+    memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() },
+    goalsEffector: { listGoals: () => [], stats: () => ({ total: 0, done: 0, active: 0 }) },
+    kanbanEffector: { listBoard: () => ({ cards: [] }) },
+    pipelineEffector: { listAll: () => ({}) },
+    effectors: { breakers: new Map(), invoke: async () => ({ ok: true }), effectors: new Map() },
+    leash: { confirm: { create: () => 'cf-1', accept: () => null, reject: () => true } },
+    goals: { debitBudget: () => {} },
+    probes: { getStatus: async () => ({ ok: true }) },
+    agentActions: {},
+    buildRunner: { getJob: () => null, onJobUpdate: () => () => {} },
+  };
+}
+
+function connectWs(port) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    ws.on('open', () => resolve(ws));
+    ws.on('error', reject);
+  });
+}
+
+describe('server: voice-capture-suspend handler logs the fields the client sends (BUG-271)', () => {
+  test('an own-voice-release transition reaches the log with every diagnostic field under its exact client name', async () => {
+    const bus = createBus({ historySize: 50 });
+    const logged = [];
+    const logger = {
+      info: (msg, fields) => logged.push({ msg, fields }),
+      warn() {}, error() {}, debug() {}, onLog: () => () => {},
+    };
+    const server = createServer(baseDeps(bus, logger));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    let ws;
+    try {
+      ws = await connectWs(port);
+      // Exactly the shape s2s-bridge.js's releaseOwnVoiceGate sends (see
+      // logSuspendTransition's own-voice-release call site).
+      ws.send(JSON.stringify({
+        type: 'voice-capture-suspend',
+        suspended: false,
+        at: 1755432100000,
+        reason: 'own-voice-release',
+        ownVoiceGate: false,
+        prerollFrames: 37,
+        prerollCap: 50,
+        heldMs: 6650,
+        framesDropped: 0,
+        framesZeroed: 12,
+        peakRms: 0.0421,
+      }));
+      // The handler is fire-and-forget; poll briefly for the log line.
+      const entry = await new Promise((resolve, reject) => {
+        const deadline = Date.now() + 3000;
+        (function poll() {
+          const hit = logged.find((e) => e.msg === 'voice.capture-suspend' && e.fields && e.fields.reason === 'own-voice-release');
+          if (hit) return resolve(hit);
+          if (Date.now() > deadline) return reject(new Error('voice.capture-suspend own-voice-release never logged'));
+          setTimeout(poll, 20);
+        })();
+      });
+
+      const f = entry.fields;
+      // The four fields the handler already logged (must not regress).
+      assert.equal(f.suspended, false);
+      assert.equal(f.reason, 'own-voice-release');
+      assert.equal(f.at, 1755432100000);
+      // The six BUG-271 fields, each under its exact client name.
+      assert.equal(f.prerollFrames, 37);
+      assert.equal(f.prerollCap, 50);
+      assert.equal(f.heldMs, 6650);
+      assert.equal(f.framesDropped, 0);
+      assert.equal(f.framesZeroed, 12);
+      assert.equal(f.peakRms, 0.0421);
+      // ownVoiceGate is a boolean the client sends on both own-voice
+      // transitions — part of the evidence chain, never transcript text.
+      assert.equal(f.ownVoiceGate, false);
+    } finally {
+      if (ws) try { ws.close(); } catch (_) {}
+      await server.stop();
+    }
+  });
+
+  test('a media-start suspend still logs holdMs and does not fabricate the release-only fields', async () => {
+    const bus = createBus({ historySize: 50 });
+    const logged = [];
+    const logger = {
+      info: (msg, fields) => logged.push({ msg, fields }),
+      warn() {}, error() {}, debug() {}, onLog: () => () => {},
+    };
+    const server = createServer(baseDeps(bus, logger));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    let ws;
+    try {
+      ws = await connectWs(port);
+      ws.send(JSON.stringify({
+        type: 'voice-capture-suspend',
+        suspended: true,
+        at: 1755432200000,
+        holdMs: 8000,
+        reason: 'media-start',
+      }));
+      const entry = await new Promise((resolve, reject) => {
+        const deadline = Date.now() + 3000;
+        (function poll() {
+          const hit = logged.find((e) => e.msg === 'voice.capture-suspend' && e.fields && e.fields.reason === 'media-start');
+          if (hit) return resolve(hit);
+          if (Date.now() > deadline) return reject(new Error('voice.capture-suspend media-start never logged'));
+          setTimeout(poll, 20);
+        })();
+      });
+
+      const f = entry.fields;
+      assert.equal(f.suspended, true);
+      assert.equal(f.holdMs, 8000);
+      assert.equal(f.reason, 'media-start');
+      // The release-only fields were not sent, so they must be absent from the
+      // log line — not coerced to 0/false, which would falsify the evidence.
+      assert.equal(f.prerollFrames, undefined);
+      assert.equal(f.heldMs, undefined);
+      assert.equal(f.framesZeroed, undefined);
+      assert.equal(f.peakRms, undefined);
+    } finally {
+      if (ws) try { ws.close(); } catch (_) {}
+      await server.stop();
+    }
   });
 });
