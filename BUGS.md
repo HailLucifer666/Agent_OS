@@ -8453,7 +8453,24 @@ touching code.
 
 ## BUG-269 — the global press-to-talk hotkey is intermittent
 
-**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17, same sitting.**
+**FIXED IN CODE 2026-08-17 (`9b98bc3`) — live re-verification pending (the
+20-press check in the v0.1.10 Part B sitting). Operator-reported 2026-08-17,
+same sitting.**
+
+Three independent defects were found and fixed, each of which alone produces
+the reported symptom: (1) the lost-IPC race — `registerTalkHotkey()` ran
+before the renderer's `onHotkey` listener existed and Electron does not queue
+IPC for unregistered listeners, so a press in that window was lost forever;
+now a `mythos:renderer-ready` signal plus a single-press latch
+(`electron/hotkey-latch.js`) that flushes exactly once and re-arms on reload.
+(2) Toggle re-entrancy — `toggleVoice()` was async but invoked un-awaited, so
+two presses during mic acquisition interleaved; now an in-flight guard
+(`voice/toggle-guard.js`) that drops concurrent presses rather than queueing
+them. (3) Structural lag — the visible `arming` state now sets synchronously
+before any await (a lost press and a slow press were visually identical, which
+is why the bug read as "intermittent" rather than "slow"), and `vadTick()`
+runs once immediately, removing up to 100ms of dead time. New behavioural
+tests were red-first: 8/14 failing before the fix, 20/20 after.
 
 **Observed, verbatim:** `Alt+Space` pressed while a *different* application holds
 focus "works. Sometime there is a lag, there is a delay. It works, and sometimes
@@ -8473,3 +8490,61 @@ three change what the press has to contend with.
 sitting and both touch the Electron hotkey layer: one is "never completes", the
 other is "completes unreliably", and merging them would let a fix for either
 close the ticket for both.
+
+## BUG-270 — first live voice session: utterances split mid-thought, and missed speech left zero evidence
+
+**FIXED IN CODE 2026-08-17 — live re-verification pending (re-run the voice
+checks of the v0.1.10 Part B sitting). Operator-reported 2026-08-17, the
+first real voice conversation on the batch path.**
+
+**Observed, verbatim:** "I spoke to it, had a conversation… It is very
+glitchy. It interrupts and it's breaking in between all sorts of things. I
+did a microphone test as well. It's not picking up words from the noise. The
+microphone is fine because I have been using this microphone since day one."
+
+**Two findings, one root cause and one observability hole.**
+
+**(1) The interruptions — root cause: the 900ms endpointing experiment,
+live-falsified the same day it shipped.** `e19ac07` (2026-08-17) cut
+`VAD_SILENCE_MS` from 1800 to 900 for faster endpointing, explicitly flagged
+"unit-green, NOT yet live-verified at a mic", and its own commit message
+accepted the trade-off: "natural mid-sentence pauses of 0.9–1.8s can split one
+utterance into two clips." This session was that live verification, and it
+failed exactly as the warning predicted: a natural pause >900ms ends the clip
+(`voice-loop.js` vadTick endpointing), MYTHOS starts answering mid-thought,
+and the `assistantSpeaking` half-duplex gate (BUG-027) then suppresses the
+operator's continuation unless it clears the much higher barge-in floor
+(0.0875 RMS sustained ~600ms). One thought therefore becomes: MYTHOS
+"interrupts", then the follow-up "breaks". **Fix: the documented revert —
+default restored to 1800** in `schema.js`, the `voice-loop.js` literal, and
+`.env.example` (the pair is pinned by `config-doc-truth.test.js`). Still
+env-tunable for anyone who wants faster endpointing.
+
+**(2) The missed words — the real defect was that they were INVISIBLE.** The
+batch path's `recorder.onstop` gates each clip twice before transcription:
+peak RMS must clear `MIN_PEAK_RMS` (0.06), and effective length/size must
+clear `MIN_CLIP_MS`/`MIN_CLIP_BYTES`. Both gates used to `return` with no
+log, no event, no HUD hint — and the batch path emits no client telemetry of
+its own, so "not picking up words" had literally no evidence to diagnose:
+nobody could tell "the mic never heard you" from "heard, rejected as too
+quiet". **Fix: both drops are now loud** — a `console.warn` carrying the
+measured value and the floor it failed, plus a HUD caption ("🎤 too quiet —
+not sent" / "🎤 too short — not sent"). Pinned by
+`test/bug-270-clip-drop-observability.test.js` (source-shape, red-first: 2/3
+failing before the fix). The gates still drop — observability changed,
+behaviour did not.
+
+**Deliberately NOT changed: the BUG-020 threshold trio stays**
+(`VAD_SPEECH_RMS` 0.035, `VAD_MIN_PEAK_RMS` 0.06, `VAD_HOLD_TICKS` 3). It was
+raised against noise for a reason (fans/AC/bikes were triggering phantom
+recordings), and lowering it blindly would re-open that bug. The new
+observability is what makes the next step evidence-based: if words are still
+missed, the HUD/console now says WHICH gate ate them, and then one knob moves
+at a time (`VAD_SPEECH_RMS=0.025` first) — or the operator opts into
+`VAD_ENGINE=silero`, the trained speech-vs-noise detector that already exists
+(one-time `node mythos/scripts/setup-silero.js` download).
+
+**Re-verification (pending):** a conversation WITH natural mid-sentence
+pauses — MYTHOS must no longer jump in mid-thought; and speech in the noisy
+room — if still missed, note whether the new "too quiet" hint appears, which
+names the gate to tune.

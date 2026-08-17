@@ -142,17 +142,20 @@ const SCHEMA = {
   VOICE_STT_CHAIN:          { type: 'string', default: '' },
 
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
-  // thresholds; defaults match the previously-hardcoded constants except
-  // VAD_SILENCE_MS, below). Exposed to the HUD via GET /api/config/vad so
-  // mic sensitivity can be tuned without a rebuild.
-  // VAD_SILENCE_MS default is 900, not the legacy 1800 — operator decision
-  // 2026-08-17: faster endpointing, trading the risk that natural
-  // mid-sentence pauses of 0.9–1.8s split one utterance into two clips.
-  // Instantly reversible: VAD_SILENCE_MS=1800 in mythos/.env.
+  // thresholds; defaults match the previously-hardcoded constants). Exposed
+  // to the HUD via GET /api/config/vad so mic sensitivity can be tuned
+  // without a rebuild.
+  // VAD_SILENCE_MS default is 1800. The 2026-08-17 experiment of 900
+  // (faster endpointing) was live-falsified the same day: natural
+  // mid-sentence pauses of 0.9–1.8s split one utterance into two clips,
+  // MYTHOS answered mid-thought, and the assistantSpeaking half-duplex gate
+  // then swallowed the operator's continuation — read live as "it interrupts
+  // and breaks in between things". 1800 restored; still env-tunable for
+  // anyone who wants faster endpointing: VAD_SILENCE_MS=900 in mythos/.env.
   VAD_SPEECH_RMS:           { type: 'number', default: 0.035, min: 0, max: 1 },
   VAD_MIN_PEAK_RMS:         { type: 'number', default: 0.06,  min: 0, max: 1 },
   VAD_HOLD_TICKS:           { type: 'number', default: 3,     min: 1, max: 20 },
-  VAD_SILENCE_MS:           { type: 'number', default: 900,   min: 100, max: 10000 },
+  VAD_SILENCE_MS:           { type: 'number', default: 1800,  min: 100, max: 10000 },
   // Which speech-detector drives voice-loop.js. 'rms' (default) is the
   // hand-tuned volume-threshold detector above. 'silero' runs a trained
   // speech/non-speech ONNX model (ui/public/js/voice/silero-vad.js) client-side

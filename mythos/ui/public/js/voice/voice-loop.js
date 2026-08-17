@@ -27,13 +27,13 @@ const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 // BUG-020: these four are `let`, not `const` — createVoiceLoop's optional
 // `vad` option can override them per-instance. Values below are the
-// defaults; SILENCE_MS alone no longer matches the old hardcoded constant
-// (see its note).
-// SILENCE_MS default is 900, not the legacy 1800 — operator decision
-// 2026-08-17: faster endpointing, trading the risk that natural mid-sentence
-// pauses of 0.9–1.8s split one utterance into two clips. Instantly
-// reversible: VAD_SILENCE_MS=1800 in mythos/.env.
-let SILENCE_MS = 900;        // quiet gap that ends an utterance
+// defaults and match the previously-hardcoded constants.
+// SILENCE_MS default is 1800. The 2026-08-17 experiment of 900 (faster
+// endpointing) was live-falsified the same day: natural mid-sentence pauses
+// of 0.9–1.8s split one utterance into two clips, MYTHOS answered
+// mid-thought, and the assistantSpeaking half-duplex gate then swallowed the
+// operator's continuation. 1800 restored; env-tunable via VAD_SILENCE_MS.
+let SILENCE_MS = 1800;       // quiet gap that ends an utterance
 let SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
 const VAD_TICK_MS = 100;
 let SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
@@ -757,13 +757,28 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       recorder = null;
       chunks = [];
       prerollBuffer = null;
-      if (!loudEnough) return; // never actually got louder than ambient noise — drop silently
+      if (!loudEnough) {
+        // BUG-270: this drop used to be silent — missed speech left zero
+        // evidence anywhere, so "not picking up words" was undiagnosable.
+        // Warn with the measured peak and the floor, and say so in the HUD.
+        console.warn('[voice] clip dropped: peak RMS ' + peakRms.toFixed(4)
+          + ' below floor ' + MIN_PEAK_RMS
+          + ' — speech detected but too quiet (tune VAD_MIN_PEAK_RMS)');
+        caption('🎤 too quiet — not sent', 'error');
+        return;
+      }
       // With pre-roll, the effective clip length includes the pre-roll duration.
       // MIN_CLIP_MS was originally raised to 500 because the first words were
       // being clipped — with pre-roll recovered, we can check the full duration.
       var prerollMs = capturedPreroll ? Math.round(capturedPreroll.length / prerollSampleRate * 1000) : 0;
       var effectiveMs = clipMs + prerollMs;
-      if (effectiveMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) return;
+      if (effectiveMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) {
+        // BUG-270: same observability hole as the loudness gate above.
+        console.warn('[voice] clip dropped: ' + effectiveMs + 'ms / ' + blob.size
+          + 'B below minimums (' + MIN_CLIP_MS + 'ms / ' + MIN_CLIP_BYTES + 'B)');
+        caption('🎤 too short — not sent', 'error');
+        return;
+      }
       // Merge pre-roll + recorded audio if a pre-roll snapshot is available.
       if (capturedPreroll && capturedPreroll.length) {
         mergePrerollAndTranscribe(blob, type, capturedPreroll);
