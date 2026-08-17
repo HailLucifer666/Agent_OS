@@ -143,6 +143,22 @@ describe('config', () => {
     assert.equal(overridden.config.VOICE_S2S_ENABLED, true);
   });
 
+  // Task A2 (v0.1.10 closeout, operator decision 2026-08-17: "whenever we
+  // start the app, it should ask for the PIN"): PIN_SESSION_ENFORCE defaults
+  // to ON. Safe to default on because pinSessionRequired() (server/index.js)
+  // requires BOTH the flag AND a PIN actually configured — no PIN, no
+  // lockout (pinned by test/pin-session.test.js). Set false to opt out.
+  it('PIN_SESSION_ENFORCE defaults to ON (no-PIN-no-lockout keeps it safe) and accepts a false override', () => {
+    const defaults = validate({}, SCHEMA);
+    assert.equal(defaults.ok, true);
+    assert.equal(defaults.config.PIN_SESSION_ENFORCE, true,
+      'the PIN lock screen must be real access control by default; enforcement still requires a configured PIN');
+
+    const overridden = validate({ PIN_SESSION_ENFORCE: 'false' }, SCHEMA);
+    assert.equal(overridden.ok, true);
+    assert.equal(overridden.config.PIN_SESSION_ENFORCE, false);
+  });
+
   it('rejects PLANNER_MORNING_HOUR outside its 0-23 range and PLANNER_CHECKIN_EVERY_MS below its floor', () => {
     const badHour = validate({ PLANNER_MORNING_HOUR: '24' }, SCHEMA);
     assert.equal(badHour.ok, false);

@@ -40,14 +40,16 @@ const SCHEMA = {
   // Until this, the PIN screen was a client-side visual/pointer deterrent
   // ONLY: tokenOk() (server/index.js) passes every request when
   // MYTHOS_AUTH_TOKEN is unset, so `curl 127.0.0.1/api/...` bypassed the
-  // lock screen entirely on the default loopback install. OFF by default so
-  // an existing loopback-without-token install (headless/Docker/Render, and
-  // every pre-existing test) is completely unaffected — enforcement only
-  // activates once this is true AND a PIN has actually been configured via
-  // POST /api/pin/set (fresh installs with the flag on but no PIN set yet
-  // stay open, honestly, rather than locking the operator out of their own
-  // server). See .env.example for the full story and its caveats.
-  PIN_SESSION_ENFORCE:      { type: 'bool', default: false },
+  // lock screen entirely on the default loopback install. ON by default
+  // (operator decision, 2026-08-17: "whenever we start the app, it should
+  // ask for the PIN") — and safe to be on because pinSessionRequired()
+  // (server/index.js) requires BOTH this flag AND a PIN actually configured
+  // via POST /api/pin/set: with no PIN set there is nothing to enforce, so a
+  // fresh install stays open rather than locking the operator out of their
+  // own server. Set false to opt out — a loopback-without-token install then
+  // exercises none of the enforcement paths, exactly as before Track B1.
+  // See .env.example for the full story and its caveats.
+  PIN_SESSION_ENFORCE:      { type: 'bool', default: true },
   // How long a PIN-unlocked session stays valid with no further activity
   // (sliding — src/core/security/pin-session.js extends it on every
   // authenticated request), ms.
