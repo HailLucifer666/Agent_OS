@@ -35,13 +35,13 @@
 | Take | Repo | Install cost | Lands in |
 |---|---|---|---|
 | Tree-sitter code graph + blast radius + risk scoring, over MCP | `tirth8205/code-review-graph` | pip, local-first, no keys | `mythos/mcp/server.js` tool + review/verify gate |
-| The 4-asset memory model (Chat Memory L0→L3 · Skill · LLM-Wiki · Code-Graph) as a **schema**, not a deployment | `TencentCloud/TencentDB-Agent-Memory` | none — design only | maps onto `episodic.js` / `skills.js` / `semantic.js` / new code-graph |
+| The 4-asset memory model (Chat Memory L0→L3 · Skill · LLM-Wiki · Code-Graph) as a **schema**, not a deployment. **DECIDED 2026-08-17 — now merged-order step 8**: L0→L3 = 8C, versioned skills = 8F.1, wiki links = 8F.2, loadouts (scoped-recall half only) = 8F.3, CodeGraph = 8F.4. Patterns only; the Docker stack is not deployed | `TencentCloud/TencentDB-Agent-Memory` | none — design only | `MYTHOS-IRIS-Synthesis-Plan.md` "Step 8" is authoritative; maps onto `episodic.js` / `skills.js` / `semantic.js` / `notes.js` / new code-graph |
 | Provenance + accountability edges (every memory fact traceable to its source event) | `semantica-agi/semantica` | none — design only | `semantic.js` + `audit-writer.js` |
 | Obsidian-native vault: `[[wikilinks]]` on write, backlink index, free graph view | no repo — Obsidian reads the vault as-is | zero deps | `vault/Semantic`, `Episodic`, `Lessons`, `Index/` |
 | PDF classify→Markdown, offline | `firecrawl/pdf-inspector` | **the one new npm dep** (Rust native bindings) | `memory/documents.js` ingestion route |
 | Docs/books → on-demand SKILL.md chapters | `virgiliojr94/book-to-skill` | python + local LLM slot | ingestion → `mythos/skills/` |
 | Durable goals, evidence logs, verifiable handoffs, quota-aware auto-wake | `huangruiteng/loopx` | none — design only | `src/core/goals/`, `quota.js`, `memory/lessons.js` |
-| `/refine` continual-improvement loop, durable memories | `PrimeIntellect-ai/prime-agent` | none — design only | cortex tick + lessons |
+| `/refine` continual-improvement loop, durable memories. **DECIDED 2026-08-17 — now step 8B (Continual Harness) + 8D (bounded autonomy: turn/token/wall budget + gates)**. Patterns only: its installer is `curl \| sh`, forbidden here | `PrimeIntellect-ai/prime-agent` | none — design only | `src/core/harness/` + `src/core/agent/`, over the existing lessons/skills stores and leash |
 | Current-state → ideal-state hill climbing | `danielmiessler/LifeOS` | none — design only | `vault/Goals.md` + goals module |
 
 ## 2. Skills layer — all text, zero runtime cost
@@ -53,7 +53,7 @@
 | Anti-AI-slop design gate | `Nutlope/hallmark` | applies to HUD work |
 | Verifiable architecture / sequence / data-flow diagrams (self-contained HTML) | `tt-a1i/archify` | for `Plans/` + docs |
 | routing.json + tool-index + regression discipline | `zhaoxuya520/reverse-skill` | MIT — **leave the GPLv3 submodules out** |
-| Specialized agent personas | `msitarzewski/agency-agents` | cherry-pick into the roster |
+| Specialized agent personas. **DECIDED 2026-08-17 — now step 8E**: 6 already vendored as `skills/persona-*` but **catalogue-only** (the seats read a different directory and the builder router is a two-way keyword coin flip); 8E bridges the loader roots, scores the router, and vendors 8 more with named readers. ~220 stay out | `msitarzewski/agency-agents` | cherry-pick into the roster — `MYTHOS-IRIS-Synthesis-Plan.md` "Step 8E" is authoritative |
 | 100+ agent/RAG recipes | `Shubhamsaboo/awesome-llm-apps` | mine on demand |
 
 Free corpora to mint through `book-to-skill`: `donnemartin/system-design-primer`,

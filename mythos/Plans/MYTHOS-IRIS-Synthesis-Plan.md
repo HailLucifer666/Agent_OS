@@ -17,7 +17,53 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-17 (latest) — the FIRST real operator Electron sitting. Three step-7 items verified by a human, two defects found, and the forked vault merged.
+### 2026-08-17 (latest) — step 8 grew two lanes: 8E (Agency roster) and 8F (the four TencentDB assets). PLANNING ONLY, NO CODE. Position unchanged.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). Next action
+UNCHANGED. Step 8 still does not start until 6.5, 6.6 and 7 are ticked** — the
+operator re-confirmed *plan only, nothing built* when asking for this.
+
+The operator named three upstream repos to fold into MYTHOS — `prime-agent`,
+`TencentDB-Agent-Memory`, and (new) `msitarzewski/agency-agents` — asking for
+"the best of the best: memory, agent skills". Two of the three were **already
+designed in** by the step-8 block below, so this pass added only what was
+genuinely missing:
+
+- **8E — the Agency roster reaches the seats.** The finding that sized the lane:
+  agency-agents is **already half-vendored** — six personas ship as
+  `mythos/skills/persona-*/SKILL.md` (MIT, in `skills.allowlist`, credited in
+  `THIRD_PARTY_NOTICES.md`) — but they are **catalogue-only**. There are two
+  persona layers that cannot see each other: `skills/loader.js` serves those six to
+  the model via `use_skill`, while `agents/personas.js` serves the *seats* from a
+  different directory holding four files. And `pickBuilderPersona()` is a two-way
+  keyword coin flip — one frontend keyword list, else `backend-builder` — so cards
+  about deploy, schema, credentials or test coverage all get the backend builder and
+  the roster is never consulted. 8E bridges the roots (8E.1), makes the router
+  scored and self-reporting (8E.2), and vendors **eight** more personas that each
+  have a named reader (8E.3), leaving ~220 unvendored on purpose.
+- **8F — the four TencentDB assets 8C did not take.** 8C took only the L0→L3
+  layering. The operator wanted all four of the rest: **8F.1** versioned skills
+  (`memory/skills.js` overwrites in place, so a worse auto-distillation silently
+  destroys a better one — and `recordUse()` must *not* snapshot or it is a disk
+  leak), **8F.2** `[[wiki-link]]` resolution + backlinks over the existing
+  Obsidian-compatible Notes store with **no index file**, **8F.3** scoped recall
+  (`meta.scope`/`meta.audience` tags first, the filter second, applied at the one
+  place `excludeKinds` already is — its team/ACL half is explicitly not built, no
+  reader in a single-operator product), **8F.4** CodeGraph, which opens with an
+  **adopt-vs-build decision** because the adoption matrix already carries
+  `tirth8205/code-review-graph` at 🟢 P1 for exactly this.
+- **Five new invariants, AD-17…AD-21**, mirrored into V2 spine §1: one persona
+  loader; a routed seat states which seat and why; a skill body is never overwritten
+  without keeping its predecessor; a graph answer carries its freshness; a scope
+  filter removes, never fabricates, and says what it withheld.
+
+Upstream filenames for 8E.3 were enumerated from the **real** tree with
+`gh api repos/msitarzewski/agency-agents/git/trees/main?recursive=1` — the
+`tree/main/...` web path 404s, so do not guess them. All three upstreams are MIT,
+so the commercial gate (6.5) is unaffected; **extend** the single agency-agents row
+in `THIRD_PARTY_NOTICES.md` rather than adding a second.
+
+### 2026-08-17 — the FIRST real operator Electron sitting. Three step-7 items verified by a human, two defects found, and the forked vault merged.
 
 **Status: 6.5 ☐ · 6.6 ☐ · 7 ☐ — step 7 is NOT ticked, but it moved for the first
 time since 2026-08-04.** The operator ran the sitting this file has been asking
@@ -112,18 +158,21 @@ design therefore landed in this file as **Step 8**, with nothing implemented.
 (One `loader.js` edit was started before that instruction arrived and was
 reverted; `git status` confirmed clean.)
 
-**What step 8 contains:** four lanes — 8A skills truth + curated vendoring, 8B
+**What step 8 contains:** **six** lanes — 8A skills truth + curated vendoring, 8B
 the Continual Harness, 8C memory budget + Live depth, 8D budgets + quality
-gates — each with its architecture, a wiring table naming every writer and every
-reader, real code snippets, and six new anti-drift invariants **AD-11…AD-16**
+gates, and (added later the same day, see the block below) 8E the Agency roster
+reaching the seats, 8F the four TencentDB assets 8A-8D had not taken — each with
+its architecture, a wiring table naming every writer and every reader, real code
+snippets, and eleven new anti-drift invariants **AD-11…AD-21**
 (mirrored into the V2 spine §1 table). Two operator decisions are recorded there
 and should not be relitigated: prime-agent and TencentDB are **patterns-only,
 never dependencies** — prime-agent installs by `curl | sh` (forbidden by the root
 `CLAUDE.md`, where Hermes is the single deliberate exception) and TencentDB needs
 a 3-service Docker stack that breaks portability and the sold-installer story.
-Only addyosmani's skills get vendored, six of them, by the process
-`mythos/skills/README.md` already documents. Infrastructure delta: zero — no
-dependency, service, port or container.
+Only addyosmani's skills and agency-agents' persona markdown get vendored — six
+addyosmani skills (8A.4) and eight personas on top of the six already on disk
+(8E.3) — by the process `mythos/skills/README.md` already documents.
+Infrastructure delta: zero — no dependency, service, port or container.
 
 **The research finding worth keeping:** MYTHOS already has most of what those
 repos are known for. `skills/loader.js` is multi-root resolution with progressive
@@ -622,8 +671,10 @@ installed copy are not the same test.
 **Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (4 decisions answered + licences verified; wake word stays BYO with the non-commercial notice at the install point — Decision 4, 2026-08-17; the own-model training workstream is superseded) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ **(all 6 slices now shipped IN CODE as of 2026-08-04 — Slice 5 cursor overlay `3050889`, Slice 6 OSS hygiene + the directory-scoped `CLAUDE.md` split. What keeps step 7 unticked is live verification, not missing code: Slices 1, 2, 3 and 5 are unit-green only and need the operator at an Electron desktop. Slice 4 is the sole slice verified against a real artifact.)** Earlier state for the record: (**Slices 1-4 of 6 shipped in code**: `5f6108d` foundation, globalShortcut, desktopCapturer, and — 2026-08-04 — the electron-builder installer, which honours Decision 1 and is the first slice verified against a real artifact rather than only unit-green: a real `MYTHOS Setup 0.1.0.exe` with the licence exclusions confirmed by walking `dist/win-unpacked`. Slices 1-3 remain NOT live-verified — all three need the operator at an Electron desktop. Next: Slice 5, the cursor overlay, then Slice 6, OSS hygiene)
 
 **· 8 ☐ (planned 2026-08-17, TRACKED NOT STARTED — "Step 8 — Upstream synthesis:
-prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory", below. Four
-lanes 8A-8D, full design + code snippets + AD-11…AD-16 written out so the build
+prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory · agency-agents",
+below. **Six** lanes 8A-8F (8E/8F added later the same day when the operator named
+`msitarzewski/agency-agents` and asked for the four TencentDB assets 8A-8D had not
+taken), full design + code snippets + AD-11…AD-21 written out so the build
 is an execution pass, not an investigation. Operator set the sequence explicitly:
 **step 8 does not start until 6.5, 6.6 and 7 are ticked.** It carries two live,
 already-reproduced bugs — BUG-266 phantom skill names on a fresh clone, BUG-267
@@ -703,6 +754,7 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 | 2026-08-17 (operator sitting) | **Step 7 moved for the first time since 2026-08-04 — three slices verified by a human, two defects found, and the forked vault merged. Step 7 still ☐** (screen-share, cursor overlay, persona-by-ear, barge-in and the clean-path installer check remain). Verified live: the app launches and runs from `npm start` (the real Electron shell); **close-and-reopen works — BUG-225's quit seam, fixed the same day and never before checked by a person**; press-to-talk fires while another app holds focus. Found live, both green in the automated suite: **BUG-268** (`Ctrl+Alt+X` screen-text capture does nothing — popup fires, no result; operator-deprioritised, left undiagnosed rather than guessed at) and **BUG-269** (press-to-talk intermittent with variable lag; kept separate from 268 so one fix cannot close both). The PIN prompt was resolved as NOT a bug. **The vault fork is the substantive finding:** before `app.setName('MYTHOS')`, dev runs wrote `%APPDATA%\agent-os` and the packaged app wrote `%APPDATA%\MYTHOS`, both live on the same days — and `MYTHOS`/`mythos` are one directory, Windows being case-insensitive, so two vaults not four. Merged additively with a backup and nothing overwritten: **734 episodic entries, 572 audit lines, 31 lessons (90→121), 2 operator facts (37→39)**; every merged line parses, zero duplicate ids, re-run finds nothing left. Stale `proposed` goals, an all-`fired` reminders file, `pin.json` and six older Identity files deliberately left behind. **BUG-266/267 recorded in BUGS.md as reserved ids** so a concurrent session cannot reuse them. | this commit | **Yes — this row is itself the live verification**, performed by the operator at a real Electron desktop, which is the only thing that could have produced it. The merge is verified by re-run + JSON validation, not by assumption. BUG-268/269 are verified as REAL and deliberately NOT diagnosed. |
 | 2026-08-17 (planning only) | **No merged-order step advanced, NO CODE WRITTEN — merged-order step 8 designed and tracked.** The operator asked for three upstream repos wired into MYTHOS end-to-end (`PrimeIntellect-ai/prime-agent`, `addyosmani/agent-skills`, `TencentCloud/TencentDB-Agent-Memory`) and then set the sequence explicitly: plan now, build only after 6.5/6.6/7. The full design landed in this file as **Step 8** — four lanes (8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates), each with architecture, a wiring table naming every writer and reader, code snippets, and six new invariants **AD-11…AD-16** mirrored into the V2 spine §1. Two operator decisions recorded so they are not relitigated: prime-agent and TencentDB are **patterns-only, never dependencies** (prime-agent installs by `curl \| sh`, forbidden by the root `CLAUDE.md`; TencentDB needs a 3-service Docker stack that breaks portability and the sold-installer story). Infrastructure delta zero. **Research finding that reframed the scope:** MYTHOS already has most of what those repos are known for — `skills/loader.js` is multi-root resolution with progressive disclosure, `memory/index.js:243 recallHybrid()` already does keyword+vector RRF (TencentDB's headline design), and `Identity/operator-profile.txt` is already its "L3 persona" reaching every surface via `persona()`; hence 8C.3 is provisional and gated behind 8C.2 proving insufficient. **Two live bugs reproduced and deliberately left unfixed** (they are 8A's first two items; fixing them now would jump the operator's sequence): **BUG-266** — six skill names hardcoded into prompt text (`voice-agent.js:275`/`:93`, `from-skills.js:37`) are PHANTOM on any fresh clone, proven by running the real loader with `USERPROFILE`/`HOME` pointed at a non-existent directory, and `ui-ux-pro-max` is phantom even here because it is vendored essence-only while `loadContent()` reads `SKILL.md` exclusively; **BUG-267** — `buildLiveSystemInstruction()` injects a 43-skill catalogue whose header says "call use_skill" while `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT` and Live declares only `DEFAULT_ALLOWLIST`, so the primary spoken surface is told to call a tool it was never given. One `loader.js` edit was begun before the plan-only instruction arrived and was reverted; `git status` confirmed clean before this commit. | this commit | n/a (docs) — **nothing in step 8 is implemented, so nothing is verifiable yet.** The two bugs above ARE verified as real: reproduced against the live loader in the fresh-clone environment shape, output recorded verbatim in the Step 8 section. |
 | 2026-08-17 | **No merged-order step advanced (6.5 ☐ · 6.6 ☐ · 7 ☐ unchanged) — the operator-approved fix plan for the NINE open coding defects, executed in three waves, one commit per verified fix, each pushed immediately.** **Wave 1:** BUG-225's quit seam fixed at all four structural defects (re-fork race: `window-all-closed` sets `isQuitting` before `stopChild` non-darwin + `startChild` refuses once quitting; secondary windows: the main window's `closed` handler now releases media window + overlay so `window-all-closed` can fire; kill ladder: `stopChild` returns `awaitChildExit`'s SIGKILL-at-3s escalation; backstop: a ref'd 10s quit watchdog tree-killing via `taskkill /T /F` then `app.exit(0)` — armed BEFORE the blocking vault push) — with the trap the fix forced: an explicit `installerHandover` flag now feeds `before-quit`'s push-skip, since pre-setting `isQuitting` in `window-all-closed` would have skipped the vault push on every ordinary quit. Packaged builds no longer arm wake-word models from the install tree (`MYTHOS_PACKAGED=1` injected; `modelSearchDirs` drops the install tree there — userData-or-nothing, dev keeps the search). **Wave 2:** BUG-260 (`sensors/job.js` emitted the artifact OBJECT, the announcer spoke "[object Object]" — now the PATH string, announcer accepts both shapes); BUG-261 (open_folder's single 700ms coin-flip oracle → 4×400ms bounded poll, exact-then-contains title match, distinct pc-child-offline vs no-window reasons); `TOOL_ACK_DEADLINE_MS` operator-tunable (schema key default 1500 UNCHANGED, seam fed, `.env.example` names `live.tool-ack-deadline` counts as the evidence source). **Wave 3:** BUG-262 (distillation's two dead gates: idle count excludes `kind:'timer'` heartbeats — also revives `mull()`, the Phase-4-broken routing — and the active-branch consolidate hoisted above the goalless early-return; every skip now emits `memory.consolidate-skip` with a reason); BUG-263 (the fields-absent WebView2 caret false-refusal: split on the landed title — real app names still hard-fail with the 2026-07-31/Antigravity guards intact and pinned, the "Chrome Legacy Window" artifact shape returns honest-unverified BEFORE the read-back oracle); BUG-264 (`open_web browser:true` — the explicit in-tool route through the existing newtab mechanism; default unchanged, pinned); BUG-265 (the duplicate-identify anomaly damped to one per nodeId per 60s with `suppressedCount`; root cause honestly recorded as Aether-side). BUG-253's table rows for the whatsapp, open_folder, open_web and duplicate-storm incidents closed; the 2026-08-15 RCA's wakeword and ack-deadline bullets closed. Suite **4760 / 4758 pass / 0 fail / 2 skip**, counts synced per commit. A second session (freebuff worktree) landed `42f370d` mid-plan — stacked cleanly. | `1eda5a8`, `36ba820`, `196911d`, `f61f205`, `2c4bc08`, `0ed3108`, `bd64180`, `b7e16fa`, `1b96d52` | **Unit/source-shape green only — nothing here is live-verified yet, and four cheap operator sittings are named in RESUME HERE:** one X-close sitting (BUG-225: MYTHOS.exe exits ≤10s, double-click relaunches), one packaged-install check (wakeword honest-unavailable), one voice session then grep `memory.consolidate-skip` (BUG-262 — also covers the 08-15 persona/facts checks), and the Aether-side storm diagnosis. Two hook retries were load flakes from the concurrent session's suite runs, not regressions — both re-verified green in isolation before commit. |
+| 2026-08-17 (planning only, second pass) | **No merged-order step advanced, NO CODE WRITTEN — step 8 grew from four lanes to six.** The operator named `msitarzewski/agency-agents` alongside the two repos step 8 already covered, asked for "the best of the best — memory, agent skills", and re-confirmed **plan only, nothing built**, so the 6.5/6.6/7 gate stands. Two lanes added with full design, wiring tables and per-lane oracles: **8E — the Agency roster reaches the seats.** The finding that sized it: agency-agents is **already half-vendored** (six personas as `mythos/skills/persona-*/SKILL.md`, MIT, in `skills.allowlist`, credited in `THIRD_PARTY_NOTICES.md`) but **catalogue-only** — two persona layers exist that cannot see each other (`skills/loader.js` serves those six to the model via `use_skill`; `agents/personas.js` serves the *seats* from a different directory of four files), and `pickBuilderPersona()` is a two-way keyword coin flip, so every card that is not frontend-shaped gets `backend-builder` and the roster is never consulted — the same silent-degradation shape as *personas never loaded*. 8E.1 bridges the roots as a fourth candidate, 8E.2 makes the router scored and self-reporting, 8E.3 vendors **eight** more personas that each have a named reader (devops-automator, api-platform-engineer, data-engineer, appsec-engineer, secrets-credential-engineer, test-automation-engineer, evidence-collector, minimal-change-engineer), leaving ~220 unvendored on purpose, with `desktop-app-engineer` and `code-reviewer` deferred for stated reasons. **8F — the four TencentDB assets 8C did not take** (8C took only the L0→L3 layering): 8F.1 versioned skills (`memory/skills.js:28` overwrites in place, so a worse auto-distillation silently destroys a better one — and the load-bearing detail is that `recordUse()` must NOT snapshot, since it rewrites on every use); 8F.2 `[[wiki-link]]` + backlinks over the existing Obsidian-compatible Notes store with **no index file**; 8F.3 scoped recall, tags first and filter second, applied at the one place `excludeKinds` already is (`memory/index.js:265`, where the keyword/vector paths once diverged as FIX G) — its team/ACL half deliberately not built, no reader in a single-operator product; 8F.4 CodeGraph, which **opens with an adopt-vs-build decision** because `ADOPTION-MATRIX.md` already carries `tirth8205/code-review-graph` at 🟢 P1 for exactly this question, with a recorded recommendation to build native and scope it to JS/TS honestly. **Five new invariants AD-17…AD-21** mirrored into V2 spine §1. Upstream persona filenames were enumerated from the real tree with `gh api repos/msitarzewski/agency-agents/git/trees/main?recursive=1` — the `tree/main/...` web path 404s, so guessing them was explicitly ruled out. All three upstreams MIT, so 6.5 is unaffected. | this commit | n/a (docs) — **nothing in 8E or 8F is implemented, so nothing is verifiable yet.** What IS verified: the two-persona-layer split and the coin-flip router were read in `agents/personas.js` and `agent-actions.js` (four `loadPersona` call sites, one `pickBuilderPersona` caller); the six vendored personas were confirmed on disk, in `skills.allowlist` and in `THIRD_PARTY_NOTICES.md`; the eight upstream filenames were listed from the live upstream tree. |
 
 ---
 
@@ -742,7 +794,7 @@ Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract
 | **6.5** | **Licensing gate: TTS=BYO (no swap needed), wake-word model TBD — blocks SHIPPING, see below** | §18.3.3 |
 | **6.6** | **Wider third-party licence audit (Hermes, cua-driver, MediaPipe assets, provider ToS for resale) — split from 6.5 by Decision 3** | new |
 | 7 | Electron shell + installer + overlay; Android app planned only — buildable now (blocks release, not building); installer MUST honour Decision 1 (never bundle the LGPL edge-tts package) | §13 |
-| **8** | **Upstream synthesis (prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory): 8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates. Tracked, NOT started — starts only after 6.5/6.6/7** | new (AD-11…AD-16) |
+| **8** | **Upstream synthesis (prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory · agency-agents): 8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates, 8E Agency roster reaches the seats, 8F the four TencentDB assets 8A-8D left (versioned skills, wiki links, scoped recall, CodeGraph). Tracked, NOT started — starts only after 6.5/6.6/7** | new (AD-11…AD-21) |
 
 ### Step 6.5 — the licensing gate, with 2026-07-30's findings folded in
 
@@ -918,6 +970,7 @@ end-to-end. Two operator decisions were taken during planning and both are
 | `PrimeIntellect-ai/prime-agent` | MIT | A complete competing agent CLI (TypeScript + persistent IPython kernel), installed by `curl \| sh` | **Patterns only** |
 | `addyosmani/agent-skills` | MIT | 24 `SKILL.md` documents + 4 personas + 7 reference checklists | **Vendor a curated subset** (5 already vendored) |
 | `TencentCloud/TencentDB-Agent-Memory` | MIT | 3-service Docker stack (memory-core + web hub + proxy) + a team/ACL model | **Patterns only** |
+| `msitarzewski/agency-agents` | MIT | ~230 persona markdown files across 18 divisions + shell installers for 14 host tools | **Vendor a curated subset** (6 already vendored; +8 in 8E.3) — added to this step 2026-08-17 |
 
 Two of the three cannot become dependencies without breaking rules already in the
 root `CLAUDE.md`: prime-agent's installer is `curl -fsSL … | sh` (forbidden
@@ -1005,6 +1058,19 @@ restatement of *a loader pointed at one root fails silently forever*. AD-16 exis
 because **a loader that cannot find anything returns exactly what a loader with
 nothing to find returns** — an invisible overlay would be that same trap wearing a
 new filename.
+
+**AD-17 … AD-21 — added the same day, for lanes 8E and 8F** (the Agency roster and
+the four TencentDB assets 8A-8D did not take). Same rule as above: these are
+additions to the spine's §1 table, mirrored there, and **the spine wins** on any
+disagreement.
+
+| ID | Invariant | Enforcement |
+|---|---|---|
+| **AD-17** | **One persona loader.** Every persona — tracked default, operator edit, or vendored Agency body — resolves through `src/core/agents/personas.js`. No second reader, no inline `path.join` to a persona directory anywhere else. Two persona layers that cannot see each other is the state 8E exists to end; a third would restore it. | `test/anti-drift-persona-single-loader.test.js`: read every file under `src/` + `server/`; assert persona-directory path construction appears only in `agents/personas.js`. Same sweep shape as AD-13. |
+| **AD-18** | **A routed seat says which seat it is and why.** Persona selection writes the chosen role **and** the matched reason into the kanban/mission record. No silent default. A router whose choice is invisible is indistinguishable from the two-way keyword coin flip it replaced — which is exactly how `backend-builder` came to build every security card without anyone noticing. | `test/persona-router.test.js`: assert role + reason present for a matched card and for a zero-hit card (where the reason is the fallback, stated as such). |
+| **AD-19** | **A skill body is never overwritten without keeping its predecessor.** A body/steps change snapshots the previous version first; a use-counter update does **not** snapshot. Both halves are load-bearing: without the first, a worse distillation silently destroys a better one; without the second, `recordUse()` writes thousands of version files a week. | `test/skills-versioning.test.js`: write → rewrite with different steps → assert exactly one version file; then 50 `recordUse()` calls → assert still exactly one. |
+| **AD-20** | **A graph answer carries its freshness.** Every CodeGraph result states the index timestamp and file count, and a query naming a file that is not in the index returns a distinct "not indexed" shape — never an empty edge set. An empty result and an unindexed target must never look identical; that equivalence is the same dishonest-empty trap AD-16 names one layer up. | `test/codegraph-freshness.test.js`: query an un-indexed file; assert the not-indexed shape, not `[]`. Assert timestamp + file count on a normal hit. |
+| **AD-21** | **A scope filter removes, never fabricates, and states what it withheld.** A scoped recall is a strict subset of the same unscoped recall and reports how many records scope withheld. A filter that silently shrinks recall is indistinguishable from an empty vault. | `test/memory-scope-filter.test.js`: same query scoped vs unscoped; assert subset, and assert the withheld count is reported and non-zero when records were excluded. |
 
 ### Architecture and infrastructure
 
@@ -1651,6 +1717,262 @@ precisely the parts that cannot ship inside an installer the operator sells
 
 ---
 
+### Step 8E — The Agency roster reaches the seats (`msitarzewski/agency-agents`)
+
+> **Added 2026-08-17, same plan-only pass. TRACKED, NOT STARTED, same 6.5/6.6/7
+> gate as the rest of step 8.** The operator named a third repo alongside
+> prime-agent and TencentDB; research found it **already half-vendored**, which is
+> what makes this lane small.
+
+Six Agency personas already ship in this repo: `mythos/skills/persona-frontend-developer`,
+`persona-backend-architect`, `persona-ui-designer`, `persona-brand-guardian`,
+`persona-reality-checker`, `persona-ui-finish-gate-reviewer` — MIT bodies verbatim,
+listed in `mythos/skills.allowlist` under `# ---- Personas (adapted from
+msitarzewski/agency-agents, MIT) ----`, credited in `THIRD_PARTY_NOTICES.md`.
+
+**The defect that makes them decorative.** There are two persona layers and they
+cannot see each other:
+
+| Layer | Resolved by | Reads | Reaches |
+|---|---|---|---|
+| Vendored Agency personas | `skills/loader.js` | `mythos/skills/persona-*/SKILL.md` | the model, via `use_skill` — **only if it thinks to ask** |
+| Seat personas | `agents/personas.js` | `$MYTHOS_PERSONAS_DIR` → `vault/Personas/` → `mythos/personas/` (4 files) | the reviewer / reality-checker / builder seats, on every build |
+
+So `agent-actions.js` can seat a `reviewer` and a `reality-checker` and two
+builders, and nothing else — six vendored personas sit in the skills catalogue
+where no seat can reach them. And the router that chooses a builder,
+`agents/personas.js:121 pickBuilderPersona()`, is a **two-way keyword coin flip**:
+one frontend keyword list, else `backend-builder`. A card about deploying, about
+schema, about credentials, about test coverage — all get the backend builder, and
+the roster is never consulted. This is the same shape as *personas never loaded*
+already recorded in this repo's history: nothing throws, every seat just quietly
+degrades to generic.
+
+- [ ] **8E.1 — One persona resolution order (bridge the two layers).**
+
+  `agents/personas.js` gains the vendored persona skills as a **fourth and final
+  root**, after the existing three. Order becomes:
+
+  1. `$MYTHOS_PERSONAS_DIR` — explicit override, `path.delimiter`-separated (unchanged)
+  2. `mythos/vault/Personas/` — the operator's own edits (unchanged; a customisation
+     that loses to a shipped default does nothing)
+  3. `mythos/personas/` — tracked defaults (unchanged)
+  4. **NEW** `mythos/skills/persona-<role>/SKILL.md` — the vendored Agency bodies
+
+  Four things the lane must get right, each traced to something already known here:
+
+  - **Strip the frontmatter before using the body as a system identity.** These
+    files are `SKILL.md`s: they open with `name:`/`description:` YAML that is
+    loader metadata, not persona prose. `skills/loader.js` already parses that
+    block — reuse it rather than writing a second frontmatter regex.
+  - **`isSafeRole()` still gates the role name** (`personas.js:66`). The new root is
+    one more `path.join` on the same already-validated value, not a new input path.
+  - **Keep caching the miss** (`personas.js:86`). Four roots × a role with no file ×
+    the reviewer seat running on every build is a stat storm for nothing.
+  - **Prefix mapping is explicit, not clever.** Role `ui-designer` must resolve
+    `persona-ui-designer/`; do not accept a bare `persona-` prefix from the caller,
+    or the same persona ends up addressable by two names and the cache keys split.
+
+  `listPersonas()` gains the same root so the vendored six become listable — which
+  is precisely what 8E.2 needs, and is unreachable today.
+
+  **Consumers checked:** `loadPersona` has four call sites, all in
+  `effectors/agent-actions.js` (`:435` reviewer, `:457` reality-checker, `:709`
+  builder, `:859` reviewer again) plus a comment reference in `brain/index.js:135`.
+  None inspect the string; all pass it as a system identity. So a body that arrives
+  from a different root needs no caller change.
+
+- [ ] **8E.2 — A router that states its choice (AD-18).**
+
+  Replace the keyword coin flip with a scored match over `listPersonas()`:
+
+  - Routing terms live in **one** place. Decide at execution time between a
+    `Routes:` line inside each persona file and a table in `agents/personas.js` —
+    but pick one. Two sources for the same mapping is how a persona ends up
+    routable in the table and unroutable in the file.
+  - Score = term hits; ties broken by declaration order, so the ordering is
+    reviewable rather than emergent.
+  - **Zero hits still resolves to `backend-builder`.** Today's default is the
+    fail-safe and stays the fail-safe — a router that returns nothing would silently
+    drop the persona entirely, which is worse than a generic seat.
+  - The chosen role **and the matched reason** are written into the kanban/mission
+    record (AD-18), so the Audit view can answer "which seat built this card".
+
+  **Do not change the signature.** `pickBuilderPersona(cardTitle, cardDetail)` has
+  exactly one caller (`agent-actions.js:708`); widening it to take the whole card
+  is a refactor riding along on a feature.
+
+- [ ] **8E.3 — Vendor eight more personas, each with a named reader.**
+
+  Slot test is 8A.4's, unchanged: **a persona earns a slot when a seat calls it**,
+  not when it reads well. Upstream filenames below were enumerated from the real
+  tree (`gh api repos/msitarzewski/agency-agents/git/trees/main?recursive=1`) — the
+  repo has 18 division directories and ~230 files, and the `tree/main/...` web path
+  404s, so enumerate with `gh` or a clone rather than guessing.
+
+  | Upstream file | Vendored as | The reader that exists today |
+  |---|---|---|
+  | `engineering/engineering-devops-automator.md` | `persona-devops-automator` | build cards about deploy/CI/Docker — today they get `backend-builder` |
+  | `engineering/engineering-api-platform-engineer.md` | `persona-api-platform-engineer` | build cards adding routes/effectors; pairs with the vendored `api-and-interface-design` skill |
+  | `engineering/engineering-data-engineer.md` | `persona-data-engineer` | ingestion/vault/index cards (`memory/documents.js`, `from-code-search.js` indexing work) |
+  | `security/security-appsec-engineer.md` | `persona-appsec-engineer` | security cards; the `security` pack and `strix-security` skill already exist for this lane and have no seat |
+  | `security/security-secrets-credential-engineer.md` | `persona-secrets-credential-engineer` | the credential scanner (`effectors/credential-scanner.js`) + leash pre-T3 scan — the one area where a generic builder is actively dangerous |
+  | `testing/testing-test-automation-engineer.md` | `persona-test-automation-engineer` | test-writing cards; the `tdd-workflow`/`verification-before-completion` skills have no seat |
+  | `testing/testing-evidence-collector.md` | `persona-evidence-collector` | the **evidence contract** — `effectors/evidence.js` + `evidence-validator.js` + `dispatch-action.js`'s `unverified`/`reason` rule. This repo's single most-repeated scar has no persona |
+  | `engineering/engineering-minimal-change-engineer.md` | `persona-minimal-change-engineer` | `build-refine.js` repair passes; the code analogue of the vendored `ponytail` skill and of the surgical-changes rule |
+
+  **Two considered and deliberately deferred, reason recorded so a later session
+  does not "helpfully" add them:** `engineering/engineering-desktop-app-engineer.md`
+  (MYTHOS *is* an Electron app, so the reader is real — but step 7 is the Electron
+  lane and is unticked; adding a seat mid-flight there mixes two builds) and
+  `engineering/engineering-code-reviewer.md` (the reviewer seat already has a
+  tracked `mythos/personas/reviewer.md` written for this repo's own rubric, and
+  `review-rubric.js` owns the output contract — a second reviewer identity would
+  fight it). **The remaining ~220 stay unvendored**: a catalogue entry no seat calls
+  is prompt tax on every turn.
+
+  Mechanics per persona: `mythos/skills/README.md:47-58`, verbatim, invent nothing
+  — upstream body verbatim, frontmatter rewritten for this loader with the
+  `<!-- Adapted from msitarzewski/agency-agents (MIT), original file … -->`
+  provenance comment the existing six already carry, `LICENSE` copied, one line in
+  the existing `skills.allowlist` Personas block, **extend the single
+  `THIRD_PARTY_NOTICES.md` agency-agents row** (do not add a second), and add the
+  README "Copied from upstream" rows.
+
+- [ ] **8E.4 — Tests.**
+
+  - `test/personas-resolution.test.js` — four-root order; `$MYTHOS_PERSONAS_DIR`
+    wins; operator `vault/Personas/` beats tracked defaults; vendored fallback
+    resolves; frontmatter stripped; unsafe role rejected; miss cached. **Point every
+    root at temp directories.** Never rename a real directory to fake a state — that
+    is the wake-word `EPERM` scar, and it stranded real model weights invisibly
+    because both directories were gitignored.
+  - `test/persona-router.test.js` — a security card does not get `backend-builder`;
+    a zero-hit card still does; role + reason land in the record (AD-18).
+  - `test/anti-drift-persona-single-loader.test.js` — AD-17 sweep.
+
+---
+
+### Step 8F — The TencentDB assets step 8 did not take
+
+> **Added 2026-08-17, same plan-only pass, same 6.5/6.6/7 gate.** 8C took
+> TencentDB's **layering** (L0→L3) and nothing else. The operator asked for the
+> other four assets: versioned skills, the Wiki's link structure, memory
+> loadouts/ACL, and CodeGraph. Ordered cheapest-and-most-certain first; the last
+> two carry explicit gates because both are large and one has a competing answer
+> already sitting in the adoption matrix.
+
+- [ ] **8F.1 — Versioned skills (no gate — the cheapest real win in step 8).**
+
+  `memory/skills.js:28 write()` composes the whole file and overwrites it. So an
+  auto-distilled skill (written by `goals/index.js:176` and
+  `identity/reflection.js:259`) can be silently replaced by a worse distillation
+  and the predecessor is gone — the exact hazard 8B's snapshot ledger exists to
+  prevent, one store over. TencentDB versions its skill assets for this reason.
+
+  Design, deliberately the same shape as 8B so the repo has one discipline, not two:
+
+  - `vault/Skills/<slug>.md` stays the current version. **No reader changes** —
+    `recall()`, `get()`, `parseSkill()` and the `dispatch-action.js` bookkeeping all
+    keep working untouched.
+  - `vault/Skills/versions/<slug>/<ts>.md` — the previous body, written **before**
+    the overwrite. Snapshot-then-write, in that order, for the same reason
+    `mergeConsolidatedTopics()` now writes before deleting: the other order destroys
+    data on a failed write.
+  - `version` + `supersedes` added to the existing sidecar comment
+    (`skills.js:17 SIDECAR_RE`). Additive — `parseSkill()` must keep parsing files
+    that have neither, or every skill written before this lane becomes unreadable.
+  - **`recordUse()` must NOT snapshot.** It rewrites the file on every single use to
+    bump `uses`/`successRate` (`skills.js:146`, inside `fs.withLock`). A version per
+    use is thousands of files a week. Only a change to the body/steps/criteria
+    snapshots. **This distinction is the whole lane** — get it backwards and the
+    feature is a disk leak.
+  - `history(slug)` and `rollback(slug, ts)` surfaced through the existing
+    `from-memory.js` tool set, not a new effector file.
+  - AD-19 above.
+
+- [ ] **8F.2 — Wiki link structure over Notes (small, additive).**
+
+  `memory/notes.js` is already Obsidian-compatible markdown with search
+  (`notes.js:167`), and `MYTHOS_NOTES_DIR` can point at the operator's real
+  Obsidian vault. What TencentDB's Wiki adds is what is missing: **link structure**
+  — `[[wiki-link]]` resolution and backlinks, so a note declares what it relates to
+  and the relation is readable from both ends.
+
+  - Parse `[[target]]` on read and resolve through the existing `slugifyTitle()`
+    (`notes.js:28`), so link resolution and file naming cannot drift apart.
+  - `backlinks(slug)` computed by scanning at query time, bounded by the existing
+    `MAX_SCAN_FILES` cap. **No index file.** An index over a directory the operator
+    edits in Obsidian is a second source of truth that is stale the moment they
+    save — and the truncation must be reported, since `search()` already reports
+    `truncated`.
+  - Unresolved links are **reported as unresolved**, never silently dropped. Same
+    honesty rule as the loader reporting a missing skill instead of quietly
+    shortening its catalogue.
+  - Anything injected into a prompt from here goes through 8C.1's
+    `budgetedBlock()` (AD-14). No second truncation rule.
+
+- [ ] **8F.3 — Memory loadouts / per-agent scope (two parts, second one gated).**
+
+  TencentDB's idea is that memory assets **bind to specific agents** — sharing is
+  explicit, not broadcast. Its team/ACL half (System Admin / Team Admin / Member,
+  private/team/restricted visibility) has **no reader in a single-operator
+  product** and is not being built; that is recorded here so it is not mistaken for
+  an oversight. The half that does have a reader is **scoped recall**: the reviewer
+  seat should not be steered by facts distilled from an unrelated project, and a
+  build agent should not inherit conversational preferences.
+
+  1. **Scope tags on write — ship this alone first.** `semantic.write(topic, facts,
+     meta)` already carries a `meta` object (`memory/index.js:88`). Add
+     `meta.scope` (project/engagement slug) and `meta.audience` (seat role; absent
+     = every seat). Purely additive: every existing caller keeps working and every
+     untagged record stays universally visible.
+  2. **A recall filter, not a recall fork.** `recallHybrid(query, opts)` gains
+     `opts.audience`/`opts.scope`, applied **in the same place `opts.excludeKinds`
+     is already applied** (`memory/index.js:265`) — that filter exists there
+     precisely because the vector path bypassed the keyword path's exclusion once
+     (recorded in-file as FIX G). A second filter site would re-create that bug.
+     AD-21 applies.
+
+  **Gate:** part 1 before part 2, as separate commits. Tagging is harmless and
+  immediately auditable. Filtering changes what every seat sees, so part 2 needs a
+  full audit of the `recall`/`recallHybrid` call sites first — the server's
+  recall-before-respond, `handleUtterance()`, the goal planner, and the Live
+  composer all read memory, and a filter defaulting the wrong way makes MYTHOS look
+  amnesiac with a full vault.
+
+- [ ] **8F.4 — CodeGraph: symbols, call edges, blast radius (largest — decision first).**
+
+  The honest gap: `from-code-search.js` is embedding-only (`index_project` /
+  `search_code` over `chunkCode()` chunks in the shared `documents` vector
+  partition). It finds code that *reads like* the query. It cannot answer "what
+  breaks if I change this function" — the question the build lane, the reviewer
+  seat and the pre-commit gate all actually ask, and the question TencentDB's
+  CodeGraph exists to answer.
+
+  **First task of this lane is a recorded decision, not code.** The adoption matrix
+  already carries a competing answer: `tirth8205/code-review-graph`, 🟢 **P1** —
+  tree-sitter blast-radius graph over MCP, ~65× token reduction, risk-scored merge
+  gate, local-first, `pip install`. MYTHOS already speaks MCP (`from-mcp.js`,
+  `mcp_call_tool`).
+
+  | Option | For | Against |
+  |---|---|---|
+  | **Adopt** `code-review-graph` as an MCP sidecar | real tree-sitter parsing, multi-language, someone else maintains it; degrades OFFLINE when absent, exactly the cua-driver pattern the root `CLAUDE.md` mandates | a Python dependency inside a product being sold — its licence and its deps must clear step 6.6 before it can ship |
+  | **Build native** | zero new dependencies; reuses the existing `walk()` + `SKIP_DIRS` + `MAX_FILES` caps in `from-code-search.js` (**do not write a second walker**); ships in the installer with nothing to install | regex/AST-lite means JS/TS-accurate and weak elsewhere |
+
+  **Recommendation to record: build native, scoped to JS/TS only, and say so in the
+  tool description.** A graph that silently under-reports Python callers is worse
+  than one that declines to cover Python — that is AD-20's whole point. Shape:
+  extract `require`/`import`/`export` edges and top-level declarations, write
+  `vault/Index/codegraph.json`, expose `impact_of({symbol|file, depth})` returning
+  callers/importers. T0 read-only, so no leash change.
+
+  Sequenced **last** in step 8 and dependent on 8A.4, because the reviewer/gate
+  consumers that make it worth building are what 8A.4 and 8D put in place.
+
+---
+
 ### Step 8 — execution order and verification
 
 Each step is independently shippable and independently revertible.
@@ -1666,7 +1988,21 @@ Each step is independently shippable and independently revertible.
 | 7 | 8C.2 Live episodic + lessons blocks | 5 | medium; prompt-size cost is real |
 | 8 | 8D budget + gates + executor rewire | 4 | medium |
 | 9 | 8C.3 L2 scenarios — **only if 7 proves insufficient** | 7 | provisional |
+| 11 | 8E.1 persona resolution bridge + AD-17 sweep | — | low |
+| 12 | 8E.2 scored router + AD-18 record fields | 11 | low |
+| 13 | 8E.3 vendor 8 personas + allowlist/notices/README | 11-12 | low |
+| 14 | 8F.1 versioned skills + AD-19 | — | low |
+| 15 | 8F.2 wiki links + backlinks over Notes | 5 (uses `budgetedBlock`) | low |
+| 16 | 8F.3 part 1 — scope tags on write, unused | — | low |
+| 17 | 8F.3 part 2 — scoped recall filter + AD-21 | 16 + a full `recall*` consumer audit | medium |
+| 18 | 8F.4 CodeGraph — **adopt-vs-build decision recorded first**, then native JS/TS + AD-20 | 4, 8 | **highest of 8E/8F** |
 | 10 | Tick each box, Progress-log rows with SHAs, rewrite RESUME HERE | all | doc |
+
+Rows 11-18 were appended 2026-08-17 (lanes 8E/8F). Row 10 stays last because it is
+the doc close-out for the whole step. **8E and 8F are independent of 8A-8D** — the
+only cross-lane dependencies are row 15 on 8C.1's `budgetedBlock()` and row 18 on
+8A.4/8D's reviewer-and-gate consumers, so 8E can start the moment the 6.5/6.6/7
+gate opens, without waiting on 8B.
 
 **Before touching anything** (concurrent-session safety): `git pull`, then diff
 `skills.allowlist`, `voice/live-tools.js` and `server/index.js` against what
@@ -1722,19 +2058,35 @@ Per-lane verification, in order:
    each lands `BLOCKED` with the named reason, never `COMPLETED`. Fail a gate,
    re-run with identical inputs → `skipped:'unchanged-since-failure'`; change an
    input → re-runs.
-7. **Anti-drift.** All six new AD tests pass and the existing
+7. **8E — the seat, not the catalogue.** Run a build card whose text is about
+   deploying or about credentials, and read the **record**: it must name a routed
+   persona and the reason (AD-18). Then confirm the body actually reached the
+   model — check the composed prompt or the Audit entry, **not** the model's claim
+   that it was being a devops engineer. A seat that says it is specialised is
+   exactly what was already true and false at the same time before 8E.1. Also
+   re-run the resolution probe with all four roots pointed at temp directories and
+   confirm the operator root still beats the tracked default.
+8. **8F — each lane has its own oracle.** 8F.1: rewrite a skill body, confirm one
+   version file exists and the old body is byte-identical in it, then hammer
+   `recordUse()` and confirm no new version appears. 8F.2: create two notes that
+   link to each other, confirm `backlinks()` finds both directions and that a
+   `[[missing]]` link is reported unresolved rather than dropped. 8F.3: same query
+   scoped and unscoped, assert subset plus the withheld count. 8F.4: index the
+   repo, then `impact_of` a function with known callers and **verify against a real
+   grep** — a graph that agrees with itself is not evidence.
+9. **Anti-drift.** All eleven new AD tests (AD-11…AD-21) pass and the existing
    `test/anti-drift-*.test.js` suite stays green — AD-7 especially, since step 8
    adds vault paths and test fixtures (derive fixture paths from `os.tmpdir()`;
    AD-7 only fails a path literal after `git add`).
-8. **Docs (AD-10).** `node scripts/sync-test-count.js --write`, commit its output,
+10. **Docs (AD-10).** `node scripts/sync-test-count.js --write`, commit its output,
    never hand-edit a count. Run it as a **separate** command from the commit —
    chaining both has hit the 10-minute ceiling before.
 
-**Definition of done for step 8:** all four lanes live-verified as above; every
-box above ticked with a Progress-log row carrying its commit SHA; AD-11…AD-16
-present in the V2 spine's §1 table; RESUME HERE rewritten to name the next
-unchecked step; pushed. **A tick that is not pushed does not exist to the next
-machine.**
+**Definition of done for step 8:** all six lanes (8A, 8B, 8C, 8D, 8E, 8F)
+live-verified as above; every box above ticked with a Progress-log row carrying its
+commit SHA; AD-11…AD-21 present in the V2 spine's §1 table; RESUME HERE rewritten
+to name the next unchecked step; pushed. **A tick that is not pushed does not exist
+to the next machine.**
 
 ---
 

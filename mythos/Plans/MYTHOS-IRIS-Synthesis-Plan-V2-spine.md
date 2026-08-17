@@ -64,6 +64,24 @@ live, and it is authoritative on everything below the invariant itself.
 | **AD-15** | **A limit is not a success.** A run that ends by exhausting a turn/token/wall budget reports `status:'budget-exhausted:<dimension>'`, never `COMPLETED`; a passed gate is credited only with what that gate actually verified. Sibling of AD-4 — the same refusal to let an absence of failure read as proof of success. | `test/agent-budget-gates.test.js`: exhaust each dimension separately; assert the engagement lands `BLOCKED` with the named reason and never `COMPLETED`. |
 | **AD-16** | **Nothing the model reads is invisible to the operator.** Any model-editable prompt state is readable through a HUD route and is included in the vault export. A loader that cannot find anything returns exactly what a loader with nothing to find returns — an unreadable overlay is that trap wearing a new filename. | `test/harness-route.test.js`: `GET /api/harness` returns the current overlay text, the snapshot list and the refinement ledger. |
 
+**AD-17 … AD-21 — added later the same day (2026-08-17) for step 8's two new
+lanes**, 8E (the Agency roster reaching the seats, `msitarzewski/agency-agents`)
+and 8F (the four TencentDB assets 8A-8D had not taken: versioned skills, wiki
+links, scoped recall, CodeGraph). Same standing as AD-11…AD-16: an extension, in
+force only when those lanes are built, with the roadmap authoritative on the design
+and the wiring below the invariant itself. Where AD-11…AD-16 govern **state the
+model writes**, these five govern **state the model is seated in or reads through**
+— which persona it is wearing, which memories it can see, and whether a store or a
+graph is telling it the truth about its own completeness.
+
+| ID | Invariant | Enforcement |
+|---|---|---|
+| **AD-17** | **One persona loader.** Every persona — tracked default, operator edit, or vendored Agency body — resolves through `src/core/agents/personas.js`. No second reader, no inline `path.join` to a persona directory anywhere else. Two persona layers that could not see each other is the state 8E exists to end; a third would restore it, and this repo has already paid for a loader that pointed at one root and returned null forever. | `test/anti-drift-persona-single-loader.test.js`: read every file under `src/` + `server/`; assert persona-directory path construction appears only in `agents/personas.js`. Same sweep shape as AD-1 and AD-13. |
+| **AD-18** | **A routed seat says which seat it is and why.** Persona selection writes the chosen role **and** the matched reason into the kanban/mission record; no silent default. A router whose choice is invisible is indistinguishable from the two-way keyword coin flip it replaced — which is how one builder persona came to build every security, schema and deploy card without anyone noticing. | `test/persona-router.test.js`: assert role + reason are present for a matched card and for a zero-hit card, where the reason states that the fallback fired. |
+| **AD-19** | **A skill body is never overwritten without keeping its predecessor.** A change to a skill's body/steps/criteria snapshots the previous version first; a use-counter update does **not** snapshot. Both halves are load-bearing: without the first, a worse auto-distillation silently destroys a better one; without the second, the per-use rewrite produces thousands of version files a week. | `test/skills-versioning.test.js`: write → rewrite with different steps → assert exactly one version file holding the old body byte-identical; then 50 use-count updates → assert still exactly one. |
+| **AD-20** | **A graph answer carries its freshness.** Every CodeGraph result states the index timestamp and file count, and a query naming a file absent from the index returns a distinct "not indexed" shape — never an empty edge set. An empty result and an unindexed target must never look identical; that equivalence is AD-16's trap one layer down, and it is how "nothing depends on this" gets believed. | `test/codegraph-freshness.test.js`: query an un-indexed file and assert the not-indexed shape rather than `[]`; assert timestamp + file count on a normal hit. |
+| **AD-21** | **A scope filter removes, never fabricates, and states what it withheld.** A scoped recall is a strict subset of the same unscoped recall and reports how many records scope withheld. A filter that silently shrinks recall is indistinguishable from an empty vault — and it is applied at the one site the existing kind-exclusion already uses, because that is where the keyword and vector paths diverged once before. | `test/memory-scope-filter.test.js`: run one query scoped and unscoped; assert subset, and assert the withheld count is reported and non-zero when records were excluded. |
+
 **Drift log.** Add `mythos/docs/DRIFT-LOG.md`. Any time an invariant is deliberately bent,
 one line: date, invariant, reason, expiry. An entry with no expiry is a bug.
 
