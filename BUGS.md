@@ -9,7 +9,18 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-17 (third entry) - BUG-271: the first Gemini Live voice session, diagnosed as
+Last updated: 2026-08-18 - BUG-272: BUG-271's live re-test happened (20-minute voice session in the
+noisy room) and its evidence is fully inventoried here: what BUG-271 fixed (noise gate zeroed 5000+
+frames, zero frames dropped, the suspend-log evidence delivered the diagnosis), and what it did NOT
+fix (self-interruption at 63% of turns - the eager tier sits below the room's measured bleed floor
+of 0.09-0.38 RMS; real barge-ins held 10-13s by the ceiling; the echo filter fired ZERO times;
+phantom ASR persists; the wake word died at boot with OverconstrainedError and never re-armed;
+launch_app resolved "code" to the ZCode process; open_web(browser:true) failed 7/7 silently under
+Electron). Full fix plan recorded in the entry - audio ownership -> echo attribution -> barge-in
+policy -> tool honesty - status PLANNED, nothing implemented yet. This entry is the handoff for the
+next machine.
+
+Previous entry: 2026-08-17 (third entry) - BUG-271: the first Gemini Live voice session, diagnosed as
 three Live-path defects the batch path has defended against for years - a self-interrupting echo
 loop (MYTHOS's own voice replayed to Gemini and transcribed as the operator), phantom words from
 ungated room noise, and the suspend-transition evidence the client computed and sent but the server
@@ -8647,3 +8658,271 @@ lines in mythos-server.log name the responsible gate: `live.echo-dropped`
 (the echo filter fired), and `voice.capture-suspend`'s `peakRms` (how loud
 the bleed got), `framesZeroed` (how much the noise gate silenced) and
 `framesDropped` (how much speech the preroll ring lost).
+
+## BUG-272 — BUG-271's live re-test: what the 20-minute session proved, what it broke, and the fix plan for all of it
+
+**PLANNED 2026-08-18 — NOTHING IMPLEMENTED YET. This entry is the handoff:
+the complete error inventory of the first post-BUG-271 voice session
+(2026-08-17 21:35–21:56 UTC, 72 live turns), the evidence-based corrections
+to five claims in the findings document that session produced, and the
+agreed fix order. The next machine starts here and at the roadmap's RESUME
+HERE block.**
+
+### What BUG-271's fixes demonstrably did (confirmed working)
+
+- **Noise gate:** `framesZeroed` climbed 71 → 5,240 across the session
+  (~half of all frames actively zeroed to silence); `framesDropped: 0` on
+  every single transition — no operator speech lost by the preroll ring.
+- **Evidence logging:** the full suspend-log fields (`peakRms`,
+  `framesZeroed`, `framesDropped`, `prerollFrames`, `prerollCap`, `heldMs`,
+  `ownVoiceGate`) delivered exactly the diagnosis below — the data that was
+  missing on 2026-08-16 existed for the first time.
+- **Echo filter wiring:** present and routing (no crashes, no wire change),
+  but see defect V3 — it never fired.
+
+### The defects the session recorded
+
+**V1 — Self-interruption persists (incidents 1+2: "cut off mid-sentence").**
+45 of 72 turns (63%) carry the `interrupted` flag. ~46 `barge-in-eager`
+releases fired at `peakRms` between **0.09 and 0.38** — this room's speaker
+bleed is 2–7× above the raised 0.05 eager tier. The tier raise was not
+enough; a static constant cannot track a room. Stored reply text shows the
+truncations (turns 6, 11, 27, 34, 36, 46) and one stutter ("thinking I'm
+thinking", turn 16). MYTHOS itself logged two incidents ("My God, you cut
+off again", "still cuts of") and the operator's frustration peaked at turn
+13.
+
+**V2 — Real barge-ins held 10–13 seconds.** 16 `ceiling-fail-open` events,
+~10 of them after 10.5–13s holds with up to 130 preroll frames buffered.
+The mirror image of V1: the gate that opens too easily on bleed is the same
+gate that holds the operator's real speech until the safety valve gives up.
+**This is why the fix must not "just raise the threshold" — the two
+failures are opposite sides of one RMS-only policy, and in this room bleed
+(0.09–0.38) overlaps the speech RMS band, so NO RMS threshold separates
+them.**
+
+**V3 — The echo filter fired ZERO times.** No `live.echo-dropped` line in
+the entire session, despite dozens of interrupted turns carrying input
+transcripts. Either those interruptions genuinely weren't echo transcripts
+(pure VAD-level: Gemini interrupts on the bleed audio before any transcript
+exists — the filter only sees transcripts), or the filter isn't receiving
+what MYTHOS said (output-fragment accumulation, the 3s window, or the
+incremental-`inputTranscription` hypothesis from BUG-271's final review).
+The logs cannot currently tell which — that silence is itself the finding,
+and instrumentation comes before policy.
+
+**V4 — Phantom ASR persists.** "Oui." (turn 11), "Stopp. Äh" (26), "Sí.
+Sí." (61), plus garbles "Six and Feebas" (7), "start door" (27, meant Dota
+2), "red ocean" (40), "review code" (35, meant Razer Cortex), "Hello, my
+doll" (69). The operator denied inputs twice ("That wasn't me", turn 53;
+"Never. I didn't even do anything.", turn 62). The noise gate attacks
+below-floor noise at the wire; these survive because they clear the floor —
+above-floor real sound is the wake-word/attention class, documented
+out-of-scope in BUG-271 and still out of scope here.
+
+**V5 — Six `live-turn-no-user-transcript` anomalies.** Operator speech
+reached Gemini but was never transcribed (turns 24, 33, 52, 56, 58, 63;
+audioIn 6–199). The healer's standing note: the half-duplex gate held it
+past the preroll ring, or what reached the VAD was MYTHOS's own voice.
+Subsumed by the V1/V2 policy fix.
+
+**W1 — Wake word dead for the entire session.** `wakeword.error`
+"OverconstrainedError" at 21:35:58, one retry at 21:36:51 (a pointerdown
+gesture, not a timer), never armed. Code-level findings: the constraint
+object (`mic-device.js:41-45`) contains NO sampleRate and NO channelCount —
+the only hard constraint is `deviceId: { exact }` from localStorage
+(`MYTHOS_MIC_DEVICE`), so a stale persisted device ID is the surviving
+explanation (it accounts for both failures with one cause). There is no
+fallback, no relaxed retry, no backoff re-arm, no `devicechange` hook —
+once both one-shot arm paths have fired, a failed wake word stays dead
+until reload. This is the BUG-150/175 family ("the wake word fails and
+nothing ever re-arms it"), next gap in the chain. **Timeline correction to
+the findings document:** the wake word failed ~29s BEFORE the s2s mic
+existed (first live activity 21:36:00+), so "two captures raced" is NOT the
+cause here; and "share one capture" contradicts the documented design
+(`wakeword.js` header: owns its own stream) — recorded as the upgrade path
+only if OverconstrainedError recurs after the small fix.
+
+**T1 — launch_app resolved "code" to the ZCode process.** `launch_app
+{name:"code"}` returned SUCCESS with pid 27540, `resolvedVia
+registry-app-paths` — but the pid belonged to "ZCode" (the operator's
+coding CLI), not VS Code. Mechanism, verified in code: VS Code is
+single-instance, the started process handed off and exited windowless,
+`Resolve-RealProcessAfterLaunch`'s exact-name fallback missed, and
+`Resolve-WindowedProcessByName`'s partial rung is an UNANCHORED substring
+match (`'ZCode' -like '*code*'` is true) returned as `matchedBy:'process'`
+— a full trusted resolution. `New-LaunchResult` echoes the REQUESTED name,
+never the resolved process's real name, and `from-pc.js`'s evidence oracle
+builds `observed` from that echo — circular, so the wrong process passed
+every gate as a VERIFIED launch. MYTHOS caught it only by noticing the pid's
+real name later and retracting (immune system's `claimed-action-not-taken`
+fired 3× this session — VS Code, Razer close, OneNote — all caught and
+retracted; that system worked as designed). The dota2/"Tor Link" failures
+were honest app-not-found failures working as designed — NOT foreground
+lock (the findings document mis-mapped them).
+
+**T2 — open_web(browser:true) failed 7/7 silently (the Chrome-YouTube
+saga).** The branch (from-dashboard.js:259-266, FIX-PLAN 3.3) returns
+`widgetType:'newtab'` + `ok:true` + `unverified`. Under the Electron shell
+`newtab` has ZERO working surfaces: the media window rejects it by design
+("not a media widgetType", verdict logged and DISCARDED at
+electron/main.js:809), the HUD's `window.open` fallback is denied by
+`setWindowOpenHandler` (a deliberate 2026-07-31 fix that drops URLs on the
+floor), and `shell.openExternal` is used NOWHERE in the repo. The tool
+still returned ok+unverified, so the circuit breaker counted all 7 as
+SUCCESSES (`unverified` has `ok:true` at hub.js:242-246), signature dedup
+resets per turn, and MYTHOS retried the identical dead call through turn
+72 while Chrome sat on `chrome://whats-new` (confirmed by screenshot +
+screen_read_text). `logs/main.log` carries the corpses: 6× "denied external
+open for https://www.youtube.com/results?search_query=news".
+
+**T3 — focus_window failed twice.** Stale pid 28268 ("Cannot find a
+process with the process identifier") — the model passed a pid from an
+earlier tool result after the process died; no re-resolution hint in the
+failure message (close_window has one). And foreground-lock on pid 17996
+despite all three ladder rungs (thread-attach, lock-timeout override,
+minimize/restore — the error string says so). **This session answers
+AGENTS.md's open question: the foreground-lock DOES reproduce in real
+voice-driven usage with a real app focused.** The ladder is exhausted; no
+speculative 4th rung — document and fail honestly.
+
+**T4 — 4 tool-ack-deadline breaches** (launch_app ×3, open_web ×1); one
+launch_app legitimately took 9860ms against a global 1500ms deadline.
+Per-tool-class deadlines needed (launch/open/window-class ~5000ms).
+
+**I1 — Infra:** browser-agent gave up after 6 CDP failures (ECONNREFUSED
+9222; 8-minute backoff, not permanent); 17 tools withheld (13 browser, 4
+gmail — no OAuth creds; operator asked for Gmail at turn 12 and got a flat
+no); Piper offline (no voices; chain falls through); one boot loop.stalled
+(1089ms, one-off); 2× live.goaway handled by reconnect; android-child
+offline (adb not installed, optional). All degrade honestly; operator
+provisioning decisions, not code.
+
+**O1 — Open observations, no repro mechanism yet:** unprompted
+`open_folder(<repo-root>)` at 21:46:16 with no
+matching request (operator asked why at turn 42); time confusion at turn 70
+("yesterday's Chrome-YouTube skirmish" — minutes earlier); incident #1
+misquotes the operator ("got off" vs stored "cut off") and severities
+defaulted to `error`.
+
+### Five corrections to the findings document (evidence over claims)
+
+1. **Wake word:** the failure predates the s2s mic by ~29s — not a capture
+   race; and no sampleRate/channel constraints exist in the request at all.
+   Stale `deviceId:{exact}` is the surviving cause. Fix small first
+   (relaxed retry + backoff re-arm), shared-stream only if it recurs.
+2. **launch_app failures were app-not-found, not foreground lock.** Only
+   one of the four focus/launch failures was foreground-lock, and its
+   error string proves AttachThreadInput was already tried and denied —
+   the findings doc's fix #01 proposes work that already exists.
+3. **Dedupe exists and worked** — the logged
+   `live.duplicate-tool-call-signature` event IS the dedupe catching the
+   close_window re-issue. The real gap is cross-turn dedupe for calls that
+   just failed/came back unverified.
+4. **Echo-check logs must stay transcript-free.** The proposed
+   `echo-check.inputTranscript` / `echo-check.lastAssistantText` fields
+   violate BUG-271's binding, test-pinned privacy invariant (logs never
+   contain transcript text). Same diagnostic power with similarity score,
+   word counts, assistant-audio-playing flag, ms since assistant speech
+   ended, decision, reason.
+5. **echoCancellation is already on** (`mic-device.js:42` requests
+   echoCancellation/noiseSuppression/autoGainControl on every capture).
+   Bleed measures 0.09–0.38 DESPITE AEC — which is why reference-based
+   handling is the next rung, not "enable AEC".
+
+### The fix plan (agreed order: audio ownership → echo attribution → barge-in policy → tool honesty)
+
+**Do not tune the eager threshold alone** — V1 and V2 are opposite failures
+of one RMS-only policy, and bleed overlaps the speech band in this room.
+
+**Slice 1 — Wake word survives mic failure (W1).** `mic-device.js`:
+`openMicWithFallback()` — on OverconstrainedError retry with OS default
+(`buildAudioConstraints(null)`), clear the stale `MYTHOS_MIC_DEVICE` key,
+report degraded; shared by wakeword.js, s2s-bridge.js, voice-loop.js.
+`wakeword.js`: use it + operator-actionable `micErrorMessage` text instead
+of the raw error name. `app.js`: bounded backoff re-arm (30s/60s/120s) +
+`devicechange` re-arm so hands-free Electron boot heals without a
+pointerdown. Logging: `wakeword.constraints.requested` (shape flags +
+deviceId-present, never the device path), `wakeword.constraints.actual`
+(track settings), `wakeword.start.source`, fallback-fired flag. RED-first
+tests.
+
+**Slice 2 — Prove why the echo filter never fired (V3), instrumentation
+first.** Log `live.echo-check` at every inputTranscription decision
+during/within-3s of assistant speech — privacy-safe fields ONLY (similarity
+score, candidate/reference word counts, assistant-audio-playing flag, ms
+since assistant speech ended, decision, reason). Verify the reference
+pipeline: is `outputTranscription` actually accumulating into the tracker
+(`noteSpoken`/`endUtterance`)? Check the incremental-fragment hypothesis.
+Fix the concrete defect if found (with test); otherwise the instrumentation
++ finding stands and Slice 3 carries the wire-level answer. Note for the
+record: at transcript level the eager path does NOT bypass the filter (all
+inputTranscriptions route through `match()`); the bypass is at the VAD
+level — Gemini interrupts on bleed audio before any transcript exists.
+
+**Slice 3 — Playback-aware barge-in state machine (V1+V2+V5, the core).**
+New pure module `ui/public/js/voice/barge-in-policy.js` with explicit
+states: IDLE / ASSISTANT_SPEAKING_PROTECTED /
+ASSISTANT_SPEAKING_INTERRUPTIBLE / BARGE_IN_PENDING / BARGE_IN_CONFIRMED.
+First 400–700ms of assistant speech: PROTECTED, no eager release (kills
+sentence-start self-interruption). High RMS during INTERRUPTIBLE creates
+PENDING, not an immediate release: hold 250–500ms, confirm with
+multi-signal check — adaptive bleed floor (rolling max of own-voice-hold
+peakRms × 1.4–1.5, clamped below the flush tier), minimum sustained
+duration, and echo similarity once a transcript exists. Confirm → release
+with replay; decay → discard as bleed. Ceiling 13s → 2s with a
+state-based decision table at the ceiling (echo-like → drop; user-like →
+interrupt; strong near-field energy with no transcript → interrupt;
+playback-correlated energy → drop). Preroll cap 300 → ~150 frames (1.5s),
+consistent with the 2s ceiling. Eager-tier constants become inputs to the
+pending→confirmed transition; `MYTHOS_BARGE_*` localStorage overrides still
+win absolutely. Wire format unchanged (frames zeroed-never-dropped;
+hold/release only changes WHEN frames flow). Implemented as gate policy in
+the client, reusing the existing own-voice gate machinery — it already
+controls whether frames reach Gemini, so Gemini's VAD never hears bleed.
+RED-first tests: state transitions (pure), protection window, pending/confirm
+timing, 2s ceiling decision table, preroll cap, source-shape wiring.
+
+**Slice 4 — Tool honesty (T1–T4).** launch_app: demote the partial rung to
+`matchedBy:'partial'` (candidate, not resolution — the WAVE 1 title rule
+extended to substring process names, the same epistemic class), include the
+resolved process's real `resolvedName` in every resolved payload, and
+`from-pc.js` downgrades evidence to unverified on name mismatch (kills the
+circular oracle). open_web: new `mythos:open-external` fork-IPC channel →
+`shell.openExternal` with request/ack (mirrors `requestCloseMediaWindow`);
+wire Electron's "not a media widgetType" verdict back instead of dropping
+it; explicit `fail()` with remedy text when nothing can render; circuit
+breaker counts `unverified` as failure; cross-turn dedupe (5–10s TTL) for
+signatures whose last outcome was failed/unverified; fix the Live-vs-hub
+description drift (`voice-agent.js:94` vs `from-dashboard.js:1263`). Ack
+deadlines: per-tool-class (launch/open/window-class 5000ms, fast reads keep
+1500ms). focus_window: stale-pid message gains the "call list_windows
+again" re-resolution hint; foreground-lock documented as confirmed-live,
+ladder exhausted, no 4th rung.
+
+**Slice 5 — Records + scripted verification session.** This entry + roadmap
+RESUME HERE (this commit). Then the operator's scripted ~10-minute session:
+MYTHOS speaks ~60s quiet-room; user interrupts at 1s/3s/8s into speech;
+speaker volume low/med/high; wake word attempted before and after s2s
+starts; launch_app/focus_window twice each. Pass criteria from logs:
+`wakeword.error` 0 + `wakeword.listening` once; interrupted-turn % < 10–15
+(was 63%); `live.echo-dropped` or decisive `live.echo-check` lines during
+bleed; real barge-in latency < 700ms; `ceiling-fail-open` 0; max preroll <
+1.5s; `framesDropped` stays 0; zero duplicate-signature events; ack
+deadlines clean for launch_app.
+
+### Out of scope (recorded upgrade paths, not built)
+
+- Shared single mic stream between s2s and wake word (contradicted by the
+  failure timeline; revisit only if OverconstrainedError recurs after
+  Slice 1).
+- Playback-reference correlation / echo-suppressor DSP (Slice 3's
+  measured-bleed gate is the cheap proxy; escalate if insufficient).
+- Embedding-based echo matching (try the instrumented word-overlap filter
+  first).
+- Foreground-lock 4th rung; Gmail OAuth / debuggable browser / Piper voices
+  / adb (operator provisioning; all degrade honestly).
+- Wake-word/attention gating for speech aimed at other devices; above-floor
+  phantom ASR (same class).
+- O1 observations (unprompted open_folder, time confusion, incident
+  misquote) — no repro mechanism yet.
