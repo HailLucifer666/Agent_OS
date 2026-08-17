@@ -142,7 +142,7 @@ describe('barge-in backstop: two independent tiers', () => {
       + 'interruption, which is the whole point of releasing early');
   });
 
-  it('the release lands strictly before the flush on a loud interruption', () => {
+  it('the release lands no later than the flush on a loud interruption', () => {
     const { backstop, flushes, releases } = harness();
     let releasedAt = -1;
     let flushedAt = -1;
@@ -152,7 +152,11 @@ describe('barge-in backstop: two independent tiers', () => {
       if (flushedAt === -1 && flushes.length) flushedAt = i;
     }
     assert.ok(releasedAt !== -1 && flushedAt !== -1, 'both tiers must fire on sustained loud speech');
-    assert.ok(releasedAt < flushedAt,
+    // <=, not <: since BUG-271 raised the eager tier to 3 frames (the flush
+    // tier's hold), both can tip on the SAME frame. That is still correct —
+    // observe() evaluates the release tier first within a frame, so the mic
+    // reopens no later than the frame playback stops, never after it.
+    assert.ok(releasedAt <= flushedAt,
       'the mic must reopen no later than the frame playback stops, never after it — '
       + `released at frame ${releasedAt}, flushed at ${flushedAt}`);
   });
@@ -359,5 +363,34 @@ describe('barge-in backstop: thresholds are amplitude-scale on purpose', () => {
       path.join(__dirname, '..', 'ui', 'public', 'js', 'voice', 'barge-in-backstop.js'), 'utf8');
     assert.ok(!/SPEECH_RMS|BARGE_IN_RMS_MULT/.test(src.replace(/^\s*\/\/.*$/gm, '')),
       'barge-in-backstop.js must not read voice-loop.js\'s runtime-rescaled thresholds');
+  });
+});
+
+// BUG-271 (2026-08-17): the eager tier was 0.035 / 2 frames (200ms), and the
+// operator's own session log proved speaker bleed clears 0.035 in that room —
+// every ~7s own-voice-hold -> barge-in-eager cycle was MYTHOS releasing its own
+// half-duplex gate on the echo of its voice, then replaying the buffered bleed
+// to Gemini. The tier moved to 0.05 / 3 frames (300ms): still eager, still
+// below the flush tier (0.056), and the localStorage override
+// (MYTHOS_BARGE_RELEASE_RMS) remains the walk-back for a real barge-in that a
+// different room's noise floor outruns.
+describe('barge-in backstop: BUG-271 eager tier is 0.05 / 300ms', () => {
+  it('the release threshold is 0.05 — above measured speaker bleed, below the flush tier', () => {
+    assert.equal(BACKSTOP_RELEASE_RMS_THRESHOLD, 0.05,
+      '0.035 was cleared by speaker bleed in the operator\'s room (BUG-271); the tier must '
+      + 'sit above it. Got ' + BACKSTOP_RELEASE_RMS_THRESHOLD);
+    assert.ok(BACKSTOP_RELEASE_RMS_THRESHOLD < BACKSTOP_RMS_THRESHOLD,
+      'the eager tier must stay strictly below the flush tier (0.056), or a release IS a flush');
+  });
+
+  it('the release hold is 3 frames (300ms of 100ms frames)', () => {
+    assert.equal(BACKSTOP_RELEASE_HOLD_FRAMES, 3,
+      '200ms tripped on bleed bursts; got ' + BACKSTOP_RELEASE_HOLD_FRAMES);
+  });
+
+  it('the flush tier is UNCHANGED by BUG-271', () => {
+    assert.equal(BACKSTOP_RMS_THRESHOLD, 0.035 * 1.6,
+      'only the eager tier moved — the flush tier is the one that cuts MYTHOS off mid-word');
+    assert.equal(BACKSTOP_HOLD_FRAMES, 3);
   });
 });

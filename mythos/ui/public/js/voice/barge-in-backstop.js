@@ -50,12 +50,22 @@ import { decideBargeIn } from './voice-loop.js';
 // session against 0.0875 / 6 frames.
 //
 // So the release tier is deliberately EAGER (operator's explicit choice, taken
-// over losing sentences): it clears the ordinary speech floor for ~200ms and
+// over losing sentences): it clears the ordinary speech floor for ~300ms and
 // does nothing except reopen the mic path, handing the real interruption verdict
 // to Gemini's own server-side VAD — which is a better detector than an RMS
 // heuristic and is the thing that would have decided it anyway had the gate
 // never been held. The flush tier stays higher and slightly longer, because it
 // is the one that can cut MYTHOS off mid-word.
+//
+// BUG-271 (2026-08-17): the eager tier used to be 0.035 / 2 frames (200ms), and
+// the operator's own session log proved that was wrong for this room — speaker
+// bleed (MYTHOS's voice leaking through the mic despite AEC) clears 0.035, so
+// every ~7s the bleed alone released the half-duplex gate and the replay handed
+// MYTHOS's own words straight to Gemini. The tier is now 0.05 / 3 frames
+// (300ms): above the measured bleed, still eager, and still strictly below the
+// flush tier (0.056) — a release must never double as a flush. A real barge-in
+// that a different room's noise floor outruns keeps the localStorage override
+// (MYTHOS_BARGE_RELEASE_RMS).
 //
 // Both tiers are still well clear of the echo of our own voice: getUserMedia's
 // AEC (mic-device.js) attenuates it, which is what makes a two-tier split
@@ -65,8 +75,8 @@ import { decideBargeIn } from './voice-loop.js';
 // can walk the eagerness back without a rebuild.
 export const BACKSTOP_RMS_THRESHOLD = 0.035 * 1.6;
 export const BACKSTOP_HOLD_FRAMES = 3;
-export const BACKSTOP_RELEASE_RMS_THRESHOLD = 0.035;
-export const BACKSTOP_RELEASE_HOLD_FRAMES = 2;
+export const BACKSTOP_RELEASE_RMS_THRESHOLD = 0.05;
+export const BACKSTOP_RELEASE_HOLD_FRAMES = 3;
 
 // Int16 little-endian PCM (what pcm-capture-worklet.js emits) -> RMS in the
 // same -1..1 scale voice-loop.js's rms() produces from its Uint8 analyser data,

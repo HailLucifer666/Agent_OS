@@ -66,7 +66,7 @@ describe('BUG-224 half-duplex gate — source shape', () => {
   it('the mic frame handler gates the SEND, not the barge-in observer', () => {
     const start = bridgeSrc.indexOf('captureNode.port.onmessage');
     assert.ok(start !== -1, 'the mic frame handler must exist');
-    const body = bridgeSrc.slice(start, start + 2000);
+    const body = bridgeSrc.slice(start, start + 2600);
 
     const observeAt = body.indexOf('bargeBackstop.observe');
     const gateAt = body.indexOf('if (ownVoiceGate)');

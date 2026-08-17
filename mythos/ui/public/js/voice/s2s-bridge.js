@@ -38,7 +38,8 @@
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
 import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
-import { createBargeInBackstop } from './barge-in-backstop.js';
+import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
+import { createLiveNoiseGate } from './live-noise-gate.js';
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -75,7 +76,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   //
   // TWO TIERS since 2026-08-14. onRelease is the eager one: it opens the gate and
   // touches playback not at all, so the operator's audio reaches Gemini after
-  // ~200ms of ordinary speech and Gemini's own VAD — the better detector — makes
+  // ~300ms of ordinary speech and Gemini's own VAD — the better detector — makes
   // the interruption call. onFlush is the higher tier that actually stops MYTHOS
   // talking. Before the split, one threshold decided both, it never fired in the
   // 2026-08-14 session, and the operator's speech died in the 1.2s preroll ring:
@@ -91,6 +92,23 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       releaseOwnVoiceGate('barge-in-eager');
     },
     ...bargeTuning(),
+  });
+
+  // BUG-271: noise gate on BOTH live-audio send points (the capture path below
+  // and the gate-release replay in releaseOwnVoiceGate). Below-floor frames are
+  // ZEROED to silence, never dropped — the stream stays continuous, so Gemini's
+  // VAD timeline and the wire format are untouched. Without it, every 100ms of
+  // room noise reached Gemini's START_SENSITIVITY_HIGH VAD and its STT
+  // fabricated words the operator never said; and the replay handed MYTHOS's
+  // own speaker bleed straight back to it. The floor is the localStorage-
+  // tunable knob (MYTHOS_LIVE_NOISE_GATE_FLOOR, same lsNumber idiom as
+  // MYTHOS_BARGE_*); rmsFromPcm16 is reused from barge-in-backstop.js so both
+  // measurements share one scale. Deliberately NOT changed here: Gemini's
+  // START_SENSITIVITY_HIGH stays — the rationale is documented at
+  // live-session.js's automaticActivityDetection block.
+  const noiseGate = createLiveNoiseGate({
+    floorRms: lsNumber('MYTHOS_LIVE_NOISE_GATE_FLOOR') ?? undefined,
+    rms: rmsFromPcm16,
   });
 
   // Bound listener refs, so stop() can precisely unsubscribe the exact
@@ -418,11 +436,17 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (!ownVoiceGate) return;
     ownVoiceGate = false;
     // Replay what the operator said while we were talking over them. Oldest
-    // first, so the model receives it in the order it was spoken.
+    // first, so the model receives it in the order it was spoken. BUG-271:
+    // every replayed frame goes through the noise gate too — the ring holds
+    // whatever the mic heard while MYTHOS was speaking, which is mostly
+    // MYTHOS; the gate turns the bleed into silence at the wire level while
+    // the operator's real interruption (loud enough to have opened the gate)
+    // passes raw. The stored frames are never mutated — process() hands back
+    // a fresh zeroed copy when it zeroes.
     const held = preroll;
     preroll = [];
     for (const frame of held) {
-      try { send({ type: 'live-audio', data: arrayBufferToBase64(frame) }); } catch (_) { /* socket closed */ }
+      try { send({ type: 'live-audio', data: arrayBufferToBase64(noiseGate.process(frame).buffer) }); } catch (_) { /* socket closed */ }
     }
     logSuspendTransition({
       reason: reason || 'own-voice-release',
@@ -441,6 +465,10 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // could not tell apart. A hold that drops nothing and still yields no
       // transcript is evidence for the second, and this is how we will know.
       framesDropped: prerollDropped,
+      // BUG-271: how many frames the noise gate silenced (both send points,
+      // session-cumulative). The server logs this with the rest of the
+      // transition line — the evidence chain belongs together.
+      framesZeroed: noiseGate.framesZeroed(),
       // One line per hold, not per frame — see ownVoicePeakRms's declaration.
       peakRms: Math.round(ownVoicePeakRms * 10000) / 10000,
     });
@@ -565,7 +593,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
           if (preroll.length > PREROLL_MAX_FRAMES) { preroll.shift(); prerollDropped++; }
           return;
         }
-        sendMessage({ type: 'live-audio', data: arrayBufferToBase64(e.data) });
+        // BUG-271: the noise gate's decision goes on the wire, not the raw
+        // frame — below-floor room noise is zeroed to silence (never dropped),
+        // so Gemini's VAD no longer fires on it and its STT stops fabricating
+        // words. e.data itself is untouched: the preroll branch above may
+        // still hold a reference to it on a later hold.
+        sendMessage({ type: 'live-audio', data: arrayBufferToBase64(noiseGate.process(e.data).buffer) });
       };
       source.connect(captureNode);
       // Pull-based worklet needs a downstream sink to keep firing (same
@@ -665,6 +698,9 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }
     if (player) { player.close(); player = null; }
     bargeBackstop.reset();
+    // BUG-271: a stale hysteresis tail (or zeroed count) must not carry into
+    // the next session — same once-per-session reasoning as the backstop reset.
+    noiseGate.reset();
     setVoiceState('idle');
   }
 

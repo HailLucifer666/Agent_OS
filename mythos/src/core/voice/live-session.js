@@ -456,6 +456,15 @@ function createLiveSession(deps) {
       // end-of-speech silence is deliberately NOT aggressive: a shorter window
       // cuts the operator off mid-sentence at every natural pause, which reads
       // as rudeness rather than as responsiveness.
+      //
+      // BUG-271 (2026-08-17): START_SENSITIVITY_HIGH STAYS even though it is
+      // what let room noise fire the VAD and fabricate phantom transcripts.
+      // Lowering it would trade the phantoms for missed speech onset — the
+      // original "it talks over me" bug — which is the worse failure. The
+      // noise is now handled at the wire instead: s2s-bridge.js zeroes
+      // below-floor frames before they reach this session (live-noise-gate.js),
+      // so HIGH sensitivity keeps seeing real speech and no longer sees the
+      // noise floor.
       realtimeInputConfig: {
         automaticActivityDetection: {
           startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',

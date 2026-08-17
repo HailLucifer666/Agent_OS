@@ -34,6 +34,12 @@ const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 // mid-thought, and the assistantSpeaking half-duplex gate then swallowed the
 // operator's continuation. 1800 restored; env-tunable via VAD_SILENCE_MS.
 let SILENCE_MS = 1800;       // quiet gap that ends an utterance
+// BUG-271 (2026-08-17): these batch-path thresholds are deliberately UNTOUCHED
+// by the Live-path noise gate. live-noise-gate.js (0.02 RMS floor) gates the
+// Gemini Live SEND path only; this file's SPEECH_RMS/MIN_PEAK_RMS gate the
+// batch Whisper path, which is the tested fallback under VOICE_S2S_ENABLED=false
+// and already tuned against this room's ambient (fans/AC/bikes). Two paths,
+// two gates, no shared constant — same reasoning as barge-in-backstop.js's.
 let SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
 const VAD_TICK_MS = 100;
 let SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
