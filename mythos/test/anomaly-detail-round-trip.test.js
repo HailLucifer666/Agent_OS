@@ -207,7 +207,14 @@ describe('B2 conformance: no core emitter names a diagnostic field the persister
   // `queueMax`, `waitedMs`, …) are intentionally not persisted, and adding them
   // is a privacy decision, not a mechanical one. If a future emitter genuinely
   // needs one, add it to BOTH lists and say why in anomaly-detail.js.
-  const DIAGNOSTIC_FIELDS = ['reason', 'turnId', 'audioIn', 'scFields', 'tool', 'evidence', 'provider'];
+  // engagementId/stageId added 2026-08-17 for the same reason turnId/audioIn are
+  // here: engagements/executor.js spreads its anomaly fields flat, so without
+  // them on the allowlist every engagement anomaly persisted with no way to say
+  // which engagement or which stage. Both are internal opaque ids, so keeping
+  // them forever clears the privacy bar this list exists to enforce — see the
+  // note in anomaly-detail.js.
+  const DIAGNOSTIC_FIELDS = ['reason', 'turnId', 'audioIn', 'scFields', 'tool', 'evidence', 'provider',
+    'engagementId', 'stageId'];
 
   function coreEmitterSources() {
     const roots = [path.join(__dirname, '..', 'src')];

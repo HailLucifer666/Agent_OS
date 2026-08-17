@@ -187,4 +187,59 @@ describe('F5 — the fallback cannot come back by accident', () => {
     assert.doesNotMatch(BUILD_BODY, /\bthink\b/,
       'the build stage must not call the brain.think helper — there is no fallback');
   });
+
+  // 2026-08-17. The no-fallback rule above only helps if the resulting failure is
+  // diagnosable, and it was not: both branches emitted ONE kind, and the two
+  // fields naming the failure were dropped by the persister.
+  describe('the two no-engine failures stay distinguishable in the vault', () => {
+    const { ANOMALY_DETAIL_FIELDS, anomalyDetail } = require('../src/core/immune/anomaly-detail');
+
+    it('absent-engine and failed-engine emit DIFFERENT anomaly kinds', () => {
+      // Same remedy test as any diagnostic split: "install it" and "diagnose
+      // it" are different actions, and only one of them is fixable by retrying.
+      assert.match(BUILD_BODY, /engagement-build-engine-missing/,
+        'the absent-generator branch must emit its own kind');
+      assert.match(BUILD_BODY, /engagement-build-engine-offline/,
+        'the engine-present-but-failed branch must keep the offline kind');
+      assert.notEqual('engagement-build-engine-missing', 'engagement-build-engine-offline');
+    });
+
+    it('no healer playbook keys on either kind, so splitting orphaned nothing', () => {
+      // build-engine-reprobe triggers on 'build-engine-failed'. If a future
+      // playbook ever claims one of these kinds, this test is where that shows
+      // up — a reprobe against an engine that was never installed is a futile
+      // heal loop, not a recovery.
+      const healer = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'core', 'immune', 'healer.js'), 'utf8');
+      assert.doesNotMatch(healer, /engagement-build-engine-(missing|offline)/,
+        'a playbook now claims one of these kinds — verify the remedy actually applies to it');
+    });
+
+    it('both branches attach engagementId and stageId', () => {
+      for (const field of ['engagementId', 'stageId']) {
+        const occurrences = (BUILD_BODY.match(new RegExp('\\b' + field + ':', 'g')) || []).length;
+        assert.ok(occurrences >= 2,
+          'both the missing and offline branches must attach ' + field +
+          ' — found ' + occurrences + ' occurrence(s)');
+      }
+    });
+
+    it('and the persister actually keeps them — emitter and allowlist agree', () => {
+      // The B2 shape: a field can be emitted and thrown away. Asserting the
+      // emitter alone would pass while the vault line stayed useless.
+      for (const field of ['engagementId', 'stageId']) {
+        assert.ok(ANOMALY_DETAIL_FIELDS.includes(field),
+          field + ' must be on ANOMALY_DETAIL_FIELDS or the vault record cannot say which engagement/stage failed');
+      }
+      const persisted = anomalyDetail({
+        kind: 'engagement-build-engine-missing',
+        engagementId: 'eng-abc123',
+        stageId: 'stage-2',
+        error: 'Hermes is unavailable',
+      });
+      assert.equal(persisted.engagementId, 'eng-abc123');
+      assert.equal(persisted.stageId, 'stage-2');
+      assert.equal(persisted.kind, 'engagement-build-engine-missing');
+    });
+  });
 });

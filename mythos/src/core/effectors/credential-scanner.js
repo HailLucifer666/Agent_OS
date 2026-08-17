@@ -21,7 +21,26 @@ var PATTERNS = [
   // A2 (logger redaction): provider key prefixes that were missing from the
   // original list. Additive — also strengthens the leash scanner that reuses
   // these same patterns via scan().
-  { name: 'openai-key', re: /sk-[A-Za-z0-9\-_]{20,}/g },
+  //
+  // The `openai-key` lookahead exists because MYTHOS collides with its own
+  // namespace: memory/skills.js:21 mints procedural-skill ids as
+  // `'sk-' + crypto.randomUUID()`, e.g. sk-1ec74737-f6a4-4047-b156-0c645aa9f293,
+  // which the bare /sk-[A-Za-z0-9\-_]{20,}/ matched as an OpenAI key. Two
+  // consequences, and the smaller one is the one that bites first:
+  //   * server/index.js's log redaction rendered every skill id as [REDACTED],
+  //     so "which learned skill ran" became unreadable in the HUD log — a fix
+  //     that destroys the evidence trail (rules/core.md §11.2).
+  //   * leash/index.js:320 scans args for tier >= 3 and DENIES on a match with
+  //     reason 'credential-detected'. No effector takes a skill id as an input
+  //     arg today and use_skill is T0, so this could not fire yet — but T3
+  //     build tools carry large free-text prompts, and a brief that happened to
+  //     quote a skill id would have been denied as a credential leak with an
+  //     actively misleading reason.
+  // The lookahead rejects the UUID shape (8 hex, '-', 4 hex, '-') and nothing
+  // else: real keys are `sk-` + alnum, `sk-proj-…` and `sk-svcacct-…`, none of
+  // which put a hyphen at that position. Pinned both ways in
+  // test/credential-scanner-id-collision.test.js.
+  { name: 'openai-key', re: /sk-(?![0-9a-fA-F]{8}-[0-9a-fA-F]{4}-)[A-Za-z0-9\-_]{20,}/g },
   { name: 'groq-key', re: /gsk_[A-Za-z0-9\-_]{20,}/g },
   { name: 'nvidia-key', re: /nvapi-[A-Za-z0-9\-_]{20,}/g },
 ];

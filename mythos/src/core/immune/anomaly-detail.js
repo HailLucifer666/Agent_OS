@@ -38,10 +38,28 @@
 // the diagnostician puts the whole anomaly in `evidence`, and several core
 // emitters (leash, probes, goals, reflection, identity) use one or the other as
 // their only detail channel. Both are depth-capped by clipValue, not trusted.
+// `engagementId` and `stageId` joined 2026-08-17, and the case for them is this
+// file's own B2 argument applied to a second subsystem: "the join key (turnId)
+// and the discriminator (audioIn) had been emitted and thrown away."
+// engagements/executor.js's anomaly() spreads its fields FLAT
+// (`Object.assign({kind}, detail)`, executor.js:79) rather than nesting them
+// under `detail`, so every engagement anomaly — build-engine missing/offline,
+// stage failures, repair exhaustion — reached the vault with no way to say WHICH
+// engagement or WHICH stage it was about. engagementId is the join key that
+// turnId is for a voice turn; stageId is the discriminator that audioIn is for
+// the mic gate. events.js's emitHealthAnomaly() also puts engagementId at the
+// top level, so this fixes both emitters, not just the executor.
+//
+// Why keeping them forever is acceptable — the test that specifies this list
+// says adding a field is "a privacy decision, not a mechanical one": both are
+// internal opaque generated ids (`eng-…`, and a stage id from the plan), never
+// operator content, never a file path, never a quoted reply. That is exactly why
+// they qualify where `claim` and `dropped` deliberately do not.
 const ANOMALY_DETAIL_FIELDS = [
   'kind', 'scope', 'error', 'target',
   'reason', 'turnId', 'audioIn', 'scFields', 'tool', 'evidence',
   'detail', 'provider',
+  'engagementId', 'stageId',
 ];
 
 // Bounded so one fat payload cannot bloat a vault line. Strings clipped, arrays

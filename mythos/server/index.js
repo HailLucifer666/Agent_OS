@@ -138,6 +138,26 @@ function recallWithTimeout(promise, ms) {
 // NOT duplicated — they reuse credential-scanner's exported _PATTERNS so there
 // is one source of truth. Over-matching (e.g. a benign 'token' substring) is
 // acceptable: redaction errs safe.
+//
+// PINNED DISPOSITION (2026-08-17 review): the substring semantics STAY, and the
+// list is deliberately NOT narrowed. Reviewed because 'session' and 'token' are
+// the kind of words that appear in ordinary diagnostic field names, so the
+// over-match risked the failure mode that matters most here — a fix that hides
+// the evidence trail (rules/core.md §11.2). Three things settled it:
+//   * Measured, not assumed: a sweep of every real logger/anomaly payload key in
+//     src/ + server/ found exactly ONE collateral key, `sessionsClosed`, a
+//     counter that nothing read programmatically. It is now `closedCount`.
+//   * audit-writer.js's REDACT_KEYS is byte-identical AND matches by substring
+//     too. Narrowing one list would leave two redaction rules with different
+//     semantics, which is strictly worse than one over-broad rule — the comment
+//     above already asks for them to be kept in sync.
+//   * The blast radius is one frame type. redactLogEntry is applied only to the
+//     logger.onLog relay, not to /api responses or any other WS frame.
+// So the enforcement is a gate, not a narrower list:
+// test/log-redaction-collateral.test.js sweeps the real emitters and fails when a
+// NEW payload key would be swallowed — the drift becomes a red commit instead of
+// something noticed by eye months later. If a future key legitimately collides,
+// rename the key; do not narrow this list without also narrowing audit-writer's.
 const LOG_REDACT_KEYS = ['apiKey', 'api_key', 'token', 'authorization', 'password', 'secret', 'cookie', 'credential', 'session'];
 
 function redactLogValue(str) {
@@ -1438,7 +1458,14 @@ function createServer(deps) {
         }
       });
     } catch (_) { /* no server yet — nothing open to reopen */ }
-    if (closed) logger.info('live.voice-changed', { voice: liveVoiceOverride, sessionsClosed: closed });
+    // `closedCount`, not `sessionsClosed`: LOG_REDACT_KEYS matches key names by
+    // SUBSTRING, so any key containing 'session' is replaced with [REDACTED] in
+    // the client-bound copy — this line's own count included. Renaming the field
+    // is the cheap half of the fix; the enforcing half is
+    // test/log-redaction-collateral.test.js, which fails when any NEW log payload
+    // key would be swallowed. See the LOG_REDACT_KEYS note for why the substring
+    // semantics are kept rather than narrowed.
+    if (closed) logger.info('live.voice-changed', { voice: liveVoiceOverride, closedCount: closed });
     return closed;
   }
 

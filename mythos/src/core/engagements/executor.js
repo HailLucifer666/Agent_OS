@@ -308,7 +308,16 @@ function createEngagementExecutor(deps) {
     if (!generator) {
       var noEngineError = 'Hermes is unavailable — Hermes-Agent is the only build-content engine and there is no fallback. '
         + 'Install it with `node mythos/scripts/setup-hermes.js --install`.';
-      anomaly('engagement-build-engine-offline', { engagementId: record.id, stageId: stage.id, error: noEngineError });
+      // Distinct kind from the offline case below, deliberately: "no engine was
+      // ever wired" and "the engine is wired but failed this call" have
+      // different remedies (install it vs diagnose it) and one of them is not
+      // fixable by retrying. Sharing one kind made the vault ledger unable to
+      // tell them apart, which is the same shape as BUG-265's storm — a
+      // diagnostic that cannot discriminate costs a session later. Nothing keys
+      // on either string: the healer's build-engine-reprobe playbook triggers on
+      // 'build-engine-failed', not on these, so splitting cannot orphan a
+      // playbook or start a futile heal loop against an engine that is absent.
+      anomaly('engagement-build-engine-missing', { engagementId: record.id, stageId: stage.id, error: noEngineError });
       return { ok: false, error: noEngineError, verified: false };
     }
     if (vault && typeof vault.writeText === 'function') {
