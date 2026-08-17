@@ -118,12 +118,19 @@ describe('BUG-271 live noise gate: hysteresis', () => {
     }
   });
 
-  it('reset() re-arms the gate, so a new session starts zeroing immediately', () => {
+  it('reset() re-arms the gate AND clears framesZeroed — the count is per session', () => {
     const gate = createLiveNoiseGate({ floorRms: 0.02, quietFrames: 8, rms: (b) => amp(b) });
-    gate.process(frame(0.3));
-    gate.reset();
+    gate.process(frame(0.005));                    // zeroed
+    gate.process(frame(0.005));                    // zeroed
+    assert.equal(gate.framesZeroed(), 2);
+    gate.process(frame(0.3));                      // voice opens the gate
+    gate.reset();                                  // s2s-bridge's stop()
+    assert.equal(gate.framesZeroed(), 0,
+      'the count feeds one session\'s transition logs and must not carry into the next — '
+      + 'the bridge is constructed once and survives start/stop cycles');
     assert.equal(gate.process(frame(0.005)).zero, true,
-      'after reset the hysteresis tail must not carry over');
+      'after reset the hysteresis tail must not carry over either');
+    assert.equal(gate.framesZeroed(), 1, 'counting restarts from zero');
   });
 
   it('framesZeroed counts exactly the frames that were zeroed', () => {

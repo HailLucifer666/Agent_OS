@@ -465,9 +465,10 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // could not tell apart. A hold that drops nothing and still yields no
       // transcript is evidence for the second, and this is how we will know.
       framesDropped: prerollDropped,
-      // BUG-271: how many frames the noise gate silenced (both send points,
-      // session-cumulative). The server logs this with the rest of the
-      // transition line — the evidence chain belongs together.
+      // BUG-271: how many frames the noise gate silenced (both send points)
+      // so far THIS session — cumulative within the session, cleared by
+      // noiseGate.reset() in stop(). The server logs this with the rest of
+      // the transition line — the evidence chain belongs together.
       framesZeroed: noiseGate.framesZeroed(),
       // One line per hold, not per frame — see ownVoicePeakRms's declaration.
       peakRms: Math.round(ownVoicePeakRms * 10000) / 10000,

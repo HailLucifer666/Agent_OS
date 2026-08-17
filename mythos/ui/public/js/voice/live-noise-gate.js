@@ -58,7 +58,12 @@ export function createLiveNoiseGate({ floorRms, quietFrames, rms } = {}) {
     return { zero: true, buffer: new ArrayBuffer(buffer.byteLength) };
   }
 
-  function reset() { open = false; quietRun = 0; }
+  // Per session: s2s-bridge calls this from stop(), and the bridge outlives
+  // start/stop cycles, so both the hysteresis state AND the zeroed count must
+  // restart — the count feeds one session's transition logs, not the page's.
+  // Nothing is lost: the last transition log of a session fires at release,
+  // before stop().
+  function reset() { open = false; quietRun = 0; zeroed = 0; }
 
   return { process, reset, framesZeroed: () => zeroed };
 }
