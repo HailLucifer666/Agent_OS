@@ -296,11 +296,23 @@ only — no legal conclusions; terms change, so re-verify before any release.
   model training with the Models it uses"* — per-Model terms flow down
   (§5.1–5.9); org-level Admins configure prompt logging/zero data
   retention/model training settings (§3.1).
-- **NVIDIA NIM (build.nvidia.com hosted APIs).** **NOT VERIFIED 2026-08-16:**
-  `build.nvidia.com/terms` renders an empty JS shell with no terms text, and
-  `nvidia.com/en-us/agreements/cloud-services-terms/` is a navigation hub
-  without the document body. Named gap — re-verify against the actual NIM
-  hosted-API terms before any release decision relies on it.
+- **NVIDIA NIM (build.nvidia.com hosted APIs).** Source: General NIM FAQ,
+  "What does 'production' mean?" (https://docs.api.nvidia.com/nim/docs/product,
+  fetched 2026-08-17; the older `www.nvidia.com/en-us/nim/docs/product/` path
+  404s): *"Production use involves any use of NIM for purposes other than
+  development, testing, research or evaluation such as conducting business
+  transactions and any non-testing activity including activity serving real
+  end-users. Using NIM in production requires an NVIDIA AI Enterprise
+  license."* The same FAQ states access through the NVIDIA Developer Program
+  *"is for prototyping, research, development and testing purposes only and
+  does not include enterprise features or support"*, and its pricing section
+  adds: *"To use NIM In production, your organization must have an NVIDIA AI
+  Enterprise license."* Closes the 2026-08-16 named gap (`build.nvidia.com/terms`
+  rendering an empty JS shell; the agreements hub serving no document body).
+  Consequence for MYTHOS: NIM keys are BYO — the end user supplies their own
+  key and accepts NVIDIA's terms directly, exactly as with every other provider
+  here, so this is a disclosure obligation (state the free tier's limits where
+  the key is configured — see `.env.example`), not a licensing one.
 
 ## Optional external tools reached at runtime (not redistributed)
 

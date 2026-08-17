@@ -893,11 +893,27 @@ resale** is now recorded verbatim for Google (Gemini API + Google APIs ToS),
 Groq (Services Agreement, 2026-06-22), Mistral (Commercial ToS + Additional
 Product Terms, effective 2026-08-05 — including that Labs/Preview models may
 train on Customer Data), Cerebras (2024-08-27) and OpenRouter (2026-07-29).
-Named gap: **NVIDIA NIM hosted-API terms NOT VERIFIED** — build.nvidia.com's
-terms page renders empty and NVIDIA's agreements hub doesn't serve the
-document body; re-verify before any release decision leans on it. Step 6.6
-stays ☐ until the NIM gap closes and the operator/lawyer reads the recorded
-facts. The seven npm dependencies themselves are permissive
+The named gap — **NVIDIA NIM hosted-API terms** — is **CLOSED 2026-08-17**:
+the General NIM FAQ ("What does 'production' mean?",
+https://docs.api.nvidia.com/nim/docs/product, fetched 2026-08-17) states
+*"Production use involves any use of NIM for purposes other than development,
+testing, research or evaluation such as conducting business transactions and
+any non-testing activity including activity serving real end-users. Using NIM
+in production requires an NVIDIA AI Enterprise license."*, and Developer
+Program access *"is for prototyping, research, development and testing
+purposes only and does not include enterprise features or support"*. Full
+sourced entry in THIRD_PARTY_NOTICES.md; the BYO-key consequence (end user
+accepts NVIDIA's terms directly — a disclosure obligation, not a licensing
+one) is recorded there. **Lane audit (2026-08-17):** NIM leads NO
+default lane in `src/core/brain/lanes.default.js` — voice 5th ("last cloud
+resort"), reasoning 3rd, simple 3rd, text 4th, build 7th, vision 5th–6th
+(lane leads with google); memory and embed have no NIM entry. No
+de-ranking was needed: the historical vision-lane rank-0 timeout problem was
+already fixed by the 2026-08-14 reorder that put google first. Step 6.6
+stays ☐ until the operator/lawyer reads the recorded facts (the NIM gap
+itself is now closed by evidence, not by another empty terms page).
+
+The seven npm dependencies themselves are permissive
 (MIT/Apache-2.0). **The BYO-API-key architecture is a genuine licensing asset**
 — the end user brings their own provider keys and accepts those providers' terms
 directly, so MYTHOS resells nobody's API. Preserve that deliberately.
