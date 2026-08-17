@@ -619,7 +619,7 @@ installed copy are not the same test.
 | **Two documents → now three** | This file = delta/roadmap. V2 spine = source-level detail. `MYTHOS-Post-Parity-Plan.md` = everything after step 7 (social, business-agent layer, multi-surface, wake-word arbitration). The "do not start a third plan document" rule exists to stop planning living in **untracked** files; all three are tracked and cross-linked, and this file still wins on any overlap. Precedence rules in the V2-spine section below. |
 | **Last updated** | 2026-08-16 (status-table rows below the dated RESUME HERE blocks still describe 2026-08-05 state; the dated blocks above are newer and win) |
 
-**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (3 decisions answered + licences verified; wake-word path LOCKED — train own model, separate workstream) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ **(all 6 slices now shipped IN CODE as of 2026-08-04 — Slice 5 cursor overlay `3050889`, Slice 6 OSS hygiene + the directory-scoped `CLAUDE.md` split. What keeps step 7 unticked is live verification, not missing code: Slices 1, 2, 3 and 5 are unit-green only and need the operator at an Electron desktop. Slice 4 is the sole slice verified against a real artifact.)** Earlier state for the record: (**Slices 1-4 of 6 shipped in code**: `5f6108d` foundation, globalShortcut, desktopCapturer, and — 2026-08-04 — the electron-builder installer, which honours Decision 1 and is the first slice verified against a real artifact rather than only unit-green: a real `MYTHOS Setup 0.1.0.exe` with the licence exclusions confirmed by walking `dist/win-unpacked`. Slices 1-3 remain NOT live-verified — all three need the operator at an Electron desktop. Next: Slice 5, the cursor overlay, then Slice 6, OSS hygiene)
+**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (4 decisions answered + licences verified; wake word stays BYO with the non-commercial notice at the install point — Decision 4, 2026-08-17; the own-model training workstream is superseded) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ **(all 6 slices now shipped IN CODE as of 2026-08-04 — Slice 5 cursor overlay `3050889`, Slice 6 OSS hygiene + the directory-scoped `CLAUDE.md` split. What keeps step 7 unticked is live verification, not missing code: Slices 1, 2, 3 and 5 are unit-green only and need the operator at an Electron desktop. Slice 4 is the sole slice verified against a real artifact.)** Earlier state for the record: (**Slices 1-4 of 6 shipped in code**: `5f6108d` foundation, globalShortcut, desktopCapturer, and — 2026-08-04 — the electron-builder installer, which honours Decision 1 and is the first slice verified against a real artifact rather than only unit-green: a real `MYTHOS Setup 0.1.0.exe` with the licence exclusions confirmed by walking `dist/win-unpacked`. Slices 1-3 remain NOT live-verified — all three need the operator at an Electron desktop. Next: Slice 5, the cursor overlay, then Slice 6, OSS hygiene)
 
 **· 8 ☐ (planned 2026-08-17, TRACKED NOT STARTED — "Step 8 — Upstream synthesis:
 prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory", below. Four
@@ -850,8 +850,9 @@ facts. The seven npm dependencies themselves are permissive
 — the end user brings their own provider keys and accepts those providers' terms
 directly, so MYTHOS resells nobody's API. Preserve that deliberately.
 
-**Three operator decisions — ANSWERED 2026-07-30** (each is a product/architecture
-choice, not derivable from code; recorded here verbatim):
+**Operator decisions — 1–3 ANSWERED 2026-07-30, Decision 4 locked 2026-08-17**
+(each is a product/architecture choice, not derivable from code; recorded here
+verbatim):
 
 - **Decision 1 — Paid TTS: STAYS BYO, like the API keys.** This resolves the
   edge-tts/LGPL exposure *without a code swap*. The paid installer ships no
@@ -871,6 +872,21 @@ choice, not derivable from code; recorded here verbatim):
 - **Decision 3 — Wider licence audit: OWN TRACKED STEP 6.6**, not folded into 6.5.
   Keeps the two known swaps separate from the un-scoped unknowns (Hermes/cua/
   MediaPipe/provider-ToS); see the new 6.6 row in the merged-order table.
+- **Decision 4 — Wake word: STAYS BYO, with the non-commercial terms stated at
+  the install point (locked 2026-08-17).** The openWakeWord pretrained weights
+  are never bundled (root `package.json` build files exclude
+  `mythos/ui/public/models`), `WAKEWORD_ENABLED` defaults false, and
+  `scripts/setup-wakeword.js` fetches the weights to the user's own machine on
+  demand. The operator's decision adds informed consent at that download moment:
+  the setup wizard's wakeword component note now states the weights are
+  openWakeWord, licensed CC BY-NC-SA 4.0, non-commercial use only, and that
+  downloading them is the user's own action (`src/core/setup/components.js`,
+  pinned by `test/electron-builder-files-allowlist.test.js`). No own-model
+  training workstream: the 2026-07-30 "train an own `hey_mythos` model" plan
+  (see the Progress log row for that date) is superseded by this decision.
+  Facts only, per the standing limit below — whether download-on-demand clears
+  NC for a paid product remains a lawyer's call, and step 6.5 stays unticked
+  until the operator's Part B manual check (v0.1.10 closeout plan) has run.
 
 **Standing limit:** an AI session can report what the licence files say and what
 the code does. Whether download-on-demand clears NC for a paid product is a

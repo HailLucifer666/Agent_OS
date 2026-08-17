@@ -122,6 +122,27 @@ test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', (t)
     'openWakeWord .onnx weights (CC BY-NC-SA, non-commercial) must never be packaged');
 });
 
+// The exclusion above is the distribution half of step-6.5's wake-word
+// decision; the informed-consent half lives in the setup wizard. The weights
+// are never bundled and WAKEWORD_ENABLED defaults false, so the moment a user
+// chooses to fetch them is the components step — and that row's note is the
+// only surface where the licence terms reach them. Assert the note still names
+// all three load-bearing facts (non-commercial, CC BY-NC-SA 4.0, and that the
+// download is the user's own action) so a future tidy-up cannot silently drop
+// the notice — the same silent-drop failure mode this whole file exists to
+// make loud.
+test('setup wizard wakeword note states the CC BY-NC-SA non-commercial terms at download time', () => {
+  const { findComponent } = require('../src/core/setup/components.js');
+  const wakeword = findComponent('wakeword');
+  assert.ok(wakeword, 'the setup components catalog must have a wakeword entry');
+  assert.match(wakeword.note, /CC BY-NC-SA 4\.0/,
+    'the wakeword note must name the CC BY-NC-SA 4.0 licence');
+  assert.match(wakeword.note, /non-commercial/i,
+    'the wakeword note must state the weights are non-commercial');
+  assert.match(wakeword.note, /your action/i,
+    'the wakeword note must state that downloading the weights is the user\'s own action (BYO)');
+});
+
 // The three assets below were found by walking a REAL dist/win-unpacked, after
 // the exclusions above were already in place and passing. They are the reason
 // this file asserts model paths as a class rather than naming known-bad ones:

@@ -34,7 +34,12 @@ const COMPONENTS = [
   {
     id: 'wakeword',
     label: 'Wake word "hey jarvis"',
-    note: '~4 MB — three .onnx models; WAKEWORD_ENABLED cannot arm without all three',
+    // The note carries the licence terms at the moment of download (step-6.5
+    // Decision 4, 2026-08-17): the weights are never bundled and the feature
+    // defaults off, so this wizard row is the informed-consent surface. Keep
+    // non-commercial + CC BY-NC-SA 4.0 + the user's-own-action wording —
+    // test/electron-builder-files-allowlist.test.js pins all three.
+    note: '~4 MB — three .onnx models; WAKEWORD_ENABLED cannot arm without all three. Weights are openWakeWord, licensed CC BY-NC-SA 4.0 — non-commercial use only; downloading them is your action.',
     doctorId: 'wakeword',
     script: 'scripts/setup-wakeword.js',
     args: [],
