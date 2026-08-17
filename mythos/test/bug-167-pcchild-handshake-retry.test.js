@@ -37,6 +37,18 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Poll cond every 10ms until the deadline (same shape as aether-sensor.test.js).
+// Fixed sleeps here got outrun under load — timer coalescing pushed the second
+// spawn past the sleep; assert on the observable state instead.
+async function waitFor(cond, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (cond()) return true;
+    await sleep(10);
+  }
+  return cond();
+}
+
 // Fake ChildProcess with the members pc-child actually touches.
 // `pid` is deliberately left undefined: killLiveChild() shells out to a REAL
 // `taskkill /PID <n> /T /F` on win32 when pid is truthy, which would kill
@@ -127,7 +139,10 @@ describe('BUG-167 — pc-child handshake timeout must restart, not strand the ad
 
     try {
       pcChild.startPcChild();
-      await sleep(STARTUP_TIMEOUT_MS + 200);
+      assert.ok(
+        await waitFor(() => spawned.length >= 2, 2000),
+        `handshake timeout must schedule a restart within 2000ms, spawned ${spawned.length} time(s)`
+      );
 
       assert.ok(spawned.length >= 2, `handshake timeout must schedule a restart, spawned ${spawned.length} time(s)`);
       assert.equal(spawned[0].killed, true, 'the hung child must be killed, not left as a zombie holding the pipes');
@@ -155,7 +170,10 @@ describe('BUG-167 — pc-child handshake timeout must restart, not strand the ad
     try {
       pcChild.startPcChild();
       // initial spawn + MAX_RESTART_ATTEMPTS (2) restarts, then give up
-      await sleep((STARTUP_TIMEOUT_MS + 100) * 3 + 600);
+      assert.ok(
+        await waitFor(() => spawned.length >= 3 && pcChild.getStatus().state === 'OFFLINE', 4000),
+        'restart budget must be spent and settle OFFLINE within 4000ms'
+      );
 
       const status = pcChild.getStatus();
       assert.equal(status.state, 'OFFLINE', 'must settle OFFLINE once the restart budget is spent');
@@ -176,7 +194,10 @@ describe('BUG-167 — pc-child handshake timeout must restart, not strand the ad
 
     try {
       pcChild.startPcChild();
-      await sleep(STARTUP_TIMEOUT_MS + 400);
+      assert.ok(
+        await waitFor(() => pcChild.getStatus().state === 'ONLINE' && spawnCount === 2, 2000),
+        'the second spawn must answer and bring the adapter ONLINE within 2000ms'
+      );
 
       assert.equal(pcChild.getStatus().state, 'ONLINE', 'the retry must actually recover the adapter');
       assert.equal(spawnCount, 2);

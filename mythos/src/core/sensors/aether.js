@@ -522,6 +522,7 @@ function createAetherSensor(ctx) {
       decide: decide,            // test hook: drive the dedup gate directly
       findOwnerScanner: findOwnerScanner,
       ingest: ingest,            // test hook: seed ranging/position enrichment
+      isConnected: function () { return connected; }, // test hook: client-side flag speak() gates on
       _reset: function () {      // test hook: clear gate + enrichment state
         lastEmittedOwner = null;
         lastEmittedRssi = null;
