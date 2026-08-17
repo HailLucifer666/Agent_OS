@@ -550,20 +550,20 @@ function createServer(deps) {
   // any route; the only gate was origin allow-listing (verifyClient below),
   // which any non-browser client spoofs with a header. Dockerfile and
   // render.yaml both set MYTHOS_BIND=0.0.0.0. Fail closed, loudly, at boot,
-  // rather than silently exposing 107 tools (including T3 confirm-and-execute)
+  // rather than silently exposing the full effector set (including T3 confirm-and-execute)
   // to anyone who finds the URL.
   const AUTH_TOKEN = config.MYTHOS_AUTH_TOKEN || '';
   const isLoopbackBind = /^(127\.|::1|localhost)/i.test(String(BIND));
   if (!isLoopbackBind && !AUTH_TOKEN) {
     throw new Error(
       `MYTHOS_BIND is non-loopback (${BIND}) but MYTHOS_AUTH_TOKEN is unset. ` +
-      'Refusing to expose 107 tools unauthenticated. Set MYTHOS_AUTH_TOKEN (see mythos/.env.example) or bind 127.0.0.1.'
+      'Refusing to expose the full effector set unauthenticated. Set MYTHOS_AUTH_TOKEN (see mythos/.env.example) or bind 127.0.0.1.'
     );
   }
 
   // H3(b) (security audit, 2026-08-08) — MYTHOS_AUTH_TOKEN had no minimum
   // length or entropy requirement, yet it is the ONLY thing standing between
-  // the public internet and 166 effectors including tier-3 confirm-and-execute
+  // the public internet and the full effector set including tier-3 confirm-and-execute
   // once MYTHOS_BIND is non-loopback (see the guard just above). Reject an
   // obviously weak token at boot with the same fail-loud posture — but ONLY
   // when a token is actually configured. Running with NO token at all on
