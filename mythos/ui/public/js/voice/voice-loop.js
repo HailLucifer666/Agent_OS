@@ -27,8 +27,13 @@ const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 // BUG-020: these four are `let`, not `const` — createVoiceLoop's optional
 // `vad` option can override them per-instance. Values below are the
-// unchanged defaults (zero behavior change unless a caller opts in).
-let SILENCE_MS = 1800;       // quiet gap that ends an utterance
+// defaults; SILENCE_MS alone no longer matches the old hardcoded constant
+// (see its note).
+// SILENCE_MS default is 900, not the legacy 1800 — operator decision
+// 2026-08-17: faster endpointing, trading the risk that natural mid-sentence
+// pauses of 0.9–1.8s split one utterance into two clips. Instantly
+// reversible: VAD_SILENCE_MS=1800 in mythos/.env.
+let SILENCE_MS = 900;        // quiet gap that ends an utterance
 let SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
 const VAD_TICK_MS = 100;
 let SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
