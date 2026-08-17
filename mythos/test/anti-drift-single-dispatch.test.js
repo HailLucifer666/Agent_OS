@@ -5,9 +5,9 @@
 // Every tool call — cortex, voice-agent, Live session, REST, confirm-accept — goes
 // leash.check() -> dispatchAction() -> sharedDispatch. No channel gets its own path."
 // Executable check, verbatim from the spine's own table: read every file under
-// src/core/ + server/ + adapters/ + ui/ (all of mythos/) plus the repo-root
-// electron/ dir; assert `effectors.invoke(` appears ONLY in
-// src/core/effectors/dispatch-action.js.
+// src/core/ + server/ + adapters/ + ui/ plus the repo-root electron/ dir
+// (providers/, scripts/, services/, mcp/, skills/, personas/, test/ are not
+// scanned); assert `effectors.invoke(` appears ONLY in dispatch-action.js.
 //
 // FIXED (2026-07-30, merged-order step 2): the three real call sites that bypassed
 // dispatchAction() with a raw effectors.invoke() are rerouted:
