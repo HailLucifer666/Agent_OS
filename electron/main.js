@@ -22,6 +22,7 @@ const child_process = require('node:child_process');
 // checkForUpdates() below for why it is required lazily at its use site.
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
+const { createHotkeyLatch } = require('./hotkey-latch');
 const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = require('./vault-migration');
 const { recryptForeignStore } = require('./keystore-recrypt');
 const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
@@ -2008,6 +2009,13 @@ if (!gotLock) {
     // banner would only ever appear if the timing happened to line up.
     mainWindow.webContents.on('did-finish-load', () => sendUpdateState());
 
+    // BUG-269 defect 1 (re-arm): a reload destroys the renderer's onHotkey
+    // listener, so the talk-hotkey ready-latch must re-arm — otherwise the
+    // lost-IPC race would reappear after every refresh. The renderer's next
+    // notifyReady() (app.js sends it after registering the listener) flushes
+    // any press latched in the meantime.
+    mainWindow.webContents.on('did-start-loading', () => talkHotkeyLatch.markLoading());
+
     // Trap window.open(_blank) from the renderer so it never spawns an external
     // browser. Without this, the HUD's `window.open(url, '_blank')` (app.js,
     // the 'newtab' branch) falls back to Electron's default — opening Chrome —
@@ -2149,6 +2157,30 @@ if (!gotLock) {
 // silently failed to register is indistinguishable from a broken mic.
 const TALK_HOTKEY_FALLBACKS = ['Alt+Space', 'Control+Alt+Space', 'Control+Shift+Space', 'Control+Alt+M'];
 
+// BUG-269 defect 1: the accelerator is claimed right after loadURL(), but the
+// renderer's onHotkey listener does not exist until app.js evaluates — Electron
+// does not queue IPC for unregistered listeners, so a press in that window was
+// lost forever. The latch holds at most one pre-ready press and flushes it when
+// the renderer announces itself ('mythos:renderer-ready', sent by preload's
+// notifyReady() right after app.js registers the listener). A reload destroys
+// the renderer's listeners, so did-start-loading re-arms it (see createWindow).
+// Behavioural tests: mythos/test/electron-hotkey-latch.test.js.
+const talkHotkeyLatch = createHotkeyLatch({
+  send: () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      mainWindow.webContents.send('mythos:hotkey', 'talk');
+    } catch (err) {
+      log('push-to-talk hotkey: send failed:', err && err.message);
+    }
+  },
+});
+
+// The renderer's ready signal — its onHotkey listener is registered, so the
+// latch may flush. Payload-free by design (preload's notifyReady sends nothing),
+// so nothing structured can ride this channel into the main process either.
+ipcMain.on('mythos:renderer-ready', () => talkHotkeyLatch.markReady());
+
 function talkHotkeyCandidates() {
   const configured = String(process.env.MYTHOS_HOTKEY_TALK || '').trim();
   if (configured.toLowerCase() === 'false' || configured.toLowerCase() === 'off') return [];
@@ -2167,12 +2199,10 @@ function registerTalkHotkey() {
     let registered = false;
     try {
       registered = globalShortcut.register(accel, () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        try {
-          mainWindow.webContents.send('mythos:hotkey', 'talk');
-        } catch (err) {
-          log('push-to-talk hotkey: send failed:', err && err.message);
-        }
+        // BUG-269: route through the ready-latch — a press before the renderer
+        // has registered its listener is latched and flushed on the ready
+        // signal instead of being sent into the void (see talkHotkeyLatch).
+        talkHotkeyLatch.press();
       });
     } catch (err) {
       log('push-to-talk hotkey: register threw for', accel, '-', err && err.message);

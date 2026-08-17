@@ -5,13 +5,15 @@
 // the privileged main process.
 //
 // AD-8 (V2 spine §1): "Secrets never reach the renderer." This preload exposes
-// a contextBridge surface of EXACTLY nine functions — getKeyNames, setKey,
-// hasKey, onHotkey, restartServer, onUpdateStatus, installUpdate, getSettings
-// and setSetting — and NOTHING that returns a key VALUE. Names, booleans, short
-// strings/numbers (onHotkey, onUpdateStatus — the latter now three plain
-// primitives: state, version, percent), status objects (restartServer,
-// installUpdate, setSetting) and NON-SECRET configuration (getSettings) are the
-// only things that cross.
+// a contextBridge surface of EXACTLY ten functions — getKeyNames, setKey,
+// hasKey, onHotkey, notifyReady, restartServer, onUpdateStatus, installUpdate,
+// getSettings and setSetting — and NOTHING that returns a key VALUE. Names,
+// booleans, short strings/numbers (onHotkey, onUpdateStatus — the latter now
+// three plain primitives: state, version, percent), status objects
+// (restartServer, installUpdate, setSetting) and NON-SECRET configuration
+// (getSettings) are the only things that cross. notifyReady (BUG-269) is the
+// one renderer→main signal: a payload-free send announcing the renderer's
+// hotkey listener is registered, so nothing crosses into the renderer at all.
 //
 // There is deliberately no getKey / getValue / read / secret function here.
 // That omission is the regression gate: mythos/test/anti-drift-no-key-to-client.test.js
@@ -57,6 +59,14 @@ contextBridge.exposeInMainWorld('mythos', {
     ipcRenderer.on('mythos:hotkey', function (_event, action) {
       callback(String(action || ''));
     });
+  },
+  // notifyReady() → tells the main process the renderer's onHotkey listener is
+  // registered, so the push-to-talk ready-latch (electron/hotkey-latch.js,
+  // BUG-269) may flush. Payload-free by design: a bare send on one named
+  // channel, nothing structured crosses in either direction. Called by app.js
+  // immediately after it registers the onHotkey listener above.
+  notifyReady: function notifyReady() {
+    ipcRenderer.send('mythos:renderer-ready');
   },
   // restartServer() → { ok, restarting } — re-forks the server child so keys
   // stored through setKey() above reach it (they are injected into the child env

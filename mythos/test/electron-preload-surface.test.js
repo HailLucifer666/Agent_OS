@@ -3,9 +3,10 @@
 // test/electron-preload-surface.test.js — §14 phase-8 gate (V2 spine).
 //
 // Asserts the Electron preload's contextBridge surface is EXACTLY
-// { getKeyNames, setKey, hasKey, onHotkey, restartServer, onUpdateStatus,
-// installUpdate } — no more, no fewer — and that each function forwards to its
-// named IPC channel with the right args.
+// { getKeyNames, setKey, hasKey, onHotkey, notifyReady, restartServer,
+// onUpdateStatus, installUpdate, getSettings, setSetting } — no more, no
+// fewer — and that each function forwards to its named IPC channel with the
+// right args.
 //
 // restartServer was added with the first-run wizard: a key stored via setKey()
 // only reaches the server at fork(), so the wizard's last step re-forks the
@@ -73,6 +74,7 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
     let exposedApi = null;
     const invokeCalls = [];
     const onCalls = [];
+    const sendCalls = [];
     const restore = installElectronStub({
       contextBridge: {
         exposeInMainWorld: (name, api) => { exposedName = name; exposedApi = api; },
@@ -80,6 +82,7 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       ipcRenderer: {
         invoke: async (...args) => { invokeCalls.push(args); return { ok: true }; },
         on: (channel, handler) => { onCalls.push({ channel, handler }); },
+        send: (...args) => { sendCalls.push(args); },
       },
     });
     try {
@@ -95,10 +98,14 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // key, which is what left ~140 keys at their defaults in the install. They
       // carry configuration, never credentials — settings-store.js refuses
       // secret-shaped names and the main-process handler filters them again.
+      // notifyReady was added by BUG-269 (2026-08-17): the renderer→main signal
+      // that the onHotkey listener is registered, so the push-to-talk
+      // ready-latch may flush. It is the surface's only renderer→main function:
+      // a payload-free send, so it widens no inbound (AD-8) surface at all.
       assert.deepEqual(
         Object.keys(exposedApi).sort(),
-        ['getKeyNames', 'getSettings', 'hasKey', 'installUpdate', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey', 'setSetting'],
-        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/restartServer/onUpdateStatus/installUpdate/getSettings/setSetting',
+        ['getKeyNames', 'getSettings', 'hasKey', 'installUpdate', 'notifyReady', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey', 'setSetting'],
+        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/notifyReady/restartServer/onUpdateStatus/installUpdate/getSettings/setSetting',
       );
 
       // restartServer() → ipcRenderer.invoke('mythos:restart-server'), no args.
@@ -158,6 +165,18 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // registering a second listener.
       exposedApi.onHotkey('not-a-function');
       assert.equal(onCalls.length, 1);
+
+      // notifyReady() → ipcRenderer.send('mythos:renderer-ready'), NO args.
+      // BUG-269: the renderer announces its onHotkey listener is registered so
+      // the main-process ready-latch may flush. The no-args part is the
+      // assertion that matters: a payload here would be a way for the renderer
+      // to influence the privileged main process, and the latch needs nothing.
+      exposedApi.notifyReady();
+      assert.deepEqual(
+        sendCalls[sendCalls.length - 1],
+        ['mythos:renderer-ready'],
+        'notifyReady must send channel mythos:renderer-ready with no arguments',
+      );
 
       // installUpdate() → ipcRenderer.invoke('mythos:install-update'), NO args.
       // The no-args part is the security property: the main process decides what

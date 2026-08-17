@@ -17,6 +17,7 @@ import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
 import { decideVoiceTransport } from './voice/voice-transport.js';
+import { createToggleGuard } from './voice/toggle-guard.js';
 import { createCameraLoop } from './vision/camera.js';
 import { decideGestureMic } from './vision/gesture-mic.js';
 import { canGestureAccept } from './vision/gesture-confirm.js';
@@ -353,7 +354,7 @@ function ensureS2S() {
 // both capturing at once would have the Live model hearing itself and the
 // batch loop transcribing MYTHOS's own replies. See voice/voice-transport.js
 // and test/voice-transport-decision.test.js.
-async function toggleVoice() {
+async function toggleVoiceImpl() {
   // No voice affordance (compose-bar button, orb click, wake word) may open
   // the mic while the PIN lock screen is locked OR its status check hasn't
   // answered yet — see isGateClosed()'s doc comment in pin/pin-gate.js.
@@ -370,16 +371,27 @@ async function toggleVoice() {
   if (plan.stopOther === 's2s' && s2s) await s2s.stop();
 
   if (plan.transport === 'batch') {
-    if (plan.action === 'start') ensureVoice().start();
+    // BUG-269 defect 2: this start() was un-awaited, so two presses could
+    // interleave their async re-entry into voice-loop's start(). Awaited now;
+    // the in-flight guard below drops presses that land while it resolves.
+    if (plan.action === 'start') await ensureVoice().start();
     else if (voice) voice.stop();
     return;
   }
 
   const bridge = await ensureS2S();
-  if (!bridge) { ensureVoice().start(); return; } // import failed — batch fallback
+  if (!bridge) { await ensureVoice().start(); return; } // import failed — batch fallback
   if (plan.action === 'start') await bridge.start();
   else await bridge.stop();
 }
+
+// BUG-269 defect 2: every caller fires toggleVoice() without await, and the
+// toggle itself awaits mic acquisition — two presses landing mid-toggle
+// interleaved their start/stop writes ("erratic on repeat presses"). The
+// guard drops presses arriving while a toggle is in flight (drop, not queue:
+// queueing would ripple start/stop/start the operator never asked for).
+// See voice/toggle-guard.js and test/voice-toggle-guard.test.js.
+const toggleVoice = createToggleGuard(toggleVoiceImpl);
 
 // Orb click still toggles voice (legacy affordance)
 // (onClick already wired in mountCoreOrb above)
@@ -398,6 +410,10 @@ if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHot
   window.mythos.onHotkey((action) => {
     if (action === 'talk') toggleVoice();
   });
+  // BUG-269 defect 1: announce the listener above is registered. The main
+  // process latches earlier presses and flushes them now (electron/
+  // hotkey-latch.js) — without this, a boot-time press was lost forever.
+  if (typeof window.mythos.notifyReady === 'function') window.mythos.notifyReady();
 }
 
 // camera + hand-gesture control (Part A/B, P16). Camera is OFF by default,

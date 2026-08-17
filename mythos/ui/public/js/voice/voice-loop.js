@@ -961,6 +961,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   async function start() {
     if (active) return true;
+    // BUG-269 defect 3: instant visible feedback, synchronously, before
+    // anything asynchronous — ensureMic() is unbounded on the first press per
+    // session, and a slow press used to look exactly like a lost one. The
+    // compose-bar/orb/hud fan-out treats an unknown state harmlessly.
+    setState('arming');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
       setState('unsupported'); // honest: no mic-recording API in this browser
       return false;
@@ -978,6 +983,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     processing = false;
     setState('listening');
     vadTimer = setInterval(vadTick, VAD_TICK_MS);
+    vadTick(); // BUG-269 defect 3: first VAD tick NOW, not up to a full 100ms
+    // tick later — removes the dead time between arming and the first sample.
+    // vadTick() is a safe no-op if the analyser is somehow gone.
     return true;
   }
 
