@@ -9,7 +9,21 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-17 - the nine open coding defects (fix-plan waves 1-3): BUG-260..BUG-265
+Last updated: 2026-08-17 (second entry) - the FIRST real operator Electron sitting, and the vault
+merge it exposed. BUG-268 (Ctrl+Alt+X screen-text capture does nothing - popup fires, no result;
+operator-deprioritised, undiagnosed) and BUG-269 (global press-to-talk intermittent with variable
+lag) are both operator-reported from live use and both fully green in the automated suite - the
+Slice 5 lesson again: a green suite is not evidence that the desktop app works. Three things PASSED
+their first human check: the app launches and runs, close-and-reopen (BUG-225's quit seam, never
+before verified by a human), and the talk hotkey working across other windows. BUG-266/BUG-267
+(phantom skill names; Live told to call use_skill) are recorded as reserved ids, deferred by design
+to merged-order step 8. Separately: the operator's vault had FORKED across two folders before
+electron/main.js began calling app.setName('MYTHOS') - %APPDATA%\agent-os (dev runs) vs
+%APPDATA%\MYTHOS (packaged) - stranding 734 episodic entries, 572 audit lines, 31 lessons and 2
+operator facts. Merged additively 2026-08-17 with a backup and nothing overwritten; stale goals,
+expired reminders and pin.json deliberately left behind (see the merge notes in that entry).
+
+Previous entry: 2026-08-17 - the nine open coding defects (fix-plan waves 1-3): BUG-260..BUG-265
 (artifact [object Object], open_folder coin-flip oracle, TOOL_ACK_DEADLINE_MS dial, distillation
 dead gates + skip diagnostics, the WebView2 caret false-refusal, open_web browser:true, the
 duplicate-identify anomaly storm) plus BUG-225 quit-seam and the packaged-wakeword honest state.
@@ -8362,3 +8376,100 @@ exactly one anomaly, first emission carries suppressedCount:0. **The
 reconnect-storm root cause itself is NOT this repo's** — it is whatever the
 Aether aggregator/bridge side does across drops, and needs a live Aether
 session to chase; recorded as operator-side, honestly open.
+
+## BUG-266 — six skill names are hardcoded into prompts and are PHANTOM on a fresh clone
+
+**OPEN. Deferred by design to merged-order step 8, lane 8A.1/8A.2** — see
+`mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` "Step 8", which carries the full
+design, the wiring table and the fix. Numbered here so the id is reserved and
+cannot be reused by a concurrent session.
+
+`voice/voice-agent.js:275` (the SKILLS RULE paragraph), `voice/voice-agent.js:93`
+and `effectors/from-skills.js:37` name specific skills in prose the model reads
+every turn — `ui-ux-pro-max`, `frontend-ui-engineering`,
+`spec-driven-development`, `tdd-workflow`, `deep-research`, `code-review`. All
+six are `?`-optional in `skills.allowlist` and none is vendored, so they resolve
+only from a host CLI's `~/.claude/skills`. **Reproduced 2026-08-17** by running
+the real loader with `USERPROFILE`/`HOME` pointed at a non-existent directory
+and `MYTHOS_SKILLS_DIR` empty: 43 skills resolve, and all six prompt-named ones
+report PHANTOM. The model is instructed every turn to call `use_skill` on names
+that answer "not found" — and per the withheld-read-tool pattern it does not
+report the gap, it substitutes the nearest skill and narrates it.
+
+Second, separate defect under the same id (8A.2): `ui-ux-pro-max` is phantom
+**on every machine**, because it is deliberately vendored essence-only
+(`mythos/skills/ui-ux-pro-max/` holds `LICENSE` + `SKILL-CORE.md`, no
+`SKILL.md`, since the full 45 KB doc needs a Python CSV database this repo does
+not carry) while `loader.js:338 loadContent()` reads `SKILL.md` exclusively. So
+`use_skill('ui-ux-pro-max')` fails for a skill that IS vendored and IS driving
+every UI build through `loadEssence()` — the loader disagreeing with itself
+about whether a skill exists.
+
+## BUG-267 — the Live/spoken path is told to call a tool it was never given
+
+**OPEN. Deferred by design to merged-order step 8, lane 8A.3.** Numbered here to
+reserve the id.
+
+`buildLiveSystemInstruction()` (`mythos/server/index.js`) injects
+`skillsLoader.catalogBlock()`, whose header is literally *"SKILLS AVAILABLE
+(methodology + design guides — call use_skill with the name to load full
+guidance)"* (`loader.js:392`). But `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT`
+(`voice/live-tools.js:252`, rationale "internal/debugging surface") and Live's
+`functionDeclarations` are built from `DEFAULT_ALLOWLIST` only. So the **primary
+spoken surface** receives a catalogue of 43 skills plus an instruction to call a
+function that was never declared to it. `use_skill` is T0 (`leash/tiers.js:71`,
+read-only), so there is no safety argument for withholding it — only the
+tool-count argument, which is already outweighed by the tokens the catalogue
+itself spends. Fix is to promote it to `DEFAULT_ALLOWLIST`; the alternative
+(dropping the catalogue on Live) would leave the primary surface the only one
+with no skills at all.
+
+## BUG-268 — Ctrl+Alt+X (screen text capture / OCR) does nothing
+
+**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron
+sitting, and explicitly DEPRIORITISED by the operator the same day** — "not one
+of the most important features I'm looking to do a pass right now", fix later.
+Recorded now so the observation is not lost with the session.
+
+**Observed, verbatim:** pressing `Ctrl+Alt+X` produces a popup/toast (the
+operator described it as looking like a clipboard notification from MYTHOS) and
+then **nothing further happens** — no captured text is returned, spoken, or
+surfaced anywhere. So the hotkey is registering and something in the chain is
+firing; what follows it is not.
+
+**Why this matters beyond the feature itself:** this is merged-order step 7's
+Slice 2/3 surface and it is fully green in the automated suite. It took a human
+at a real keyboard to find it — the same lesson as the Slice 5 boot crash that
+shipped behind 2598 passing tests and a walked installer artifact. **A green
+suite is not evidence that the desktop app works.**
+
+**Not yet investigated.** Do not guess at a cause in this entry. When it is
+picked up, start from the two things the report already pins down — the hotkey
+fires and a notification renders — which puts the fault after registration:
+candidates are the capture step, the OCR call itself, or the delivery of the
+result back to the HUD/voice surface. Read `<userData>/logs/main.log` and
+`<userData>/mythos-server.log` from a run where the key was pressed before
+touching code.
+
+## BUG-269 — the global press-to-talk hotkey is intermittent
+
+**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17, same sitting.**
+
+**Observed, verbatim:** `Alt+Space` pressed while a *different* application holds
+focus "works. Sometime there is a lag, there is a delay. It works, and sometimes
+it doesn't work." So the feature is real and wired — the defect is reliability,
+not absence.
+
+This is the first live report on `globalShortcut` (step 7 Slice 2), which until
+2026-08-17 had never been exercised by a human. Intermittency plus variable
+latency points at a timing or contention problem rather than a missing piece —
+but that is a hypothesis, not a finding, and this repo's history is explicit
+that plausible theories here have been wrong three or more times. Reproduce with
+timestamps before proposing a cause: note what had focus, whether MYTHOS had
+spoken recently, and whether a Live session was open at the time, since all
+three change what the press has to contend with.
+
+**Deliberately NOT bundled with BUG-268** even though both surfaced in one
+sitting and both touch the Electron hotkey layer: one is "never completes", the
+other is "completes unreliably", and merging them would let a fix for either
+close the ticket for both.
