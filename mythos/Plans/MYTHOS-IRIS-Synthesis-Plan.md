@@ -6,7 +6,12 @@
 > plan document — the V2 spine was lost precisely because planning lived in untracked
 > files (see the blocking-gap section below).
 
-**Post-parity backlog (not part of this build):** `mythos/Plans/MYTHOS-Post-Parity-Plan.md` holds scope that starts only after merged-order step 7 — social platforms, a multi-agent business layer, phone/multi-device control surfaces, multi-device wake-word arbitration. It is downstream by construction and **this file wins on any overlap**; it exists so that scope does not bury this build's RESUME HERE loop.
+**Post-parity backlog (not part of this build):** `mythos/Plans/MYTHOS-Post-Parity-Plan.md` holds scope that starts only after merged-order step 7 — social platforms, a multi-agent business layer, phone/multi-device control surfaces, multi-device wake-word arbitration. It is downstream by construction and **this file wins on any overlap**; it exists so that scope does not bury this build's RESUME HERE loop. It also
+carries **Appendix COMM — commercial readiness** (added 2026-08-17): the
+open-core split, the demo-critical reliability list, and — relevant to *this*
+file — the reason the product name gates **release** rather than step 7's tick
+(`build.appId` is Windows' install/upgrade key and is free to change only until
+the first external user exists).
 
 ## RESUME HERE
 

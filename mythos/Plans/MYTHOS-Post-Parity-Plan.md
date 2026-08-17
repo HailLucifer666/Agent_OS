@@ -50,7 +50,15 @@ sometimes only thing the next machine reads.*
 | **Next action** | Live-verify the Voice Nodes build — it is the only thing here with code behind it, and none of it has met real hardware (`nodes/README.md` has the checks, in order: walk with `bridge.py`, then the election, then a phone answering). Everything else is unchanged: go to `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`'s RESUME HERE, with **P0-parallel** (platform paperwork, zero code) still the only startable item in this file. |
 | **Blocked on** | (1) Parity steps 6.5 and 7 (except the two `PARALLEL-SAFE` items). (2) **Four operator decisions** — see "Open decisions"; three gate real design choices, not wording. (3) **Voice Nodes live-verification needs hardware** — a paired watch and at least two phones; `adb devices` was empty for the whole build. (4) **Hands-free needs a wake-word model the operator supplies** — none ships, deliberately, since weights are routinely licensed apart from the code that runs them and MYTHOS is sold. (5) The operator's own wake-word-collision repo is still unread — §P8 was implemented via Aether without it. (6) Several research findings below are flagged UNVERIFIED or LIKELY-WRONG — verify before building on one. |
 | **Relationship to the parity build** | Strictly downstream. Parity roadmap wins on any overlap. This file never edits `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` or the V2 spine except to add its own one-line pointer. |
-| **Last updated** | 2026-08-08 |
+| **Last updated** | 2026-08-17 (Appendix COMM added — commercial readiness; the P-sequence itself is unchanged) |
+
+**Appendix COMM — commercial readiness (added 2026-08-17).** Not part of the
+P-sequence and not gated by it. It answers what the numbered parity steps
+6.5/6.6/7 actually still gate, why the product name blocks *release* rather than
+step 7, how the open-core split must be built (additive modules, never config
+flags), and which eight capabilities have to be reliable for the marketing
+videos the operator plans to record over the next two to four weeks. Read it
+before doing any commercial or release work; it does not change the build order.
 
 **Sequence (the only order — justified in the next section):**
 P0 ☐ · P0-parallel ☐ `PARALLEL-SAFE` · P1 ☐ · P2 ☐ · P3 ☐ · P4 ☐ · P5 ☐ · P6 ☐ · P7 ☐ · P8 ☐ `PARALLEL-SAFE` · P9 ☐ · P10 ☐ · P11 ☐ · P12 ☐ (lock screen — operator-requested 2026-08-17; order-independent of P0-P11, needs only `PIN_SESSION_ENFORCE` defaulting ON first)
@@ -1340,3 +1348,176 @@ says nothing about iPhones.
 6.6/7 shipping gates, and this file's own rule is that nothing here gets ticked
 while the parity roadmap's RESUME HERE still has open steps. First startable
 item is PA-1 (an issue, zero code).
+
+---
+
+## Appendix COMM — Commercial readiness (added 2026-08-17)
+
+**Why this is here and not in the parity roadmap.** Selling is downstream of
+shipping, and the roadmap's own rule is that it tracks the parity build only.
+But the operator confirmed commercial intent on 2026-07-30 and set a concrete
+window on 2026-08-17: **two to four weeks of marketing and video content first,
+then release, contingent on audience response.** That makes this a real plan
+with a real clock, not a someday-list — so it is written down rather than
+carried in a session's head. It does not override 6.5/6.6/7; it says what must
+be true *in addition* to them.
+
+**Standing limit, unchanged from step 6.5:** nothing in this appendix is a legal
+conclusion. Where a licence or a term of service matters, the appendix records
+the fact and the source, and names the decision as the operator's or a lawyer's.
+
+### COMM-0 — What the numbered steps actually gate
+
+Read this before assuming the name blocks anything.
+
+| Step | What is genuinely left | Who can close it | Blocks |
+|---|---|---|---|
+| **6.5** | One decision: how the **paid** product handles openWakeWord's CC BY-NC-SA weights. Everything else in 6.5 is answered — TTS is BYO (Decision 1), the free demo is deferred (Decision 2), the wider audit split out (Decision 3). | Operator. Two options: train an own wake model with the Apache-2.0 tooling (a separate workstream, not a fix), or ship the paid tier with press-to-talk only and no always-on wake word. | Shipping, not building. |
+| **6.6** | One named gap: **NVIDIA NIM hosted-API terms are UNVERIFIED** — build.nvidia.com's terms page renders empty. Plus MediaPipe's `.task` gesture weights, where the operator already decided ship-anyway with the question left open. | A session can close the NIM gap by finding the served document; the operator/lawyer then reads the recorded facts in `THIRD_PARTY_NOTICES.md`. | Shipping, not building. |
+| **7** | **All six slices exist in code.** What is left is human verification, and after the 2026-08-17 sitting the remaining list is short: screen share, cursor overlay, persona and `Aoede` by ear, barge-in, installing the built installer on a clean path, and confirming the merged vault loads in the running app. Plus **BUG-269** — the press-to-talk hotkey is intermittent. | Operator at the desktop (roughly one sitting), plus one engineering fix for BUG-269. | Step 8. |
+| **8** | Planned in full, zero code, gated behind all three above by the operator's explicit sequencing. | — | — |
+
+**The name is not a step.** It is one of step 7's three product decisions, and
+it gates **release**, not the tick. The mechanism is `build.appId`
+(`com.mythos.assistant`), which is Windows' install and upgrade key: change it
+after external users exist and Windows installs a second copy side by side
+instead of updating. Today the only install is the operator's, so the change is
+still free. **It stops being free at the first external user** — which means the
+name must land before the installer is handed to anyone, and not one day sooner.
+
+**So the honest critical path to "past 7" is:** fix BUG-269, run one operator
+sitting through the six remaining checks, tick 7. Days of work, not weeks. 6.5
+and 6.6 run in parallel and block only the release. That is the whole answer.
+
+### COMM-1 — The open-core split, and why a config flag is not a split
+
+The intended shape is a public demo repo plus a private paid core, following the
+model the operator studied. The failure mode to design against is stated first
+because it is the one that quietly destroys the business:
+
+**A feature gated by a config flag is not gated.** If the pro capability's code
+ships inside the free artifact and a boolean decides whether it runs, then
+anyone who can edit a file has the paid product. This repo makes that trivially
+easy — the project root is always an allowed root in `allowedRoots()`, so even
+MYTHOS's own `write_file` can rewrite `mythos/.env`. Tier gates have the same
+hole and it is already in the risk register above.
+
+**The rule, therefore: pro features are additive modules that are absent from
+the free artifact, not present-but-disabled.** Concretely —
+
+- Free capabilities live where they live today. Pro capabilities live under a
+  directory that the free repo does not contain and the free installer does not
+  package (`mythos/src/pro/**` is the obvious shape, given `effectors/` already
+  registers by discovery).
+- The loader must treat absence as normal, not as an error. This is the same
+  contract cua-driver and android-child already honour: missing binary → adapter
+  reports OFFLINE → fallback path takes over, boot still succeeds. A free user
+  must never see a stack trace where a pro module would have been; they see a
+  smaller capability list, honestly reported.
+- **The capability manifest is the seam that makes this testable.**
+  `capabilities-manifest.written` already enumerates what actually registered.
+  A build test can assert that the free artifact's manifest contains zero pro
+  tool names — which is a real, mechanical check that no flag-flip can defeat.
+- No pro code in the public repo at all. Not commented out, not behind a build
+  define. If it is in the public git history it is public forever, and history
+  rewrites do not un-publish a clone.
+
+**What splits which way** is a product decision the operator has not made, so
+this records only the constraint that makes it decidable: the free tier must be
+good enough to demonstrate the thing the videos promise, because the videos are
+the funnel. A demo that cannot do what the marketing shows converts nobody. The
+natural boundary given what exists is *local single-machine assistance free,
+and the multiplying surfaces paid* — the phone bridge, the build engine, the
+autonomous cortex, multi-device. That is a proposal, not a decision.
+
+**Practical consequence for the repo move.** The operator plans a new private
+repo. Do the split **before** the first public push, not after: a public repo
+that once contained the pro code has leaked it permanently, and the whole
+open-core structure is then theatre.
+
+### COMM-2 — The demo-critical reliability list
+
+Marketing runs before release. That inverts the usual priority: for the next two
+to four weeks, the only defects that matter are the ones that can ruin a take.
+Everything else can wait, including defects that are objectively worse.
+
+This list is derived from the chronic failure classes found in the full-history
+log analysis (Lessons recurrence counts in parentheses), not from guesswork, and
+it is ordered by *risk to a recording*, which is recurrence multiplied by how
+visible the failure is on camera.
+
+| # | Capability the videos will show | Standing risk | State |
+|---|---|---|---|
+| 1 | **Press-to-talk / wake → first response.** The first second of every video. | **BUG-269 — intermittent, variable lag, occasional total silence.** Nothing else on this list matters if this one fails. | Open, and it is the single highest-value fix in the repo right now. |
+| 2 | **Conversation that remembers the operator.** The core emotional claim. | Was structurally broken: the Live path read no memory, and the CRLF bug meant the authored persona never once reached the model on a Windows-edited vault. | **Fixed 2026-08-15/16** (BUG-251, BUG-254). Needs one live sitting to confirm on camera. |
+| 3 | **Play music.** The most-attempted casual demo there is. | Wrong-item playback, **nine recurrences**, operator's own words "basic things don't work". Tracked as BUG-001/026, still open. | Highest-recurrence unfixed class on the list. Either fix it or keep it out of the videos — do not gamble on a take. |
+| 4 | **Open an app and type into it.** The "it actually drives my PC" moment. | Keystrokes follow the caret, not the foreground window, and a foreground-pid guard passes while text lands somewhere else. MSIX-packaged apps silently discard SendInput. | Works, with known traps. **Rehearse with the exact app that will appear on camera** — the failure is app-specific, not general. |
+| 5 | **"What's on my screen."** | Untested at step 7 — it is one of the remaining operator checks. Separately, `screen_look`/`ui_elements` has six recurrences, and **BUG-268** (Ctrl+Alt+X capture) is dead and deliberately deprioritised. | Verify before scripting it into a video. |
+| 6 | **Browser / web action.** | CDP unattached is chronic across eight distinct days spanning a month; the adapter boots OFFLINE every session. | Mechanically avoidable: `browser_launch_debug` must be in the pre-recording checklist. This is a setup step, not a bug, but it looks like a bug on camera. |
+| 7 | **Build something (Hermes).** The genuine differentiator — few competitors show this. | By design there is no brain.think fallback; a missing engine fails loudly. Hermes must be installed and its own `config.yaml` correct, since that wins over forwarded env. | Works when set up. Verify the install on the recording machine specifically. |
+| 8 | **Phone control (ADB).** The wow shot. | Never live-verified on a physical device — three roadmap steps sit unticked for exactly this reason. `screencap` returns black while the device is dozing. | Unknown. Test on the real phone before promising it in a video. |
+
+**Two cross-cutting risks that will show up in any take:**
+
+- **The second voice.** When Gemini Live returns text with no audio, MYTHOS
+  speaks it through the local TTS chain — a *different voice* finishing the
+  sentence. On camera this reads as a bug even to a viewer who cannot name it.
+  It fires when the Live path goes silent, which is not rare, and anomaly
+  explanations are deliberately suppressed during Live sessions so it is never
+  explained. Watch for it in every recording; if it appears, re-shoot rather
+  than ship it.
+- **Free-tier quota is the demo's real clock.** `gemini-tts` is capped at ten
+  requests per day and exhausts in about fifteen minutes of use; edge-tts is
+  BYO and dead by default; kokoro cannot load from a packaged build. Piper is
+  the survivor. **Record with the paid or a fresh-quota key, and record early
+  in the day** — a video that degrades to the fallback voice halfway through is
+  a wasted afternoon.
+
+### COMM-3 — The commercial artifacts, and what each one costs
+
+Recorded because the operator asked and the numbers were agreed on 2026-08-17:
+roughly ₹2,000 one-time (domain plus certificate) and about $10/month later,
+spent only after audience response justifies it.
+
+- **LICENSE vs EULA — these are different documents and the distinction has
+  been a source of confusion.** LICENSE governs *source code* and is only
+  meaningful for a repo people can read; it is irrelevant to a private core.
+  The **EULA** governs the installed product and is what a paying user actually
+  agrees to. The paid product needs an EULA regardless of what any LICENSE file
+  says. If the free demo repo is public, it needs an OSI licence — and note the
+  operator's earlier finding that free code-signing programmes (SignPath, the
+  Certum open-source programme) require exactly that: an OSI licence and a
+  public repo. That is a real reason to keep the demo repo public and properly
+  licensed, beyond marketing.
+- **Code signing.** Unsigned installers trigger SmartScreen, which on camera
+  and on a landing page reads as "this might be malware". The free route runs
+  through the open-source programmes above and is contingent on the public demo
+  repo. The paid route is the ₹1,000-ish certificate the operator budgeted.
+  Either way this is a **release-time** cost, not a marketing-time one — the
+  videos do not need a signed binary.
+- **Payments.** Razorpay and PayPal are both already KYC'd, which removes the
+  usual multi-week blocker entirely. Nothing to do until there is something to
+  sell.
+- **Domain.** Buy it when the name lands, not before. Buying a domain for a
+  name that later fails a trademark check wastes the money and, worse, creates
+  sunk-cost pressure to keep a bad name.
+
+**Sequencing, stated plainly:** none of COMM-3 blocks the videos. The videos
+need a working product and a name; they do not need a certificate, a payment
+integration, a licence file or a website. Build the funnel first, spend after
+the response — which is exactly the order the operator proposed.
+
+### COMM-4 — Open decisions (operator's, recorded not resolved)
+
+1. **The product name.** Parked deliberately on 2026-08-17 after roughly twenty
+   candidates were search-verified and rejected. Standing verified-clean
+   shortlist: ORVO, TALVO, ZELVO, VANTO, ORVEK, ELIO. Must land before the
+   installer reaches any external user, because of `appId` (COMM-0). A
+   two-word form ("<Name> Labs") materially improves both trademark and domain
+   odds and should be the fallback if single words keep failing.
+2. **What is free and what is paid** (COMM-1). Constraint: the free tier must
+   demonstrate what the videos promise.
+3. **The wake-word question** (step 6.5) — train an own model, or ship the paid
+   tier with press-to-talk only.
+4. **Whether the demo repo is public**, which is coupled to free code signing
+   and therefore is not purely a marketing choice.
