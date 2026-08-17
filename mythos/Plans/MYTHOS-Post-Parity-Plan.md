@@ -53,7 +53,7 @@ sometimes only thing the next machine reads.*
 | **Last updated** | 2026-08-08 |
 
 **Sequence (the only order — justified in the next section):**
-P0 ☐ · P0-parallel ☐ `PARALLEL-SAFE` · P1 ☐ · P2 ☐ · P3 ☐ · P4 ☐ · P5 ☐ · P6 ☐ · P7 ☐ · P8 ☐ `PARALLEL-SAFE` · P9 ☐ · P10 ☐ · P11 ☐
+P0 ☐ · P0-parallel ☐ `PARALLEL-SAFE` · P1 ☐ · P2 ☐ · P3 ☐ · P4 ☐ · P5 ☐ · P6 ☐ · P7 ☐ · P8 ☐ `PARALLEL-SAFE` · P9 ☐ · P10 ☐ · P11 ☐ · P12 ☐ (lock screen — operator-requested 2026-08-17; order-independent of P0-P11, needs only `PIN_SESSION_ENFORCE` defaulting ON first)
 
 ### How to keep this file honest
 
@@ -863,6 +863,72 @@ equivalent per OD's open note), `mythos/src/core/agents/teams.js`; modify
   sent:false}`; that honest behaviour must not regress into a claimed send when a
   real API path lands beside it.
 - [ ] **Step 4 — live-verify each** against a real account, or do not ship it.
+
+---
+
+## P12 — the lock screen: on-demand lock and AFK re-auth (operator-requested 2026-08-17)
+
+**Operator's words, so intent is not lost in paraphrase:** *"there should be a
+lock feature so that we can lock and go. And, uh, once… if we are AFK and, uh,
+once we are back, we can type just like Windows lock or any other lock feature.
+But that is for future roadmap, we will implement that later."* Placed here, not
+in the parity roadmap, on the operator's explicit instruction.
+
+**What already exists — read this before designing anything.** The PIN is not a
+greenfield feature and must not be rebuilt:
+
+- `src/core/security/pin-session.js` — `POST /api/pin/verify` mints a CSPRNG
+  32-byte session token with a **sliding 30-minute TTL**, returned as an
+  `HttpOnly`/`SameSite=Strict` cookie (`Secure` when `req.secure`). This is real
+  access control as of 2026-08-04, not a visual deterrent.
+- Enforcement extends the **existing** `extractToken()` chain, so `requireToken`
+  (REST) and the WS `verifyClient` upgrade were both closed by one change.
+  `tokenOk()` is `if (pinSession.isValid(presented)) return true; if (!AUTH_TOKEN)
+  return !pinSessionRequired();`.
+- `pinSessionRequired()` = `PIN_SESSION_ENFORCE && pinLock.isConfigured()`.
+  **The parity roadmap records the operator answering PIN_SESSION_ENFORCE as
+  default ON (2026-08-17)** — startup already asks for the PIN once that lands,
+  so **P12 is only the two things startup-PIN does not give you.**
+- HUD side: `ui/public/js/pin/pin-lock-screen.js`, mounted in `app.js:90`;
+  `isGateClosed(pinLockScreen.lockState())` already guards the socket and several
+  entry points, so a locked state that blocks the UI is wired.
+- `/pin/status` and `/pin/verify` are deliberately exempt from enforcement or it
+  becomes an unrecoverable lockout, and the exemption matches on the
+  **mount-relative** path (`/pin/verify` inside `app.use('/api', …)`) — matching
+  the full path silently disables it. `/pin/set` stays gated.
+
+**So P12's actual scope is two features, not a subsystem:**
+
+- [ ] **Step 1 — on-demand lock.** A "lock now" action (HUD button, hotkey, and a
+      spoken verb) that invalidates the current PIN session immediately and drops
+      the HUD to the existing lock screen. Server side this is one new authed
+      route that calls into `pin-session.js` to revoke the presented token —
+      **revoke, not expire-early**, so a stolen cookie cannot outlive the lock.
+      Tier the spoken verb carefully: locking is safe and reversible, so T0/T1 is
+      right, but it must NOT be session-grantable in reverse — i.e. UNLOCK must
+      never become click-through.
+- [ ] **Step 2 — AFK auto-lock.** Lock after N minutes of no operator activity.
+      Two hard questions to answer with evidence, not assumption: **(a) what
+      counts as activity?** The server already tracks `lastActiveWs` and
+      deliberately excludes `NODE_TELEMETRY_TYPES` (`node-reading`, `node-lost`)
+      precisely so a phone's telemetry does not read as the operator being
+      present — reuse that exclusion, do not invent a second idea of "active", or
+      a wall-mounted phone will hold the session open forever. **(b) does MYTHOS
+      speaking count?** A proactive announcement is MYTHOS being active, not the
+      operator; if it resets the timer the lock never fires during a busy day.
+      Default: it does not.
+- [ ] **Step 3 — do not break unattended operation.** The cortex loop, sensors and
+      reminders run with no operator present and must keep running while locked;
+      only the *surfaces* lock. Verify a reminder still fires and is still spoken
+      while the HUD is locked, and that the audit line still records it.
+- [ ] **Step 4 — live-verify:** lock by hand → HUD locks, socket refuses, PIN
+      re-entry restores; idle past the timeout → same; a reminder fires while
+      locked → still spoken; a phone node streaming telemetry does NOT prevent
+      the AFK lock.
+
+**Blocked on nothing technically** — but it is downstream of the parity build like
+everything else in this file, and it is pointless before
+`PIN_SESSION_ENFORCE` actually defaults ON.
 
 ---
 

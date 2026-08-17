@@ -62,12 +62,38 @@ conversational commitments), an expired all-`fired:true` reminders file, the old
 `pin.json`, six Identity files whose live copies are NEWER, and 10 byte-identical
 Skills files.
 
-**Next action — the operator's, unchanged in kind:** the remaining step-7 checks
-that still need a human — `LIVE_SCREEN_SHARE_ENABLED=true` then "what's on my
-screen"; the cursor overlay via `Ctrl+Alt+C`; judging the persona and the `Aoede`
-voice by ear; barge-in; and installing the built installer on a clean path. Then
-the three product decisions (PIN default, product name, gesture model) and the
-6.5/6.6 licence work.
+**Two of step 7's three product decisions were answered by the operator on
+2026-08-17:**
+- **PIN — ANSWERED: `PIN_SESSION_ENFORCE` defaults ON.** *"If we have set it, it
+  should default to the main home screen. Whenever we start the app, it should
+  ask for the PIN."* So: enforcement on by default, and it self-disables when no
+  PIN exists (`pinSessionRequired()` already requires both the flag AND
+  `pinLock.isConfigured()`), which is what makes an on-by-default safe — no PIN
+  set means no lockout. **Do NOT import the orphaned `%APPDATA%\agent-os`
+  `pin.json` to satisfy this** — the operator sets a fresh PIN once enforcement
+  is on. The operator also asked for an **on-demand + AFK lock** ("lock and go…
+  once we are back we can type, just like Windows lock") and placed it
+  explicitly in future scope, so it is recorded in
+  `MYTHOS-Post-Parity-Plan.md`, NOT here.
+- **Product name — STILL OPEN, and actively being worked.** The operator is
+  researching names because most candidates are taken. **Consequence that matters
+  before any public release:** `build.appId` is `com.mythos.assistant` and that
+  string is Windows' install/upgrade key. Change it after users exist and Windows
+  installs a SECOND copy side by side instead of updating. Today the only install
+  is the operator's, so the change is still free — it stops being free at the
+  first external user. Leave `appId` as-is until the name lands; do not
+  "tidy" `package.json`'s `name: agent-os` into something else in the meantime,
+  because that is what derives the dev userData path and the vault fork below is
+  what that costs.
+- Gesture model licence — unchanged, still open (excluded from the installer).
+
+**Next action — the operator's:** the remaining step-7 checks that still need a
+human — `LIVE_SCREEN_SHARE_ENABLED=true` then "what's on my screen"; the cursor
+overlay via `Ctrl+Alt+C`; judging the persona and the `Aoede` voice by ear;
+barge-in; and installing the built installer on a clean path. **Plus one new
+check created by this session: launch the app once and confirm the merged vault
+loads cleanly** — 734 recovered episodic entries changed a file the app reads at
+boot, and that merge is not yet verified inside the running app.
 
 ### 2026-08-17 — step 8 planned and tracked. NO CODE WRITTEN. Position unchanged.
 
