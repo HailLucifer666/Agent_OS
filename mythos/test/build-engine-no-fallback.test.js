@@ -142,4 +142,49 @@ describe('F5 — the fallback cannot come back by accident', () => {
     assert.doesNotMatch(call, /brain/,
       'passing a brain here is how the fallback would come back — there is nothing for it to do');
   });
+
+  // Task B1 (2026-08-17) — the engagement executor's BUILD stage kept a live
+  // `|| brain` / `: await think(...)` branch long after build-engine.js lost
+  // its fallback, so the same no-fallback rule is now scanned there too. Only
+  // runBuildStage is guarded: the executor LEGITIMATELY uses brain/think at
+  // its research, verify claims-check, repair-hint and completion-report
+  // sites, so a whole-file scan would false-positive. Scope = this one fn.
+  const EXEC_RAW = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'core', 'engagements', 'executor.js'), 'utf8');
+  const EXEC_SRC = EXEC_RAW.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+
+  // Extract one function body by brace-matching from a given source. Returns
+  // null if the signature or its opening brace is missing (the smoke test
+  // below fails loudly rather than silently scanning nothing).
+  function extractFn(src, name) {
+    const at = src.indexOf('async function ' + name);
+    if (at === -1) return null;
+    const open = src.indexOf('{', at);
+    if (open === -1) return null;
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(open, i + 1); }
+    }
+    return null;
+  }
+  const BUILD_BODY = extractFn(EXEC_SRC, 'runBuildStage');
+
+  it('the executor runBuildStage extractor found the real function', () => {
+    assert.ok(BUILD_BODY, 'runBuildStage must be found and brace-matched');
+    assert.ok(BUILD_BODY.includes('generator.generate'), 'real engine call must survive the strip');
+    assert.ok(BUILD_BODY.includes('verifyStage'), 'real verify call must survive the strip');
+    // The line filter cannot see into a multi-line block comment, so forbid it
+    // in the raw region — same guard as build-engine.js above.
+    const rawBody = extractFn(EXEC_RAW, 'runBuildStage') || '';
+    assert.doesNotMatch(rawBody, /\/\*[^*]*\n/,
+      'runBuildStage must not use multi-line block comments — the line filter cannot see into them');
+  });
+
+  it('executor runBuildStage makes no brain/think reference at all', () => {
+    assert.doesNotMatch(BUILD_BODY, /\bbrain\b/,
+      'the build stage must not fall back to brain — Hermes is the only build-content engine');
+    assert.doesNotMatch(BUILD_BODY, /\bthink\b/,
+      'the build stage must not call the brain.think helper — there is no fallback');
+  });
 });

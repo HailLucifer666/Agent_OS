@@ -342,7 +342,10 @@ describe('phase1/engagement-executor', () => {
     });
 
     it('artifact_created fires when a build stage produces a file (vault present)', async () => {
-      // Build a harness with a fake vault + a brain that returns content.
+      // Build a harness with a fake vault + a buildEngine that returns content.
+      // Build content comes from buildEngine only (Hermes-Agent is the single
+      // build-content engine — no brain.think fallback), so the engine fake is
+      // what produces the artifact.
       const bus = spyBus();
       const store = memStore();
       const engagement = createEngagement({
@@ -355,10 +358,10 @@ describe('phase1/engagement-executor', () => {
         writeText: function (p, c) { writtenFiles.push({ path: p, content: c }); },
         exists: function () { return true; }
       };
-      const brain = { think: async function () { return { content: 'FILE-CONTENT', offline: false }; } };
+      const buildEngine = { generate: async function () { return { content: 'FILE-CONTENT', offline: false, engine: 'fake' }; } };
       const executor = createEngagementExecutor({
         bus: bus, config: { ENGAGEMENT_MAX_REPAIRS: 2 },
-        dispatchAction: fakeDispatch(), leash: fakeLeash(), brain: brain,
+        dispatchAction: fakeDispatch(), leash: fakeLeash(), buildEngine: buildEngine,
         checkpoints: fakeCheckpoints(), store: engagement, engagementStore: store,
         vault: vault, logger: null
       });
