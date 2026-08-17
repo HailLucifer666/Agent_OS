@@ -28,6 +28,7 @@ export async function render(mount) {
     <div class="conversation-log" id="conv-log" style="overflow-y:auto;max-height:70vh;padding:8px;">
       <div class="text-faint" id="conv-empty">No conversation yet — start speaking to see the transcript.</div>
     </div>
+    <div class="sr-only" id="conv-live" aria-live="polite"></div>
     <div style="padding:4px 8px;border-top:1px solid var(--border,#333);">
       <button id="conv-clear" style="background:none;border:1px solid var(--border,#555);color:var(--text,#ccc);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;">Clear</button>
     </div>
@@ -35,10 +36,18 @@ export async function render(mount) {
 
   const logEl = mount.querySelector('#conv-log');
   const emptyEl = mount.querySelector('#conv-empty');
+  // sr-only aria-live mirror of the transcript (third live region in the HUD,
+  // after core-orb.js's #hud-status-live and kanban.js's #kanban-note).
+  // Deliberately NOT aria-live on #conv-log itself: appendChunk fires per
+  // streamed token and would spam screen readers — the mirror is written only
+  // on message completion (addMessage / finalizeStreaming), never per chunk,
+  // the same state-transitions-only pattern as core-orb.js's announceState.
+  const liveEl = mount.querySelector('#conv-live');
   let messageCount = 0;
 
   function addMessage(role, text, kind) {
     if (!text || !text.trim()) return;
+    if (liveEl) liveEl.textContent = text; // completion-only announce; empty text already returned above
     emptyEl.style.display = 'none';
     const div = document.createElement('div');
     div.className = 'conv-msg conv-' + role;
@@ -94,6 +103,7 @@ export async function render(mount) {
     if (streamingEl && streamingText) {
       const body = streamingEl.querySelector('span:last-child');
       if (body) body.textContent = streamingText;
+      if (liveEl) liveEl.textContent = streamingText; // completion-only announce (never per chunk)
     }
     streamingEl = null;
     streamingText = '';

@@ -193,7 +193,7 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Caption passthrough (reused by app.js for the old mic.setCaption calls).
   // Every voice/build/mission status string already funnels through this one
   // function, so it's also the one place that needs to feed #hud-status-live
-  // (one of exactly two aria-live regions in the HUD) — no new call sites.
+  // (one of exactly three aria-live regions in the HUD) — no new call sites.
   //
   // Routed through captionFor() so "turn ended" (kind: 'idle', or the old
   // empty-text clear) resolves to the idle hint instead of a blank strip —

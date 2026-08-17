@@ -151,11 +151,11 @@ export function mountCoreOrb(canvas, ctx) {
   function statusColor() { return STATE_COLOR[resolveState()]; }
   function statusLine() { return STATE_LINE[resolveState()]; }
 
-  // aria-live announce — #hud-status-live is one of exactly two live regions
-  // in the whole HUD (the other is kanban.js's #kanban-note); this pushes
-  // STATE_LINE[state] only on an actual state TRANSITION, never per frame
-  // (resolveState() is otherwise recomputed every frame for drawing, which
-  // would make a screen reader unusable if echoed at that rate).
+  // aria-live announce — #hud-status-live is one of exactly three live regions
+  // in the whole HUD (the others: kanban.js's #kanban-note, conversation.js's
+  // sr-only #conv-live transcript mirror); this pushes STATE_LINE[state] only on
+  // an actual state TRANSITION, never per frame (resolveState() is recomputed
+  // every frame for drawing; echoing at that rate makes a screen reader unusable).
   const statusLiveEl = document.getElementById('hud-status-live');
   let lastAnnouncedState = null;
   function announceState(state) {
