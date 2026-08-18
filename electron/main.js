@@ -215,6 +215,25 @@ function toRealPathIfPackaged(p) {
 // identifier every packaged install carries without a build-time codegen step,
 // and process.resourcesPath is only meaningful when packaged. Best-effort: a
 // missing/unreadable archive returns '' and the badge falls back to the version.
+// WHICH BUILD WROTE THIS LOG. app.getVersion() is correct in a PACKAGED build —
+// it reads the asar's own package.json through Electron — and wrong in dev, where
+// there is no asar and it returns ELECTRON's version instead. The first boot marker
+// this file ever wrote said "MYTHOS 43.3.0", which is Electron 43.3.0.
+//
+// That is not a cosmetic slip in this repo. The operator spent 2026-08-12 with four
+// different builds and no way to tell them apart from inside the app, and the HUD
+// badge on a 0.1.7 install read "v0.1.0" because a version was resolved from the
+// wrong package.json. A boot marker exists to say WHICH RUN a log belongs to; one
+// that names the wrong product is worse than no marker, because it will be believed.
+//
+// Every other app.getVersion() in this file is on the auto-update path, which runs
+// only when packaged, so they are all correct where they stand and are left alone.
+function appVersionForLog() {
+  if (app.isPackaged) return app.getVersion();
+  try { return require('../package.json').version + '-dev'; }
+  catch (_) { return 'unknown-dev'; }
+}
+
 function buildTimeISO() {
   if (!app.isPackaged) return '';
   try {
@@ -751,7 +770,7 @@ function startChild() {
   // indistinguishable — which is half of why D4 could not be answered.
   try {
     if (childLogStream) {
-      childLogStream.write('--- boot: MYTHOS ' + app.getVersion() + ' pid=' + process.pid
+      childLogStream.write('--- boot: MYTHOS ' + appVersionForLog() + ' pid=' + process.pid
         + ' at ' + new Date().toISOString() + ' ---\n');
     }
   } catch (err) { log('could not write the child log boot marker:', err.message); }

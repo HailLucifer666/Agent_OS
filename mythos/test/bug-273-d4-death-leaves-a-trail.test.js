@@ -181,3 +181,35 @@ test('Q8 — the restart policy itself is untouched', () => {
     "BUG-225's never-re-fork-while-quitting guard must still be the first thing "
     + 'startChild does');
 });
+
+test('the boot marker names MYTHOS, not Electron', () => {
+  // LIVE-CAUGHT, 2026-08-18: the very first marker this code wrote said
+  // "--- boot: MYTHOS 43.3.0 ---". 43.3.0 is Electron's version. app.getVersion()
+  // is correct in a packaged build (it reads the asar's own package.json) and
+  // returns Electron's version in dev, where there is no asar.
+  //
+  // Not cosmetic in this repo: the operator spent 2026-08-12 with four builds and no
+  // way to tell them apart from inside the app, and a HUD badge on a 0.1.7 install
+  // read "v0.1.0" for the same class of reason. A marker exists to say which run a
+  // log belongs to; one naming the wrong product is worse than none, because it gets
+  // believed.
+  assert.match(CODE, /function appVersionForLog\(/);
+  const fn = block('function appVersionForLog(', '\nfunction ');
+  assert.match(fn, /app\.isPackaged/,
+    'packaged is the case app.getVersion() answers correctly, and it must keep it');
+  assert.match(fn, /require\('\.\.\/package\.json'\)/,
+    "and dev must read the repo's own version instead of Electron's");
+
+  const startChild = block('function startChild(', 'function stopChild(');
+  assert.match(startChild, /appVersionForLog\(\)/, 'the marker uses it');
+  assert.doesNotMatch(startChild, /boot: MYTHOS ' \+ app\.getVersion\(\)/);
+});
+
+test('the other app.getVersion() callers are left alone', () => {
+  // They are all on the auto-update path, which runs only when packaged — where
+  // app.getVersion() is the RIGHT answer and the one the installer, the updater and
+  // the release asset all agree on. Q3/surgical: fix the caller that was wrong, not
+  // the function that was right everywhere else.
+  assert.ok((CODE.match(/app\.getVersion\(\)/g) || []).length >= 5,
+    'the update path still asks Electron directly');
+});
