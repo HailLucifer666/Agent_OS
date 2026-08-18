@@ -10,6 +10,18 @@
 //
 // The module is pure with an injected clock, so this drives real behaviour rather
 // than asserting on source shape (which is all s2s-bridge.js can support).
+//
+// BUG-273 A1 — READ THIS BEFORE TRUSTING THE FLOOR TESTS BELOW. The adaptive floor
+// this file describes as the third pillar of slice 3 is DORMANT in production as of
+// 2026-08-18. It was measured for the first time that session and it settled at
+// 0.1781 against an operator peak of 0.069 — roughly 3x the operator's own voice, so
+// nothing could open a candidacy and real barge-ins were held 13.4 seconds. The three
+// tests that require the floor to RISE therefore now construct the policy with
+// { learnedFloorEnabled: true } explicitly: they still prove the mechanism works as
+// designed, which is why it was kept rather than deleted, but they no longer describe
+// the shipped default. The default is pinned at INITIAL_BLEED_FLOOR and is covered by
+// test/bug-273-bleed-floor-dormant.test.js. The protected window and the sustain test
+// — the two parts with evidence behind them — are unchanged and still ship on.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
@@ -166,7 +178,10 @@ describe('BUG-272 slice 3 — the adaptive floor is learned from THIS room', () 
   it('rises above measured bleed — and above the flush tier, which BUG-272 got backwards', async () => {
     const { createBargeInPolicy } = await import(POLICY_URL);
     const c = clock();
-    const p = createBargeInPolicy({ now: c.now });
+    // BUG-273 A1: opt in explicitly. This asserts the MECHANISM, not the default —
+    // the default is dormant because in the operator's room this floor rose above the
+    // operator too. Kept because one room is not a sample.
+    const p = createBargeInPolicy({ now: c.now, learnedFloorEnabled: true, bleedMargin: 1.45 });
 
     p.assistantSpeakingStarted();
     feed(p, c, BLEED_QUIET, 6);
@@ -185,7 +200,8 @@ describe('BUG-272 slice 3 — the adaptive floor is learned from THIS room', () 
   it('is bounded, so a pathological measurement cannot make MYTHOS deaf', async () => {
     const { createBargeInPolicy, MAX_BLEED_FLOOR } = await import(POLICY_URL);
     const c = clock();
-    const p = createBargeInPolicy({ now: c.now });
+    // BUG-273 A1: the bound only means anything while learning is on, so opt in.
+    const p = createBargeInPolicy({ now: c.now, learnedFloorEnabled: true, bleedMargin: 1.45 });
 
     p.assistantSpeakingStarted();
     feed(p, c, 0.99, 4); // absurd — a clipped frame, or a mic fault
@@ -198,7 +214,11 @@ describe('BUG-272 slice 3 — the adaptive floor is learned from THIS room', () 
   it('remembers the room across turns but forgets it across sessions', async () => {
     const { createBargeInPolicy, INITIAL_BLEED_FLOOR } = await import(POLICY_URL);
     const c = clock();
-    const p = createBargeInPolicy({ now: c.now });
+    // BUG-273 A1: this one still PASSED with learning dormant, and that is worse than
+    // failing — every assertion compared INITIAL_BLEED_FLOOR to itself, so it proved
+    // nothing about remembering or forgetting. Opted in so it keeps testing what it
+    // was written to test.
+    const p = createBargeInPolicy({ now: c.now, learnedFloorEnabled: true, bleedMargin: 1.45 });
 
     p.assistantSpeakingStarted();
     feed(p, c, BLEED_LOUD, 6);

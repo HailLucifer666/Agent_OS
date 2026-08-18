@@ -46,6 +46,7 @@ const CRITERIA_NOTES = {
   echo: 'the filter fired ZERO times and nothing could say why',
   dedupe: 'the same dead open_web call repeated through turn 72',
   ack: 'four breaches, one launch_app legitimately taking 9860ms',
+  policy: 'informational — read alongside how the session actually felt',
 };
 
 function parseArgs(argv) {
@@ -170,11 +171,20 @@ function main() {
   // --- V1: the new policy's own numbers ---
   let vetoed = 0;
   let floorSeen = null;
+  // BUG-273 A1: the dormant learned floor and the raw room bleed. Reported
+  // separately from the floor in force, which is now pinned at 0.05 and would
+  // otherwise be the only barge-in number in the log.
+  let learnedSeen = null;
+  let peakSeen = null;
   for (const e of suspendLines) {
     const v = num(e.bargeVetoed);
     if (v !== null) vetoed += v;
     const f = num(e.bleedFloor);
     if (f !== null) floorSeen = f;
+    const l = num(e.learnedFloor);
+    if (l !== null) learnedSeen = l;
+    const bp = num(e.bleedPeak);
+    if (bp !== null && (peakSeen === null || bp > peakSeen)) peakSeen = bp;
   }
   // Not pass/fail. A veto count is the calibration reading, and which direction
   // is "good" depends on what the operator experienced — high vetoes with a happy
@@ -182,8 +192,21 @@ function main() {
   // ignores me" means the window or floor is too aggressive.
   check('barge-in policy reported its work', true,
     `${vetoed} vetoed barge-in(s)`
-    + (floorSeen !== null ? `, learned bleed floor ${floorSeen}` : ', no bleedFloor seen'),
-    'informational — read alongside how the session actually felt');
+    + (floorSeen !== null ? `, floor in force ${floorSeen}` : ', no bleedFloor seen')
+    + (learnedSeen !== null ? `, dormant learned floor ${learnedSeen}` : '')
+    + (peakSeen !== null ? `, room bleed peak ${peakSeen}` : ''),
+    CRITERIA_NOTES.policy);
+
+  // BUG-273 A1 is pass/fail, unlike the veto count: the floor in force must be
+  // the pinned initial tier. A 0.1781 floor against the operator's 0.069 peak is
+  // what produced 49 vetoes and a 13.4-second hold, and if it reappears the
+  // learned floor has been re-enabled — deliberately or by a stray localStorage
+  // key — and every other barge-in number that session should be read in that
+  // light rather than trusted.
+  check('the adaptive bleed floor is still dormant (BUG-273 A1)',
+    floorSeen === null || floorSeen <= 0.05,
+    floorSeen === null ? 'no bleedFloor seen' : `floor in force ${floorSeen}`,
+    'a learned floor above the operator\'s own voice holds real barge-ins for 11-13s');
 
   // --- V3: echo attribution ---
   const echoChecks = of('live.echo-check');

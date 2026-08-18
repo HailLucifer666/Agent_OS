@@ -56,9 +56,16 @@ export const PROTECTED_MS = 500;
 // sustained human speech does not.
 export const PENDING_HOLD_MS = 350;
 
-// Learned floor = observed bleed peak x this. 1.45 sits in BUG-272's 1.4-1.5
-// band: above the bleed that produced it, below a raised human voice.
-export const BLEED_MARGIN = 1.45;
+// Learned floor = observed bleed peak x this.
+//
+// BUG-273 A1 — was 1.45, chosen from BUG-272's 1.4-1.5 band on the assumption
+// that a raised human voice sits above this room's bleed. The 2026-08-18 session
+// measured the opposite and the margin is now 1.0, i.e. the reported would-be
+// floor is the raw measured bleed peak with no headroom added. With the learned
+// term dormant (LEARNED_FLOOR_ENABLED below) this changes no behaviour — it only
+// changes what learnedFloor() REPORTS, and the raw peak is the number the next
+// session needs in order to decide whether the mechanism is salvageable.
+export const BLEED_MARGIN = 1.0;
 
 // Absolute bound on the learned floor (see the Q5 note above). Above this the
 // gate would be rejecting real speech, so a measurement implying it is treated
@@ -68,7 +75,50 @@ export const MAX_BLEED_FLOOR = 0.45;
 // Floor before anything has been measured. Matches BUG-271's eager tier so a
 // fresh session is never LESS willing to hear an interruption than it was
 // before this module existed.
+//
+// BUG-273 A1 — Q5, IS THIS CONSTANT ACTUALLY CORRECT? Partly, and the honest
+// answer is written here rather than implied. 0.05 is now the floor in every
+// session (see LEARNED_FLOOR_ENABLED), and the 2026-08-18 session measured
+// operator speech peaking at 0.0395-0.069. So 0.05 clears the loud end and sits
+// ABOVE the quiet end: a turn peaking at 0.0395 still cannot open a candidacy.
+// It is deliberately NOT lowered in this pass. Bleed in that room measured 0.123,
+// so any floor under it depends entirely on the 350ms sustain test to reject
+// bleed, and whether that holds is exactly what BUG-273 A2 exists to measure —
+// what actually reaches Gemini during a hold. Lowering it blind is how V1 comes
+// back, which is the pair of opposite failures BUG-272 already walked into once.
 export const INITIAL_BLEED_FLOOR = 0.05;
+
+// BUG-273 A1 — THE ADAPTIVE FLOOR IS DORMANT BY DEFAULT, AND THIS IS WHY.
+//
+// The 2026-08-18 session is the first real measurement of the mechanism, and it
+// says the mechanism is actively harmful in this room. Learned bleedFloor settled
+// at 0.1781, roughly 3x the operator's own 0.069 peak. Consequences, all measured:
+// bargeVetoed 49, framesDropped 0, max own-voice hold 13,396ms. Nothing was lost —
+// it all arrived 11-13 seconds late. That is V2, the exact failure BUG-272 set out
+// to fix, reached from the other direction: BUG-272 argued (correctly) that no
+// static threshold separates bleed from speech when the bands overlap, then shipped
+// a LEARNED threshold, which has the same problem the moment bleed is the louder of
+// the two. The header above claims bleed at 0.09-0.38 is "above a raised human
+// voice"; in this room bleed is above the operator's NORMAL voice, and the floor
+// derived from it can only be deaf.
+//
+// Q8 — WHY DORMANT RATHER THAN DELETED. One room is not a sample. The two parts
+// of slice 3 with evidence behind them (the 500ms protected window and the 350ms
+// sustain test) do the work; the learned floor was the speculative part, and a
+// speculative part that measures badly once is not proven wrong everywhere. So the
+// code stays, keeps measuring, and keeps REPORTING through learnedFloor() — the
+// telemetry is the whole reason not to delete it — while contributing nothing to
+// any decision. Re-enable per session with MYTHOS_BARGE_LEARNED_FLOOR=1 in
+// localStorage, or per call with { learnedFloorEnabled: true }. If this constant is
+// ever flipped back to true, the commit doing it should be able to name the room
+// and the numbers that justify it.
+//
+// Q2 — DOES THIS HIDE EVIDENCE? It would have. bleedFloor() is the only
+// barge-in number on the suspend/release log line, and pinning it at 0.05 would
+// have made every future log read "floor 0.05" while saying nothing about what the
+// room actually bleeds. s2s-bridge.js therefore reports bleedPeak and learnedFloor
+// alongside it, and scripts/verify-voice-session.js prints all three.
+export const LEARNED_FLOOR_ENABLED = false;
 
 export const STATES = {
   IDLE: 'IDLE',
@@ -86,6 +136,9 @@ export function createBargeInPolicy(opts) {
   const bleedMargin = numberOr(o.bleedMargin, BLEED_MARGIN);
   const maxBleedFloor = numberOr(o.maxBleedFloor, MAX_BLEED_FLOOR);
   const initialFloor = numberOr(o.initialBleedFloor, INITIAL_BLEED_FLOOR);
+  // BUG-273 A1: opt-in, default off. See LEARNED_FLOOR_ENABLED.
+  const learnedFloorEnabled = typeof o.learnedFloorEnabled === 'boolean'
+    ? o.learnedFloorEnabled : LEARNED_FLOOR_ENABLED;
 
   let state = STATES.IDLE;
   let speakingSince = 0;
@@ -94,13 +147,21 @@ export function createBargeInPolicy(opts) {
   let bleedPeak = 0;       // loudest level seen while MYTHOS was provably speaking
   let lastFloor = initialFloor;
 
-  // The floor this room has earned. Learned from bleed observed during assistant
-  // speech, never below the pre-existing eager tier (so this is not a
-  // sensitivity regression) and never above MAX_BLEED_FLOOR (so it cannot go
-  // deaf).
+  // What this room WOULD have earned: bleed observed during assistant speech,
+  // clamped below by the pre-existing eager tier (so it is never a sensitivity
+  // regression) and above by MAX_BLEED_FLOOR (so it cannot go deaf).
+  //
+  // BUG-273 A1: computed and reported unconditionally, applied only when the
+  // learned floor is enabled. Keeping the measurement running while it decides
+  // nothing is the point — it is what a future session will be judged on.
+  function learnedFloor() {
+    return Math.min(maxBleedFloor, Math.max(initialFloor, bleedPeak * bleedMargin));
+  }
+
+  // The floor actually in force. Dormant by default (BUG-273 A1): 0.1781 learned
+  // against a 0.069 operator peak held real barge-ins for 13.4 seconds.
   function bleedFloor() {
-    const learned = bleedPeak * bleedMargin;
-    lastFloor = Math.min(maxBleedFloor, Math.max(initialFloor, learned));
+    lastFloor = learnedFloorEnabled ? learnedFloor() : initialFloor;
     return lastFloor;
   }
 
@@ -252,6 +313,8 @@ export function createBargeInPolicy(opts) {
     assistantSpeakingStarted,
     assistantSpeakingEnded,
     bleedFloor,
+    // BUG-273 A1: the dormant measurement, exposed so the telemetry can carry it.
+    learnedFloor,
     reset,
     forgetRoom,
     state: () => state,

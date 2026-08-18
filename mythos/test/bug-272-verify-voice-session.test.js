@@ -40,7 +40,13 @@ const CLEAN = [
     + '"referenceCount":0,"msSinceSpoken":null,"msSinceAssistantAudio":120}',
   '{"ts":"2026-08-18T10:00:07.000Z","level":"info","msg":"voice.capture-suspend","suspended":false,'
     + '"reason":"barge-in-confirmed","prerollFrames":6,"prerollCap":300,"heldMs":600,'
-    + '"framesDropped":0,"framesZeroed":40,"peakRms":0.3,"bargeVetoed":4,"bleedFloor":0.1305}',
+    // BUG-273 A1: a HEALTHY session now reports the floor in force pinned at the
+    // initial tier, with the dormant learned floor and the room bleed reported beside
+    // it. This fixture used to carry bleedFloor 0.1305 — a learned floor roughly 2x
+    // the operator peak — and called it clean, which is precisely the session shape
+    // that produced 49 vetoes and a 13.4-second hold on 2026-08-18.
+    + '"framesDropped":0,"framesZeroed":40,"peakRms":0.3,"bargeVetoed":4,"bleedFloor":0.05,'
+    + '"bleedPeak":0.123,"learnedFloor":0.123}',
 ];
 
 // The real 2026-08-17 signature, compressed.

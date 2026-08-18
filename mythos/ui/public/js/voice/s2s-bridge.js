@@ -417,10 +417,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     const pendingHoldMs = lsNumber('MYTHOS_BARGE_PENDING_HOLD_MS');
     const bleedMargin = lsNumber('MYTHOS_BARGE_BLEED_MARGIN');
     const maxBleedFloor = lsNumber('MYTHOS_BARGE_MAX_BLEED_FLOOR');
+    // BUG-273 A1: the learned floor ships dormant, so the escape hatch here is
+    // the way BACK ON without a code change — the mirror of every other override
+    // in this function, which exist to turn things off.
+    const learnedFloor = lsNumber('MYTHOS_BARGE_LEARNED_FLOOR');
     if (protectedMs !== null) t.protectedMs = protectedMs;
     if (pendingHoldMs !== null) t.pendingHoldMs = pendingHoldMs;
     if (bleedMargin !== null) t.bleedMargin = bleedMargin;
     if (maxBleedFloor !== null) t.maxBleedFloor = maxBleedFloor;
+    if (learnedFloor !== null) t.learnedFloorEnabled = learnedFloor !== 0;
     return t;
   }
 
@@ -585,6 +590,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       bargeVetoed: bargeVetoed,
       bargeVetoTier: lastVetoReason,
       bleedFloor: Math.round(bargePolicy.bleedFloor() * 10000) / 10000,
+      // BUG-273 A1 — Q2. bleedFloor alone used to carry both facts, because the
+      // floor in force WAS the learned one. With learning dormant it reads 0.05
+      // every session and says nothing about the room, so the two are reported
+      // separately: bleedPeak is what this room bleeds, learnedFloor is the floor
+      // that WOULD be in force if the mechanism were re-enabled. Those two numbers
+      // against peakRms below are the whole case for or against re-enabling it, and
+      // dropping them would leave the next session unable to make it either way.
+      bleedPeak: Math.round(bargePolicy.bleedPeak() * 10000) / 10000,
+      learnedFloor: Math.round(bargePolicy.learnedFloor() * 10000) / 10000,
       // BUG-271: how many frames the noise gate silenced (both send points)
       // so far THIS session — cumulative within the session, cleared by
       // noiseGate.reset() in stop(). The server logs this with the rest of
