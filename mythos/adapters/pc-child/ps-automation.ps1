@@ -4332,6 +4332,350 @@ function Handle-UiaContext {
     return $out
 }
 
+# ---- BUG-274 W2: the message-pump axis -------------------------------------
+#
+# THE LAST UNTESTED HYPOTHESIS. Everything else about the WinUI3 Invoke/Expand
+# no-op is now closed: `-NonInteractive` and `windowsHide` (2026-08-13), "make it
+# a persistent daemon" (2026-08-19, a false premise - it always was one), and the
+# window-station / desktop / integrity-level context (2026-08-19, refuted by
+# `uia_context`: pc-child and a direct spawn are identical on every axis).
+#
+# What is left is the one thing the context table cannot see. UIA is COM. This
+# daemon's main thread is STA and spends its entire life blocked in
+# `[Console]::In.ReadLine()`, which does NOT pump the message queue an STA
+# apartment requires to service cross-apartment calls and callbacks. A WinUI3
+# flyout whose provider needs the caller to pump would fail in exactly the shape
+# recorded: no exception, ExpandCollapseState transitions to 'Expanded', and no
+# flyout ever renders.
+#
+# WHY THIS IS A DECISIVE EXPERIMENT AND THE CONTEXT PROBE WAS NOT. `uia_context`
+# compares environments, and an environment diff is only ever a candidate. This
+# runs the SAME call, in the SAME process, on the SAME control, changing exactly
+# one thing - whether the calling thread pumps - and reads the ORIGINAL failure
+# signature as its oracle. If the pumped variant finds Save/Save As and the direct
+# one does not, that is a cause, not a correlation.
+#
+# Q1 - WHAT ELSE MATCHES THIS? "The flyout appeared" has other explanations: the
+# menu may already have been open from a previous variant, or the app may render
+# it late regardless of pumping. So every variant COLLAPSES first and re-reads the
+# state, the scan is scoped to elements that are on-screen NOW, and the variants
+# run in a fixed order with the same settle time. A variant that starts from an
+# already-expanded menu reports `stateBefore` so the reader can discard it.
+#
+# Q2 - DOES THIS HIDE EVIDENCE? Each variant reports pattern availability, whether
+# the call threw, the state before AND after, the element count and the elapsed
+# time - separately. Collapsing "pattern missing" into "invoked and nothing
+# happened" is the original defect; this handler must never do it.
+#
+# Read-only in intent, but NOT side-effect free: it opens and closes a menu on a
+# live window. It takes an explicit pid so it can never wander onto whatever
+# happens to be focused.
+function Get-VisibleSaveCount($Root) {
+    if (-not $Root) { return -1 }
+    $n = 0
+    try {
+        $all = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($el in $all) {
+            try {
+                if ($el.Current.IsOffscreen) { continue }
+                $name = ([string]$el.Current.Name).Trim().TrimEnd('.', "`u{2026}")
+                if ($name -eq 'Save' -or $name -eq 'Save As' -or $name -eq 'Save all') { $n++ }
+            } catch { }
+        }
+    } catch { return -1 }
+    return $n
+}
+
+# Q1, THE ALTERNATIVE EXPLANATION THAT HAD TO BE RULED OUT. Get-VisibleSaveCount
+# above walks the descendants of ONE top-level window element. WinUI3 renders menu
+# flyouts into a SEPARATE top-level popup window owned by the app, which is not a
+# descendant of the main window - so a count of 0 from that scan is consistent with
+# BOTH "the menu never opened" AND "the menu opened somewhere I did not look".
+# Concluding the first from that evidence alone would be exactly the kind of
+# plausible-but-unverified call this repo has been wrong about three times.
+#
+# This scans from the desktop root, restricted to the target process, so any
+# popup window the app owns is inside the search. Reported ALONGSIDE the
+# window-scoped count, never instead of it: if the two disagree, the disagreement
+# is the finding.
+function Get-VisibleSaveCountAnywhere($TargetPid) {
+    $n = 0
+    try {
+        $cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid)
+        $all = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants, $cond)
+        foreach ($el in $all) {
+            try {
+                if ($el.Current.IsOffscreen) { continue }
+                $name = ([string]$el.Current.Name).Trim().TrimEnd('.', "`u{2026}")
+                if ($name -eq 'Save' -or $name -eq 'Save As' -or $name -eq 'Save all') { $n++ }
+            } catch { }
+        }
+    } catch { return -1 }
+    return $n
+}
+
+# How many top-level windows the process owns. A flyout that rendered as its own
+# window shows up here as a count that went up, which is a signal independent of
+# any name matching - so a menu whose items are named something unexpected still
+# leaves a trace.
+function Get-TopLevelWindowCount($TargetPid) {
+    try {
+        $cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid)
+        return ([System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [System.Windows.Automation.TreeScope]::Children, $cond)).Count
+    } catch { return -1 }
+}
+function Get-FileMenuElement($TargetPid) {
+    $root = $null
+    try {
+        $root = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+            [System.Windows.Automation.TreeScope]::Children,
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid)))
+    } catch { }
+    if (-not $root) { return $null }
+    $fileEl = $null
+    try {
+        $fileEl = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'File')))
+    } catch { }
+    if (-not $fileEl) {
+        try {
+            $fileEl = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                (New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::NameProperty, 'File')))
+        } catch { }
+    }
+    return @{ root = $root; file = $fileEl }
+}
+
+# Pump the current thread's message queue for $Ms milliseconds. DoEvents is the
+# blunt instrument, and it is the right one here: the question is not "which pump
+# is best" but "does pumping at all change the outcome".
+function Invoke-Pump($Ms) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.ElapsedMilliseconds -lt $Ms) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 15
+    }
+    $sw.Stop()
+}
+
+function Handle-UiaPumpProbe($TargetPid) {
+    if (-not $TargetPid) { return 'uia_pump_probe requires a pid' }
+    $pidInt = 0
+    if (-not [int]::TryParse([string]$TargetPid, [ref]$pidInt)) { return 'uia_pump_probe: pid must be an integer' }
+
+    $found = Get-FileMenuElement $pidInt
+    if (-not $found -or -not $found.file) {
+        return ("uia_pump_probe: no 'File' menu element found for pid $pidInt - " +
+                'without the control the original defect is about, every variant would ' +
+                'report the same nothing and look like agreement')
+    }
+    $root = $found.root
+    $fileEl = $found.file
+
+    $out = [ordered]@{}
+    $out.targetPid = $pidInt
+    $out.mainThreadId = [System.Threading.Thread]::CurrentThread.ManagedThreadId
+    $out.mainApartment = [string][System.Threading.Thread]::CurrentThread.GetApartmentState()
+    $out.baselineSaveCount = Get-VisibleSaveCount $root
+    $out.baselineSaveAnywhere = Get-VisibleSaveCountAnywhere $pidInt
+    $out.baselineTopLevelWindows = Get-TopLevelWindowCount $pidInt
+    $variants = @()
+
+    $ecpOf = {
+        param($el)
+        try { return $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) -as [System.Windows.Automation.ExpandCollapsePattern] } catch { return $null }
+    }
+    $stateOf = {
+        param($el)
+        try { return [string]$el.GetCurrentPropertyValue([System.Windows.Automation.ExpandCollapsePattern]::ExpandCollapseStateProperty) } catch { return $null }
+    }
+    $resetMenu = {
+        param($el)
+        $p = & $ecpOf $el
+        if ($p) { try { $p.Collapse() } catch { } }
+        Start-Sleep -Milliseconds 250
+    }
+
+    # --- variant 1: direct, no pump. Production behaviour today. -------------
+    & $resetMenu $fileEl
+    $v = [ordered]@{ name = 'direct-no-pump' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $ecp = & $ecpOf $fileEl
+    $v.patternAvailable = ($null -ne $ecp)
+    $v.stateBefore = & $stateOf $fileEl
+    $v.threw = $null
+    if ($ecp) {
+        try { $ecp.Expand() } catch { $v.threw = $_.Exception.Message }
+        Start-Sleep -Milliseconds 600
+    }
+    $v.stateAfter = & $stateOf $fileEl
+    $v.saveCount = Get-VisibleSaveCount $root
+    $v.saveAnywhere = Get-VisibleSaveCountAnywhere $pidInt
+    $v.topLevelWindows = Get-TopLevelWindowCount $pidInt
+    $sw.Stop(); $v.elapsedMs = [int]$sw.ElapsedMilliseconds
+    $variants += $v
+
+    # --- variant 2: same call, but the calling thread pumps afterwards -------
+    & $resetMenu $fileEl
+    $v = [ordered]@{ name = 'expand-then-pump' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $ecp = & $ecpOf $fileEl
+    $v.patternAvailable = ($null -ne $ecp)
+    $v.stateBefore = & $stateOf $fileEl
+    $v.threw = $null
+    if ($ecp) {
+        try { $ecp.Expand() } catch { $v.threw = $_.Exception.Message }
+        Invoke-Pump 600
+    }
+    $v.stateAfter = & $stateOf $fileEl
+    $v.saveCount = Get-VisibleSaveCount $root
+    $v.saveAnywhere = Get-VisibleSaveCountAnywhere $pidInt
+    $v.topLevelWindows = Get-TopLevelWindowCount $pidInt
+    $sw.Stop(); $v.elapsedMs = [int]$sw.ElapsedMilliseconds
+    $variants += $v
+
+    # --- variant 3: pump BEFORE and after, in case the provider needs the ----
+    #     caller responsive at call time rather than only afterwards.
+    & $resetMenu $fileEl
+    $v = [ordered]@{ name = 'pump-around-expand' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $ecp = & $ecpOf $fileEl
+    $v.patternAvailable = ($null -ne $ecp)
+    $v.stateBefore = & $stateOf $fileEl
+    $v.threw = $null
+    if ($ecp) {
+        Invoke-Pump 200
+        try { $ecp.Expand() } catch { $v.threw = $_.Exception.Message }
+        Invoke-Pump 800
+    }
+    $v.stateAfter = & $stateOf $fileEl
+    $v.saveCount = Get-VisibleSaveCount $root
+    $v.saveAnywhere = Get-VisibleSaveCountAnywhere $pidInt
+    $v.topLevelWindows = Get-TopLevelWindowCount $pidInt
+    $sw.Stop(); $v.elapsedMs = [int]$sw.ElapsedMilliseconds
+    $variants += $v
+
+    # --- variant 4: a genuinely different STA thread, with its own pump ------
+    #     The main thread has been blocked in Console.ReadLine for the life of the
+    #     process before this command arrived; a thread that has never blocked is a
+    #     different proposition, and this is the only variant that tests it.
+    & $resetMenu $fileEl
+    $v = [ordered]@{ name = 'fresh-sta-thread' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $v.patternAvailable = $null
+    $v.stateBefore = & $stateOf $fileEl
+    $v.threw = $null
+    $rs = $null
+    try {
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.ApartmentState = 'STA'
+        $rs.ThreadOptions = 'UseNewThread'
+        $rs.Open()
+        $psx = [powershell]::Create()
+        $psx.Runspace = $rs
+        [void]$psx.AddScript({
+            param($p)
+            Add-Type -AssemblyName UIAutomationClient
+            Add-Type -AssemblyName System.Windows.Forms
+            $res = @{ threadId = [System.Threading.Thread]::CurrentThread.ManagedThreadId
+                      apartment = [string][System.Threading.Thread]::CurrentThread.GetApartmentState()
+                      patternAvailable = $false; threw = $null; stateAfter = $null
+                      saveCount = -1; saveAnywhere = -1; topLevelWindows = -1 }
+            try {
+                $r = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+                    [System.Windows.Automation.TreeScope]::Children,
+                    (New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $p)))
+                if (-not $r) { $res.threw = 'no root for pid'; return $res }
+                $f = $r.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                    (New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'File')))
+                if (-not $f) {
+                    $f = $r.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                        (New-Object System.Windows.Automation.PropertyCondition(
+                            [System.Windows.Automation.AutomationElement]::NameProperty, 'File')))
+                }
+                if (-not $f) { $res.threw = 'no File element'; return $res }
+                $pat = $f.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) -as [System.Windows.Automation.ExpandCollapsePattern]
+                $res.patternAvailable = ($null -ne $pat)
+                if ($pat) {
+                    try { $pat.Expand() } catch { $res.threw = $_.Exception.Message }
+                    $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
+                    while ($sw2.ElapsedMilliseconds -lt 800) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 15
+                    }
+                }
+                try { $res.stateAfter = [string]$f.GetCurrentPropertyValue([System.Windows.Automation.ExpandCollapsePattern]::ExpandCollapseStateProperty) } catch { }
+                $n = 0
+                try {
+                    foreach ($el in $r.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                        [System.Windows.Automation.Condition]::TrueCondition)) {
+                        try {
+                            if ($el.Current.IsOffscreen) { continue }
+                            $nm = ([string]$el.Current.Name).Trim().TrimEnd('.', "`u{2026}")
+                            if ($nm -eq 'Save' -or $nm -eq 'Save As' -or $nm -eq 'Save all') { $n++ }
+                        } catch { }
+                    }
+                    $res.saveCount = $n
+                    $m = 0
+                    $c2 = New-Object System.Windows.Automation.PropertyCondition(
+                        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $p)
+                    foreach ($el2 in [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                        [System.Windows.Automation.TreeScope]::Descendants, $c2)) {
+                        try {
+                            if ($el2.Current.IsOffscreen) { continue }
+                            $nm2 = ([string]$el2.Current.Name).Trim().TrimEnd('.', "`u{2026}")
+                            if ($nm2 -eq 'Save' -or $nm2 -eq 'Save As' -or $nm2 -eq 'Save all') { $m++ }
+                        } catch { }
+                    }
+                    $res.saveAnywhere = $m
+                    $res.topLevelWindows = ([System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                        [System.Windows.Automation.TreeScope]::Children, $c2)).Count
+                } catch { }
+            } catch { $res.threw = $_.Exception.Message }
+            return $res
+        }).AddArgument($pidInt)
+        $ret = $psx.Invoke()
+        $psx.Dispose()
+        if ($ret -and $ret.Count -gt 0) {
+            $r0 = $ret[0]
+            $v.threadId = $r0.threadId
+            $v.apartment = $r0.apartment
+            $v.patternAvailable = $r0.patternAvailable
+            $v.threw = $r0.threw
+            $v.stateAfter = $r0.stateAfter
+            $v.saveCount = $r0.saveCount
+            $v.saveAnywhere = $r0.saveAnywhere
+            $v.topLevelWindows = $r0.topLevelWindows
+        } else {
+            $v.threw = 'the STA runspace returned nothing'
+        }
+    } catch {
+        $v.threw = 'runspace failed: ' + $_.Exception.Message
+    } finally {
+        if ($rs) { try { $rs.Close(); $rs.Dispose() } catch { } }
+    }
+    if ($null -eq $v.saveCount) { $v.saveCount = -1 }
+    $sw.Stop(); $v.elapsedMs = [int]$sw.ElapsedMilliseconds
+    $variants += $v
+
+    # Leave the target as it was found. A probe that walks away with a menu open
+    # is a side effect the next command would inherit.
+    & $resetMenu $fileEl
+
+    $out.variants = $variants
+    return $out
+}
+
 # ---- Main Loop ----
 # Read JSON lines from stdin, process, write JSON lines to stdout
 $reader = [Console]::In
@@ -4376,6 +4720,19 @@ while ($true) {
         # string-is-failure guard is not needed here.
         'uia_context' {
             $result = Handle-UiaContext
+        }
+        # BUG-274 W2, the last untested axis. Runs the SAME Expand call on the SAME
+        # control four ways, changing only whether the calling thread pumps its
+        # message queue, and reads the ORIGINAL failure signature (do Save/Save As
+        # appear?) as the oracle. Unlike uia_context this is a controlled experiment
+        # rather than an environment diff, so a difference here IS a cause.
+        # Takes an explicit pid so it can never wander onto whatever has focus.
+        'uia_pump_probe' {
+            $result = Handle-UiaPumpProbe $cmd.pid
+            # Same string-is-failure guard every other handler has: without it a
+            # 'requires a pid' string would ship as ok:true with the failure text as
+            # the payload - the exact shape this bug is about.
+            if ($result -is [string]) { $err = $result; $result = $null }
         }
         'launch_app' {
             $result = Handle-LaunchApp $cmd.name

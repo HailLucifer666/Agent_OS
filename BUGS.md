@@ -305,8 +305,81 @@ denied, i.e. exactly the interesting case — and it rejects phantom fields too,
 field the handler never emits renders as `(null)` in every column, matches itself across
 hosts, and would push the verdict toward "identical".
 
-**Still owed before this item closes:** the console-attached comparison, and the
-message-pump axis. Neither is a fix; both are measurements.
+**Still owed before this item closes:** the console-attached comparison only. The
+message-pump axis was measured and refuted — see below.
+
+#### T5 message-pump axis — ❌ REFUTED 2026-08-19: the last client-side hypothesis is gone
+
+**The hypothesis, and why it was the right one to test last.** UIA is COM. pc-child's
+automation host is STA and spends its whole life blocked in `[Console]::In.ReadLine()`,
+which does **not** pump the message queue an STA apartment needs to service
+cross-apartment calls and callbacks. A WinUI3 flyout whose provider needs the caller to
+pump would fail in precisely the recorded shape — no exception,
+`ExpandCollapseState` transitions to `Expanded`, nothing renders.
+
+**This was a controlled experiment, not another environment diff.** `uia_pump_probe` runs
+the **same** `Expand()` call, in the **same** process, on the **same** control, changing
+exactly one variable, and reads the **original failure signature** as its oracle. Four
+variants: unpumped (production behaviour today), pumped after the call, pumped before and
+after, and a **fresh STA runspace thread** that has never blocked, with its own pump. Run
+in both hosts — pc-child and a non-adapter direct spawn — against one shared Notepad.
+
+**Result: identical across all eight runs.** `ExpandCollapseState` goes
+`Collapsed → Expanded` every time, the pattern is available every time, nothing throws —
+and the Save count stays **0** every time.
+
+| variant | pattern | threw | stateBefore | stateAfter | saveCount | saveAnywhere | windows |
+|---|---|---|---|---|---|---|---|
+| direct-no-pump | true | – | Collapsed | Expanded | 0 | 0 | 1 |
+| expand-then-pump | true | – | Collapsed | Expanded | 0 | 0 | 1 |
+| pump-around-expand | true | – | Collapsed | Expanded | 0 | 0 | 1 |
+| fresh-sta-thread | true | – | Collapsed | Expanded | 0 | 0 | 1 |
+
+**Q1 — the alternative explanation that had to be ruled out, and was.** The first version
+of this probe scanned only the descendants of the target's **main window element**. WinUI3
+renders menu flyouts into a **separate top-level popup window**, which is not a descendant
+of that element — so a count of 0 was consistent with *both* "the menu never opened" *and*
+"the menu opened somewhere I did not look", and concluding the first would have been
+exactly the plausible-but-unverified call this repo has been wrong about three times. A
+second oracle was added: `saveAnywhere` scans from the **desktop root** restricted to the
+process, so any popup the app owns is inside the search, plus `topLevelWindows`, a count
+that needs no name matching at all. Both stayed flat. **Nothing rendered anywhere.**
+
+**What this means.** `ExpandCollapseState` reports `Expanded` while no flyout exists and
+the process gains no window. The provider is reporting a state change it did not perform.
+That is a defect in **Notepad's own UIA provider**, not in how MYTHOS calls it, and **no
+client-side change can fix it** — which is why the existing honest-failure path (name
+`write_file` as the way out) is the correct behaviour and must not be replaced by a fourth
+UIA rung.
+
+**And a correction to the original report.** The direct spawn **also** fails, identically.
+The 2026-08-13 record says an identical sequence from a plain `powershell.exe -File`
+process "opens the File menu and finds Save/Save As/Save all every time". That did **not**
+reproduce on 2026-08-19 from a non-adapter spawn. Either the platform changed under it
+(Notepad updates itself) or the original comparison differed in a way not recorded. The
+"works standalone" premise should be treated as **unconfirmed**, not as a baseline to
+chase.
+
+**The one host still untested**, and it is the one the original claim came from: a script
+run in a terminal a person opened. An automation shell cannot produce that host — libuv
+maps `detached` to `DETACHED_PROCESS`, i.e. no console at all. `scripts/probe-uia-pump.js`
+prints the exact one-line command to run there. If `saveAnywhere` is still 0 in a real
+terminal, the standalone result does not reproduce at all and the premise is dead.
+
+**Status of the whole axis list for this item — every client-side hypothesis is now
+closed:** `-NonInteractive` ❌ · `windowsHide` ❌ · per-command spawn ❌ (false premise) ·
+window station / desktop / integrity ❌ (identical) · message pump / apartment ❌
+(identical, both oracles). **Do not open a sixth.**
+
+**Guard.** `test/bug-274-uia-context-probe.test.js` was extended to pin the pump probe's
+own two-places pairing, and it earned its keep immediately: it caught that the STA variant
+recorded `threadId`/`apartment` — the only evidence that the "fresh STA thread" label is
+true — and printed neither. It also caught that the *context* handler's field scan had
+started swallowing this new function, because its window was bounded by the main-loop
+banner rather than by its own function end. **A source window can be too wide as well as
+too narrow.** Both fixed; the guard was observed failing with a field removed and passing
+with it restored.
+
 
 **RED first:** a test that drives `Invoke` on a control through the daemon and asserts a real
 oracle-backed outcome — not `ok:true`. A silent no-op currently reports success, so any test
@@ -397,7 +470,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED - the context hypothesis is refuted, the evidence contract was never escaped, and launch/focus/type/click pass live on both a Win32 and an MSIX app.
+Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app.
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are
