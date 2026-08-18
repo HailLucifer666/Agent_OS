@@ -334,6 +334,11 @@ function createLiveSession(deps) {
   // stall. The batch path has had this filter for years (voice-loop.js's
   // echoMatch); the Live path never got it.
   const echoFilter = createEchoFilter();
+  // BUG-272 V3: epoch ms of the last assistant audio frame Gemini sent, or 0.
+  // Feeds live.echo-check's msSinceAssistantAudio. Deliberately NOT called
+  // "assistant playing": real playback state lives in the client and this side
+  // of the wire cannot see it.
+  let lastAssistantAudioAt = 0;
 
   function setState(next, reason) {
     if (state === next) return;
@@ -568,10 +573,34 @@ function createLiveSession(deps) {
         // BUG-271: an echo of MYTHOS's own voice behaves as if it never
         // arrived — no userText, no onTranscript, no idle-ceiling reset, no
         // turn stall (see echoFilter's declaration above).
-        const echoRatio = echoFilter.match(sc.inputTranscription.text);
+        // BUG-272 V3: the filter fired ZERO times across 72 turns and nothing
+        // could say why — match() collapses every non-match to null, so a
+        // near-miss at 0.59 and "MYTHOS had said nothing at all" produced the
+        // same silence. inspect() returns the whole decision; one echo-check
+        // line per inputTranscription makes the answer readable from the log
+        // instead of inferable a day later.
+        //
+        // Every field is a number, a boolean or a fixed enum. The privacy
+        // invariant (a log line never carries transcript text) is binding and
+        // test-pinned, which is why the proposed inputTranscript /
+        // lastAssistantText fields from the findings document are absent.
+        const echoCheck = echoFilter.inspect(sc.inputTranscription.text);
+        logger.info('live.echo-check', {
+          turnId: turnCounter + 1,
+          ratio: echoCheck.ratio,
+          decision: echoCheck.matched ? 'dropped' : 'accepted',
+          reason: echoCheck.reason,
+          candidateWords: echoCheck.candidateWords,
+          referenceWords: echoCheck.referenceWords,
+          referenceCount: echoCheck.referenceCount,
+          msSinceSpoken: echoCheck.msSinceSpoken,
+          msSinceAssistantAudio: lastAssistantAudioAt ? Date.now() - lastAssistantAudioAt : null,
+        });
+        const echoRatio = echoCheck.matched ? echoCheck.ratio : null;
         if (echoRatio !== null) {
           // The ratio only, never the text — transcripts are operator
-          // speech, the log is not.
+          // speech, the log is not. Kept alongside echo-check because
+          // BUG-271's tests pin this line and a drop must stay loud on its own.
           logger.info('live.echo-dropped', { turnId: turnCounter + 1, ratio: echoRatio });
         } else {
           userText += sc.inputTranscription.text;
@@ -598,6 +627,14 @@ function createLiveSession(deps) {
       for (const p of parts) {
         if (p.inlineData && p.inlineData.data) {
           turnAudioParts += 1; // BUG-170 — counted whether or not a sink is wired
+          // BUG-272 V3: when Gemini last handed us assistant audio. This is the
+          // closest thing to "is MYTHOS speaking right now" that exists on this
+          // side of the wire — actual playback state lives in the client
+          // (s2s-bridge's player.isSpeaking()) and is NOT visible here. Named
+          // for what it measures rather than what we wish it measured: a field
+          // called assistantAudioPlaying would be a guess presented as fact, and
+          // this bug has already cost two sessions to confident wrong theories.
+          lastAssistantAudioAt = Date.now();
           if (onAudioOut) onAudioOut(p.inlineData.data);
         }
         // BUG-118: a part the model marks as its own thinking is not the reply.
