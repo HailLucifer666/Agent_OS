@@ -17,7 +17,8 @@ operator's own voice, `33090e1`), and the verifier's own headline criterion, whi
 and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix plan's diagnoses were
 corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
 its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
-D2 next. Suite 4975/4975/0 fail/0 skipped.
+D2 is FIXED too, and its banner turned out never to have been false. Next: A2's acoustic fix
+(needs a live session), or A3. Suite 4992/4992/0 fail/0 skipped.
 
 Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
@@ -9195,6 +9196,71 @@ saying why. **One of them still PASSED with learning dormant** — "remembers th
 room across turns" was comparing `INITIAL_BLEED_FLOOR` to itself and proving
 nothing, which is worse than failing, so it is opted in too.
 
+**D2 (P0) — the HUD was telling the truth about a different call.** Incident:
+*"News widget displayed but main HUD shows incorrect error message ('agent
+actions failed'); requires operator to physically click HUD to interrupt speech;
+unintentional triggering of 'propose goal' action."* Filed as three defects; it
+was one, plus two misattributions.
+
+The audit, with real args, shows two `open_web` calls four seconds apart:
+
+```
+11:44:01  open_web {query:"Kolkata to Bangalore", type:"search"}        -> ok
+11:44:06  open_web {query:"distance Kolkata to Bangalore", type:"web"}  -> FAIL
+                    "A URL is required for web embedding."
+```
+
+Two rows, same tool name, one a real failure, and nothing in the Agent Actions
+feed distinguishing them — so a truthful failure read as the HUD contradicting
+the widget the operator could see. **The banner was never false.** Two real
+defects behind it, both fixed:
+
+1. **That bare "A URL is required for web embedding." is the exact string the
+   2026-08-14 browser-intent fix was written to remove** — its own comment names
+   it and records that a refusal carrying no remedy got repeated five times in
+   four minutes. That fix guarded ONE branch, `!url` where the query looks like a
+   domain, and `looksLikeUrlOrDomain()` returns false for anything containing
+   whitespace, so a prose query fell through to the unguarded sibling and got the
+   old string back. **Q6: the same asymmetry as this entry's B1, four days apart**
+   — one remedy written, applied to one of the branches that needed it, sibling
+   left carrying the bare version. Prose now gets its own remedy naming what the
+   model actually meant (`type:"search"`), not a demand for a url it never had.
+   The domain branch is deliberately unchanged and still names
+   `browser_navigate`; a test pins the two remedies apart, because a domain is
+   not a search phrase.
+2. **The action feed could not tell two calls of the same tool apart.** The relay
+   now carries the bus event's `ts` and each row renders a zero-padded wall
+   clock. Relayed rather than stamped client-side because `replayBuffers` replays
+   up to 200 historical rows on subscribe, and `Date.now()` at receipt would
+   label all of session history with the moment the panel opened — a worse lie
+   than no clock. `rowClock()` returns null rather than a placeholder when there
+   is no timestamp. **Q1/privacy: arguments would disambiguate better and are
+   deliberately NOT rendered** — `whatsapp_send`'s args carry the message text
+   and the recipient's phone number, and this feed sits on a HUD that gets
+   screenshotted and screen-shared.
+
+**Two corrections to D2 as filed.** The `propose_goal` half was **not a
+mis-click**: all 6 calls that session carry `actor:'cortex'` in the audit — three
+mull cycles proposing two goals each, creating inert `status:proposed` goals for
+operator acceptance — and `propose_goal` is not in the Live tool allowlist at all
+(`live-tools.js`), so voice cannot reach it. The titles are telling
+("Audit terminal adapter wiring and tool reporting accuracy", "Implement visual
+state cross-check for all UI actions"): the cortex was proposing goals about the
+very bugs the session was hitting. Nothing to fix. And the "no working voice
+route to interrupt speech" half is the barge-in work already covered by A1 and
+A2, not a separate HUD defect.
+
+Two test corrections worth recording. An existing test *required* the bare
+message and called it deliberate; its reasoning was half right ("weather in
+Delhi" is not browsing intent, so `browser_navigate` would be misleading) and
+half wrong, reading "the browser remedy does not apply" as "no remedy applies".
+Both halves are now asserted. And one of my own new tests was network-dependent —
+it required `ok !== false` for search/flights/image, so it passed alone and failed
+under full-suite load; since `node --test` collects everything under `test/`, one
+third-party hiccup would have blocked every commit in the repo. Rewritten to
+assert the invariant that needs no network.
+
+
 **A2's measurement (P0, code unchanged).** `flushedFrames`, `flushedZeroed` and
 `flushedRaw` now ride the `voice.capture-suspend` transition line, and the
 verifier reports them as informational (no threshold yet — no session has ever
@@ -9205,13 +9271,6 @@ unchanged, and the remaining acoustic decision waits on a live session by design
 
 ### REMAINING — ordered, with what is known
 
-- **D2 (P0)** — the HUD reported failure for an action that succeeded: a false
-  "agent actions failed" banner over a `news` widget that displayed, no working
-  voice route to interrupt speech (operator had to click), and a mis-click landing
-  on `propose_goal`. The audit shows **6** `propose_goal` calls; how many were
-  intended is worth checking. A false failure indicator is worse than none — it
-  trains the operator to distrust the true ones, which is the same class as the
-  dead verifier criterion above.
 - **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
   above; needs a live session to confirm `flushedRaw` before changing behaviour.
 - **A3 (P1)** — the wake word self-triggers on MYTHOS's own TTS. 11:33:16

@@ -17,13 +17,13 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three fixes live-verified, B1/A1 shipped, A2 diagnosed. Next action: **D2, the false "agent actions failed" banner.**
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three BUG-272 fixes live-verified; B1, A1 and D2 shipped; A2 diagnosed. Next action: **A3, the wake word self-triggering on MYTHOS’s own TTS** (A2’s acoustic half needs a live session first).
 
-**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Three commits
-on `main`: `7eb3920` (B1, `unverified` was narrated as success), `33090e1` (A1,
-the learned bleed floor went dormant), `8d61547` (the verifier's headline
-criterion could never fire), plus A2's measurement. Suite **4975/4975/0 fail/0
-skipped**.
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
+Five commits on `main`: `7eb3920` (B1, `unverified` was narrated as success),
+`33090e1` (A1, the learned bleed floor went dormant), `8d61547` (the verifier’s
+headline criterion could never fire), `1d58765` (A2’s measurement + the BUG-273
+record), `24c95c5` (D2). Suite **4992/4992/0 fail/0 skipped**.
 
 **Read BUGS.md's BUG-273 entry before touching anything.** It is the full
 handoff: the measured evidence table, what is now closed out, the remaining
@@ -54,18 +54,32 @@ slice 1 (wake word listening all session), slice 2 (echo attribution — and its
 data: do not build it**), and slice 4b (`open_web(browser:true)`, four successful
 hand-offs against 7/7 silent failure).
 
-**NEXT ACTION — D2**, the highest-priority remaining item: the HUD showed "agent
-actions failed" for a `news` widget that displayed, there was no working voice
-route to interrupt speech (the operator had to click), and a mis-click landed on
-`propose_goal` (the audit shows 6 calls — check how many were intended). A false
-failure indicator is worse than none: it trains the operator to distrust the true
-ones, which is exactly the class as the dead verifier criterion above.
+**D2 IS DONE, and it was not what it looked like.** The HUD banner was never
+false. The audit shows one `open_web` succeeding at 11:44:01 and a DIFFERENT one
+failing at 11:44:06, with nothing in the Agent Actions feed to tell two same-tool
+rows apart. Two real defects behind it, both fixed in `24c95c5`: a bare
+"A URL is required for web embedding." that the 2026-08-14 fix had already
+condemned but only removed from one of its two branches (the same asymmetry as
+B1, four days apart), and a feed row carrying no timestamp. The `propose_goal`
+half was a misattribution — all 6 calls carry `actor:'cortex'` and `propose_goal`
+is not in the Live allowlist, so voice cannot reach it.
 
-**Then, in order:** A2's acoustic fix (stop replaying frames the policy never
-believed — needs a live session to confirm `flushedRaw` first), A3 (the wake word
-self-triggers on MYTHOS's own failover TTS — `app.js:826-831` checks five things
-and edge-tts playback sets none of them), B2 (hand-off wording), B3 (widget render
-ack), C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
+**NEXT ACTION — A3**, the wake word self-triggering on MYTHOS’s own failover TTS.
+11:33:16 `gemini-tts` returns 503 and fails over to edge-tts; 11:33:19 the wake
+word fires at 0.9797; 11:33:22 `peakScore` hits 0.997818. The suppression chain
+(`app.js:826-831`) checks the PIN gate, `voice.isActive()`, `s2s.isActive()`,
+`s2s.isSpeaking()` and `_voiceState`, and proactive/failover edge-tts playback
+sets none of them. Track it through the `speech-chunk` subscription that already
+exists at `app.js:295`, with its own reason string. Q1: do NOT suppress on "any
+audio playing" — Spotify the operator asked for must not deafen the wake word.
+Q2: keep logging `detected-suppressed` with reason and score; that is what made
+this diagnosable at all.
+
+**A2’s acoustic half is deliberately still open** and needs a live session before
+any code changes: the diagnosis is that the release flush is the carrier, and
+`flushedRaw` on the next session's log is what confirms or kills it.
+
+**Then, in order:** B2 (hand-off wording), B3 (widget render ack), C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
 (**operator action** — the Gmail `invalid_grant` is a Google Cloud OAuth app left
 in Testing status, not a code bug; do NOT add a retry), then D3/D4 which need
 more evidence.
