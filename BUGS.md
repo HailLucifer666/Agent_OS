@@ -9,7 +9,16 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-18 - BUG-272: BUG-271's live re-test happened (20-minute voice session in the
+Last updated: 2026-08-18 (second entry) - BUG-272 SLICES 1-4 SHIPPED IN CODE (`6d1dc34` wake-word
+stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
+barge-in state machine, `190cd74` tool honesty). Five corrections to the fix plan's own numbers are
+recorded on the entry - notably that the "13-second ceiling" does not exist (an 8s ceiling refreshed
+by arriving audio), that "150 frames (1.5s)" is off by 10x, and that the adaptive floor must rise
+ABOVE the flush tier rather than being clamped below it. NOT live-verified: slices 1 and 3 are
+acoustic, and `scripts/verify-voice-session.js` now reads the pass criteria out of a session log so
+the next analysis is not a hand-count. Still open: `open_web(browser:true)` has no Electron surface.
+
+Previous entry: 2026-08-18 - BUG-272: BUG-271's live re-test happened (20-minute voice session in the
 noisy room) and its evidence is fully inventoried here: what BUG-271 fixed (noise gate zeroed 5000+
 frames, zero frames dropped, the suspend-log evidence delivered the diagnosis), and what it did NOT
 fix (self-interruption at 63% of turns - the eager tier sits below the room's measured bleed floor
@@ -8661,7 +8670,64 @@ the bleed got), `framesZeroed` (how much the noise gate silenced) and
 
 ## BUG-272 — BUG-271's live re-test: what the 20-minute session proved, what it broke, and the fix plan for all of it
 
-**PLANNED 2026-08-18 — NOTHING IMPLEMENTED YET. This entry is the handoff:
+**SLICES 1-4 FIXED IN CODE 2026-08-18** (`6d1dc34` wake word, `8bf1acc` echo
+instrumentation, `daf89d4` barge-in state machine, `190cd74` tool honesty).
+Slice 5's records are this entry plus `scripts/verify-voice-session.js`.
+**NOT LIVE-VERIFIED - slices 1 and 3 are acoustic and device-dependent, and the
+scripted mic session is the gate.** Suite 4940/4940/0 fail/0 skipped.
+
+**Five corrections to this entry's own fix plan, all found by reading the code
+before writing any:**
+
+1. **There is no 13-second ceiling.** `OWN_VOICE_IDLE_CEILING_MS` is 8000 and is
+   REFRESHED by every arriving assistant-audio chunk (`s2s-bridge.js:508`), so the
+   observed 10.5-13s holds are "last chunk plus 8s". "Change the 13s ceiling to
+   2s" was not actionable. The ceiling is unchanged; what changed is that it is no
+   longer what ends holds, because a real interruption now confirms in under 500ms.
+2. **"Preroll cap 300 -> ~150 frames (1.5s)" is off by 10x.** `FRAME_MS` is 100,
+   so 300 frames is 30s and 150 frames is 15s, not 1.5s. Worse, the cap is a
+   DERIVED expression and `s2s-preroll-ring.test.js` fails any bare literal by
+   name; a ring smaller than the hold it must span is the exact
+   12-frames-against-8000ms defect that test exists for, and would surface as lost
+   operator speech. Left derived and unchanged. The pass criterion below is
+   restated in frames AND ms.
+3. **The adaptive floor must NOT be "clamped below the flush tier".** Bleed
+   (0.09-0.38) is ABOVE 0.056, so a floor pinned below it would be crossed on
+   nearly every frame and would rebuild V1. It is bounded by `MAX_BLEED_FLOOR`
+   (0.45) instead, so a pathological measurement cannot make MYTHOS deaf.
+4. **`ceiling-fail-open` was emitted by TWO unrelated timers** - the media/TTS
+   capture-suspend ceiling and the own-voice hold ceiling - so the count of 16
+   below cannot be split by cause. The media one is now
+   `suspend-ceiling-fail-open`; the own-voice one names the branch that decided.
+5. **`mic-indicator.js:124`'s bare `getUserMedia({audio:true})` is NOT a live
+   sixth capture path.** `createMicIndicator` has no importer anywhere - the file
+   is dead code, and `mic-settings.js:15` already calls it "the decommissioned
+   standalone ring". Left untouched and flagged rather than "fixed": nothing reads
+   it, so wiring it would add a mechanism to code that never runs. Also: `app.js`
+   has THREE arm paths, not two.
+
+**One defect in the new code, caught by its own test:** the adaptive floor first
+learned from every frame heard while MYTHOS spoke, so the operator's voice raised
+the floor above itself and no barge-in could ever confirm - a detector poisoned by
+the signal it exists to distinguish. Learning is now restricted to the protected
+window and echo-confirmed frames, with two regression tests pinning that louder
+speech never becomes harder to confirm.
+
+**Still open, the largest remaining piece of T2:** `open_web(browser:true)` has no
+working surface under Electron. `widgetType:'newtab'` is refused by the media
+window by design, the HUD's `window.open` fallback is denied by
+`setWindowOpenHandler`, and `shell.openExternal` appears nowhere in executable
+code. The `mythos:open-external` IPC channel is NOT built. Slice 4 stopped that
+failure being invisible (the breaker now trips, the retry is deduped) but the
+feature still cannot work. Note that `bug-075-electron-media-window.test.js`
+actively asserts `newtab` is not promoted, so building the surface means changing a
+test that codifies the current design, deliberately and with a stated reason.
+
+*Original plan, kept for the record. Its "NOTHING IMPLEMENTED YET" and its slice
+specifications are SUPERSEDED by the status block above — read the five
+corrections before acting on any number below.*
+
+**PLANNED 2026-08-18 (superseded). This entry was the handoff:
 the complete error inventory of the first post-BUG-271 voice session
 (2026-08-17 21:35–21:56 UTC, 72 live turns), the evidence-based corrections
 to five claims in the findings document that session produced, and the

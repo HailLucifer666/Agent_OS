@@ -17,7 +17,52 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest) — BUG-271's live re-test HAPPENED: the evidence is inventoried as BUG-272, and the fix plan is written. Next action: implement BUG-272 slice 1 (wake word). NOTHING IMPLEMENTED YET.
+### 2026-08-18 (latest, second entry) — BUG-272 slices 1–4 are SHIPPED IN CODE and pushed. Next action: the operator's scripted mic session, then `node scripts/verify-voice-session.js <log>`.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Four commits
+on `main`: `6d1dc34` (slice 1, wake word survives a stale mic device id + bounded
+backoff/devicechange re-arm), `8bf1acc` (slice 2, `live.echo-check` on every
+decision), `daf89d4` (slice 3, the playback-aware barge-in state machine),
+`190cd74` (slice 4, tool honesty). Suite **4940/4940/0 fail/0 skipped**.
+
+**NOTHING HERE IS LIVE-VERIFIED, and slices 1 and 3 cannot be.** They are
+acoustic and device-dependent. This repo has already shipped a slice with 16
+green tests that could not boot the app — unit-green proves the state machine,
+not that the operator's room stopped interrupting MYTHOS.
+
+**NEXT ACTION — the scripted ~10-minute session** (MYTHOS speaks ~60s in a quiet
+room; interrupt at 1s/3s/8s into its speech; speaker volume low/med/high; wake
+word attempted before and after s2s starts; `launch_app`/`focus_window` twice
+each). Then run **`node scripts/verify-voice-session.js <path-to-log>`**, which
+prints every BUG-272 pass criterion green/red. The criteria live in that script
+deliberately: two hand-count errors from the 2026-08-17 analysis survived into a
+written fix plan, and a script cannot make them.
+
+**Read BUGS.md's BUG-272 status block before touching anything** — it records
+five corrections to that entry's own fix plan, found by reading the code. The
+load-bearing ones: there is no 13-second ceiling (an 8s ceiling refreshed by
+arriving audio); "preroll cap 150 frames (1.5s)" is off by 10× and the cap must
+stay a derived expression; and the adaptive bleed floor must rise ABOVE the flush
+tier, not be clamped below it, because this room's bleed is above both tiers.
+
+**Still open, and the largest remaining piece:** `open_web(browser:true)` has no
+working surface under Electron — no `shell.openExternal` anywhere, `newtab`
+refused by the media window by design, `window.open` denied by
+`setWindowOpenHandler`. Slice 4 made that failure visible (the breaker trips, the
+retry is deduped) but did not build the `mythos:open-external` channel. Doing so
+means deliberately changing `bug-075-electron-media-window.test.js`, which
+asserts the current design.
+
+**If the session still self-interrupts:** the escape hatches are
+`MYTHOS_BARGE_PROTECTED_MS` (0 disables the protection window),
+`MYTHOS_BARGE_PENDING_HOLD_MS`, `MYTHOS_BARGE_BLEED_MARGIN`, and
+`MYTHOS_LIVE_HALF_DUPLEX=off` for the whole gate — all localStorage, all
+absolute-precedence, no code change needed. Read `bargeVetoed` and `bleedFloor`
+on the `voice.capture-suspend` lines first: high vetoes with a happy operator
+means bleed is being correctly rejected; high vetoes plus "it still ignores me"
+means the window or the floor is too aggressive.
+
+### 2026-08-18 (superseded by the block above) — BUG-271's live re-test HAPPENED: the evidence is inventoried as BUG-272, and the fix plan is written.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The
 operator ran the 20-minute post-BUG-271 voice session in the noisy room
