@@ -32,8 +32,17 @@ function fail(msg) { return { ok: false, result: { error: msg } }; }
 // is the machine-readable half of the same fact — see hub.js's isTerminalResult.
 // Deliberately narrow: only the two OAuth grant signatures, never a blanket
 // 4xx rule, so a rate limit or a transient 401 stays retryable.
+// BUG-273 C2 — PRECEDENCE BUG, found while exporting this for gmail-sensor.js. It
+// used to read `!!(err && (err.isAuthError || RE.test(reason)))`, so the leading
+// `err &&` short-circuited the WHOLE expression and the reason-regex fallback could
+// never fire without an error object. The comment above calls the regex the fallback
+// for exactly the case where there is no flag to read, which is the case it could not
+// serve. Every caller inside this file happens to pass a truthy `err`, so the bug was
+// latent — but the sensor reaching for the same helper is precisely a caller that may
+// have only a string, and a dead fallback there would silently stop announcing a
+// revoked token.
 function isTerminalAuthError(err, reason) {
-  return !!(err && (err.isAuthError || /invalid_grant|unauthorized_client/.test(String(reason))));
+  return !!((err && err.isAuthError) || /invalid_grant|unauthorized_client/.test(String(reason)));
 }
 
 function gmailFailureText(prefix, err) {
@@ -193,4 +202,8 @@ function registerFromGmail(hub, ctx) {
 // allow-list of terminal signatures is the risky half of that change (a 401 from
 // a rate limiter must stay retryable) and needs to be asserted directly, not
 // inferred from the tool wiring.
-module.exports = { registerFromGmail, buildTools, gmailFailure };
+// BUG-273 C2: isTerminalAuthError is exported so gmail-sensor.js can decide
+// "re-auth needed" with the SAME narrow test used here, rather than growing a
+// second regex that drifts. The narrowness is the point — a rate limit or a
+// transient 401 must stay retryable and must not raise a re-auth alarm.
+module.exports = { registerFromGmail, buildTools, gmailFailure, isTerminalAuthError };

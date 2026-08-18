@@ -18,8 +18,39 @@
 // Known accepted limitation: seenIds resets on process restart, which can
 // cause one possible re-announcement of already-seen mail after a restart.
 //
-// When the bound fn returns { ok:false, ... } (Gmail unconfigured/not authed/
+// When the bound fn returns { ok:false, ... } (Gmail unconfigured or
 // breaker-open), the poll is a silent no-op — no throw, no health.anomaly.
+//
+// BUG-273 C2 — WITH ONE EXCEPTION, added 2026-08-18. `gmail_unread` failed twice
+// that session with "invalid_grant: Token has been expired or revoked", and the
+// operator's report was that Gmail "fails every now and then" — the signature of an
+// OAuth app left in Testing publishing status, where Google expires refresh tokens
+// after seven days. from-gmail.js already classifies that as terminal and names the
+// remedy in the failure text, so the tool is honest. The gap is WHEN the operator
+// finds out: only by asking for mail and being told.
+//
+// This sensor already knew. It polls every GMAIL_TRIAGE_POLL_MS, discovered the
+// dead token on every pass, and threw the answer away at the `!res.ok` line below.
+// So the proactive check the fix plan asks for does not need building — it needs
+// its result not discarded.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Only the OAuth grant signature, via from-gmail.js's
+// exported isTerminalAuthError. NOT 'Gmail unconfigured': a fresh clone with no
+// Google keys is a legitimate degraded state and telling that operator to re-auth
+// would be nonsense. NOT breaker-open, which is transient by construction. One
+// definition, imported, so the two cannot drift into disagreeing about what
+// 'terminal' means.
+//
+// Q8 — STILL NO RETRY. The plan is explicit that retrying a revoked token forever
+// is the fail-open shape, and hub.js's isTerminalResult already stops the breaker
+// counting it as a retryable failure. This adds an announcement, not an attempt.
+//
+// ONCE PER OUTAGE, not once per poll: at a 5-minute cadence the latter would be
+// twelve identical spoken alarms an hour, which is how a real warning gets ignored.
+// The latch clears on the next successful poll, so a re-auth followed by another
+// expiry a week later is announced again.
+var isTerminalAuthError = require('../effectors/from-gmail').isTerminalAuthError;
+
 function createGmailSensor(ctx) {
   var gmailUnread = ctx.gmailUnread;
   var bus = ctx.bus;
@@ -29,6 +60,9 @@ function createGmailSensor(ctx) {
   var timer = null;
   var seenIds = new Set();
   var pollCount = 0;
+  // BUG-273 C2: latched so one dead token produces one announcement, not one per
+  // poll. Cleared by a success below.
+  var reauthAnnounced = false;
 
   function poll(myGen) {
     if (typeof gmailUnread !== 'function') return;
@@ -37,7 +71,34 @@ function createGmailSensor(ctx) {
       .then(function () { return gmailUnread({}); })
       .then(function (res) {
         if (generation !== myGen) return; // stopped/restarted mid-flight
-        if (!res || !res.ok) return; // Gmail unconfigured/not authed/breaker-open — silent no-op
+        if (!res || !res.ok) {
+          // BUG-273 C2: everything except a terminal OAuth failure stays a silent
+          // no-op, exactly as before. See the header for why this one does not.
+          var why = (res && res.result && res.result.error) || (res && res.result) || '';
+          if (!reauthAnnounced && isTerminalAuthError(res && res.result, why)) {
+            reauthAnnounced = true;
+            if (bus) {
+              // `reason` carries the whole message because an anomaly with no
+              // playbook is spoken from reason/target — so this has to read as a
+              // sentence to the operator, not as a slug.
+              bus.emit('health.anomaly', {
+                kind: 'gmail-reauth-required',
+                target: 'gmail',
+                reason: 'Gmail has stopped working and it will not recover on its own: the Google '
+                  + 'refresh token is expired or revoked. Nothing was read. Re-authorise by running '
+                  + '`node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in '
+                  + 'mythos/.env. If this keeps happening every few days, the Google Cloud OAuth app '
+                  + 'is still in Testing publishing status, which expires refresh tokens after seven '
+                  + 'days — moving it to Production stops it recurring.',
+                detail: String(why).slice(0, 200),
+              });
+            }
+          }
+          return;
+        }
+        // A working poll clears the latch, so a later expiry is announced again
+        // rather than being suppressed for the life of the process.
+        reauthAnnounced = false;
         var messages = (res.result && res.result.messages) || [];
         var fresh = messages.filter(function (m) { return m && m.id && !seenIds.has(m.id); });
         if (!fresh.length) return;
