@@ -17,6 +17,57 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-08-19 (latest) — BUG-273 has **no code items left**. The two faults the last entry listed as still open were both misdiagnosed, and neither needed a live session to settle. Next action: **A2’s acoustic remedy**, which is now genuinely one session from decidable.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
+Two commits on `main`: `ada7572` (the `voice.capture-suspend` allowlist — A2 was
+never blocked on a session at all) and `26f6360` (the cortex stalls and the heal
+announcements). Suite **5143/5143/0 fail/0 skipped**.
+
+**Three corrections to this session’s own earlier conclusions.** All three came from
+reading evidence that was already on disk, and all three are the reason the
+"remaining backlog" shrank rather than grew:
+
+1. **A2 was never waiting on a live session.** `flushedRaw` — the single datum its
+   remedy turns on — was being discarded by a hand-maintained allowlist in
+   `server/index.js` that copies client fields onto the log line. **Third occurrence
+   of that exact two-places bug** (BUG-271 fixed it, BUG-272 and BUG-273 each
+   reintroduced it), with the allowlist’s own comment predicting it. Two sessions
+   were spent collecting a field that could not arrive. A class-level assertion now
+   reads the fields the client actually sends and fails at commit time.
+2. **The cortex was never stalling.** The anomalies are +307195ms apart — 300 ticks
+   at ~1.024s, i.e. `mull()`’s cadence, not the healer’s 300000ms cooldown.
+   `lastTickAt` is stamped once per tick body and the reentrancy guard holds across
+   every await, so a cortex that is THINKING is indistinguishable from one that is
+   dead. Each false stall restarted the cortex and **paused the active goal**. It had
+   been found once before and papered over by raising `STALL_MS`’s default — which a
+   stale `.env` silently reverts, and this machine’s `.env` does.
+3. **D3’s backoff ladder went into the wrong file.** The four repeats came from
+   `immune/announcer.js`’s heal line, whose dedup map was declared, documented as
+   unused, and never applied — not from `conversation/announcer.js`, whose
+   `SERIOUS_KINDS` allowlist does not contain `cortex-stall` and listed two kinds no
+   emitter produces. D3’s own regression test used one of those phantoms as its
+   fixture.
+
+**The pattern worth carrying forward:** every one of the three was a mechanism that
+LOOKED present — a documented cooldown, a named allowlist entry, a raised default —
+and did nothing. None of them failed loudly; each made the next reader believe the
+case was handled. When a fault recurs after a fix, check that the fix is on the path
+the evidence names before adding a second one.
+
+**Still open, and now the whole list:**
+
+- **A2 (P0)** — the release flush replays the preroll ring in one burst. (The other
+  red line that session, `max preroll under 2000ms`, turned out to be unpassable by
+  construction and redundant with the eviction criterion — it is informational now,
+  so **A2 is the only code item left in BUG-273**.) The plan’s first remedy (a higher
+  floor) is already
+  ruled out by measurement: bleed 0.123 vs operator speech 0.069. Needs one session
+  that reports `flushedRaw` — which the pipeline can finally deliver.
+- **Gmail** — operator action, not a code item: `node mythos/scripts/google-auth.js`,
+  then update **both** `mythos/.env` and the packaged app’s key store, and move the
+  Google Cloud OAuth app out of Testing so tokens stop expiring every 7 days.
+
 ### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for A2’s acoustic half, which is blocked on a live session by design. Twelve items shipped; D4 and D3 both turned out to be answerable without another session. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**

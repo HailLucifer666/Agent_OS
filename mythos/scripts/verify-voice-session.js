@@ -48,7 +48,24 @@ const FRAME_MS = 100;
 
 // Frames, not milliseconds. BUG-272's own "max preroll < 1.5s" is reported in
 // BOTH units below for exactly that reason.
-const MAX_PREROLL_MS = 2000;
+//
+// BUG-273 (2026-08-19): there used to be a MAX_PREROLL_MS = 2000 threshold here and
+// a pass/fail criterion against it. It could not pass. `prerollFrames` is how many
+// frames the ring held AT RELEASE, and the ring fills for exactly as long as the
+// own-voice gate is held — i.e. for as long as MYTHOS is audibly speaking. So the
+// criterion asked that MYTHOS never speak for more than two seconds, against a
+// session whose median reply was 6650ms. It scored [FAIL] 92 frames = 9200ms and
+// went into the backlog as an open item that was never a fault.
+//
+// It was a fossil of BUG-272, when the ring was a flat 12 frames: back then a full
+// ring MEANT eviction, so its size was a fair proxy for lost speech. F3 derived the
+// ring from OWN_VOICE_MAX_HOLD_MS (300 frames) precisely so a long hold would stop
+// evicting, and the proxy died there. Eviction has its own criterion — `no operator
+// speech dropped`, on framesDropped — which is the real number and passed at 0 on
+// the same session.
+//
+// The hold size is still printed, in both units, because it is what determines how
+// big A2's release burst can get. It is an input, not a verdict.
 
 const CRITERIA_NOTES = {
   wakeword: 'the wake word died at boot on 2026-08-17 and never re-armed',
@@ -258,7 +275,7 @@ function main() {
   }
   check('no operator speech dropped', totalDropped === 0,
     `framesDropped total ${totalDropped}`, CRITERIA_NOTES.preroll);
-  check(`max preroll under ${MAX_PREROLL_MS}ms`, maxPreroll * FRAME_MS <= MAX_PREROLL_MS,
+  check('hold size at release (A2 input, not a verdict)', true,
     `max ${maxPreroll} frames = ${maxPreroll * FRAME_MS}ms`
     + (cap !== null ? ` (cap ${cap} frames = ${cap * FRAME_MS}ms)` : ''),
     'reported in frames AND ms: BUG-272 called 150 frames "1.5s", which is 15s');

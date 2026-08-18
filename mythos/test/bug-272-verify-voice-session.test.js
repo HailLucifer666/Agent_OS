@@ -88,7 +88,12 @@ describe('BUG-272 slice 5 — verify-voice-session.js', () => {
         /\[FAIL\] self-interruption/,
         /\[FAIL\] own-voice ceiling/,
         /\[FAIL\] no operator speech dropped/,
-        /\[FAIL\] max preroll/,
+        // BUG-273 (2026-08-19): the `max preroll under 2000ms` line used to be here.
+        // It was removed because it could not pass: prerollFrames is the size of the
+        // ring at release, which grows for as long as MYTHOS speaks, so the criterion
+        // asked that it never speak for more than two seconds. What this fixture is
+        // really about — that speech was EVICTED — is the framesDropped line directly
+        // above, which is the real number and still fails here.
         /\[FAIL\] no duplicate tool-call signatures/,
       ]) assert.match(r.stdout, expected, r.stdout);
     });

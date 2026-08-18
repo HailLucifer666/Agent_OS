@@ -9695,8 +9695,35 @@ carries `needsOperator: true` and no remedy is guessed for it at all, and
 untrusted input, so the control belongs at the edge, not in the request). A refused
 remedy is logged rather than silently downgraded.
 
-**Still open from this session:** max preroll 9200ms (A2's territory — the buffer is
-still large, though nothing was dropped and no ceiling fired).
+**Still open from this session:** nothing except A2's acoustic remedy. The other
+entry that used to sit here — "max preroll 9200ms" — was not a fault at all:
+
+### THE SECOND FAILING CRITERION COULD NEVER HAVE PASSED — 2026-08-19
+
+The session scored 13/15 and the second red line was `[FAIL] max preroll under
+2000ms — 92 frames = 9200ms`. It went into the backlog as "the buffer is still
+large". **That criterion cannot pass on any real session.**
+
+`prerollFrames` is the size of the ring AT RELEASE, and the ring fills for exactly
+as long as the own-voice gate is held — which is exactly as long as MYTHOS is
+audibly speaking. So the criterion asked that MYTHOS never speak for more than two
+seconds, against a session whose median reply was 6650ms. It is a fossil of
+BUG-272, when the ring was a flat 12 frames and a full ring genuinely MEANT
+eviction; F3 then derived the ring from `OWN_VOICE_MAX_HOLD_MS` (300 frames)
+precisely so that a long hold would stop evicting, and the proxy died with that
+change while the threshold outlived it — still carrying the note "every evicted
+frame is 100ms of operator speech thrown away".
+
+**And it was redundant.** Eviction has its own criterion two lines above, `no
+operator speech dropped`, measuring `framesDropped` — the real number, which PASSED
+at 0 on the same session. So the fossil was an unpassable duplicate of a correct
+criterion, and a permanent red light is worse than none: it trains the reader to
+skim the line, and it cost this backlog a phantom P1.
+
+Now printed as `hold size at release (A2 input, not a verdict)` — both units kept,
+because BUG-272 wrote "150 frames (1.5s)" for what is 15 seconds and that 10x error
+reached a fix plan. The hold size still matters: it is what determines how big A2's
+release burst can get.
 
 ### THE CORTEX WAS NEVER STALLING — 2026-08-19
 
