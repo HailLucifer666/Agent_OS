@@ -227,6 +227,87 @@ hole, the hole is the bug and it is wider than one route.
 **Do NOT fold in `focus_window`'s foreground lock** — closed question, three rungs ran and
 failed, `adapters/CLAUDE.md` forbids a fourth. `launch_app`'s windowed-pid resolution is
 related but separate; do not fold them either.
+
+#### T5 findings — 🔍 MEASURED 2026-08-19 (`d9f2ad2`): three of this item's premises do not survive
+
+**1. The contract was never escaped, and there is no false success.** The plan asks the
+sharpest question in it: `effectors/evidence.js` already forbids `ok:true` without an
+oracle, so *why did UIA Invoke escape it?* Answer, from reading the code: **it did not.**
+All three `uia-invoke` **action** routes are oracle-backed — `uia-invoke-send` requires the
+compose box to have actually emptied, `uia-invoke-focused` only sets `$landed` when the
+read-back text changed, and `uia-invoke-save` requires either a Save-As dialog or a changed
+window title, and says so in its own comment. The no-op lives in `Find-SaveViaFileMenu`,
+which is a **discovery helper, not an action route**: when `Expand()` no-ops it returns
+`$null`, the caller takes its honest-failure branch, and the dispatcher's
+string-is-failure guard ships `ok:false` with a message naming `write_file` as the way out.
+So the "silently no-ops — **no exception, false success**" framing is half wrong. The UIA
+*call* reports success it did not earn; the *effector* does not. Nothing to fix in the
+contract, and the hole the plan suspected is not there.
+
+**2. The interaction-context hypothesis is REFUTED on every axis measurable.** New
+read-only `uia_context` command reports the automation host's own window station, desktop,
+input desktop, integrity level, apartment state, session id, elevation, console and UIA
+root. `scripts/probe-pc-child-context.js` reads it back through the **real adapter**
+(`startPcChild`/`sendCommand`) — not a lookalike spawn, because `adapters/CLAUDE.md` is
+explicit that a PowerShell self-test is subject to the thing being measured and will lie.
+
+Result: pc-child and a direct spawn are **identical on every field** — `WinSta0`,
+`Default`, input desktop `Default`, integrity High, **STA**, session 18, UIA root
+resolvable. So the Invoke no-op is **not** a difference in where, or as whom, the
+automation client runs. Recorded as a refutation; no cause is read into a null result.
+
+Two caveats stated rather than buried. The **console-attached** third host could not be
+produced from an automation shell — on Windows libuv maps `detached` to
+`DETACHED_PROCESS`, which gives the child **no console at all**, the exact opposite of
+what a first draft of the probe claimed. It is now an operator step the script prints
+(`--compare ctx-console.json`). And the axes this table cannot see remain untested: the
+**message pump on the calling thread** (UIA is COM; a WinUI3 flyout needing a pumped STA
+would fail in precisely this silent, state-still-transitions shape) and whether the
+provider treats the caller as foreground-capable. The pump is the cheapest next candidate.
+
+**3. The ticket's own checklist passes live.** Q7 is "type · click · focus · launch, each
+across a normal app **and** an MSIX-packaged one", and nothing in the repo had ever run it.
+`scripts/verify-desktop-automation.js` now does, judging every verb on an oracle the app
+supplies rather than on the route's return value — launch by an enumerable window carrying
+the pid, focus by `get_foreground_window` agreeing, type by reading the text back out of
+the control, click by the UIA tree or foreground actually changing. `UNVERIFIED` is a
+distinct outcome from `PASS` and `FAIL`, because "reported ok and nothing could confirm it"
+is the condition the release gate excludes.
+
+| app | launch | focus | type | click |
+|---|---|---|---|---|
+| charmap (Win32) | PASS | PASS | PASS (`wm-char-post`, read back via ValuePattern) | PASS |
+| notepad (MSIX) | PASS | PASS | PASS (`uia-setvalue`, read back via ValuePattern) | PASS |
+
+So **"desktop automation failed drastically" does not reproduce** for those four verbs on
+these two apps. What remains is the narrow WinUI3 **save** path, which already fails
+honestly with a hint. That is a much smaller item than W2's P0 framing implies, and the
+priority should be re-set against that rather than against the original report.
+
+**Three defects the instruments found in themselves, fixed in the same commit** — each an
+instance of the class this whole bug is about:
+- `readBack` is a **status word** (`'confirmed'`); the typed text is in `readBackText`.
+  Reading the wrong one made the verifier report FAIL on two routes that had worked.
+- `list_windows` rows carry `rect`, not `bounds`. Guessing the key made every click read
+  as UNTESTED — which looks like a platform limitation and was a typo.
+- **Windows 11 Notepad restores its session**, so `launch_app notepad` did not open a blank
+  window: it reopened the operator's own `cleanupEmailDraft.txt` and the first run typed
+  into it. Nothing was saved and the file on disk was never modified — verified by
+  unchanged length and mtime, and by no probe text anywhere in Notepad's `TabState` — but
+  that was luck, not design. Typing is now gated twice: request a new document, then read
+  what the target holds and **refuse** if it is not empty. Proven on the re-run by
+  `typedIntoTitle="Untitled - Notepad"`.
+
+**Guard (standing rule).** `test/bug-274-uia-context-probe.test.js` pins that the
+PowerShell handler and the probe's `FIELDS` list agree **in both directions**. It caught a
+real drop on its first run — `inputDesktopError`, set only when `OpenInputDesktop` is
+denied, i.e. exactly the interesting case — and it rejects phantom fields too, because a
+field the handler never emits renders as `(null)` in every column, matches itself across
+hosts, and would push the verdict toward "identical".
+
+**Still owed before this item closes:** the console-attached comparison, and the
+message-pump axis. Neither is a fix; both are measurements.
+
 **RED first:** a test that drives `Invoke` on a control through the daemon and asserts a real
 oracle-backed outcome — not `ok:true`. A silent no-op currently reports success, so any test
 that trusts the return value is vacuous.
@@ -316,7 +397,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (the AEC readback instrument) CODED, the measurement itself still owed; T5's "make it a daemon" premise withdrawn as false.
+Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED - the context hypothesis is refuted, the evidence contract was never escaped, and launch/focus/type/click pass live on both a Win32 and an MSIX app.
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are
