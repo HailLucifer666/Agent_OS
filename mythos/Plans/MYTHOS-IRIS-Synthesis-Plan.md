@@ -17,14 +17,14 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three BUG-272 fixes live-verified; B1, A1, D2 and A3 shipped; A2 diagnosed. Next action: **B2 (hand-off wording) then B3 (widget render ack)** — A2’s acoustic half needs a live session first.
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three BUG-272 fixes live-verified; B1, A1, D2, A3 and B2 shipped; A2 diagnosed. Next action: **B3, the HUD widget render ack** — A2’s acoustic half needs a live session first.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
-Seven commits on `main`: `7eb3920` (B1, `unverified` was narrated as success),
+Nine commits on `main`: `7eb3920` (B1, `unverified` was narrated as success),
 `33090e1` (A1, the learned bleed floor went dormant), `8d61547` (the verifier’s
 headline criterion could never fire), `1d58765` (A2’s measurement + the BUG-273
-record), `24c95c5` + `1d01c79` (D2), `a910767` (A3). Suite **5003/5003/0 fail/0
-skipped**.
+record), `24c95c5` + `1d01c79` (D2), `a910767` + `619c5b1` (A3), `e1684ab` (B2).
+Suite **5012/5012/0 fail/0 skipped**.
 
 **Read BUGS.md's BUG-273 entry before touching anything.** It is the full
 handoff: the measured evidence table, what is now closed out, the remaining
@@ -81,18 +81,32 @@ session is making tool calls, because that flag tracks the CLIENT bridge’s ses
 That is why the batch TTS chain ran at all instead of BUG-060/061 routing the
 greeting through `sendText()`. Not filed as its own item yet.
 
-**NEXT ACTION — B2**, then B3. B2 is wording only: `open_web(browser:true)` now
-genuinely works (four hand-offs logged), and the operator still filed an incident
-because the outcome is spoken as "unverified". Keep the evidence shape —
-`unverified` stays true, deliberately, and must not be flattened — and change only
-the spoken `reason` so it leads with the positive fact that the browser was handed
-the URL. B3 is the sibling with real work in it: give the HUD a render ack, reusing
-the `requestClosePanel` pattern, so a widget that fails to mount is a FAILURE
-rather than an unverified success.
-**A2’s acoustic half is deliberately still open** and needs a live session before
-any code changes: the diagnosis is that the release flush is the carrier, and
-`flushedRaw` on the next session's log is what confirms or kills it.
+**B2 IS DONE, and it could not have been fixed as filed.** The instruction was
+"change only the spoken reason", and the reason already led with the positive fact.
+The alarm was in the wrapper B1 added the day before, which for a WORKING hand-off
+told the model "Do NOT say it worked, is done, is open, or is ready" — gagging it
+about the only thing the operator wanted to hear. Root cause: `unverified` carried
+two states under one name, "nothing is known" (ui_type) and "a step is confirmed,
+the end state is not" (openExternal resolved, so the OS took the URL). `e1684ab`
+gives evidence.unverified() an optional confirmedStep and the three narration paths
+a second, partial prohibition. `unverified` stays true throughout — isVerified(),
+the breaker and the HUD glyph are all unchanged, and a test asserts it.
 
+**Second time this ticket that a fix landed on a sibling.** Slice 4 moved
+`launch_app` onto the weakest narration path (B1); B1 then gagged the one tool
+whose partial success was worth stating (B2). Both were found by reading what the
+model actually receives rather than what the branch intends to say — worth doing
+again before B3.
+
+**NEXT ACTION — B3**, the dashboard render ack, and note it is NOT another
+confirmedStep. The widget branch of `open_web` returns unverified with "the
+dashboard has not confirmed it rendered this", and unlike the browser hand-off it
+has no confirmed step at all, because nothing downstream reports back. So the
+strict prohibition is currently the CORRECT narration for it, and the fix is a real
+ack: reuse the `requestClosePanel` pattern so a widget that fails to mount is a
+FAILURE rather than an unverified success. Three incidents that session — `news`,
+`flights` ("Kolkata to Bangalore"), and a generic "Dashboard did not confirm
+display". BUG-272 T2 only ever fixed the browser:true branch.
 **Then, in order:** C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
 (**operator action** — the Gmail `invalid_grant` is a Google Cloud OAuth app left
 in Testing status, not a code bug; do NOT add a retry), then D3/D4 which need

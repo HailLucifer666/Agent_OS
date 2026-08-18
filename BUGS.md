@@ -17,9 +17,9 @@ operator's own voice, `33090e1`), and the verifier's own headline criterion, whi
 and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix plan's diagnoses were
 corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
 its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
-D2 and A3 are FIXED too — D2's banner turned out never to have been false, and A3 was not the
+D2, A3 and B2 are FIXED too — D2's banner turned out never to have been false, A3 was not the
 boot-has-no-Live-session case it was filed as. Next: A2's acoustic fix
-(needs a live session), or B2/B3. Suite 5003/5003/0 fail/0 skipped.
+(needs a live session), or B3. Suite 5012/5012/0 fail/0 skipped.
 
 Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
@@ -9336,6 +9336,78 @@ matched the comment explaining why `Date.now()` was wrong). **Source-shape windo
 in this repo should be bounded by structure, never by a character count.**
 
 
+**B2 (P1) — `unverified` was carrying two different states, and B1 gagged the
+working one.** Incident, MYTHOS's own words: *"Open_web: browser:true action reports
+'unverified' even when successfully handed to default browser, causing operator
+confusion about actual state."*
+
+**B2 as filed could not have fixed it.** The instruction was "change only the spoken
+`reason` to lead with the positive fact", and the reason already did — *"handed to
+your default browser — I cannot confirm the page rendered"*. The alarm was in the
+wrapper **B1 added the day before**. What the model actually received for a WORKING
+hand-off was:
+
+```
+open_web ran but could NOT be confirmed: handed to your default browser — I
+cannot confirm the page rendered. Do not tell the operator it worked. There is NO
+proof either way about this action. ... Do NOT say it worked, is done, is open, or
+is ready, ...
+```
+
+So B1 made this specific tool **worse**: it explicitly forbade the model from
+saying the one thing that was true and the only thing the operator wanted to hear.
+Recorded plainly because it is the second time in this ticket that a fix's blast
+radius landed on a sibling four commits later — the first was slice 4 moving
+`launch_app` onto the weakest narration path.
+
+**Root cause.** `unverified` carried two different epistemic states under one name:
+
+- **(a) NOTHING is known.** `ui_type` sent keystrokes and no control reads back; the
+  text may or may not be there. B1's blanket "do not say it worked" is exactly
+  right here.
+- **(b) A STEP is confirmed and the END STATE is not.** `shell.openExternal`
+  resolving means the OS accepted the URL and dispatched it to the default browser.
+  That is a fact about the world, not the call's own optimism. Only the render is
+  unknown.
+
+`evidence.js` had `verifiedOk` (an oracle proved the outcome) and `unverified`
+(nothing proved anything) and **no shape for (b)** — so (b) was narrated as (a).
+
+`evidence.unverified()` now takes an optional `confirmedStep`, and the three
+narration paths select between two prohibitions: the strict one when nothing is
+known, and a partial one that permits the confirmed part while fencing off the rest.
+B1's rule still holds — every unverified branch carries A prohibition — and a test
+pins that the `ui_type` case keeps the strict wording verbatim.
+
+What the model hears now:
+
+```
+open_web: your default browser was handed https://maps.google.com and accepted it
+— that part IS confirmed. NOT confirmed: whether the page actually rendered in the
+browser. State the confirmed part plainly — it happened. Then say the rest is not
+confirmed, and do not claim the rest: not now, and not later in this conversation.
+Do NOT report the whole action as done, and do NOT report it as FAILED either.
+```
+
+**Q8, deliberately unchanged and asserted against:** `unverified` stays true,
+`isVerified()` stays false, the breaker still declines to count it as a success, the
+HUD still shows the middle glyph, and the wire status stays `unverified`. A confirmed
+STEP is not a confirmed OUTCOME. "Just make it `ok:true`" is one line away and
+wrong. B1's nested payload also stays nested — a confirmed step does not un-hedge
+`handedToBrowser`.
+
+**Q1:** a blank or non-string `confirmedStep` is dropped rather than stored. A
+present key reads as "a step was confirmed" downstream, so an empty one would let
+any effector claim partial success by passing nothing.
+
+**Note for B3, which is next and is the same shape.** The dashboard-widget branch of
+`open_web` returns unverified with *"the dashboard has not confirmed it rendered
+this"* — and unlike the browser hand-off it has **no confirmed step at all**, because
+nothing downstream reports back. So `confirmedStep` is not the answer there; a real
+render ack is, and until that exists the strict prohibition is the correct narration
+for it.
+
+
 **A2's measurement (P0, code unchanged).** `flushedFrames`, `flushedZeroed` and
 `flushedRaw` now ride the `voice.capture-suspend` transition line, and the
 verifier reports them as informational (no threshold yet — no session has ever
@@ -9348,11 +9420,6 @@ unchanged, and the remaining acoustic decision waits on a live session by design
 
 - **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
   above; needs a live session to confirm `flushedRaw` before changing behaviour.
-- **B2 (P1)** — the `open_web(browser:true)` hand-off works and still confuses.
-  Incident: *"reports 'unverified' even when successfully handed to default
-  browser, causing operator confusion about actual state."* Keep the evidence
-  shape (`unverified` stays true — deliberate, must not be flattened) and change
-  only the spoken `reason` to lead with the positive fact.
 - **B3 (P1)** — dashboard widgets silently do not render. Three incidents
   (`news`, `flights` "Kolkata to Bangalore", and a generic "Dashboard did not
   confirm display"); audit shows `open_web → ok` with reason "the dashboard has
