@@ -337,8 +337,17 @@ function buildTools(ctx) {
           // page" — openExternal resolves on ACCEPTANCE, not on render. Reporting
           // it as unverified is the honest shape and keeps the evidence contract
           // intact rather than claiming a confirmation nothing produced.
+          //
+          // BUG-273 B2: the two halves are now separated. The hand-off IS
+          // confirmed — openExternal resolving means the OS took the URL and
+          // dispatched it — so it goes in confirmedStep, where the voice layer is
+          // allowed to say it out loud. `reason` narrows to the only thing actually
+          // unknown. Same data, same unverified verdict; what changes is that
+          // MYTHOS can now tell the operator their browser is opening instead of
+          // being forbidden from claiming anything at all.
           return evidence.unverified(ok({ widgetType: 'newtab', url: bUrl, title: title || bRaw, handedToBrowser: true }),
-            'handed to your default browser — I cannot confirm the page rendered');
+            'whether the page actually rendered in the browser',
+            { confirmedStep: 'your default browser was handed ' + bUrl + ' and accepted it' });
         }
         return fail('open_web with browser:true needs the MYTHOS desktop shell to reach your real '
           + 'browser, and it is not running (this looks like a plain server/browser session). '

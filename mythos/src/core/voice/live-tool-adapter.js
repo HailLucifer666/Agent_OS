@@ -465,10 +465,27 @@ function createLiveToolAdapter(deps) {
       result,
       rawError,
       reason: isUnverified ? String(outcome.reason || 'no confirmation available') : null,
+      // BUG-273 B2: the independently-established step, when the effector named
+      // one. Read straight off the outcome like `reason` — effectors/evidence.js
+      // sets both on the same object.
+      confirmedStep: isUnverified && typeof outcome.confirmedStep === 'string' && outcome.confirmedStep
+        ? outcome.confirmedStep : null,
     };
   }
 
-  function unverifiedNarration(toolName, reason) {
+  // BUG-273 B2 — two shapes, because "unverified" covers two different states.
+//
+  // With NO confirmedStep, nothing at all is known and this is unchanged from B1.
+  // With one, a step was independently established (openExternal resolved, so the
+  // OS took the URL) and only the end state is unknown. Narrating the second as
+  // the first is what produced the 2026-08-18 incident: the model was forbidden
+  // from saying "your browser is opening it", which was both true and the only
+  // thing the operator wanted to hear. See effectors/evidence.js's unverified().
+  function unverifiedNarration(toolName, reason, confirmedStep) {
+    if (confirmedStep) {
+      return `${toolName}: ${confirmedStep} — that part IS confirmed. NOT confirmed: `
+        + `${reason || 'the final outcome'}.`;
+    }
     return `${toolName} ran but could NOT be confirmed: ${reason || 'no confirmation available'}. Do not tell the operator it worked.`;
   }
 
@@ -538,6 +555,20 @@ function createLiveToolAdapter(deps) {
     'or is ready, and do NOT describe it as done later in this conversation either. Do NOT claim it FAILED ' +
     'either — that is equally unproven.';
 
+  // BUG-273 B2 — the sibling claim, for an outcome with a CONFIRMED step.
+//
+  // The claim above is correct when nothing is known and wrong when something is:
+  // applied to a working browser hand-off it forbids "is open" and "is ready",
+  // i.e. it gags the model about the fact the operator actually asked for. This one
+  // permits exactly the confirmed part and fences off the rest, so the honesty
+  // invariant is preserved without inventing doubt about a step that is not in
+  // doubt. B1s rule still holds — every unverified branch carries A prohibition —
+  // and bug-273-b2-handoff-wording.test.js pins that the no-proof case keeps the
+  // stricter wording verbatim.
+  const UNVERIFIED_PARTIAL_CLAIM = 'State the confirmed part plainly — it happened. Then say the rest is ' +
+    'not confirmed, and do not claim the rest: not now, and not later in this conversation. Do NOT report ' +
+    'the whole action as done, and do NOT report it as FAILED either.';
+
   // BUG-273 B1, second half. Q4 — WHAT IS STANDING NEXT TO IT? On the awaited
   // branch the hedge lived in `message` while the effector's raw, success-shaped
   // result object was attached beside it, un-nested. ui_type's unverified payload
@@ -551,8 +582,12 @@ function createLiveToolAdapter(deps) {
   // data in evidence.unverified() — an MCP tool's output, a security finding, a RAG
   // answer. Dropping it would be a larger lie than the wrap. So every field is
   // kept, reachable only through a key that says what it is.
-  function unverifiedPayload(toolName, reason, result) {
-    const wrapped = { confirmed: false, whatIsUnconfirmed: unverifiedNarration(toolName, reason) };
+  function unverifiedPayload(toolName, reason, result, confirmedStep) {
+    // BUG-273 B2: `confirmed` stays FALSE even when a step is confirmed — it is the
+    // OUTCOME flag, and flipping it would undo B1 for exactly the tool B2 is about.
+    // The confirmed step rides as its own key instead.
+    const wrapped = { confirmed: false, whatIsUnconfirmed: unverifiedNarration(toolName, reason, confirmedStep) };
+    if (confirmedStep) wrapped.confirmedStep = confirmedStep;
     const payload = truncateForModel(result);
     if (payload !== null && payload !== undefined) wrapped.unconfirmedDetails = payload;
     return wrapped;
@@ -756,13 +791,15 @@ function createLiveToolAdapter(deps) {
         } else if (ev.unverified) {
           // Wave 0's evidence contract, on the awaited path too: ok:true +
           // unverified:true must never reach the model as status:'ok'.
-          summary = unverifiedNarration(call.name, ev.reason).slice(0, 200);
+          summary = unverifiedNarration(call.name, ev.reason, ev.confirmedStep).slice(0, 200);
           // BUG-273 B1: the one shared prohibition instead of this branch's own
           // weaker wording, and the payload hedged rather than handed over bare.
+          // BUG-273 B2: which prohibition depends on whether a step is confirmed.
           response = {
             status: 'unverified',
-            message: unverifiedNarration(call.name, ev.reason) + ' ' + UNVERIFIED_NO_PROOF_CLAIM,
-            result: unverifiedPayload(call.name, ev.reason, ev.result),
+            message: unverifiedNarration(call.name, ev.reason, ev.confirmedStep) + ' '
+              + (ev.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM),
+            result: unverifiedPayload(call.name, ev.reason, ev.result, ev.confirmedStep),
           };
         } else {
           summary = `${call.name} done.`;
@@ -807,12 +844,13 @@ function createLiveToolAdapter(deps) {
       instruction = NO_SUCCESS_CLAIM;
     } else if (ev.unverified) {
       // Wave 0's contract, on the slow path too.
-      verdict = unverifiedNarration(toolName, ev.reason);
+      verdict = unverifiedNarration(toolName, ev.reason, ev.confirmedStep);
       // BUG-273 B1: THIS is the line the 2026-08-18 launch_app('wt') incident came
       // through. It used to fall through to the neutral default instruction while
       // the failure branch above escalated, so the weakest hedge in the file was
       // handed the branch most likely to be believed.
-      instruction = UNVERIFIED_NO_PROOF_CLAIM;
+      // BUG-273 B2: same split as the awaited branch.
+      instruction = ev.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
     }
@@ -878,9 +916,15 @@ function createLiveToolAdapter(deps) {
       // text does not belong in a record of what happened (Q2: do not corrupt the
       // diagnostic trail while fixing the narration). Same shared sentence as the
       // other two paths, so the three can no longer disagree.
-      verdict = `The operator APPROVED ${pending.name} and it ran, but the outcome is UNVERIFIED: ` +
-        String(outcome.reason || 'no confirmation available');
-      instruction = UNVERIFIED_NO_PROOF_CLAIM;
+      // BUG-273 B2: a confirmed step is stated as one here too, rather than folded
+      // into a flat "the outcome is UNVERIFIED".
+      const step = typeof outcome.confirmedStep === 'string' && outcome.confirmedStep ? outcome.confirmedStep : null;
+      verdict = step
+        ? `The operator APPROVED ${pending.name}. ${step} — that part IS confirmed. NOT confirmed: `
+          + `${String(outcome.reason || 'the final outcome')}`
+        : `The operator APPROVED ${pending.name} and it ran, but the outcome is UNVERIFIED: `
+          + String(outcome.reason || 'no confirmation available');
+      instruction = step ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`;
     }

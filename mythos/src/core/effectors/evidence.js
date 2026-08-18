@@ -107,11 +107,48 @@ function verifiedOk(result, proof) {
 // unverified — ok:true, but say so honestly. `reason` is operator-facing: it
 // becomes part of what MYTHOS says out loud, so write it as a phrase that can
 // be spoken ("no readable text pattern"), not an error code.
+//
+// BUG-273 B2 — `opts.confirmedStep`, and why "unverified" needed a second field.
+//
+// The operator logged an incident about open_web(browser:true): it "reports
+// 'unverified' even when successfully handed to default browser, causing operator
+// confusion about actual state." The hand-off works — four succeeded on
+// 2026-08-18 against 7/7 silent failure before BUG-272 T2 — and the operator was
+// still left unsure whether anything had happened.
+//
+// The cause is that `unverified` was carrying two different epistemic states
+// under one name:
+//   (a) NOTHING is known. ui_type sent keystrokes and no control reads back; the
+//       text may or may not be there. This is the case BUG-273 B1 exists for, and
+//       its blanket "do not say it worked" is exactly right.
+//   (b) A STEP is confirmed and the END STATE is not. shell.openExternal resolved,
+//       which means the OS accepted the URL and dispatched it to the default
+//       browser. That is a fact about the world, not the call's own optimism. Only
+//       the render is unknown.
+// This module had verifiedOk (an oracle proved the outcome) and unverified
+// (nothing proved anything) and no shape for (b) — so (b) was narrated as (a),
+// and the model was told not to say the one thing that was true and useful.
+//
+// Q8 — THIS DOES NOT PROMOTE THE OUTCOME. `unverified` stays true, isVerified()
+// stays false, the breaker still declines to count it as a success and the HUD
+// still shows the middle glyph. A confirmed STEP is not a confirmed OUTCOME, and
+// "just make it ok:true" is one line away and wrong. Pinned by
+// test/bug-273-b2-handoff-wording.test.js.
+//
+// Q1 — WHAT ELSE MATCHES THIS? The field is only meaningful when something
+// genuinely independent of the call established the step. A blank or non-string
+// value is DROPPED rather than stored: an empty confirmedStep would still be a
+// present key downstream, and a present key is read as "a step was confirmed",
+// which would let any effector claim partial success by passing nothing.
 // ---------------------------------------------------------------------------
-function unverified(result, reason) {
+function unverified(result, reason, opts) {
   var base = isPlainObject(result) ? result : {};
   var why = asText(reason).trim() || 'no oracle available to confirm this landed';
-  return Object.assign({}, base, { ok: true, unverified: true, reason: why });
+  var out = Object.assign({}, base, { ok: true, unverified: true, reason: why });
+  var o = isPlainObject(opts) ? opts : {};
+  var step = typeof o.confirmedStep === 'string' ? o.confirmedStep.trim() : '';
+  if (step) out.confirmedStep = step;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
