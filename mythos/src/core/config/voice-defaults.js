@@ -36,10 +36,29 @@ function deriveVoiceDefaults(rawEnv) {
   const chosen = env.VOICE_TTS_CHAIN || env.VOICE_TTS_PROVIDER;
   if (chosen !== undefined && String(chosen) !== '') return {};
 
+  // BUG-274 T1 (2026-08-19) — KOKORO MOVES AHEAD OF EDGE AND PIPER, ON LICENCE.
+  //
+  // Verified against the GitHub API, not against articles or this repo's own older
+  // comments: rhasspy/piper (MIT) was ARCHIVED 2025-08-26 and its only maintained
+  // fork, OHF-Voice/piper1-gpl, is GPL-3.0; upstream edge-tts is LGPLv3 and labelled
+  // personal/hobby use. hexgrad/kokoro is Apache-2.0 for the code AND the weights.
+  // So the derived default reached for two engines with copyleft or personal-use
+  // exposure before the one that is clean end to end — while providers/kokoro-tts.js
+  // already existed and kokoro-js was already a runtime dependency.
+  //
+  // A REORDER, NOT A REMOVAL. edge and piper stay: they are the fallback when Kokoro
+  // has no weights cached yet (it fetches them from Hugging Face on first use, and
+  // isAvailable() bounds that with a timeout), and dropping them would trade a licence
+  // problem for a mute assistant on first boot — a worse failure.
+  //
+  // gemini keeps the lead when its key is present, deliberately: providers/tts.js maps
+  // gemini-tts to GEMINI_LIVE_VOICE, so it is the only entry that makes MYTHOS sound
+  // like the same person as the duplex path. Licence ordering must not change who it
+  // sounds like.
   return {
     VOICE_TTS_CHAIN: env.GOOGLE_API_KEY
-      ? 'gemini,edge,kokoro,piper'
-      : 'edge,kokoro,piper',
+      ? 'gemini,kokoro,edge,piper'
+      : 'kokoro,edge,piper',
   };
 }
 

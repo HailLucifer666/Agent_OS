@@ -9,10 +9,28 @@
 // patched to raise, Piper still produced 144,940 bytes of audio in 292ms while
 // edge-tts failed immediately with "NETWORK CALL ATTEMPTED". No API, no key, no
 // per-call cost, no rate limit, and nothing about what the operator says leaves
-// the machine. Piper is MIT and the voice models carry their own open licences,
-// which is also why it is the only one of the three usable in a product that is
-// sold — edge-tts is an unofficial Microsoft endpoint labelled personal/hobby-only.
-// (An observation about licences, not legal advice.)
+// the machine.
+//
+// LICENCE NOTE CORRECTED 2026-08-19 (BUG-274 T2). This block used to assert that Piper
+// carried a permissive licence, that its voice models were uniformly open, and — on
+// that basis — that it was the one engine of the three fit for a product being sold.
+// All three parts were true when written and none of them holds now. Nothing rechecks
+// a licence claim once it is in a comment, which is the whole reason this survived:
+//
+//   rhasspy/piper         MIT      ARCHIVED 2025-08-26
+//   OHF-Voice/piper1-gpl  GPL-3.0  the only maintained fork
+//   rhasspy/piper-voices  per-voice licences (CC BY 4.0 / CC0 / MIT, mixed)
+//
+// (Read from the GitHub API on 2026-08-19.) So whichever Piper the operator installs
+// behind PIPER_URL is either archived or copyleft, and "the voice models carry their
+// own open licences" hides a per-voice check nobody has done.
+//
+// This file states the facts and stops there. Whether any of it is compatible with
+// selling MYTHOS is the step 6.5 gate's question and a lawyer's call, not a comment's
+// — CLAUDE.md is explicit about that, and the sentence removed above is exactly the
+// kind of verdict it warns against. providers/kokoro-tts.js is Apache-2.0 for code and
+// weights and now leads the derived default chain (BUG-274 T1); Piper remains a
+// supported offline fallback and nothing here argues against using it.
 //
 // MEASURED 2026-07-31, same sentence, best of 3, model load excluded:
 //   piper en_US-hfc_female-medium   350ms   local

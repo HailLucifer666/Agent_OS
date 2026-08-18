@@ -21,7 +21,7 @@ const {
 } = require('../src/core/config/voice-choice');
 const { voiceFor } = require('../providers/tts');
 
-const BASE = 'gemini,edge,kokoro,piper';
+const BASE = 'gemini,kokoro,edge,piper';
 
 describe('isValidChoice', () => {
   test('accepts a well-formed choice for every known provider', () => {
@@ -43,7 +43,7 @@ describe('isValidChoice', () => {
 describe('applyVoiceChoice', () => {
   test('moves the chosen engine to the front and KEEPS the rest as failover', () => {
     const out = applyVoiceChoice({}, { provider: 'piper-tts', voice: 'en_US-amy-medium' }, BASE);
-    assert.equal(out.VOICE_TTS_CHAIN, 'piper,gemini,edge,kokoro');
+    assert.equal(out.VOICE_TTS_CHAIN, 'piper,gemini,kokoro,edge');
     assert.equal(out.PIPER_VOICE, 'en_US-amy-medium');
   });
 
@@ -67,7 +67,7 @@ describe('applyVoiceChoice', () => {
 
   test('an operator voice id survives even when the chain came from the picker', () => {
     const out = applyVoiceChoice({ GEMINI_LIVE_VOICE: 'Zephyr' }, { provider: 'gemini-tts', voice: 'Kore' }, BASE);
-    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,edge,kokoro,piper');
+    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,kokoro,edge,piper');
     assert.equal('GEMINI_LIVE_VOICE' in out, false, 'a real env voice id must not be overwritten');
   });
 
@@ -84,7 +84,7 @@ describe('applyVoiceChoice', () => {
 
   test('the chosen engine is never duplicated in the chain', () => {
     const out = applyVoiceChoice({}, { provider: 'gemini-tts', voice: 'Kore' }, BASE);
-    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,edge,kokoro,piper');
+    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,kokoro,edge,piper');
   });
 });
 

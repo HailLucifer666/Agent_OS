@@ -29,12 +29,14 @@ const { parseChain, voiceFor } = require('../providers/tts');
 describe('deriveVoiceDefaults', () => {
   test('a Google key puts gemini first', () => {
     const out = deriveVoiceDefaults({ GOOGLE_API_KEY: 'x' });
-    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,edge,kokoro,piper');
+    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,kokoro,edge,piper');
   });
 
-  test('no key leads with edge and still names the local engines', () => {
+  // BUG-274 T1: was 'no key leads with edge…'. Kokoro leads now — Apache-2.0 for
+  // code and weights, against edge-tts's LGPLv3/personal-use labelling.
+  test('no key leads with the permissive local engine, others still named', () => {
     const out = deriveVoiceDefaults({});
-    assert.equal(out.VOICE_TTS_CHAIN, 'edge,kokoro,piper');
+    assert.equal(out.VOICE_TTS_CHAIN, 'kokoro,edge,piper');
   });
 
   test('an explicit VOICE_TTS_CHAIN is left alone', () => {
@@ -49,7 +51,7 @@ describe('deriveVoiceDefaults', () => {
 
   test('an empty string is not a choice — it is the schema default', () => {
     const out = deriveVoiceDefaults({ GOOGLE_API_KEY: 'x', VOICE_TTS_CHAIN: '' });
-    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,edge,kokoro,piper');
+    assert.equal(out.VOICE_TTS_CHAIN, 'gemini,kokoro,edge,piper');
   });
 
   test('never turns the metered duplex path on by itself', () => {
@@ -62,7 +64,7 @@ describe('deriveVoiceDefaults', () => {
   });
 
   test('a missing argument is not a crash — same answer as an empty env', () => {
-    assert.equal(deriveVoiceDefaults().VOICE_TTS_CHAIN, 'edge,kokoro,piper');
+    assert.equal(deriveVoiceDefaults().VOICE_TTS_CHAIN, 'kokoro,edge,piper');
   });
 });
 
@@ -132,12 +134,12 @@ describe('loadConfig applies the derived default', () => {
 
   test('a key in the environment reaches the loaded config as a gemini-first chain', () => {
     const chain = withEnv({ GOOGLE_API_KEY: 'x' }, () => loadConfig().config.VOICE_TTS_CHAIN);
-    assert.equal(chain, 'gemini,edge,kokoro,piper');
+    assert.equal(chain, 'gemini,kokoro,edge,piper');
   });
 
   test('no key still yields a real chain rather than the empty default', () => {
     const chain = withEnv({}, () => loadConfig().config.VOICE_TTS_CHAIN);
-    assert.equal(chain, 'edge,kokoro,piper');
+    assert.equal(chain, 'kokoro,edge,piper');
   });
 
   test('the environment still wins over the derived value', () => {
