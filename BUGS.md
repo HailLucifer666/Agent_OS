@@ -17,8 +17,9 @@ operator's own voice, `33090e1`), and the verifier's own headline criterion, whi
 and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix plan's diagnoses were
 corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
 its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
-D2 is FIXED too, and its banner turned out never to have been false. Next: A2's acoustic fix
-(needs a live session), or A3. Suite 4992/4992/0 fail/0 skipped.
+D2 and A3 are FIXED too — D2's banner turned out never to have been false, and A3 was not the
+boot-has-no-Live-session case it was filed as. Next: A2's acoustic fix
+(needs a live session), or B2/B3. Suite 5003/5003/0 fail/0 skipped.
 
 Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
@@ -9261,6 +9262,80 @@ third-party hiccup would have blocked every commit in the repo. Rewritten to
 assert the invariant that needs no network.
 
 
+**A3 (P1) — the wake word woke itself, and every guard was asking about the wrong
+instant.** From the log:
+
+```
+11:33:16.603  tts.provider-failed  gemini-tts  503 high demand
+11:33:17.978  tts.failover         gemini-tts -> edge-tts
+11:33:19.591  wakeword.detected    score 0.9797  "opening a turn"
+```
+
+The three metric windows before that read 0.000005, 0.000009 and 0.00001. A room
+silent to six significant figures for twenty seconds produced a 0.98 the moment
+MYTHOS's own failover TTS started, and the log says `detected`, not
+`detected-suppressed` — so all five guards in `onWake` evaluated false.
+
+**Why a correct guard missed it.** A wake-word score is not a statement about the
+present. One classifier score is computed from `classifierWindow` feature frames;
+the first covers `EMBED_WINDOW` mel frames and each later one advances
+`EMBED_STRIDE`, so at the defaults one score is evidence about 196 mel frames —
+**1,960 ms of audio**. Every guard asked "is MYTHOS speaking NOW?", and a greeting
+that stopped playing shortly before the score crossed the threshold is invisible to
+all of them.
+
+`wakeword.js` now states its own receptive field (the three model constants moved
+to module scope so the helpers are pure and testable) and `app.js` tracks WHEN
+MYTHOS last had speech audio in the room rather than whether it has some right
+now. The sixth guard suppresses a detection whose evidence window overlaps our own
+voice, reading the window **from the detector** rather than a constant copied next
+to it — a copy drifts the first time a model ships a different
+`classifierWindow`.
+
+**Two corrections to A3 as filed**, both from the log rather than from reading the
+suppression chain:
+
+1. *"at boot there is no Live session yet, so it really plays"* — **there was
+   one.** `live.tool-call-batch` with three tools is logged at 11:33:01.976,
+   eighteen seconds BEFORE the detection, and `live-tools: declared 91, withheld
+   74` at 11:33:00.325 is that session being built. So `s2s.isActive()` returning
+   false while a Live session is making tool calls is its own finding: that flag
+   tracks the CLIENT bridge's session, and BUG-060/061's proactive-speech
+   re-routing is conditional on it. Worth a look on its own — it is the reason the
+   batch TTS chain ran at all instead of the text going through `sendText()`.
+2. The filed fix was "track server-TTS playback via the `speech-chunk`
+   subscription and add it to the suppression chain". That is necessary and is
+   done — but on its own it is a **sixth instantaneous guard**, and it would still
+   have missed this detection if playback had ended 300 ms earlier. The
+   timestamp-plus-window shape is what makes the fix correct under both timings:
+   audio still playing, or audio just finished.
+
+**Q1** — only MYTHOS's own SPEECH feeds the window. The `PLAYBACK_TOOLS`
+subscriber is untouched and a test asserts it never calls `noteAssistantAudio`:
+Spotify the operator asked for must not deafen the wake word, which is exactly why
+`suspendForMedia` is a separate, narrower, opening-burst-only mechanism.
+
+**Q2** — the suppression reports `ownAudioAgeMs` and `detectorWindowMs` beside the
+score. Without the margin the next session cannot tell "correctly rejected our own
+greeting" from "the window is too wide and ate the operator".
+
+**Q8, the accepted cost** — this extends an existing suppression rather than adding
+a new one: an operator speaking over MYTHOS was already suppressed by two guards
+above. What changes is that it now outlasts the speech by one receptive field, so
+the wake word is deaf for ~2 s after a sentence ends. Bounded by the window, logged
+with its margin, and shorter than the detector's own refractory gap between
+accepted wakes.
+
+One test correction, and it is the third instance in this ticket. The BUG-150 guard
+test used a fixed `APP.slice(idx, idx + 1800)`; the sixth guard's comment pushed the
+fifth reason past 1,800 characters and failed a correct chain. Rebounded on the
+handler's next stage, so prose cannot break it again — the invariant is unchanged
+and one assertion stronger. Two of my own new tests hit the same trap this session
+(a slice that swallowed the `speech-chunk` block, and a `Date.now()` detector that
+matched the comment explaining why `Date.now()` was wrong). **Source-shape windows
+in this repo should be bounded by structure, never by a character count.**
+
+
 **A2's measurement (P0, code unchanged).** `flushedFrames`, `flushedZeroed` and
 `flushedRaw` now ride the `voice.capture-suspend` transition line, and the
 verifier reports them as informational (no threshold yet — no session has ever
@@ -9273,20 +9348,6 @@ unchanged, and the remaining acoustic decision waits on a live session by design
 
 - **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
   above; needs a live session to confirm `flushedRaw` before changing behaviour.
-- **A3 (P1)** — the wake word self-triggers on MYTHOS's own TTS. 11:33:16
-  `gemini-tts` 503 → failover to edge-tts; 11:33:19 wake word fires at 0.9797;
-  11:33:22 `peakScore` 0.997818. The suppression chain (`app.js:826-831`) checks
-  the PIN gate, `voice.isActive()`, `s2s.isActive()`, `s2s.isSpeaking()` and
-  `_voiceState` — proactive/failover edge-tts playback sets **none** of them.
-  `proactiveSpeak()` routes through an open Live session instead of playing audio
-  (BUG-060/061), which is true, but at boot there is no Live session yet, so it
-  really plays. Slice 1 did not cause this; it made it reachable, because the wake
-  word used to be dead at boot. Fix: track server-TTS playback via the
-  `speech-chunk` subscription that already exists at `app.js:295`, with its own
-  reason string. Q1: do NOT suppress on "any audio playing" — media the operator
-  asked for (Spotify) must not deafen the wake word. Q2: keep logging
-  `detected-suppressed` with reason and score; that is what made this
-  diagnosable.
 - **B2 (P1)** — the `open_web(browser:true)` hand-off works and still confuses.
   Incident: *"reports 'unverified' even when successfully handed to default
   browser, causing operator confusion about actual state."* Keep the evidence

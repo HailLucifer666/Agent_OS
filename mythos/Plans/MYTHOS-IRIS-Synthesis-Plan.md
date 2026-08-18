@@ -17,13 +17,14 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three BUG-272 fixes live-verified; B1, A1 and D2 shipped; A2 diagnosed. Next action: **A3, the wake word self-triggering on MYTHOS’s own TTS** (A2’s acoustic half needs a live session first).
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three BUG-272 fixes live-verified; B1, A1, D2 and A3 shipped; A2 diagnosed. Next action: **B2 (hand-off wording) then B3 (widget render ack)** — A2’s acoustic half needs a live session first.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
-Five commits on `main`: `7eb3920` (B1, `unverified` was narrated as success),
+Seven commits on `main`: `7eb3920` (B1, `unverified` was narrated as success),
 `33090e1` (A1, the learned bleed floor went dormant), `8d61547` (the verifier’s
 headline criterion could never fire), `1d58765` (A2’s measurement + the BUG-273
-record), `24c95c5` (D2). Suite **4992/4992/0 fail/0 skipped**.
+record), `24c95c5` + `1d01c79` (D2), `a910767` (A3). Suite **5003/5003/0 fail/0
+skipped**.
 
 **Read BUGS.md's BUG-273 entry before touching anything.** It is the full
 handoff: the measured evidence table, what is now closed out, the remaining
@@ -64,22 +65,35 @@ B1, four days apart), and a feed row carrying no timestamp. The `propose_goal`
 half was a misattribution — all 6 calls carry `actor:'cortex'` and `propose_goal`
 is not in the Live allowlist, so voice cannot reach it.
 
-**NEXT ACTION — A3**, the wake word self-triggering on MYTHOS’s own failover TTS.
-11:33:16 `gemini-tts` returns 503 and fails over to edge-tts; 11:33:19 the wake
-word fires at 0.9797; 11:33:22 `peakScore` hits 0.997818. The suppression chain
-(`app.js:826-831`) checks the PIN gate, `voice.isActive()`, `s2s.isActive()`,
-`s2s.isSpeaking()` and `_voiceState`, and proactive/failover edge-tts playback
-sets none of them. Track it through the `speech-chunk` subscription that already
-exists at `app.js:295`, with its own reason string. Q1: do NOT suppress on "any
-audio playing" — Spotify the operator asked for must not deafen the wake word.
-Q2: keep logging `detected-suppressed` with reason and score; that is what made
-this diagnosable at all.
+**A3 IS DONE, and it was not the case it was filed as.** The premise was "at boot
+there is no Live session yet, so proactive TTS really plays". There WAS one —
+`live.tool-call-batch` with three tools is logged at 11:33:01.976, eighteen seconds
+before the detection. The real defect is that a wake-word score is evidence about
+the previous ~1,960ms (76 + 15*8 = 196 mel frames at a 10ms hop) while all five
+guards asked "is MYTHOS speaking NOW?", so a greeting that stopped playing shortly
+before the score crossed the threshold defeated every one of them. `a910767` adds a
+sixth guard over the detector-reported window, tracking WHEN MYTHOS last had speech
+audio rather than whether it has some right now. Q1 held: only MYTHOS’s own speech
+feeds the window, and a test pins that Spotify never does.
 
+**Left behind for whoever wants it:** `s2s.isActive()` reads false while a Live
+session is making tool calls, because that flag tracks the CLIENT bridge’s session.
+That is why the batch TTS chain ran at all instead of BUG-060/061 routing the
+greeting through `sendText()`. Not filed as its own item yet.
+
+**NEXT ACTION — B2**, then B3. B2 is wording only: `open_web(browser:true)` now
+genuinely works (four hand-offs logged), and the operator still filed an incident
+because the outcome is spoken as "unverified". Keep the evidence shape —
+`unverified` stays true, deliberately, and must not be flattened — and change only
+the spoken `reason` so it leads with the positive fact that the browser was handed
+the URL. B3 is the sibling with real work in it: give the HUD a render ack, reusing
+the `requestClosePanel` pattern, so a widget that fails to mount is a FAILURE
+rather than an unverified success.
 **A2’s acoustic half is deliberately still open** and needs a live session before
 any code changes: the diagnosis is that the release flush is the carrier, and
 `flushedRaw` on the next session's log is what confirms or kills it.
 
-**Then, in order:** B2 (hand-off wording), B3 (widget render ack), C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
+**Then, in order:** C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
 (**operator action** — the Gmail `invalid_grant` is a Google Cloud OAuth app left
 in Testing status, not a code bug; do NOT add a retry), then D3/D4 which need
 more evidence.
