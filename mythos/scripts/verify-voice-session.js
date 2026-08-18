@@ -176,10 +176,26 @@ function main() {
     .filter((r) => r.indexOf('own-voice-ceiling') === 0 || r === 'ceiling-fail-open')
     .reduce((n, r) => n + byReason[r], 0);
   const suspendCeiling = byReason['suspend-ceiling-fail-open'] || 0;
+  // BUG-273 A4: a caller-chosen hold that simply elapsed is routine and is counted
+  // separately. The 8 counted on 2026-08-18 were ALL of this kind — 8 media-start
+  // arms, 8 expiries, 0 clears — and reading them as 8 fail-opens is what filed A4
+  // as a leak. A log predating the split shows them under the fail-open name, which
+  // is why the note below says so rather than silently reporting zero.
+  const suspendElapsed = byReason['suspend-window-elapsed'] || 0;
   check('own-voice ceiling never reached', ownVoiceCeiling === 0,
-    `${ownVoiceCeiling} own-voice ceiling event(s); ${suspendCeiling} media-suspend ceiling event(s)`
-    + (byReason['ceiling-fail-open'] ? ' — NOTE: bare "ceiling-fail-open" present, this log predates the rename' : ''),
+    `${ownVoiceCeiling} own-voice ceiling event(s); ${suspendCeiling} media-suspend FAIL-OPEN event(s)`
+    + `; ${suspendElapsed} routine media-window expiry(ies)`
+    + (byReason['ceiling-fail-open'] ? ' — NOTE: bare "ceiling-fail-open" present, this log predates the rename' : '')
+    + (suspendCeiling && !suspendElapsed ? ' — NOTE: no window-elapsed events at all, so this log likely predates the BUG-273 A4 split' : ''),
     CRITERIA_NOTES.ceiling);
+
+  // BUG-273 A4: now that the routine expiry has its own name, a real fail-open is
+  // worth a pass/fail line of its own. Reaching MAX_SUSPEND_MS means a 'speaking'
+  // state never cleared and Live would have gone permanently deaf without the net —
+  // that is a fault, not a rhythm.
+  check('the media-suspend safety net never had to fire (BUG-273 A4)', suspendCeiling === 0,
+    suspendCeiling === 0 ? 'no MAX_SUSPEND_MS fail-open' : `${suspendCeiling} fail-open(s) at MAX_SUSPEND_MS`,
+    'was 8 on 2026-08-18, but every one of those was a routine 8s media window under the old shared label');
 
   // --- V2/V5: the preroll ring ---
   let maxPreroll = 0;

@@ -240,6 +240,31 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (next && onCaption) onCaption('Mic muted — media playing', 'muted');
     if (next) {
       const ceiling = Math.min(Number(holdMs) || MAX_SUSPEND_MS, MAX_SUSPEND_MS);
+      // BUG-273 A4 — WHICH of the two expiries this is going to be, decided here
+      // where the caller's intent is still visible.
+      //
+      // MEASURED, 2026-08-18: 8 media-start arms, 8 ceiling expiries, 0 explicit
+      // clears. The fix plan filed that as "check whether media suspends are armed
+      // and never cleared" — and they are never cleared, but that is the DESIGN, not
+      // a leak. suspendForMedia asks for MEDIA_START_SUSPEND_MS (8s) precisely
+      // because only the opening burst of a track is suppressed; there is no event
+      // to clear it and there is not meant to be one. So the expiry fired on 100% of
+      // the designed path while being logged as 'suspend-ceiling-fail-open', a name
+      // that reads as an exceptional safety net catching a stuck state.
+      //
+      // Two very different things were sharing one label, which is the same defect
+      // BUG-272 fixed one level up when the own-voice ceiling and this one both
+      // emitted a bare 'ceiling-fail-open':
+      //   * a caller-chosen hold that ran to completion — routine, expected, and
+      //     the only thing that has ever been observed;
+      //   * MAX_SUSPEND_MS being reached, which means a 'speaking' state never
+      //     cleared (a SpeechSynthesisUtterance whose onend never fired) and Live
+      //     would have gone permanently deaf without the net. That is a real fault
+      //     and deserves a name nothing else uses.
+      // Deciding it at ARM time rather than in the timer keeps the two facts
+      // together: whether this was a deliberate window is a property of the call,
+      // and reconstructing it from the elapsed time later would be a guess.
+      const isDeliberateWindow = ceiling < MAX_SUSPEND_MS;
       logSuspendTransition({ holdMs: ceiling, reason: reason || 'suspend' });
       suspendTimer = setTimeout(() => {
         suspendTimer = null;
@@ -250,7 +275,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // showing N of them could not be attributed to either — which is exactly
         // what happened to the 16 counted in the 2026-08-17 session. Two
         // ceilings, two names.
-        logSuspendTransition({ reason: 'suspend-ceiling-fail-open' });
+        //
+        // BUG-273 A4: and now three, because this timer serves two purposes. See
+        // isDeliberateWindow at the arm site. 'suspend-window-elapsed' is the
+        // routine end of a caller-chosen hold; 'suspend-ceiling-fail-open' is kept
+        // for MAX_SUSPEND_MS, where it means what its name says.
+        logSuspendTransition({
+          reason: isDeliberateWindow ? 'suspend-window-elapsed' : 'suspend-ceiling-fail-open',
+          heldMs: ceiling,
+        });
       }, ceiling);
     } else {
       logSuspendTransition({ reason: reason || 'clear' });

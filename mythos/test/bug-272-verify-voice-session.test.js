@@ -101,9 +101,16 @@ describe('BUG-272 slice 5 — verify-voice-session.js', () => {
   it('splits the two ceilings and flags a pre-rename log instead of misattributing it', () => {
     withLog(BAD, (file) => {
       const r = run([file]);
-      assert.match(r.stdout, /media-suspend ceiling/,
+      // BUG-273 A4 renamed this column: the media-suspend line now separates a real
+      // MAX_SUSPEND_MS fail-open from a caller-chosen window that simply elapsed,
+      // because all 8 counted on 2026-08-18 were the routine kind and reading them as
+      // fail-opens is what filed A4 as a leak. The invariant under test is unchanged —
+      // the two CEILINGS must still be attributable — so only the wording moves.
+      assert.match(r.stdout, /media-suspend FAIL-OPEN event\(s\)/,
         'the bare "ceiling-fail-open" came from two unrelated timers, so a single count could '
         + 'not be attributed to either');
+      assert.match(r.stdout, /routine media-window expiry/,
+        'and a designed 8s window elapsing must not be counted as a safety net firing');
       assert.match(r.stdout, /predates the rename/,
         'an old log must be labelled as old, not silently scored against the new names');
     });

@@ -77,7 +77,33 @@ describe('s2s-bridge: capture-suspend transition log', () => {
     // own-voice hold ceiling, which used to emit the identical string from a
     // different timer — making a count of them unattributable (BUG-272 counted 16
     // and could not split them by cause).
+    //
+    // BUG-273 A4: split once more, and this case moved. A caller-chosen 1000ms hold
+    // running to completion is the ROUTINE end of a deliberate window, not a safety
+    // net catching a stuck state — measured 2026-08-18 as 8 media-start arms, 8
+    // expiries and 0 clears, i.e. 100% of the designed path wearing a fail-open name.
+    // The fail-open name is kept for MAX_SUSPEND_MS, asserted in the test below.
+    assert.equal(sent[1].reason, 'suspend-window-elapsed');
+    assert.equal(sent[1].heldMs, 1000, 'and it reports the window it actually served');
+  });
+
+  test('BUG-273 A4: reaching MAX_SUSPEND_MS is still a fail-open, and says so', (t) => {
+    // The case the fail-open name exists for: no caller-chosen hold, so the only
+    // thing that clears the gate is the 30s net. That means a 'speaking' state never
+    // cleared (a SpeechSynthesisUtterance whose onend never fired) and Live would
+    // have gone permanently deaf without it. A real fault, and it must not share a
+    // label with the routine window above or the count stops meaning anything.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const sent = [];
+    const bridge = createS2SBridge({ sendMessageOverride: (m) => sent.push(m) });
+
+    bridge.suspendForMedia(999999);   // clamped to MAX_SUSPEND_MS
+    assert.equal(bridge.isCaptureSuspended(), true);
+    t.mock.timers.tick(30000);
+
+    assert.equal(bridge.isCaptureSuspended(), false, 'fail-open: a deaf assistant is the worse failure');
     assert.equal(sent[1].reason, 'suspend-ceiling-fail-open');
+    assert.equal(sent[1].heldMs, 30000);
   });
 
   test('setCaptureSuspended(false, ...) with an explicit reason logs a clear, not a re-suspend', () => {
