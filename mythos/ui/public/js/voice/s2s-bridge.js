@@ -560,8 +560,40 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // a fresh zeroed copy when it zeroes.
     const held = preroll;
     preroll = [];
+    // BUG-273 A2 — MEASUREMENT ONLY, no behaviour change in this pass.
+    //
+    // 43% of the 2026-08-18 session's turns were interrupted while bargeVetoed hit
+    // 49, i.e. the policy was vetoing constantly and the interruptions came from
+    // Gemini's own server-side VAD reacting to audio that had reached it. The plan
+    // for A2 assumed that audio was bleed the noise gate had passed during a hold.
+    // It cannot be: the capture handler RETURNS before sendMessage while ownVoiceGate
+    // is set, so during a hold nothing is on the wire at all.
+    //
+    // This loop is the only other candidate, and the comment above it asserts the
+    // very thing that needs checking — "the gate turns the bleed into silence at the
+    // wire level". Against this room's numbers that assertion is doubtful:
+    // LIVE_NOISE_GATE_FLOOR_RMS is 0.02 and measured bleed was 0.123, roughly 6x
+    // above it, and the gate's hysteresis keeps it open for 800ms of quiet once any
+    // frame clears the floor. If that is right, releasing a full ring flushes up to
+    // 133 frames — 13.3 SECONDS of audio the comment itself calls "mostly MYTHOS" —
+    // onto the wire unzeroed, in one burst, and Gemini's VAD fires on it. It would
+    // also explain the coupling to A1: the longer the hold, the bigger the burst.
+    //
+    // Q5 — do not fix this on the strength of that reasoning. The ONE number that
+    // separates "the gate silenced the bleed" from "the gate passed all of it" is how
+    // many flushed frames it actually zeroed, and nothing has ever reported it. So
+    // this pass counts and reports, and changes nothing. Note in advance that the
+    // obvious remedy — raise the gate floor toward 0.123 — walks into the same
+    // overlap A1 just backed out of, since operator speech measured 0.0395-0.069,
+    // BELOW the bleed. If this measurement confirms the burst, the fix is to stop
+    // replaying frames the policy never believed, not to pick another scalar.
+    let flushedZeroed = 0;
     for (const frame of held) {
-      try { send({ type: 'live-audio', data: arrayBufferToBase64(noiseGate.process(frame).buffer) }); } catch (_) { /* socket closed */ }
+      try {
+        const gated = noiseGate.process(frame);
+        if (gated && gated.zero) flushedZeroed += 1;
+        send({ type: 'live-audio', data: arrayBufferToBase64(gated.buffer) });
+      } catch (_) { /* socket closed */ }
     }
     logSuspendTransition({
       reason: reason || 'own-voice-release',
@@ -580,6 +612,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // could not tell apart. A hold that drops nothing and still yields no
       // transcript is evidence for the second, and this is how we will know.
       framesDropped: prerollDropped,
+      // BUG-273 A2: of the frames replayed onto the wire at THIS release, how many the
+      // noise gate actually silenced. flushedRaw is the number that matters —
+      // flushedRaw frames of assistant-dominated audio arriving in one burst is the
+      // only remaining candidate for the 43% of turns Gemini cut short, because
+      // nothing is sent during the hold itself. Reported as both halves rather than a
+      // ratio so a zero denominator stays readable.
+      flushedFrames: held.length,
+      flushedZeroed: flushedZeroed,
+      flushedRaw: held.length - flushedZeroed,
       // BUG-272: how many times a level-triggered barge-in was VETOED by the
       // policy during this hold, and which tier last tried. This is the number
       // that says whether the new policy is calibrated: high vetoes with a

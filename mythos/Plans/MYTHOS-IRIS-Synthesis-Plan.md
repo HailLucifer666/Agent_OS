@@ -17,7 +17,82 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, second entry) — BUG-272 slices 1–5 are SHIPPED IN CODE and pushed. Next action: the operator's scripted mic session, then `node scripts/verify-voice-session.js <log>`.
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three fixes live-verified, B1/A1 shipped, A2 diagnosed. Next action: **D2, the false "agent actions failed" banner.**
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Three commits
+on `main`: `7eb3920` (B1, `unverified` was narrated as success), `33090e1` (A1,
+the learned bleed floor went dormant), `8d61547` (the verifier's headline
+criterion could never fire), plus A2's measurement. Suite **4975/4975/0 fail/0
+skipped**.
+
+**Read BUGS.md's BUG-273 entry before touching anything.** It is the full
+handoff: the measured evidence table, what is now closed out, the remaining
+backlog in order, and — load-bearing — **three corrections to the BUG-273 fix
+plan's own diagnoses**, all found by reading the code before writing any:
+
+1. **B1's cause was an asymmetry BUG-272 slice 4 created**, not the
+   instruction-following failure it looked like. Three paths narrate an
+   unverified outcome and they carried three different hedges;
+   `reportLateOutcome` had none. Slice 4 (`190cd74`) moved `launch_app` into
+   `SLOW_TOOLS` for sound duration reasons, which moved its narration onto the
+   weakest of the three, three commits before the session that caught it.
+2. **A2's carrier is the release FLUSH, not bleed passed during a hold.**
+   Nothing reaches Gemini during a hold — the capture handler `return`s before
+   any send. The replay at `releaseOwnVoiceGate()` pushes the whole preroll ring
+   (133 frames = 13.3 s of audio the code's own comment calls "mostly MYTHOS")
+   in one burst, and a test now shows the noise gate silences **0 of 133** at
+   the measured levels: floor 0.02 vs bleed 0.123. That also rules out the
+   plan's own first remedy — a floor high enough to reject 0.123 bleed rejects
+   operator speech at 0.069 too.
+3. **The verifier was lying on the plan's headline metric.** It counted a `msg`
+   that is a bus event and is never logged, so "self-interruption under 15%"
+   printed PASS on every session ever run, including one at 43%.
+
+**THREE BUG-272 ITEMS ARE NOW LIVE-VERIFIED** and can stop being re-litigated:
+slice 1 (wake word listening all session), slice 2 (echo attribution — and its
+37/39 `no-reference` decisions **close the deferred V3 wire-message question with
+data: do not build it**), and slice 4b (`open_web(browser:true)`, four successful
+hand-offs against 7/7 silent failure).
+
+**NEXT ACTION — D2**, the highest-priority remaining item: the HUD showed "agent
+actions failed" for a `news` widget that displayed, there was no working voice
+route to interrupt speech (the operator had to click), and a mis-click landed on
+`propose_goal` (the audit shows 6 calls — check how many were intended). A false
+failure indicator is worse than none: it trains the operator to distrust the true
+ones, which is exactly the class as the dead verifier criterion above.
+
+**Then, in order:** A2's acoustic fix (stop replaying frames the policy never
+believed — needs a live session to confirm `flushedRaw` first), A3 (the wake word
+self-triggers on MYTHOS's own failover TTS — `app.js:826-831` checks five things
+and edge-tts playback sets none of them), B2 (hand-off wording), B3 (widget render
+ack), C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
+(**operator action** — the Gmail `invalid_grant` is a Google Cloud OAuth app left
+in Testing status, not a code bug; do NOT add a retry), then D3/D4 which need
+more evidence.
+
+**A1's escape hatch, and the one thing to check first if barge-in feels worse:**
+the learned floor is now dormant and the floor in force is pinned at
+`INITIAL_BLEED_FLOOR` (0.05). Turn it back on with
+`MYTHOS_BARGE_LEARNED_FLOOR=1` in localStorage. Note the honest limit, which is
+locked by a test: 0.05 clears the loud end of measured operator speech (0.069)
+and still sits **above** the quiet end (0.0395), so a very quiet interruption
+still will not open a candidacy. Lowering it further is A2's call, because below
+0.05 the only thing rejecting 0.123 bleed is the 350 ms sustain test. The other
+hatches are unchanged: `MYTHOS_BARGE_PROTECTED_MS`,
+`MYTHOS_BARGE_PENDING_HOLD_MS`, `MYTHOS_BARGE_BLEED_MARGIN`,
+`MYTHOS_LIVE_HALF_DUPLEX=off`.
+
+**The gate for the acoustic work is another live session**, and
+`node mythos/scripts/verify-voice-session.js <log>` now measures what it claims
+to. Target deltas: interrupted turns well under 15% (from 43%), max hold under
+2 s (from 13,396 ms), `framesDropped` still 0, `bleedFloor` still 0.05,
+`flushedRaw` reported at all (it never has been), zero `wakeword.detected` while
+MYTHOS is speaking, zero incidents of the "tools are lying" class. Capture the
+terminal this time:
+`npm start 2>&1 | tee "$env:TEMP\mythos-terminal.log"` — D4 exists because one
+run died with no trail at all.
+
+### 2026-08-18 (superseded by the block above, second entry) — BUG-272 slices 1–5 are SHIPPED IN CODE and pushed. Next action: the operator's scripted mic session, then `node scripts/verify-voice-session.js <log>`.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Four commits
 on `main`: `6d1dc34` (slice 1, wake word survives a stale mic device id + bounded

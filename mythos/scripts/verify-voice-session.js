@@ -46,6 +46,7 @@ const CRITERIA_NOTES = {
   echo: 'the filter fired ZERO times and nothing could say why',
   dedupe: 'the same dead open_web call repeated through turn 72',
   ack: 'four breaches, one launch_app legitimately taking 9860ms',
+  flush: 'nothing is sent DURING a hold, so the release flush is the only remaining carrier',
   policy: 'informational — read alongside how the session actually felt',
 };
 
@@ -237,6 +238,30 @@ function main() {
     floorSeen === null || floorSeen <= 0.05,
     floorSeen === null ? 'no bleedFloor seen' : `floor in force ${floorSeen}`,
     'a learned floor above the operator\'s own voice holds real barge-ins for 11-13s');
+
+  // --- BUG-273 A2: what the release flush actually put on the wire ---
+  //
+  // Informational by construction: this is the measurement A2 exists to take, and
+  // there is no pass threshold yet because no session has ever reported it. A high
+  // flushedRaw against a high interrupted percentage is the case for the burst being
+  // the carrier; a high flushedZeroed refutes it and sends A2 back to the drawing
+  // board. Absent on any log written before BUG-273, and said so rather than shown
+  // as zero.
+  let flushedRaw = 0;
+  let flushedZeroed = 0;
+  let sawFlush = false;
+  for (const e of suspendLines) {
+    const raw = num(e.flushedRaw);
+    const zeroed = num(e.flushedZeroed);
+    if (raw !== null || zeroed !== null) sawFlush = true;
+    if (raw !== null) flushedRaw += raw;
+    if (zeroed !== null) flushedZeroed += zeroed;
+  }
+  check('release flush reported what it put on the wire', true,
+    sawFlush
+      ? `${flushedRaw} raw frame(s) replayed, ${flushedZeroed} zeroed by the gate`
+      : 'not reported — log predates BUG-273 A2 instrumentation',
+    CRITERIA_NOTES.flush);
 
   // --- V3: echo attribution ---
   const echoChecks = of('live.echo-check');

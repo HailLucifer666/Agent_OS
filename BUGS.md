@@ -9,7 +9,17 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
+Last updated: 2026-08-18 (third entry) - BUG-273: the first post-BUG-272 live sessions ran. Three
+BUG-272 fixes are now LIVE-VERIFIED (wake word, echo attribution - which also closes the deferred
+V3 wire-message question with data - and open_web(browser:true)). Three items fixed this session:
+B1 (`unverified` narrated as success, `7eb3920`), A1 (the learned bleed floor settled ~3x above the
+operator's own voice, `33090e1`), and the verifier's own headline criterion, which could never fire
+and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix plan's diagnoses were
+corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
+its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
+D2 next. Suite 4975/4975/0 fail/0 skipped.
+
+Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
 barge-in state machine, `190cd74` tool honesty). Five corrections to the fix plan's own numbers are
 recorded on the entry - notably that the "13-second ceiling" does not exist (an 8s ceiling refreshed
@@ -9016,3 +9026,260 @@ deadlines clean for launch_app.
   phantom ASR (same class).
 - O1 observations (unprompted open_folder, time confusion, incident
   misquote) — no repro mechanism yet.
+## BUG-273 — the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust
+
+**B1, A1 and A2's measurement SHIPPED IN CODE 2026-08-18** (`7eb3920` unverified
+narration, `33090e1` the dormant bleed floor, `8d61547` the verifier's dead
+criterion, plus the release-flush measurement). Suite 4975/4975/0 fail/0 skipped.
+**The acoustic items are NOT live-verified — a live session is the gate**, and the
+gate now has a working tool (see "the verifier was lying too" below, which is why
+that sentence could not have been written before this entry).
+
+The operator ran two Electron voice sessions after BUG-272's five slices were
+pushed. The first died after ~2 minutes with no diagnostic trail; the second ran
+~10 minutes, 61 live turns, and was closed deliberately once evidence had been
+collected. MYTHOS logged **9 incidents itself** during the second one. The
+operator's own words, logged as an incident by MYTHOS: *"Your tools are lying.
+Your tools are not wired properly."*
+
+### Evidence — measured, not inferred
+
+| Metric | 2026-08-18 | 2026-08-17 |
+|---|---|---|
+| Turns | 61 | 72 |
+| Interrupted turns | **26 (43%)** | 45 (63%) |
+| Max own-voice hold | **13,396 ms** | 10-13 s |
+| Max preroll | 133 frames (13.3 s) | ~130 frames |
+| `framesDropped` | **0** | 0 |
+| `bargeVetoed` | **49** | field did not exist |
+| Learned `bleedFloor` | **0.1781** | n/a |
+| Operator speech `peakRms` | **0.0395 - 0.069** | bleed 0.09-0.38 |
+| `live.echo-check` | 39 (37 `no-reference`, 2 `below-floor`) | n/a |
+| `live.echo-dropped` | **0** | 0 |
+| Wake word | listening all session, 1 detection | dead at boot |
+
+Sources: `%APPDATA%\MYTHOS\mythos-server.log` (850 lines), `logs\main.log`, and
+the vault's `Incidents/`, `Audit/`, `Episodic/` for 2026-08-18.
+
+### Closed out — BUG-272 items now live-verified
+
+- **Slice 1, wake word.** `wakeword.listening` once, 211 metric ticks,
+  `streamLive:true` throughout. Previously dead 29 s into boot. **VERIFIED.**
+- **Slice 2, echo attribution — and it ANSWERS the deferred V3 question.** 37 of
+  39 decisions are `no-reference`: no transcript of MYTHOS's speech existed when
+  the operator's transcript arrived. A transcript-level filter can never catch
+  those, so `live.echo-dropped: 0` is correct behaviour **and the deferred wire
+  message feeding `echoRatio` to the client is NOT worth building.** Closed with
+  data rather than judgement.
+- **Slice 4b, `open_web(browser:true)`.** Four hand-offs logged `ok — handed to
+  your default browser`, against 7/7 silent failure before. **VERIFIED** (wording
+  still confusing — B2 below).
+- **Slice 3's ceiling decision table.** 5 `own-voice-ceiling-no-evidence-of-echo`,
+  2 `own-voice-ceiling-near-field-energy`, and the media ceiling correctly
+  separating as `suspend-ceiling-fail-open` (8x).
+- **`framesDropped: 0`** across 49 holds. No operator speech was lost.
+- **The red "degraded" badge is mostly honest and NOT caused by slice 4.** Zero
+  `health.anomaly`, zero breaker trips, zero `unverified` outcomes reaching the
+  breaker. `health.js:37` paints `degraded` for any null probe, and ollama /
+  browser-agent / android / piper are legitimately absent. One part of the red IS
+  a lie — D2 below.
+
+### THREE CORRECTIONS TO THIS ENTRY'S OWN FIX PLAN, all found by reading the code before writing any
+
+Recording these because the pattern repeats: each plan diagnosis was plausible,
+and each was wrong in a way that would have produced a fix in the wrong file.
+
+**1. B1's root cause was an asymmetry BUG-272 slice 4 created, not the
+instruction-following failure it looked like.** The plan concluded the model was
+overriding `live-tool-adapter.js`'s "report only that it was attempted"
+instruction. It never saw that instruction. Three paths narrate an unverified
+outcome to a Live model and they carried three different strengths of hedge: the
+awaited branch appended "Report only that it was attempted", `resolveLiveConfirm`
+inlined its prohibition into the AUDIT record, and `reportLateOutcome` appended
+**nothing** — only its FAILURE branch escalated to `NO_SUCCESS_CLAIM`. Slice 4
+(`190cd74`) moved `launch_app` into `SLOW_TOOLS` for sound duration reasons,
+which moved its narration off the strongest of those three paths and onto the
+weakest, three commits before the session that caught it. The tool did not get
+less honest; the sentence carrying its honesty did.
+
+**2. A2's carrier is the release FLUSH, not bleed passed during a hold.** The
+plan proposed instrumenting what reaches Gemini during a hold and then, in cost
+order, raising the noise-gate floor toward measured bleed. Nothing reaches Gemini
+during a hold: `s2s-bridge.js`'s capture handler `return`s before any send while
+`ownVoiceGate` is set. What does reach Gemini is the replay at
+`releaseOwnVoiceGate()` — the whole preroll ring, up to 133 frames, **13.3
+seconds of audio the code's own comment calls "mostly MYTHOS"**, delivered in one
+burst. That comment also asserts "the gate turns the bleed into silence at the
+wire level", and `test/bug-273-release-flush-measurement.test.js` now shows it
+silences **0 of 133** frames at the measured levels: `LIVE_NOISE_GATE_FLOOR_RMS`
+is 0.02, bleed measured 0.123, roughly 6x above it, and hysteresis holds the gate
+open for 800 ms of quiet once any frame clears it. This also explains the
+coupling to A1: the longer the hold, the bigger the burst, so A1 shrinks A2.
+**And it rules out the plan's own first remedy** — a floor high enough to reject
+0.123 bleed also rejects operator speech at 0.069, which is the same overlap A1
+just backed out of. The fix is to stop replaying frames the policy never
+believed, not to pick another scalar. Still not implemented: acoustic, needs a
+live session.
+
+**3. The verifier was lying too, on the plan's headline metric.**
+`verify-voice-session.js` counted log entries whose `msg` was
+`voice.live.interrupted`. That name is a BUS EVENT (`live-session.js:665`,
+`bus.emit`) and nothing writes it to the server log, so the count was
+structurally zero and "self-interruption under 15% of turns" printed **PASS on
+every session ever fed to it** — including this one, where it reported "0/61
+turns = 0%" against a real 43%. The signal the log does carry is
+`live.turn-parts.scFields`, the list of serverContent field names Gemini sent for
+that turn; `interrupted` among them is the event observed at the source. Now
+matched as a whole list element (not a substring, so a future
+`uninterruptedAudio` cannot inflate it), with the old lookup kept as an OR, and
+"no turn reported scFields at all" failing loudly rather than defaulting to the
+healthy answer. The existing BAD fixture had not caught this because it carries a
+`voice.live.interrupted` line — it went red through a path production never
+takes, which is how a dead criterion survives.
+
+### FIXED this session
+
+**B1 (P0) — `unverified` was narrated as success.** `launch_app('wt')` returned
+`ok:true + unverified:true`, reason "launched, but no windowed process matching
+the name could be confirmed; a later focus_window/ui_type has no trustworthy
+target" — exactly what BUG-272 T1 built — and MYTHOS told the operator Windows
+Terminal was open. All three narration paths now share one
+`UNVERIFIED_NO_PROOF_CLAIM`, which forbids the success claim **and** the failure
+claim: `evidence.js` is explicit that unverified means "may well have landed,
+cannot be proven", so collapsing it into failure would make MYTHOS deny things it
+actually did. On the confirm path the prohibition moved out of `verdict` into
+`instruction`, because verdict is also the audit and episodic summary and prompt
+text does not belong in a record of what happened. Second half (Q4): the awaited
+branch attached the effector's raw success-shaped result BESIDE the hedge —
+`ui_type`'s `{ typed: true }`, `launch_app`'s live pid. Given a fact and a caveat
+the model repeats the fact. The payload is kept, since `from-mcp`, `from-strix`
+and `from-documents` all wrap real operator-facing data in
+`evidence.unverified()`, but only under keys that say what it is. **Third
+instance of one invariant (BUG-068, BUG-116)**, so the test enumerates all three
+narration paths rather than patching a third branch — the assertion those two
+fixes never wrote down.
+
+**A1 (P0) — the learned bleed floor settled ~3x above the operator's own voice.**
+`bleedFloor` 0.1781 against operator speech peaking 0.069. No frame ever opened a
+candidacy, every hold ran to its idle ceiling, and real barge-ins arrived 11-13
+seconds late; `framesDropped: 0` says nothing was lost, it was all LATE. That is
+V2, the failure slice 3 was written to remove, reached from the other side:
+BUG-272 argued correctly that no static threshold separates overlapping bleed and
+speech, then shipped a LEARNED threshold, which has the same defect the moment
+bleed is the louder of the two. In this room it is — bleed 0.123 vs operator
+0.069. The learned term is now dormant by default (`LEARNED_FLOOR_ENABLED =
+false`) with the floor pinned at `INITIAL_BLEED_FLOOR`. **Not deleted**: one room
+is not a sample, the learning keeps running and REPORTING, and it re-enables per
+session with `MYTHOS_BARGE_LEARNED_FLOOR=1` or per call with
+`{ learnedFloorEnabled: true }` — an override a test proves reproduces the old
+0.1781 floor exactly, failure included. `BLEED_MARGIN` drops to 1.0 so the
+reported would-be floor is the raw measured bleed peak. The two parts of slice 3
+with evidence behind them — the 500 ms protected window and the 350 ms sustain
+test — are untouched.
+
+Q5, stated in code rather than implied: **0.05 clears the loud end of measured
+operator speech and still sits ABOVE the quiet end (0.0395).** Deliberately not
+lowered — below 0.05 the only thing rejecting 0.123 bleed is the sustain test,
+and whether that holds is A2's open question. A test locks that known limit so
+the next session cannot mistake it for a complete fix.
+
+Q2 for A1: pinning the floor would have blinded the next session, since
+`bleedFloor` was the only barge-in number on the suspend line and would now read
+0.05 forever. `s2s-bridge.js` reports `bleedPeak` and `learnedFloor` beside it,
+and the verifier prints all three plus a new pass/fail criterion that catches a
+re-enabled floor. That criterion correctly reports FAIL against the 2026-08-18
+log, which is what it exists to do.
+
+Three BUG-272 floor tests now opt in explicitly rather than being weakened, each
+saying why. **One of them still PASSED with learning dormant** — "remembers the
+room across turns" was comparing `INITIAL_BLEED_FLOOR` to itself and proving
+nothing, which is worse than failing, so it is opted in too.
+
+**A2's measurement (P0, code unchanged).** `flushedFrames`, `flushedZeroed` and
+`flushedRaw` now ride the `voice.capture-suspend` transition line, and the
+verifier reports them as informational (no threshold yet — no session has ever
+reported this). `noiseGate.process()` already returned the verdict; it was simply
+thrown away. Nothing acoustic changed, `framesDropped` behaviour is test-pinned
+unchanged, and the remaining acoustic decision waits on a live session by design
+— the plan's own instruction not to do A1 and A2 in one pass.
+
+### REMAINING — ordered, with what is known
+
+- **D2 (P0)** — the HUD reported failure for an action that succeeded: a false
+  "agent actions failed" banner over a `news` widget that displayed, no working
+  voice route to interrupt speech (operator had to click), and a mis-click landing
+  on `propose_goal`. The audit shows **6** `propose_goal` calls; how many were
+  intended is worth checking. A false failure indicator is worse than none — it
+  trains the operator to distrust the true ones, which is the same class as the
+  dead verifier criterion above.
+- **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
+  above; needs a live session to confirm `flushedRaw` before changing behaviour.
+- **A3 (P1)** — the wake word self-triggers on MYTHOS's own TTS. 11:33:16
+  `gemini-tts` 503 → failover to edge-tts; 11:33:19 wake word fires at 0.9797;
+  11:33:22 `peakScore` 0.997818. The suppression chain (`app.js:826-831`) checks
+  the PIN gate, `voice.isActive()`, `s2s.isActive()`, `s2s.isSpeaking()` and
+  `_voiceState` — proactive/failover edge-tts playback sets **none** of them.
+  `proactiveSpeak()` routes through an open Live session instead of playing audio
+  (BUG-060/061), which is true, but at boot there is no Live session yet, so it
+  really plays. Slice 1 did not cause this; it made it reachable, because the wake
+  word used to be dead at boot. Fix: track server-TTS playback via the
+  `speech-chunk` subscription that already exists at `app.js:295`, with its own
+  reason string. Q1: do NOT suppress on "any audio playing" — media the operator
+  asked for (Spotify) must not deafen the wake word. Q2: keep logging
+  `detected-suppressed` with reason and score; that is what made this
+  diagnosable.
+- **B2 (P1)** — the `open_web(browser:true)` hand-off works and still confuses.
+  Incident: *"reports 'unverified' even when successfully handed to default
+  browser, causing operator confusion about actual state."* Keep the evidence
+  shape (`unverified` stays true — deliberate, must not be flattened) and change
+  only the spoken `reason` to lead with the positive fact.
+- **B3 (P1)** — dashboard widgets silently do not render. Three incidents
+  (`news`, `flights` "Kolkata to Bangalore", and a generic "Dashboard did not
+  confirm display"); audit shows `open_web → ok` with reason "the dashboard has
+  not confirmed it rendered this". BUG-272 T2 fixed only the `browser:true`
+  branch. Fix: give the HUD a render ack reusing the `requestClosePanel` pattern,
+  so a widget that fails to mount is a FAILURE, not an unverified success.
+- **C1 (P0)** — WhatsApp cannot type; two sends failed. *"opened the chat with
+  mom (+91...), but I could not identify its window, so I cannot type into it
+  safely."* Same for `alex`. Honest failure, zero delivery. Same
+  UIA-under-pc-child class already recorded. The send path refusing rather than
+  typing blind is CORRECT and must stay; diagnose window resolution for WhatsApp
+  specifically before touching UIA.
+- **C3 (P1)** — `screen_look` failed twice ("the vision model did not answer in
+  time", "Vision providers are offline"). Related to the recorded vision-lane
+  dead-time issue; re-check lane ordering and per-attempt timeouts.
+- **A4 (P2)** — `suspend-ceiling-fail-open` fired 8x, i.e. routinely rather than
+  exceptionally, visible only because BUG-272 renamed it. Check whether media
+  suspends are armed and never cleared.
+- **C2 (P1) — OPERATOR ACTION, not a patch.** `gmail_unread → fail` x2:
+  *"invalid_grant: Token has been expired or revoked."* `from-gmail.js` already
+  classifies this as terminal. That is the signature of an OAuth app left in
+  **Testing** publishing status, where Google expires refresh tokens after 7 days
+  — exactly the "fails every now and then" the operator reports. Move the Google
+  Cloud OAuth app to Production/External, or accept weekly re-consent. What
+  MYTHOS can add is a proactive check that says so BEFORE the operator asks for
+  mail. **Do not add a retry** — retrying a revoked token forever is the fail-open
+  shape.
+- **D3 (P1)** — unsolicited speech, *"rambling on by yourself"* with no operator
+  input; MYTHOS logged its own corrective ("cease speaking immediately"). 61 turns
+  in 10 minutes is high and turn 1 was `systemInitiated:true`. Audit what opens a
+  turn with no operator utterance.
+- **D4 (P1)** — one run died with no diagnostic trail. The 11:19 UTC run ended
+  mid-session: no Crashpad dump, child log stops abruptly, `logs/main.log` records
+  no exit at all (a clean quit always writes `child exited ... during shutdown`).
+  **Ruled out:** the `taskkill` on `node.exe` cannot be the cause — the child is
+  forked via `process.execPath`, which under Electron is electron.exe. **The
+  missing trail is the bug.** Capture stderr on every run until it recurs and do
+  not theorise without that stream.
+
+### Verification for the next live session
+
+`node mythos/scripts/verify-voice-session.js <log>` prints every criterion green
+or red, and as of this entry the self-interruption line actually measures
+something. Target deltas: interrupted turns well under 15% (from 43%), max hold
+under 2 s (from 13,396 ms), `framesDropped` still 0, `bleedFloor` still 0.05,
+`flushedRaw` reported at all (it never has been), zero `wakeword.detected` while
+MYTHOS is speaking, and zero incidents of the "tools are lying" class.
+
+Capture the terminal this time:
+`npm start 2>&1 | tee "$env:TEMP\mythos-terminal.log"`.
