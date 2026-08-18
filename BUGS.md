@@ -17,9 +17,11 @@ operator's own voice, `33090e1`), and the verifier's own headline criterion, whi
 and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix plan's diagnoses were
 corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
 its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
-D2, A3 and B2 are FIXED too — D2's banner turned out never to have been false, A3 was not the
+EVERY ITEM THAT COULD BE FIXED WITHOUT A LIVE SESSION IS NOW FIXED — B1, A1, D2, A3, B2, B3,
+C1, C3, A4 and C2. D2's banner turned out never to have been false, A3 was not the
 boot-has-no-Live-session case it was filed as. Next: A2's acoustic fix
-(needs a live session), or B3. Suite 5012/5012/0 fail/0 skipped.
+is the only P0 left and is blocked on a live session by design; D3 and D4 need more
+evidence. Suite 5066/5066/0 fail/0 skipped.
 
 Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
@@ -9408,6 +9410,87 @@ render ack is, and until that exists the strict prohibition is the correct narra
 for it.
 
 
+**C3 (P1) — nine providers timing out at the same ceiling is one cause, not nine
+outages.** Two `screen_look` failures, reported as separate problems, are one causal
+chain:
+
+```
+11:35:04  google  gemini-3.5-flash-lite  ms:2672  ok:true       <- it worked
+11:38:18  google  gemini-3.5-flash-lite  ms:4009  timedOut
+11:38:22  mistral mistral-small-latest   ms:4001  timedOut
+11:38:26  mistral mistral-large-2512     ms:4000  timedOut
+11:38:30  google  gemini-flash-latest    ms:4001  timedOut
+11:38:34  nim     llama-3.2-11b-vision   ms:4004  timedOut
+11:38:38  nim2    llama-3.2-11b-vision   ms:4006  timedOut
+11:38:42  nim     nemotron-nano-12b-vl   ms:4009  timedOut
+11:38:44  every entry skipped: 'cooldown'  ->  "Vision providers are offline"
+```
+
+Nine models across five unrelated providers aborting within 15 ms of the same 4000 ms
+ceiling is not nine simultaneous outages. **The mechanism is a previous fix.** B1
+(2026-08-14) made `attemptTimedOut` take a cooldown, reasoning that a provider which
+will not answer inside its own step budget is at fault — true, but only while the
+budget is generous next to known-good latency, and it was not: PREF_VISION records
+3090 ms for its own head and the call that SUCCEEDED three minutes earlier took
+2672 ms, against 4000 ms.
+
+Timeout cooldowns are now deferred to the end of a run and dropped only when the
+shared-cause reading is the only one left: nothing answered, no attempt failed for a
+reason that names a provider, and more than one attempt happened. 429 / 5xx / network
+are untouched. Budgets raised to 7000 ms per attempt and 21000 ms total so three
+attempts still fit.
+
+**Two bugs in the first version, both caught by `chain-provider-breakers.test.js`'s
+existing assertions rather than by anything written for C3:** the settlement ran only
+on the exhausted path, so any run that eventually got an answer dropped the cooldown
+silently — the common case; and a success in the same run disproves the shared-cause
+theory and was not part of the discriminator, so `{nim hangs, nim2 hangs, mistral
+answers}` would have exempted both dead NIM entries. **No pre-existing test was
+weakened**: all seven that went red were correct, and they went green once the code
+was.
+
+**A4 (P2) — a designed 8 s window elapsing was being logged as a fail-open.** Filed as
+"check whether media suspends are armed and never cleared". They are never cleared,
+and that is the design:
+
+```
+reason "media-start"                8
+reason "suspend-ceiling-fail-open"  8
+reason "watchdog-clear"             0
+```
+
+`suspendForMedia()` asks for `MEDIA_START_SUSPEND_MS` (8 s) because only the opening
+burst of a track is suppressed; no event clears it and none is meant to. So the expiry
+fired on 100% of the designed path wearing a name that reads as a safety net catching
+a stuck state — and reading those 8 as 8 fail-opens is what filed A4 as a leak.
+**Q6: the same defect BUG-272 fixed one level up**, where two unrelated timers shared
+a bare `ceiling-fail-open`. Now `suspend-window-elapsed` for a caller-chosen hold
+running to completion, `suspend-ceiling-fail-open` kept for `MAX_SUSPEND_MS` where it
+means what it says. Decided at the arm site from the caller's own hold, since intent
+is a property of the call. Behaviour unchanged — same durations, same clamp, same
+fail-open.
+
+**C2 (P1) — the Gmail sensor already knew the token was dead and threw it away.**
+`gmail_unread` failed twice with "invalid_grant: Token has been expired or revoked".
+**The real fix is the operator's** — move the Google Cloud OAuth app to
+Production/External, or accept weekly re-consent; no code makes a revoked token work.
+What code could fix is *when* the operator finds out, and the proactive check did not
+need building: `gmail-sensor.js` polls every `GMAIL_TRIAGE_POLL_MS`, discovered the
+dead token on every pass, and discarded the answer at `if (!res || !res.ok) return;`,
+commented accurately as a silent no-op. It now emits a `gmail-reauth-required`
+`health.anomaly` whose `reason` is a spoken sentence naming what broke, that it will
+not self-recover, the command that fixes it, and that a recurrence every few days
+means the app is still in Testing — the part the operator cannot act on without being
+told. Once per outage, latch cleared by the next successful poll. Q1: only the OAuth
+grant signature, via the effector's own exported test; unconfigured, breaker-open and
+429 all stay silent. Q8: still no retry.
+
+Also fixed a latent precedence bug found while exporting that helper:
+`!!(err && (err.isAuthError || RE.test(reason)))` short-circuited on the leading
+`err &&`, so the reason-regex **fallback could never fire without an error object** —
+it could not serve the one case its own comment describes.
+
+
 **A2's measurement (P0, code unchanged).** `flushedFrames`, `flushedZeroed` and
 `flushedRaw` now ride the `voice.capture-suspend` transition line, and the
 verifier reports them as informational (no threshold yet — no session has ever
@@ -9420,33 +9503,6 @@ unchanged, and the remaining acoustic decision waits on a live session by design
 
 - **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
   above; needs a live session to confirm `flushedRaw` before changing behaviour.
-- **B3 (P1)** — dashboard widgets silently do not render. Three incidents
-  (`news`, `flights` "Kolkata to Bangalore", and a generic "Dashboard did not
-  confirm display"); audit shows `open_web → ok` with reason "the dashboard has
-  not confirmed it rendered this". BUG-272 T2 fixed only the `browser:true`
-  branch. Fix: give the HUD a render ack reusing the `requestClosePanel` pattern,
-  so a widget that fails to mount is a FAILURE, not an unverified success.
-- **C1 (P0)** — WhatsApp cannot type; two sends failed. *"opened the chat with
-  mom (+91...), but I could not identify its window, so I cannot type into it
-  safely."* Same for `alex`. Honest failure, zero delivery. Same
-  UIA-under-pc-child class already recorded. The send path refusing rather than
-  typing blind is CORRECT and must stay; diagnose window resolution for WhatsApp
-  specifically before touching UIA.
-- **C3 (P1)** — `screen_look` failed twice ("the vision model did not answer in
-  time", "Vision providers are offline"). Related to the recorded vision-lane
-  dead-time issue; re-check lane ordering and per-attempt timeouts.
-- **A4 (P2)** — `suspend-ceiling-fail-open` fired 8x, i.e. routinely rather than
-  exceptionally, visible only because BUG-272 renamed it. Check whether media
-  suspends are armed and never cleared.
-- **C2 (P1) — OPERATOR ACTION, not a patch.** `gmail_unread → fail` x2:
-  *"invalid_grant: Token has been expired or revoked."* `from-gmail.js` already
-  classifies this as terminal. That is the signature of an OAuth app left in
-  **Testing** publishing status, where Google expires refresh tokens after 7 days
-  — exactly the "fails every now and then" the operator reports. Move the Google
-  Cloud OAuth app to Production/External, or accept weekly re-consent. What
-  MYTHOS can add is a proactive check that says so BEFORE the operator asks for
-  mail. **Do not add a retry** — retrying a revoked token forever is the fail-open
-  shape.
 - **D3 (P1)** — unsolicited speech, *"rambling on by yourself"* with no operator
   input; MYTHOS logged its own corrective ("cease speaking immediately"). 61 turns
   in 10 minutes is high and turn 1 was `systemInitiated:true`. Audit what opens a

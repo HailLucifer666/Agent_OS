@@ -17,14 +17,16 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN. Three BUG-272 fixes live-verified; B1, A1, D2, A3 and B2 shipped; A2 diagnosed. Next action: **B3, the HUD widget render ack** — A2’s acoustic half needs a live session first.
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for what needs a live session. Ten items shipped; A2 diagnosed and instrumented. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
-Nine commits on `main`: `7eb3920` (B1, `unverified` was narrated as success),
-`33090e1` (A1, the learned bleed floor went dormant), `8d61547` (the verifier’s
-headline criterion could never fire), `1d58765` (A2’s measurement + the BUG-273
-record), `24c95c5` + `1d01c79` (D2), `a910767` + `619c5b1` (A3), `e1684ab` (B2).
-Suite **5012/5012/0 fail/0 skipped**.
+Fourteen commits on `main`, `f0f63f9..2d82ba5`: `7eb3920` (B1, `unverified` was
+narrated as success), `33090e1` (A1, the learned bleed floor went dormant),
+`8d61547` (the verifier’s headline criterion could never fire), `1d58765` (A2’s
+measurement + the BUG-273 record), `24c95c5` + `1d01c79` (D2), `a910767` +
+`619c5b1` (A3), `e1684ab` + `ea5f1dd` (B2), `025ceba` (B3), `e8777ee` (C1),
+`12b6ada` (C3), `5fe9368` (A4), `2d82ba5` (C2).
+Suite **5066/5066/0 fail/0 skipped**, from 4963 at the start of the session.
 
 **Read BUGS.md's BUG-273 entry before touching anything.** It is the full
 handoff: the measured evidence table, what is now closed out, the remaining
@@ -81,37 +83,53 @@ session is making tool calls, because that flag tracks the CLIENT bridge’s ses
 That is why the batch TTS chain ran at all instead of BUG-060/061 routing the
 greeting through `sendText()`. Not filed as its own item yet.
 
-**B2 IS DONE, and it could not have been fixed as filed.** The instruction was
-"change only the spoken reason", and the reason already led with the positive fact.
-The alarm was in the wrapper B1 added the day before, which for a WORKING hand-off
-told the model "Do NOT say it worked, is done, is open, or is ready" — gagging it
-about the only thing the operator wanted to hear. Root cause: `unverified` carried
-two states under one name, "nothing is known" (ui_type) and "a step is confirmed,
-the end state is not" (openExternal resolved, so the OS took the URL). `e1684ab`
-gives evidence.unverified() an optional confirmedStep and the three narration paths
-a second, partial prohibition. `unverified` stays true throughout — isVerified(),
-the breaker and the HUD glyph are all unchanged, and a test asserts it.
+**TEN OF THE ELEVEN BUG-273 ITEMS ARE SHIPPED.** Read BUGS.md’s BUG-273 entry for
+the detail; what belongs here is the pattern, because it decided most of the work:
+**five of these fixes were caused by earlier fixes**, and every one was found by
+reading what the consumer actually receives rather than what the branch intends to
+say.
 
-**Second time this ticket that a fix landed on a sibling.** Slice 4 moved
-`launch_app` onto the weakest narration path (B1); B1 then gagged the one tool
-whose partial success was worth stating (B2). Both were found by reading what the
-model actually receives rather than what the branch intends to say — worth doing
-again before B3.
+- BUG-272 slice 4 moved `launch_app` into SLOW_TOOLS, which moved its narration onto
+  the weakest of three hedges → **B1**.
+- **B1**’s blanket prohibition then gagged the one tool whose partial success was
+  worth stating → **B2**.
+- BUG-272-era B1 (the vision one) made a timeout take a cooldown against a budget
+  too tight to tell slow from dead → **C3**.
+- BUG-272 renamed one shared ceiling label but left one timer serving two purposes
+  → **A4**.
+- And the verifier’s own headline criterion had never once fired, so "self-
+  interruption under 15%" printed PASS on every session ever run, including one at
+  43%.
 
-**NEXT ACTION — B3**, the dashboard render ack, and note it is NOT another
-confirmedStep. The widget branch of `open_web` returns unverified with "the
-dashboard has not confirmed it rendered this", and unlike the browser hand-off it
-has no confirmed step at all, because nothing downstream reports back. So the
-strict prohibition is currently the CORRECT narration for it, and the fix is a real
-ack: reuse the `requestClosePanel` pattern so a widget that fails to mount is a
-FAILURE rather than an unverified success. Three incidents that session — `news`,
-`flights` ("Kolkata to Bangalore"), and a generic "Dashboard did not confirm
-display". BUG-272 T2 only ever fixed the browser:true branch.
-**Then, in order:** C1 (WhatsApp window resolution), C3 (vision lane), A4 (media ceiling), C2
-(**operator action** — the Gmail `invalid_grant` is a Google Cloud OAuth app left
-in Testing status, not a code bug; do NOT add a retry), then D3/D4 which need
-more evidence.
+**Four times a PRE-EXISTING test caught a real defect in the first attempt** —
+most sharply in C3, where the cooldown settlement ran only on the exhausted path and
+would have disabled the fix for every call that eventually got an answer. Run the
+whole suite, not the new file.
 
+**NEXT ACTION — the operator’s voice session.** Everything acoustic is now waiting on
+measurement rather than on code:
+
+```
+npm start 2>&1 | tee "$env:TEMP\mythos-terminal.log"
+node mythos/scripts/verify-voice-session.js "$env:APPDATA\MYTHOS\mythos-server.log"
+```
+
+Target deltas: interrupted turns well under 15% (from 43%), max hold under 2s (from
+13,396ms), `framesDropped` still 0, `bleedFloor` still 0.05, `flushedRaw` reported at
+all (it never has been), zero `wakeword.detected` while MYTHOS is speaking, zero
+incidents of the "tools are lying" class. Capture the terminal because **D4** exists:
+one run died with no Crashpad dump, no child exit line, and no trail at all.
+
+**WHAT IS LEFT, and why none of it is code-ready:**
+- **A2’s acoustic fix (P0)** — diagnosed (the release flush is the carrier; the noise
+  gate silences 0 of 133 frames at measured levels) and deliberately NOT written.
+  `flushedRaw` from one real session confirms or kills it, and changing the acoustic
+  path blind is how BUG-272 traded V1 for V2 in the first place.
+- **C2’s other half** — an operator action, not a patch: move the Google Cloud OAuth
+  app to Production/External, or accept weekly re-consent. MYTHOS now warns
+  proactively either way.
+- **D3** (unsolicited speech) and **D4** (the missing crash trail) — both need
+  evidence a session has not yet produced.
 **A1's escape hatch, and the one thing to check first if barge-in feels worse:**
 the learned floor is now dormant and the floor in force is pinned at
 `INITIAL_BLEED_FLOOR` (0.05). Turn it back on with
