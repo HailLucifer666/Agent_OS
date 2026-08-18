@@ -74,13 +74,28 @@ describe('A1 open_web: a URL-shaped query on type:"web" is refused WITH the reme
       'a www. host is already a URL missing only its scheme — do not prepend https:// twice');
   });
 
-  it('a non-URL query on type:"web" still gets the ORIGINAL bare message, not the remedy', async () => {
-    // Nothing about "weather in Delhi" says the model meant a browser, so the
-    // remedy would be misleading advice rather than a fix.
+  it('a non-URL query on type:"web" must NOT get the browser remedy — but must get A remedy', async () => {
+    // BUG-273 D2 — this test used to require the ORIGINAL bare "A URL is required
+    // for web embedding." here, and its reasoning was half right. The half that
+    // was right, and is kept below: nothing about "weather in Delhi" says the
+    // model meant a browser, so browser_navigate would be misleading advice
+    // rather than a fix.
+    //
+    // The half that was wrong: it read "the browser remedy does not apply" as
+    // "no remedy applies", and pinned the bare string this file's own header
+    // condemns — a refusal carrying no remedy, repeated five times in four
+    // minutes. On 2026-08-18 the unguarded branch fired again on
+    // open_web({type:'web', query:'distance Kolkata to Bangalore'}) and the
+    // operator logged the fallout as an incident.
+    //
+    // A prose query on type:"web" is not a missing url, it is the wrong type, so
+    // the remedy is type:"search". Both halves are now asserted.
     const res = await toolFn('open_web')({ type: 'web', query: 'weather in Delhi' });
     assert.equal(res.ok, false);
-    assert.match(String(res.result), /A URL is required for web embedding/);
-    assert.doesNotMatch(String(res.result), /browser_navigate/);
+    assert.doesNotMatch(String(res.result), /browser_navigate/,
+      'unchanged and still load-bearing: a search phrase is not browsing intent');
+    assert.match(String(res.result), /type:"search"/,
+      'but the refusal must name the remedy that DOES apply, per this file\'s own premise');
   });
 
   it('a real url: on type:"web" is untouched by the guard', async () => {

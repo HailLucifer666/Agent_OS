@@ -91,6 +91,46 @@ function browserIntentRemedy(what, value) {
     + `If the operator asked for an at-a-glance card ON THE HUD instead, call open_web with url:"${url}" (not query).`;
 }
 
+// BUG-273 D2 — the sibling of browserIntentRemedy, for the branch the 2026-08-14
+// fix did not reach.
+//
+// THE INCIDENT: *"News widget displayed but main HUD shows incorrect error
+// message ('agent actions failed')"*, 2026-08-18. The HUD was right; it was
+// reporting a different call four seconds later. From the audit, with real args:
+//   11:44:01  open_web {query:"Kolkata to Bangalore", type:"search"}        -> ok
+//   11:44:06  open_web {query:"distance Kolkata to Bangalore", type:"web"}  -> FAIL
+//                       "A URL is required for web embedding."
+//
+// That bare string is the exact one the A1 comment above condemns and says was
+// repeated five times in four minutes for want of a remedy. A1 guarded the branch
+// where the query LOOKS like a domain; looksLikeUrlOrDomain() rejects anything
+// containing whitespace, so a prose query fell through to the unguarded sibling and
+// got the old string back.
+//
+// Q6 — SAME CLASS AS BUG-273 B1, four days apart: one remedy written, applied to
+// one of the branches that needed it, the sibling left carrying the bare version.
+// B1 was three narration paths with three different hedges; this is two refusal
+// branches with two different remedies. Fixed the same way — a shared helper per
+// case, and a test that enumerates the branches rather than the instance.
+//
+// Q7 — the remedy has to match what the model MEANT. It asked for "distance
+// Kolkata to Bangalore": that is not a missing url, it is the wrong type. Demanding
+// a url would send it back for something it does not have and never had. So prose
+// gets pointed at type:"search" and a domain still gets pointed at
+// browser_navigate — deliberately two different answers, pinned apart by
+// test/bug-273-d2-prose-query-remedy.test.js.
+function webTypeNeedsUrlRemedy(query) {
+  const s = String(query || '').trim();
+  if (!s) {
+    return 'type:"web" embeds ONE direct https URL and needs url:. Nothing was passed to embed. '
+      + 'If the operator wanted results for a topic rather than one specific page, call open_web '
+      + 'with type:"search" and the topic in query: instead.';
+  }
+  return `type:"web" embeds ONE direct https URL and needs url:, and "${s}" is a search phrase, not a URL — `
+    + `it is not guessed at. If the operator wanted results for that phrase, call open_web with `
+    + `type:"search" and query:"${s}". If they wanted one specific page, pass its full https URL as url:.`;
+}
+
 // E5: bytes -> GB rounded to 2dp, for read_system_specs' human-readable fields.
 function bytesToGB(bytes) {
   return Math.round((bytes / (1024 * 1024 * 1024)) * 100) / 100;
@@ -444,7 +484,10 @@ function buildTools(ctx) {
         if (!url && looksLikeUrlOrDomain(q)) {
           return fail(browserIntentRemedy('open_web renders a card inside the MYTHOS dashboard, and for type:"web" it needs url:, not query:', q));
         }
-        if (!url) return fail('A URL is required for web embedding.');
+        // BUG-273 D2: was a bare "A URL is required for web embedding." — the exact
+        // string the A1 note above says a refusal must never be. See
+        // webTypeNeedsUrlRemedy for why prose and a domain get different remedies.
+        if (!url) return fail(webTypeNeedsUrlRemedy(q));
         var parsed = null;
         try { parsed = new URL(url); } catch (_) { return fail('Invalid URL: ' + url); }
         if (parsed.protocol !== 'https:') return fail('Only https: URLs can be embedded (security).');

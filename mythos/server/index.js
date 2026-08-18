@@ -3982,6 +3982,15 @@ function createServer(deps) {
     const payload = {
       tool, state, ok: e.payload.ok, goalId: e.payload.goalId,
       reason: e.payload.reason, unverified: e.payload.unverified,
+      // BUG-273 D2: the BUS event's own time, not the client's arrival time. The
+      // Agent Actions feed had no way to tell two calls of the SAME tool apart, and
+      // on 2026-08-18 that cost trust: an open_web widget rendered at 11:44:01 and a
+      // different open_web failed at 11:44:06, so the operator read the failure row as
+      // the widget's and filed *"main HUD shows incorrect error message"*. Relayed
+      // rather than stamped client-side because replayBuffers replays up to 200 old
+      // rows on subscribe — Date.now() at receipt would stamp all of session history
+      // with the moment the panel opened, which is a worse lie than no clock at all.
+      ts: e.ts,
     };
     pushReplay('action', payload);
     broadcastAll({ type: 'action', payload });
