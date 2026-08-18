@@ -9624,6 +9624,82 @@ unchanged, and the remaining acoustic decision waits on a live session by design
   Still worth capturing the terminal on the next run — `npm start 2>&1 | tee ...` —
   but no longer as the only hope of an answer.
 
+### THE LIVE SESSION RAN — 2026-08-18T18:15–18:33, 8 turns
+
+Scored with `verify-voice-session.js`, which scoped itself to the last run:
+**13 of 15 criteria passed.** Every BUG-273 fix that could be observed was observed
+working, and the two failures are both real findings rather than regressions.
+
+```
+[PASS] wake word: zero errors                  0
+[PASS] self-interruption under 15%             1/8 turns = 12.5%   (was 43%)
+[PASS] own-voice ceiling never reached         0                   (was 16)
+[PASS] media-suspend safety net never fired    no MAX_SUSPEND_MS fail-open
+[PASS] no operator speech dropped              framesDropped 0
+[PASS] the adaptive bleed floor is dormant     floor in force 0.05 (was 0.1781)
+[PASS] echo attribution is decisive            2 checks, 0 dropped
+[PASS] no duplicate tool-call signatures       0
+[PASS] no ack-deadline breaches                0
+[FAIL] max preroll under 2000ms                92 frames = 9200ms
+[FAIL] self-started turns under 25%            6/8 = 75% | injections: proactive-speak=7
+```
+
+**A1 and the ceiling are confirmed fixed in the field**: the floor held at 0.05,
+zero own-voice ceilings (16 last time), zero barge-in vetoes (49 last time), and
+self-interruption fell from 43% to 12.5%.
+
+**D4 is confirmed too, by the log's own existence.** Three boots appended to one
+file — 169K, 186K, 208K — with the original 61-turn session still in it. Under the
+code this ticket replaced, every boot reset that file to zero. The first marker also
+caught its own bug live: it read `MYTHOS 43.3.0`, which is **Electron's** version,
+because `app.getVersion()` answers correctly only in a packaged build. Fixed
+(`appVersionForLog()`); the marker now reads `MYTHOS 0.1.9-dev`.
+
+**D3's instrumentation answered D3 in its first session.** All 7 injections came
+from ONE site — `proactive-speak` — and four were the same length at almost exactly
+five-minute intervals (18:16:41, 18:21:48, 18:26:56, 18:32:03). The vault says what
+they were:
+
+> "Cortex restarted. Stall averted. Standing by for orders, boss."
+> "Another stall conquered. Systems running. What's the play, boss?"
+> "Stall again, fixed quickly. Online and ready now—what do you need?"
+> "More stalls; patched promptly. Fully operational, boss. Awaiting command."
+
+**The "rambling on by yourself" is MYTHOS narrating its own routine self-healing, on
+a metronome.** `announcer.js`'s `onHealthAnomaly` deduped with a flat
+`DEDUP_WINDOW_MS` of 5 minutes, so a condition that keeps recurring is re-announced
+every 5 minutes for as long as it lasts — and each announcement provokes a full
+spoken turn. Repeats of the same kind now back off 5m -> 15m -> 45m, capped at 2h,
+with the ladder resetting after a full cap of quiet so a new outbreak still leads
+promptly. The first announcement is untouched: the first one is the useful one, the
+twelfth is what teaches the operator to ignore the eleventh. A held repeat emits
+`conversation.suppressed`, so the silence is diagnosable; nothing about detection,
+healing or logging changed. **The stalls themselves are a separate fault and are NOT
+fixed here.**
+
+**And C2 misfired in the operator's own words.** The sensor announced the dead token
+three seconds after boot, exactly as designed — and then the immune explainer asked
+the brain to pick a remedy and it chose `probe_provider`, so MYTHOS ran
+`registry.refresh(true)` on the AI provider registry and said:
+
+> "Gmail requires re-authentication, sir. Cause unknown, internal checking ongoing.
+> **AI provider reprobe underway.** Just heads up."
+
+Nothing about re-probing Gemini or Mistral can re-mint a Google OAuth refresh token,
+so the operator heard remediation in progress and Gmail kept failing — which is
+exactly how it was reported the next day. Two fixes, because the narrow one would
+leave every future terminal credential fault free to do the same: the anomaly now
+carries `needsOperator: true` and no remedy is guessed for it at all, and
+`probe_provider` is **refused in code** for any target that is not an AI provider
+(the prompt already said "ONLY if an AI provider seems down" — a model's answer is
+untrusted input, so the control belongs at the edge, not in the request). A refused
+remedy is logged rather than silently downgraded.
+
+**Still open from this session:** max preroll 9200ms (A2's territory — the buffer is
+still large, though nothing was dropped and no ceiling fired), the recurring cortex
+stalls themselves, and `flushedRaw` — which STILL was not reported, because this
+build predates that field reaching the transition line. A2 remains blocked.
+
 ### Verification for the next live session
 
 `node mythos/scripts/verify-voice-session.js <log>` prints every criterion green

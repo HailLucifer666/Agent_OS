@@ -100,6 +100,12 @@ const ALLOWED_EVENTS = new Set([
   'cortex.recall',      // V1 (Phase 4): orient→recallHybrid per-tick cache hydration
   'cortex.proposed',    // V8 (Phase 4): mull() → propose_goal suggestion surfaced
   'conversation.announced',
+  // BUG-273 D3: the SPOKEN copy of a repeating anomaly is held back by a backoff
+  // ladder (5m/15m/45m, capped at 2h) after the operator's 2026-08-18 session
+  // announced the same self-healed cortex stall four times in sixteen minutes. The
+  // anomaly still reaches the log, the audit and the HUD — this event exists so the
+  // silence itself is diagnosable rather than looking like the fault stopped.
+  'conversation.suppressed',
   'conversation.intent',   // Phase 5a — conversation-gateway.js's non-engagement route() fallback
   'cortex.thought',
 

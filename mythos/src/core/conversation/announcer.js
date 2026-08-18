@@ -30,7 +30,10 @@ function honestCauseClause(p) {
   return ' Reported reason: ' + String(p.reason) + '.';
 }
 
-function createConversationAnnouncer({ bus, brain, config, speak }) {
+function createConversationAnnouncer({ bus, brain, config, speak, now }) {
+  // Injectable clock (BUG-273 D3). The backoff ladder below spans hours, and a test
+  // that cannot move time either sleeps or asserts nothing.
+  var clock = typeof now === 'function' ? now : function() { return Date.now(); };
   if (!bus) throw new Error('createConversationAnnouncer requires bus');
   if (!brain || typeof brain.think !== 'function') throw new Error('createConversationAnnouncer requires brain');
   if (typeof speak !== 'function') throw new Error('createConversationAnnouncer requires speak');
@@ -47,14 +50,14 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   function isRecent(key) {
     var ts = announced.get(key);
     if (!ts) return false;
-    return Date.now() - ts < DEDUP_WINDOW_MS;
+    return clock() - ts < DEDUP_WINDOW_MS;
   }
 
   function markAnnounced(key) {
-    announced.set(key, Date.now());
+    announced.set(key, clock());
     // Prevent unbounded growth — sweep old entries every 100 announcements
     if (announced.size > 200) {
-      var now = Date.now();
+      var now = clock();
       for (var [k, ts] of announced) {
         if (now - ts > DEDUP_WINDOW_MS) announced.delete(k);
       }
@@ -213,19 +216,77 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   // describeCondition / honestCauseClause now live at module scope — see the
   // note above createConversationAnnouncer.
 
+  // BUG-273 D3 — REPEATS BACK OFF INSTEAD OF REPEATING ON A METRONOME.
+  //
+  // MEASURED in the operator's own session, 2026-08-18: four announcements of the
+  // same self-healed cortex stall at 18:16:41, 18:21:48, 18:26:56 and 18:32:03 —
+  // five minutes apart to within a second, because the dedup below was a flat
+  // DEDUP_WINDOW_MS. Six of that session's eight turns were started by MYTHOS, every
+  // injection came from this one path, and the operator's description of it was
+  // "rambling on by yourself".
+  //
+  // The first announcement is the useful one and is untouched. Repeats of the SAME
+  // kind climb: 5m, 15m, 45m, capped at 2h. Capped rather than unbounded because a
+  // fault lasting all day must still say so occasionally — the operator has to be
+  // able to tell "still broken" from "fixed", and silence cannot.
+  //
+  // The ladder resets once the kind has been quiet for a full cap, so a genuinely
+  // new outbreak after a quiet stretch still leads with a prompt announcement rather
+  // than inheriting yesterday's suppression.
+  var REPEAT_LADDER_MS = [5 * 60 * 1000, 15 * 60 * 1000, 45 * 60 * 1000, 120 * 60 * 1000];
+  var repeatRung = {};   // kind -> index into the ladder
+  var lastSpokenAt = {}; // kind -> ts
+
+  // Returns 0 when it should be spoken now, or the ms still to wait.
+  function holdRemainingMs(kind) {
+    var last = lastSpokenAt[kind];
+    if (!last) return 0;
+    var since = clock() - last;
+    var cap = REPEAT_LADDER_MS[REPEAT_LADDER_MS.length - 1];
+    // Quiet for a whole cap: this is a new outbreak, not a continuing one.
+    if (since >= cap) { repeatRung[kind] = 0; return 0; }
+    var wait = REPEAT_LADDER_MS[Math.min(repeatRung[kind] || 0, REPEAT_LADDER_MS.length - 1)];
+    return since >= wait ? 0 : wait - since;
+  }
+
+  // The rung recorded here is the wait before the NEXT one, so the first announcement
+  // of a condition leaves rung 0 (5m) rather than jumping straight to 15m — the first
+  // repeat is still the one most likely to be worth hearing.
+  function noteSpoken(kind) {
+    var cap = REPEAT_LADDER_MS[REPEAT_LADDER_MS.length - 1];
+    var isFirst = lastSpokenAt[kind] === undefined;
+    var afterQuiet = !isFirst && (clock() - lastSpokenAt[kind]) >= cap;
+    repeatRung[kind] = (isFirst || afterQuiet) ? 0
+      : Math.min((repeatRung[kind] || 0) + 1, REPEAT_LADDER_MS.length - 1);
+    lastSpokenAt[kind] = clock();
+  }
+
   function onHealthAnomaly(event) {
     var p = event.payload;
     if (!p) return;
     if (!isSerious(p)) return;
 
-    var key = 'anomaly:' + (p.kind || 'unknown') + ':' + Date.now();
-    if (isRecent(p.kind)) return; // dedup by kind, not by timestamp
+    var kind = p.kind || 'unknown';
+    var key = 'anomaly:' + kind + ':' + clock();
+    // BUG-273 D3: was `if (isRecent(p.kind)) return;` — a flat 5-minute window, which
+    // is what produced an identical announcement every 5 minutes for as long as the
+    // condition lasted. Dedup is still BY KIND, so unrelated conditions never mute
+    // each other; only the interval changed.
+    var holdMs = holdRemainingMs(kind);
+    if (holdMs > 0) {
+      // Q2: the anomaly still reached the log, the audit and the HUD. Say on the bus
+      // that the SPOKEN copy was held, so "why did it stop telling me?" is answerable
+      // without reading this file.
+      bus.emit('conversation.suppressed', { kind: kind, nextInMs: holdMs, reason: 'repeat-backoff' });
+      return;
+    }
 
     var text = ('Heads up — I have hit a problem: ' + describeCondition(p) + '.' +
       honestCauseClause(p)).slice(0, 300);
     if (!DRYRUN) speak(text);
     bus.emit('conversation.announced', { key: key, text: text, kind: 'anomaly' });
-    markAnnounced(p.kind);
+    noteSpoken(kind);
+    markAnnounced(kind);
   }
 
   // health.diagnosed carries severity from the diagnostician (anomaly → diagnose
@@ -235,7 +296,7 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   function onHealthDiagnosed(event) {
     var p = event.payload;
     if (!p || p.severity !== 'critical') return;
-    var key = 'diagnosed:' + (p.kind || p.syndrome || 'unknown') + ':' + Date.now();
+    var key = 'diagnosed:' + (p.kind || p.syndrome || 'unknown') + ':' + clock();
     var dedupKey = 'diag:' + (p.kind || p.syndrome || 'unknown');
     if (isRecent(dedupKey)) return;
     // BUG-123: same deterministic treatment as onHealthAnomaly above. A
@@ -271,7 +332,9 @@ function createConversationAnnouncer({ bus, brain, config, speak }) {
   // within seconds of each other. Sharing THIS module's dedup map (rather
   // than each caller inventing its own Map/timestamp) means one dedup
   // window covers every greeting-shaped source.
-  return { start: start, stop: stop, isRecent: isRecent, markAnnounced: markAnnounced };
+  return { start: start, stop: stop, isRecent: isRecent, markAnnounced: markAnnounced,
+    // exposed for tests, like immune/explainer.js's _onHealed
+    _onHealthAnomaly: onHealthAnomaly };
 }
 
 module.exports = {

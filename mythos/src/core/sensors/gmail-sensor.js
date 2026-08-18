@@ -84,6 +84,13 @@ function createGmailSensor(ctx) {
               bus.emit('health.anomaly', {
                 kind: 'gmail-reauth-required',
                 target: 'gmail',
+                // BUG-273 C2 (second half): the immune explainer asks the brain to pick a
+                // mechanical remedy for anomalies that have none, and on 2026-08-18 it
+                // picked `probe_provider` for THIS one — so MYTHOS re-probed the AI
+                // providers and announced it was doing so, for a dead Google OAuth token.
+                // This flag says the fault is terminal and human-only, so no remedy is
+                // guessed at all. The reason below is already the complete instruction.
+                needsOperator: true,
                 reason: 'Gmail has stopped working and it will not recover on its own: the Google '
                   + 'refresh token is expired or revoked. Nothing was read. Re-authorise by running '
                   + '`node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in '

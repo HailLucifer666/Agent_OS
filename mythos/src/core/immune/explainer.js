@@ -36,6 +36,34 @@
 var healerLib = require('./healer');
 var announcerLib = require('../conversation/announcer');
 
+// BUG-273 C2 (second half) — WHICH TARGETS A PROVIDER RE-PROBE CAN POSSIBLY HELP.
+//
+// LIVE, 2026-08-18T18:15:48Z, three seconds after boot, in the operator's own
+// session: a `gmail-reauth-required` anomaly — a REVOKED GOOGLE OAUTH TOKEN — was
+// handed to the brain to choose a remedy, and it chose `probe_provider`. So MYTHOS
+// refreshed the AI provider registry and told the operator "I'm re-probing the AI
+// providers now". Nothing about re-probing Gemini or Mistral can re-mint a Google
+// refresh token, so the operator heard remediation in progress and Gmail went on
+// failing — which is exactly how it was reported.
+//
+// The prose in the prompt below ALREADY said "Choose probe_provider ONLY if an AI
+// provider seems down", and the model picked it for a mail account anyway. A
+// model's answer is untrusted input: the control has to be here, in code, not in
+// the request. Rejected at the edge rather than sanitised downstream.
+//
+// Deliberately a small, explicit list rather than "ask the registry": the registry
+// is exactly the subsystem this remedy perturbs, so consulting it to decide whether
+// to perturb it invites the failure mode where a broken registry can no longer
+// refuse a refresh. Names are the lanes and the brain itself, which is all the
+// remedy has ever been able to act on.
+var PROBEABLE_TARGETS = ['brain', 'provider', 'providers', 'llm', 'lane',
+  'voice', 'simple', 'vision', 'coding', 'reasoning'];
+function canProbeProvider(target) {
+  var t = String(target || '').trim().toLowerCase();
+  if (!t) return false;
+  return PROBEABLE_TARGETS.indexOf(t) !== -1;
+}
+
 var EXPLAIN_COOLDOWN_MS = 10 * 60 * 1000;
 var SUPPRESS_TTL_MS = 60 * 1000;
 // F8: see the call site. The bound exists because episodic recall is a
@@ -94,6 +122,17 @@ function createExplainer({ bus, brain, memory, config, logger }) {
       + announcerLib.describeCondition(payload) + '.'
       + announcerLib.honestCauseClause(payload);
 
+    // BUG-273 C2: an anomaly that has ALREADY named the only thing that fixes it does
+    // not get a remedy guessed for it. `needsOperator` is set by the sensor that knows
+    // the fault is terminal — a revoked OAuth grant is the first — and every mechanical
+    // remedy in the menu below is, for such a fault, a wrong answer that also sounds
+    // like a right one. Skipping the call is cheaper AND more honest than filtering its
+    // result afterwards.
+    if (payload.needsOperator === true) {
+      return { explanation: explanation, remedy: 'none',
+        spoken: explanation + ' This one needs your attention.' };
+    }
+
     // The brain is asked for the remedy ONLY. No prose, no cause, no narration.
     // A choice from three fixed values is not a fabrication risk; a sentence is.
     var result = await brain.think({
@@ -125,12 +164,21 @@ function createExplainer({ bus, brain, memory, config, logger }) {
     if (remedy === 'suppress_tool' && target && /^[a-z][a-z0-9_-]*$/i.test(target)) {
       healerLib.suppressTool(target, SUPPRESS_TTL_MS);
       remedyNote = " I've suppressed " + target + ' for a minute.';
-    } else if (remedy === 'probe_provider') {
+    } else if (remedy === 'probe_provider' && canProbeProvider(target)) {
       try {
         require('../brain/registry').refresh(true);
         remedyNote = " I'm re-probing the AI providers now.";
       } catch (_) {}
     } else {
+      // BUG-273 C2: a refused remedy is LOGGED, never silently downgraded. A guard
+      // that quietly swallows the answer makes the next "why did nothing happen?"
+      // investigation start from zero — and this one fired in production on its
+      // first day, so it will fire again.
+      if (remedy === 'probe_provider') {
+        log.info('immune-explain.remedy-refused', { remedy: remedy, target: target,
+          reason: 'not an AI provider — a re-probe cannot affect this target' });
+        remedy = 'none';
+      }
       remedyNote = ' This one needs your attention.';
     }
 
