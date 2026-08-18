@@ -40,7 +40,7 @@ const MAX_PREROLL_MS = 2000;
 
 const CRITERIA_NOTES = {
   wakeword: 'the wake word died at boot on 2026-08-17 and never re-armed',
-  interrupted: 'was 63% (45 of 72 turns)',
+  interrupted: 'was 43% (26 of 61 turns) on 2026-08-18, 63% (45 of 72) on 2026-08-17',
   ceiling: 'was 16, though the label could not say WHICH ceiling',
   preroll: 'every evicted frame is 100ms of operator speech thrown away',
   echo: 'the filter fired ZERO times and nothing could say why',
@@ -124,11 +124,41 @@ function main() {
     'a re-arm attempt is not a failure — it is slice 1 working');
 
   // --- V1: self-interruption ---
+  //
+  // BUG-273: this criterion could never fire, and it is the headline number of the
+  // whole script. It counted log entries with msg 'voice.live.interrupted' — but
+  // that name is a BUS EVENT (live-session.js:665, bus.emit), not a log line, and
+  // nothing writes it to the server log. So the count was structurally 0, the
+  // percentage was 0%, and the criterion printed PASS on every session ever fed to
+  // it. Against the 2026-08-18 log it reported '0/61 turns = 0%' while the real
+  // figure was 26 of 61 (43%) — the single measurement BUG-273 A2 exists to move.
+  //
+  // A false PASS is worse than a missing criterion, for exactly the reason BUG-273
+  // D2 gives about the HUD banner: it trains the reader to believe the greens. The
+  // same shape as this script's own earlier trap, recorded above — a detector that
+  // matches something other than what it means to match.
+  //
+  // What the log actually carries is live.turn-parts.scFields, the list of
+  // serverContent field names Gemini sent during that turn. 'interrupted' appearing
+  // there means the server cut its own generation, which IS the event, observed at
+  // the source rather than inferred. The old msg lookup is kept as an OR: if a
+  // future build does log the event, this must not stop counting it.
   const turns = of('live.turn-parts');
-  const interrupted = entries.filter((e) => e.msg === 'voice.live.interrupted');
-  const pct = turns.length ? Math.round((interrupted.length / turns.length) * 1000) / 10 : null;
-  check('self-interruption under 15% of turns', pct === null ? false : pct < 15,
-    turns.length ? `${interrupted.length}/${turns.length} turns = ${pct}%`
+  const interruptedTurns = turns.filter((e) => /(^|,)interrupted(,|$)/.test(String(e.scFields || '')));
+  const interruptedMsgs = entries.filter((e) => e.msg === 'voice.live.interrupted');
+  const interruptedCount = Math.max(interruptedTurns.length, interruptedMsgs.length);
+  // Distinguishable from "0 because it was clean": if not one turn reported scFields
+  // at all, the field is missing rather than empty, and this script must say so
+  // instead of scoring the session green off a number it could not read.
+  const sawScFields = turns.some((e) => typeof e.scFields === 'string' && e.scFields);
+  const pct = turns.length ? Math.round((interruptedCount / turns.length) * 1000) / 10 : null;
+  check('self-interruption under 15% of turns',
+    pct === null || (!sawScFields && interruptedMsgs.length === 0) ? false : pct < 15,
+    turns.length
+      ? (sawScFields || interruptedMsgs.length
+        ? `${interruptedCount}/${turns.length} turns = ${pct}%`
+        : `${turns.length} turns but no scFields on any of them — cannot compute, and 0% here `
+          + `would be a fabricated pass`)
       : 'no live.turn-parts entries — cannot compute; was the session actually spoken?',
     CRITERIA_NOTES.interrupted);
 

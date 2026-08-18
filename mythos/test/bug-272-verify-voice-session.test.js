@@ -34,7 +34,11 @@ function run(args) {
 
 const CLEAN = [
   '{"ts":"2026-08-18T10:00:00.000Z","level":"info","msg":"wakeword.status","state":"listening"}',
-  '{"ts":"2026-08-18T10:00:05.000Z","level":"info","msg":"live.turn-parts","turnId":1}',
+  // BUG-273: scFields is where self-interruption is actually observable — it is the
+  // list of serverContent field names Gemini sent for the turn. A healthy turn has
+  // the list WITHOUT 'interrupted' in it. A turn-parts line with no scFields at all
+  // is now an explicit "cannot compute", not a free pass.
+  '{"ts":"2026-08-18T10:00:05.000Z","level":"info","msg":"live.turn-parts","turnId":1,"scFields":"generationComplete,inputTranscription,modelTurn,outputTranscription,turnComplete"}',
   '{"ts":"2026-08-18T10:00:06.000Z","level":"info","msg":"live.echo-check","turnId":1,"ratio":0.2,'
     + '"decision":"accepted","reason":"no-reference","candidateWords":3,"referenceWords":0,'
     + '"referenceCount":0,"msSinceSpoken":null,"msSinceAssistantAudio":120}',
@@ -127,5 +131,86 @@ describe('BUG-272 slice 5 — verify-voice-session.js', () => {
     const r = run([path.join(os.tmpdir(), 'mythos-does-not-exist-4a7f.log')]);
     assert.equal(r.status, 2);
     assert.match(r.stderr, /no such log file/);
+  });
+  // -------------------------------------------------------------------------
+  // BUG-273 — the headline criterion could never fire.
+  //
+  // It counted log entries with msg 'voice.live.interrupted'. That name is a BUS
+  // EVENT (live-session.js:665), not a log line, and nothing writes it to the
+  // server log — so the count was structurally 0, the percentage was 0%, and the
+  // criterion printed PASS on every session ever fed to it, including the
+  // 2026-08-18 log where the real figure was 26 of 61 turns (43%).
+  //
+  // Note what the existing BAD fixture above does NOT prove: it carries a
+  // 'voice.live.interrupted' line, so it went red for a reason the real log can
+  // never reproduce. A fixture that exercises a path production does not take is
+  // how a dead criterion stays green for five commits.
+  // -------------------------------------------------------------------------
+
+  it('counts self-interruption from scFields, the way the real log records it', () => {
+    const turn = (id, fields) => JSON.stringify({
+      ts: '2026-08-18T11:00:00.000Z', level: 'info', msg: 'live.turn-parts', turnId: id, scFields: fields,
+    });
+    const CLEAN_FIELDS = 'generationComplete,modelTurn,turnComplete';
+    const CUT_FIELDS = 'generationComplete,interrupted,modelTurn,turnComplete';
+    // 4 of 10 = 40%, the 2026-08-18 shape. No voice.live.interrupted line anywhere,
+    // which is exactly the condition the old code read as a clean session.
+    const lines = [];
+    for (let i = 1; i <= 10; i++) lines.push(turn(i, i <= 4 ? CUT_FIELDS : CLEAN_FIELDS));
+    withLog(lines, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /\[FAIL\] self-interruption under 15% of turns/,
+        '40% self-interruption must be a FAIL — the old code scored this 0% and passed');
+      assert.match(r.stdout, /4\/10 turns = 40%/, r.stdout);
+    });
+  });
+
+  it('does not match a field merely CONTAINING the word interrupted', () => {
+    // Q1: scFields is a comma-separated list from the wire, so the detector has to
+    // match a whole element. A substring test would count a turn whose fields include
+    // something like 'uninterruptedAudio' and inflate the number this criterion
+    // exists to drive down.
+    const lines = [];
+    for (let i = 1; i <= 4; i++) {
+      lines.push(JSON.stringify({
+        ts: '2026-08-18T11:00:00.000Z', level: 'info', msg: 'live.turn-parts', turnId: i,
+        scFields: 'generationComplete,uninterruptedAudio,modelTurn,turnComplete',
+      }));
+    }
+    withLog(lines, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /0\/4 turns = 0%/, r.stdout);
+      assert.doesNotMatch(r.stdout, /\[FAIL\] self-interruption/, r.stdout);
+    });
+  });
+
+  it('refuses to score 0% when no turn reported scFields at all', () => {
+    // Q5/Q2: "the field is absent" and "the field is empty" are different facts, and
+    // collapsing them is how this criterion passed for its whole life. Absent must
+    // fail loudly rather than default to the healthy answer.
+    const lines = [
+      JSON.stringify({ ts: '2026-08-18T11:00:00.000Z', level: 'info', msg: 'live.turn-parts', turnId: 1 }),
+      JSON.stringify({ ts: '2026-08-18T11:00:05.000Z', level: 'info', msg: 'live.turn-parts', turnId: 2 }),
+    ];
+    withLog(lines, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /\[FAIL\] self-interruption/, r.stdout);
+      assert.match(r.stdout, /fabricated pass/, r.stdout);
+      assert.doesNotMatch(r.stdout, /0\/2 turns = 0%/,
+        'reporting 0% off a field it could not read is the bug, not the fallback');
+    });
+  });
+
+  it('still counts a logged voice.live.interrupted, if a future build ever logs one', () => {
+    const lines = [
+      JSON.stringify({ ts: '2026-08-18T11:00:00.000Z', level: 'info', msg: 'live.turn-parts', turnId: 1,
+        scFields: 'generationComplete,modelTurn,turnComplete' }),
+      JSON.stringify({ ts: '2026-08-18T11:00:01.000Z', level: 'info', msg: 'voice.live.interrupted' }),
+    ];
+    withLog(lines, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /1\/1 turns = 100%/,
+        'the old lookup is kept as an OR — adding the real signal must not remove a signal');
+    });
   });
 });
