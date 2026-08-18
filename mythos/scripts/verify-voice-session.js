@@ -60,6 +60,7 @@ const CRITERIA_NOTES = {
   ack: 'four breaches, one launch_app legitimately taking 9860ms',
   flush: 'nothing is sent DURING a hold, so the release flush is the only remaining carrier',
   policy: 'informational — read alongside how the session actually felt',
+  selftalk: 'was 26 of 61 turns (43%) on 2026-08-18 — the "rambling on by yourself" session',
 };
 
 function parseArgs(argv) {
@@ -290,6 +291,38 @@ function main() {
     + (learnedSeen !== null ? `, dormant learned floor ${learnedSeen}` : '')
     + (peakSeen !== null ? `, room bleed peak ${peakSeen}` : ''),
     CRITERIA_NOTES.policy);
+
+  // --- D1: how much of the conversation did MYTHOS start? (BUG-273 D3) ---
+  //
+  // The complaint was "rambling on by yourself". The measurement is the share of
+  // turns MYTHOS injected text into, and until BUG-273 D3 the log could say the
+  // share but never the CAUSE: `systemInitiated` is stamped on the turn after the
+  // fact by live-session.js, and all thirteen injection sites called one unlabelled
+  // function. `live.text-injected` now names the site, so this can break the number
+  // down instead of just reporting it.
+  //
+  // Operator-typed text is excluded on BOTH sides: it travels the same wire frame
+  // (the Live protocol has no system role after setup) and used to be counted as
+  // MYTHOS talking to itself, which inflated this figure and — worse — exempted
+  // those turns from the half-blind-transcript check.
+  const injected = of('live.text-injected').filter((e) => e.operator !== true);
+  const bySite = {};
+  for (const e of injected) {
+    const k = e.site || 'unattributed';
+    bySite[k] = (bySite[k] || 0) + 1;
+  }
+  const siteBreakdown = Object.entries(bySite).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k}=${v}`).join(' ');
+  const sysTurns = turns.filter((e) => e.systemInitiated === true).length;
+  const sysPct = turns.length ? Math.round((sysTurns / turns.length) * 100) : 0;
+  // Not a threshold on the injections themselves — a session full of slow tools
+  // SHOULD carry a lot of outcome reports, and suppressing those is how BUG-273 B1
+  // happened. The threshold is on the share of the CONVERSATION, which is what the
+  // operator actually experiences.
+  check('self-started turns under 25% (BUG-273 D3)', turns.length === 0 || sysPct < 25,
+    `${sysTurns}/${turns.length} turns = ${sysPct}%`
+    + (siteBreakdown ? ` | injections: ${siteBreakdown}` : ' | no live.text-injected lines'),
+    CRITERIA_NOTES.selftalk);
 
   // BUG-273 A1 is pass/fail, unlike the veto count: the floor in force must be
   // the pinned initial tier. A 0.1781 floor against the operator's 0.069 peak is

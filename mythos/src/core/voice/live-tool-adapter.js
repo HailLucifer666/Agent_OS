@@ -650,7 +650,8 @@ function createLiveToolAdapter(deps) {
         // announcing, so sending "outcome pending" here would be noise ahead
         // of the answer.
         if (!entry.started) {
-          sendSystemNotice(entry.summary, entry.ok ? 'Report this to the operator accurately.' : NO_SUCCESS_CLAIM);
+          sendSystemNotice(entry.summary, entry.ok ? 'Report this to the operator accurately.' : NO_SUCCESS_CLAIM,
+            { site: 'late-for-turn', tool: entry.tool || null, claim: entry.ok ? 'ok' : 'failed' });
         }
         return;
       }
@@ -855,7 +856,8 @@ function createLiveToolAdapter(deps) {
       verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
     }
     liveTurnActions.push({ tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict });
-    sendSystemNotice(verdict, instruction);
+    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
+      claim: !ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok') });
   }
 
   // The one way to reach a model whose turn has already closed. A
@@ -865,10 +867,49 @@ function createLiveToolAdapter(deps) {
   // SYSTEM_NOTICE_PREFIX — there is no system role after setup, so this
   // arrives attributed to the user role, which is exactly why the prefix has
   // to make it self-describing).
-  function sendSystemNotice(verdict, instruction) {
+  // BUG-273 D3 — EVERY injection is logged, because an injected notice provokes a
+  // full spoken turn and nothing in the log said one had happened.
+  //
+  // MEASURED, mythos-server.log 2026-08-18 (the "rambling on by yourself" session):
+  // 26 of 61 turns carried systemInitiated:true — 43% of the conversation was
+  // MYTHOS answering MYTHOS — and 8 of those had no tool-call batch anywhere
+  // between them and the previous turn, so nothing in the log could say what
+  // started them. `systemInitiated` is recorded on the turn AFTER the fact, by
+  // live-session.js, and it cannot name WHICH of the three injection sites fired
+  // or why. That is the whole reason D3 could only be filed as "audit what opens a
+  // turn with no operator utterance".
+  //
+  // Q2 — DOES THIS HIDE EVIDENCE? The opposite, and note what is NOT logged: the
+  // verdict text is a tool outcome and can carry file names, window titles and
+  // message bodies. The site, the reason class and a length are enough to attribute
+  // a turn; the content is already in the audit vault for anyone entitled to it.
+  //
+  // Q8 — PIN THE DISPOSITION: this changes nothing about WHEN a notice is sent. The
+  // candidate fix (coalescing notices that arrive together — three per-tool call
+  // sites with no batching between them, so two slow tools finishing at once speak
+  // twice) is deliberately NOT written here. Chains of 2 and 3 consecutive
+  // system-initiated turns appear six times in that log, which is consistent with
+  // it and does not demonstrate it. This line is what makes the next session able
+  // to tell.
+  function sendSystemNotice(verdict, instruction, meta) {
     const liveSession = getLiveSession ? getLiveSession() : null;
-    if (!liveSession || !liveSession.isOpen()) return false; // best-effort, same as confirms
-    liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`);
+    const m = meta || {};
+    if (!liveSession || !liveSession.isOpen()) {
+      // Logged on the way out too: "the outcome never reached the model" and "the
+      // model was told and said nothing" are different failures that used to look
+      // identical from here, and the audit records only the former.
+      logger.info('live.system-notice', { site: m.site || 'unknown', tool: m.tool || null,
+        delivered: false, reason: 'no open live session' });
+      return false; // best-effort, same as confirms
+    }
+    const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`;
+    // The delivered line is written by live-session.sendText itself, which is the
+    // ONE door every injection in the process goes through — including seven in
+    // server/index.js this module cannot see. Logging here as well would give the
+    // adapter's injections two lines and the others one, which is a worse log than
+    // no log: the counts would not mean the same thing.
+    liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null,
+      claim: m.claim || null });
     return true;
   }
 
@@ -935,9 +976,12 @@ function createLiveToolAdapter(deps) {
     // it this way.
     liveTurnActions.push({ tool: pending.name, ok: ok && !unverified, unverified, summary: verdict });
 
-    const liveSession = getLiveSession ? getLiveSession() : null;
-    if (!liveSession || !liveSession.isOpen()) return; // nothing left to tell — best-effort
-    liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`);
+    // BUG-273 D3: this used to build and send the notice itself, duplicating
+    // sendSystemNotice's guard and its wire format. Two doors meant the injection
+    // log could only ever cover one of them — and an incomplete log of what starts
+    // a turn is worse than none, because the gaps read as "nothing happened".
+    sendSystemNotice(verdict, instruction, { site: 'confirm-resolved', tool: pending.name,
+      claim: accepted ? (unverified ? 'unverified' : (ok ? 'ok' : 'failed')) : 'rejected' });
   }
 
   // B3 — 2026-08-12 diagnosis (G4): a show_desktop confirm was created and
@@ -983,13 +1027,15 @@ function createLiveToolAdapter(deps) {
     }
     livePendingConfirms.clear();
 
-    const liveSession = getLiveSession ? getLiveSession() : null;
-    if (!liveSession || !liveSession.isOpen()) return; // best-effort, same as resolveLiveConfirm
     const names = cancelledNames.join(', ');
-    liveSession.sendText(
-      `${SYSTEM_NOTICE_PREFIX} The operator said no. Cancelled: ${names}. ` +
-      `Do NOT run ${cancelledNames.length === 1 ? 'that action' : 'those actions'} — ` +
-      'tell the operator plainly what was cancelled.',
+    // BUG-273 D3: third door, closed. One notice for the whole batch of cancels,
+    // as before — this path already coalesced, which is precisely the shape the
+    // late-outcome path lacks.
+    sendSystemNotice(
+      `The operator said no. Cancelled: ${names}.`,
+      `Do NOT run ${cancelledNames.length === 1 ? 'that action' : 'those actions'} — `
+      + 'tell the operator plainly what was cancelled.',
+      { site: 'confirm-rejected-by-voice', tool: names, claim: 'cancelled' },
     );
   }
 
@@ -1058,6 +1104,7 @@ function createLiveToolAdapter(deps) {
             + 'so you do not know whether it worked.',
             `Say so now: tell the operator you are still waiting on ${failedTool} and that you spoke too early. `
             + 'Do NOT repeat the completion claim. The real outcome will arrive as a [SYSTEM] message; report it then.',
+            { site: 'ad4-correction-premature', tool: failedTool, claim: 'spoke-too-early' },
           );
           continue;
         }
@@ -1067,6 +1114,7 @@ function createLiveToolAdapter(deps) {
         sendSystemNotice(
           `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
           'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
+          { site: 'ad4-correction-retract', tool: failedTool || null, claim: 'retract' },
         );
       }
     }

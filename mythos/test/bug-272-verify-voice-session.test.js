@@ -203,7 +203,14 @@ describe('BUG-272 slice 5 — verify-voice-session.js', () => {
       const r = run([file]);
       assert.match(r.stdout, /\[FAIL\] self-interruption/, r.stdout);
       assert.match(r.stdout, /fabricated pass/, r.stdout);
-      assert.doesNotMatch(r.stdout, /0\/2 turns = 0%/,
+      // Scoped to the self-interruption LINE, not to the whole of stdout. BUG-273 D3
+      // added a second criterion that legitimately reports "0/2 turns = 0%" for a
+      // conversation with no self-started turns, and this assertion caught it — an
+      // over-broad detector matching something other than what it means, which is the
+      // exact defect the criterion below it exists to prevent. The invariant is
+      // unchanged: THIS criterion must not print a fabricated 0%.
+      const interruptionLine = r.stdout.split('\n').find((l) => /self-interruption/.test(l)) || '';
+      assert.doesNotMatch(interruptionLine, /0\/2 turns = 0%/,
         'reporting 0% off a field it could not read is the bug, not the fallback');
     });
   });
@@ -290,6 +297,68 @@ describe('verify-voice-session: which run is being scored', () => {
         + 'class of bug as pooling');
       assert.match(r.stdout, /\[FAIL\] wake word: zero errors/,
         'both runs are inside the requested window');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-273 D3 — how much of the conversation did MYTHOS start?
+//
+// The operator's complaint was "rambling on by yourself". The measurement is the
+// share of turns MYTHOS injected text into: 26 of 61 (43%) in the session that
+// produced the complaint. The script could always have counted it — nothing did,
+// and nobody could have said WHY any of those turns happened, because all thirteen
+// injection sites called one unlabelled sendText.
+describe('verify-voice-session: self-started turns (BUG-273 D3)', () => {
+  const turn = (id, sys) => JSON.stringify({
+    ts: '2026-08-18T12:00:0' + (id % 10) + '.000Z', level: 'info', msg: 'live.turn-parts',
+    turnId: id, systemInitiated: sys, scFields: 'generationComplete,modelTurn,turnComplete',
+  });
+  const inject = (site, operator) => JSON.stringify({
+    ts: '2026-08-18T12:00:00.000Z', level: 'info', msg: 'live.text-injected',
+    site, operator: !!operator, chars: 120,
+  });
+
+  it('fails when MYTHOS started too much of the conversation, and names the sites', () => {
+    const lines = [turn(1, true), turn(2, true), turn(3, false), turn(4, false),
+      inject('late-outcome'), inject('late-outcome'), inject('proactive-speak')];
+    withLog(lines, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /\[FAIL\] self-started turns/, r.stdout);
+      assert.match(r.stdout, /2\/4 turns = 50%/);
+      assert.match(r.stdout, /late-outcome=2/, 'the breakdown is the half that was missing');
+      assert.match(r.stdout, /proactive-speak=1/);
+    });
+  });
+
+  it('passes a conversation the operator actually drove', () => {
+    const lines = [turn(1, false), turn(2, false), turn(3, false), turn(4, false),
+      turn(5, true), inject('late-outcome')];
+    withLog(lines, (file) => {
+      assert.match(run([file]).stdout, /\[PASS\] self-started turns/);
+    });
+  });
+
+  it('the operator TYPING is not counted as MYTHOS talking to itself', () => {
+    // Typed text rides the same wire frame (no system role after setup) and used to
+    // be marked system-initiated, which both inflated this figure and exempted those
+    // turns from the half-blind-transcript check.
+    const lines = [turn(1, false), turn(2, false),
+      inject('operator-typed', true), inject('operator-typed', true), inject('late-outcome')];
+    withLog(lines, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /late-outcome=1/);
+      assert.doesNotMatch(r.stdout, /operator-typed/,
+        'the operator speaking is not the entity rambling');
+    });
+  });
+
+  it('says so plainly when the log predates the instrumentation', () => {
+    // Every log captured before this slice has no live.text-injected lines at all.
+    // Printing an empty breakdown would read as "no injections happened", which is
+    // the fabricated-pass shape this script already got caught by once.
+    withLog([turn(1, true), turn(2, false)], (file) => {
+      assert.match(run([file]).stdout, /no live\.text-injected lines/);
     });
   });
 });

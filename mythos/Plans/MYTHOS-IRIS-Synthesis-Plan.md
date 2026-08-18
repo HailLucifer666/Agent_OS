@@ -17,7 +17,7 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for what needs a live session. Eleven items shipped (D4 included: the logging path was destroying its own evidence); A2 diagnosed and instrumented. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for A2’s acoustic half, which is blocked on a live session by design. Twelve items shipped; D4 and D3 both turned out to be answerable without another session. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
 Fourteen commits on `main`, `f0f63f9..2d82ba5`: `7eb3920` (B1, `unverified` was
@@ -128,7 +128,17 @@ one run died with no Crashpad dump, no child exit line, and no trail at all.
 - **C2’s other half** — an operator action, not a patch: move the Google Cloud OAuth
   app to Production/External, or accept weekly re-consent. MYTHOS now warns
   proactively either way.
-- **D3** (unsolicited speech) — still needs evidence a session has not yet produced.
+**D3 IS AUDITED, and the audit ran against the log already on disk.** 26 of 61 turns
+(43%) were started by MYTHOS; 8 of those had no tool call anywhere near them; there
+are 6 chains of 2-3 consecutive self-started turns — and nothing in the log could
+say what caused any of them, because all **thirteen** injection sites called one
+unlabelled `sendText`. **One of the thirteen is the operator typing**, which both
+inflated the count and — because `turnSystemInitiated` guards the
+half-blind-transcript anomaly — exempted typed turns from the very monitor A2 exists
+to serve. One argument and one log line at the one door fixes both. Coalescing (the
+likely cause of the 2-3 chains: `reportLateOutcome` is per-tool with no batching) is
+deliberately unwritten — consistent is not demonstrated, and two `live.text-injected`
+lines inside one turn gap will settle it.
 
 **D4 IS FIXED, and it is the sixth fix in this ticket caused by an earlier one.** It
 was filed as "the missing trail is the bug — capture stderr until it recurs", i.e.

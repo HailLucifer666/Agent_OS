@@ -18,11 +18,13 @@ and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix p
 corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
 its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
 EVERY ITEM THAT COULD BE FIXED WITHOUT A LIVE SESSION IS NOW FIXED — B1, A1, D2, A3, B2, B3,
-C1, C3, A4, C2, and D4's instrumentation half. D2's banner turned out never to have been
-false, A3 was not the boot-has-no-Live-session case it was filed as, and D4 was not waiting
-for evidence at all: the logging path was DESTROYING it (the server log was truncated by the
-crash-restart that its own crash caused). Next: A2's acoustic fix is the only P0 left and is
-blocked on a live session by design; D3 still needs evidence. Suite 5090/5090/0 fail/0 skipped.
+C1, C3, A4, C2, D4 and D3. D2's banner turned out never to have been false, A3 was not the
+boot-has-no-Live-session case it was filed as, and NEITHER D4 NOR D3 was waiting for evidence:
+D4's logging path was destroying it (the server log was truncated by the crash-restart its own
+crash caused) and D3 was auditable against the log already on disk — 26 of 61 turns (43%) were
+started by MYTHOS, and one of the thirteen injection sites turned out to be the operator typing.
+Next: A2's acoustic fix is the only item left, and it is blocked on a live session by design.
+Suite 5103/5103/0 fail/0 skipped.
 
 Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
@@ -9504,10 +9506,60 @@ unchanged, and the remaining acoustic decision waits on a live session by design
 
 - **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
   above; needs a live session to confirm `flushedRaw` before changing behaviour.
-- **D3 (P1)** — unsolicited speech, *"rambling on by yourself"* with no operator
-  input; MYTHOS logged its own corrective ("cease speaking immediately"). 61 turns
-  in 10 minutes is high and turn 1 was `systemInitiated:true`. Audit what opens a
-  turn with no operator utterance.
+- **D3 (P1) — AUDITED and INSTRUMENTED; the audit ran against the log already on
+  disk.** Filed as *"rambling on by yourself"* with no operator input, MYTHOS
+  logging its own corrective, 61 turns in 10 minutes, turn 1 `systemInitiated:true`.
+  The ask was "audit what opens a turn with no operator utterance". Against
+  `mythos-server.log` for 2026-08-18T11:32–11:50, the session the complaint came
+  from:
+
+  ```
+  61  turns
+  26  systemInitiated:true      <- 43% of the conversation was MYTHOS answering MYTHOS
+  18  of those had a tool-call batch since the previous turn
+   8  had NO tool call anywhere
+   6  chains of 2-3 CONSECUTIVE system-initiated turns
+  ```
+
+  **And the log could not say why a single one of them happened.**
+  `systemInitiated` is stamped on the turn *after* the fact by `live-session.js`;
+  it cannot name what injected the text. There are **thirteen** injection sites —
+  six in `live-tool-adapter.js` (late outcomes, confirm resolutions, spoken
+  cancels, late-for-turn actions, two kinds of AD-4 self-correction) and seven in
+  `server/index.js` (proactive speech, the boot greeting, replies routed into Live,
+  the HUD text box) — all calling one unlabelled `sendText`.
+
+  **One of the thirteen is not MYTHOS at all.** The HUD text box routes the
+  operator's typed words through the same call, because the Live protocol has no
+  system role after setup — so every typed message was marked system-initiated.
+  That is not cosmetic: `turnSystemInitiated` is the guard on the
+  half-blind-transcript anomaly, so those turns were exempted from the one monitor
+  that notices when the operator was not heard — the monitor **A2** exists to
+  serve. A count inflated by operator input and a check silenced on operator input,
+  both from the same missing argument.
+
+  Fixed with one argument and one log line **at the one door**: `sendText` is the
+  only way text enters a Live session in this process, so `live.text-injected`
+  covers all thirteen, names the site, the tool and which hedge class the model was
+  handed, and excludes operator input from the flag. Instrumenting the adapter
+  helper instead would have covered six — and a partial log of what starts a turn
+  is worse than none, because the gaps read as "nothing happened" (the same trap as
+  the verifier criterion that could never fire, `8d61547`). The text itself is
+  never logged: these strings carry tool results, message bodies and whatever the
+  operator typed.
+
+  `verify-voice-session.js` now reports the share with a per-site breakdown, fails
+  above 25%, and says plainly when a log predates the instrumentation rather than
+  printing an empty breakdown that would read as "no injections happened". Against
+  the original log it reports `26/61 turns = 43%` — FAIL — which is the first time
+  that number has been produced by anything but a hand-count.
+
+  **Deliberately NOT done (Q8):** coalescing. `reportLateOutcome` is per-tool with
+  no batching, so two slow tools finishing together produce two injections and
+  therefore two spoken turns — consistent with those 2-3 chains, but not
+  demonstrated by them, and the conversational path is exactly where this repo has
+  traded one bug for another before. Two `live.text-injected` lines inside one turn
+  gap is the proof, and it can now be read.
 - **D4 (P1) — FIXED, and it was never waiting for evidence.** One run died with no
   diagnostic trail: no Crashpad dump, child log stops abruptly, `logs/main.log`
   records no exit at all. Filed as "capture stderr until it recurs". Reading the

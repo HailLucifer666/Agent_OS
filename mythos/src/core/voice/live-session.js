@@ -922,13 +922,44 @@ function createLiveSession(deps) {
 
   // Text injection on the realtimeInput channel (NOT clientContent — that breaks VAD
   // mid-conversation per Google's guidance). Used for the post-confirm follow-up.
-  function sendText(text) {
+  // BUG-273 D3 — THIS is the only way text enters a Live session, and until now it
+  // recorded nothing about who sent it or why.
+  //
+  // MEASURED (mythos-server.log, the 2026-08-18 "rambling on by yourself" session):
+  // 26 of 61 turns carried systemInitiated:true, 8 of them with no tool call
+  // anywhere between them and the previous turn — and the log could not say what
+  // started a single one. There are thirteen call sites across live-tool-adapter.js
+  // and server/index.js (late outcomes, confirm resolutions, AD-4 corrections,
+  // proactive speech, the boot greeting, and the operator TYPING into the HUD).
+  //
+  // AND ONE OF THEM IS NOT US AT ALL. The HUD text box routes the operator's typed
+  // words through this same function, so every typed message was being marked
+  // system-initiated. That is not cosmetic: turnSystemInitiated is the guard on the
+  // half-blind-transcript anomaly, so a turn where the operator typed — or spoke and
+  // was not heard — could be silently exempted from the very check that exists to
+  // catch it. `meta.operator` separates the two; the default stays "ours", because
+  // an unlabelled caller in this file is pipeline code by construction.
+  //
+  // Q2: the text itself is NOT logged. These strings carry tool results, message
+  // bodies and whatever the operator typed. A site and a length attribute a turn;
+  // the content already lives in the audit vault under its own rules.
+  function sendText(text, meta) {
     if (state !== 'open') return false;
+    const m = meta || {};
+    const fromOperator = m.operator === true;
     // Mark the turn this provokes as ours, so the half-blind transcript check
     // does not accuse the operator of having spoken unheard (see
     // turnSystemInitiated's declaration). Set before the send, not after: the
     // reply can begin arriving synchronously on a fake socket in tests.
-    turnSystemInitiated = true;
+    if (!fromOperator) turnSystemInitiated = true;
+    logger.info('live.text-injected', {
+      site: m.site || 'unattributed',
+      operator: fromOperator,
+      tool: m.tool || null,
+      claim: m.claim || null,
+      chars: String(text).length,
+      turnId: turnCounter,
+    });
     return sendRaw({ realtimeInput: { text: String(text) } });
   }
 

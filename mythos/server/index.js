@@ -2055,7 +2055,12 @@ function createServer(deps) {
     if (liveSession && liveSession.isOpen()) {
       // BUG-117: same self-describing prefix the tool-outcome pushes use — a
       // proactive alert is even easier to misread as the operator speaking.
-      liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${text}`);
+      // BUG-273 D3: every injection names itself now. This is the entity speaking
+      // unprompted (an announcement, an anomaly, the boot greeting), which is exactly
+      // the class the operator described as "rambling on by yourself" — and the class
+      // that was indistinguishable in the log from a tool outcome or from the operator
+      // typing, because all thirteen sites called one unlabelled function.
+      liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${text}`, { site: 'proactive-speak' });
       try {
         memory.episodic.write({
           kind: 'proactive-speech', channel: 'proactive',
@@ -3060,7 +3065,7 @@ function createServer(deps) {
       // Live here would answer on the desktop a question that was asked at the
       // phone. Same guard the utterance router uses, and for the same reason.
       if (!ws._mythosNodeId && liveSession && liveSession.isOpen()) {
-        liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${speak}`);
+        liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${speak}`, { site: 'reply-routed-to-live' });
         logger.info('reply.routed-to-live', { reqId, chars: speak.length });
         try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
         return;
@@ -3457,7 +3462,7 @@ function createServer(deps) {
           // The final `done` still carries the caption so the HUD shows the
           // answer, marked chunked so the client finishes the turn silently
           // instead of speaking the reply again locally.
-          liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${say}`);
+          liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${say}`, { site: 'ask-answer-to-live' });
           send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: true });
           activeSpeech.delete(msg.reqId);
           return;
@@ -3673,13 +3678,19 @@ function createServer(deps) {
         if (ws._mythosNodeId && !ws._nodeLiveAudio) {
           queueTurn(function() { return handleUtterance(msg); });
         } else if (liveSession && liveSession.isOpen()) {
-          liveSession.sendText(String(msg.text || ''));
+          // BUG-273 D3: operator:true. This is the HUD text box — the operator's own
+          // words, arriving on the same wire frame as a pipeline injection because the
+          // Live protocol has no system role after setup. Marking it system-initiated
+          // (which is what an unlabelled call does) silently exempts the turn from the
+          // half-blind-transcript check, i.e. from the one monitor that notices when
+          // the operator was not heard.
+          liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
           const typedText = String(msg.text || '');
           liveForSpeech().then((live) => {
             if (live && live.isOpen()) {
-              live.sendText(typedText);
+              live.sendText(typedText, { site: 'operator-typed', operator: true });
               send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
             } else {
               queueTurn(function() { return handleUtterance(msg); });
@@ -3903,7 +3914,9 @@ function createServer(deps) {
         if (liveSession && config.LIVE_SCREEN_SHARE_ENABLED === true) liveSession.sendVideoFrame(msg.data);
       }
       else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
-      else if (msg.type === 'live-text') { if (liveSession) liveSession.sendText(String(msg.text || '')); }
+      else if (msg.type === 'live-text') {
+        if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+      }
     });
 
     // Tear down any open Live session when the socket itself closes — a
