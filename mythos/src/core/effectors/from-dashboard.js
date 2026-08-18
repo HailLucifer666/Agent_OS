@@ -238,6 +238,15 @@ function buildTools(ctx) {
     externalOpener = fn;
   }
 
+  // BUG-273 B3 — the dashboard render ack. Same injected-setter shape as the three
+  // providers above, and left null for the same reason: outside a running HUD there
+  // is nothing to ask, and "unset" must mean "I cannot confirm" rather than a
+  // fabricated yes.
+  let widgetRenderer = null;
+  function setWidgetRenderer(fn) {
+    widgetRenderer = fn;
+  }
+
   async function close_panel({ all }) {
     try {
       if (!closePanelProvider) {
@@ -272,8 +281,51 @@ function buildTools(ctx) {
   // evidence contract dispatch-action.js enforces everywhere else: ok:true
   // is kept (this DID resolve real content), but honestly marked unverified
   // rather than a bare, unqualified success.
-  function openWebResult(result, uiActions) {
-    return evidence.unverified(ok(result, uiActions), 'the dashboard has not confirmed it rendered this');
+  // BUG-273 B3 — the ack the comment above says does not exist now does.
+  //
+  // Three incidents on 2026-08-18 were this exact gap: `news`, `flights` ("Kolkata
+  // to Bangalore") and a generic "Dashboard did not confirm display", all of them
+  // `open_web -> ok` carrying "the dashboard has not confirmed it rendered this".
+  // BUG-272 T2 only ever fixed the browser:true branch; this is the dashboard one.
+  //
+  // Q8 — WHY THIS IS NOT ANOTHER confirmedStep (BUG-273 B2). B2 could honestly say
+  // "your browser was handed the URL" because openExternal resolving is an
+  // independently established fact. Here there was NO confirmed step at all —
+  // nothing downstream reported back — so a partial claim would have been invented.
+  // The fix had to be a real ack, and with one the outcome stops being unverified
+  // altogether: it is verified, or it is a FAILURE.
+  //
+  // Q5 — WHEN THE RENDERER IS UNSET, behaviour is byte-identical to before, and
+  // deliberately so. No HUD (a plain `node src/main.js` boot, or the socket down)
+  // means nothing can confirm, and unverified is the honest answer. A default that
+  // assumed success would rebuild this bug in the one configuration nobody tests.
+  async function openWebResult(result, uiActions) {
+    if (!widgetRenderer) {
+      return evidence.unverified(ok(result, uiActions), 'the dashboard has not confirmed it rendered this');
+    }
+    // Marked BEFORE the round-trip. dispatch-action.js must not relay this
+    // descriptor over the bus as well, or the widget renders twice — BUG-166 (one
+    // open_web, two players of the same video) from the other direction.
+    if (result) result.renderDispatched = true;
+    var ack = null;
+    try { ack = await widgetRenderer(result); } catch (_) { ack = null; }
+    // A timeout resolves null, and that is NOT the same as an explicit "did not
+    // mount": silence means the HUD never answered (no client attached, or it is
+    // wedged), which is unproven rather than proven-failed. Reporting failure there
+    // would be the mirror-image lie of the one this fixes.
+    if (!ack) {
+      return evidence.unverified(ok(result, uiActions),
+        'the dashboard did not answer, so I cannot confirm it rendered');
+    }
+    if (!ack.mounted) {
+      return fail('the dashboard did not render this: ' + String(ack.reason || 'no reason given')
+        + '. Nothing is on screen, so do not tell the operator to look at it.');
+    }
+    return evidence.verifiedOk(ok(result, uiActions), {
+      oracle: 'dashboard-render',
+      expected: String((result && result.widgetType) || 'widget'),
+      observed: String(ack.surface || 'mounted') + ' — ' + String((result && result.widgetType) || 'widget'),
+    });
   }
 
   // ---- open_web ----
@@ -1390,7 +1442,7 @@ function buildTools(ctx) {
     { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];
 
-  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setCameraPowerProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser, setExternalOpener };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setCameraPowerProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser, setExternalOpener, setWidgetRenderer };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -1404,7 +1456,8 @@ function registerFromDashboard(hub, ctx) {
     count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch,
     setCameraFrameProvider: built.setCameraFrameProvider,
     setCameraPowerProvider: built.setCameraPowerProvider, setPlannerHandle: built.setPlannerHandle,
-    setClosePanelProvider: built.setClosePanelProvider, setMediaWindowCloser: built.setMediaWindowCloser, setExternalOpener: built.setExternalOpener
+    setClosePanelProvider: built.setClosePanelProvider, setMediaWindowCloser: built.setMediaWindowCloser, setExternalOpener: built.setExternalOpener,
+    setWidgetRenderer: built.setWidgetRenderer
   };
 }
 

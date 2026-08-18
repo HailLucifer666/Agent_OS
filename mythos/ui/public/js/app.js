@@ -1099,16 +1099,44 @@ subscribe(['widget-command'], (msg) => {
 // Routes rich media (YouTube, direct URLs) to the overlay panel; compact results
 // (search, weather, flights, images) to floating widgets; iframe-blocking sites
 // get smart-routed: 'newtab' opens externally, 'news' navigates to news panel.
+// BUG-273 B3 — every branch below now answers the server: did this actually appear?
+// Three incidents on 2026-08-18 (`news`, `flights`, and a generic "Dashboard did
+// not confirm display") were open_web reporting ok with "the dashboard has not
+// confirmed it rendered this", because nothing ever reported back.
+//
+// `reqId` is absent on the legacy bus relay — from-pc.js and from-widgets.js still
+// emit ui.open-web directly — so ackRender is a no-op for those and this stays
+// purely additive rather than making them fail for want of an ack.
+function ackRender(msg, result) {
+  if (!msg || !msg.reqId) return;
+  try {
+    sendMessage(Object.assign({ type: 'open-web-ack', reqId: msg.reqId }, result || {}));
+  } catch (_) { /* socket down — the server times out and reports unverified */ }
+}
+
 subscribe(['open-web'], (msg) => {
   const p = msg.payload;
-  if (!p || !p.widgetType) return;
+  if (!p || !p.widgetType) {
+    ackRender(msg, { mounted: false, reason: 'the descriptor had no widgetType' });
+    return;
+  }
   if (p.widgetType === 'newtab' || p.widgetType === 'news') {
     const targetUrl = p.url || 'https://news.google.com';
-    window.open(targetUrl, '_blank', 'noopener');
+    // window.open returns null when the popup is blocked, which is a real and
+    // common failure that used to be reported to the operator as a success.
+    const win = window.open(targetUrl, '_blank', 'noopener');
+    ackRender(msg, win
+      ? { mounted: true, surface: 'new browser tab' }
+      : { mounted: false, reason: 'the browser blocked the new tab' });
     return;
   }
   if (p.widgetType === 'youtube' || p.widgetType === 'web') {
-    overlays.openPanel('web', p);
+    try {
+      overlays.openPanel('web', p);
+      ackRender(msg, { mounted: true, surface: 'dashboard panel' });
+    } catch (err) {
+      ackRender(msg, { mounted: false, reason: 'the web panel would not open: ' + ((err && err.message) || err) });
+    }
     return;
   }
   // dynamic — Item 11 generative UI (spawn_widget effector): declarative
@@ -1116,8 +1144,8 @@ subscribe(['open-web'], (msg) => {
   // floating-widget lifecycle as search/weather/flights/image below — just a
   // distinct render path inside spawnWebWidget, not a different lifecycle.
   if (p.widgetType === 'dynamic') {
-    widgetApi.spawnWebWidget(p);
+    ackRender(msg, widgetApi.spawnWebWidget(p));
     return;
   }
-  widgetApi.spawnWebWidget(p);
+  ackRender(msg, widgetApi.spawnWebWidget(p));
 });

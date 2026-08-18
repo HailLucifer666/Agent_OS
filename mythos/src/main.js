@@ -889,6 +889,13 @@ async function main() {
       if (dashboardWiring && typeof dashboardWiring.setExternalOpener === 'function' && typeof serverHandle.requestOpenExternal === 'function') {
         dashboardWiring.setExternalOpener(serverHandle.requestOpenExternal);
       }
+      // BUG-273 B3 — the same wiring shape once more, for the DASHBOARD half of
+      // open_web. With this set, a widget that never mounts is a FAILURE instead of
+      // an unverified success. Without it, open_web keeps saying "the dashboard has
+      // not confirmed it rendered this", which is exactly what it always said.
+      if (dashboardWiring && typeof dashboardWiring.setWidgetRenderer === 'function' && typeof serverHandle.requestWidgetRender === 'function') {
+        dashboardWiring.setWidgetRenderer(serverHandle.requestWidgetRender);
+      }
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
 

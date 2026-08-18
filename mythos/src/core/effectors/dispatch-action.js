@@ -248,7 +248,12 @@ async function dispatchAction(decision, ctx) {
     bus.emit('ui.navigate', { route: result.result.route });
   }
   if (decision.tool === 'open_web' && result && result.ok && result.result) {
-    bus.emit('ui.open-web', result.result);
+    // BUG-273 B3: skip when the effector already dispatched the render itself in
+    // order to collect a mount ack. Emitting here as well would render the widget
+    // twice, which is BUG-166 (one open_web, two players) from the other direction.
+    // Every other producer of this event (from-pc.js, from-widgets.js) is untouched
+    // and still relies on this relay.
+    if (!result.result.renderDispatched) bus.emit('ui.open-web', result.result);
   }
 
   return result;

@@ -394,6 +394,39 @@ function createServer(deps) {
   // (or that never answers within the timeout) resolves null, and close_panel
   // surfaces that honestly instead of fabricating success.
   const pendingClosePanel = new Map(); // reqId -> { resolve, timer }
+  // BUG-273 B3: the same shape, for "did the widget actually mount". A separate
+  // map because the two round-trips can be in flight at once (a close_panel while
+  // a spawn is still resolving); sharing one keyed by reqId would work and would
+  // read as if they were the same conversation.
+  const pendingWidgetRender = new Map(); // reqId -> { resolve, timer }
+  // BUG-273 B3 — send a widget descriptor to the HUD and wait to be told whether
+  // it mounted. Modelled on requestClosePanel below, including the 3s timeout
+  // resolving NULL rather than throwing: "no answer" and "did not mount" are
+  // different facts, and from-dashboard.js reports them differently.
+  //
+  // This becomes the ONLY path that broadcasts open-web for the open_web effector
+  // — dispatch-action.js skips its bus relay for a descriptor marked
+  // renderDispatched — so a widget cannot render twice. The Electron media-window
+  // relay is kept verbatim from the bus subscriber, BUG-166's rule included: under
+  // Electron, youtube/web are handled by the media window INSTEAD of a panel
+  // broadcast, and that window has its own ack channel, so there is no HUD panel
+  // to wait for and this resolves null rather than pretending to have asked one.
+  function requestWidgetRender(payload) {
+    return new Promise(function (resolve) {
+      const electronHandles = typeof process.send === 'function'
+        && payload && (payload.widgetType === 'youtube' || payload.widgetType === 'web');
+      if (typeof process.send === 'function') {
+        try { process.send({ channel: 'mythos:ui.open-web', payload: payload }); }
+        catch (_) { /* no parent listening (non-Electron boot) */ }
+      }
+      if (electronHandles) { resolve(null); return; }
+      const id = 'openweb-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      const timer = setTimeout(function () { pendingWidgetRender.delete(id); resolve(null); }, 3000);
+      pendingWidgetRender.set(id, { resolve: resolve, timer: timer });
+      broadcastAll({ type: 'open-web', payload: payload, reqId: id });
+    });
+  }
+
   function requestClosePanel(all) {
     return new Promise(function(resolve) {
       const id = 'closepanel-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -3713,6 +3746,21 @@ function createServer(deps) {
         }
         logger.info('voice.capture-suspend', fields);
       }
+      else if (msg.type === 'open-web-ack') {
+        // BUG-273 B3. `mounted` is the HUD reporting on its own DOM. Anything else
+        // — an older client, a malformed frame — is treated as NOT mounted rather
+        // than as a pass: a missing field must never read as a confirmation.
+        const w = pendingWidgetRender.get(msg.reqId);
+        if (w) {
+          clearTimeout(w.timer);
+          pendingWidgetRender.delete(msg.reqId);
+          w.resolve({
+            mounted: msg.mounted === true,
+            surface: typeof msg.surface === 'string' ? msg.surface.slice(0, 60) : null,
+            reason: typeof msg.reason === 'string' ? msg.reason.slice(0, 200) : null,
+          });
+        }
+      }
       else if (msg.type === 'close-panel-ack') {
         const p = pendingClosePanel.get(msg.reqId);
         if (p) {
@@ -4362,6 +4410,7 @@ function createServer(deps) {
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestCameraPower, requestClosePanel,
+    requestWidgetRender,
     requestCloseMediaWindow, requestOpenExternal, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: {

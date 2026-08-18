@@ -62,6 +62,14 @@ var ORACLES = [
   // page changed. Deliberately cheap (no full re-snapshot) so it can ride every
   // ref action without making each click cost a second tree.
   'page-state',
+  // BUG-273 B3: the HUD, asked after the fact whether the widget it was sent
+  // actually mounted — the card is in the document and its kind module did not
+  // throw. Independent of the call in the way that matters: composing a widget
+  // descriptor and handing it to a socket proves nothing about what rendered,
+  // which is exactly what the three "did not display" incidents on 2026-08-18
+  // were. The HUD is a separate page reporting on its own DOM, same spirit as
+  // page-state.
+  'dashboard-render',
 ];
 
 function isPlainObject(v) {
