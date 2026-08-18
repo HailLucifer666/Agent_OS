@@ -185,6 +185,19 @@ function buildTools(ctx) {
     mediaWindowCloser = fn;
   }
 
+  // BUG-272 T2 — open_web(browser:true)'s route to the operator's REAL browser
+  // (server/index.js's requestOpenExternal → electron/main.js →
+  // shell.openExternal). Same injected-setter shape as mediaWindowCloser above.
+  //
+  // Deliberately left null outside the Electron shell rather than defaulted to
+  // something: "unset" is what lets open_web say "the desktop shell is not
+  // running, so there is no browser to hand this to" instead of reporting a
+  // success that nothing performed. A no-op default would rebuild the bug.
+  let externalOpener = null;
+  function setExternalOpener(fn) {
+    externalOpener = fn;
+  }
+
   async function close_panel({ all }) {
     try {
       if (!closePanelProvider) {
@@ -262,7 +275,34 @@ function buildTools(ctx) {
           return fail('open_web with browser:true needs a url (or a query that IS one) — a search result list or a weather card cannot open in the real browser. Pass url:"https://…" with browser:true.');
         }
         var bUrl = URL_SHAPED.test(bRaw) ? (/^www\./i.test(bRaw) ? 'https://' + bRaw : bRaw) : 'https://' + bRaw;
-        return openWebResult({ widgetType: 'newtab', url: bUrl, title: title || bRaw });
+        // BUG-272 T2: this used to return widgetType:'newtab' + unverified, and
+        // under the Electron shell that had ZERO working surfaces — the media
+        // window refuses anything but youtube/web by design, and the HUD's
+        // window.open fallback is denied unconditionally by
+        // setWindowOpenHandler. It failed 7/7 in the 2026-08-17 session while
+        // reporting ok:true every time, so the circuit breaker counted seven
+        // successes and the model retried the identical dead call through turn 72.
+        //
+        // Now it actually asks the Electron main process to hand the URL to the
+        // operator's real browser, and FAILS when it cannot — no surface is a
+        // failure, not an unverified success. That distinction is the whole bug.
+        if (externalOpener) {
+          var handoff = await externalOpener(bUrl);
+          if (!handoff || !handoff.opened) {
+            return fail('could not open ' + bUrl + ' in your browser: '
+              + ((handoff && handoff.reason) || 'no reason given')
+              + '. Use browser_navigate to drive a browser directly, or open it yourself.');
+          }
+          // Handed to the OS, which is not the same as "the operator saw the
+          // page" — openExternal resolves on ACCEPTANCE, not on render. Reporting
+          // it as unverified is the honest shape and keeps the evidence contract
+          // intact rather than claiming a confirmation nothing produced.
+          return evidence.unverified(ok({ widgetType: 'newtab', url: bUrl, title: title || bRaw, handedToBrowser: true }),
+            'handed to your default browser — I cannot confirm the page rendered');
+        }
+        return fail('open_web with browser:true needs the MYTHOS desktop shell to reach your real '
+          + 'browser, and it is not running (this looks like a plain server/browser session). '
+          + 'Use browser_navigate instead, or open ' + bUrl + ' yourself.');
       }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
@@ -1298,7 +1338,7 @@ function buildTools(ctx) {
     { name: 'daily_plan', description: "Read today's plan, force an immediate re-brief, or quiet the planner for the rest of the day. action:\"status\" reads today's focus/check-ins/review. action:\"replan\" re-runs the morning brief right now. action:\"skip_today\" marks the day quiet — no further morning/check-in/evening firing today.", params: { action: 'string - status|replan|skip_today' }, danger: false, fn: daily_plan },
   ];
 
-  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setCameraPowerProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser };
+  return { TOOLS, setAskAgentDispatch, setCameraFrameProvider, setCameraPowerProvider, setPlannerHandle, setClosePanelProvider, setMediaWindowCloser, setExternalOpener };
 }
 
 function registerFromDashboard(hub, ctx) {
@@ -1312,7 +1352,7 @@ function registerFromDashboard(hub, ctx) {
     count: built.TOOLS.length, setAskAgentDispatch: built.setAskAgentDispatch,
     setCameraFrameProvider: built.setCameraFrameProvider,
     setCameraPowerProvider: built.setCameraPowerProvider, setPlannerHandle: built.setPlannerHandle,
-    setClosePanelProvider: built.setClosePanelProvider, setMediaWindowCloser: built.setMediaWindowCloser
+    setClosePanelProvider: built.setClosePanelProvider, setMediaWindowCloser: built.setMediaWindowCloser, setExternalOpener: built.setExternalOpener
   };
 }
 

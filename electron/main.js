@@ -797,6 +797,45 @@ function startChild() {
     child.stderr.pipe(childLogStream);
   }
 
+  // BUG-272 T2 — hand a URL to the operator's real browser.
+  //
+  // SECURITY, and the reason this is an allowlist rather than a pass-through:
+  // shell.openExternal hands the string to the OS handler for its scheme, so it
+  // is not "open a web page", it is "run whatever is registered for this
+  // protocol". A file: URL opens Explorer on an arbitrary path; ms-msdt:,
+  // search-ms:, and friends have been live Windows RCE vectors; a custom scheme
+  // reaches any application that registered one. The URL here originates from a
+  // TOOL CALL the model composed, so it is attacker-influenceable by anything
+  // that reached the model's context — a web page it summarised, an email, a
+  // filename. Reject at the edge: http and https only, parsed by WHATWG URL
+  // rather than string-matched, so "https:/\evil" and similar cannot slip past a
+  // startsWith check.
+  //
+  // Returns a verdict instead of throwing, because the caller must be able to
+  // report the refusal honestly — a silently-dropped URL is the bug this fixes.
+  function openExternalUrl(raw) {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return { opened: false, reason: 'no url' };
+    let parsed;
+    try { parsed = new URL(value); } catch (_) { return { opened: false, reason: 'not a valid url' }; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { opened: false, reason: 'refused scheme ' + parsed.protocol + ' — only http and https are opened externally' };
+    }
+    try {
+      // Lazily required at the use site: several Electron exports are lazy
+      // getters that throw when touched before app.ready, and a module-scope
+      // destructure of one is what once stopped this app booting at all.
+      const { shell } = require('electron');
+      shell.openExternal(parsed.href);
+      // openExternal resolves when the OS ACCEPTS the request, not when a page
+      // renders, so this is genuinely "handed off", never "the operator saw it".
+      // The effector reports it as unverified for that reason.
+      return { opened: true, reason: null };
+    } catch (err) {
+      return { opened: false, reason: err.message };
+    }
+  }
+
   // Stage 5 (BUG-075) — the child's only outbound channel to us is this fork()
   // IPC (stdio slot 3, 'ipc'), already established for lifecycle only. Reuse
   // it rather than opening a new one: 'ui.open-web' opens/updates the media
@@ -807,6 +846,28 @@ function startChild() {
     if (msg.channel === 'mythos:ui.open-web') {
       const res = mediaWindowController.handleOpenWeb(msg.payload);
       log('media-window: open-web ->', JSON.stringify(res));
+      // BUG-272 T2: the verdict used to be logged and DROPPED here. When it says
+      // opened:false ('not a media widgetType', i.e. anything but youtube/web),
+      // nothing rendered and nobody downstream was told — open_web still reported
+      // ok:true. Ack it back so the effector can fail honestly.
+      try { child.send({ channel: 'mythos:ui.open-web-ack', opened: Boolean(res && res.opened), reason: (res && res.reason) || null }); }
+      catch (err) { log('media-window: open-web ack send failed:', err.message); }
+    } else if (msg.channel === 'mythos:open-external') {
+      // BUG-272 T2: open_web(browser:true) had NO working surface under Electron.
+      // The media window refuses widgetType 'newtab' by design, and the HUD's
+      // window.open fallback is denied unconditionally by setWindowOpenHandler (a
+      // deliberate 2026-07-31 fix that must stay). shell.openExternal appeared
+      // nowhere in the codebase, so all seven attempts in the 2026-08-17 session
+      // failed silently while reporting success.
+      //
+      // shell is required lazily at the use site, like session/desktopCapturer/
+      // screen elsewhere in this file: several Electron exports are lazy getters
+      // that throw when touched before app.ready, and a module-scope destructure
+      // is what once made the whole app fail to boot.
+      const verdict = openExternalUrl(msg.url);
+      log('open-external ->', JSON.stringify(verdict));
+      try { child.send({ channel: 'mythos:open-external-ack', opened: verdict.opened, reason: verdict.reason }); }
+      catch (err) { log('open-external: ack send failed:', err.message); }
     } else if (msg.channel === 'mythos:close-media-window') {
       const closed = mediaWindowController.closeMediaWindow();
       try { child.send({ channel: 'mythos:close-media-window-ack', closed }); }

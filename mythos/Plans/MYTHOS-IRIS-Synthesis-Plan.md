@@ -17,7 +17,7 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, second entry) — BUG-272 slices 1–4 are SHIPPED IN CODE and pushed. Next action: the operator's scripted mic session, then `node scripts/verify-voice-session.js <log>`.
+### 2026-08-18 (latest, second entry) — BUG-272 slices 1–5 are SHIPPED IN CODE and pushed. Next action: the operator's scripted mic session, then `node scripts/verify-voice-session.js <log>`.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Four commits
 on `main`: `6d1dc34` (slice 1, wake word survives a stale mic device id + bounded
@@ -45,13 +45,15 @@ arriving audio); "preroll cap 150 frames (1.5s)" is off by 10× and the cap must
 stay a derived expression; and the adaptive bleed floor must rise ABOVE the flush
 tier, not be clamped below it, because this room's bleed is above both tiers.
 
-**Still open, and the largest remaining piece:** `open_web(browser:true)` has no
-working surface under Electron — no `shell.openExternal` anywhere, `newtab`
-refused by the media window by design, `window.open` denied by
-`setWindowOpenHandler`. Slice 4 made that failure visible (the breaker trips, the
-retry is deduped) but did not build the `mythos:open-external` channel. Doing so
-means deliberately changing `bug-075-electron-media-window.test.js`, which
-asserts the current design.
+**T2's browser surface is now BUILT** (`open_web(browser:true)` -> the new
+`mythos:open-external` fork-IPC channel -> `shell.openExternal`, http/https only,
+validated with WHATWG `URL` before the hand-off because that call runs whatever is
+registered for a scheme and the URL comes from a model-composed tool call). No
+surface is now a FAILURE rather than an unverified success. `bug-075`'s test did
+NOT need changing after all - its assertion is still correct, because this adds a
+different surface rather than widening the media window.
+
+**Nothing in BUG-272 is left unbuilt.** What remains is the operator's session.
 
 **If the session still self-interrupts:** the escape hatches are
 `MYTHOS_BARGE_PROTECTED_MS` (0 disables the protection window),

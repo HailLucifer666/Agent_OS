@@ -882,6 +882,13 @@ async function main() {
       if (dashboardWiring && typeof dashboardWiring.setMediaWindowCloser === 'function' && typeof serverHandle.requestCloseMediaWindow === 'function') {
         dashboardWiring.setMediaWindowCloser(serverHandle.requestCloseMediaWindow);
       }
+      // BUG-272 T2 — same wiring shape again, for open_web(browser:true). Left
+      // unset outside the Electron shell, which is exactly what open_web needs in
+      // order to say "there is no browser to hand this to" instead of reporting a
+      // success nothing performed.
+      if (dashboardWiring && typeof dashboardWiring.setExternalOpener === 'function' && typeof serverHandle.requestOpenExternal === 'function') {
+        dashboardWiring.setExternalOpener(serverHandle.requestOpenExternal);
+      }
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
 

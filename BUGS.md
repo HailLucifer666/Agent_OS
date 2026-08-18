@@ -9,14 +9,14 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-18 (second entry) - BUG-272 SLICES 1-4 SHIPPED IN CODE (`6d1dc34` wake-word
+Last updated: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
 barge-in state machine, `190cd74` tool honesty). Five corrections to the fix plan's own numbers are
 recorded on the entry - notably that the "13-second ceiling" does not exist (an 8s ceiling refreshed
 by arriving audio), that "150 frames (1.5s)" is off by 10x, and that the adaptive floor must rise
 ABOVE the flush tier rather than being clamped below it. NOT live-verified: slices 1 and 3 are
 acoustic, and `scripts/verify-voice-session.js` now reads the pass criteria out of a session log so
-the next analysis is not a hand-count. Still open: `open_web(browser:true)` has no Electron surface.
+the next analysis is not a hand-count. T2's browser surface is now built too (`mythos:open-external` -> shell.openExternal, http/https only).
 
 Previous entry: 2026-08-18 - BUG-272: BUG-271's live re-test happened (20-minute voice session in the
 noisy room) and its evidence is fully inventoried here: what BUG-271 fixed (noise gate zeroed 5000+
@@ -8713,15 +8713,39 @@ the signal it exists to distinguish. Learning is now restricted to the protected
 window and echo-confirmed frames, with two regression tests pinning that louder
 speech never becomes harder to confirm.
 
-**Still open, the largest remaining piece of T2:** `open_web(browser:true)` has no
-working surface under Electron. `widgetType:'newtab'` is refused by the media
-window by design, the HUD's `window.open` fallback is denied by
-`setWindowOpenHandler`, and `shell.openExternal` appears nowhere in executable
-code. The `mythos:open-external` IPC channel is NOT built. Slice 4 stopped that
-failure being invisible (the breaker now trips, the retry is deduped) but the
-feature still cannot work. Note that `bug-075-electron-media-window.test.js`
-actively asserts `newtab` is not promoted, so building the surface means changing a
-test that codifies the current design, deliberately and with a stated reason.
+**T2's browser surface is now BUILT** (slice 4b). `open_web(browser:true)` had no
+working surface at all: the media window refuses `widgetType:'newtab'` by design,
+the HUD's `window.open` fallback is denied unconditionally by
+`setWindowOpenHandler` (the deliberate 2026-07-31 fix), and `shell.openExternal`
+appeared nowhere in executable code — so all seven attempts failed while reporting
+success. New `mythos:open-external` fork-IPC channel, mirroring
+`requestCloseMediaWindow`'s request/ack shape exactly:
+`from-dashboard.js` → `server/index.js`'s `requestOpenExternal` →
+`electron/main.js` → `shell.openExternal`. **No surface is now a FAILURE, not an
+unverified success** — that distinction is the whole bug. A successful hand-off
+stays `unverified`, because `openExternal` resolves when the OS accepts the
+request, not when a page renders.
+
+**Security note, because this is not "open a web page":** `shell.openExternal`
+hands the string to the OS handler for its scheme, so it runs whatever is
+registered for that protocol. `file:` opens Explorer on an arbitrary path, and
+`ms-msdt:`/`search-ms:` have been live Windows RCE vectors. The URL originates in a
+tool call the MODEL composed, so it is influenceable by anything that reached the
+model's context — a summarised web page, an email, a filename. `openExternalUrl`
+therefore parses with WHATWG `URL` (not `startsWith`) and allows **http and https
+only**, validated before the hand-off. Test-pinned, including the ordering.
+
+Also fixed here: `main.js` used to `log()` and DISCARD the media window's
+`handleOpenWeb` verdict, so `opened:false` reached nobody. It is acked back now.
+
+Two corrections to this entry's own T2 plan: `bug-075-electron-media-window.test.js`
+did NOT need changing — its assertion that the media window refuses `newtab` is
+still correct, because the fix adds a different surface rather than widening that
+one. What DID need rewriting was `open-web-is-not-a-browser.test.js`, which
+asserted `ok:true` + `widgetType:'newtab'` and explained it as "the client newtab
+branch opens the real browser window" — a claim that was false, so the test was
+pinning the bug. And `media-window.js`'s comment justified the exclusion with the
+same false claim; both now say what is actually true.
 
 *Original plan, kept for the record. Its "NOTHING IMPLEMENTED YET" and its slice
 specifications are SUPERSEDED by the status block above — read the five

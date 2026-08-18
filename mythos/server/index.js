@@ -4029,6 +4029,7 @@ function createServer(deps) {
   // one media window exists at a time, so a single pending slot (not a Map
   // keyed by reqId, unlike requestClosePanel/requestCameraFrame) is enough.
   let pendingCloseMediaWindow = null; // { resolve, timer }
+  let pendingOpenExternal = null;     // { resolve, timer } — BUG-272 T2
   if (typeof process.on === 'function') {
     process.on('message', (msg) => {
       if (msg && msg.channel === 'mythos:close-media-window-ack' && pendingCloseMediaWindow) {
@@ -4036,6 +4037,16 @@ function createServer(deps) {
         const pending = pendingCloseMediaWindow;
         pendingCloseMediaWindow = null;
         pending.resolve(Boolean(msg.closed));
+        return;
+      }
+      // BUG-272 T2 — the ack for mythos:open-external. Same single-pending-slot
+      // shape as close-media-window above: one browser hand-off at a time, so a
+      // reqId-keyed Map would be more machinery than the problem needs.
+      if (msg && msg.channel === 'mythos:open-external-ack' && pendingOpenExternal) {
+        clearTimeout(pendingOpenExternal.timer);
+        const pending = pendingOpenExternal;
+        pendingOpenExternal = null;
+        pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
         return;
       }
       // Slice 2 (Electron shell): Ctrl+Alt+X pressed in the Electron main
@@ -4074,6 +4085,42 @@ function createServer(deps) {
       pendingCloseMediaWindow = { resolve, timer };
       try { process.send({ channel: 'mythos:close-media-window' }); }
       catch { pendingCloseMediaWindow = null; clearTimeout(timer); resolve(false); }
+    });
+  }
+
+  // BUG-272 T2 — hand a URL to the operator's real browser via the Electron main
+  // process. Mirrors requestCloseMediaWindow exactly, with one difference that
+  // matters: it resolves an OBJECT, not a boolean, because "it did not open" and
+  // "it did not open BECAUSE the scheme was refused" are different things the
+  // operator needs to hear, and a bare false is how the original failure stayed
+  // invisible for seven attempts.
+  //
+  // Not under Electron (plain `npm start`, or the batch launcher without the
+  // shell) resolves opened:false with a reason that says so, rather than hanging
+  // or pretending. The scheme allowlist lives in the main process, next to the
+  // shell.openExternal call it protects — validating here as well would be a
+  // second copy to drift.
+  function requestOpenExternal(url) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') {
+        resolve({ opened: false, reason: 'not running under the Electron shell, so there is no browser to hand this to' });
+        return;
+      }
+      if (pendingOpenExternal) {
+        clearTimeout(pendingOpenExternal.timer);
+        pendingOpenExternal.resolve({ opened: false, reason: 'superseded by a newer request' });
+      }
+      const timer = setTimeout(() => {
+        pendingOpenExternal = null;
+        resolve({ opened: false, reason: 'the Electron shell did not acknowledge the request' });
+      }, 3000);
+      pendingOpenExternal = { resolve, timer };
+      try { process.send({ channel: 'mythos:open-external', url: String(url || '') }); }
+      catch (err) {
+        pendingOpenExternal = null;
+        clearTimeout(timer);
+        resolve({ opened: false, reason: err.message });
+      }
     });
   }
 
@@ -4296,7 +4343,7 @@ function createServer(deps) {
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestCameraPower, requestClosePanel,
-    requestCloseMediaWindow, setGmailPollCountGetter,
+    requestCloseMediaWindow, requestOpenExternal, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: {
       voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY,

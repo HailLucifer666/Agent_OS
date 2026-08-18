@@ -82,24 +82,51 @@ describe('open_web browser:true — the explicit real-browser route', () => {
     abtop: { getState: () => ({}), killSession: async () => {} },
   };
 
-  function openWebTool() {
-    const { TOOLS: tools } = buildTools(ctx);
-    return tools.find((t) => t.name === 'open_web');
+  // BUG-272 T2: browser:true now needs an external opener wired, because the
+  // route it used to claim did not exist. `handedOff` records what reached the
+  // shell so these tests can assert the URL normalisation they always cared
+  // about, on the path that now actually carries it.
+  let handedOff = [];
+  function openWebTool(opener) {
+    const built = buildTools(ctx);
+    handedOff = [];
+    if (opener !== null) {
+      built.setExternalOpener(opener || (async (u) => { handedOff.push(u); return { opened: true }; }));
+    }
+    return built.TOOLS.find((t) => t.name === 'open_web');
   }
 
-  it('browser:true + url routes through the newtab mechanism to the real browser', async () => {
+  // REWRITTEN 2026-08-18 (BUG-272 T2). This test used to assert ok:true +
+  // widgetType:'newtab' and explained it as "the client newtab branch opens the
+  // real browser window". That explanation was FALSE, and the test was pinning the
+  // bug: under the Electron shell newtab had no working surface at all — the media
+  // window refuses it by design and the HUD's window.open is denied outright by
+  // setWindowOpenHandler. So open_web(browser:true) failed 7/7 in the 2026-08-17
+  // session while returning exactly the shape this test demanded. It now asserts
+  // the hand-off actually happens.
+  it('browser:true + url is handed to the real browser via the shell', async () => {
     const res = await openWebTool().fn({ type: 'web', url: 'https://example.com/page', browser: true });
     assert.equal(res.ok, true);
-    assert.equal(res.result.widgetType, 'newtab',
-      'the same route the NO_EMBED domains use — the client newtab branch opens the real browser window');
+    assert.deepEqual(handedOff, ['https://example.com/page'],
+      'the url must reach shell.openExternal, not a widgetType nothing renders');
+    assert.equal(res.result.widgetType, 'newtab', 'the payload shape is unchanged for the HUD');
     assert.equal(res.result.url, 'https://example.com/page');
-    assert.equal(res.unverified, true, 'still honestly unverified — nothing here confirms the browser opened');
+    assert.equal(res.unverified, true,
+      'still honestly unverified: openExternal resolves on OS acceptance, not on render');
+  });
+
+  it('browser:true fails honestly when the desktop shell is not running', async () => {
+    // The case that produced seven silent successes. No opener wired = no browser
+    // to hand it to, and that must be a failure that names the alternative.
+    const res = await openWebTool(null).fn({ type: 'web', url: 'https://example.com/page', browser: true });
+    assert.equal(res.ok, false);
+    assert.match(String(res.result || res.error), /browser_navigate/);
   });
 
   it('browser:true with a BARE DOMAIN in query normalizes to https and routes the same way', async () => {
     const res = await openWebTool().fn({ type: 'web', query: 'openai.com', browser: true });
     assert.equal(res.ok, true);
-    assert.equal(res.result.widgetType, 'newtab');
+    assert.deepEqual(handedOff, ['https://openai.com'], 'normalised BEFORE the hand-off');
     assert.equal(res.result.url, 'https://openai.com');
   });
 
