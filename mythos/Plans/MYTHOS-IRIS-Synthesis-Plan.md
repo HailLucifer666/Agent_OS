@@ -57,7 +57,15 @@ the evidence names before adding a second one.
 
 **Still open, and now the whole list:**
 
-- **A2 (P0)** — the release flush replays the preroll ring in one burst. (The other
+- **A2 (P0) — MEASURED 2026-08-19, and the carrier is NOT the flush.** 771 frames
+  replayed across 14 releases, 695 zeroed, **76 raw**, worst single release 25
+  frames (2.5s) against a predicted 133. The louder of the two sessions, too (peak
+  RMS 0.1136 vs 0.0454). Do NOT build the "stop replaying frames the policy never
+  believed" remedy — it has nothing to act on. The SYMPTOM remains: self-
+  interruption at 15.4% (2/13), down from 43% but still over criterion. A new
+  carrier has to be found; the flush is excluded by measurement.
+
+- *(historical, now answered)* — the release flush replays the preroll ring in one burst. (The other
   red line that session, `max preroll under 2000ms`, turned out to be unpassable by
   construction and redundant with the eviction criterion — it is informational now,
   so **A2 is the only code item left in BUG-273**.) The plan’s first remedy (a higher

@@ -9695,7 +9695,42 @@ carries `needsOperator: true` and no remedy is guessed for it at all, and
 untrusted input, so the control belongs at the edge, not in the request). A refused
 remedy is logged rather than silently downgraded.
 
-**Still open from this session:** nothing except A2's acoustic remedy. The other
+### A2 MEASURED AT LAST — AND THE HYPOTHESIS IS REFUTED — 2026-08-19
+
+The allowlist fix landed, the app was booted, and `flushedRaw` reached the log for
+the first time. **13 turns, 14 releases, 771 frames replayed in total — of which
+the noise gate zeroed 695 and passed 76.** Per release:
+
+```
+flushedRaw   9  0  0  0  25  0  8  15  0  16  3  21  0
+```
+
+A2 predicted the opposite. Its standing text says releasing a full ring "flushes up
+to 133 frames — 13.3 SECONDS of audio the comment itself calls mostly MYTHOS — onto
+the wire unzeroed, in one burst, and Gemini's VAD fires on it". The measured worst
+case is **25 frames (2.5s)**, five of the thirteen releases put **zero** raw frames
+on the wire, and the biggest flush of the session (113 frames) was 90% silenced.
+
+**And this run was the LOUDER of the two.** The obvious objection — that the room
+was quiet, so of course the gate coped — does not survive the numbers: peak RMS
+during holds reached **0.1136** here against **0.0454** across the operator's
+18:15–18:33 session. Room bleed peak read 0.0142, below the 0.02 gate floor, so the
+loud frames were transient rather than a sustained assistant-audio floor.
+
+**What this does and does not settle.** The release flush is NOT delivering a large
+burst of unzeroed assistant audio, so the remedy A2 was holding out for — "stop
+replaying frames the policy never believed" — has nothing to act on and must not be
+built. What it does not settle is the symptom: self-interruption still ran at
+**15.4% (2 of 13)**, over the 15% criterion, though far below the 43% that opened
+this ticket. Something still cuts turns short; the flush is not it.
+
+This is the **third** BUG-273 hypothesis to be refuted by the measurement it asked
+for (after "D4 needs a session" and "D3 is the conversation announcer"), and the
+reason is the same each time: the instrument was built before the theory was
+trusted. A2 should stay open as a symptom, with a new carrier to find, and its
+existing prose in `s2s-bridge.js` must not be read as a pending remedy.
+
+**Still open from this session:** nothing except A2's remaining symptom. The other
 entry that used to sit here — "max preroll 9200ms" — was not a fault at all:
 
 ### THE SECOND FAILING CRITERION COULD NEVER HAVE PASSED — 2026-08-19
