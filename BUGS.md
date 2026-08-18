@@ -119,6 +119,51 @@ should cancel. **Stated as a suspect, not a finding.**
 live and record which come back as a transcript. That single measurement decides whether this
 is a routing bug or a genuine capability gap.
 
+#### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
+
+**The check that had to run first could not run at all.** The plan's own Q5 says the premise
+rests on `echoCancellation: true` being *honoured*, and calls reading
+`track.getSettings().echoCancellation` a five-minute check. It was not five minutes, because
+nothing on the Live path read it. `micConstraintShape()` reports `echoCancellation: true`
+**unconditionally** — it describes the request — and a request is not a grant.
+
+**The readback existed, on the wrong stream.** `trackSettingsOf()` was private to
+`wakeword.js` and read the real `getSettings()` for the **wake word's** stream. The wake word
+is the one capture path where hearing MYTHOS's own voice does not matter. The Live conversation
+opens a **separate** stream (`s2s-bridge.js`'s `openMicWithFallback()` call) and recorded
+nothing about it. So the single datum that could refute this whole item's premise was being
+measured only where it was irrelevant, and reported as a constant where it was not.
+
+**Shipped:** `trackSettingsOf()` moved to `mic-device.js` (one door, both callers — a second
+copy is how they drifted); `openMicWithFallback()` returns `actual` alongside `requested`;
+`s2s-bridge.js` puts `micEchoCancellation`/`micNoiseSuppression` on the
+`voice-capture-suspend` payload, and `server/index.js`'s allowlist logs them. `null` means
+*not measured* and stays distinguishable from *measured as false*.
+
+**And the guard meant to catch the two-places drop had a hole.**
+`test/bug-273-suspend-fields-reach-the-log.test.js` read exactly **one** object literal — the
+release-transition `extra` — so a field added at the `send()` site (where a once-per-session
+measurement belongs) was invisible to it: computed, sent, dropped at the allowlist, **PASS
+printed**. That is the fabricated-pass shape its own header condemns, occurring inside the tool
+written to condemn it. The guard now covers the **union** of both literals, and was observed
+failing with the allowlist entry removed and passing with it restored.
+
+**Q1 respected — nothing runtime was added.** No new classifier, no fourth echo detector, no
+threshold. Instrumentation only: it reports what Chromium granted and changes no decision.
+
+**NOT verified, and must not be ticked as such.** This makes T4's measurement runnable; it does
+not perform it. Two questions stay open until one live session answers them:
+1. does the Live track report `echoCancellation` as **granted**, or was the constraint silently
+   dropped — in which case the own-voice gate has been compensating for that all along;
+2. which of the three output paths — `pcm-player`'s `AudioContext`, `new Audio(data:…)`,
+   `window.speechSynthesis` — come back as `inputTranscription`.
+
+Read the answer to (1) off `voice.capture-suspend` in the server log; it is on every
+transition, so a log that loses its first lines still answers it.
+
+Suite after: **5163/5163, 0 failures, 0 skipped** (+7, the new guard file).
+
+
 **Then, only if AEC works:** move to the reference barge-in design, which MYTHOS does not
 currently have —
 1. mic stays **live** while the assistant speaks (no half-duplex gate at all),
@@ -137,21 +182,51 @@ wrapping `xiph/speexdsp` (722, upstream Xiph BSD-style, licence file shows NOASS
 it) or extracting WebRTC's `aec3` module. Both are native-addon work MYTHOS would own. Do not
 start either before the measurement above.
 
-### T5 (P1) — host the UIA automation as a persistent daemon
+### T5 (P1) — find out why UIA `Invoke` no-ops under pc-child
 
 **No library fixes this.** The working mechanism is already in the repo:
 `adapters/pc-child/ps-automation.ps1`'s `uia-setvalue` route calls UIA COM patterns, which
 talk to the target app's own automation provider, never touch the Windows input queue, and
 need no foreground window — one of only two routes measured working on MSIX apps.
 
-**The blocker is the hosting, not the call.** `uia-invoke-noop-under-pc-child-spawn` records
-that `InvokePattern.Invoke()` works standalone and **silently no-ops — no exception, false
-success — when run through `pc-child`'s per-command `child_process.spawn`.** That is a
-property of how the automation client process is hosted. FlaUI (3,095, MIT) or pywinauto
-(6,146, BSD-3) spawned the same way would very plausibly no-op identically.
+**The defect.** `uia-invoke-noop-under-pc-child-spawn` records that `InvokePattern.Invoke()`
+works standalone and **silently no-ops — no exception, false success — when run through
+`pc-child`.** The note originally attributed that to a *per-command* `child_process.spawn`;
+that attribution is wrong (see the correction below) and only the observation survives. It is
+still plausibly a property of how the automation client process is hosted, which is why FlaUI
+(3,095, MIT) or pywinauto (6,146, BSD-3) hosted the same way could no-op identically — so
+adopting either before the cause is known would buy nothing.
 
-**Do:** run one long-lived interactive automation host that MYTHOS talks to over a pipe,
-instead of spawning `powershell.exe` per command.
+**CORRECTION 2026-08-19 — the original `Do` had a false premise and is WITHDRAWN.** This item
+used to say "run one long-lived interactive automation host … instead of spawning
+`powershell.exe` per command". pc-child **is already that daemon**, and has been:
+`adapters/pc-child/index.js:254` spawns **one** long-lived `powershell.exe`, and
+`ps-automation.ps1:4199` is a `while ($true)` stdin loop — queued, single-in-flight, id-stamped,
+with the command id echoed back. There is no per-command spawn to remove. Verified by reading
+both files, not inferred. Building the daemon that already exists would have been a week spent
+on a mechanism that was never the fault.
+
+**What is actually unknown** is why UIA `Invoke` no-ops *inside* that host. Suspects, in test
+order: `-NonInteractive` (already on the arg list at `index.js:249` — a **hypothesis, not a
+finding**), window-station/desktop isolation, integrity level. Method: add a one-line context
+probe to `ps-automation.ps1` reporting its own window station, desktop and integrity level,
+then read it back through a **real Node→pc-child round trip** — `adapters/CLAUDE.md` is
+explicit that a PowerShell self-test is itself UIPI-blocked and will lie.
+
+**The four outcomes must be distinguishable in the response, not merely in a log line:**
+pattern-unavailable / invoked-and-verified / invoked-unverified / threw. Collapsing them is
+what produced the false success. `from-pc.js` interprets the raw vocabulary into
+`evidence.verifiedOk()`/`unverified()`/`mismatch()`, so a new signal lands in **two** places —
+the omission that has now happened three times (BUG-271, 272, 273). Any new field ships with a
+class-level assertion in the shape of `bug-273-suspend-fields-reach-the-log.test.js`.
+
+**The sharpest question, to answer before writing any fix:** `effectors/evidence.js` already
+forbids `ok:true` without an oracle. So **why did UIA Invoke escape it?** If the contract has a
+hole, the hole is the bug and it is wider than one route.
+
+**Do NOT fold in `focus_window`'s foreground lock** — closed question, three rungs ran and
+failed, `adapters/CLAUDE.md` forbids a fourth. `launch_app`'s windowed-pid resolution is
+related but separate; do not fold them either.
 **RED first:** a test that drives `Invoke` on a control through the daemon and asserts a real
 oracle-backed outcome — not `ok:true`. A silent no-op currently reports success, so any test
 that trusts the return value is vacuous.
@@ -241,7 +316,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 OPENED (dependency + licence remediation, planned not started).
+Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (the AEC readback instrument) CODED, the measurement itself still owed; T5's "make it a daemon" premise withdrawn as false.
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are

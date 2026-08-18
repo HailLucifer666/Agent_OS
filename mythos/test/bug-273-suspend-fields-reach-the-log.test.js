@@ -69,19 +69,39 @@ function serverAllowlist() {
   return set;
 }
 
-// Every field the client attaches to the object it hands to sendSuspendState/send.
-// Read from source rather than from a duplicated list here: a hand-copied expectation
-// is the same two-places problem wearing a different hat.
-function clientFields() {
-  const marker = 'flushedFrames:';
+// Keys of one object literal in the bridge, located by a marker inside it. Read from
+// source rather than from a duplicated list here: a hand-copied expectation is the same
+// two-places problem wearing a different hat.
+function objectLiteralKeys(marker, why) {
   const at = BRIDGE.indexOf(marker);
-  assert.notEqual(at, -1, 'the release-transition payload must still be built here');
+  assert.notEqual(at, -1, why);
   // Walk back to the start of the object literal, forward to its close.
   const open = BRIDGE.lastIndexOf('{', at);
   const close = BRIDGE.indexOf('};', open);
   const body = BRIDGE.slice(open, close);
   const keys = body.match(/^\s{2,}([A-Za-z][A-Za-z0-9]*)\s*:/gm) || [];
   return keys.map((k) => k.trim().replace(':', ''));
+}
+
+// BUG-274 W1 WIDENED THIS, AND THE WIDENING IS THE POINT. Until then clientFields()
+// read exactly ONE object literal — the release-transition `extra` — so it could only
+// ever see fields added at that one call site. A field added instead to
+// logSuspendTransition()'s own send() literal (which is where anything measured ONCE
+// PER SESSION belongs, since `extra` is per-transition) was invisible to it: the field
+// would be computed, sent over the wire, dropped at the server allowlist, and this
+// file would print PASS. That is the same fabricated-pass shape the header above
+// condemns — occurring inside the tool written to condemn it, which is why the fix is
+// to widen the covered surface rather than to name one more field.
+//
+// Covered surface is now the UNION of both places a client field can be born.
+// `type` is excluded: it is the message discriminator the server matches on, not a
+// diagnostic it logs.
+function clientFields() {
+  const fromExtra = objectLiteralKeys(
+    'flushedFrames:', 'the release-transition payload must still be built here');
+  const fromSend = objectLiteralKeys(
+    "type: 'voice-capture-suspend'", 'the transition message must still be sent here');
+  return [...new Set([...fromExtra, ...fromSend])].filter((k) => k !== 'type');
 }
 
 test('every diagnostic the client computes actually reaches the log line', () => {
@@ -101,8 +121,12 @@ test("the fields BUG-273's own slices added are present by name", () => {
   // shape of one object literal — if a refactor moves those fields somewhere the
   // parser cannot see, this test must fail loudly rather than pass on an empty list.
   const allowed = serverAllowlist();
-  for (const field of ['flushedFrames', 'flushedZeroed', 'flushedRaw', 'bleedPeak', 'learnedFloor']) {
-    assert.ok(allowed.has(field), field + ' must reach the log — A1 and A2 are judged on it');
+  for (const field of ['flushedFrames', 'flushedZeroed', 'flushedRaw', 'bleedPeak', 'learnedFloor',
+    // BUG-274 W1 Q5: the granted-vs-requested echoCancellation pair. Named as well as
+    // derived because the derivation depends on the shape of two object literals, and
+    // this is the datum the entire own-voice plan's premise rests on.
+    'micEchoCancellation', 'micNoiseSuppression']) {
+    assert.ok(allowed.has(field), field + ' must reach the log — a live session is judged on it');
   }
 });
 

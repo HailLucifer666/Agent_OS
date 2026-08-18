@@ -23,7 +23,7 @@
 // Input/output tensor NAMES are also read from each loaded ONNX session at
 // runtime (session.inputNames/outputNames) rather than assumed, since the
 // exact exported name isn't recoverable from the Python source alone.
-import { openMicWithFallback, micErrorMessage, micConstraintShape } from './mic-device.js';
+import { openMicWithFallback, micErrorMessage, micConstraintShape, trackSettingsOf } from './mic-device.js';
 
 // Shared with createWakeWord below AND exported for tests. openWakeWord's mel
 // bin count is fixed by the model, so these are module constants, not
@@ -163,29 +163,10 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   let micConstraintsRequested = null;
   let micTrackSettings = null;
 
-  // What the browser ACTUALLY granted, as opposed to what was asked for — the
-  // pair is what makes an OverconstrainedError diagnosable.
-  //
-  // Q4 (what is standing next to it?) — MediaTrackSettings includes `deviceId`
-  // and `groupId`, so returning getSettings() verbatim would put exactly the
-  // identifier micConstraintShape() is careful to omit straight into a log
-  // line, one field away. Pick the fields explicitly; never spread this object.
-  function trackSettingsOf(s) {
-    try {
-      const track = s && s.getAudioTracks && s.getAudioTracks()[0];
-      if (!track || typeof track.getSettings !== 'function') return null;
-      const st = track.getSettings() || {};
-      return {
-        sampleRate: st.sampleRate ?? null,
-        channelCount: st.channelCount ?? null,
-        echoCancellation: st.echoCancellation ?? null,
-        noiseSuppression: st.noiseSuppression ?? null,
-        autoGainControl: st.autoGainControl ?? null,
-      };
-    } catch (_) {
-      return null;
-    }
-  }
+  // BUG-274 W1: trackSettingsOf now lives in mic-device.js and is shared with the
+  // Live capture path, which had no readback of its own. Deliberately NOT a
+  // re-export or a local alias — a second name for it is how the two paths
+  // drifted in the first place.
   // Generous: ~18 frames (1280 samples / 80ms each) are expected in this window,
   // so zero means genuinely no audio rather than a slow machine.
   const FIRST_FRAME_TIMEOUT_MS = 3000;

@@ -217,6 +217,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // SpeechSynthesisUtterance whose onend never fires) would otherwise leave
   // Live permanently deaf with no symptom except silence.
   const MAX_SUSPEND_MS = 30000;
+  // BUG-274 W1 Q5: what Chromium actually GRANTED on this stream, as opposed to
+  // what mic-device.js asked for. The comment above says "getUserMedia's
+  // echoCancellation is already on (mic-device.js) and did not stop it on
+  // speakers" — that was inferred from the request, because nothing on this path
+  // had ever read the grant back. If AEC3 is silently off here, the own-voice
+  // gate is compensating for a dropped constraint and the entire class of fix is
+  // aimed at the wrong layer. null means "not measured yet", which is a
+  // different statement from "measured as false" and must stay distinguishable.
+  let micGranted = null;
   let captureSuspended = false;
   let suspendTimer = null;
   // Wave 0 (2026-08-13): fire-and-forget transition log so the server side has
@@ -225,7 +234,20 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // block the capture gate itself.
   function logSuspendTransition(extra) {
     try {
-      send({ type: 'voice-capture-suspend', suspended: captureSuspended, at: Date.now(), ...extra });
+      // Q3 (who actually reads this?) — the transition message is the only channel
+      // from here to the server log, and the server copies a hand-maintained
+      // allowlist off it, so a field added here and nowhere else is computed,
+      // sent, and dropped. bug-273-suspend-fields-reach-the-log.test.js fails
+      // when that happens. Sent on every transition rather than once at open
+      // because a log that loses its first lines still answers the question.
+      send({
+        type: 'voice-capture-suspend',
+        suspended: captureSuspended,
+        at: Date.now(),
+        micEchoCancellation: micGranted ? micGranted.echoCancellation : null,
+        micNoiseSuppression: micGranted ? micGranted.noiseSuppression : null,
+        ...extra,
+      });
     } catch (_) { /* logging only — never block the gate */ }
   }
   function setCaptureSuspended(flag, holdMs, reason) {
@@ -775,6 +797,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // path, so all of them clear it and retry on the OS default.
       const openedMic = await openMicWithFallback();
       stream = openedMic.stream;
+      micGranted = openedMic.actual;
       // onCaption is optional (see the destructure at the top) — guarded exactly
       // like every other call site in this file.
       if (openedMic.fallbackFired && onCaption) {

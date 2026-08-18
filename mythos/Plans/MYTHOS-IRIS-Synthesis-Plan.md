@@ -17,10 +17,10 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** A verified 15-area dependency sweep produced five items worth doing, a long "change nothing" list, and three widely-recommended repos rejected against their own source. Next action: **BUG-274 T1+T2** (one afternoon, closes two licence exposures), then T4's measurement session.
+### 2026-08-19 (latest) — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** A verified 15-area dependency sweep produced five items worth doing, a long "change nothing" list, and three widely-recommended repos rejected against their own source. **T1+T2 shipped (`fb574ce`). T4 step 0 shipped — the AEC readback instrument, because the measurement T4 depends on could not be run: nothing on the Live capture path had ever read `getSettings().echoCancellation` back, so the plan's premise was unfalsifiable.** Next action: **T4's measurement session** — one live boot, read `micEchoCancellation` off `voice.capture-suspend` in the server log, then play one sentence through each of the three output paths with the mic live and record which return as `inputTranscription`. **Do not start T4's remedy before that.** T5's "make it a daemon" premise was withdrawn as false — pc-child already is one.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** BUG-273 closed except
-A2's symptom. Suite **5147/5147/0 fail/0 skipped**.
+A2's symptom. Suite **5163/5163/0 fail/0 skipped** — do not hand-edit this; `scripts/sync-test-count.js` emits it.
 
 **The operator's priorities, stated 2026-08-19:** interruption first ("it worked flawlessly
 before" — correct, and BUG-272's learned bleed floor is what broke it), desktop automation
@@ -43,10 +43,16 @@ BUGS.md entry — not duplicated here):**
 3. **T4 remedy** — if AEC proves fixable, adopt the reference full-duplex design (mic live
    throughout, VAD cancels the in-flight response, playback queue cleared **with a fade-out**).
    That **deletes** the own-voice gate, the preroll ring, the lost first word and A2's class.
-4. **T5** — host UIA automation as a **persistent daemon** instead of a per-command spawn. No
-   library fixes this: `uia-setvalue` already works, but `Invoke` silently no-ops under
-   `pc-child`'s spawn. Windows-MCP was rejected here **against its own source** — it drives
-   with `uia.Click`/`SendKeys`/`SetForegroundWindow` and reproduces all three failures.
+4. **T5** — find out **why** UIA `Invoke` no-ops under pc-child. The old wording ("host it as a
+   persistent daemon instead of a per-command spawn") was **withdrawn 2026-08-19: pc-child is
+   already a persistent daemon** — one long-lived `powershell.exe` (`index.js:254`) driving a
+   `while ($true)` stdin loop (`ps-automation.ps1:4199`). There was no per-command spawn to
+   remove, and building the daemon that already exists would have been a week on a mechanism
+   that was never the fault. Suspects now, in test order: `-NonInteractive`, window-station /
+   desktop isolation, integrity level — probed through a real Node→pc-child round trip, since a
+   PowerShell self-test is itself UIPI-blocked and will lie. `uia-setvalue` already works.
+   Windows-MCP was rejected here **against its own source** — it drives with
+   `uia.Click`/`SendKeys`/`SetForegroundWindow` and reproduces all three failures.
 5. **T3** — train wake-word weights MYTHOS owns. openWakeWord's pretrained weights are
    CC BY-NC-SA 4.0. Last by sequence only because it parallelises; it is the item that hard-
    blocks a paid release. **Porcupine is not the free answer** — proprietary metered models.

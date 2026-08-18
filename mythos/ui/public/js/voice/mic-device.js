@@ -73,6 +73,44 @@ export function micConstraintShape() {
   };
 }
 
+// What the browser ACTUALLY granted, as opposed to what was asked for. Moved
+// here from wakeword.js (BUG-274 W1) because it was private to the wake word's
+// stream, and the wake word is the one capture path where hearing MYTHOS's own
+// voice does not matter. The Live conversation opens a SEPARATE stream and had
+// no readback at all — so the single datum that could refute "echoCancellation
+// is honoured" was measured only where it was irrelevant.
+//
+// Q5 (is this constant actually correct?) — micConstraintShape() reports
+// `echoCancellation: true` unconditionally, because it describes the REQUEST.
+// Chromium may drop a constraint silently, and then the request and the grant
+// disagree while only the request is logged. Requested-vs-actual is the pair
+// that makes that diagnosable; neither half is worth anything alone.
+//
+// Q4 (what is standing next to it?) — MediaTrackSettings includes `deviceId`
+// and `groupId`, so returning getSettings() verbatim would put exactly the
+// identifier micConstraintShape() is careful to omit straight into a log line,
+// one field away. Pick the fields explicitly; never spread this object.
+//
+// Returns null (never throws, never a partial object) when there is no audio
+// track or the track predates getSettings — a null here means "not measured",
+// which is a different statement from "measured as false" and must stay so.
+export function trackSettingsOf(stream) {
+  try {
+    const track = stream && stream.getAudioTracks && stream.getAudioTracks()[0];
+    if (!track || typeof track.getSettings !== 'function') return null;
+    const st = track.getSettings() || {};
+    return {
+      sampleRate: st.sampleRate ?? null,
+      channelCount: st.channelCount ?? null,
+      echoCancellation: st.echoCancellation ?? null,
+      noiseSuppression: st.noiseSuppression ?? null,
+      autoGainControl: st.autoGainControl ?? null,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 // Open the mic, surviving a stale persisted device id (BUG-272 W1).
 //
 // The failure this exists for: buildAudioConstraints() puts the saved device id
@@ -111,14 +149,14 @@ export async function openMicWithFallback(opts) {
 
   try {
     const stream = await getUserMedia(buildAudioConstraints(deviceId, base));
-    return { stream, fallbackFired: false, originalError: null, requested: shapeOf(Boolean(deviceId)) };
+    return { stream, fallbackFired: false, originalError: null, requested: shapeOf(Boolean(deviceId)), actual: trackSettingsOf(stream) };
   } catch (err) {
     if (!deviceId || !STALE_DEVICE_ERRORS.has(err && err.name)) throw err;
     // The saved id was proven bad by that rejection — clear it whether or not
     // the retry succeeds, so a dead device cannot poison every future boot.
     setMicDeviceId(null);
     const stream = await getUserMedia(buildAudioConstraints(null, base));
-    return { stream, fallbackFired: true, originalError: err, requested: shapeOf(false) };
+    return { stream, fallbackFired: true, originalError: err, requested: shapeOf(false), actual: trackSettingsOf(stream) };
   }
 }
 

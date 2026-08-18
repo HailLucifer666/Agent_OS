@@ -3769,7 +3769,15 @@ function createServer(deps) {
         for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
           'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
           'bleedPeak', 'learnedFloor',
-          'flushedFrames', 'flushedZeroed', 'flushedRaw']) {
+          'flushedFrames', 'flushedZeroed', 'flushedRaw',
+          // BUG-274 W1 Q5: what Chromium actually GRANTED on the Live capture stream,
+          // as opposed to what mic-device.js requested. The own-voice gate exists to
+          // compensate for MYTHOS hearing itself, and the premise of removing it is
+          // that AEC3 is already on — a premise nothing had ever read back. If this
+          // logs false, the gate is patching a dropped constraint and the whole class
+          // of fix is aimed at the wrong layer. null means not measured, which stays
+          // distinguishable from measured-as-false.
+          'micEchoCancellation', 'micNoiseSuppression']) {
           if (msg[k] !== undefined) fields[k] = msg[k];
         }
         logger.info('voice.capture-suspend', fields);
