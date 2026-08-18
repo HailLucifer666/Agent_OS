@@ -494,6 +494,70 @@ function createLiveToolAdapter(deps) {
     return `${toolName} FAILED: ${detail} ${NO_SUCCESS_CLAIM}`;
   }
 
+  // BUG-273 B1 — 2026-08-18. The operator logged an incident reading "Your tools
+  // are lying. Your tools are not wired properly." immediately after
+  // launch_app('wt'). The effector was already honest: ok:true + unverified:true,
+  // reason "launched, but no windowed process matching the name could be
+  // confirmed; a later focus_window/ui_type has no trustworthy target." MYTHOS
+  // told the operator it had opened Windows Terminal.
+  //
+  // ROOT CAUSE, and it is NOT the instruction-following failure it looks like.
+  // Three paths narrate an unverified outcome to a Live model, and they did not
+  // agree with each other:
+  //   * the awaited branch below appended 'Report only that it was attempted.'
+  //   * reportLateOutcome appended NOTHING — it kept the neutral default
+  //     'Report this to the operator accurately.', because only its FAILURE
+  //     branch escalated to NO_SUCCESS_CLAIM.
+  //   * resolveLiveConfirm inlined its prohibition into `verdict`, i.e. into the
+  //     audit record, and also left its instruction neutral.
+  // BUG-272 slice 4 (190cd74) then moved launch_app into SLOW_TOOLS for sound
+  // duration reasons — which silently moved its narration off the strongest of
+  // those three paths and onto the weakest. The tool did not get less honest; the
+  // sentence carrying its honesty did. Everything else in SLOW_TOOLS that can
+  // return unverified had the same hole: spotify_play, cua_click, screen_look,
+  // camera_look, browser_switch, hermes_task.
+  //
+  // Q6 — WHAT CLASS IS THIS AN INSTANCE OF? The third occurrence of one invariant.
+  // BUG-068: only the late path honored `unverified`, so the awaited path reported
+  // status:'ok' over an unprovable ui_type. BUG-116: the failure branches carried a
+  // bare error string and nothing else, so the model narrated a click it had just
+  // failed to make. Both were closed by making ONE shared sentence mandatory on
+  // EVERY branch of one kind. Twice is a pattern, so this is deliberately not a
+  // third per-branch patch: test/bug-273-unverified-payload.test.js enumerates all
+  // three narration paths and asserts the sentence on each — the assertion those
+  // two fixes never wrote down.
+  //
+  // Q8 — DELIBERATELY NOT COLLAPSED INTO A FAILURE. effectors/evidence.js is
+  // explicit that unverified means "it may well have landed, we simply cannot
+  // prove it", and reporting that as a failure would make MYTHOS deny things it
+  // actually did — its own kind of lying. So this forbids BOTH claims, and the
+  // test pins that both halves are present. Reusing NO_SUCCESS_CLAIM verbatim here
+  // was the easy move and would have been wrong.
+  const UNVERIFIED_NO_PROOF_CLAIM = 'There is NO proof either way about this action. Tell the operator ' +
+    'plainly what was attempted and what could not be confirmed. Do NOT say it worked, is done, is open, ' +
+    'or is ready, and do NOT describe it as done later in this conversation either. Do NOT claim it FAILED ' +
+    'either — that is equally unproven.';
+
+  // BUG-273 B1, second half. Q4 — WHAT IS STANDING NEXT TO IT? On the awaited
+  // branch the hedge lived in `message` while the effector's raw, success-shaped
+  // result object was attached beside it, un-nested. ui_type's unverified payload
+  // is literally `{ typed: true }` (BUG-068's own record) and launch_app's carries
+  // a live pid. A model handed `pid: 17996` next to a sentence saying nothing could
+  // be confirmed has a fact and a caveat, and it repeats the fact. Same defect
+  // shape as BUG-116's `error`-without-`message`, one field over.
+  //
+  // Q3 — WHO ACTUALLY READS THIS? The model does, and the payload cannot simply be
+  // deleted: from-mcp, from-strix and from-documents all wrap real operator-facing
+  // data in evidence.unverified() — an MCP tool's output, a security finding, a RAG
+  // answer. Dropping it would be a larger lie than the wrap. So every field is
+  // kept, reachable only through a key that says what it is.
+  function unverifiedPayload(toolName, reason, result) {
+    const wrapped = { confirmed: false, whatIsUnconfirmed: unverifiedNarration(toolName, reason) };
+    const payload = truncateForModel(result);
+    if (payload !== null && payload !== undefined) wrapped.unconfirmedDetails = payload;
+    return wrapped;
+  }
+
   async function handleLiveToolCalls(calls, { sendToolResponse }) {
     sweepPendingConfirms();
     // BUG-128 instrumentation: a re-issued batch carries fresh call ids, so the
@@ -693,10 +757,12 @@ function createLiveToolAdapter(deps) {
           // Wave 0's evidence contract, on the awaited path too: ok:true +
           // unverified:true must never reach the model as status:'ok'.
           summary = unverifiedNarration(call.name, ev.reason).slice(0, 200);
+          // BUG-273 B1: the one shared prohibition instead of this branch's own
+          // weaker wording, and the payload hedged rather than handed over bare.
           response = {
             status: 'unverified',
-            message: unverifiedNarration(call.name, ev.reason) + ' Report only that it was attempted.',
-            result: truncateForModel(ev.result),
+            message: unverifiedNarration(call.name, ev.reason) + ' ' + UNVERIFIED_NO_PROOF_CLAIM,
+            result: unverifiedPayload(call.name, ev.reason, ev.result),
           };
         } else {
           summary = `${call.name} done.`;
@@ -742,6 +808,11 @@ function createLiveToolAdapter(deps) {
     } else if (ev.unverified) {
       // Wave 0's contract, on the slow path too.
       verdict = unverifiedNarration(toolName, ev.reason);
+      // BUG-273 B1: THIS is the line the 2026-08-18 launch_app('wt') incident came
+      // through. It used to fall through to the neutral default instruction while
+      // the failure branch above escalated, so the weakest hedge in the file was
+      // handed the branch most likely to be believed.
+      instruction = UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
     }
@@ -801,9 +872,15 @@ function createLiveToolAdapter(deps) {
       verdict = `The operator APPROVED ${pending.name} but it FAILED: ${String((outcome && outcome.result) || 'unknown')}`;
       instruction = NO_SUCCESS_CLAIM;
     } else if (unverified) {
+      // BUG-273 B1: the prohibition moves out of `verdict` and into `instruction`,
+      // for the reason the comment above this block already gives — verdict is also
+      // the liveTurnActions summary, i.e. the audit and episodic record, and prompt
+      // text does not belong in a record of what happened (Q2: do not corrupt the
+      // diagnostic trail while fixing the narration). Same shared sentence as the
+      // other two paths, so the three can no longer disagree.
       verdict = `The operator APPROVED ${pending.name} and it ran, but the outcome is UNVERIFIED: ` +
-        String(outcome.reason || 'no confirmation available') +
-        '. Do NOT claim it completed — tell the operator exactly what could not be confirmed.';
+        String(outcome.reason || 'no confirmation available');
+      instruction = UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`;
     }
