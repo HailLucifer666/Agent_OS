@@ -26,6 +26,7 @@ const { createHotkeyLatch } = require('./hotkey-latch');
 const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = require('./vault-migration');
 const { recryptForeignStore } = require('./keystore-recrypt');
 const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
+const { rotateLogIfOver } = require('./log-rotate');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
 // ---- ONE app identity -----------------------------------------------------------
@@ -83,10 +84,19 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // timestamps, and a 40-minute silent update was indistinguishable from a dead
 // app. Every line now also lands in <userData>/logs/main.log.
 //
-// Truncate-at-a-cap rather than rotation: one file, no machinery, and the lines
-// that matter are the recent ones. userData (not the install tree) for the same
-// reason as everything else here — writable without elevation, survives updates.
+// Capped by ROTATION, not by truncation (BUG-273 D4): truncating at the cap threw
+// away the run leading up to the overflow, which is the only part anybody reads after
+// a crash. userData (not the install tree) for the same reason as everything else here
+// — writable without elevation, survives updates.
 const MAIN_LOG_MAX_BYTES = 2 * 1024 * 1024;
+// BUG-273 D4 — the child log had NO ceiling before this slice: it was opened with
+// flags:'w' on every startChild(), and truncate-per-run WAS the bound. Appending
+// across runs (so a crash-restart cannot erase the crash that caused it) needs a real
+// one. 8 MB is sized from measurement, not taste: a real installed session was
+// recorded growing 42 KB -> 363 KB in about two hours, so this is roughly forty hours
+// of ordinary logging per generation, and 16 MB is the total on-disk ceiling for the
+// two generations kept.
+const CHILD_LOG_MAX_BYTES = 8 * 1024 * 1024;
 let mainLogPath = null;
 function mainLogFile() {
   if (mainLogPath) return mainLogPath;
@@ -97,13 +107,19 @@ function mainLogFile() {
   mainLogPath = path.join(dir, 'main.log');
   return mainLogPath;
 }
+
+// BUG-273 D4 — the logs are capped by ROTATING, never by erasing. Both mechanisms
+// this replaced (truncateSync(file, 0) here, flags:'w' in startChild) threw away the
+// run leading up to the failure, which is the only part anybody reads after a death.
+// The rules and the reasoning live in ./log-rotate.js, where they can be tested for
+// real rather than shape-asserted.
 function log(...args) {
   const line = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ') + '\n';
   try { process.stderr.write(line); } catch { /* broken pipe in GUI mode — swallow */ }
   try {
     const file = mainLogFile();
     try {
-      if (fs.statSync(file).size > MAIN_LOG_MAX_BYTES) fs.truncateSync(file, 0);
+      rotateLogIfOver(file, MAIN_LOG_MAX_BYTES);
     } catch { /* first write — no file to cap yet */ }
     fs.appendFileSync(file, line);
   } catch { /* a log that cannot be written must never take the app down */ }
@@ -119,6 +135,54 @@ function safeStringify(v) {
 // strictly better failure mode than a dead desktop app.
 process.on('uncaughtException', (err) => {
   log('main process uncaughtException:', err && err.stack ? err.stack : err);
+});
+
+// BUG-273 D4 — FOUR WAYS THIS APP DISAPPEARS THAT USED TO LOG NOTHING AT ALL.
+// The 2026-08-18 session died after ~2 minutes with no Crashpad dump, no child exit
+// line and no trail, and it was filed as "needs more evidence". Three of these four
+// would have produced that evidence, and none of them was handled.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Nothing: each is a distinct Electron/Node event with a
+// single meaning, so there is no heuristic here to mis-fire. They only ever add a line.
+// Q8 — PIN THE DISPOSITION: observers only. Nothing here changes behaviour — no quit,
+// no restart, no reload. A diagnostic that also acts is how a wrong diagnosis becomes
+// an outage, and the restart policy is deliberately left where it already is.
+
+// `uncaughtException` above does NOT catch a rejected promise, and most of this file is
+// async — an async throw in the main process left no line whatsoever.
+process.on('unhandledRejection', (reason) => {
+  log('main process unhandledRejection:', reason && reason.stack ? reason.stack : reason);
+});
+
+// The HUD renderer dying while the main process lives on is the exact shape of an
+// "it just stopped responding" report: blank or vanished window, process still there.
+app.on('render-process-gone', (_event, contents, details) => {
+  let url = '';
+  try { url = contents && contents.getURL ? contents.getURL() : ''; } catch { url = ''; }
+  log('render-process-gone:', JSON.stringify({
+    reason: details && details.reason,
+    exitCode: details && details.exitCode,
+    hud: isHudContents(contents),
+    url,
+  }));
+});
+
+// A GPU or utility process fault takes the window with it, and the main process
+// survives to write it down — which is the only reason this is diagnosable at all.
+app.on('child-process-gone', (_event, details) => {
+  log('child-process-gone:', JSON.stringify({
+    type: details && details.type,
+    reason: details && details.reason,
+    exitCode: details && details.exitCode,
+    name: details && details.name,
+  }));
+});
+
+// THE LINE THAT MADE D4 UNANSWERABLE BY ITS ABSENCE. With nothing written for an
+// orderly exit, a log that simply stops is equally consistent with a clean quit, a
+// kill, and a vanish — so no amount of reading it could ever settle which happened.
+app.on('quit', (_event, exitCode) => {
+  log('app quit: orderly exit, code=' + exitCode);
 });
 
 // ---- asar-unpack path translation (H11) ---------------------------------------
@@ -665,11 +729,32 @@ function startChild() {
     log('startChild: suppressed — app is quitting');
     return;
   }
-  // Reopen the log stream per run (truncates, so it reflects the latest boot,
-  // not an accumulating tail). Append-mode would grow without bound across a
-  // crash-restart loop; truncate-on-start keeps it bounded and current.
-  try { childLogStream = fs.createWriteStream(childLogPath(), { flags: 'w' }); }
+  // BUG-273 D4 — THIS FUNCTION IS THE RESTART PATH, NOT ONLY THE BOOT PATH.
+  // It used to open the log with flags:'w'. The child's own exit handler below
+  // re-forks through here after a 1s backoff, so a crashing child had its log
+  // ERASED BY ITS OWN RESTART about a second later, every time — and in a crash
+  // loop only the last and shortest attempt survived. That is precisely the
+  // reported symptom of D4: a session that died and left nothing behind.
+  //
+  // The old comment was right that append-mode grows without bound across a
+  // crash loop. So the bound moved to a real size cap with one kept generation
+  // (rotateLogIfOver, see the logging block at the top of this file) instead of
+  // being paid for by deleting the evidence.
+  //
+  // The path is unchanged on purpose: scripts/verify-voice-session.js reads this
+  // file by name, and a per-run filename would split one voice session in two.
+  rotateLogIfOver(childLogPath(), CHILD_LOG_MAX_BYTES);
+  try { childLogStream = fs.createWriteStream(childLogPath(), { flags: 'a' }); }
   catch (err) { log('could not open child log:', err.message); }
+  // Appending across runs is only readable if each run says where it starts.
+  // Without this, "the log ends here" and "the log was overwritten here" are
+  // indistinguishable — which is half of why D4 could not be answered.
+  try {
+    if (childLogStream) {
+      childLogStream.write('--- boot: MYTHOS ' + app.getVersion() + ' pid=' + process.pid
+        + ' at ' + new Date().toISOString() + ' ---\n');
+    }
+  } catch (err) { log('could not write the child log boot marker:', err.message); }
 
   // B3: resolve + (one-time, best-effort) migrate the vault BEFORE fork so
   // the child never even sees the install-tree default. Explicit env (the
@@ -877,6 +962,18 @@ function startChild() {
   // A fresh start (or a clean restart after uptime) resets the backoff to the
   // floor so a single past crash doesn't pin the delay at the 5s cap forever.
   backoffIndex = 0;
+
+  // BUG-273 D4 — a fork that fails to START emits 'error', not 'exit', so the exit
+  // handler below (which carries the ONLY crash line this app writes about its own
+  // server) never ran and nothing at all was said. A missing node binary, a bad
+  // SERVER_ENTRY path after an update, or an EPERM all land here.
+  //
+  // Q8: log only. Node emits 'exit' after 'error' when the process did start, and the
+  // existing handler owns the restart decision; adding a second restart trigger here
+  // is how a crash loop doubles its own rate.
+  child.on('error', (err) => {
+    log('mythos child failed to spawn:', err && err.stack ? err.stack : err);
+  });
 
   child.on('exit', (code, signal) => {
     // NEVER restart while we are shutting down. Without this guard, stopChild()

@@ -221,3 +221,75 @@ describe('BUG-272 slice 5 — verify-voice-session.js', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-273 D4 — the log is no longer one run per file, so this script had to be
+// told which run it is scoring.
+//
+// Until D4, electron/main.js opened the child log with flags:'w' on every
+// startChild() — which is also the CRASH-RESTART path, so a dying server erased
+// its own log about a second later. Fixing that (append + rotate at a size cap)
+// silently changed what "the log" means to every consumer, and this script is the
+// consumer whose entire output is percentages. Pooling two runs reports a number
+// belonging to neither.
+//
+// Q3 of the checklist, applied to a fix rather than to a feature: the seam moved,
+// so the reader had to move with it.
+describe('verify-voice-session: which run is being scored', () => {
+  const BOOT = (n) => '--- boot: MYTHOS 0.1.9 pid=' + (1000 + n) + ' at 2026-08-18T1'
+    + n + ':00:00.000Z ---';
+
+  // Run 1 is the 2026-08-17 disaster; run 2 is clean. Scoring them together would
+  // report the wake word as broken in a session where it worked.
+  const TWO_RUNS = [BOOT(1)].concat(BAD, [BOOT(2)], CLEAN);
+
+  it('defaults to the LAST run, so an earlier crash cannot contaminate this session', () => {
+    withLog(TWO_RUNS, (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /scope: the LAST of 2 runs/, r.stdout);
+      assert.match(r.stdout, /\[PASS\] wake word: zero errors/,
+        "run 1's OverconstrainedError belongs to run 1 — reading it here would report a "
+        + 'failure the operator did not just experience');
+    });
+  });
+
+  it('says out loud that earlier runs were skipped', () => {
+    withLog(TWO_RUNS, (file) => {
+      // Q2/no-silent-caps: dropping data quietly reads as "covered everything". The
+      // operator must be able to see that this file held more than it scored.
+      assert.match(run([file]).stdout, /earlier runs are ignored/);
+    });
+  });
+
+  it('--all-runs pools them, and warns that the number belongs to no session', () => {
+    withLog(TWO_RUNS, (file) => {
+      const r = run([file, '--all-runs']);
+      assert.match(r.stdout, /scope: EVERY run/, r.stdout);
+      assert.match(r.stdout, /\[FAIL\] wake word: zero errors/,
+        "with run 1 pooled back in, its error is in scope again — that is what --all-runs "
+        + 'means and why it is not the default');
+    });
+  });
+
+  it('a log with NO boot markers is read whole — that is the pre-D4 and batch shape', () => {
+    // The batch launcher redirects stdout and writes no marker, and every log captured
+    // before this slice has none either. Treating "no markers" as "no data" would break
+    // the script against every log that already exists.
+    withLog(CLEAN, (file) => {
+      const r = run([file]);
+      assert.doesNotMatch(r.stdout, /scope:/, 'nothing to choose between, so nothing to announce');
+      assert.match(r.stdout, /\[PASS\] wake word: zero errors/, r.stdout);
+    });
+  });
+
+  it('--since still wins: an explicit scope outranks the default', () => {
+    withLog(TWO_RUNS, (file) => {
+      const r = run([file, '--since', '2026-08-01T00:00:00.000Z']);
+      assert.doesNotMatch(r.stdout, /scope: the LAST/,
+        'the operator named a window; silently narrowing it further would be the same '
+        + 'class of bug as pooling');
+      assert.match(r.stdout, /\[FAIL\] wake word: zero errors/,
+        'both runs are inside the requested window');
+    });
+  });
+});

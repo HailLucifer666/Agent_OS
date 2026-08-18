@@ -17,7 +17,7 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for what needs a live session. Ten items shipped; A2 diagnosed and instrumented. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for what needs a live session. Eleven items shipped (D4 included: the logging path was destroying its own evidence); A2 diagnosed and instrumented. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
 Fourteen commits on `main`, `f0f63f9..2d82ba5`: `7eb3920` (B1, `unverified` was
@@ -25,8 +25,8 @@ narrated as success), `33090e1` (A1, the learned bleed floor went dormant),
 `8d61547` (the verifier’s headline criterion could never fire), `1d58765` (A2’s
 measurement + the BUG-273 record), `24c95c5` + `1d01c79` (D2), `a910767` +
 `619c5b1` (A3), `e1684ab` + `ea5f1dd` (B2), `025ceba` (B3), `e8777ee` (C1),
-`12b6ada` (C3), `5fe9368` (A4), `2d82ba5` (C2).
-Suite **5066/5066/0 fail/0 skipped**, from 4963 at the start of the session.
+`12b6ada` (C3), `5fe9368` (A4), `2d82ba5` (C2), plus D4.
+Suite **5090/5090/0 fail/0 skipped**, from 4963 at the start of the session.
 
 **Read BUGS.md's BUG-273 entry before touching anything.** It is the full
 handoff: the measured evidence table, what is now closed out, the remaining
@@ -128,8 +128,23 @@ one run died with no Crashpad dump, no child exit line, and no trail at all.
 - **C2’s other half** — an operator action, not a patch: move the Google Cloud OAuth
   app to Production/External, or accept weekly re-consent. MYTHOS now warns
   proactively either way.
-- **D3** (unsolicited speech) and **D4** (the missing crash trail) — both need
-  evidence a session has not yet produced.
+- **D3** (unsolicited speech) — still needs evidence a session has not yet produced.
+
+**D4 IS FIXED, and it is the sixth fix in this ticket caused by an earlier one.** It
+was filed as "the missing trail is the bug — capture stderr until it recurs", i.e.
+parked on evidence. Reading the logging path instead found the trail being destroyed:
+`startChild()` opened the server log with `flags:'w'`, and `startChild()` is also the
+crash-restart path, so **a crashing child erased its own log about a second later,**
+**every time.** `logs/main.log` capped itself with `truncateSync(file, 0)`, throwing
+away the run leading up to the overflow. Both were deliberate, both were defended in
+comments, and neither was wrong about wanting a bound — only about paying for it with
+the evidence. Rotation with one kept generation gives the same ceiling
+(`electron/log-rotate.js`; extracted from main.js precisely so "the log survives a
+crash" rests on 8 tests against real files rather than on a regex over source text).
+Four silent death modes now log (`unhandledRejection`, `render-process-gone`,
+`child-process-gone`, the fork's `error`), and `app.on('quit')` finally makes a clean
+exit distinguishable from a disappearance. `verify-voice-session.js` moved with the
+seam: it scopes to the last run by default now that a log can hold several.
 **A1's escape hatch, and the one thing to check first if barge-in feels worse:**
 the learned floor is now dormant and the floor in force is pinned at
 `INITIAL_BLEED_FLOOR` (0.05). Turn it back on with

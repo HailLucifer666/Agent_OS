@@ -67,8 +67,17 @@ test('log() writes to a file under userData, not stderr alone', () => {
 test('the main log is size-capped, so it cannot grow without bound', () => {
   const code = codeOnly(readMainJs());
   assert.ok(/MAIN_LOG_MAX_BYTES/.test(code), 'a cap constant must exist');
-  assert.ok(/truncateSync/.test(code),
-    'capped by truncation deliberately — one file, no rotation machinery to go wrong');
+  // BUG-273 D4 CHANGED THE MECHANISM, NOT THIS INVARIANT. This used to assert
+  // `truncateSync`, on the stated grounds that truncation is "one file, no rotation
+  // machinery to go wrong". The bound was never the problem — the erasure was:
+  // hitting the cap wiped the run LEADING UP TO the overflow, which is the only part
+  // of a log anybody reads after a crash. Rotation with one kept generation holds the
+  // bound at 2x the constant, so what this test protects (no unbounded growth) is
+  // unchanged and now names the mechanism that actually implements it.
+  assert.ok(/rotateLogIfOver/.test(code),
+    'capped by rotating one generation aside — see electron/log-rotate.js');
+  assert.ok(!/truncateSync/.test(code),
+    'and never by truncating to zero, which is what destroyed the evidence in D4');
 });
 
 test('logging can never take the app down', () => {

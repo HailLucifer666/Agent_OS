@@ -15,7 +15,7 @@
  * remembering them.
  *
  * Usage:
- *   node scripts/verify-voice-session.js <path-to-log> [--since <ISO8601>]
+ *   node scripts/verify-voice-session.js <path-to-log> [--since <ISO8601>] [--all-runs]
  *   node scripts/verify-voice-session.js --stdin < some.log
  *
  * The log is the server's structured output: one JSON object per line, shaped
@@ -23,6 +23,18 @@
  * A path is REQUIRED rather than guessed: the log destination depends on how the
  * operator launched MYTHOS (batch redirect, Electron, a pipe), and a script that
  * silently reads the wrong file would report a clean session that never happened.
+ *
+ * ONE RUN AT A TIME, BY DEFAULT (BUG-273 D4). Until D4 the Electron child log was
+ * truncated on every startChild(), so the file WAS exactly one run and this script
+ * could read all of it. That truncation is what erased the evidence of the crash
+ * that caused the restart, so the log now appends across runs and rotates at a size
+ * cap — which silently changes what "the log" means to everything downstream,
+ * including here. Reading the whole file would pool several sessions into one
+ * percentage and report a number belonging to no session at all: a 43%
+ * self-interruption run averaged against a two-minute boot looks like an
+ * improvement that never happened. So the default scope is the LAST run in the
+ * file, anchored on the boot marker main.js writes ('--- boot: MYTHOS ...'), and
+ * the chosen scope is printed. --all-runs opts out; --since still wins if given.
  *
  * Exit code 0 when every criterion passes, 1 when any fails, 2 on bad input.
  * Zero dependencies.
@@ -51,11 +63,12 @@ const CRITERIA_NOTES = {
 };
 
 function parseArgs(argv) {
-  const args = { path: null, stdin: false, since: null };
+  const args = { path: null, stdin: false, since: null, allRuns: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--stdin') args.stdin = true;
     else if (a === '--since') args.since = argv[++i] || null;
+    else if (a === '--all-runs') args.allRuns = true;
     else if (!a.startsWith('-') && !args.path) args.path = a;
   }
   return args;
@@ -77,6 +90,28 @@ function fail(msg) {
 }
 
 // Non-JSON lines are ignored, not counted as errors: a real log carries banner
+// The marker electron/main.js writes to the child log at every startChild(), which
+// is the only thing in the file that can tell one run from the next. Matched loosely
+// on the prefix rather than on the whole line: the version, pid and timestamp it
+// carries are all expected to change, and pinning them here would make this scoping
+// fail open (i.e. silently read every run) the first time that line is edited.
+const BOOT_MARKER = /^-{2,}\s*boot: MYTHOS\b/;
+
+// Returns the lines belonging to the LAST run, plus what was skipped, so the caller
+// can say so out loud. A log written before D4 (or by the batch launcher, which
+// redirects stdout and writes no marker) has no markers at all — that is not an
+// error and must not be treated as "no data": it means the file is already one run,
+// which is exactly the pre-D4 contract.
+function scopeToLastRun(lines) {
+  let last = -1;
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (BOOT_MARKER.test(lines[i].trim())) { last = i; count++; }
+  }
+  if (last === -1) return { lines, runs: 0, marker: null };
+  return { lines: lines.slice(last), runs: count, marker: lines[last].trim() };
+}
+
 // text and pretty-printed lines when MYTHOS ran on a TTY. But a log with NO
 // parseable entries at all is reported, because that is almost always the wrong
 // file or a pretty-mode log (MYTHOS_LOG_PRETTY=force), and silently scoring it
@@ -102,7 +137,19 @@ function check(name, passed, detail, note) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const entries = parseEntries(readLines(args), args.since);
+  const allLines = readLines(args);
+  // --since is an explicit instruction about scope and outranks the default; so does
+  // --all-runs. Otherwise: the last run only, and say which.
+  const scoped = (args.since || args.allRuns) ? { lines: allLines, runs: 0, marker: null }
+    : scopeToLastRun(allLines);
+  if (scoped.runs > 1) {
+    process.stdout.write('scope: the LAST of ' + scoped.runs + ' runs in this log ('
+      + scoped.marker + ')\n        earlier runs are ignored — pass --all-runs to pool them.\n\n');
+  } else if (args.allRuns) {
+    process.stdout.write('scope: EVERY run in this log (--all-runs) — a percentage here belongs to\n'
+      + '        no single session.\n\n');
+  }
+  const entries = parseEntries(scoped.lines, args.since);
 
   if (!entries.length) {
     fail('no structured JSON log entries found. Either this is the wrong file, or MYTHOS ran in\n'

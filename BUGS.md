@@ -18,10 +18,11 @@ and printed PASS on every session ever fed to it (`8d61547`). THREE of the fix p
 corrected by reading the code first and are recorded on the entry. A2 measurement instrumented,
 its acoustic fix deliberately deferred to a live session. Remaining backlog ordered on the entry,
 EVERY ITEM THAT COULD BE FIXED WITHOUT A LIVE SESSION IS NOW FIXED — B1, A1, D2, A3, B2, B3,
-C1, C3, A4 and C2. D2's banner turned out never to have been false, A3 was not the
-boot-has-no-Live-session case it was filed as. Next: A2's acoustic fix
-is the only P0 left and is blocked on a live session by design; D3 and D4 need more
-evidence. Suite 5066/5066/0 fail/0 skipped.
+C1, C3, A4, C2, and D4's instrumentation half. D2's banner turned out never to have been
+false, A3 was not the boot-has-no-Live-session case it was filed as, and D4 was not waiting
+for evidence at all: the logging path was DESTROYING it (the server log was truncated by the
+crash-restart that its own crash caused). Next: A2's acoustic fix is the only P0 left and is
+blocked on a live session by design; D3 still needs evidence. Suite 5090/5090/0 fail/0 skipped.
 
 Previous entry: 2026-08-18 (second entry) - BUG-272 SLICES 1-5 SHIPPED IN CODE (`6d1dc34` wake-word
 stale-device rescue + bounded re-arm, `8bf1acc` echo-check instrumentation, `daf89d4` playback-aware
@@ -9507,13 +9508,48 @@ unchanged, and the remaining acoustic decision waits on a live session by design
   input; MYTHOS logged its own corrective ("cease speaking immediately"). 61 turns
   in 10 minutes is high and turn 1 was `systemInitiated:true`. Audit what opens a
   turn with no operator utterance.
-- **D4 (P1)** — one run died with no diagnostic trail. The 11:19 UTC run ended
-  mid-session: no Crashpad dump, child log stops abruptly, `logs/main.log` records
-  no exit at all (a clean quit always writes `child exited ... during shutdown`).
-  **Ruled out:** the `taskkill` on `node.exe` cannot be the cause — the child is
-  forked via `process.execPath`, which under Electron is electron.exe. **The
-  missing trail is the bug.** Capture stderr on every run until it recurs and do
-  not theorise without that stream.
+- **D4 (P1) — FIXED, and it was never waiting for evidence.** One run died with no
+  diagnostic trail: no Crashpad dump, child log stops abruptly, `logs/main.log`
+  records no exit at all. Filed as "capture stderr until it recurs". Reading the
+  logging path instead found a mechanism that DESTROYS the trail, so the next
+  session would have been just as blind:
+
+  ```
+  startChild()  ->  createWriteStream(childLogPath(), { flags: 'w' })
+  child.on('exit')  ->  setTimeout(startChild, 1000)      <- SAME function
+  ```
+
+  `startChild()` is the restart path as well as the boot path, so **a crashing
+  child's log was erased by its own restart about a second later, every time** —
+  and in a crash loop only the last and shortest attempt survived. `logs/main.log`
+  had the second half of it: its 2 MB cap was enforced with `truncateSync(file, 0)`,
+  which throws away the run leading up to the overflow rather than the oldest part
+  of it. Both choices were deliberate and both were defended in comments ("one file,
+  no rotation machinery to go wrong"); the bound was never the problem, the erasure
+  was. Now capped by rotating one generation aside (`electron/log-rotate.js`, 8 tests
+  against real files), so the ceiling is 2x a named constant instead of unbounded and
+  every death has both its own run and the one before it on disk.
+
+  **Four death modes that logged nothing at all** are now written down —
+  `unhandledRejection` (which `uncaughtException` does not catch, in a file that is
+  mostly async), `render-process-gone` (the HUD dies, the main process lives on, and
+  it reads as a hang), `child-process-gone` (a GPU/driver fault takes the window),
+  and `child.on('error')` (a fork that never STARTS emits 'error', not 'exit', so the
+  one crash line this app writes about its server never ran). Plus `app.on('quit')`:
+  with no line for an orderly exit, a log that simply stops is equally consistent
+  with a clean quit, a kill and a vanish — **which is what made D4 unanswerable in
+  the first place.** All observers; nothing here restarts, quits or reloads.
+
+  **Q3, applied to a fix rather than a feature.** Appending across runs silently
+  changed what "the log" means to `scripts/verify-voice-session.js`, whose entire
+  output is percentages: pooling a 43% self-interruption run with a two-minute boot
+  reports a number belonging to no session. It now scopes to the LAST run by default,
+  anchored on the boot marker, announces that earlier runs were skipped, and takes
+  `--all-runs` to opt out. A log with no markers (every log captured before this, and
+  everything the batch launcher writes) is still read whole.
+
+  Still worth capturing the terminal on the next run — `npm start 2>&1 | tee ...` —
+  but no longer as the only hope of an answer.
 
 ### Verification for the next live session
 
