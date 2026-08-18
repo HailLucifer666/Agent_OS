@@ -3751,8 +3751,25 @@ function createServer(deps) {
         // is calibrated. An allowlist is the right shape here (a transcript must
         // never reach a log line by accident), but it means every new client field
         // has to be added in two places, and forgetting the second is silent.
+        // BUG-273, and this is the THIRD time this exact bug has been fixed here.
+        // A1 added bleedPeak/learnedFloor and A2 added flushedFrames/flushedZeroed/
+        // flushedRaw to the client's transition message, and neither added them below —
+        // so they were computed, sent, and dropped, exactly as the paragraph above
+        // describes happening to BUG-272's three fields. flushedRaw is the ONE datum
+        // A2's remaining acoustic fix waits on: two live sessions were run to collect
+        // it, both produced nothing, and the verifier reported "log predates the
+        // instrumentation" because a discarded field and an old log look identical to
+        // it. A P0 sat blocked on "we need another session" over a missing line here.
+        //
+        // The list stays a list — a transcript must never reach a log line by accident.
+        // What was missing was a CHECK on it, which now exists and runs every commit:
+        // test/bug-273-suspend-fields-reach-the-log.test.js reads the fields the client
+        // actually sends and fails if any would be dropped. Third occurrence is where
+        // patching instances stops and the assertion gets written.
         for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
-          'bargeVetoed', 'bargeVetoTier', 'bleedFloor']) {
+          'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
+          'bleedPeak', 'learnedFloor',
+          'flushedFrames', 'flushedZeroed', 'flushedRaw']) {
           if (msg[k] !== undefined) fields[k] = msg[k];
         }
         logger.info('voice.capture-suspend', fields);

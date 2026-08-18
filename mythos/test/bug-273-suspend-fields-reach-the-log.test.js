@@ -1,0 +1,126 @@
+'use strict';
+
+// bug-273-suspend-fields-reach-the-log.test.js — the class, not the instance.
+//
+// THIS IS THE THIRD TIME. `voice.capture-suspend` is assembled in two places: the
+// client puts fields on the transition message (ui/public/js/voice/s2s-bridge.js)
+// and the server copies a hand-maintained ALLOWLIST of them onto the log line
+// (server/index.js). Adding a field to one and not the other is silent — the number
+// is computed, sent over the wire, and dropped.
+//
+//   BUG-271  fixed it for ownVoiceGate/prerollFrames/framesZeroed/...
+//   BUG-272  reintroduced it for bargeVetoed/bargeVetoTier/bleedFloor
+//   BUG-273  reintroduced it AGAIN, for A1's bleedPeak/learnedFloor and A2's
+//            flushedFrames/flushedZeroed/flushedRaw
+//
+// The comment above the allowlist already says why: "it means every new client field
+// has to be added in two places, and forgetting the second is silent." It was written
+// by the person who fixed it the second time, and it did not stop the third.
+//
+// WHAT IT COST THIS TIME. `flushedRaw` is the single datum BUG-273 A2's remaining
+// acoustic fix waits on. Two sessions were run to collect it. Both produced nothing,
+// and the verifier reported "not reported — log predates BUG-273 A2 instrumentation",
+// which was true of the FIRST session and false of the second: that build had the
+// instrumentation and the field was being discarded at the seam. So a P0 sat blocked
+// on "we need another live session" when it was actually blocked on a missing line in
+// an allowlist — and the tool built to detect exactly this printed PASS, because a
+// missing field and an old log are indistinguishable to it. Precisely the
+// fabricated-pass shape as `8d61547`.
+//
+// Q6 — WHAT CLASS IS THIS AN INSTANCE OF? "The same invariant broken three times."
+// The repo's own rule for that is to stop patching instances and write the assertion
+// somewhere that runs repeatedly. This file IS that assertion: it reads the fields
+// the client actually puts on the transition payload and fails if the server would
+// drop any of them. Adding a fourth field with no allowlist entry now fails at commit
+// time instead of costing another live session.
+//
+// Q2 — the allowlist itself STAYS. It is the right shape: a transcript must never
+// reach a log line by accident, and an open passthrough would let one. What was wrong
+// was that nothing checked it, not that it existed.
+//
+// Run: cd mythos && node --test test/bug-273-suspend-fields-reach-the-log.test.js
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+const stripComments = (t) => t.replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+const BRIDGE = stripComments(
+  fs.readFileSync(path.join(ROOT, 'ui', 'public', 'js', 'voice', 's2s-bridge.js'), 'utf8'));
+const SERVER = stripComments(
+  fs.readFileSync(path.join(ROOT, 'server', 'index.js'), 'utf8'));
+
+// The server's copy loop, as a set of names.
+function serverAllowlist() {
+  const at = SERVER.indexOf("'voice-capture-suspend'");
+  assert.notEqual(at, -1, 'the handler must still exist');
+  const loop = SERVER.slice(at, SERVER.indexOf("logger.info('voice.capture-suspend'", at));
+  const list = loop.slice(loop.indexOf('for (const k of ['));
+  const names = list.slice(0, list.indexOf(']')).match(/'([A-Za-z][A-Za-z0-9]*)'/g) || [];
+  const set = new Set(names.map((n) => n.replace(/'/g, '')));
+  // The four fields the handler sets directly on `fields` rather than copying in the
+  // loop (suspended/holdMs/reason/at) are just as delivered — counting them as
+  // dropped would make this test fail on a field that demonstrably reaches the log.
+  const base = loop.slice(loop.indexOf('const fields = {'), loop.indexOf('for (const k of ['));
+  for (const m of base.match(/([A-Za-z][A-Za-z0-9]*)s*:/g) || []) set.add(m.replace(':', '').trim());
+  return set;
+}
+
+// Every field the client attaches to the object it hands to sendSuspendState/send.
+// Read from source rather than from a duplicated list here: a hand-copied expectation
+// is the same two-places problem wearing a different hat.
+function clientFields() {
+  const marker = 'flushedFrames:';
+  const at = BRIDGE.indexOf(marker);
+  assert.notEqual(at, -1, 'the release-transition payload must still be built here');
+  // Walk back to the start of the object literal, forward to its close.
+  const open = BRIDGE.lastIndexOf('{', at);
+  const close = BRIDGE.indexOf('};', open);
+  const body = BRIDGE.slice(open, close);
+  const keys = body.match(/^\s{2,}([A-Za-z][A-Za-z0-9]*)\s*:/gm) || [];
+  return keys.map((k) => k.trim().replace(':', ''));
+}
+
+test('every diagnostic the client computes actually reaches the log line', () => {
+  const allowed = serverAllowlist();
+  const sent = clientFields();
+  assert.ok(sent.length >= 8, 'sanity: the payload should carry the full diagnostic set');
+
+  const dropped = sent.filter((k) => !allowed.has(k));
+  assert.deepEqual(dropped, [],
+    'these are computed, sent over the wire and THROWN AWAY at server/index.js\'s '
+    + 'allowlist — the third occurrence of this exact bug, and the one that cost two '
+    + 'live sessions of flushedRaw');
+});
+
+test("the fields BUG-273's own slices added are present by name", () => {
+  // Named explicitly as well as derived, because the derivation above depends on the
+  // shape of one object literal — if a refactor moves those fields somewhere the
+  // parser cannot see, this test must fail loudly rather than pass on an empty list.
+  const allowed = serverAllowlist();
+  for (const field of ['flushedFrames', 'flushedZeroed', 'flushedRaw', 'bleedPeak', 'learnedFloor']) {
+    assert.ok(allowed.has(field), field + ' must reach the log — A1 and A2 are judged on it');
+  }
+});
+
+test('the pre-BUG-273 fields are still allowed — nothing was traded away', () => {
+  const allowed = serverAllowlist();
+  for (const field of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs',
+    'framesDropped', 'framesZeroed', 'peakRms', 'bargeVetoed', 'bargeVetoTier', 'bleedFloor']) {
+    assert.ok(allowed.has(field), field + ' was already load-bearing before this fix');
+  }
+});
+
+test('the allowlist is still an allowlist — no passthrough', () => {
+  // Q2: the mechanism is right and stays. A transcript must never reach a log line by
+  // accident, and `Object.assign(fields, msg)` would let one. What was missing was a
+  // check on the list, not the list.
+  const at = SERVER.indexOf("'voice-capture-suspend'");
+  const handler = SERVER.slice(at, SERVER.indexOf("logger.info('voice.capture-suspend'", at));
+  assert.match(handler, /for \(const k of \[/, 'still an explicit list');
+  assert.doesNotMatch(handler, /Object\.assign\(fields,\s*msg\)/);
+  assert.doesNotMatch(handler, /\.\.\.msg/);
+});

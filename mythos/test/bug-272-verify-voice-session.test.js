@@ -50,7 +50,12 @@ const CLEAN = [
     // the operator peak — and called it clean, which is precisely the session shape
     // that produced 49 vetoes and a 13.4-second hold on 2026-08-18.
     + '"framesDropped":0,"framesZeroed":40,"peakRms":0.3,"bargeVetoed":4,"bleedFloor":0.05,'
-    + '"bleedPeak":0.123,"learnedFloor":0.123}',
+    // BUG-273: a healthy CURRENT session also reports the release flush. It was added
+    // here when the criterion stopped treating "absent" as "old log and therefore
+    // fine" — the fixture has to represent a build that actually ships the fields,
+    // or it pins the very blind spot that let a P0 sit blocked.
+    + '"bleedPeak":0.123,"learnedFloor":0.123,'
+    + '"flushedFrames":6,"flushedZeroed":1,"flushedRaw":5}',
 ];
 
 // The real 2026-08-17 signature, compressed.
@@ -412,6 +417,54 @@ describe('verify-voice-session: release-flush volume (BUG-273 A2)', () => {
     });
     withLog([arm, release('own-voice-ended', 10)], (file) => {
       assert.match(run([file]).stdout, /10 frame\(s\) replayed total/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-273 — "not reported" was a guess presented as a fact.
+//
+// This criterion used to say, unconditionally, "log predates BUG-273 A2
+// instrumentation" whenever the flush fields were absent — and PASS. On the
+// 2026-08-18T18:15 session that was false: the build had the instrumentation and
+// server/index.js's capture-suspend allowlist was discarding the fields. A P0 stayed
+// blocked on "we need another live session" over a missing line in a list, because
+// the tool built to detect exactly this said the reassuring thing.
+describe('verify-voice-session: absent flush fields (BUG-273)', () => {
+  const release = (extra) => JSON.stringify(Object.assign({
+    ts: '2026-08-18T14:00:00.000Z', level: 'info', msg: 'voice.capture-suspend',
+    suspended: false, reason: 'own-voice-ended', prerollFrames: 40, framesDropped: 0,
+  }, extra || {}));
+
+  it('FAILS, and says the pipeline is broken, when other release fields DID arrive', () => {
+    withLog([release()], (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /\[FAIL\] release flush reported/, r.stdout);
+      assert.match(r.stdout, /being dropped between client and log/,
+        'a discarded field and an old build are different faults and must not share a message');
+      assert.doesNotMatch(r.stdout, /predates/);
+    });
+  });
+
+  it('reports the numbers when they do arrive', () => {
+    withLog([release({ flushedFrames: 40, flushedZeroed: 6, flushedRaw: 34 })], (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /\[PASS\] release flush reported/);
+      assert.match(r.stdout, /34 raw frame\(s\) replayed, 6 zeroed/);
+    });
+  });
+
+  it('a run with no release transition is not accused of anything', () => {
+    // Nothing was flushed because nothing was held. That is silence, not a defect,
+    // and calling it broken would be the mirror image of the bug being fixed.
+    const armOnly = JSON.stringify({
+      ts: '2026-08-18T14:00:00.000Z', level: 'info', msg: 'voice.capture-suspend',
+      suspended: true, reason: 'own-voice-hold',
+    });
+    withLog([armOnly], (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /\[PASS\] release flush reported/);
+      assert.match(r.stdout, /nothing to report/);
     });
   });
 });

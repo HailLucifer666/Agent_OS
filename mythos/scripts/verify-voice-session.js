@@ -353,10 +353,24 @@ function main() {
     if (raw !== null) flushedRaw += raw;
     if (zeroed !== null) flushedZeroed += zeroed;
   }
-  check('release flush reported what it put on the wire', true,
+  // BUG-273: this used to say, unconditionally, 'not reported — log predates BUG-273
+  // A2 instrumentation'. That was a GUESS presented as a fact, and it was wrong on the
+  // 2026-08-18T18:15 session: that build HAD the instrumentation and the fields were
+  // being discarded by server/index.js's capture-suspend allowlist. A P0 stayed blocked
+  // on 'we need another live session' for a missing line in a list, because this line
+  // said the reassuring thing. A run that reported the OTHER release fields but not
+  // these has a broken pipeline, not an old log, and must say so.
+  var sawRelease = false;
+  for (var ri = 0; ri < suspendLines.length; ri++) {
+    if (suspendLines[ri].suspended === false && num(suspendLines[ri].prerollFrames) !== null) sawRelease = true;
+  }
+  check('release flush reported what it put on the wire', sawFlush || !sawRelease,
     sawFlush
       ? `${flushedRaw} raw frame(s) replayed, ${flushedZeroed} zeroed by the gate`
-      : 'not reported — log predates BUG-273 A2 instrumentation',
+      : (sawRelease
+        ? 'BROKEN: this run reported prerollFrames but NOT flushedRaw — the fields are '
+          + 'being dropped between client and log, not missing from the build'
+        : 'no release transition in this run — nothing to report'),
     CRITERIA_NOTES.flush);
 
   // HOW BIG THE BURST IS, and which kind of hold produced it. This is derivable
