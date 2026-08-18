@@ -4192,6 +4192,146 @@ function Handle-WriteNote($text, $title) {
     }
 }
 
+# ---- BUG-274 W2: the automation host's own execution context ----------------
+#
+# Why this exists. `InvokePattern.Invoke()`/`ExpandCollapsePattern.Expand()` on
+# Win11 Notepad's WinUI3 MenuBarItem work every time from a plain
+# `powershell.exe -File` process and silently no-op - no exception, state even
+# reports 'Expanded', no flyout renders - when the SAME script runs as
+# pc-child's spawned child. Three things were ruled out live on 2026-08-13:
+# `-NonInteractive`, `windowsHide`, and (2026-08-19) "make it a persistent
+# daemon", which was withdrawn as a false premise - this file has ALWAYS been a
+# persistent daemon (one long-lived process, `while ($true)` over stdin).
+#
+# So the remaining hypothesis is the one nobody measured: the spawned process
+# tree's interaction context. This handler reports it and nothing else - it is
+# read-only, takes no target, and changes no behaviour. Run it BOTH ways and
+# diff: `scripts/probe-pc-child-context.js` drives the real Node->pc-child round
+# trip and a standalone spawn of this same file, because a PowerShell self-test
+# is itself subject to the thing being measured (adapters/CLAUDE.md) and lies
+# about it.
+#
+# Q1 - WHAT ELSE MATCHES THIS? "Invoke no-oped" is not one condition, and an
+# environment diff is not a cause. If every field below comes back IDENTICAL in
+# both hosts, that REFUTES the desktop/window-station/integrity hypothesis
+# rather than confirming anything - a result worth having, and the same shape as
+# the two BUG-274 items that turned out not to be faults. Report the diff; do
+# not infer a mechanism from it.
+#
+# `apartmentState` is here deliberately: it has never been measured, UIA's COM
+# client is apartment-sensitive, and a flyout that needs a pumped STA thread
+# would fail in exactly this shape - silently, with state still transitioning.
+# That makes it the cheapest untested candidate, not the answer.
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+
+public static class HostContext {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetProcessWindowStation();
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetThreadDesktop(uint dwThreadId);
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool CloseDesktop(IntPtr hDesktop);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool GetUserObjectInformationW(IntPtr hObj, int nIndex,
+        StringBuilder pvInfo, uint nLength, out uint lpnLengthNeeded);
+
+    // UOI_NAME = 2. Returns null rather than throwing: a probe that dies tells
+    // you nothing, and "could not read" is itself a datum worth logging.
+    public static string NameOf(IntPtr hObj) {
+        if (hObj == IntPtr.Zero) return null;
+        StringBuilder sb = new StringBuilder(256);
+        uint needed;
+        if (!GetUserObjectInformationW(hObj, 2, sb, 256 * 2, out needed)) return null;
+        return sb.ToString();
+    }
+}
+'@ -ErrorAction SilentlyContinue
+
+function Handle-UiaContext {
+    $out = [ordered]@{}
+    $out.pid = $PID
+    try { $out.sessionId = (Get-Process -Id $PID).SessionId } catch { $out.sessionId = $null }
+    # The COM apartment the UIA client actually runs on. Never measured before.
+    try { $out.apartmentState = [string]$Host.Runspace.ApartmentState } catch { $out.apartmentState = $null }
+    try { $out.threadApartment = [string][System.Threading.Thread]::CurrentThread.GetApartmentState() } catch { $out.threadApartment = $null }
+    try { $out.userInteractive = [Environment]::UserInteractive } catch { $out.userInteractive = $null }
+    try { $out.inputRedirected = [Console]::IsInputRedirected } catch { $out.inputRedirected = $null }
+    try { $out.outputRedirected = [Console]::IsOutputRedirected } catch { $out.outputRedirected = $null }
+    try { $out.hasConsoleWindow = ([HostContext]::GetConsoleWindow() -ne [IntPtr]::Zero) } catch { $out.hasConsoleWindow = $null }
+    try { $out.windowStation = [HostContext]::NameOf([HostContext]::GetProcessWindowStation()) } catch { $out.windowStation = $null }
+    try { $out.desktop = [HostContext]::NameOf([HostContext]::GetThreadDesktop([HostContext]::GetCurrentThreadId())) } catch { $out.desktop = $null }
+    # The desktop currently receiving user input. If this differs from `desktop`
+    # above, the host is automating a desktop nobody is looking at, which would
+    # explain a render that never happens while state still transitions.
+    try {
+        $h = [HostContext]::OpenInputDesktop(0, $false, 1)   # DESKTOP_READOBJECTS
+        if ($h -ne [IntPtr]::Zero) {
+            $out.inputDesktop = [HostContext]::NameOf($h)
+            [void][HostContext]::CloseDesktop($h)
+        } else {
+            # Access denied here is itself informative: this process cannot even
+            # read the input desktop.
+            $out.inputDesktop = $null
+            $out.inputDesktopError = 'OpenInputDesktop failed, GetLastError=' + [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        }
+    } catch { $out.inputDesktop = $null }
+    try {
+        $wid = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $out.isElevated = (New-Object System.Security.Principal.WindowsPrincipal($wid)).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+        # Mandatory Label SID is S-1-16-<rid>. 4096 Medium, 8192 High, 12288 System.
+        # WindowsIdentity.Groups does NOT carry the mandatory label on this Windows
+        # build - measured 2026-08-19, it returned null - so read it from the token
+        # the way the OS reports it. A probe that silently reports null for the field
+        # it was added to measure is the failure mode this whole item is about.
+        $rid = $null
+        # ABSOLUTE path deliberately. A bare `whoami` resolves through PATH, and on a
+        # machine with Git for Windows on PATH it hits /usr/bin/whoami, which does not
+        # understand /groups and fails - measured 2026-08-19. The whole point of this
+        # probe is that it reports different things in different hosts, so a lookup
+        # whose own resolution depends on the host is worse than useless here.
+        try {
+            $wa = Join-Path $env:SystemRoot 'System32\whoami.exe'
+            $rows = & $wa /groups /fo csv 2>$null | ConvertFrom-Csv
+            $label = $rows | Where-Object { $_.SID -like 'S-1-16-*' } | Select-Object -First 1
+            if ($label) { $parts = ([string]$label.SID).Split('-'); $rid = [int]$parts[$parts.Length - 1] }
+        } catch { $rid = $null }
+        if ($null -eq $rid) {
+            $label2 = $wid.Groups | Where-Object { $_.Value -like 'S-1-16-*' } | Select-Object -First 1
+            if ($label2) { $parts2 = ([string]$label2.Value).Split('-'); $rid = [int]$parts2[$parts2.Length - 1] }
+        }
+        $out.integrityRid = $rid
+        $out.integrityLevel = if ($null -eq $rid) { $null }
+            elseif ($rid -eq 0) { 'Untrusted' }
+            elseif ($rid -eq 4096) { 'Medium' }
+            elseif ($rid -eq 8192) { 'High' }
+            elseif ($rid -eq 12288) { 'System' }
+            else { 'Other(' + $rid + ')' }
+    } catch { $out.isElevated = $null; $out.integrityRid = $null; $out.integrityLevel = $null }
+    try {
+        $ppid = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $PID) -ErrorAction Stop).ParentProcessId
+        $out.parentPid = [int]$ppid
+        $out.parentName = (Get-Process -Id $ppid -ErrorAction Stop).ProcessName
+    } catch { $out.parentPid = $null; $out.parentName = $null }
+    # Does the UIA client resolve at all from here? A dead RootElement would make
+    # EVERY route fail, not only Invoke, so a healthy value here narrows it.
+    try {
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+        $out.uiaRootOk = ($null -ne $root)
+        $out.uiaRootName = if ($root) { [string]$root.Current.Name } else { $null }
+    } catch { $out.uiaRootOk = $false; $out.uiaRootName = $null }
+    return $out
+}
+
 # ---- Main Loop ----
 # Read JSON lines from stdin, process, write JSON lines to stdout
 $reader = [Console]::In
@@ -4227,6 +4367,15 @@ while ($true) {
     switch ($command) {
         'ping' {
             $result = @{ pong = $true; pid = $PID; timestamp = (Get-Date -Format 'o') }
+        }
+        # BUG-274 W2. Read-only: reports this host's own interaction context so a
+        # spawned run can be DIFFED against a standalone one. Takes no target and
+        # touches no window, so it is safe to call at any time; it is a diagnostic,
+        # not a capability, and is deliberately absent from the leash's action
+        # vocabulary. Never returns a bare string, so the dispatcher's
+        # string-is-failure guard is not needed here.
+        'uia_context' {
+            $result = Handle-UiaContext
         }
         'launch_app' {
             $result = Handle-LaunchApp $cmd.name

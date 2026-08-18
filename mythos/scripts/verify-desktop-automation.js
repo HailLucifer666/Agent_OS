@@ -1,0 +1,361 @@
+#!/usr/bin/env node
+'use strict';
+
+// verify-desktop-automation.js — BUG-274 W2's release-gate oracle.
+//
+// WHY THIS EXISTS. W2's ticket is "desktop automation failed drastically", and its
+// Q7 checklist is four verbs — launch, focus, type, click — each across a normal
+// Win32 app AND an MSIX-packaged one. Nothing in the repo ran that matrix. The
+// release gate line "named apps, including one MSIX-packaged, accept type/click/
+// focus with oracle-backed confirmation" had no instrument behind it, so it could
+// only ever be answered by opinion.
+//
+// WHAT IT REFUSES TO DO. It never reports a route as working on the strength of
+// the route's own return value. Every verb is judged on an oracle the app itself
+// supplies:
+//   launch  -> a window with a real pid appears in list_windows
+//   focus   -> get_foreground_window agrees it is the foreground pid
+//   type    -> the text is READ BACK out of the control it was typed into
+//   click   -> the UIA tree changes in the way the click should have changed it
+// A route that "succeeded" but cannot demonstrate its effect is recorded as
+// UNVERIFIED, which is a distinct outcome from PASS and from FAIL. Collapsing
+// those three is the exact defect W2 is about.
+//
+// Q1 — WHAT ELSE MATCHES THIS? A green line here means "this verb worked on this
+// app, once, on this machine, now". It is not a claim about every app. The MSIX
+// column exists precisely because the same verb has different physics there:
+// SendInput is discarded silently by packaged apps (a documented platform fact in
+// adapters/CLAUDE.md, not a TODO), so a suite that only ever tested Notepad-the-
+// Win32-app would have printed green through the entire defect.
+//
+// Q2 — DOES THIS HIDE EVIDENCE? The per-step raw response is kept and printed on
+// failure. The single most expensive habit in this repo's history is a probe that
+// reports a verdict without the payload that produced it — two live sessions were
+// spent re-collecting a field that had been computed and dropped.
+//
+// Q4 — WHAT IS STANDING NEXT TO IT? `focus_window`'s foreground lock is a CLOSED
+// question: three ladder rungs ran and failed, and adapters/CLAUDE.md forbids a
+// fourth. So a focus refusal here is reported as EXPECTED-FAILURE with that note
+// attached, not as a regression and not as something to go fix. Reopening it is
+// the trap this comment exists to prevent.
+//
+// SIDE EFFECTS, STATED PLAINLY. This launches real windows on the operator's
+// desktop and types into them. It uses a throwaway string, never touches an
+// existing document, and closes what it opened. It does NOT save anything: a
+// Notepad window with unsaved text opens a "Save changes?" modal on close, which
+// is a pending dialog rather than a failure to close (a correction the operator
+// themselves made on 2026-08-13, after the opposite conclusion was recorded).
+// That modal is answered where possible and reported where not.
+//
+// Usage:
+//   cd mythos && node scripts/verify-desktop-automation.js
+//   cd mythos && node scripts/verify-desktop-automation.js --json
+//   cd mythos && node scripts/verify-desktop-automation.js --keep   (leave windows open)
+//
+// Exit codes: 0 = every verb either PASSED or failed in a way already known and
+// documented; 1 = at least one verb FAILED or came back UNVERIFIED.
+
+const path = require('node:path');
+
+const REPO = path.join(__dirname, '..');
+
+// The probe string. Deliberately ASCII-only and distinctive: BUG-038 in this repo
+// was OEM-codepage corruption of non-ASCII round-tripping through the pc-child
+// pipe, and a probe that fails for THAT reason would be misread as a typing
+// failure.
+const PROBE_TEXT = 'MYTHOS W2 probe 12345';
+
+// The two targets. `charmap` is a genuine Win32 binary with a real edit control
+// ("Characters to copy"), and `notepad` on Windows 11 is MSIX-packaged — the case
+// the ticket is actually about. Both are present in System32 on this platform;
+// absence is reported as UNTESTED rather than silently skipped, because a skipped
+// column that prints like a passing one is how a gate lies.
+const TARGETS = [
+  { key: 'win32', app: 'charmap', label: 'charmap (Win32)' },
+  { key: 'msix', app: 'notepad', label: 'notepad (MSIX)' },
+];
+
+const VERDICT = { PASS: 'PASS', FAIL: 'FAIL', UNVERIFIED: 'UNVERIFIED', EXPECTED: 'EXPECTED-FAIL', UNTESTED: 'UNTESTED' };
+
+function step(name, verdict, detail, raw) {
+  return { name, verdict, detail, raw };
+}
+
+async function call(adapter, cmd, timeoutNote) {
+  try {
+    const res = await adapter.sendCommand(cmd);
+    return res || { ok: false, error: 'no response' };
+  } catch (err) {
+    // COMMAND_TIMEOUT_MS is 15000 in the adapter. A timeout and a refusal are
+    // different facts and must not print the same way — a hung probe that reads as
+    // a failed one is how the last investigation lost a day.
+    return { ok: false, error: (timeoutNote ? timeoutNote + ': ' : '') + err.message, timedOut: /timed out/i.test(err.message) };
+  }
+}
+
+// The typed text comes back in `readBackText`. `readBack` is a STATUS WORD —
+// ps-automation.ps1 sets it to 'confirmed' — and reading it as the text made this
+// script report FAIL on two routes that had actually worked, on its first live run.
+// Exactly the defect class W2 is about, committed by the tool built to measure it:
+// a field name that looks like the payload and is not.
+function typedTextOf(result) {
+  if (!result || typeof result !== 'object') return '';
+  for (const k of ['readBackText', 'text', 'value']) {
+    if (typeof result[k] === 'string') return result[k];
+  }
+  return '';
+}
+
+// Whatever the app currently holds, used to refuse typing into real content.
+function existingTextOf(envelope) {
+  if (!envelope || !envelope.ok) return null;
+  const r = envelope.result;
+  if (typeof r === 'string') return r;
+  if (r && typeof r === 'object') {
+    for (const k of ['text', 'readBackText', 'value']) {
+      if (typeof r[k] === 'string') return r[k];
+    }
+  }
+  return null;
+}
+
+async function runTarget(adapter, target, opts) {
+  const steps = [];
+  let targetPid = null;
+
+  // ---- launch -------------------------------------------------------------
+  const launched = await call(adapter, { cmd: 'launch_app', name: target.app });
+  if (!launched.ok) {
+    steps.push(step('launch', VERDICT.FAIL, launched.error, launched));
+    return { target, steps, pid: null };
+  }
+  targetPid = (launched.result && (launched.result.pid || launched.result.processId)) || null;
+
+  // The oracle for launch is NOT the launch call's own pid — that is the exact
+  // value that was wrong for MSIX apps until 2026-07-27 (the activation stub exits
+  // within ~1s and its pid is dead or windowless). The oracle is that a window
+  // with that pid is actually enumerable.
+  await new Promise((r) => setTimeout(r, 1500));
+  const windows = await call(adapter, { cmd: 'list_windows' });
+  const list = (windows.ok && Array.isArray(windows.result)) ? windows.result
+    : (windows.ok && windows.result && Array.isArray(windows.result.windows)) ? windows.result.windows
+      : [];
+  const match = list.find((w) => w && Number(w.pid) === Number(targetPid));
+  if (!match) {
+    steps.push(step('launch', VERDICT.UNVERIFIED,
+      'launch_app returned pid ' + targetPid + ' but no window with that pid is enumerable — '
+      + 'the MSIX activation-stub shape this repo already fixed once', { launched, windows }));
+    return { target, steps, pid: targetPid };
+  }
+  steps.push(step('launch', VERDICT.PASS,
+    'pid ' + targetPid + ' has an enumerable window: ' + (match.title || '(untitled)'), launched));
+
+  // ---- focus --------------------------------------------------------------
+  const focused = await call(adapter, { cmd: 'focus_window', pid: targetPid });
+  const fg = await call(adapter, { cmd: 'get_foreground_window' });
+  const fgPid = fg.ok && fg.result ? Number(fg.result.pid) : null;
+  if (fgPid === Number(targetPid)) {
+    steps.push(step('focus', VERDICT.PASS, 'foreground pid agrees: ' + fgPid, focused));
+  } else if (!focused.ok) {
+    // Q4: the foreground lock is a closed question. Windows refuses deliberately,
+    // the ladder is exhausted, and adapters/CLAUDE.md forbids a fourth rung.
+    steps.push(step('focus', VERDICT.EXPECTED,
+      'focus refused (' + focused.error + '). This is the KNOWN foreground-lock, closed '
+      + '2026-08-17 after three rungs; list_windows is the documented recovery. Do NOT '
+      + 'add a fourth rung.', focused));
+  } else {
+    steps.push(step('focus', VERDICT.UNVERIFIED,
+      'focus_window reported success but the foreground pid is ' + fgPid + ', not ' + targetPid
+      + ' — reported success it did not earn', { focused, fg }));
+  }
+
+  // ---- type --------------------------------------------------------------
+  //
+  // SAFETY, LEARNED THE HARD WAY ON THIS SCRIPT'S FIRST RUN. Windows 11 Notepad
+  // restores its previous session, so `launch_app notepad` did not open a blank
+  // window — it reopened the operator's own document (cleanupEmailDraft.txt) and
+  // this probe typed into it. Nothing was saved and the file on disk was never
+  // modified, but that was luck, not design: a probe that writes into whatever
+  // document happens to be open is unacceptable regardless of the outcome.
+  //
+  // So typing is now gated twice. First ask the app for a NEW document, which is
+  // the honest way to get a blank target. Then READ what the target holds, and if
+  // it is not empty, refuse to type at all and report UNTESTED with the reason.
+  // Refusing loses a data point; typing into someone's work loses their work.
+  const fresh = await call(adapter, { cmd: 'new_document', pid: targetPid });
+  const existing = existingTextOf(await call(adapter, { cmd: 'read_compose_box', pid: targetPid }));
+  if (existing !== null && existing.trim().length > 0) {
+    steps.push(step('type', VERDICT.UNTESTED,
+      'the target already holds ' + existing.trim().length + ' characters of content'
+      + (fresh.ok ? '' : ' and new_document did not give a blank one (' + fresh.error + ')')
+      + ' — refusing to type into it. Close the document by hand and re-run.',
+      { fresh, existingLength: existing.trim().length }));
+  } else {
+    const typed = await call(adapter, { cmd: 'ui_type', text: PROBE_TEXT, pid: targetPid });
+    if (!typed.ok) {
+      steps.push(step('type', VERDICT.FAIL, typed.error, typed));
+    } else {
+      const r = typed.result || {};
+      const readBackText = typedTextOf(r);
+      const landed = readBackText.includes(PROBE_TEXT);
+      if (landed) {
+        steps.push(step('type', VERDICT.PASS,
+          'read back out of the control via ' + (r.readBackVia || 'an unnamed reader')
+          + ', typed via ' + (r.mechanism || 'an unnamed mechanism'), typed));
+      } else if (!readBackText) {
+        // The honest middle outcome the evidence contract exists to express.
+        steps.push(step('type', VERDICT.UNVERIFIED,
+          'ui_type reported ok via ' + (r.mechanism || 'an unnamed mechanism')
+          + ' but nothing read the text back'
+          + (r.readBackReason ? ' (' + r.readBackReason + ')' : '')
+          + ' — cannot tell success from a silent no-op, which does not count for the gate', typed));
+      } else {
+        steps.push(step('type', VERDICT.FAIL,
+          'read back "' + readBackText.slice(0, 60) + '" which does not contain the probe text', typed));
+      }
+    }
+  }
+  // ---- click --------------------------------------------------------------
+  // Clicking is judged by the UIA tree, not by the click call. A click at window
+  // centre is deliberately chosen over a named control: the point is whether the
+  // input reaches a packaged app at all, and a named control would make this a test
+  // of element resolution instead.
+  const elements = await call(adapter, { cmd: 'ui_elements', pid: targetPid, depth: 2 });
+  const before = JSON.stringify(elements.result || null);
+  // `rect`, not `bounds`: Handle-ListWindows emits {pid, processName, title,
+  // className, rect, visible, hwnd}. Guessing the key made every click UNTESTED on
+  // the first run, which reads like a platform limitation and was a typo.
+  const bounds = match.rect || {};
+  const cx = Number(bounds.x) + Math.floor(Number(bounds.width || 0) / 2);
+  const cy = Number(bounds.y) + Math.floor(Number(bounds.height || 0) / 2);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !bounds.width) {
+    steps.push(step('click', VERDICT.UNTESTED,
+      'list_windows gave no usable bounds for this window, so there is no defensible '
+      + 'coordinate to click — reported rather than guessed', match));
+  } else {
+    const clicked = await call(adapter, { cmd: 'click_at', x: cx, y: cy });
+    if (!clicked.ok) {
+      steps.push(step('click', VERDICT.FAIL, clicked.error, clicked));
+    } else {
+      await new Promise((r) => setTimeout(r, 400));
+      const after = await call(adapter, { cmd: 'ui_elements', pid: targetPid, depth: 2 });
+      const changed = JSON.stringify(after.result || null) !== before;
+      const focusAfter = await call(adapter, { cmd: 'get_foreground_window' });
+      const focusMoved = focusAfter.ok && focusAfter.result
+        && Number(focusAfter.result.pid) === Number(targetPid);
+      if (changed || focusMoved) {
+        steps.push(step('click', VERDICT.PASS,
+          changed ? 'the UIA tree changed after the click'
+            : 'the click brought this pid to the foreground', clicked));
+      } else {
+        steps.push(step('click', VERDICT.UNVERIFIED,
+          'click_at reported ok at (' + cx + ',' + cy + ') but neither the UIA tree nor the '
+          + 'foreground window changed — this is the MSIX SendInput-discard shape, and a route '
+          + 'that cannot tell success from a silent no-op does not count', clicked));
+      }
+    }
+  }
+
+  // ---- cleanup ------------------------------------------------------------
+  if (!opts.keep && targetPid) {
+    const closed = await call(adapter, { cmd: 'close_window', pid: targetPid });
+    if (!closed.ok) {
+      // Not a failure of the run: a dirty document opens a modal, which is a
+      // PENDING DIALOG, not resistance. That correction is in the memory record.
+      steps.push(step('cleanup', VERDICT.UNTESTED,
+        'close_window did not complete (' + closed.error + '). If this app holds unsaved '
+        + 'text, that is a "Save changes?" modal awaiting an answer, not a stuck window — '
+        + 'close it by hand.', closed));
+    }
+  }
+
+  return { target, steps, pid: targetPid };
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const asJson = argv.includes('--json');
+  const keep = argv.includes('--keep');
+
+  if (process.platform !== 'win32') {
+    console.error('verify-desktop-automation: Windows only.');
+    process.exit(1);
+  }
+
+  let adapter;
+  try {
+    adapter = require(path.join(REPO, 'adapters', 'pc-child', 'index.js'));
+  } catch (err) {
+    console.error('could not load the pc-child adapter: ' + err.message);
+    process.exit(1);
+  }
+  await adapter.startPcChild();
+
+  const results = [];
+  try {
+    for (const t of TARGETS) {
+      results.push(await runTarget(adapter, t, { keep }));
+    }
+  } finally {
+    try { adapter.shutdownPcChild(); } catch { /* best effort */ }
+  }
+
+  if (asJson) {
+    console.log(JSON.stringify(results, null, 2));
+  }
+
+  const VERBS = ['launch', 'focus', 'type', 'click'];
+  const cell = (r, verb) => {
+    const s = r.steps.find((x) => x.name === verb);
+    return s ? s.verdict : VERDICT.UNTESTED;
+  };
+  const wl = Math.max(...results.map((r) => r.target.label.length), 6);
+  const wv = Math.max(...VERBS.map((v) => v.length), 14);
+  const pad = (s, w) => s + ' '.repeat(Math.max(0, w - s.length));
+
+  console.log('');
+  console.log('BUG-274 W2 — desktop automation, oracle-backed');
+  console.log('');
+  console.log('  ' + pad('app', wl) + '  ' + VERBS.map((v) => pad(v, wv)).join('  '));
+  console.log('  ' + '-'.repeat(wl) + '  ' + VERBS.map(() => '-'.repeat(wv)).join('  '));
+  for (const r of results) {
+    console.log('  ' + pad(r.target.label, wl) + '  '
+      + VERBS.map((v) => pad(cell(r, v), wv)).join('  '));
+  }
+  console.log('');
+
+  for (const r of results) {
+    console.log(r.target.label + ':');
+    for (const s of r.steps) {
+      console.log('  ' + pad(s.name, 8) + ' ' + pad(s.verdict, 14) + ' ' + s.detail);
+    }
+    console.log('');
+  }
+
+  const blocking = results.flatMap((r) => r.steps)
+    .filter((s) => s.verdict === VERDICT.FAIL || s.verdict === VERDICT.UNVERIFIED);
+
+  if (blocking.length === 0) {
+    console.log('GATE: every verb is oracle-confirmed on both a Win32 and an MSIX app.');
+    console.log('That satisfies the release-gate line for desktop automation, for THESE two');
+    console.log('apps, on this machine, now — it is not a claim about every app.');
+  } else {
+    console.log('GATE: NOT MET — ' + blocking.length + ' verb(s) failed or could not be verified.');
+    console.log('');
+    console.log('UNVERIFIED is not a softer PASS. It means the route reported success and');
+    console.log('nothing could confirm it, which is precisely the condition the gate excludes:');
+    console.log('"a route that cannot tell success from a silent no-op does not count".');
+    console.log('');
+    for (const s of blocking) {
+      console.log('  ' + s.name + ' [' + s.verdict + '] ' + s.detail);
+      if (s.raw) console.log('    raw: ' + JSON.stringify(s.raw).slice(0, 400));
+    }
+  }
+  console.log('');
+  process.exit(blocking.length === 0 ? 0 : 1);
+}
+
+main().catch((err) => {
+  console.error('verify-desktop-automation failed: ' + (err && err.stack ? err.stack : err));
+  process.exit(1);
+});
