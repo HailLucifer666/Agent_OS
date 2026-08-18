@@ -9504,8 +9504,29 @@ unchanged, and the remaining acoustic decision waits on a live session by design
 
 ### REMAINING — ordered, with what is known
 
-- **A2's fix (P0)** — stop replaying frames the policy never believed. Diagnosis
-  above; needs a live session to confirm `flushedRaw` before changing behaviour.
+- **A2's fix (P0) — the ONLY item left, and the block is confirmed, not assumed.**
+  Stop replaying frames the policy never believed. `flushedRaw` is the datum that
+  decides it, and it is **absent from the log on disk** — that session predates the
+  instrumentation (`1d58765`), which was checked rather than presumed.
+
+  What the existing fields DO answer, measured on that same log and now reported
+  by the verifier so the next session is comparable:
+
+  ```
+  2682  preroll frames replayed across 99 holds     ~268s of buffered audio
+     0  framesDropped                               the invariant, still held
+   133  biggest single flush                        ~13.4s in one burst
+   32%  of all replayed frames came from ceiling-terminated holds
+  ```
+
+  **The sharpening: the enormous bursts are not spread across ordinary holds — the
+  seven largest (108-133 frames, 10.8-13.4s) were ALL ceiling-terminated**
+  (`own-voice-ceiling-no-evidence-of-echo` / `-near-field-energy`), not holds that
+  ended because the assistant stopped speaking. That narrows where the burst comes
+  from and does **not** license dropping it: `no-evidence-of-echo` means the buffer
+  may well BE the operator, and `framesDropped:0` is a deliberate invariant. Which
+  it is still needs `flushedRaw`, i.e. still needs a session. Doing it blind is how
+  BUG-272 traded V1 for V2.
 - **D3 (P1) — AUDITED and INSTRUMENTED; the audit ran against the log already on
   disk.** Filed as *"rambling on by yourself"* with no operator input, MYTHOS
   logging its own corrective, 61 turns in 10 minutes, turn 1 `systemInitiated:true`.

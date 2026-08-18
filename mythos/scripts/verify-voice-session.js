@@ -359,6 +359,38 @@ function main() {
       : 'not reported — log predates BUG-273 A2 instrumentation',
     CRITERIA_NOTES.flush);
 
+  // HOW BIG THE BURST IS, and which kind of hold produced it. This is derivable
+  // from fields that predate BUG-273, so unlike flushedRaw above it has a real
+  // baseline to be compared against — measured on the 2026-08-18 session:
+  //
+  //   2682 preroll frames released across 99 holds   = ~268s of buffered audio
+  //      0 framesDropped                             (the invariant, still held)
+  //   the SEVEN largest flushes (108-133 frames, 10.8-13.4s) were ALL
+  //   ceiling-terminated, not own-voice-ended
+  //
+  // That last line is the sharpening A2 was missing: the enormous bursts are not
+  // spread across ordinary holds, they are exactly the holds that ran to their
+  // ceiling. It does NOT license dropping them — `no-evidence-of-echo` means the
+  // buffer may well BE the operator, and framesDropped:0 is a deliberate
+  // invariant. Which it is still needs flushedRaw, i.e. still needs a session.
+  let prerollTotal = 0;
+  let ceilingFrames = 0;
+  let biggest = 0;
+  for (const e of suspendLines) {
+    if (e.suspended !== false) continue;
+    const p = num(e.prerollFrames);
+    if (p === null) continue;
+    prerollTotal += p;
+    if (p > biggest) biggest = p;
+    if (String(e.reason || '').includes('ceiling')) ceilingFrames += p;
+  }
+  const ceilingPct = prerollTotal ? Math.round((ceilingFrames / prerollTotal) * 100) : 0;
+  check('release-flush volume (BUG-273 A2 baseline)', true,
+    `${prerollTotal} frame(s) replayed total (~${Math.round(prerollTotal * FRAME_MS / 1000)}s), `
+    + `biggest single flush ${biggest} (~${Math.round(biggest * FRAME_MS / 1000)}s), `
+    + `${ceilingPct}% of them from ceiling-terminated holds`,
+    'was 2682 frames / biggest 133 / heavily ceiling-terminated on 2026-08-18');
+
   // --- V3: echo attribution ---
   const echoChecks = of('live.echo-check');
   const echoDropped = of('live.echo-dropped');

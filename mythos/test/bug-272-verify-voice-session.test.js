@@ -362,3 +362,56 @@ describe('verify-voice-session: self-started turns (BUG-273 D3)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-273 A2 baseline — how big the release flush is, from fields that predate
+// the A2 instrumentation.
+//
+// `flushedRaw` (the criterion above) is the datum A2 actually needs and no session
+// has ever reported it. But `prerollFrames` has been logged all along, so the SIZE
+// of the burst has a real baseline: 2682 frames (~268s) across 99 holds in the
+// 2026-08-18 session, biggest single flush 133 frames (~13.4s), and the seven
+// largest were all ceiling-terminated rather than ended by the assistant's voice
+// stopping. That last part is the sharpening — the enormous bursts are not spread
+// evenly, they are exactly the holds that ran to their ceiling.
+describe('verify-voice-session: release-flush volume (BUG-273 A2)', () => {
+  const release = (reason, prerollFrames) => JSON.stringify({
+    ts: '2026-08-18T13:00:00.000Z', level: 'info', msg: 'voice.capture-suspend',
+    suspended: false, reason, prerollFrames, framesDropped: 0,
+  });
+
+  it('totals the replayed frames and converts them to seconds', () => {
+    withLog([release('own-voice-ended', 10), release('own-voice-ended', 20)], (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /30 frame\(s\) replayed total/, r.stdout);
+      // FRAME_MS is 100, stated as a constant because assuming it is what produced
+      // the original plan's 10x preroll error.
+      assert.match(r.stdout, /~3s/);
+    });
+  });
+
+  it('separates ceiling-terminated holds, which is where the huge bursts came from', () => {
+    withLog([
+      release('own-voice-ended', 10),
+      release('own-voice-ceiling-no-evidence-of-echo', 90),
+    ], (file) => {
+      const r = run([file]);
+      assert.match(r.stdout, /biggest single flush 90/);
+      assert.match(r.stdout, /90% of them from ceiling-terminated holds/,
+        'a hold that ended because the assistant stopped talking and a hold that hit '
+        + 'its ceiling are different events, and only one of them produced 13-second bursts');
+    });
+  });
+
+  it('an arming line is not counted as a flush', () => {
+    // Only releases replay a buffer. Counting the suspend side too would roughly
+    // double the figure and make it incomparable with the recorded baseline.
+    const arm = JSON.stringify({
+      ts: '2026-08-18T13:00:00.000Z', level: 'info', msg: 'voice.capture-suspend',
+      suspended: true, reason: 'own-voice-hold', prerollFrames: 50,
+    });
+    withLog([arm, release('own-voice-ended', 10)], (file) => {
+      assert.match(run([file]).stdout, /10 frame\(s\) replayed total/);
+    });
+  });
+});
