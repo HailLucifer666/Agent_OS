@@ -161,13 +161,15 @@ already pushed to `origin/main`):**
    the activation stub exits within ~1s, or (single-instance apps) the new
    process never gets its own window at all. Fixed by resolving the real
    windowed process after launch instead of trusting `Start-Process`'s raw
-   pid. **Still open, not fixed**: `focus_window` was reproducibly denied by
-   Windows' foreground-lock in headless/no-app-focused test conditions, even
-   with the existing `AttachThreadInput` workaround — unconfirmed whether
-   this reproduces in real voice-driven usage where some app is normally
-   already focused. If typing into a launched app still silently fails,
-   re-test starting from a real app (not the bare desktop) having focus —
-   that's the next thing to chase.
+   pid. **`focus_window`'s foreground-lock: question CLOSED 2026-08-17, and the
+   answer is yes.** This entry used to ask whether the denial reproduces in
+   real voice-driven usage with an app already focused. It does — the
+   2026-08-17 session hit it on pid 17996 under exactly those conditions
+   (BUG-272 T3), with all three ladder rungs already run and the error string
+   saying so. **Ladder exhausted; do not add a 4th rung** — Windows is refusing
+   deliberately and the alternatives are unreliable or user-hostile. It now
+   fails honestly, and `focus_window`'s stale-pid failure names `list_windows`
+   as the recovery step. Details in `mythos/adapters/CLAUDE.md`.
 
 **Wiring needed on a fresh clone/pull:** `git config core.hooksPath
 .githooks` (once per clone) — nothing else; no new deps, no build step.
