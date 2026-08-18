@@ -78,7 +78,10 @@ describe('A2 the preroll ring is DERIVED from the gate ceiling, not hand-tuned',
     assert.match(src, /function armOwnVoiceMaxHold\(\)/,
       'OWN_VOICE_MAX_HOLD_MS needs a timer, or it is a comment');
     const hold = src.slice(src.indexOf('function holdOwnVoiceGate'));
-    assert.match(hold.slice(0, 500), /armOwnVoiceMaxHold\(\)/,
+    // BUG-272 widened 500 -> 1200: holdOwnVoiceGate now also opens the barge-in
+    // policy's protection window (assistantSpeakingStarted) and documents why, which
+    // pushed the arming call past the old window. The invariant is unchanged.
+    assert.match(hold.slice(0, 1200), /armOwnVoiceMaxHold\(\)/,
       'the cap must be armed when the gate is taken');
     const refresh = src.slice(src.indexOf('function refreshOwnVoiceCeiling'));
     assert.doesNotMatch(refresh.slice(0, 300), /armOwnVoiceMaxHold/,
@@ -122,7 +125,9 @@ describe('A2 the preroll ring is DERIVED from the gate ceiling, not hand-tuned',
 
   it('the ring is still a ring — the oldest frame is dropped, not the newest', () => {
     const handler = src.indexOf('captureNode.port.onmessage');
-    const body = src.slice(src.indexOf('if (ownVoiceGate) {', handler), handler + 2000);
+    // BUG-272 widened handler+2000 -> handler+3600: the frame handler grew the
+    // policy observe() call above the gate, moving the gate block later in the file.
+    const body = src.slice(src.indexOf('if (ownVoiceGate) {', handler), handler + 3600);
     assert.match(body, /preroll\.shift\(\)/,
       'overflow must drop the OLDEST frame. Dropping the newest would keep the beginning of a '
       + 'sentence and lose the end, which is worse: the end is what the operator just said.');

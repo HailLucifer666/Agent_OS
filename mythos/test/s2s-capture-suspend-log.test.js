@@ -73,7 +73,11 @@ describe('s2s-bridge: capture-suspend transition log', () => {
     assert.equal(bridge.isCaptureSuspended(), false, 'fail-open: a deaf assistant is the worse failure');
     assert.equal(sent.length, 2);
     assert.equal(sent[1].suspended, false);
-    assert.equal(sent[1].reason, 'ceiling-fail-open');
+    // BUG-272: renamed to distinguish this MEDIA/TTS suspend ceiling from the
+    // own-voice hold ceiling, which used to emit the identical string from a
+    // different timer — making a count of them unattributable (BUG-272 counted 16
+    // and could not split them by cause).
+    assert.equal(sent[1].reason, 'suspend-ceiling-fail-open');
   });
 
   test('setCaptureSuspended(false, ...) with an explicit reason logs a clear, not a re-suspend', () => {

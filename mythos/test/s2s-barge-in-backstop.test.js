@@ -285,7 +285,14 @@ describe('barge-in backstop: actually wired into s2s-bridge.js', () => {
     assert.match(ctorBody, /releaseOwnVoiceGate\('barge-in'\)/,
       'and open the half-duplex gate — the local backstop is the only detector running '
       + 'while the gate is held, so without this, interrupting MYTHOS is impossible');
-    assert.match(ctorBody, /onRelease:[\s\S]*releaseOwnVoiceGate\('barge-in-eager'\)/,
+    // BUG-272 renamed 'barge-in-eager' -> 'barge-in-confirmed'. The reason string is
+    // load-bearing in the log, and 'eager' had become a lie: the tier no longer
+    // releases on level alone. It releases only when barge-in-policy.js has CONFIRMED
+    // a sustained interruption above this room's learned bleed floor — 46 of these
+    // fired on speaker bleed in the 2026-08-17 session precisely because eager meant
+    // eager. The property this pins is unchanged: the tier opens the gate WITHOUT
+    // stopping playback.
+    assert.match(ctorBody, /onRelease:[\s\S]*releaseOwnVoiceGate\('barge-in-confirmed'\)/,
       'the eager tier must open the gate WITHOUT stopping playback (2026-08-14)');
     assert.ok(!/\bsend(Message)?\(/.test(ctorBody),
       'no frame of any kind may be sent from the backstop callbacks: a false positive must '

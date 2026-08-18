@@ -66,7 +66,11 @@ describe('BUG-224 half-duplex gate — source shape', () => {
   it('the mic frame handler gates the SEND, not the barge-in observer', () => {
     const start = bridgeSrc.indexOf('captureNode.port.onmessage');
     assert.ok(start !== -1, 'the mic frame handler must exist');
-    const body = bridgeSrc.slice(start, start + 2600);
+    // BUG-272 widened 2600 -> 4200: the frame handler grew a barge-in-policy
+    // observe() call and its rationale comment, which pushed the send past the old
+    // window so sendAt came back -1. The ORDERING invariant below is unchanged and
+    // is the thing worth pinning; the window size never was.
+    const body = bridgeSrc.slice(start, start + 4200);
 
     const observeAt = body.indexOf('bargeBackstop.observe');
     const gateAt = body.indexOf('if (ownVoiceGate)');
@@ -112,9 +116,18 @@ describe('BUG-224 half-duplex gate — source shape', () => {
       'a gate with no ceiling leaves Live permanently deaf if onSpeakEnd never arrives');
     const holdBody = bridgeSrc.slice(bridgeSrc.indexOf('function holdOwnVoiceGate'), bridgeSrc.indexOf('function releaseOwnVoiceGate'));
     assert.match(holdBody, /armOwnVoiceCeiling\(\)/, 'the ceiling must actually be armed when the gate is held');
-    assert.match(bridgeSrc, /setTimeout\([\s\S]{0,200}OWN_VOICE_IDLE_CEILING_MS\)/,
+    // BUG-272 widened 200 -> 1600: the ceiling callback now consults
+    // bargePolicy.ceilingDecision() instead of blindly failing open, and carries the
+    // reasoning for that in comments.
+    assert.match(bridgeSrc, /setTimeout\([\s\S]{0,1600}OWN_VOICE_IDLE_CEILING_MS\)/,
       'and armed with a real timer');
-    assert.match(bridgeSrc, /ceiling-fail-open/, 'the fail-open must be logged, not silent');
+    // BUG-272: the own-voice ceiling no longer emits the bare string
+    // 'ceiling-fail-open' — it emits 'own-voice-ceiling-*' / 'own-voice-ceiling-...'
+    // reasons naming WHICH branch decided, because the media-suspend ceiling used to
+    // emit the identical label from an unrelated timer and the two could not be told
+    // apart in a log. What must stay true is that the ceiling is never SILENT.
+    assert.match(bridgeSrc, /own-voice-ceiling-|own-voice-' \+ verdict\.reason/,
+      'the ceiling must be logged, not silent');
   });
 
   // The 2026-08-14 regression. As a flat MAX_OWN_VOICE_HOLD_MS = 20000 this was

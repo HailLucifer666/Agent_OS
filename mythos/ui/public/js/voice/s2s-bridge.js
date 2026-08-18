@@ -38,6 +38,7 @@
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
 import { openMicWithFallback } from './mic-device.js';
+import { createBargeInPolicy } from './barge-in-policy.js';
 import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
 import { createLiveNoiseGate } from './live-noise-gate.js';
 
@@ -81,15 +82,37 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // talking. Before the split, one threshold decided both, it never fired in the
   // 2026-08-14 session, and the operator's speech died in the 1.2s preroll ring:
   // two turns reached the server as live-turn-no-user-transcript.
+  // BUG-272 V1/V2: the playback-aware policy is a VETO in front of both backstop
+  // tiers, not a replacement for them. The backstop still does the level
+  // counting it always did; what changed is that clearing a threshold is no
+  // longer sufficient to release the gate or to flush playback.
+  //
+  // Why a veto rather than a rewrite: the backstop's tiers, its hysteresis and
+  // its localStorage overrides are all pinned by existing tests and were
+  // deliberately tuned. The defect was never that the levels were counted
+  // wrongly — it was that a level ALONE decided, in a room where bleed
+  // (0.09-0.38) sits above both tiers (0.05 and 0.056) and inside the operator's
+  // own speech band. So the level stays as the trigger and the policy supplies
+  // the judgement.
+  //
+  // Both callbacks are vetoed, including onFlush. Bleed clears the flush tier
+  // too, and flushing on bleed is what CUT MYTHOS's own audio mid-word — the
+  // clipping the operator heard. Vetoing the release while still flushing would
+  // keep exactly the audible half of the bug.
+  const bargePolicy = createBargeInPolicy(policyTuning());
+  let policyAllowsRelease = false;
+
   const bargeBackstop = createBargeInBackstop({
     onFlush: (level) => {
+      notePeakRms(level);   // recorded either way — a vetoed near-miss is evidence
+      if (!policyAllowsRelease) { noteBargeVetoed('flush', level); return; }
       if (player) player.flush();
-      notePeakRms(level);   // before the release, so the hold's log line includes it
       releaseOwnVoiceGate('barge-in');
     },
     onRelease: (level) => {
       notePeakRms(level);
-      releaseOwnVoiceGate('barge-in-eager');
+      if (!policyAllowsRelease) { noteBargeVetoed('eager', level); return; }
+      releaseOwnVoiceGate('barge-in-confirmed');
     },
     ...bargeTuning(),
   });
@@ -222,7 +245,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         suspendTimer = null;
         captureSuspended = false;   // fail open: a deaf assistant is the worse failure
         setState(lastVoiceState);
-        logSuspendTransition({ reason: 'ceiling-fail-open' });
+        // BUG-272: renamed from the bare 'ceiling-fail-open'. The own-voice hold
+        // ceiling emitted that same string from an unrelated timer, so a log
+        // showing N of them could not be attributed to either — which is exactly
+        // what happened to the 16 counted in the 2026-08-17 session. Two
+        // ceilings, two names.
+        logSuspendTransition({ reason: 'suspend-ceiling-fail-open' });
       }, ceiling);
     } else {
       logSuspendTransition({ reason: reason || 'clear' });
@@ -377,6 +405,54 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       return null;   // no localStorage (tests, privacy modes)
     }
   }
+  // BUG-272: the policy's own overrides, same absolute-precedence rule as
+  // bargeTuning() below. MYTHOS_BARGE_PROTECTED_MS=0 disables the protection
+  // window entirely, which is the escape hatch if the window ever feels like
+  // MYTHOS ignoring an interruption — alongside MYTHOS_LIVE_HALF_DUPLEX=off,
+  // which still disables the whole gate. An operator mid-session must always
+  // have a way back to the previous behaviour without a code change.
+  function policyTuning() {
+    const t = {};
+    const protectedMs = lsNumber('MYTHOS_BARGE_PROTECTED_MS');
+    const pendingHoldMs = lsNumber('MYTHOS_BARGE_PENDING_HOLD_MS');
+    const bleedMargin = lsNumber('MYTHOS_BARGE_BLEED_MARGIN');
+    const maxBleedFloor = lsNumber('MYTHOS_BARGE_MAX_BLEED_FLOOR');
+    if (protectedMs !== null) t.protectedMs = protectedMs;
+    if (pendingHoldMs !== null) t.pendingHoldMs = pendingHoldMs;
+    if (bleedMargin !== null) t.bleedMargin = bleedMargin;
+    if (maxBleedFloor !== null) t.maxBleedFloor = maxBleedFloor;
+    return t;
+  }
+
+  // A vetoed barge-in is a real event and the single most useful number for
+  // judging whether the policy is too strict or too lax. Counted, and reported
+  // on the release/hold log line — never silent, because "the gate quietly
+  // stopped releasing" is indistinguishable from "the mic died" without it.
+  let bargeVetoed = 0;
+  let lastVetoReason = null;
+
+  // The echo filter's verdict for the current hold, or null when there is none.
+  //
+  // HONEST LIMITATION, stated rather than papered over: this is currently ALWAYS
+  // null, because the echo filter runs server-side (live-session.js) and the
+  // server does not send its verdict to the client. Feeding it would mean a new
+  // wire message, and this slice deliberately changes no wire format.
+  //
+  // The policy is written to use the signal because it is the one input that can
+  // separate bleed from speech on amplitude alone — but it is not needed for the
+  // primary fix, which is the protection window plus the sustain requirement plus
+  // the learned floor. Whether it is worth a wire message is precisely what slice
+  // 2's live.echo-check lines will answer: if they report 'no-reference' during
+  // bleed, then no transcript exists at that moment and there is nothing to send.
+  // Wiring a channel before knowing that would be building a mechanism on a
+  // guess, which is how this bug has already burned two sessions.
+  const lastEchoRatio = null;
+  function noteBargeVetoed(tier, level) {
+    bargeVetoed += 1;
+    lastVetoReason = tier;
+    void level;
+  }
+
   function bargeTuning() {
     const t = {};
     const flushRms = lsNumber('MYTHOS_BARGE_RMS');
@@ -394,7 +470,31 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (ownVoiceTimer) clearTimeout(ownVoiceTimer);
     ownVoiceTimer = setTimeout(() => {
       ownVoiceTimer = null;
-      releaseOwnVoiceGate('ceiling-fail-open');
+      // BUG-272 V2: at the ceiling we are not out of information, so this is no
+      // longer a blind fail-open. The policy weighs what we know (echo verdict,
+      // whether a transcript exists, peak level) and the reason string records
+      // WHICH branch decided — 16 of these fired in the 2026-08-17 session and
+      // the log could not say why any of them did.
+      //
+      // The reason is also now distinct from the media/TTS suspend ceiling's,
+      // which emitted the identical string 'ceiling-fail-open' from a completely
+      // different timer. That collision is why BUG-272's count of 16 cannot be
+      // split by cause: two unrelated ceilings, one label.
+      const verdict = bargePolicy.ceilingDecision({
+        echoRatio: lastEchoRatio,
+        hasTranscript: lastEchoRatio !== null,
+        peakRms: ownVoicePeakRms,
+      });
+      if (!verdict.release) {
+        // Echo-like: the buffered audio is MYTHOS's own voice, so replaying it
+        // to Gemini is what caused the self-interruption loop in the first
+        // place. Drop the ring and re-arm rather than feeding it back.
+        preroll = [];
+        armOwnVoiceCeiling();
+        logSuspendTransition({ reason: 'own-voice-ceiling-' + verdict.reason, ownVoiceGate: true });
+        return;
+      }
+      releaseOwnVoiceGate('own-voice-' + verdict.reason);
     }, OWN_VOICE_IDLE_CEILING_MS);
     if (typeof ownVoiceTimer.unref === 'function') ownVoiceTimer.unref();
   }
@@ -425,6 +525,11 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     prerollDropped = 0;
     ownVoicePeakRms = 0;
     ownVoiceHeldAt = Date.now();
+    // BUG-272: MYTHOS has started speaking, so the protection window opens here.
+    // This is the transition the policy needs and the only place that knows it.
+    bargePolicy.assistantSpeakingStarted();
+    policyAllowsRelease = false;
+    bargeVetoed = 0;
     armOwnVoiceCeiling();
     armOwnVoiceMaxHold();
     logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
@@ -435,6 +540,11 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (ownVoiceMaxTimer) { clearTimeout(ownVoiceMaxTimer); ownVoiceMaxTimer = null; }
     if (!ownVoiceGate) return;
     ownVoiceGate = false;
+    // BUG-272: the hold is over, so the policy returns to IDLE and stops making
+    // release decisions until MYTHOS speaks again. Its learned bleed floor
+    // deliberately survives — that is a property of the room, not of this turn.
+    bargePolicy.assistantSpeakingEnded();
+    policyAllowsRelease = false;
     // Replay what the operator said while we were talking over them. Oldest
     // first, so the model receives it in the order it was spoken. BUG-271:
     // every replayed frame goes through the noise gate too — the ring holds
@@ -465,6 +575,16 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // could not tell apart. A hold that drops nothing and still yields no
       // transcript is evidence for the second, and this is how we will know.
       framesDropped: prerollDropped,
+      // BUG-272: how many times a level-triggered barge-in was VETOED by the
+      // policy during this hold, and which tier last tried. This is the number
+      // that says whether the new policy is calibrated: high vetoes with a
+      // happy operator means it is correctly rejecting bleed; high vetoes with
+      // an operator complaining they cannot interrupt means the protection
+      // window or the learned floor is too aggressive. A silent veto would be
+      // indistinguishable from a dead microphone.
+      bargeVetoed: bargeVetoed,
+      bargeVetoTier: lastVetoReason,
+      bleedFloor: Math.round(bargePolicy.bleedFloor() * 10000) / 10000,
       // BUG-271: how many frames the noise gate silenced (both send points)
       // so far THIS session — cumulative within the session, cleared by
       // noiseGate.reset() in stop(). The server logs this with the rest of
@@ -585,6 +705,16 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // AFTER the captureSuspended gate: while we are knowingly making noise
         // ourselves (own TTS, media playback) those frames are not the operator
         // and must not count toward an interruption.
+        // BUG-272: the policy sees the frame FIRST, because bargeBackstop.observe()
+        // invokes onFlush/onRelease synchronously and those callbacks read
+        // policyAllowsRelease. Reversing these two lines would have every release
+        // decided by the PREVIOUS frame's verdict — an off-by-one-frame bug that
+        // no test on the pure module could ever catch, so the ordering is pinned
+        // by a source-shape assertion alongside the existing gate-order one.
+        policyAllowsRelease = bargePolicy.observe({
+          rms: rmsFromPcm16(e.data),
+          echoRatio: lastEchoRatio,
+        }).release;
         bargeBackstop.observe(e.data, player ? player.isSpeaking() : false);
         // Instrumentation only, and only while the gate is actually held (notePeakRms
         // checks): the question this answers is "how loud did the operator get while
