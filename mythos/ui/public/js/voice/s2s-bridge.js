@@ -37,7 +37,7 @@
 
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
-import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
+import { openMicWithFallback } from './mic-device.js';
 import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
 import { createLiveNoiseGate } from './live-noise-gate.js';
 
@@ -562,7 +562,16 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     armOpenAckTimer();   // BUG-147: silence from here on becomes a visible refusal
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
+      // BUG-272 W1: shares the wake word's stale-device rescue. A saved device
+      // id that has gone stale is a property of the machine, not of one capture
+      // path, so all of them clear it and retry on the OS default.
+      const openedMic = await openMicWithFallback();
+      stream = openedMic.stream;
+      // onCaption is optional (see the destructure at the top) — guarded exactly
+      // like every other call site in this file.
+      if (openedMic.fallbackFired && onCaption) {
+        onCaption('Saved microphone was unavailable — using the system default.', 'error');
+      }
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaStreamSource(stream);
       await audioCtx.audioWorklet.addModule('/js/voice/pcm-capture-worklet.js');

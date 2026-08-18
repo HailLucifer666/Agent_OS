@@ -15,7 +15,7 @@
 // States: idle -> listening -> processing -> speaking -> listening.
 
 import { utterance, stopRequest, sendMessage } from '../ws.js';
-import { getMicDeviceId, setMicDeviceId, buildAudioConstraints, micErrorMessage } from './mic-device.js';
+import { getMicDeviceId, setMicDeviceId, micErrorMessage, openMicWithFallback } from './mic-device.js';
 import { isVisionQuery } from './vision-trigger.js';
 // Static import is cheap: silero-vad.js only DEFINES functions at module
 // scope — it fetches onnxruntime-web and the ONNX model lazily, inside
@@ -665,7 +665,13 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   async function ensureMic() {
     if (stream) return stream;
-    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
+    // BUG-272 W1: shares the stale-device rescue with the wake word and the Live
+    // bridge — one saved id, one recovery, not three.
+    const openedMic = await openMicWithFallback();
+    stream = openedMic.stream;
+    if (openedMic.fallbackFired) {
+      caption('Saved microphone was unavailable — using the system default.', 'error');
+    }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();

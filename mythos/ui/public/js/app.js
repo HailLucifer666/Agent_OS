@@ -639,6 +639,69 @@ if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHot
   else armInShell();
 }
 
+// BUG-272 W1: a FAILED wake-word start used to be terminal. On 2026-08-17 the
+// mic threw OverconstrainedError 29s into boot (a stale MYTHOS_MIC_DEVICE id)
+// and the wake word stayed dead for the whole 20-minute session, because every
+// arm path in this file is one-shot: armOnce removes its own listener, armInShell
+// polls only the PIN gate and stops once ensureWakeWord() has been CALLED (not
+// once it has succeeded), and startWakeWord() nulls `wakeword` on failure
+// specifically so "a later gesture" can retry. In the Electron shell, hands-free,
+// that later gesture never comes.
+//
+// Two cheap heals, both bounded:
+//   * a backoff re-arm (30s/60s/120s, then stop). Bounded on purpose — an
+//     unbounded retry loop against a denied permission is a prompt storm, and a
+//     mic that is still broken after ~3.5 minutes needs the operator, not
+//     another attempt.
+//   * a `devicechange` re-arm, which is the event that actually corresponds to
+//     the failure: openMicWithFallback() has by then cleared the stale id, so
+//     plugging the mic back in (or Windows re-enumerating it) is exactly when a
+//     retry can newly succeed. Mirrors the listener in views/mic-settings.js.
+//
+// Q8 (pin the disposition): this deliberately does NOT retry when the wake word
+// is disabled by config or its models are absent — those are honest, permanent
+// "not available here" states, and retrying them would just log noise every
+// 30 seconds. `_wakewordCfgError` / model-missing paths return before arming and
+// are left exactly as they were.
+const WAKEWORD_REARM_DELAYS_MS = [30000, 60000, 120000];
+let wakewordRearmIndex = 0;
+let wakewordRearmTimer = null;
+
+function wakewordIsLive() {
+  return Boolean(wakeword && typeof wakeword.isRunning === 'function' && wakeword.isRunning());
+}
+
+function scheduleWakewordRearm(source) {
+  if (wakewordRearmTimer) return;                                  // one pending attempt at a time
+  if (wakewordRearmIndex >= WAKEWORD_REARM_DELAYS_MS.length) return; // bounded, then the operator's problem
+  if (wakewordIsLive()) return;
+  const delay = WAKEWORD_REARM_DELAYS_MS[wakewordRearmIndex++];
+  wakewordRearmTimer = setTimeout(() => {
+    wakewordRearmTimer = null;
+    if (wakewordIsLive()) return;
+    if (isGateClosed(pinLockScreen.lockState())) { scheduleWakewordRearm(source); return; }
+    reportWakeword('rearm', 'retrying the wake word after a failed start', {
+      source: source, attempt: wakewordRearmIndex, delayMs: delay,
+    });
+    ensureWakeWord();
+  }, delay);
+}
+
+// A device arriving/leaving is the one signal that can turn a stale-device
+// failure into a success, so it resets the backoff ladder rather than consuming
+// a rung of it.
+if (typeof navigator !== 'undefined' && navigator.mediaDevices
+    && typeof navigator.mediaDevices.addEventListener === 'function') {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (wakewordIsLive()) return;
+    if (isGateClosed(pinLockScreen.lockState())) return;
+    wakewordRearmIndex = 0;
+    if (wakewordRearmTimer) { clearTimeout(wakewordRearmTimer); wakewordRearmTimer = null; }
+    reportWakeword('rearm', 'audio devices changed — retrying the wake word', { source: 'devicechange' });
+    ensureWakeWord();
+  });
+}
+
 // Wake-word ("hey jarvis") — hands-free activation. Lazily imported (like
 // voice-loop.js above) only on the same first-gesture arm, and only when the
 // server reports it enabled AND the on-device models are actually present
@@ -817,18 +880,24 @@ function startWakeWord() {
     // than inside it: wakeword-arming.test.js asserts setCaption appears within
     // 300 chars of the .then(, and that assertion is worth keeping intact.)
     return wakeword.start().then((ok) => {
-      if (ok) mic.setCaption('Standby — listening for "hey jarvis"', 'info');
+      // A successful arm resets the ladder, so a failure LATER in the session
+      // gets its own three attempts rather than inheriting a spent budget.
+      if (ok) { wakewordRearmIndex = 0; mic.setCaption('Standby — listening for "hey jarvis"', 'info'); }
       else {
         wakeword = null; // failed to arm; let a later gesture try again
         // The status handler has already set a specific caption ('silent' /
         // 'error') and reported it; don't overwrite it with something vaguer.
         reportWakeword('not-listening', 'wake word did not arm');
+        // BUG-272 W1: "let a later gesture try again" is not a plan in the
+        // hands-free Electron shell, where no later gesture arrives.
+        scheduleWakewordRearm('start-failed');
       }
       return ok;
     });
   }).catch((err) => {
     wakeword = null;
     mic.setCaption('Wake word failed to load: ' + (err && err.message || err), 'error');
+    scheduleWakewordRearm('load-failed');
   });
 }
 

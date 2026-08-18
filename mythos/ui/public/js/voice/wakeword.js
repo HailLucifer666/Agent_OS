@@ -23,7 +23,7 @@
 // Input/output tensor NAMES are also read from each loaded ONNX session at
 // runtime (session.inputNames/outputNames) rather than assumed, since the
 // exact exported name isn't recoverable from the Python source alone.
-import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
+import { openMicWithFallback, micErrorMessage, micConstraintShape } from './mic-device.js';
 
 // Shared with createWakeWord below AND exported for tests. openWakeWord's mel
 // bin count is fixed by the model, so these are module constants, not
@@ -110,6 +110,36 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   let framesAtLastReport = 0;
   let metricsTimer = null;
   let ctxStateAtStart = null; // AudioContext.state as measured, not as assumed
+  // BUG-272 W1: the 2026-08-17 session could not tell WHY getUserMedia threw
+  // OverconstrainedError, because nothing recorded what was requested. These
+  // carry shape flags and real track settings, never the device id itself.
+  let micFallbackFired = false;
+  let micConstraintsRequested = null;
+  let micTrackSettings = null;
+
+  // What the browser ACTUALLY granted, as opposed to what was asked for — the
+  // pair is what makes an OverconstrainedError diagnosable.
+  //
+  // Q4 (what is standing next to it?) — MediaTrackSettings includes `deviceId`
+  // and `groupId`, so returning getSettings() verbatim would put exactly the
+  // identifier micConstraintShape() is careful to omit straight into a log
+  // line, one field away. Pick the fields explicitly; never spread this object.
+  function trackSettingsOf(s) {
+    try {
+      const track = s && s.getAudioTracks && s.getAudioTracks()[0];
+      if (!track || typeof track.getSettings !== 'function') return null;
+      const st = track.getSettings() || {};
+      return {
+        sampleRate: st.sampleRate ?? null,
+        channelCount: st.channelCount ?? null,
+        echoCancellation: st.echoCancellation ?? null,
+        noiseSuppression: st.noiseSuppression ?? null,
+        autoGainControl: st.autoGainControl ?? null,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
   // Generous: ~18 frames (1280 samples / 80ms each) are expected in this window,
   // so zero means genuinely no audio rather than a slow machine.
   const FIRST_FRAME_TIMEOUT_MS = 3000;
@@ -259,7 +289,23 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   }
 
   async function ensureAudio() {
-    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
+    // BUG-272 W1: a stale MYTHOS_MIC_DEVICE id used to end the wake word for the
+    // whole session here — deviceId:{exact} is a hard constraint, so
+    // OverconstrainedError repeated on every arm attempt and nothing re-armed.
+    // openMicWithFallback clears the proven-bad id and retries on the OS
+    // default, reporting the degrade rather than hiding it.
+    // Recorded BEFORE the attempt so a rejection still reports what was asked
+    // for — that is the fact the 2026-08-17 session was missing.
+    micConstraintsRequested = micConstraintShape();
+    const opened = await openMicWithFallback();
+    stream = opened.stream;
+    micFallbackFired = opened.fallbackFired;
+    micConstraintsRequested = opened.requested;
+    micTrackSettings = trackSettingsOf(stream);
+    if (opened.fallbackFired) {
+      status('degraded', 'Saved microphone was unavailable — fell back to the system default. '
+        + micErrorMessage(opened.originalError), { fallbackFired: true });
+    }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     // BUG-150: Chromium creates an AudioContext 'suspended' unless it is made
     // during a user gesture, and a suspended context wires its whole graph
@@ -329,7 +375,17 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       await loadSessions();
       await ensureAudio();
     } catch (err) {
-      status('error', 'Wake-word failed to start: ' + ((err && err.message) || err));
+      // BUG-272 W1: this used to surface the raw error ("OverconstrainedError"),
+      // which told the operator nothing actionable. micErrorMessage already maps
+      // every getUserMedia error name to operator-readable text — reuse it
+      // rather than adding a second mapper. constraintsRequested says whether an
+      // exact-device constraint was in play, which is the one fact that
+      // separates a stale saved device from a genuinely missing mic.
+      status('error', 'Wake word could not start: ' + micErrorMessage(err), {
+        errorName: (err && err.name) || null,
+        constraintsRequested: micConstraintsRequested,
+        fallbackFired: micFallbackFired,
+      });
       stop();
       return false;
     }
@@ -358,6 +414,11 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       ctxStateAtStart: ctxStateAtStart,
       framesToFirstAudio: framesSeen,
       threshold: THRESHOLD,
+      // BUG-272 W1: requested-vs-actual on the success line too, so a session
+      // that armed can still be compared against one that did not.
+      constraintsRequested: micConstraintsRequested,
+      constraintsActual: micTrackSettings,
+      fallbackFired: micFallbackFired,
     });
     metricsTimer = setInterval(reportMetrics, METRICS_INTERVAL_MS);
     return true;
