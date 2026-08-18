@@ -150,6 +150,27 @@ function createLiveToolAdapter(deps) {
     // that session, and awaiting a fast read is strictly better than a two-step.
     screen_look: true,
     camera_look: true,
+    // BUG-272 T4 — 2026-08-18: four ack-deadline breaches in one session,
+    // launch_app x3 and open_web x1, one launch_app legitimately taking 9860ms
+    // against the global 1500ms deadline. launch_app polls up to 6-8s for a
+    // windowed process to appear (Resolve-WindowedProcessByName), which is not a
+    // defect but the only honest way to know WHICH window it started — so by this
+    // list's own DURATION rule it always belonged.
+    //
+    // Chosen over the per-tool-class deadline table BUG-272 proposed: this
+    // mechanism already exists, is already tested, and already solves "the tool
+    // outruns the deadline" by acking with status:'started' and delivering the
+    // real outcome later. A second mechanism for one problem is a second thing
+    // that can disagree with the first.
+    //
+    // open_web is deliberately NOT here, though BUG-272 named it. It is not slow:
+    // it composes a widget descriptor and returns. Its single breach that session
+    // was a symptom of the dead newtab path, not of duration, and membership here
+    // is about duration by this list's own rule. Adding it also converted its
+    // outcome into a deferred 'pending' ack, which live-pending-is-not-failure.js
+    // caught immediately — the unverified status open_web must report is the whole
+    // point of that test, and a two-step ack hides it.
+    launch_app: true,
   };
 
   // BUG-128 — 2026-08-06: SLOW_TOOLS is a hand-maintained list, and the list is
@@ -327,10 +348,62 @@ function createLiveToolAdapter(deps) {
   };
   const executedSignatures = new Set();
 
+  // BUG-272 T2: cross-turn suppression for calls whose LAST outcome was a failure
+  // or came back unverified.
+  //
+  // executedSignatures is cleared on every turnComplete, by design — a repeated
+  // request across turns is usually the operator asking again. But
+  // open_web(browser:true) had no working surface under Electron at all, returned
+  // ok:true + unverified every time, and was re-issued identically through turn 72
+  // while Chrome sat on an unrelated page. Per-turn dedupe cannot see that; the
+  // breaker could not either, because unverified counted as success (fixed
+  // alongside this in hub.js).
+  //
+  // Deliberately narrow. Only signatures that just failed or went unproven are
+  // remembered, and only for a few seconds — long enough to break a same-topic
+  // retry storm, short enough that an operator who fixes the underlying problem
+  // ("I opened Chrome now, try again") is never told no. Wrongly suppressing is
+  // worse than wrongly allowing, which is the rule the two exemption lists above
+  // already follow.
+  const BAD_OUTCOME_TTL_MS = 8000;
+  const badSignatures = new Map();   // signature -> expiry epoch ms
+
+  function signatureOf(name, args) {
+    try {
+      return `${name}:${JSON.stringify(args || {})}`;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Recorded after dispatch. A success CLEARS the memory rather than merely not
+  // adding to it: a tool that has just worked must never be suppressed because an
+  // older attempt failed.
+  function noteToolOutcome(name, args, ev) {
+    const signature = signatureOf(name, args);
+    if (!signature) return;
+    if (IDEMPOTENT_READ_TOOLS[name] || REPEATABLE_CLICK_TOOLS[name]) return;
+    const bad = ev && (ev.unverified === true || ev.dispatchOk === false);
+    if (bad) badSignatures.set(signature, Date.now() + BAD_OUTCOME_TTL_MS);
+    else badSignatures.delete(signature);
+  }
+
+  function isRecentlyBadSignature(name, args) {
+    const signature = signatureOf(name, args);
+    if (!signature) return false;
+    const until = badSignatures.get(signature);
+    if (!until) return false;
+    if (Date.now() >= until) { badSignatures.delete(signature); return false; }
+    return true;
+  }
+
   function isDuplicateSignature(generation, name, args) {
     if (IDEMPOTENT_READ_TOOLS[name]) return false;
     if (REPEATABLE_CLICK_TOOLS[name]) return false;
-    if (generation !== turnGeneration) return false;
+    // BUG-272 T2: a new turn normally resets suppression — unless this exact call
+    // just failed or came back unproven, in which case re-issuing it immediately
+    // is the retry storm rather than a fresh request.
+    if (generation !== turnGeneration) return isRecentlyBadSignature(name, args);
     let signature;
     try {
       signature = `${name}:${JSON.stringify(args || {})}`;
@@ -629,6 +702,12 @@ function createLiveToolAdapter(deps) {
           summary = `${call.name} done.`;
           response = { status: 'ok', result: truncateForModel(ev.result) };
         }
+        // BUG-272 T2: remember a failed/unproven outcome so the identical call
+        // re-issued on the NEXT turn is suppressed for a few seconds. This is the
+        // only place that knows both the signature and what actually happened.
+        // `call.args || {}` exactly as isDuplicateSignature computes it — the two
+        // must produce the same signature string or the memory never matches.
+        noteToolOutcome(call.name, call.args || {}, ev);
         commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, summary });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {

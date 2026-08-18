@@ -239,7 +239,23 @@ function createEffectorHub({ bus, config }) {
       return result;
     }
 
-    if (result && result.ok) {
+    // BUG-272 T2: `unverified` is NOT a success for breaker purposes.
+    //
+    // evidence.unverified() always sets ok:true (it means "I did the thing but
+    // cannot prove the world changed"), and this branch read result.ok alone — so
+    // open_web(browser:true) failing seven consecutive times under Electron, with
+    // no surface capable of rendering it, was recorded as seven successes. The
+    // breaker exists precisely to stop a tool being retried into the ground, and
+    // the one shape it could not see was the one that repeated.
+    //
+    // A tool that never proves anything therefore trips its breaker after the
+    // usual run of attempts, which is the correct outcome: repeatedly doing
+    // something unprovable is indistinguishable, from here, from repeatedly
+    // failing. It stays ok:true to every OTHER consumer — the evidence contract
+    // (dispatch-action.js) is explicit that unverified/reason must not be
+    // flattened into ok/fail, and this does not flatten it, it only stops the
+    // breaker treating "unproven" as "proven".
+    if (result && result.ok && result.unverified !== true) {
       breakers.recordSuccess(resolvedName);
     } else {
       breakers.recordFailure(resolvedName);

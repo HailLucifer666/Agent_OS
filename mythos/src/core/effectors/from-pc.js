@@ -222,7 +222,32 @@ async function launch_app({ name, existing }, ctx) {
   // pid already stops us, and the explicit matchedBy check keeps it stopped if a
   // future PS change ever starts returning a pid for a title match.
   var r = res.result || {};
-  var byProcess = typeof r.pid === 'number' && r.matchedBy !== 'title';
+  // BUG-272 T1: 'partial' joins 'title' as a CANDIDATE, not a resolution. An
+  // unanchored substring hit on a process name ('ZCode' -like '*code*') used to be
+  // labelled matchedBy:'process' and was therefore indistinguishable from an exact
+  // match — which is how launch_app("code") reported the operator's unrelated CLI
+  // as a fully verified launch of VS Code.
+  var byProcess = typeof r.pid === 'number' && r.matchedBy !== 'title' && r.matchedBy !== 'partial';
+
+  // BUG-272 T1: does the process we actually landed on match what was asked for?
+  //
+  // This is the check that previously had nothing to check against.
+  // New-LaunchResult echoed the REQUESTED name back as `name`, and the oracle
+  // below built its `observed` field out of that echo — so the "proof" of a launch
+  // was the request itself plus a pid, and the pid came from a substring match.
+  // Circular, and the wrong process passed every honesty gate. The PS side now
+  // reports resolvedName (the real ProcessName), so a mismatch is finally visible.
+  //
+  // Compared case-insensitively with .exe and whitespace stripped: 'Code' vs
+  // 'code' and 'Notepad' vs 'notepad' agree, while 'ZCode' vs 'code' does not —
+  // the requested name must be the WHOLE resolved name, not merely inside it.
+  // Absent resolvedName (an older adapter build) the check abstains rather than
+  // failing every launch: a missing field is not evidence of a mismatch.
+  var resolvedName = typeof r.resolvedName === 'string' && r.resolvedName ? r.resolvedName : null;
+  var normName = function (v) {
+    return String(v || '').trim().replace(/\.exe$/i, '').replace(/\s+/g, '').toLowerCase();
+  };
+  var nameAgrees = !(byProcess && resolvedName) || normName(resolvedName) === normName(name);
 
   if (res.ok && byProcess) {
     lastLaunchedPid = r.pid;
@@ -269,12 +294,30 @@ async function launch_app({ name, existing }, ctx) {
   // report the launch as attempted: the app may genuinely have started, but there
   // is no window we can honestly claim as the target, and saying so is what stops
   // the next ui_type from guessing.
-  if (byProcess) {
+  if (byProcess && nameAgrees) {
     return evidence.verifiedOk(res, {
       oracle: 'process-window',
       expected: String(name).trim(),
-      observed: String(r.name || name) + ' (pid ' + r.pid + ')',
+      // BUG-272 T1: the RESOLVED process name when we have one, never the echoed
+      // request. An oracle whose "observed" value is the caller's own input
+      // proves nothing about the world.
+      observed: String(resolvedName || r.name || name) + ' (pid ' + r.pid + ')',
     });
+  }
+  // BUG-272 T1: a pid belonging to a DIFFERENT application is worse than no pid,
+  // because a later ui_type would type into it happily. Downgrade, clear the
+  // implicit target, and name both sides so the model asks instead of assuming.
+  // Failing loudly beats a confident wrong answer.
+  if (byProcess && !nameAgrees) {
+    lastLaunchedPid = null;
+    return evidence.unverified(res, 'asked for "' + String(name).trim() + '" but the windowed process ' +
+      'that came up is "' + resolvedName + '" (pid ' + r.pid + '), a different application — not ' +
+      'targeting it. Call list_windows to see what is actually open.');
+  }
+  if (r.matchedBy === 'partial') {
+    return evidence.unverified(res, 'no process is named exactly "' + name + '" — the closest was "' +
+      (resolvedName || 'an unrelated process') + '", whose name merely contains it, so I am not ' +
+      'targeting it');
   }
   return evidence.unverified(res, r.candidateTitle
     ? 'no process named like "' + name + '" owns a window — the only match was an unrelated window titled "' +
@@ -357,7 +400,26 @@ async function focus_window({ pid }) {
   // it requires an explicit real pid.
   var targetPid = coercePid(pid);
   if (!targetPid) return fail('PID is required.');
-  return delegate({ cmd: 'focus_window', pid: targetPid });
+  var res = await delegate({ cmd: 'focus_window', pid: targetPid });
+  // BUG-272 T3: a vanished pid used to surface as PowerShell's bare "Cannot find
+  // a process with the process identifier", with no hint about what to do — so
+  // the model kept passing the same dead pid from an earlier tool result.
+  // close_window has carried the remedy since its own incident, and
+  // foregroundThenRetry has the identical wording; this reuses that sentence
+  // rather than inventing a third variant of it.
+  // Reads BOTH shapes on purpose. delegate() maps an adapter failure to
+  // fail(resp.error), so the PowerShell text arrives on `error`, while PS paths
+  // that return their message as a successful-transport result put it on
+  // `result`. close_window checks only `result` and has been lucky; a guard that
+  // silently matches nothing is worse than no guard, because it looks like it
+  // works.
+  var detail = String((res && res.error) || (res && res.result) || '');
+  if (!res.ok && /cannot find/i.test(detail)) {
+    return fail(detail
+      + ' That pid no longer exists, so nothing was focused. Call list_windows again to find the '
+      + 'right target — retrying this pid will not help.');
+  }
+  return res;
 }
 
 async function close_window({ pid }) {

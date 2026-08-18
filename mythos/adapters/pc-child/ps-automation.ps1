@@ -463,9 +463,25 @@ function Resolve-AppPathFromRegistry($name) {
 }
 
 function Resolve-AppViaStartApps($name) {
+    # BUG-272 T1: this used to take the FIRST Start-Apps entry whose display name
+    # merely CONTAINED the requested name, unanchored. Asking for "code" could
+    # therefore launch an entirely different application whose name happens to
+    # contain those four letters -- the wrong app STARTED, not merely
+    # misidentified afterwards. BUG-272 blamed only the process-name rung
+    # downstream; fixing that alone would have left MYTHOS opening the wrong
+    # program and simply labelling it honestly.
+    #
+    # Ranked instead of first-match: exact, then prefix, then substring. The
+    # substring tier is kept because it is genuinely useful ("word" ->
+    # "Microsoft Word"), but it can no longer beat an exact hit that sorts later.
     try {
-        $match = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -like "*$name*" } | Select-Object -First 1
-        if ($match) { return $match.AppID }
+        $apps = @(Get-StartApps -ErrorAction Stop)
+        $exact = $apps | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
+        if ($exact) { return $exact.AppID }
+        $prefix = $apps | Where-Object { $_.Name -like "$name*" } | Sort-Object { $_.Name.Length } | Select-Object -First 1
+        if ($prefix) { return $prefix.AppID }
+        $sub = $apps | Where-Object { $_.Name -like "*$name*" } | Sort-Object { $_.Name.Length } | Select-Object -First 1
+        if ($sub) { return $sub.AppID }
     } catch { }
     return $null
 }
@@ -506,14 +522,17 @@ function Resolve-RealProcessAfterLaunch($StartedProc, $Name) {
     for ($i = 0; $i -lt 6; $i++) {
         try {
             $p = Get-Process -Id $StartedProc.Id -ErrorAction Stop
-            if ($p.MainWindowHandle -ne 0) { return $p.Id }
+            if ($p.MainWindowHandle -ne 0) { return @{ pid = $p.Id; processName = $p.ProcessName } }
         } catch {
             break
         }
         Start-Sleep -Milliseconds 300
     }
+    # -Name is an EXACT match in PowerShell, so this rung was never the
+    # substring problem -- but it still has to report WHICH process it found, or
+    # the Node side has nothing to check the requested name against (BUG-272 T1).
     $named = Get-Process -Name $Name -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-    if ($named) { return $named.Id }
+    if ($named) { return @{ pid = $named.Id; processName = $named.ProcessName } }
     return $null
 }
 
@@ -564,13 +583,21 @@ function Resolve-WindowedProcessByName($Name, $TimeoutMs) {
             $windowed = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
             # Exact process-name match wins, then a partial one. Both are real
             # resolutions and return immediately.
+            # BUG-272 T1: an EXACT process-name match is a resolution. An
+            # unanchored SUBSTRING match is a CANDIDATE, and conflating the two is
+            # how launch_app("code") returned the operator's "ZCode" CLI as a
+            # fully verified launch: 'ZCode' -like '*code*' is true, and the old
+            # code labelled that hit matchedBy='process', indistinguishable from
+            # a real match. Same epistemic class as the title rung below, which
+            # WAVE 1 already demoted for exactly this reason -- this extends that
+            # rule to substring process names.
             $hit = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -ieq $needle } |
                 Sort-Object Id -Descending | Select-Object -First 1
-            if (-not $hit) {
-                $hit = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -like ('*' + $needle + '*') } |
-                    Sort-Object Id -Descending | Select-Object -First 1
-            }
-            if ($hit) { return @{ pid = $hit.Id; matchedBy = 'process' } }
+            if ($hit) { return @{ pid = $hit.Id; matchedBy = 'process'; processName = $hit.ProcessName } }
+
+            $partial = $windowed | Where-Object { ($_.ProcessName -replace '\s', '') -like ('*' + $needle + '*') } |
+                Sort-Object Id -Descending | Select-Object -First 1
+            if ($partial) { return @{ pid = $partial.Id; matchedBy = 'partial'; processName = $partial.ProcessName } }
 
             # Title-only hit: remember it, keep polling for a real process.
             if (-not $candidate) {
@@ -601,16 +628,38 @@ function New-LaunchResult($Name, $ResolvedPid, $Resolution, $Via) {
     $r = @{ name = $Name; launched = $true }
     if ($Via) { $r.resolvedVia = $Via }
 
+    # BUG-272 T1: every resolved payload now carries resolvedName -- the REAL
+    # ProcessName of the process we settled on. $r.name is and always was the
+    # name the CALLER asked for, and from-pc.js built its evidence "observed"
+    # field out of that echo, so the proof of a launch was the request itself
+    # plus a pid. Circular: the wrong process passed every honesty gate.
     if ($ResolvedPid) {
-        $r.pid = $ResolvedPid; $r.resolved = $true; $r.matchedBy = 'process'
+        if ($ResolvedPid -is [hashtable]) {
+            $r.pid = $ResolvedPid.pid; $r.resolvedName = $ResolvedPid.processName
+        } else {
+            $r.pid = $ResolvedPid
+        }
+        $r.resolved = $true; $r.matchedBy = 'process'
         return $r
     }
     if ($Resolution -and $Resolution.matchedBy -eq 'process') {
         $r.pid = $Resolution.pid; $r.resolved = $true; $r.matchedBy = 'process'
+        if ($Resolution.processName) { $r.resolvedName = $Resolution.processName }
         return $r
     }
 
     $r.resolved = $false
+    # A substring hit is a candidate, exactly like a title hit: named, offered,
+    # never silently adopted as the target of a later ui_type.
+    if ($Resolution -and $Resolution.matchedBy -eq 'partial') {
+        $r.matchedBy = 'partial'
+        $r.candidatePid = $Resolution.pid
+        $r.resolvedName = $Resolution.processName
+        $r.note = ('No process is named exactly "' + $Name + '". One windowed process''s name merely CONTAINS it (' +
+                   $Resolution.processName + '), which is not the same thing and is NOT being targeted. ' +
+                   'Confirm which app is meant, or call list_windows.')
+        return $r
+    }
     if ($Resolution -and $Resolution.matchedBy -eq 'title') {
         $r.matchedBy = 'title'
         $r.candidatePid = $Resolution.pid
