@@ -220,6 +220,10 @@ describe('server: voice-capture-suspend handler logs the fields the client sends
         framesDropped: 0,
         framesZeroed: 12,
         peakRms: 0.0421,
+        // BUG-272 slice 3's three calibration fields.
+        bargeVetoed: 4,
+        bargeVetoTier: 'eager',
+        bleedFloor: 0.1305,
       }));
       // The handler is fire-and-forget; poll briefly for the log line.
       const entry = await new Promise((resolve, reject) => {
@@ -247,6 +251,15 @@ describe('server: voice-capture-suspend handler logs the fields the client sends
       // ownVoiceGate is a boolean the client sends on both own-voice
       // transitions — part of the evidence chain, never transcript text.
       assert.equal(f.ownVoiceGate, false);
+      // BUG-272: found DROPPED on the first live run. Slice 3 added these to the
+      // client's message and not to the handler's allowlist, so they were computed,
+      // sent, and discarded — precisely the defect BUG-271 fixed for the fields
+      // above, reintroduced by the commit that added new ones. They are the three
+      // numbers that say whether the barge-in policy is calibrated, so losing them
+      // silently made the live session unreadable for its main question.
+      assert.equal(f.bargeVetoed, 4, 'how many level-triggered barge-ins the policy vetoed');
+      assert.equal(f.bargeVetoTier, 'eager', 'which tier last tried');
+      assert.equal(f.bleedFloor, 0.1305, "the floor learned from this room's bleed");
     } finally {
       if (ws) try { ws.close(); } catch (_) {}
       await server.stop();

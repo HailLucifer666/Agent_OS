@@ -3698,7 +3698,17 @@ function createServer(deps) {
         // field get it: a media-start line must not grow fabricated zeros.
         // No wire change; numeric/boolean fields only, never transcript text.
         const fields = { suspended: Boolean(msg.suspended), holdMs: msg.holdMs, reason: msg.reason, at: msg.at };
-        for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms']) {
+        // BUG-272: bargeVetoed/bargeVetoTier/bleedFloor were added to the client's
+        // transition message by slice 3 and were NOT added here, so they were
+        // computed, sent over the wire, and thrown away — the exact defect BUG-271
+        // fixed for the fields above it, reintroduced by the commit that added new
+        // ones. Found on the first live run: the log line arrived with everything
+        // EXCEPT the three numbers needed to judge whether the new barge-in policy
+        // is calibrated. An allowlist is the right shape here (a transcript must
+        // never reach a log line by accident), but it means every new client field
+        // has to be added in two places, and forgetting the second is silent.
+        for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
+          'bargeVetoed', 'bargeVetoTier', 'bleedFloor']) {
           if (msg[k] !== undefined) fields[k] = msg[k];
         }
         logger.info('voice.capture-suspend', fields);
