@@ -24,7 +24,15 @@
 // caller has to be able to say WHY it saw nothing. A thrown error would surface
 // as a bare failure string and the distinction would be lost.
 
-const DEFAULT_VISION_TIMEOUT_MS = 12000;
+// BUG-273 C3 — was 12000, which at the raised per-attempt bound would have fit
+// exactly ONE attempt and removed failover altogether. The whole point of the pair
+// is that a slow first-ranked model must not consume the entire budget, so the
+// total has to be a multiple of the step: 21000 / 7000 = three real attempts. The
+// 2026-08-18 run needed that and did not have it — attemptsTried:2 out of nine
+// ranked entries. Both numbers stay overridable (VISION_ATTEMPT_TIMEOUT_MS in
+// config, timeoutMs per call) so an operator on a slower link can move them
+// together rather than one at a time.
+const DEFAULT_VISION_TIMEOUT_MS = 21000;
 
 // Per-ATTEMPT bound, threaded into chain.js — distinct from the total-call bound
 // above, and the fix for the 2026-08-14 screen_look failures.

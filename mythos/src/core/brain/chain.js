@@ -205,6 +205,94 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
   const errors = [];
   const useBreakers = breakersEnabledFor(config);
 
+  // BUG-273 C3 (2026-08-18) — WHY A TIMEOUT COOLDOWN IS NOW DEFERRED.
+  //
+  // MEASURED, two screen_look failures minutes apart:
+  //   11:35:04  google gemini-3.5-flash-lite  ms:2672  ok:true      <- it worked
+  //   11:38:18  google gemini-3.5-flash-lite  ms:4009  timedOut     <- and then
+  //   11:38:22  mistral mistral-small-latest  ms:4001  timedOut
+  //   11:38:26  mistral mistral-large-2512    ms:4000  timedOut
+  //   11:38:30  google  gemini-flash-latest   ms:4001  timedOut
+  //   11:38:34  nim     llama-3.2-11b-vision  ms:4004  timedOut
+  //   11:38:38  nim2    llama-3.2-11b-vision  ms:4006  timedOut
+  //   11:38:42  nim     nemotron-nano-12b-vl  ms:4009  timedOut
+  //   11:38:44  EVERY entry skipped: 'cooldown'  -> "Vision providers are offline"
+  //
+  // Nine models across five unrelated providers aborting within 15ms of the same
+  // 4000ms ceiling is not nine simultaneous provider outages. It is one shared
+  // cause on this side — and the same signature this repo already records for
+  // child-spawn ceilings: identical timings at a hardcoded bound every run.
+  //
+  // B1's fix (2026-08-14) made attemptTimedOut take a cooldown, on the reasoning
+  // that "a provider that will not answer inside its own step budget plainly is at
+  // fault". That reasoning holds only while the budget is generous next to known-
+  // good latency. It was not: the lane's own recorded latencies include 3090ms and
+  // the successful call three minutes earlier took 2672ms, against a 4000ms budget.
+  // So a slightly slow minute condemned the entire lane, and the SECOND incident
+  // ("Vision providers are offline") is a direct consequence of the first — one
+  // causal chain reported as two independent failures.
+  //
+  // THE RULE: a timeout is provider-specific evidence only when some other
+  // provider answered. If every attempt in one run timed out, the common factor is
+  // this process, its network or its budget, so the cooldowns are dropped rather
+  // than taken. Rate-limit, 5xx and network failures are UNAFFECTED and still cool
+  // down immediately — those name a provider by themselves.
+  //
+  // Q2: the dropped decision is reported, not silent. An invisible non-cooldown is
+  // how the opposite bug would hide for a week.
+  const deferredTimeoutCooldowns = [];
+  let nonTimeoutFailures = 0;
+  let anyAttemptSucceeded = false;
+
+  // Settle the deferred timeout cooldowns. Called on EVERY exit from the walk —
+  // success and exhaustion both — because the first version only ran it on the
+  // exhausted path, which silently dropped the cooldown for every run that
+  // eventually got an answer. That is the common case, so it disabled B1's fix
+  // almost entirely: caught by chain-provider-breakers.test.js's very first
+  // assertion, not by anything written for C3.
+  //
+  // anyAttemptSucceeded is part of the discriminator, and the reason is the whole
+  // argument of this fix read backwards: the exemption exists because nine
+  // simultaneous timeouts point at one shared local cause. A provider answering in
+  // the SAME run disproves that — the network was fine, so the ones that timed out
+  // really were slow. Without this a run of {nim hangs, nim2 hangs, mistral answers}
+  // would exempt both dead NIM entries, which is exactly the all-day outage B1 was
+  // written to stop.
+  let deferredSettled = false;
+  function settleDeferredTimeouts() {
+    if (deferredSettled) return;
+    deferredSettled = true;
+    if (!deferredTimeoutCooldowns.length) return;
+    const sharedCauseLikely = !anyAttemptSucceeded
+      && nonTimeoutFailures === 0
+      && deferredTimeoutCooldowns.length > 1;
+    if (!sharedCauseLikely) {
+      deferredTimeoutCooldowns.forEach(function (c) {
+        markCooldown(c.lane, c.model, cooldownMs);
+        if (c.breaker) c.breaker.recordFailure();
+      });
+      return;
+    }
+    const names = deferredTimeoutCooldowns.map(function (c) { return c.lane + ':' + c.model; });
+    console.warn('[brain chain] whole-lane-timeout: ' + names.length + ' attempt(s) all timed out at the '
+      + 'per-attempt ceiling (' + attemptTimeoutMs + 'ms), nothing answered, and no provider failed for a '
+      + 'reason that names it — treating this as a local/network fault and NOT cooling down: '
+      + JSON.stringify(names.slice(0, 8)));
+    if (bus && typeof bus.emit === 'function') {
+      try {
+        bus.emit('health.anomaly', {
+          kind: 'chain-whole-lane-timeout',
+          reason: 'every ' + effectiveKind + ' attempt timed out at the ' + attemptTimeoutMs
+            + 'ms per-attempt ceiling and nothing answered, which is one shared cause rather than '
+            + names.length + ' provider outages — cooldowns were not taken',
+          target: effectiveKind,
+          attempts: names.length,
+          attemptTimeoutMs: attemptTimeoutMs,
+        });
+      } catch (_) { /* telemetry must never break the chain */ }
+    }
+  }
+
   // B1: a SKIPPED attempt must be as visible as a failed one. Both skip paths
   // below used to `continue` in silence, which is how a provider could be dead
   // all day while the only trace was an unexplained latency. Turning a loud 8s
@@ -267,6 +355,12 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
         // backoff to its base delay, so a recovered provider returns to the head
         // of the lane on its own. No hand-edit, no restart.
         if (breaker) breaker.recordSuccess();
+        // BUG-273 C3: an answer here means any earlier timeout in this run was the
+        // provider's own slowness, not a shared local fault — so the deferred
+        // cooldowns are taken. Settled before the return, or a successful call
+        // would drop them and B1's fix would apply to nothing.
+        anyAttemptSucceeded = true;
+        settleDeferredTimeouts();
         return { content, provider: lane, model };
       } finally {
         // Cleanup MUST run on BOTH success and error paths. Previously this was
@@ -303,15 +397,26 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       // attemptTimedOut is specifically OUR timer, i.e. the provider failing to
       // answer inside its own step budget, which is a provider fault by
       // definition. Both are AbortError; only one is evidence.
-      var isProviderFault = isRateLimit || isServerError || isNetwork || attemptTimedOut;
-      if (isProviderFault) {
+      var namesAProvider = isRateLimit || isServerError || isNetwork;
+      if (namesAProvider) {
+        // Unchanged: a 429, a 5xx or a dead socket is evidence about THIS provider
+        // on its own, whatever the rest of the lane did.
+        nonTimeoutFailures += 1;
         markCooldown(lane, model, cooldownMs);
         // And the escalating half — a flat 60s cooldown lapses between calls that
         // are minutes apart, which is exactly the measured pattern.
         if (breaker) breaker.recordFailure();
+      } else if (attemptTimedOut) {
+        // BUG-273 C3: held until the run ends. See deferredTimeoutCooldowns above.
+        deferredTimeoutCooldowns.push({ lane: lane, model: model, breaker: breaker });
       }
     }
   }
+
+  // BUG-273 C3: nothing answered, so this is the run the exemption is about — but
+  // the decision still belongs to settleDeferredTimeouts, which also has to run on
+  // the success path above.
+  settleDeferredTimeouts();
 
   // A4: Use generic error message — avoid leaking provider lane/model details to clients.
   // Full details are in the `errors` array for server-side logging only.

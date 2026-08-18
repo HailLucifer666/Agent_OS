@@ -556,7 +556,17 @@ const SCHEMA = {
   // 12s budget actually walk 2-3 models; vision-call.js clamps it below
   // VISION_CALL_TIMEOUT_MS, because a per-attempt bound at or above the total
   // bound reintroduces the bug rather than configuring it.
-  VISION_ATTEMPT_TIMEOUT_MS:   { type: 'number', default: 4000, min: 500 },
+  // BUG-273 C3 — was 4000, and 4000 could not tell a slow provider from a dead
+  // one. PREF_VISION's own recorded latencies include 3090ms, and the screen_look
+  // that SUCCEEDED on 2026-08-18 took 2672ms; three minutes later nine models
+  // across five providers all aborted within 15ms of the 4000ms ceiling. A budget
+  // only ~30% above the known-good case turns one slow minute into a lane-wide
+  // outage. 7000ms clears the slowest recorded good latency by ~2.3x while still
+  // leaving room for THREE attempts inside the raised total budget. screen_look has
+  // been a SLOW_TOOL since BUG-272 T4 (it acks 'started' and reports its real
+  // outcome later), so a longer budget no longer stalls a voice turn the way it
+  // would have when these two numbers were first chosen.
+  VISION_ATTEMPT_TIMEOUT_MS:   { type: 'number', default: 7000, min: 500 },
 
   // think_deeply (effectors/deep-think.js) — same two-bound shape as vision
   // above, and for the same reason: a total budget shorter than chain.js's
