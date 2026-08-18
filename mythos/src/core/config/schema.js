@@ -400,6 +400,12 @@ const SCHEMA = {
   // a truly hung loop fires it.
   STALL_MS:                 { type: 'number', default: 30000, min: 1000 },
   WATCHDOG_MS:              { type: 'number', default: 2000, min: 500 },
+  // BUG-273: how long a SINGLE cortex tick may stay in flight before it counts as
+  // wedged. Not derived from STALL_MS, which answers a different question on a
+  // TICK_MS scale (is the timer firing at all). 120000 is well past the longest
+  // legitimate await in a tick body — act()'s dispatch, capped at ACTION_TIMEOUT_MS
+  // = 30000 — and well short of anything an operator would sit through.
+  TICK_WEDGED_MS:           { type: 'number', default: 120000, min: 5000 },
   BREAKER_FAIL_THRESHOLD:   { type: 'number', default: 3, min: 1 },
   BREAKER_WINDOW_MS:        { type: 'number', default: 30000, min: 1000 },
   BREAKER_RESET_MS:         { type: 'number', default: 15000, min: 1000 },

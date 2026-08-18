@@ -70,8 +70,12 @@ function harness() {
   return {
     spoken, emitted,
     advance: (ms) => { now += ms; },
+    // BUG-273 (2026-08-19): was kind 'cortex-stalled', which NO emitter emits — the
+    // real kind is 'cortex-stall'. So this ladder was being proved against a
+    // condition that cannot occur. Re-pointed at a kind that is genuinely on the
+    // serious list; the cadence under test is unchanged.
     stall: () => announcer._onHealthAnomaly({
-      payload: { kind: 'cortex-stalled', target: 'cortex', reason: 'tick did not advance' },
+      payload: { kind: 'effector-flapping', target: 'gmail_unread', reason: 'failing repeatedly' },
     }),
     other: () => announcer._onHealthAnomaly({
       payload: { kind: 'provider-down', target: 'brain', reason: 'every lane timed out' },
@@ -86,7 +90,7 @@ describe('BUG-273 D3 — a recurring anomaly is not announced on a metronome', (
     const h = harness();
     h.stall();
     assert.equal(h.spoken.length, 1);
-    assert.match(h.spoken[0], /cortex/, 'and it still names the condition');
+    assert.match(h.spoken[0], /gmail_unread|flapping/, 'and it still names the condition');
   });
 
   it('the five-minute repeat that the operator actually experienced is suppressed', () => {
@@ -149,7 +153,7 @@ describe('BUG-273 D3 — a recurring anomaly is not announced on a metronome', (
     h.stall();
     const held = h.emitted.filter((e) => e.type === 'conversation.suppressed');
     assert.equal(held.length, 1);
-    assert.equal(held[0].payload.kind, 'cortex-stalled');
+    assert.equal(held[0].payload.kind, 'effector-flapping');
     assert.ok(held[0].payload.nextInMs > 0, 'and says when it will speak again');
   });
 });

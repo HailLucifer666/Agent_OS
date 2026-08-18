@@ -69,6 +69,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   let running = false;
   let generation = 0;
   const lastTickAt = { value: 0 };
+  // BUG-273: WHETHER A TICK IS ACTUALLY RUNNING, which lastTickAt cannot say.
+  // lastTickAt is stamped once at the top of the body and the reentrancy guard
+  // stops a second tick starting, so during any awaited call inside the tick
+  // "time since the last tick began" grows without bound and looks exactly like
+  // a dead loop. It is how mull()'s reasoning-lane call — one await, every 300
+  // ticks — got the cortex restarted every five minutes on the operator's
+  // machine, pausing the active goal each time. 0 means idle.
+  const inFlightSince = { value: 0 };
   // mull() below speaks only when its thought actually changed — see diff-gate.js.
   const diffGate = createDiffGate();
 
@@ -84,6 +92,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     // Reentrancy guard
     if (tickOnce._inFlight) return;
     tickOnce._inFlight = true;
+    inFlightSince.value = Date.now();
 
     // REMEDIATION P1-5: capture the generation this specific invocation
     // belongs to. stop()+start() (a healer 'restart-cortex' heal) bumps
@@ -284,7 +293,11 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // let the new generation's ticks proceed) could reset _inFlight back to
       // false WHILE a new-generation tick is genuinely still in flight,
       // letting a third, overlapping tick start.
-      if (generation === myGen) tickOnce._inFlight = false;
+      // BUG-273: cleared under the SAME generation rule as _inFlight, and for the
+      // same reason — a stale tick resuming after a restart must not clear the
+      // stamp a live tick is relying on, or the watchdog would read "idle" while
+      // the current generation is mid-await.
+      if (generation === myGen) { tickOnce._inFlight = false; inFlightSince.value = 0; }
     }
   }
 
@@ -420,7 +433,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   // mentioning to the operator next time they speak. Thoughts are stored in
   // episodic memory (kind: 'thought') and surface in the next conversation via
   // the server's recall-before-respond path. Best-effort: never throws, never
-  // blocks the tick loop. Disabled when MYTHOS_MULL_EVERY_TICKS is 0.
+  // BUG-273: this comment used to promise the opposite — that mull could not hold
+  // up the loop — directly above an `await` that held it up for as long as a
+  // reasoning-lane call takes, which is why nobody looked here. It
+  // block the tick, by design — nothing else may run mid-tick. What it must not do
+  // is look like a stall while it does, which is now the watchdog's problem to
+  // measure rather than this function's to deny. Disabled when
+  // MYTHOS_MULL_EVERY_TICKS is 0.
   function shouldMull(tick, cfg) {
     var every = (cfg && cfg.MYTHOS_MULL_EVERY_TICKS) || 300;
     if (every === 0) return false;
@@ -588,6 +607,8 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     stop: stop,
     tickOnce: tickOnce,
     get lastTickAt() { return lastTickAt; },
+    // BUG-273: read by immune/watchdog.js to tell BUSY from DEAD.
+    get inFlightSince() { return inFlightSince; },
     get generation() { return generation; }
   };
 }

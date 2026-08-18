@@ -17,11 +17,22 @@
 // 'action' channel so nothing is lost — see Spec Ambiguities Resolved.
 
 // BUG-030: probes.js re-emits 'health.anomaly' every 4s (no dedup by design — healer.js's
-// cooldown depends on anomalies flowing freely). The dedup map below is retained for
-// any future health-channel subscription this module re-acquires; today no subscriber
-// uses it but the cooldown precedent stays documented. No schema.js key for this (same
+// cooldown depends on anomalies flowing freely). No schema.js key for the window (same
 // precedent as breakers.js's maxResetMs) — config override exists solely so tests
 // don't have to wait out a real 10-minute window.
+//
+// BUG-273 (2026-08-19) — THE MAP BELOW WAS DECLARED, DOCUMENTED AND NEVER APPLIED.
+// Its comment used to end "today no subscriber uses it but the cooldown precedent
+// stays documented", and onHealed spoke on every single applied heal. A condition
+// that keeps recurring gets re-healed on the playbook's cooldown forever, so the
+// operator heard "Self-healed: cortex restart after a stall. Trigger: cortex-stall.
+// Action taken: restart-cortex." four times in sixteen minutes — every one of them
+// an unprompted spoken turn in the middle of a Live conversation, and the whole of
+// what they described as it "rambling on by itself".
+//
+// A documented-but-unapplied cooldown is worse than none: it tells the next reader
+// the case is handled. It is applied now, keyed kind+target+playbook so two
+// different faults healing at once are still two announcements.
 const DEFAULT_REANNOUNCE_MS = 10 * 60 * 1000; // re-speak the same standing issue at most once per 10 min
 
 function createAnnouncer({ bus, config, speak }) {
@@ -29,7 +40,7 @@ function createAnnouncer({ bus, config, speak }) {
   if (typeof speak !== 'function') throw new Error('createAnnouncer requires speak(text)');
 
   const REANNOUNCE_MS = (config && config.ANNOUNCER_REANNOUNCE_MS) || DEFAULT_REANNOUNCE_MS;
-  const spoken = new Map(); // `${kind}:${target}` -> lastSpokenTs (retained for future health-channel subs)
+  const spoken = new Map(); // `${kind}:${target}:${playbookId}` -> lastSpokenTs
 
   async function say(text) {
     try {
@@ -56,6 +67,17 @@ function createAnnouncer({ bus, config, speak }) {
     } else if (!h.title && !cause) {
       line += ' Details were not recorded.';
     }
+    // BUG-273: hold a REPEAT of the same fault healing the same way. Q2 — this
+    // governs speech only. immune/anomaly-detail.js writes the vault row from the
+    // same event on a separate path, which is what triage-incidents.js reads and
+    // what made this bug diagnosable after the fact.
+    const dedupKey = [h.kind || '', h.target || '', h.playbookId || ''].join(':');
+    const now = Date.now();
+    const last = spoken.get(dedupKey);
+    // No `REANNOUNCE_MS > 0` clause: the constant is read through a `|| DEFAULT`,
+    // so it can never be 0 here and such a guard would be a branch that cannot run.
+    if (last !== undefined && (now - last) < REANNOUNCE_MS) return;
+    spoken.set(dedupKey, now);
     say(line);
   }
 

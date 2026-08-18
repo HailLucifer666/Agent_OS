@@ -186,9 +186,18 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // memory-growth). Now we announce when EITHER severity is critical OR the kind
   // matches a known-serious condition. Conservative — better to occasionally
   // announce than to silently miss a problem the operator needs to hear.
+  // BUG-273 (2026-08-19): two of the seven names here were emitted by NOTHING.
+  // `cortex-stalled` and `provider-unhealthy` do not exist — the real kinds are
+  // `cortex-stall` and `provider-down` — so the list read as covering a stalled
+  // cortex while covering nothing at all, and BUG-273 D3's own regression test used
+  // `cortex-stalled` as its fixture, proving a backoff ladder against a condition
+  // that cannot occur. Removed rather than corrected: a real cortex-stall already
+  // reaches the operator through immune/announcer.js's heal line when it heals, and
+  // through the explainer's no-match path when it does not. Adding a third voice for
+  // one condition is what W6 spent a wave undoing. A guard test now derives the real
+  // emitted kinds from source and fails on any future phantom.
   var SERIOUS_KINDS = {
-    'provider-down': true, 'provider-unhealthy': true,
-    'cortex-stalled': true, 'tick-error': true,
+    'provider-down': true, 'tick-error': true,
     'effector-flapping': true, 'memory-growth': true,
     'identity-boundaries-malformed': true
   };

@@ -9696,9 +9696,78 @@ untrusted input, so the control belongs at the edge, not in the request). A refu
 remedy is logged rather than silently downgraded.
 
 **Still open from this session:** max preroll 9200ms (A2's territory — the buffer is
-still large, though nothing was dropped and no ceiling fired), the recurring cortex
-stalls themselves, and `flushedRaw` — which STILL was not reported, because this
-build predates that field reaching the transition line. A2 remains blocked.
+still large, though nothing was dropped and no ceiling fired).
+
+### THE CORTEX WAS NEVER STALLING — 2026-08-19
+
+The line above used to end "the recurring cortex stalls themselves" as an open
+fault. There were no stalls. The cortex was **thinking**, and the watchdog could
+not tell the difference.
+
+The vault has the arithmetic. Three consecutive `cortex-stall` anomalies at
+`1787077001758`, `1787077308953` and `1787077616183` — **+307195ms and +307230ms**.
+That is not the healer's 300000ms cooldown (which would land at 300–302s). It is
+**300 cortex ticks** at the observed ~1.024s interval: the cadence of `mull()`, the
+idle reasoning pass, which fires on `tick % MYTHOS_MULL_EVERY_TICKS === 0`. The
+session's first stall lands 57s after the boot marker, and `working.tick` was
+restored from the vault at 261550 — whose distance to the next multiple of 300 is
+**50 ticks**. Every number matches.
+
+**The measurement was the bug.** `lastTickAt` is stamped once at the top of the tick
+body, and the reentrancy guard stops a second tick starting while one is in flight.
+So during any awaited call inside a tick — mull's reasoning-lane call above all —
+"time since the last tick began" grows without bound and is indistinguishable from a
+dead loop. The healer then restarted the cortex, **pausing the active goal each
+time**, and the immune announcer said so aloud.
+
+**It had been found once before and papered over.** `config/schema.js` still carries
+the note: *"FIX C: was 5000 — lastTickAt is set once at tick start and not refreshed
+mid-tick ... Raised to match ACTION_TIMEOUT_MS so only a truly hung loop fires it."*
+The default moved 5000 → 30000 and `.env.example` gained a warning. But `STALL_MS` is
+operator config, and this machine's `.env` still says **5000** — a copy predating the
+change silently un-fixes it. **A fix a config file can revert is not a fix**, so the
+measurement is corrected instead and the threshold stops being load-bearing.
+
+The watchdog now asks two questions rather than one. A tick **in flight** means the
+loop is alive however long it takes, and only a wedge ceiling (`TICK_WEDGED_MS`,
+default 120000, deliberately NOT derived from `STALL_MS`) applies. With **nothing in
+flight**, the timer must be firing, and `STALL_MS` applies as before. Both still emit
+the same `cortex-stall` kind, so the diagnostician and the `stall-restart` playbook
+are untouched; a new `mode` field says which fired, and `target`/`reason` were added
+so the vault row stops reading `anomaly: cortex-stall — ` with nothing after the dash.
+
+### AND THE EARLIER D3 FIX WAS AIMED AT THE WRONG FILE
+
+D3 added a repeat-backoff ladder to `conversation/announcer.js`. The ladder is right
+and stays — but it is **not what was speaking**. The vault shows each of the four
+injections carried the same text verbatim:
+
+> "Self-healed: cortex restart after a stall. Trigger: cortex-stall. Action taken:
+> restart-cortex."
+
+That sentence is built in **`immune/announcer.js`**, from `health.healed`, and
+nothing in that file limited how often it spoke. `conversation/announcer.js` never
+had a hand in it — its `SERIOUS_KINDS` allowlist does not contain `cortex-stall` at
+all.
+
+**The cooldown it needed was already written, and already dead.** The file declares
+`const spoken = new Map()` and a ten-minute `REANNOUNCE_MS`, above a comment
+conceding *"today no subscriber uses it but the cooldown precedent stays
+documented"*. A documented-but-unapplied cooldown is worse than none: it tells the
+next reader the case is handled. It is wired up now, keyed kind+target+playbook so
+two different faults healing at once are still two announcements, and speech-only —
+`immune/anomaly-detail.js` writes the vault row from the same event on a separate
+path, which is exactly why this was diagnosable after the fact.
+
+**Two phantom kinds removed.** `SERIOUS_KINDS` listed `cortex-stalled` and
+`provider-unhealthy`; **no emitter anywhere produces either** (the real kinds are
+`cortex-stall` and `provider-down`). So the list read as covering a stalled cortex
+while covering nothing — and D3's own regression test used `cortex-stalled` as its
+fixture, proving a backoff ladder against a condition that cannot occur. Removed
+rather than corrected: a real stall already reaches the operator through the heal
+line when it heals and through the explainer's no-match path when it does not, and
+adding a third voice for one condition is what W6 spent a wave undoing. A guard test
+now derives the real emitted kinds from source and fails on any future phantom.
 
 ### Verification for the next live session
 
