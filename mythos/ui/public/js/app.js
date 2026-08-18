@@ -258,8 +258,34 @@ let wakeword = null;
 // onWake below to avoid re-triggering while MYTHOS is talking.
 let _voiceState = 'idle';
 
+// BUG-273 A3 — WHEN MYTHOS LAST HAD SPEECH AUDIO IN THE ROOM.
+//
+// Every guard in the wake-word suppression chain below asks about the present
+// instant, and a wake-word score is evidence about the previous ~2 seconds (see
+// wakeword.js's receptiveFieldMs). So a greeting that stopped playing shortly
+// before the score crossed the threshold defeats all of them. On 2026-08-18 it did:
+// gemini-tts 503 -> edge-tts failover at 11:33:17.978 -> 0.9797 at 11:33:19.591, in
+// a room that had been at 5e-6 for twenty seconds.
+//
+// A timestamp rather than a boolean, for exactly that reason: "was MYTHOS speaking
+// at any point inside the detector's window" is the question that can actually be
+// answered correctly, and a flag can only answer it for the instant it is read.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Deliberately only MYTHOS's own SPEECH. Media the
+// operator asked for — Spotify, a YouTube page — must not deafen the wake word,
+// which is the whole reason suspendForMedia below is a separate, narrower mechanism
+// with its own opening-burst-only scope. The two feeds here are the server-TTS
+// chunk stream and voice-state transitions into 'speaking'; no action/media event
+// touches this timestamp.
+let _lastAssistantAudioAt = 0;
+function noteAssistantAudio() { _lastAssistantAudioAt = Date.now(); }
+
 function onVoiceState(s) {
   _voiceState = s;
+  // Covers both engines that route through here: voice-loop chunk playback (the
+  // batch/proactive path) and the Live bridge, which is constructed with
+  // onState: onVoiceState and calls setVoiceState('speaking') from onSpeakStart.
+  if (s === 'speaking') noteAssistantAudio();
   compose.setVoiceState(s);
   orb.setVoiceState(s);
   hud.setVoiceState(s);
@@ -292,6 +318,12 @@ subscribe(['action'], (msg) => {
 // synthetic amplitude signal that makes the orb pulse in rhythm with MYTHOS's
 // voice. Spikes an envelope that decays in core-orb's frame loop.
 subscribe(['speech-chunk'], () => {
+  // BUG-273 A3: a chunk on the wire means server-side TTS audio is arriving to be
+  // played out of the speakers. This is the earliest honest signal there is — it
+  // precedes playback, so the suppression window opens before the first sample is
+  // audible rather than after, and it does not depend on which of the three TTS
+  // engines won the chain or on a voice-state transition landing in time.
+  noteAssistantAudio();
   if (typeof orb.pulseSpeaking === 'function') orb.pulseSpeaking();
   if (typeof hud.pulseSpeaking === 'function') hud.pulseSpeaking();
 });
@@ -823,15 +855,43 @@ function startWakeWord() {
         // was never heard at all, which is half of why this went a week without
         // a diagnosis. Behaviour is deliberately unchanged — the PIN gate in
         // particular is a security control, not a nuisance — they only say so now.
+        // BUG-273 A3: the sixth guard, and the only one that is not about the
+        // present instant. See _lastAssistantAudioAt and wakeword.js's
+        // receptiveFieldMs: a score reported now is evidence about the previous ~2
+        // seconds, so "MYTHOS is not speaking right now" is not the same claim as
+        // "this score cannot be MYTHOS's own voice".
+        //
+        // Q8 — THE COST, DELIBERATELY ACCEPTED. This extends an existing suppression
+        // rather than adding a new one: an operator speaking the wake word WHILE
+        // MYTHOS talks was already suppressed by the two guards above ('mythos-is-
+        // speaking', 'voice-state-speaking'). What changes is that the suppression now
+        // outlasts the speech by one receptive field instead of ending the instant the
+        // audio stops. So the operator cannot wake MYTHOS for ~2s after it finishes a
+        // sentence, and that is the price of not having it wake itself. It is bounded
+        // by the window, it is logged with the exact age below, and it is smaller than
+        // the detector's own REFRACTORY_MS gap between two accepted wakes.
+        const audioAgeMs = _lastAssistantAudioAt ? Date.now() - _lastAssistantAudioAt : Infinity;
+        // Read from the detector, never hardcoded here — a copied constant drifts the
+        // first time a model ships a different classifierWindow.
+        const windowMs = (wakeword && typeof wakeword.receptiveFieldMs === 'function')
+          ? wakeword.receptiveFieldMs() : 0;
         const suppressed =
           isGateClosed(pinLockScreen.lockState()) ? 'pin-gate-closed' :
           (voice && voice.isActive()) ? 'voice-turn-already-active' :
           (s2s && s2s.isActive()) ? 's2s-session-already-active' :
           (s2s && s2s.isSpeaking()) ? 'mythos-is-speaking' :
-          (_voiceState === 'speaking') ? 'voice-state-speaking' : null;
+          (_voiceState === 'speaking') ? 'voice-state-speaking' :
+          (audioAgeMs < windowMs) ? 'own-audio-within-detector-window' : null;
         if (suppressed) {
+          // Q2 — the age and the window ride along. The 2026-08-18 diagnosis was
+          // only possible because the suppressed/unsuppressed distinction and the
+          // score were both in the log; a suppression whose margin is invisible is
+          // the next session that cannot tell "correctly rejected our own greeting"
+          // from "the window is too wide and ate the operator".
           reportWakeword('detected-suppressed', 'wake word detected but not acted on', {
             reason: suppressed, score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+            ownAudioAgeMs: Number.isFinite(audioAgeMs) ? Math.round(audioAgeMs) : null,
+            detectorWindowMs: windowMs,
           });
           return;
         }

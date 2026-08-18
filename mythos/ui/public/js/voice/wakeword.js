@@ -35,6 +35,52 @@ export const MEL_BINS = 32;
 export const MEL_SCALE_DIV = 10;
 export const MEL_SCALE_ADD = 2;
 
+// BUG-273 A3 — these three moved from createWakeWord()'s body to module scope so
+// the receptive-field helpers below can be pure and testable. They are fixed by the
+// ONNX models, which is exactly the reason this file already gives for MEL_BINS
+// living out here.
+export const EMBED_WINDOW = 76;   // mel frames per embedding window
+export const EMBED_STRIDE = 8;    // mel-frame stride between successive embedding windows
+export const DEFAULT_CLASSIFIER_WINDOW = 16; // openWakeWord's get_features() default n_feature_frames
+
+// openWakeWord's melspectrogram uses hop_length 160 at 16kHz, i.e. one mel frame
+// per 10ms of audio. Stated with its source rather than derived: the frame count
+// per audio chunk comes out of the ONNX model at runtime and is not readable from
+// this file, so inventing a derivation here would be a guess wearing arithmetic.
+export const MEL_FRAME_MS = 10;
+
+// HOW MUCH AUDIO A SINGLE SCORE IS COMPUTED FROM — and why anything outside this
+// file needs to know.
+//
+// BUG-273 A3, 2026-08-18 11:33. gemini-tts returned 503, TTS failed over to
+// edge-tts at 11:33:17.978, and at 11:33:19.591 the wake word fired at 0.9797 in a
+// room that had been scoring 5e-6 for the previous twenty seconds. All five
+// suppression guards in app.js's onWake evaluated false, so the log records
+// 'detected' rather than 'detected-suppressed'.
+//
+// The reason a guard can be correct and still miss is here. One classifier score
+// is computed from classifierWindow feature frames; the first covers EMBED_WINDOW
+// mel frames and each subsequent one advances EMBED_STRIDE. At the defaults that is
+// 76 + 15*8 = 196 mel frames, i.e. very close to TWO SECONDS of audio. A detection
+// reported at time T is therefore evidence about the interval [T - ~2s, T], while
+// every guard in app.js asks a question about T alone: "is MYTHOS speaking NOW?".
+// A greeting that finished playing 300ms before the score crossed the threshold is
+// invisible to all of them, and that is the shape of this bug.
+//
+// Exported so the suppression window in app.js is derived from the detector rather
+// than hardcoded next to it. A constant copied into the consumer drifts the first
+// time a model changes classifierWindow, and this repo's own rule about the preroll
+// cap ("must stay a derived expression") exists for the same reason.
+export function receptiveFieldMelFrames(classifierWindow) {
+  const w = Number.isFinite(classifierWindow) && classifierWindow > 0
+    ? Math.floor(classifierWindow) : DEFAULT_CLASSIFIER_WINDOW;
+  return EMBED_WINDOW + (w - 1) * EMBED_STRIDE;
+}
+
+export function receptiveFieldMs(classifierWindow) {
+  return receptiveFieldMelFrames(classifierWindow) * MEL_FRAME_MS;
+}
+
 // Python does `spec = np.squeeze(outputs[0])`, producing a 2D (frames, 32)
 // array. onnxruntime-web gives us flat data + dims instead of squeeze — this
 // strips singleton dims and treats the last remaining dimension as mel bins,
@@ -75,10 +121,10 @@ export function reshapeMelOutput(out) {
 export function createWakeWord({ threshold, onWake, onStatus }) {
   const THRESHOLD = typeof threshold === 'number' ? threshold : 0.5;
   const REFRACTORY_MS = 2000;
-  const EMBED_WINDOW = 76;   // mel frames per embedding window
-  const EMBED_STRIDE = 8;    // mel-frame stride between successive embedding windows
   const EMBED_DIM = 96;      // speech-embedding output dimension
-  const DEFAULT_CLASSIFIER_WINDOW = 16; // openWakeWord's get_features() default n_feature_frames
+  // BUG-273 A3: EMBED_WINDOW, EMBED_STRIDE and DEFAULT_CLASSIFIER_WINDOW are now
+  // module constants — see receptiveFieldMs above, which app.js derives its
+  // own-audio suppression window from.
   const MEL_COMPACT_AT = 200;     // compact the mel-frame ring once the consumed prefix grows this large
   const FEATURE_BUFFER_MAX = 200; // cap embedding history — only the last classifierWindow ever gets used
 
@@ -453,5 +499,8 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
     start,
     stop,
     isRunning: () => running,
+    // BUG-273 A3: the REAL window, using the classifierWindow read out of the
+    // model's own input shape at load time rather than the default.
+    receptiveFieldMs: () => receptiveFieldMs(classifierWindow),
   };
 }
