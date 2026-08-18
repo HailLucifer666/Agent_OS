@@ -245,9 +245,68 @@ async function whatsapp_send({ to, text, send }) {
     const byName = await fromPc.launch_app({ name: 'whatsapp' });
     if (byName.ok && byName.result && typeof byName.result.pid === 'number') pid = byName.result.pid;
   }
+  // BUG-273 C1 — 2026-08-18: two sends failed here, to `mom` and to `alex`, both
+  // with "WhatsApp opened the chat ... but I could not identify its window". The
+  // chat opened; nothing was typed; zero messages delivered. Honest, and useless.
+  //
+  // Why both attempts above can come back without a pid. Step 1 launches a URI
+  // (`whatsapp://send?phone=...`), and since BUG-272 T1 launch_app only reports a
+  // pid when it can resolve a live windowed process whose NAME matches what was
+  // asked for — a deliberate change, because a pid belonging to a different app is
+  // worse than none. The name asked for here is a URI, which matches no process
+  // name, so T1 correctly declines. Step 2 asks for 'whatsapp' by name, but on a
+  // machine where the app is already running that is an activation whose new
+  // process exits immediately (the MSIX shape BUG-272 slice 4 documents), so it
+  // can decline too.
+  //
+  // The remedy is the one launch_app's own failure text already names: enumerate
+  // what is actually open. list_windows returns {pid, processName, title, visible}
+  // read from live top-level windows, which is an observation of the world rather
+  // than a launch call's say-so — the same 'process-window' class of evidence T1
+  // requires, obtained a different way.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? Matched on processName, never on title. WhatsApp's
+  // window title is "(194) WhatsApp" whichever conversation is open, so a title
+  // match would happily select a browser tab, an Explorer window in a WhatsApp
+  // folder, or a chat with the wrong person. This is the trap that targeted the
+  // operator's IDE for a launch of "notepad" on 2026-07-31, and from-pc.js's
+  // Resolve-WindowedProcessByName has refused title matches ever since.
+  //
+  // Q8 — WHAT DELIBERATELY DOES NOT CHANGE. If this ALSO finds nothing, the send
+  // still refuses. Typing blind into an unidentified window is how a message
+  // reaches the wrong person, and the whole point of step 3.5 below is that even a
+  // confirmed window is not a confirmed RECIPIENT. A fallback that guessed would be
+  // worse than the failure it replaced.
+  if (!pid && typeof fromPc.list_windows === 'function') {
+    // Guarded on the function EXISTING, not just on its answer. An unguarded call
+    // threw a TypeError here against a from-pc without list_windows, which turned a
+    // clean refusal ("the message is NOT sent") into an exception — a worse outcome
+    // than the bug being fixed, and caught by whatsapp-send.test.js's existing
+    // no-window case rather than by anything written for C1.
+    let listed = null;
+    try { listed = await fromPc.list_windows(); } catch (_) { listed = null; }
+    const rows = (listed && listed.ok && listed.result && Array.isArray(listed.result.windows))
+      ? listed.result.windows : [];
+    const matches = rows.filter((row) => {
+      const name = String((row && row.processName) || '').trim().toLowerCase();
+      return name === 'whatsapp' && row.visible !== false && typeof row.pid === 'number';
+    });
+    // Exactly one, or none. Two visible WhatsApp windows means the desktop app and
+    // something else claiming the name, and picking one at random is the guess this
+    // whole path exists to avoid — so it names them and stops.
+    if (matches.length === 1) {
+      pid = matches[0].pid;
+    } else if (matches.length > 1) {
+      return fail('WhatsApp opened the chat with ' + label + ', but ' + matches.length +
+        ' windows report themselves as WhatsApp (pids ' + matches.map((m) => m.pid).join(', ') +
+        '), so I will not guess which one to type into. The conversation should be open — ' +
+        'the message is NOT sent.');
+    }
+  }
   if (!pid) {
     return fail('WhatsApp opened the chat with ' + label + ', but I could not identify its window, ' +
-      'so I cannot type into it safely. The conversation should be open — the message is NOT sent.');
+      'so I cannot type into it safely — launch_app could not name it and no open window reports ' +
+      'itself as WhatsApp. The conversation should be open — the message is NOT sent.');
   }
 
   // 3. Focus, and let the OS confirm it. focus_window verifies through
