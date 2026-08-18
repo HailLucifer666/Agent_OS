@@ -17,6 +17,51 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-08-19 (latest) — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** A verified 15-area dependency sweep produced five items worth doing, a long "change nothing" list, and three widely-recommended repos rejected against their own source. Next action: **BUG-274 T1+T2** (one afternoon, closes two licence exposures), then T4's measurement session.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** BUG-273 closed except
+A2's symptom. Suite **5147/5147/0 fail/0 skipped**.
+
+**The operator's priorities, stated 2026-08-19:** interruption first ("it worked flawlessly
+before" — correct, and BUG-272's learned bleed floor is what broke it), desktop automation
+second, all features wanted, **WhatsApp deferred** on the ban risk. A competitor (irisxai.in,
+v1.7.6) ships this same feature set — the scope is achievable, which is worth knowing.
+
+**BUG-274 execution order (full detail, evidence and per-item verification live on the
+BUGS.md entry — not duplicated here):**
+
+1. **T1 + T2** — put Kokoro first in the TTS chain; correct `providers/piper-tts.js`'s stale
+   licence claim. A config line and a comment. `rhasspy/piper` was **archived 2025-08-26** and
+   the only maintained fork is **GPL-3.0**, so the file's "Piper is MIT … the only one of the
+   three usable in a product that is sold" is now false. Kokoro is Apache-2.0 for code *and*
+   weights and is **already an installed dependency**.
+2. **T4 measurement** — one session: play the same line through each voice engine with the mic
+   live, see which come back as a transcript. HuggingFace's production `speech-to-speech`
+   (12,612 stars) uses the *identical* `echoCancellation: true` mic config MYTHOS already has
+   and ships **no** echo canceller — so MYTHOS is not missing a library, its AEC3 is being
+   bypassed. Prime suspect: `speechSynthesis` renders outside the page audio graph.
+3. **T4 remedy** — if AEC proves fixable, adopt the reference full-duplex design (mic live
+   throughout, VAD cancels the in-flight response, playback queue cleared **with a fade-out**).
+   That **deletes** the own-voice gate, the preroll ring, the lost first word and A2's class.
+4. **T5** — host UIA automation as a **persistent daemon** instead of a per-command spawn. No
+   library fixes this: `uia-setvalue` already works, but `Invoke` silently no-ops under
+   `pc-child`'s spawn. Windows-MCP was rejected here **against its own source** — it drives
+   with `uia.Click`/`SendKeys`/`SetForegroundWindow` and reproduces all three failures.
+5. **T3** — train wake-word weights MYTHOS owns. openWakeWord's pretrained weights are
+   CC BY-NC-SA 4.0. Last by sequence only because it parallelises; it is the item that hard-
+   blocks a paid release. **Porcupine is not the free answer** — proprietary metered models.
+
+**A release gate now exists.** BUG-274 carries a written definition of "shippable" — seven
+lines, each needing an oracle rather than an opinion. It was written because this repo has
+never stated one, and a finish line that is never defined cannot be reached. **Nothing is added
+to that list without removing something.**
+
+**And read BUG-274's "why the backlog keeps regenerating" note before filing anything.** On
+2026-08-19, two of four open items turned out not to be faults and a third had its hypothesis
+refuted by measurement. The common cause — across those and BUG-273's three corrected
+diagnoses — is mechanisms that look like coverage and do nothing. Every new guard, allowlist,
+threshold or cooldown now ships with a test that fails when the guard is absent.
+
 ### 2026-08-19 (latest) — BUG-273 has **no code items left**. The two faults the last entry listed as still open were both misdiagnosed, and neither needed a live session to settle. Next action: **A2’s acoustic remedy**, which is now genuinely one session from decidable.
 
 **Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**

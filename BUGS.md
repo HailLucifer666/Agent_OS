@@ -1,5 +1,8 @@
 # MYTHOS — Complete Bug Registry
 
+<!-- BUG-274 is the newest entry; it is placed immediately after this header so the
+     handoff is the first thing a new session reads. -->
+
 Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Episodic conversation logs (vault/Episodic/)
 - Audit decision logs (vault/Audit/)
@@ -9,7 +12,245 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Git commit history
 - Live session bug reports
 
-Last updated: 2026-08-18 (third entry) - BUG-273: the first post-BUG-272 live sessions ran. Three
+---
+
+## BUG-274 — dependency and licence remediation (PLANNED, NOT STARTED) — opened 2026-08-19
+
+A verified sweep of 15 capability areas (stars, licence and last-push read from the GitHub
+API, not from articles) produced five items worth implementing and a much longer list of
+"change nothing". **The full report is tracked at `mythos/docs/MYTHOS-dependency-research-2026-08-19.md` and was delivered
+to the operator; its findings are reproduced here so this registry stays self-sufficient.**
+
+### Do NOT re-research these — checked and rejected, with the reason
+
+| Candidate | Stars | Why it was rejected |
+|---|---|---|
+| CursorTouch/Windows-MCP | 6,766 | **Verified in its own source** (`src/windows_mcp/desktop/service.py`): `click()` is `uia.Click(x, y)`, `type()` is `uia.Click(x, y)` then `uia.SendKeys(...)`, activation is `SetForegroundWindow` + `AttachThreadInput` + `AllowSetForegroundWindow(-1)`. No `InvokePattern`/`ValuePattern` anywhere. It finds controls via UIA and drives them with synthetic input, so MSIX discard, foreground lock and caret-follows-focus all reproduce |
+| octalmage/robotjs | 12,768 | Revived Aug 2026 (v0.9.1) so the "abandoned" articles are stale — but it is blind coordinate input with no accessibility tree. Solves none of the three |
+| microsoft/WinAppDriver | 4,046 | Last real release Nov 2020 |
+| whatsapp-web.js / Baileys | 22,424 / 10,750 | Both violate WhatsApp ToS; Meta can ban a customer's number. Business decision for 6.6, not a code choice |
+| Chroma / Qdrant | 29,080 / 34,048 | Both need a server process. LanceDB is the only genuinely embedded option |
+| Picovoice/Porcupine | 4,913 | Apache-2.0 SDK, **proprietary metered models**. Free tier caps at 3 users/month; personal-account training is non-commercial only |
+| NodeRT, spotify-web-api-node | 669 / 3,154 | Stale (2024) and archived respectively |
+
+### Already correct — change nothing
+
+Gmail (`googleapis/google-api-nodejs-client`, 12,230, Apache-2.0), Calendar (same client),
+VAD (`snakers4/silero-vad`, 9,996, MIT — already `silero-vad.js`), STT (`ggml-org/whisper.cpp`,
+53,008, MIT — already `local-whisper-stt.js`), browser (`playwright-core`, already shipped).
+
+---
+
+### T1 (P0, licence) — promote Kokoro in the TTS chain
+
+**Why.** The live chain resolves to `gemini-tts,edge-tts,piper-tts`. edge-tts is LGPLv3 and
+labelled personal/hobby. Piper is worse than the tracked comment claims: `rhasspy/piper`
+(11,279, MIT) was **archived 2025-08-26** and the only maintained fork,
+`OHF-Voice/piper1-gpl` (5,172), is **GPL-3.0**. Voices on `rhasspy/piper-voices` are licensed
+**per voice** (CC BY 4.0 / CC0 / MIT mixed), so "the voice models carry their own open
+licences" hides a per-file check nobody has done.
+
+**The fix costs nothing to install.** `providers/kokoro-tts.js` already exists, `kokoro-js` is
+already a runtime dependency, and `THIRD_PARTY_NOTICES.md` already records Kokoro-82M as
+Apache-2.0 for **both** code and weights (`hexgrad/kokoro`, 8,466).
+
+**Do:** make Kokoro the first entry in the default TTS chain ahead of edge-tts and piper.
+**RED first:** a test asserting the resolved default chain has Kokoro before edge-tts/piper,
+and that a chain containing neither still degrades honestly rather than falling silent.
+**Verify:** boot, speak one line, confirm in the server log that the engine used was kokoro
+and that first-audio latency is acceptable. Kokoro downloads weights from Hugging Face on
+first use and `isAvailable()` already bounds that with a timeout — confirm the fallback still
+works with the network blocked, since a stalled download must not mute MYTHOS.
+**Q5 (is the constant right?):** do NOT delete edge-tts or piper from the chain. This is a
+reorder, not a removal — the operator keeps BYO options and the rollback is one config line.
+
+### T2 (P0, licence) — correct the stale licence claim in `providers/piper-tts.js`
+
+The file states Piper "is MIT and the voice models carry their own open licences, which is
+also why it is the only one of the three usable in a product that is sold." **That is now
+false** (see T1). A tracked file asserting a licence conclusion that no longer holds is
+exactly what a licence review would rely on.
+
+**Do:** correct the factual claims — upstream archived, maintained fork GPL-3.0, voices
+licensed per voice. **Do NOT** replace it with a new legal conclusion; CLAUDE.md is explicit
+that this is a lawyer's call. State the facts and point at 6.5.
+**RED first:** a guard test that fails if the file claims Piper is MIT or "usable in a product
+that is sold" — the class-level fix, so the next stale licence claim in a provider is caught.
+
+### T3 (P0, blocks shipping) — own the wake-word weights
+
+openWakeWord code is Apache-2.0; its pretrained `.onnx` weights are **CC BY-NC-SA 4.0,
+non-commercial** — re-confirmed from a second source this sweep. This is the one item that
+hard-blocks a paid release.
+
+**Do:** keep the Apache-2.0 codebase, train replacement weights MYTHOS owns.
+`livekit/livekit-wakeword` (245, Apache-2.0 throughout, backed by a company) is the
+best-maintained training pipeline; openWakeWord's own Apache-2.0 training path is the
+fallback. **Not Porcupine** — see the rejected table.
+**Verify:** the shipped model file is one this repo produced, `THIRD_PARTY_NOTICES.md` records
+its provenance, and the wake word still fires at the measured detection rate. A weights swap
+that quietly degrades detection is worse than the licence problem it solves.
+**Owner:** this is real work (data generation + training), not a config change. Size it before
+starting.
+
+### T4 (P1) — find out why AEC3 is not working, THEN go full-duplex
+
+**This is a diagnosis, not an implementation, and it must stay that way until it produces a
+number.** Three prior BUG-273 hypotheses were refuted by the measurement they asked for.
+
+**The evidence that reframes it.** HuggingFace's `speech-to-speech` (12,612, Apache-2.0,
+pushed 2026-08-18, in production on thousands of robots) configures its microphone as:
+
+```js
+const MIC_CONSTRAINTS_BASE = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+```
+
+That is **line for line identical** to `ui/public/js/voice/mic-device.js`, and their
+server-side `audio_enhancement` option (whose help text mentions echo cancellation)
+**defaults to False**. A production S2S system ships no echo canceller of its own. So MYTHOS
+is not missing a library — its AEC3 is being bypassed.
+
+**Prime suspect:** MYTHOS has three voice engines and one is the browser's `speechSynthesis`,
+which the OS renders outside the page audio graph where nothing in the renderer can cancel
+it. Gemini Live audio goes through `pcm-player.js` into a normal `AudioContext`, which AEC3
+should cancel. **Stated as a suspect, not a finding.**
+
+**Do first (one session):** play the same sentence through each engine in turn with the mic
+live and record which come back as a transcript. That single measurement decides whether this
+is a routing bug or a genuine capability gap.
+
+**Then, only if AEC works:** move to the reference barge-in design, which MYTHOS does not
+currently have —
+1. mic stays **live** while the assistant speaks (no half-duplex gate at all),
+2. VAD `speech_started` cancels the in-flight response server-side,
+3. the playback worklet clears its queue **with a fade-out**, because cutting hard "tends to
+   produce audible clicks/buzzes" (their words) — which matches the clipped-last-word this
+   repo has already recorded.
+
+**Why this matters more than it looks.** The own-voice gate, the preroll ring, the lost first
+word, the 9.2s holds and the whole A2 investigation exist *because* capture is muted while
+MYTHOS speaks. If AEC works, that entire mechanism can be deleted rather than tuned — which
+is the repo's own stated bias: remove surface rather than defend it.
+
+**If AEC genuinely cannot be fixed:** there is no maintained Node-native AEC. The options are
+wrapping `xiph/speexdsp` (722, upstream Xiph BSD-style, licence file shows NOASSERTION so read
+it) or extracting WebRTC's `aec3` module. Both are native-addon work MYTHOS would own. Do not
+start either before the measurement above.
+
+### T5 (P1) — host the UIA automation as a persistent daemon
+
+**No library fixes this.** The working mechanism is already in the repo:
+`adapters/pc-child/ps-automation.ps1`'s `uia-setvalue` route calls UIA COM patterns, which
+talk to the target app's own automation provider, never touch the Windows input queue, and
+need no foreground window — one of only two routes measured working on MSIX apps.
+
+**The blocker is the hosting, not the call.** `uia-invoke-noop-under-pc-child-spawn` records
+that `InvokePattern.Invoke()` works standalone and **silently no-ops — no exception, false
+success — when run through `pc-child`'s per-command `child_process.spawn`.** That is a
+property of how the automation client process is hosted. FlaUI (3,095, MIT) or pywinauto
+(6,146, BSD-3) spawned the same way would very plausibly no-op identically.
+
+**Do:** run one long-lived interactive automation host that MYTHOS talks to over a pipe,
+instead of spawning `powershell.exe` per command.
+**RED first:** a test that drives `Invoke` on a control through the daemon and asserts a real
+oracle-backed outcome — not `ok:true`. A silent no-op currently reports success, so any test
+that trusts the return value is vacuous.
+**Q2 (does this hide evidence?):** the no-op is the evidence problem. The daemon must
+distinguish "invoked and verified" from "invoked, unverified" and report the second as
+`unverified:true`, per the evidence contract already in `dispatch-action.js`.
+**Only after that:** if richer UIA coverage is wanted, FlaUI over pywinauto (better
+maintained, MIT, .NET sidecar). It pays off only once the daemon exists.
+
+### Considered and deliberately NOT scheduled
+
+| Item | Stars | Licence | Why not now |
+|---|---|---|---|
+| lancedb/lancedb | 11,184 | Apache-2.0 | The only genuinely embedded vector store with Node prebuilds, and a real upgrade for semantic recall — but nothing is currently broken. YAGNI until recall quality is an actual complaint |
+| naptha/tesseract.js | 38,638 | Apache-2.0 | Pure JS OCR, no external binary. Adopt when OCR accuracy is a reported problem, not before |
+| MCP: fetch, filesystem, playwright-mcp | 89,665 / 36,247 | MIT / Apache-2.0 | Cheap because `from-mcp.js` already exists. Additive capability, not a fix — schedule against a use case |
+| DeviceFarmer/adbkit | 300 | **NOASSERTION** | Would remove the per-call adb spawn, but the licence must be read first given resale |
+
+**A note on `NOASSERTION`:** it means GitHub could not classify the licence, NOT that the
+project is permissive. adbkit, NodeRT, speexdsp and the MCP monorepo all show it. Someone
+must read the actual LICENSE file before any of them ships.
+
+### T6 (deferred by the operator, 2026-08-19) — WhatsApp
+
+Both viable libraries violate WhatsApp ToS and risk a ban on the **customer's** number, which
+on a sold product is our support incident. The operator decided on 2026-08-19: **leave it for
+now, revisit later.** Recorded so it is not silently re-adopted: if it comes back, the route
+is Meta's official Business Cloud API (per-message pricing, template pre-approval, business
+verification, usually a provider fee), and that is a 6.6 decision before it is a code task.
+
+### Execution order — ordered by the operator's stated priority, 2026-08-19
+
+| # | Item | Size | Why here |
+|---|---|---|---|
+| 1 | **T1 + T2** — Kokoro first in the chain, correct the Piper comment | one afternoon | A config line and a comment. Closes two licence exposures immediately and de-risks 6.5 for free |
+| 2 | **T4 measurement** — which engines are heard by the mic | one session | The operator's top complaint is interruption. This one measurement decides whether the half-duplex gate can be **deleted** rather than tuned |
+| 3 | **T4 remedy** — full-duplex barge-in, if AEC proves fixable | days | Removes the preroll ring, the lost first word, the long holds and A2's whole class |
+| 4 | **T5** — persistent UIA automation daemon | days | Desktop automation. The operator's second priority, and the fix no library provides |
+| 5 | **T3** — own the wake-word weights | sized work, do not guess | Last by sequence ONLY because it is schedulable in parallel. It is the item that hard-blocks a paid release |
+
+T6 (WhatsApp) is deferred and not in this order.
+
+### The release gate — what has to be true to call this shippable
+
+Written down because "production ready" has never been defined in this repo, and a target that
+is never stated cannot be reached. Each line needs an oracle, not an opinion:
+
+- [ ] **Interruption**: speaking over MYTHOS stops it, measured across a session at a stated
+      success rate, with `verify-voice-session.js` reporting it — not "it felt better".
+- [ ] **No self-hearing**: MYTHOS's own speech is never transcribed as the operator.
+      Self-started turns under the criterion, own-voice ceilings at zero.
+- [ ] **Desktop automation**: a named set of apps (including at least one MSIX-packaged one)
+      accept type/click/focus with **oracle-backed** confirmation — a route that cannot
+      distinguish success from a silent no-op does not count.
+- [ ] **Wake word**: fires reliably, on weights this repo owns.
+- [ ] **Gmail / calendar / media / browser / phone**: each has one end-to-end live check that
+      passes on a fresh install, not just on the developer machine.
+- [ ] **Licences**: 6.5 and 6.6 closed, with no NC or copyleft dependency in the shipped
+      artifact and `THIRD_PARTY_NOTICES.md` matching what actually ships.
+- [ ] **Fresh-machine install**: someone who is not the author installs it, supplies their own
+      keys, and reaches a working voice conversation without editing a file.
+
+**Nothing new is added to this list without removing something.** The reason this project has
+not converged is not bug rate — it is that scope has grown every week, so the finish line
+moves faster than the work. 178 effectors and 91 live tools is a large surface to make
+reliable; the list above is what must be reliable, and everything else is explicitly allowed
+to be imperfect for v1.
+
+### Why the backlog keeps regenerating — read this before adding an item
+
+On 2026-08-19, of four items on the operator's remaining list, **two were not faults at all**
+(the cortex "stalls" were the watchdog mistaking thinking for dying; the "9.2s preroll" was a
+criterion that asked MYTHOS never to speak for two seconds) and a third (A2) had its central
+hypothesis refuted by the measurement it finally received. Three phantom items in one day.
+
+The common cause across all of them, and across BUG-273's three corrected diagnoses, is
+**mechanisms that look like coverage and do nothing**: a cooldown written, documented and
+never called; two entries in a safety list naming conditions no code emits; a default raised
+to fix a bug that any stale `.env` silently un-fixes; a verifier printing PASS on a number it
+could not read. That is why fixes do not feel final — the safeguards cannot be trusted, so
+nothing stays fixed in the operator's experience.
+
+**The discipline that follows:** every new guard, allowlist, threshold or cooldown ships with
+a test that fails when the guard is absent. If a mechanism cannot be observed failing, it is
+not a mechanism. Three commits on 2026-08-19 added exactly that (the capture-suspend field
+assertion, the phantom-kind guard, the log-rotation tests) and they are the template.
+
+---
+
+Last updated: 2026-08-19 - BUG-274 OPENED (dependency + licence remediation, planned not started).
+A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
+areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
+permissively-licensed, actively-maintained option. Five items are worth doing and they are
+tracked as BUG-274 T1..T5 below. Three widely-recommended repos were checked against their own
+SOURCE and rejected: Windows-MCP drives with SendInput so it reproduces all three of our
+automation failures, robotjs is blind coordinates, and Piper is archived with a GPL-3.0
+successor. Full evidence on the entry. BUG-273 is closed except for A2's symptom.
+
+Previous entry: 2026-08-18 (third entry) - BUG-273: the first post-BUG-272 live sessions ran. Three
 BUG-272 fixes are now LIVE-VERIFIED (wake word, echo attribution - which also closes the deferred
 V3 wire-message question with data - and open_web(browser:true)). Three items fixed this session:
 B1 (`unverified` narrated as success, `7eb3920`), A1 (the learned bleed floor settled ~3x above the
