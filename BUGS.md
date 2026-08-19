@@ -959,9 +959,88 @@ the dormant learned floor, `TAIL_GUARD_SEC`, and the whole cushion. **One lever.
 (`BACKSTOP_RELEASE_RMS_THRESHOLD` → policy floor) stays unpulled — the dominant veto reason was
 `pending-sustaining`, not a threshold refusal.
 
-**NOT live-verified.** The next session decides it, and the two numbers to read are
-`self-interruption` (must not climb) and `barge-in(s) reached the stop door / actually cut audio`
-(the second should stop being 1-in-10).
+**RETEST 2026-08-20 — 🔬 LIVE-VERIFIED, ACCEPTED BY EAR. Status: KEEP 200.** The operator, after
+the run below: *"Now that we fixed it… it is working now."* **The ear is the oracle on this ticket
+and it has now spoken** — the log's mixed reading, recorded in full below, does not override it, and
+the one number that got worse is carried forward as a watch item rather than as a blocker.
+28 turns, boot `pid=20208`, scored by `verify-voice-session.js` on the run it scoped itself to.
+Superseding the "NOT live-verified" line this entry shipped with.
+
+| | before (350ms, 89 turns) | after (200ms, 28 turns) |
+|---|---|---|
+| `pending-sustaining` vetoes | 12 | **2** |
+| barge-ins that cut audio | 1 of 11 | **1 of 5** |
+| size of the cut | 9 chunks (~0.9s) | **20 chunks (~2.0s)** |
+| self-interruption, genuine | 16.9% (15/89) | **28.6% (8/28)** |
+| `missedTurnEnds` | 0 | **0** |
+| room bleed peak | 0.1193 | **0.1309** |
+
+**Stage 3 did what it was built to do.** The vetoes that were refusing the operator roughly halved,
+landings went from 1-in-11 to 1-in-5, and a landing now cuts two full seconds instead of under one.
+The turn-boundary wiring held (`missedTurnEnds` 0). Audio was clean — **0/28 turns starved** — so
+the cushion's growth path was **not exercised** this session and remains unverified live.
+
+**And the predicted counter-failure landed.** Self-interruption rose from **16.9% to 28.6%**
+genuinely self-caused. The mechanism is plausible rather than pure noise: a faster local
+authorisation releases the own-voice gate sooner, so the preroll replay — bleed included — reaches
+Gemini earlier and its VAD cuts the turn. **Caveat stated rather than buried:** 28 turns against 89,
+and this metric is noisy at that size. One session is not enough to convict it.
+
+**THE DOCUMENTED REMEDY DOES NOT APPLY, AND WAS DELIBERATELY NOT APPLIED.** This entry and
+`barge-in-policy.js` both say: if self-interruption rises, raise `INITIAL_BLEED_FLOOR` toward 0.04,
+never lengthen the sustain again. But this session measured bleed at **0.1309 — 3.7× the 0.035
+floor, and rising** (0.1193 the session before). **No floor between 0.04 and 0.13 separates bleed
+from the operator**, whose quiet interruptions sit at 0.024–0.031; moving it to 0.04 would forfeit
+that band and still not reject bleed. Applying the remedy mechanically would have been the wrong
+action taken for the documented reason.
+
+**THE GUARD, added at the operator's request — "make sure this bug is never appearing again."**
+Interruption has broken **five times** in this ticket, and **four of those five had green tests over
+the part that broke**, because every test pinned a *mechanism*. The new guard in
+`bug-274-barge-in-authorisation-is-deliverable.test.js` pins the *operator's experience* instead:
+
+> **a two-word (~300ms) interruption must STOP THE PLAYBACK.**
+
+It asserts `playbackStops`, not `released` — the step-4 defect reopened the microphone while MYTHOS
+carried on talking, and every counter in that harness called it success. It deliberately does **not**
+assert `PENDING_HOLD_MS === 200`: a constant may be retuned for a good reason, and this behaviour
+must either survive that or fail on the same commit. **Mutation-proven:** reverting the constant to
+350 makes it fail with its own message (3 tests red), and the file restores byte-identical.
+
+**A finding the guard's sweep produced, which constrains every future retune.** Measured, after a
+first draft of the test asserted the wrong band and was corrected: a 300ms interruption lands **only
+at a sustain of 200ms or below** — 250 already loses it. **The shipped 200 sits at the very top of
+the workable band**, so *any* increase costs exactly the short barge-ins Stage 3 was pulled to fix.
+And the real floor is not the sustain at all: **a 200ms burst lands at no sustain value, not even
+150ms**, because `barge-in-backstop.js` delivers on every third frame. Nothing shorter than 300ms of
+speech can reach the stop door however the policy is tuned. That fix would live in the backstop
+cadence and is **not attempted** — 3 frames is what distinguishes speech from bleed, and loosening it
+re-opens the self-interruption failure this ticket has already paid for twice.
+
+**THE REMAINING WATCH ITEM — self-interruption, 16.9% → 28.6%.** Accepted, not dismissed: the
+operator hears interruption working and that outranks the log here, but this number moved the wrong
+way on a 28-turn sample and **no code change was made for it**, deliberately (see below). **Watch it
+on the next few sessions** via `verify-voice-session.js`'s self-interruption criterion. **Roll-back
+trigger:** if the operator starts reporting MYTHOS talking over itself, or the genuine figure holds
+above ~30% across a session of 50+ turns, revert the sustain —
+`localStorage.setItem('MYTHOS_BARGE_PENDING_HOLD_MS', '350')` then reload for an instant, code-free
+rollback (option path test-proven, see `policyTuning()`), or `git revert 2aebe1b` to make it
+permanent. **Owner: the operator**, since the trigger is something only they can hear.
+
+**Why nothing was changed for it (Stage-5 record).** **Not raising `INITIAL_BLEED_FLOOR` to 0.04,
+which is what this entry's own remedy prescribes.** The cost that justifies ignoring my own note: the
+session measured bleed at **0.1309, 3.7× the 0.035 floor**, so 0.04 rejects almost none of it while
+forfeiting the operator's quiet interruptions at 0.024–0.031 — a strictly worse trade taken for a
+documented-sounding reason. **Revisit trigger:** if bleed ever measures *below* ~0.04 (i.e. echo
+cancellation starts working), the remedy becomes valid again and should be applied before touching
+the sustain. **Durable:** stated here and in `barge-in-policy.js`'s constant block, with the
+behaviour locked by the guard above. *Recorded here so this is not re-litigated.*
+
+**What this retest does NOT license:** re-litigating 350 vs 200 from the log alone, and treating the
+0/28 starve reading as evidence about the jitter cushion — a clean link exercises nothing. The only
+change that removes this trade instead of re-choosing which side to fail on is **T4**: echo
+cancellation is not removing MYTHOS's voice at all (bleed 0.1309 while `micEchoCancellation` reports
+`true`).
 
 #### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
 
