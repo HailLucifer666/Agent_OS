@@ -2,6 +2,7 @@
 // Follows the established MYTHOS view pattern with render(mount) -> teardown fn contract
 
 import { subscribe } from '../ws.js';
+import { safeHref } from '../url.js';   // relative, not /js/…: this file stays node-importable
 
 // Engagement states for filtering
 const ACTIVE_STATES = ['DRAFT', 'INTERVIEWING', 'SPEC_READY', 'PLAN_READY', 'AWAITING_APPROVAL', 'AWAITING_STAGE_APPROVAL', 'EXECUTING', 'VERIFYING', 'REPAIRING'];
@@ -12,6 +13,12 @@ let state = {
   engagements: [],
   filter: 'active', // active | recent | completed
   selectedId: null,
+  // Which detail tab is showing. The tablist and every pane renderer existed
+  // from the start, but renderTabContent() was never called and no click
+  // handler was ever registered for .engag-detail-tab — so the Spec/Plan/
+  // Execution/Verifications/Report buttons rendered, highlighted on hover, and
+  // did nothing, for mouse and keyboard alike. This is the missing state.
+  activeTab: 'spec',
   wsUnsub: null,
   pollTimer: null,
 };
@@ -37,18 +44,6 @@ function escapeAttr(str) {
   return escapeHtml(str).replace(/"/g, '&quot;');
 }
 
-// safeHref — duplicated verbatim from components/engagement/SpecPreviewCard.js
-// (which owns the canonical copy and the tests). escapeHtml() above leaves `"`
-// intact, so without this an LLM-authored spec containing
-// `[x](" onmouseover="alert(1))` breaks out of renderMarkdown's href attribute.
-// Input is already escapeHtml()'d, so only the quote needs handling here.
-function safeHref(url) {
-  if (typeof url !== 'string') return null;
-  const trimmed = url.trim();
-  if (!trimmed) return null;
-  if (!/^https?:\/\//i.test(trimmed)) return null;
-  return trimmed.replace(/"/g, '&quot;');
-}
 
 function relativeTime(ts) {
   if (!ts) return '—';
@@ -228,27 +223,9 @@ function renderDetailHeader(engagement) {
   `;
 }
 
-function renderTabs(engagement) {
-  const tabs = [
-    { key: 'spec', label: 'Spec' },
-    { key: 'plan', label: 'Plan' },
-    { key: 'execution', label: 'Execution' },
-    { key: 'verifications', label: 'Verifications' },
-  ];
-
-  if (engagement.status === 'COMPLETED') {
-    tabs.push({ key: 'report', label: 'Report' });
-  }
-
-  return `
-    <div class="engag-detail-tabs" role="tablist">
-      ${tabs.map((tab) => `
-        <button class="engag-detail-tab" role="tab" data-tab="${tab.key}" ${tab.key === 'spec' ? 'aria-selected="true"' : ''}>${tab.label}</button>
-      `).join('')}
-    </div>
-  `;
-}
-
+// One source of truth for the tab list. renderTabs() used to carry its own
+// copy of this array, which is how a fifth tab could have appeared in one place
+// and not the other.
 function getTabs(engagement) {
   const tabs = [
     { key: 'spec', label: 'Spec' },
@@ -260,6 +237,40 @@ function getTabs(engagement) {
     tabs.push({ key: 'report', label: 'Report' });
   }
   return tabs;
+}
+
+// The Report tab only exists once an engagement completes, so an activeTab
+// pointing at a tab that is no longer in the list has to fall back rather than
+// render an empty panel with no tab selected.
+//
+// Exported so node:test can exercise it directly — same reason web-panel.js
+// exports shouldAutoOpenOnStall (see bug-114's test): it is the one piece of
+// this view with real branching, and the HUD has no DOM harness.
+export function resolveActiveTab(engagement, wanted) {
+  const keys = getTabs(engagement).map((t) => t.key);
+  return keys.includes(wanted) ? wanted : keys[0];
+}
+
+function renderTabs(engagement, activeTab) {
+  // Roving tabindex: exactly one tab is in the tab order, and the arrow keys
+  // move between them (see the keydown handler in render()). That is the
+  // documented tablist pattern, and without it a keyboard user would have to
+  // Tab through every panel heading to reach the last tab.
+  return `
+    <div class="engag-detail-tabs" role="tablist" aria-label="Engagement detail sections">
+      ${getTabs(engagement).map((tab) => {
+        const selected = tab.key === activeTab;
+        return `
+        <button class="engag-detail-tab${selected ? ' active' : ''}" role="tab"
+                id="engag-tab-${escapeAttr(tab.key)}"
+                aria-controls="engag-panel-${escapeAttr(tab.key)}"
+                aria-selected="${selected ? 'true' : 'false'}"
+                tabindex="${selected ? '0' : '-1'}"
+                data-tab="${escapeAttr(tab.key)}">${escapeHtml(tab.label)}</button>
+      `;
+      }).join('')}
+    </div>
+  `;
 }
 
 function renderTabContent(engagement, activeTab) {
@@ -274,9 +285,18 @@ function renderTabContent(engagement, activeTab) {
 
   return `
     <div class="engag-detail-tab-content">
-      ${tabs.map((tab) => `
-        <div class="engag-detail-tab-pane${tab.key === activeTab ? ' active' : ''}" role="tabpanel">${content[tab.key] || ''}</div>
-      `).join('')}
+      ${tabs.map((tab) => {
+        const selected = tab.key === activeTab;
+        // `hidden` as well as the CSS class: .engag-detail-tab-pane is
+        // display:none by default, but a hidden attribute is what keeps an
+        // inactive panel out of the accessibility tree too.
+        return `
+        <div class="engag-detail-tab-pane${selected ? ' active' : ''}" role="tabpanel"
+             id="engag-panel-${escapeAttr(tab.key)}"
+             aria-labelledby="engag-tab-${escapeAttr(tab.key)}"
+             tabindex="0"${selected ? '' : ' hidden'}>${content[tab.key] || ''}</div>
+      `;
+      }).join('')}
     </div>
   `;
 }
@@ -576,8 +596,15 @@ function renderListAndDetail() {
       // xss-safe: static template, no interpolation
       detailEl.innerHTML = '<div class="engag-list-empty" style="height: 100%; align-items: center; justify-content: center;">Select an engagement to view details.</div>';
     } else {
+      // renderTabContent() was written at the same time as the tablist and then
+      // never called, so every pane renderer below it was dead and the tabs
+      // were decorative. Both halves are wired here.
+      const activeTab = resolveActiveTab(selected, state.activeTab);
+      state.activeTab = activeTab;
       // xss-safe: all interpolated fields escaped
-      detailEl.innerHTML = renderDetailHeader(selected) + renderTabs(selected);
+      detailEl.innerHTML = renderDetailHeader(selected)
+        + renderTabs(selected, activeTab)
+        + renderTabContent(selected, activeTab);
     }
   }
 }
@@ -651,7 +678,42 @@ export async function render(mount) {
     const item = e.target.closest('.engag-list-item');
     if (!item) return;
     state.selectedId = item.dataset.id;
+    // A different engagement starts on its first tab. Carrying the previous
+    // selection over would land on Report for an engagement that has none.
+    state.activeTab = 'spec';
     renderListAndDetail();
+  });
+
+  const detailPanel = document.getElementById('engag-detail');
+
+  detailPanel.addEventListener('click', (e) => {
+    const tab = e.target.closest('.engag-detail-tab');
+    if (!tab) return;
+    state.activeTab = tab.dataset.tab;
+    renderListAndDetail();
+  });
+
+  // Arrow-key navigation, because role="tablist" promises it. Left/Right move
+  // between tabs, Home/End jump to the ends; the newly selected tab takes focus
+  // so the keyboard user is not dropped back at the top of the panel after
+  // every re-render.
+  detailPanel.addEventListener('keydown', (e) => {
+    const tab = e.target.closest('.engag-detail-tab');
+    if (!tab) return;
+    const tabs = [...detailPanel.querySelectorAll('.engag-detail-tab')];
+    const current = tabs.indexOf(tab);
+    if (current === -1) return;
+    let next = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (current + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (current - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    state.activeTab = tabs[next].dataset.tab;
+    renderListAndDetail();
+    const focused = detailPanel.querySelector('.engag-detail-tab[aria-selected="true"]');
+    if (focused) focused.focus();
   });
 
   // Initial render
