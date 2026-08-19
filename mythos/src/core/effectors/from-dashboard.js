@@ -473,7 +473,9 @@ function buildTools(ctx) {
         try {
           // Helper: try a single geocode attempt, return the result or null if no results found
           async function tryGeocode(searchLoc) {
-            var geoRes = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(searchLoc));
+            // Bounded for the same reason the YouTube oEmbed probe 30 lines above is:
+            // an unbounded geocode on the Live path is permanent silence, not lateness.
+            var geoRes = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(searchLoc), { signal: AbortSignal.timeout(8000) });
             if (!geoRes.ok) return { error: 'network', msg: 'Could not resolve location "' + searchLoc + '".' };
             var geoData = await geoRes.json();
             if (geoData.results && geoData.results.length) return { ok: true, hit: geoData.results[0] };

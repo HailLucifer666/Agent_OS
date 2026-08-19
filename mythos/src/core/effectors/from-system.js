@@ -20,6 +20,14 @@
 // `note` field rather than presented as accurate foot/bike directions.
 
 const { effectorFromTool } = require('./adapter');
+
+// Every outbound call in this file is bounded. On the Live voice path,
+// live-tool-adapter.js races these against TOOL_ACK_DEADLINE_MS, acks
+// status:'started', and then attaches reportLateOutcome to the SAME pending
+// promise — so a fetch that never settles is not a late answer, it is permanent
+// silence: the model is never corrected and no anomaly is logged. Matches the
+// bound web-fetch.js already uses for its own outbound calls.
+const NET_TIMEOUT_MS = 15000;
 // system_status (Task B3) — reuses the exact metric math server/routes/system.js's
 // /api/system route reports, via sampledSystemMetrics() (a shared two-sample
 // CPU-delta helper, factored beside snapshotSystemMetrics itself out of the
@@ -89,7 +97,7 @@ function buildTools(ctx) {
 
   async function geocode(location) {
     var url = 'https://geocoding-api.open-meteo.com/v1/search?count=1&name=' + encodeURIComponent(location);
-    var res = await fetch(url);
+    var res = await fetch(url, { signal: AbortSignal.timeout(NET_TIMEOUT_MS) });
     if (!res.ok) throw new Error('geocoding HTTP ' + res.status);
     var data = await res.json();
     var hit = data.results && data.results[0];
@@ -102,7 +110,7 @@ function buildTools(ctx) {
       var coords = location ? await geocode(String(location).trim()) : defaultCoords();
       var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + coords.lat + '&longitude=' + coords.lon +
         '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
-      var res = await fetch(url);
+      var res = await fetch(url, { signal: AbortSignal.timeout(NET_TIMEOUT_MS) });
       if (!res.ok) throw new Error('forecast HTTP ' + res.status);
       var data = await res.json();
       var cur = data.current || {};
@@ -141,7 +149,7 @@ function buildTools(ctx) {
       var url = 'https://router.project-osrm.org/route/v1/' + profile + '/' +
         fromCoords.lon + ',' + fromCoords.lat + ';' + toCoords.lon + ',' + toCoords.lat +
         '?overview=false&steps=true';
-      var res = await fetch(url);
+      var res = await fetch(url, { signal: AbortSignal.timeout(NET_TIMEOUT_MS) });
       if (!res.ok) throw new Error('OSRM HTTP ' + res.status);
       var data = await res.json();
       var route = data.routes && data.routes[0];

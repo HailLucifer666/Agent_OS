@@ -4,6 +4,14 @@ const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'qwen3:latest';
 
 let modelsCache = { at: 0, models: [] };
 const MODELS_CACHE_MS = 30000;
+// listModels() is reached by brain/registry.js's probeOllama(), which runs
+// inside a Promise.all with six sibling probes. A bare fetch here does not fail
+// on a host that DROPS the connection rather than refusing it (a firewall
+// blackholing the SYN, a stalled handshake) — it simply never settles, so
+// registry.refresh() never resolves and EVERY brain lane is left without a
+// provider list, not just Ollama's. Same bound the shared probeModelCatalog
+// helper already uses for the other six.
+const MODELS_TIMEOUT_MS = 8000;
 
 // Stateful filter that strips  ... blocks from a token stream,
 // working across chunk boundaries. Feed raw chunks in, get visible text out.
@@ -115,7 +123,7 @@ async function listModels() {
   const now = Date.now();
   if (now - modelsCache.at < MODELS_CACHE_MS) return modelsCache.models;
 
-  const res = await fetch(`${OLLAMA_URL}/api/tags`);
+  const res = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(MODELS_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`ollama /api/tags failed: ${res.status}`);
   const data = await res.json();
   const models = (data.models || [])
