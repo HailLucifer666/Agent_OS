@@ -62,6 +62,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
@@ -82,31 +83,53 @@ const MYTHOS_ONLY = 0.006;     // peakRms with AEC3 on and the operator silent
 // Wires the two real modules the way s2s-bridge.js does — policy first, because its
 // verdict is what the backstop's synchronous callbacks read — and reports what the
 // operator would actually experience.
-async function driveBargeIn(levels) {
+async function driveBargeIn(levels, opts = {}) {
   const { createBargeInPolicy } = await import(POLICY_URL);
   const { createBargeInBackstop } = await import(BACKSTOP_URL);
+  const deferred = opts.deferred !== false;   // s2s-bridge's behaviour; false = the old wiring
 
   let t = 0;
-  const policy = createBargeInPolicy({ now: () => t });
+  const policy = createBargeInPolicy({ now: () => t, ...(opts.policy || {}) });
   let policyAllowsRelease = false;
   let released = 0;
   let vetoed = 0;
   let authorised = 0;
+  let gateHeld = true;                        // stands in for ownVoiceGate
+  let attemptedThisHold = false;
+  let lastReason = null;
 
+  const veto = () => {
+    vetoed += 1;
+    // Mirrors noteBargeVetoed(): only a candidacy that was building counts.
+    if (lastReason === 'pending-sustaining' || lastReason === 'pending-opened') attemptedThisHold = true;
+  };
   const backstop = createBargeInBackstop({
-    onFlush: () => { if (!policyAllowsRelease) { vetoed += 1; return; } released += 1; },
-    onRelease: () => { if (!policyAllowsRelease) { vetoed += 1; return; } released += 1; },
+    onFlush: () => { if (!policyAllowsRelease) return veto(); if (gateHeld) { released += 1; gateHeld = false; } },
+    onRelease: () => { if (!policyAllowsRelease) return veto(); if (gateHeld) { released += 1; gateHeld = false; } },
   });
 
   policy.assistantSpeakingStarted();
   for (const level of levels) {
     const decision = policy.observe({ rms: level, echoRatio: null });
     policyAllowsRelease = decision.release;
+    lastReason = decision.reason;
+    // Mirrors s2s-bridge: a dead candidacy cannot leave a live attempt behind.
+    if (decision.reason === 'pending-decayed'
+      || decision.reason === 'below-bleed-floor'
+      || decision.reason === 'echo-transcript') {
+      attemptedThisHold = false;
+    }
     if (decision.release) authorised += 1;
     backstop.observe(frameAt(level), true);
+    // The deferred delivery, wired exactly as s2s-bridge.js wires it: AFTER the
+    // backstop, so a tier firing on this frame takes the normal path first.
+    if (deferred && policyAllowsRelease && attemptedThisHold && gateHeld) {
+      released += 1;
+      gateHeld = false;
+    }
     t += 100;
   }
-  return { released, vetoed, authorised };
+  return { released, vetoed, authorised, attemptedThisHold };
 }
 
 // 500ms of the protected window, then the operator talks over MYTHOS.
@@ -180,6 +203,105 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
     for (let i = 0; i < 24; i++) bleed.push(i % 2 === 0 ? 0.06 : 0.01);
     const result = await driveBargeIn(afterProtectedWindow(bleed));
     assert.equal(result.released, 0, 'decaying bleed was treated as an interruption');
+  });
+
+  // --- second pass, from the 2026-08-19 LIVE session -------------------------
+  //
+  // The first fix landed one real interruption (`barge-in-confirmed`, held 8132ms,
+  // peak 0.1344) — the first in this repo's recorded history. But the same session
+  // showed the handoff failing one step EARLIER, three times, and the telemetry
+  // added in the same commit named it outright:
+  //
+  //   held= 9426ms peak=0.1101 vetoed=7 why=pending-sustaining at=0.1077
+  //   held= 8128ms peak=0.1246 vetoed=4 why=pending-sustaining at=0.0883
+  //   held=12603ms peak=0.1057 vetoed=1 why=pending-sustaining at=0.0814
+  //
+  // Never 'below-bleed-floor' (so the 0.05 floor is right and no threshold needed
+  // changing) and never 'already-confirmed' (so the first fix held). Always
+  // 'pending-sustaining': the backstop fires after 3 frames = 300ms, the policy
+  // confirms at 350ms, so the backstop is ALWAYS early, is refused, and spends its
+  // shot — the eager tier latches on releasedThisRun and the flush tier zeroes its
+  // counter, putting the next chance at frame 6.
+  describe('an attempt refused only for being early is still delivered when the policy catches up', () => {
+    // Five frames is the shortest run that can confirm at all: PENDING opens on
+    // frame 1 and 350ms has elapsed by frame 5. The backstop fires on frame 3 and
+    // is refused; its next chance would be frame 6, which never comes.
+    const FIVE_FRAME_RUN = afterProtectedWindow([...Array(5).fill(OPERATOR_LOUD), OPERATOR_DIP, OPERATOR_DIP]);
+
+    it('the old wiring loses it — the backstop asks at 300ms and never asks again', async () => {
+      const result = await driveBargeIn(FIVE_FRAME_RUN, { deferred: false });
+      // >= 1 rather than == 1: CONFIRMED keeps answering yes (the first fix), so the
+      // trailing frames of the run answer yes too. In production the gate is already
+      // released by then; here nothing releases it, which is the point of this case.
+      assert.ok(result.authorised >= 1, 'the policy should have confirmed on frame 5');
+      assert.equal(result.released, 0,
+        'this is the live failure: authorised once, refused, and never delivered');
+      assert.ok(result.vetoed > 0, 'the backstop must have tried and been refused');
+    });
+
+    it('the deferred delivery lands it on the frame the policy confirms', async () => {
+      const result = await driveBargeIn(FIVE_FRAME_RUN);
+      assert.equal(result.released, 1,
+        `expected the refused attempt to be delivered once the policy caught up: `
+        + `${result.released} release(s), ${result.vetoed} veto(es), authorised ${result.authorised}`);
+    });
+
+    it('is NOT a bypass: without a refused attempt, nothing is delivered early', async () => {
+      // Bleed that never clears a backstop tier can never set the attempt flag, so
+      // the deferred path cannot fire for it however the policy is feeling.
+      const belowTiers = Array(20).fill(0.04);   // above nothing: under floor and under both tiers
+      const result = await driveBargeIn(afterProtectedWindow(belowTiers));
+      assert.equal(result.attemptedThisHold, false, 'no backstop tier was cleared, so no attempt exists');
+      assert.equal(result.released, 0, 'a release was delivered with no level ever qualifying');
+    });
+
+    it('still requires the full sustain test — an early attempt does not shortcut it', async () => {
+      // Two loud frames then a dip, repeatedly: enough to clear a tier eventually
+      // but never enough to satisfy the policy. Nothing may be delivered.
+      const stuttered = [];
+      for (let i = 0; i < 30; i++) stuttered.push(i % 3 === 2 ? OPERATOR_DIP : OPERATOR_LOUD);
+      const result = await driveBargeIn(afterProtectedWindow(stuttered));
+      assert.equal(result.authorised, 0, 'the policy must not have confirmed on this shape');
+      assert.equal(result.released, 0, 'delivered a release the policy never authorised');
+    });
+
+    it('Q1: a candidacy that dies takes its attempt with it', async () => {
+      // Three loud frames clear a backstop tier and are refused for being early, so
+      // an attempt exists. Then the sound stops. Without clearing, that attempt would
+      // sit armed for the rest of the utterance, waiting for ANY later confirmation —
+      // a television, a second person, a door — to cash it in. The level condition was
+      // never widened; the window it could be met in would have been.
+      const shortRunThenSilence = afterProtectedWindow([
+        OPERATOR_LOUD, OPERATOR_LOUD, OPERATOR_LOUD,
+        OPERATOR_DIP, OPERATOR_DIP, OPERATOR_DIP, OPERATOR_DIP,
+      ]);
+      const result = await driveBargeIn(shortRunThenSilence);
+      assert.ok(result.vetoed > 0, 'the backstop must have fired and been refused, or this proves nothing');
+      assert.equal(result.attemptedThisHold, false,
+        'the attempt outlived the candidacy that created it — a later unrelated sound could cash it in');
+      assert.equal(result.released, 0, 'a run too short to confirm must not release');
+    });
+
+    it('s2s-bridge.js clears the attempt when the candidacy dies, not only per hold', async () => {
+      const src = fs.readFileSync(path.join(voiceDir, 's2s-bridge.js'), 'utf8');
+      assert.ok(/pending-decayed/.test(src) && /below-bleed-floor/.test(src),
+        'the decay/below-floor reasons must clear bargeAttemptedThisHold in s2s-bridge.js');
+    });
+
+    it('s2s-bridge.js actually contains the deferred delivery, after the backstop', async () => {
+      // The rule above is exercised against a copy of the wiring, so this pins that
+      // the real file has it — and has it in the right ORDER, since running it
+      // before bargeBackstop.observe() would decide on the previous frame's verdict.
+      const src = fs.readFileSync(path.join(voiceDir, 's2s-bridge.js'), 'utf8');
+      const observeAt = src.indexOf('bargeBackstop.observe(e.data');
+      const deferredAt = src.indexOf('bargeAttemptedThisHold && ownVoiceGate');
+      assert.ok(observeAt > 0, 'bargeBackstop.observe(e.data ...) not found');
+      assert.ok(deferredAt > 0, 'the deferred delivery is missing from s2s-bridge.js');
+      assert.ok(deferredAt > observeAt,
+        'the deferred delivery must run AFTER bargeBackstop.observe, or it acts on a stale verdict');
+      assert.ok(/bargeAttemptedThisHold = false;/.test(src),
+        'the attempt flag must be cleared per hold, or a stale candidacy releases the next utterance');
+    });
   });
 
   it('KNOWN FAILING SHAPE, recorded not fixed: 100ms dips reset the sustain timer', async () => {

@@ -77,11 +77,14 @@ describe('A2 the preroll ring is DERIVED from the gate ceiling, not hand-tuned',
     // one the audio-out refresh re-arms.
     assert.match(src, /function armOwnVoiceMaxHold\(\)/,
       'OWN_VOICE_MAX_HOLD_MS needs a timer, or it is a comment');
-    const hold = src.slice(src.indexOf('function holdOwnVoiceGate'));
-    // BUG-272 widened 500 -> 1200: holdOwnVoiceGate now also opens the barge-in
-    // policy's protection window (assistantSpeakingStarted) and documents why, which
-    // pushed the arming call past the old window. The invariant is unchanged.
-    assert.match(hold.slice(0, 1200), /armOwnVoiceMaxHold\(\)/,
+    // BUG-274: bounded by the NEXT FUNCTION rather than a character count. Widened
+    // once already (500 -> 1200, BUG-272) and broken again by BUG-274's comments,
+    // while the invariant — the cap is armed inside holdOwnVoiceGate — never moved.
+    const holdAt = src.indexOf('function holdOwnVoiceGate');
+    const nextFn = src.indexOf('function releaseOwnVoiceGate', holdAt);
+    assert.ok(holdAt !== -1 && nextFn !== -1, 'both gate functions must exist');
+    const hold = src.slice(holdAt, nextFn);
+    assert.match(hold, /armOwnVoiceMaxHold\(\)/,
       'the cap must be armed when the gate is taken');
     const refresh = src.slice(src.indexOf('function refreshOwnVoiceCeiling'));
     assert.doesNotMatch(refresh.slice(0, 300), /armOwnVoiceMaxHold/,
@@ -125,9 +128,15 @@ describe('A2 the preroll ring is DERIVED from the gate ceiling, not hand-tuned',
 
   it('the ring is still a ring — the oldest frame is dropped, not the newest', () => {
     const handler = src.indexOf('captureNode.port.onmessage');
-    // BUG-272 widened handler+2000 -> handler+3600: the frame handler grew the
-    // policy observe() call above the gate, moving the gate block later in the file.
-    const body = src.slice(src.indexOf('if (ownVoiceGate) {', handler), handler + 3600);
+    // BUG-274: this window was not merely too small, it was MALFORMED — the start was
+    // found relative to the handler while the end was a fixed handler+N, so once the
+    // handler grew past N the slice inverted and returned the empty string, and an
+    // empty string fails every match with no hint that the extraction was the fault.
+    // Both ends are now code sentinels: the gate block, to the send that follows it.
+    const gateAt = src.indexOf('if (ownVoiceGate) {', handler);
+    const sendAt = src.indexOf("sendMessage({ type: 'live-audio'", gateAt);
+    assert.ok(gateAt !== -1 && sendAt !== -1, 'the gate block and the send after it must both exist');
+    const body = src.slice(gateAt, sendAt);
     assert.match(body, /preroll\.shift\(\)/,
       'overflow must drop the OLDEST frame. Dropping the newest would keep the beginning of a '
       + 'sentence and lose the end, which is worse: the end is what the operator just said.');

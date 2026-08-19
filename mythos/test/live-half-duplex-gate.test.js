@@ -66,11 +66,15 @@ describe('BUG-224 half-duplex gate — source shape', () => {
   it('the mic frame handler gates the SEND, not the barge-in observer', () => {
     const start = bridgeSrc.indexOf('captureNode.port.onmessage');
     assert.ok(start !== -1, 'the mic frame handler must exist');
-    // BUG-272 widened 2600 -> 4200: the frame handler grew a barge-in-policy
-    // observe() call and its rationale comment, which pushed the send past the old
-    // window so sendAt came back -1. The ORDERING invariant below is unchanged and
-    // is the thing worth pinning; the window size never was.
-    const body = bridgeSrc.slice(start, start + 4200);
+    // BUG-274: the window is now bounded by a CODE SENTINEL, not a character count.
+    // History: 2600 -> 4200 (BUG-272) -> broken again by BUG-274's comments. Three
+    // widenings of the same window, each because prose grew inside the handler, and
+    // each time the ORDERING invariant below — the only thing worth pinning — was
+    // never in question. `source.connect(captureNode)` is the first statement after
+    // the handler closes, so this measures the handler however much it is commented.
+    const end = bridgeSrc.indexOf('source.connect(captureNode)', start);
+    assert.ok(end !== -1, 'the statement that follows the frame handler must exist');
+    const body = bridgeSrc.slice(start, end);
 
     const observeAt = body.indexOf('bargeBackstop.observe');
     const gateAt = body.indexOf('if (ownVoiceGate)');

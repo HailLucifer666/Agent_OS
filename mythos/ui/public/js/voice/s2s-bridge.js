@@ -522,11 +522,34 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   let lastVetoPolicyReason = null;
   let lastVetoLevel = null;
   let lastPolicyDecision = null;
+
+  // BUG-274 (second pass, from the 2026-08-19 live session): a level-triggered
+  // barge-in that was refused only because the policy had not finished counting
+  // yet. The two conditions — loud enough, and the policy agrees — must be
+  // allowed to be met at DIFFERENT instants, because they are structurally
+  // incapable of being met at the same one:
+  //
+  //   the backstop fires after 3 consecutive frames = 300ms
+  //   the policy confirms after PENDING_HOLD_MS         = 350ms
+  //
+  // The backstop is therefore ALWAYS ~50ms early, is vetoed with
+  // 'pending-sustaining', and spends its shot: the eager tier is latched by
+  // releasedThisRun and the flush tier zeroes its counter, so the next
+  // opportunity is frame 6 — by which time an ordinary two-word interruption has
+  // already ended. Measured live: three holds, veto levels 0.0814/0.0883/0.1077
+  // against a 0.05 floor, vetoed 1/4/7 times, and not one release. The operator's
+  // voice at twice the floor, refused seven times in a single 9.4-second hold.
+  let bargeAttemptedThisHold = false;
   function noteBargeVetoed(tier, level) {
     bargeVetoed += 1;
     lastVetoReason = tier;
     lastVetoPolicyReason = lastPolicyDecision ? lastPolicyDecision.reason : null;
     lastVetoLevel = typeof level === 'number' ? Math.round(level * 10000) / 10000 : null;
+    // Only a candidacy that was actually building counts as an attempt. A veto
+    // inside the protected window, or below the floor, is the policy working.
+    if (lastVetoPolicyReason === 'pending-sustaining' || lastVetoPolicyReason === 'pending-opened') {
+      bargeAttemptedThisHold = true;
+    }
   }
 
   function bargeTuning() {
@@ -613,6 +636,10 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     lastVetoReason = null;
     lastVetoPolicyReason = null;
     lastVetoLevel = null;
+    // BUG-274: a refused attempt belongs to the utterance it happened in. Leaking
+    // it into the next hold would let a stale candidacy release the gate on the
+    // first authorised frame of a sentence the operator never spoke over.
+    bargeAttemptedThisHold = false;
     armOwnVoiceCeiling();
     armOwnVoiceMaxHold();
     logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
@@ -863,7 +890,81 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
           echoRatio: lastEchoRatio,
         });
         policyAllowsRelease = lastPolicyDecision.release;
+        // Q1 — WHAT ELSE MATCHES THIS? Without this line the attempt flag below
+        // survives the death of the candidacy that set it, so an attempt at second 1
+        // could be cashed in by a confirmation growing out of a DIFFERENT sound at
+        // second 9 of the same hold — a TV, a second person, a door. The level
+        // condition was never widened, but the window in which a stale "loud enough"
+        // could meet a fresh "policy agrees" would have been the whole utterance.
+        // Bounding it by a timeout would have been a guessed constant; this is exact:
+        // the candidacy either survived continuously to confirmation or it did not.
+        if (lastPolicyDecision.reason === 'pending-decayed'
+          || lastPolicyDecision.reason === 'below-bleed-floor'
+          || lastPolicyDecision.reason === 'echo-transcript') {
+          bargeAttemptedThisHold = false;
+        }
         bargeBackstop.observe(e.data, player ? player.isSpeaking() : false);
+        // BUG-274 (second pass): deliver an authorisation the backstop asked for
+        // BEFORE the policy was ready. Runs after observe() so a backstop tier
+        // firing on this very frame takes the normal path first (ownVoiceGate is
+        // then already false and this is a no-op).
+        //
+        // WHY THIS IS NOT A BYPASS. Both original conditions still hold, they are
+        // simply no longer required to hold on the SAME frame: a level run had to
+        // clear a backstop tier for bargeAttemptedThisHold to be set, and the
+        // policy had to pass its protected window, its floor and its full 350ms
+        // sustain for release to be true. What is removed is the coincidence
+        // requirement — that the backstop's 300ms counter happen to fire again on
+        // the exact frame the policy's 350ms timer completes. It structurally
+        // cannot, so the operator was refused seven times in one hold at twice the
+        // floor. Bleed still has to survive the sustain test to reach here, which
+        // is the defence that was designed for it and is untouched.
+        //
+        // ADVERSARIAL PASS on this fix, answered rather than assumed:
+        //
+        // Q1 — WHAT ELSE MATCHES THIS? Answered above, and it changed the fix: the
+        //   attempt is now cleared when its candidacy dies, so a stale "loud enough"
+        //   cannot be cashed in by an unrelated later sound in the same utterance.
+        // Q2 — DOES THIS HIDE EVIDENCE? No, and it adds some. The release reason is a
+        //   DISTINCT 'barge-in-deferred', so the log says which of the three routes
+        //   let the operator in. bargeVetoed is per-hold and written on release, so
+        //   the refused attempts that preceded it are still on the same line.
+        //   verify-voice-session.js now counts landed barge-ins — until 2026-08-19 it
+        //   counted only vetoes, ceilings and self-interruptions, i.e. three ways of
+        //   measuring failure and none of success.
+        // Q3 — WHO READS THIS? The reason string reaches verify-voice-session.js,
+        //   which prefix-matches 'own-voice-ceiling' for the ceiling criterion (so
+        //   this value is not mistaken for one) and keys self-interruption off
+        //   live.turn-parts, not off this field. Both were checked, not assumed.
+        // Q4 — WHAT IS STANDING NEXT TO IT? setCaptureSuspended(). While Spotify or a
+        //   video is playing, the handler above returns BEFORE the policy or the
+        //   backstop see a frame, so interruption with music playing remains
+        //   impossible and this fix does not touch it. That is W1's checklist item
+        //   (d), still open, named here so it is not mistaken for covered.
+        // Q5 — IS THE CONSTANT CORRECT? No constant was added, and the live session
+        //   settled the one that mattered: the veto reason was NEVER
+        //   'below-bleed-floor' across 14 vetoes, so INITIAL_BLEED_FLOOR 0.05 is right
+        //   for this room and was deliberately not touched. What this fix depends on
+        //   is the RELATION 350ms (PENDING_HOLD_MS) > 300ms (3 backstop frames). If
+        //   PENDING_HOLD_MS is ever lowered to 300 or below, this branch becomes
+        //   unreachable — dead, not broken. Say so in the commit if you do that.
+        // Q6 — WHAT CLASS IS THIS? The third instance in one day of "two independent
+        //   counters required to coincide". The assertion, per the repo's own rule, is
+        //   test/bug-274-barge-in-authorisation-is-deliverable.test.js, which drives
+        //   both real modules together instead of either one alone.
+        // Q7 — WHAT DID THE TICKET SAY? W1's checklist, honestly: (a) speaking stops
+        //   MYTHOS — PARTIAL, 1 landed of roughly 5 attempts before this fix;
+        //   (b) no ghost pickup — NOT addressed here; (c) first word not lost — not
+        //   measured; (d) works with music — NO, see Q4; (e) works on the packaged
+        //   installer — untested. Fixing (a) is not closing W1.
+        // Q8 — PINNED, DELIBERATELY UNCHANGED: PENDING_HOLD_MS 350, PROTECTED_MS 500,
+        //   INITIAL_BLEED_FLOOR 0.05, the dormant learned floor, both backstop tiers,
+        //   and pcm-player's flush() staying a hard stop with no fade. Each is a
+        //   choice, not an oversight.
+        if (policyAllowsRelease && bargeAttemptedThisHold && ownVoiceGate) {
+          if (player) player.flush();
+          releaseOwnVoiceGate('barge-in-deferred');
+        }
         // Instrumentation only, and only while the gate is actually held (notePeakRms
         // checks): the question this answers is "how loud did the operator get while
         // we were refusing to listen?", which is exactly that interval. A frame that

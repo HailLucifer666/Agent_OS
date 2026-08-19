@@ -198,10 +198,13 @@ describe('BUG-271 live noise gate: wired into BOTH s2s-bridge send points', () =
   it('the live send goes through the gate', () => {
     const handler = bridge().indexOf('captureNode.port.onmessage');
     assert.ok(handler !== -1);
-    // BUG-272 widened 2200 -> 3800: the frame handler grew a barge-in-policy
-    // observe() call plus its rationale, pushing the gated send past the old
-    // window. Both assertions below are unchanged — the send is still gated.
-    const body = bridge().slice(handler, handler + 3800);
+    // BUG-274: bounded by a CODE SENTINEL rather than a character count. This window
+    // has now been widened twice (2200 -> 3800 -> broken again) purely because prose
+    // grew inside the handler, while the assertions below never changed.
+    // `source.connect(captureNode)` is the first statement after the handler closes.
+    const end = bridge().indexOf('source.connect(captureNode)', handler);
+    assert.ok(end !== -1, 'the statement that follows the frame handler must exist');
+    const body = bridge().slice(handler, end);
     assert.match(body, /noiseGate\.process\(e\.data\)/,
       'every captured frame must be gated on its way to Gemini');
     assert.match(body, /sendMessage\(\{\s*type:\s*'live-audio',\s*data:\s*arrayBufferToBase64\((?!e\.data\))/,

@@ -241,6 +241,24 @@ function main() {
     .filter((r) => r.indexOf('own-voice-ceiling') === 0 || r === 'ceiling-fail-open')
     .reduce((n, r) => n + byReason[r], 0);
   const suspendCeiling = byReason['suspend-ceiling-fail-open'] || 0;
+  // BUG-274 — Q3, and a gap this script had from the day it was written: NOTHING
+  // counted interruptions that SUCCEEDED. The release gate's first line asks that
+  // "speaking over MYTHOS stops it, at a stated rate", and there was no number for
+  // it — only vetoes, ceilings and self-interruptions, i.e. three ways of counting
+  // failure. On 2026-08-19 that made the difference between "still broken" and
+  // "landed once in five" a matter of reading raw JSON by hand.
+  //
+  // Prefix-matched on purpose: 'barge-in' (flush tier), 'barge-in-confirmed' (eager
+  // tier) and 'barge-in-deferred' (an attempt refused for being early, delivered
+  // when the policy caught up) are three routes to the same operator-visible
+  // outcome, and a future fourth should be counted without editing this line.
+  const bargeLanded = Object.keys(byReason)
+    .filter((r) => r.indexOf('barge-in') === 0)
+    .reduce((n, r) => n + byReason[r], 0);
+  const bargeLandedBreakdown = Object.keys(byReason)
+    .filter((r) => r.indexOf('barge-in') === 0)
+    .map((r) => `${r}=${byReason[r]}`)
+    .join(' ');
   // BUG-273 A4: a caller-chosen hold that simply elapsed is routine and is counted
   // separately. The 8 counted on 2026-08-18 were ALL of this kind — 8 media-start
   // arms, 8 expiries, 0 clears — and reading them as 8 fail-opens is what filed A4
@@ -313,6 +331,18 @@ function main() {
   // is "good" depends on what the operator experienced — high vetoes with a happy
   // operator means bleed is being correctly rejected; high vetoes with "it still
   // ignores me" means the window or floor is too aggressive.
+  // Not pass/fail YET, deliberately (Q8). The release gate wants a RATE, and a rate
+  // needs a denominator this script cannot yet see: how many times the operator
+  // actually tried. It reports the count and the routes so a session can be compared
+  // against the previous one, and says plainly when the answer is zero — which is
+  // what every log before 2026-08-19 would have said.
+  check('operator interruptions that landed', true,
+    bargeLanded > 0
+      ? `${bargeLanded} landed (${bargeLandedBreakdown})`
+      : 'NONE landed — every hold ended by MYTHOS finishing or by a ceiling',
+    'a landed barge-in is the only positive evidence that interruption works; vetoes '
+    + 'and ceilings only count the failures');
+
   check('barge-in policy reported its work', true,
     `${vetoed} vetoed barge-in(s)`
     + (floorSeen !== null ? `, floor in force ${floorSeen}` : ', no bleedFloor seen')

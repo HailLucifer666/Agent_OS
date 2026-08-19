@@ -17,7 +17,47 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **T4's measurement RAN. AEC3 works, the plan's premise is refuted, and interruption was a frame-handoff bug inside the veto. Fixed; needs one live boot to confirm.**
+### 2026-08-19 (latest) — **AN INTERRUPTION LANDED, LIVE. First one in this repo's recorded history. Roughly 1 in 5 — and the log named the remaining fault itself.**
+
+**Live-watched session, 385 log entries, 21 turns, `npm start`.** Result:
+`barge-in-confirmed`, held 8132ms, peak 0.1344. Every previous session on record ended
+every hold with MYTHOS finishing or with a ceiling — never a barge-in. The step-1 fix
+works.
+
+**Still partial: 7 ceilings and 14 vetoes in the same session.** It works when the operator
+sustains a phrase, fails when they do not.
+
+**The remaining fault was diagnosed by the log, not by a hypothesis, because step 1 added
+the field.** Three holds, identical: `why=pending-sustaining` at 0.0814 / 0.0883 / 0.1077
+against a 0.05 floor. Never `already-confirmed` (step 1 holds). Never `below-bleed-floor` —
+**so the floor is right and the sensitivity theory is withdrawn; it was wrong.**
+
+Same handoff bug one step earlier, and structural: the backstop fires at 3 frames = 300ms,
+the policy confirms at 350ms, so the backstop is always early, is refused, and spends its
+shot (eager tier latches, flush tier zeroes its counter → next chance frame 6, by which
+time a two-word interruption is over). **Fixed** by letting the two conditions be met at
+different instants — a refused-for-being-early attempt is delivered on the frame the policy
+confirms. Not a bypass: a tier still had to fire and the full sustain still had to pass.
+Q1 tightened it — the attempt is cleared when its candidacy dies, so a stale one cannot be
+cashed in by an unrelated later sound.
+
+**`verify-voice-session.js` now counts landed barge-ins.** It never did: it counted vetoes,
+ceilings and self-interruptions — three measures of failure and none of success — while the
+release gate's first line asks for a landed rate.
+
+**Two live findings recorded and NOT fixed, both in BUGS.md:** `bleedPeak` has been poisoned
+to 0.1041 by the operator's own voice being learned inside a protected window (harmless
+today because the learned floor is dormant, misleading to any future session that reads
+`learnedFloor` to decide whether to re-enable it); and the verifier's "self-interruption"
+criterion counts operator-caused interrupts too, so this session's 42.9% is **not**
+comparable to 2026-08-18's 43%.
+
+**Next: one more boot.** Expect `barge-in-deferred` to appear and the landed count to rise.
+Still open from W1's own checklist: interruption **with music playing** is untouched
+(`setCaptureSuspended` returns before the policy sees a frame), first-word loss is
+unmeasured, and none of this is tested on the packaged installer.
+
+### 2026-08-19 — **T4's measurement RAN. AEC3 works, the plan's premise is refuted, and interruption was a frame-handoff bug inside the veto. Fixed; needs one live boot to confirm.**
 
 The operator booted, spoke, and reported "interruptions still fails". The log answers T4 and
 answers it against the plan.

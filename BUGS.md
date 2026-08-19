@@ -271,6 +271,87 @@ currently have —
    produce audible clicks/buzzes" (their words) — which matches the clipped-last-word this
    repo has already recorded.
 
+#### T4 step 2 — 🔬 LIVE-VERIFIED PARTIAL 2026-08-19: the first interruption in this repo's recorded history landed, and the log named the remaining fault itself
+
+**The operator booted `npm start` and spoke while a live tail read the log.** 385 entries, 21
+turns. This is the first session where the barge-in path was watched as it happened rather
+than reconstructed afterwards.
+
+**RESULT: `barge-in-confirmed`, held 8132ms, peak 0.1344, after 2 vetoes.** A real
+operator interruption stopped MYTHOS. Every previous session on record ended every hold
+either with MYTHOS finishing (`own-voice-ended`) or with a ceiling — never once with a
+barge-in. T4 step 1's fix works.
+
+**It is PARTIAL, and the number is roughly 1 in 5.** The same session produced 7 own-voice
+ceiling events and 14 vetoes. So interruption now works when the operator sustains a phrase
+and fails when they do not.
+
+**The log diagnosed the remainder without a hypothesis, because step 1 added the field.**
+Three holds, all the same:
+
+```
+own-voice-ceiling  held= 9426ms peak=0.1101 raw=38 vetoed=7 why=pending-sustaining at=0.1077
+own-voice-ceiling  held= 8128ms peak=0.1246 raw=29 vetoed=4 why=pending-sustaining at=0.0883
+own-voice-ceiling  held=12603ms peak=0.1057 raw=22 vetoed=1 why=pending-sustaining at=0.0814
+```
+
+`why` was **never** `already-confirmed` (step 1 holds) and **never** `below-bleed-floor`
+(so `INITIAL_BLEED_FLOOR` 0.05 is correct for this room and was NOT touched — the
+sensitivity theory this entry previously floated is **withdrawn**, it was wrong). Always
+`pending-sustaining`, at 1.6–2.2x the floor.
+
+**Same handoff bug, one step earlier, and structural rather than tunable.** The backstop
+fires after 3 consecutive frames = **300ms**. The policy confirms at `PENDING_HOLD_MS` =
+**350ms**. The backstop is therefore *always* ~50ms early, is refused, and **spends its
+shot** — the eager tier latches on `releasedThisRun` and the flush tier zeroes its counter,
+putting the next opportunity at frame 6. An ordinary two-word interruption is over by then.
+Seven refusals in one 9.4-second hold, at twice the floor.
+
+**Fix: the two conditions may now be met at different instants.** `s2s-bridge.js` remembers
+that a backstop tier asked and was refused *for being early* (`pending-opened` /
+`pending-sustaining` only), and delivers the release on the frame the policy confirms
+instead of waiting for the backstop to ask again. **Not a bypass** — a level run still had
+to clear a tier, and the policy still had to pass its protected window, its floor and its
+full 350ms sustain. What is removed is the requirement that those coincide on one frame,
+which they structurally cannot.
+
+**Q1 changed the fix.** The first draft let the attempt live for the whole utterance, so a
+stale "loud enough" from second 1 could be cashed in by a confirmation growing out of a
+*different* sound at second 9 — a television, a second person, a door. A timeout would have
+been a guessed constant; instead the attempt is cleared the moment its candidacy dies
+(`pending-decayed` / `below-bleed-floor` / `echo-transcript`), which is exact. Regression
+test included.
+
+**Q3 gave the verifier the oracle it never had.** Nothing counted interruptions that
+*succeeded* — only vetoes, ceilings and self-interruptions, three ways of measuring failure.
+The release gate's first line asks for a landed rate. `verify-voice-session.js` now reports
+`operator interruptions that landed`, prefix-matched across `barge-in`,
+`barge-in-confirmed` and `barge-in-deferred`.
+
+##### Two findings from this session recorded and deliberately NOT fixed
+
+**1. `bleedPeak` has been poisoned by the operator's own voice, and it looks like a room
+measurement.** It rose to **0.1041** and stayed there. `barge-in-policy.js` restricts
+learning to the protected window on the stated reasoning that "the assistant's own onset is
+by construction the loudest thing present" — and this session disproves that assumption:
+in a conversation where the operator is *already talking* when MYTHOS begins its next
+utterance, their voice is what the protected window learns. Consequence today is **nil**,
+because the learned floor is dormant (BUG-273 A1), so it changes no decision. Consequence
+tomorrow is not nil: `learnedFloor` is the number a future session would read to decide
+whether re-enabling the mechanism is safe, and it is now reporting the operator's voice as
+this room's bleed. Do not re-enable the learned floor on the strength of a `learnedFloor`
+figure without first checking whether the operator was speaking during that hold's opening
+500ms.
+
+**2. The verifier's "self-interruption" criterion overclaims, and read 42.9% this session.**
+It counts turns whose `scFields` contain `interrupted`, which includes turns the **operator**
+legitimately interrupted. In a session whose entire purpose was interrupting MYTHOS, that
+number cannot be read as self-interruption, and 9/21 must not be compared against the 43%
+from 2026-08-18 as though they measure the same thing. Left alone rather than
+half-corrected: separating them needs a signal distinguishing who caused the interrupt, and
+inventing one from the fields available would be exactly the guess this ticket keeps warning
+about.
+
 **Q8 — DISPOSITION, REVISED 2026-08-19 BY THE MEASUREMENT ABOVE.** AEC3 *is* granted and
 working, so by this item's own gate the full-duplex rewrite is now **unblocked but no longer
 required**. It was written as the fix for "MYTHOS cannot be interrupted"; that fault turned
