@@ -558,6 +558,25 @@ node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
 and read the `T4 verdict:` line. Repeat in plain Chrome. **The run is void unless the operator
 confirms they actually heard MYTHOS out loud.**
 
+**INSTRUMENTATION LIVE-VERIFIED 2026-08-20 against a real boot session** (the behaviours it
+measures still need the operator's ear; only the *instruments* are confirmed). Booting MYTHOS and
+running the verifier over the resulting log produced: `audio arrival: 2/10 turns starved, worst gap
+2731ms`; `the player's jitter cushion reported back — cushion reached 250ms, 0 underrun(s) heard —
+the cushion absorbed the late chunks`; `no lost turn boundaries`; and `4 live.interrupted line(s)
+against 4 turn(s) whose scFields carried interrupted` — an **exact match**, which is the phantom
+grep from step 5 finally answered by a real line. Note the second one: a **2.7s arrival gap
+absorbed with zero underruns heard** is the step-5/5b mechanism working, and it is also precisely
+the case step 5c's fix exists for — with the pre-5c conditional `cushionMs` this run would have
+printed a FAIL telling the operator to reload their HUD.
+
+**Attribution window narrowed 30s → 10s, on evidence from that same session.** Echo is MYTHOS's own
+voice returning through the mic, so it lands while or just after the audio plays. The live log's
+transcripts sat **8.9s, 10.2s and 17.9s** after the last assistant audio, all `no-reference` — the
+operator speaking, not echo. At 30s those inflated the denominator and swept two engines into one
+bucket, so the T4 line read `ambiguous(gemini-live+tts-chain)`; at 10s, with transcripts whose
+`msSinceAssistantAudio` exceeds the window skipped outright, it reads `gemini-live: 0/5 echoed`.
+A window has to sit near the physics of the thing it attributes, not merely be safe.
+
 **Suite: 5347/5347, 0 fail, 0 skipped** (+8). Not a behaviour change: additive logging plus a
 read-only criterion.
 

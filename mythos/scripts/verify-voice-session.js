@@ -426,7 +426,14 @@ function main() {
   // ATTRIBUTION is by nearest preceding speech marker within a window. That is an
   // approximation and is labelled as one: overlapping engines inside the window are
   // reported as ambiguous rather than assigned to whichever happened to be closer.
-  const ECHO_ATTRIBUTION_WINDOW_MS = 30000;
+  // 10s, narrowed from 30s on 2026-08-20 against a real boot session. Echo is MYTHOS's
+  // own voice arriving back through the microphone, so it lands WHILE or just after the
+  // audio plays. The live log's transcripts sat 8.9s, 10.2s and 17.9s after the last
+  // assistant audio, all `no-reference` — those are the operator speaking, not echo, and
+  // a 30s window both counted them in the denominator and made almost every bucket
+  // `ambiguous` by sweeping in two engines. A window has to be near the physics of the
+  // thing it attributes, not merely safe.
+  const ECHO_ATTRIBUTION_WINDOW_MS = 10000;
   const tsOf = (e) => Date.parse(e.ts || '') || 0;
   const spokeMarks = of('tts.spoke')
     .map((e) => ({ at: tsOf(e), engine: String(e.engine || 'unknown') }))
@@ -442,6 +449,13 @@ function main() {
   for (const e of echoAll) {
     const at = tsOf(e);
     if (!at) continue;
+    // The line carries how long since MYTHOS last produced audio. When that is longer
+    // than the window, this transcript CANNOT be an echo of anything — it is the
+    // operator talking into a quiet room — and counting it as a turn the engine was
+    // "heard" on would dilute the rate with speech the engine never caused. Skipped
+    // rather than counted-and-not-echoed, so the denominator means what it says.
+    const since = Number(e.msSinceAssistantAudio);
+    if (Number.isFinite(since) && since > ECHO_ATTRIBUTION_WINDOW_MS) continue;
     const inWindow = spokeMarks.filter((m) => m.at <= at && at - m.at <= ECHO_ATTRIBUTION_WINDOW_MS);
     if (!inWindow.length) { unattributed++; continue; }
     const engines = new Set(inWindow.map((m) => m.engine));
