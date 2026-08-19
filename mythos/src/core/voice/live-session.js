@@ -288,6 +288,21 @@ function createLiveSession(deps) {
   // reply make a sound" and "did this reply open with a leaked label".
   let turnAudioParts = 0;
   let turnReasoningStrips = 0;
+  // How many `interrupted` frames Gemini sent during this turn, and when the turn
+  // began. One interrupt arriving with turnComplete is a turn ending; SEVERAL
+  // arriving mid-turn, while audio is still streaming, is every one of them
+  // calling player.flush() in the browser and chopping the reply into words. That
+  // second shape was invisible until 2026-08-19 — see the sc.interrupted branch.
+  let turnInterrupts = 0;
+  let turnStartedAt = 0;
+  // Audio-chunk starvation, per turn — see the inlineData branch. A chunk holds
+  // ~100ms of 24kHz PCM; 250ms is comfortably past "the previous chunk has
+  // finished playing and the room is now silent", without firing on ordinary
+  // jitter.
+  const AUDIO_STARVE_MS = 250;
+  let lastAudioPartAt = 0;
+  let turnAudioStarveEvents = 0;
+  let turnAudioStarveMaxMs = 0;
   let turnPartText = '';
 
   // BUG-170: a strip is never silent. A false positive costs one word and has
@@ -674,6 +689,30 @@ function createLiveSession(deps) {
       for (const p of parts) {
         if (p.inlineData && p.inlineData.data) {
           turnAudioParts += 1; // BUG-170 — counted whether or not a sink is wired
+          // 2026-08-19 — ARRIVAL TIMING, because the operator reports the reply
+          // coming out one word at a time with ~800ms of silence between words,
+          // and nothing on either side of the wire could say why.
+          //
+          // pcm-player.js schedules chunks gaplessly (startAt = max(now+0.04,
+          // nextAt)), so a silent gap in playback has exactly two possible causes:
+          // the chunk ARRIVED after the previous one had finished playing, or it
+          // arrived on time and something DROPPED it. Those need opposite fixes —
+          // one is upstream/transport, the other is the client's flush path — and
+          // guessing between them is what two sessions already did.
+          //
+          // A chunk carries ~100ms of 24kHz PCM, so consecutive chunks should land
+          // well under 100ms apart while the model is streaming. Anything past
+          // STARVE_MS means playback had already run dry before this chunk landed,
+          // i.e. the room heard a gap that no drop can explain.
+          const nowMs = Date.now();
+          if (lastAudioPartAt) {
+            const sinceLast = nowMs - lastAudioPartAt;
+            if (sinceLast > AUDIO_STARVE_MS) {
+              turnAudioStarveEvents += 1;
+              if (sinceLast > turnAudioStarveMaxMs) turnAudioStarveMaxMs = sinceLast;
+            }
+          }
+          lastAudioPartAt = nowMs;
           // BUG-272 V3: when Gemini last handed us assistant audio. This is the
           // closest thing to "is MYTHOS speaking right now" that exists on this
           // side of the wire — actual playback state lives in the client
@@ -708,6 +747,33 @@ function createLiveSession(deps) {
         }
       }
       if (sc.interrupted) {
+        turnInterrupts += 1;
+        // LOGGED, as of 2026-08-19, because it was not — and that cost a whole
+        // commit's reasoning. `voice.live.interrupted` is a BUS event name and no
+        // logger has ever written it, so
+        //   grep -c '"msg":"voice.live.interrupted"' mythos-server.log
+        // returns 0 against every log this project has ever produced, whatever
+        // actually happened. BUG-274 step 4 read that 0 as "Gemini's VAD never
+        // fired once, so no turn was ever cut", and built its fix on it. The same
+        // log's own scFields contained `interrupted` on 129 turns.
+        //
+        // This is the ONLY mechanism that can stop the model mid-turn, and it is
+        // also what makes the client call player.flush(). An unlogged count of it
+        // is the difference between diagnosing chopped speech and guessing at it.
+        // Second occurrence of this exact class — see the note on
+        // verify-voice-session.js counting a bus-event name that is never logged.
+        logger.info('live.interrupted', {
+          turnId: turnCounter,
+          interruptsThisTurn: turnInterrupts,
+          // Which other fields rode the same frame. `interrupted` alongside
+          // turnComplete is Gemini closing a turn it considers interrupted;
+          // `interrupted` with modelTurn and no turnComplete is a cut landing
+          // WHILE audio is still streaming, which is the shape that chops a word
+          // in half. Those are different faults and the frame tells them apart.
+          withFields: Object.keys(sc).sort().join(','),
+          audioPartsSoFar: turnAudioParts,
+          msSinceTurnStart: turnStartedAt ? Date.now() - turnStartedAt : null,
+        });
         if (onInterrupted) onInterrupted();
         if (bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
       }
@@ -753,6 +819,19 @@ function createLiveSession(deps) {
           // device). A healthy count with no inputTranscription in scFields means
           // the audio went up and came back untranscribed — look upstream.
           audioIn: audioInSnapshot,
+          // How many times Gemini cut THIS turn. Anything above 1 on a turn that
+          // produced audio means the browser flushed the player mid-reply that
+          // many times, which is exactly what "it says one word, pauses, says the
+          // next word" sounds like from the room. Previously uncountable: see the
+          // sc.interrupted branch above for why the old grep always returned 0.
+          interrupts: turnInterrupts,
+          // The two numbers that decide WHERE the word-by-word stutter comes from.
+          // audioStarveEvents > 0 means the audio arrived too slowly and the room
+          // heard a gap the client could not have prevented. audioStarveEvents === 0
+          // on a turn the operator heard stutter means the audio arrived on time and
+          // something in the browser dropped or flushed it. Opposite fixes.
+          audioStarveEvents: turnAudioStarveEvents,
+          audioStarveMaxMs: turnAudioStarveMaxMs,
           // Whether WE provoked this turn — the difference between "the operator
           // spoke and we did not hear it" and "nobody spoke". Logged because
           // reading the first as the second is what produced five false anomalies
@@ -778,6 +857,8 @@ function createLiveSession(deps) {
         const wasSilent = !!shownText && turnAudioParts === 0;
         turnTextParts = 0; turnThoughtParts = 0; turnAudioParts = 0;
         turnReasoningStrips = 0; turnPartText = ''; turnAudioIn = 0;
+        turnInterrupts = 0; turnStartedAt = Date.now();
+        turnAudioStarveEvents = 0; turnAudioStarveMaxMs = 0; lastAudioPartAt = 0;
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });

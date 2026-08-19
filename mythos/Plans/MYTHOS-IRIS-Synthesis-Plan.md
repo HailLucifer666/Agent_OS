@@ -17,7 +17,91 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **The "interruption that landed" did not stop the speech, and a local flush never could. Two corrections, one fix, no threshold touched. Awaiting the live session.**
+### 2026-08-19 (latest) — **The reply came out one word at a time, and nobody had interrupted it. 40ms of scheduling lead met 1486ms of jitter. Both open voice behaviours now wait on ONE live session.**
+
+**BUG-274 T4 step 5, committed with this block.** Suite **5324/5324, 0 fail, 0 skipped** (+2).
+Merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).
+
+**A DIFFERENT FAULT ON THE SAME SURFACE.** Steps 0–4 were all about *interruption* — something
+stopping the speech. The operator's newest report is speech **nobody interrupted** arriving too
+slowly to play continuously: *"after every word, there is a second delay, and then it speaks the
+other word."* Those two are indistinguishable from the room, and nothing on either side of the
+wire recorded a number that could separate them. Now measured: consecutive audio chunks arrive
+**272 / 298 / 477 / 954 / 1486 ms** apart on roughly half of all turns. A chunk holds **~100ms**
+of PCM and `pcm-player.js` led the clock by **40ms**, so every gap past ~140ms drained the
+timeline and the room heard silence. **Nothing was dropped.** The audio was played exactly as
+fast as it arrived, and it does not arrive evenly.
+
+**THE FIX — no threshold, window or sustain constant changed.**
+
+1. **A jitter cushion.** A drained timeline restarts at `currentTime + cushionSec` (base
+   **250ms**) instead of `+40ms`, growing on a real underrun to *(the dry period measured + 250ms)*,
+   capped at 2s, reset on `close()`.
+2. **`live.interrupted` is a real log line now**, with per-turn `interrupts`,
+   `audioStarveEvents` and `audioStarveMaxMs` on `live.turn-parts`. Starve > 0 means transport;
+   interrupts > 1 with no starve means the client flushed mid-reply. **Opposite fixes**, and
+   until now neither was countable.
+
+**THE CORRECTION THAT MATTERS MOST TO THE NEXT READER — the block below this one, and step 4's
+BUGS.md entry, both cite this as decisive:**
+
+```
+grep -c '"msg":"voice.live.interrupted"' mythos-server.log   ->   0
+```
+
+**That 0 is not evidence.** `voice.live.interrupted` is a **bus event name**; no logger has ever
+written it, so the grep returns 0 against every log this project has ever produced. The same
+session's log had `interrupted` in `live.turn-parts.scFields` on **129 turns** — Gemini's VAD
+fired repeatedly. **Step 4's fix is unaffected and stays** (a local flush cannot stop a turn the
+server is still streaming — true by construction, never dependent on the VAD being silent); only
+the "zero interrupts" reading is withdrawn. **Second occurrence of "a gate that passes on a metric
+it cannot read"** — `verify-voice-session.js:205-232` documents the first, where the same phantom
+name printed `0/61 = 0%` and a PASS while the real figure was 43%.
+
+**THE HONEST LIMIT — read this before judging the live session.** The cushion's **growth** is
+gated on the player believing it is mid-reply, and `END_GRACE_MS` (250ms) ends that belief shortly
+after the timeline empties. Measured on a live clock: a **477ms** gap grows the cushion; **954ms
+and 1486ms gaps do not**. Deliberate, and pinned by two tests: the player cannot tell a stalled
+network from a finished reply followed by an operator turn, and counting the latter would pin the
+cushion at 2s and put that much latency in front of every first word for the rest of the session.
+Under-learning is recoverable by ear; that is not. **If the live session still hears word-by-word
+playback with `audioStarveMaxMs > 600`, the remedy is to feed the `live-turn-complete` broadcast
+the HUD already receives into the player** — not a bigger base cushion.
+
+**Q8 pinned, unchanged:** `PENDING_HOLD_MS` 350, `PROTECTED_MS` 500, `INITIAL_BLEED_FLOOR` 0.035,
+both backstop tiers, the dormant learned floor, `pcm-player`'s `TAIL_GUARD_SEC`. The staged
+**Stage 2 / Stage 3** sensitivity widenings (incl. `PENDING_HOLD_MS` 350 → 200) stay **unshipped** —
+a previous session's stray edit of that constant was already reverted once. Nothing new goes to the
+server; the frozen Live protocol (V2 spine §3 / AD-1) has no client-initiated cancel and none was
+invented.
+
+**NEXT ACTION — ONE live session, gating BOTH open behaviours, and nothing else.** The operator
+reloads the HUD (files are served `no-cache`), converses 4–5 turns, **interrupts 4–5 times mixing
+normal and quiet voice**, then:
+
+```
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+- **Interruption half (step 4):** ≥1 hold reporting `stopped playback`, a
+  `barge-in-suppression-*` line with non-zero `suppressedChunks`, **and the operator confirming by
+  ear that MYTHOS went quiet and stayed quiet.** A released mic beside continuing speech is the
+  exact trap that produced the earlier false success.
+- **Continuity half (step 5):** replies continuous **by ear**, `audioStarveEvents` visible per
+  turn, `live.interrupted` lines present where Gemini actually cut a turn.
+- **Expected to fail, not regressions:** the 0.024–0.031 quiet band (roughly half of quiet
+  attempts — needs speaker verification or a self-interruption tolerance, an operator scope call),
+  and a repeat of any gap over ~600ms per THE HONEST LIMIT above.
+
+**Still open, unchanged:** interruption **with media playing**, first-word loss, the packaged
+installer. BUG-275 and BUG-276 remain filed and untouched per the operator.
+
+### 2026-08-19 — **The "interruption that landed" did not stop the speech, and a local flush never could. Two corrections, one fix, no threshold touched. Awaiting the live session.**
+
+> **Superseded in one detail by the block above:** this entry's decisive `grep -c
+> '"msg":"voice.live.interrupted"'` → 0 matches a bus event name no logger writes, so it proves
+> nothing. Gemini's VAD *did* fire (129 turns). The fix below stands; the "zero interrupts"
+> reasoning does not.
 
 **Uncommitted at time of writing → see the commit that carries this block.** Suite
 **5207/5207, 0 fail, 0 skipped** (was 5198; +9 tests). Merged-order position UNCHANGED

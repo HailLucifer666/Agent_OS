@@ -802,13 +802,24 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // emptied and instantly refilled: a few hundred milliseconds of silence, then MYTHOS
   // carrying on — which is precisely the report "interruption does not work".
   //
-  // THE NUMBER THAT SETTLES IT, from the 2026-08-19 session log:
+  // WHY IT HOLDS WHATEVER GEMINI DOES. A local barge-in sends nothing upstream, so the
+  // server keeps forwarding the rest of the model turn as 'live-audio-out' — that is
+  // true by construction, and it does not depend on what Gemini's VAD did. The
+  // suppression is what makes a LOCAL decision to stop actually stop the speech.
+  //
+  // CORRECTED 2026-08-19 (BUG-274 step 5). This paragraph used to claim the stronger
+  // thing — that Gemini's VAD "never fired once in the whole session" — and cited
   //   grep -c '"msg":"voice.live.interrupted"' mythos-server.log  ->  0
-  // Not one server-side interrupt in the whole session. Gemini's VAD — the only
-  // mechanism that can stop the model mid-turn — never fired, so on every hold the
-  // turn ran to completion no matter what the client flushed. (Why it never fired is a
-  // separate, still-open defect: the preroll replay reaches Gemini mostly zeroed by the
-  // noise gate — "flushedFrames":84,"flushedZeroed":80 on the hold that "landed".)
+  // That 0 was not evidence. `voice.live.interrupted` is a BUS event name (live-session.js,
+  // bus.emit) that no logger has ever written, so the grep returns 0 against every log
+  // this project has ever produced, whatever actually happened. The same session's log
+  // carried `interrupted` in live.turn-parts.scFields on 129 turns. Gemini's VAD fired
+  // repeatedly; the reading that it never did was an artefact of a detector that matched
+  // nothing. Second occurrence of that class — see verify-voice-session.js's own note.
+  //
+  // The mechanism below is unaffected: it was never the VAD's silence that justified it.
+  // As of the same date live-session.js writes a real `live.interrupted` log line, so the
+  // question "did the server cut this turn" now has an answer that can be read.
   //
   // So stopping the speech has to be local and has to outlast the flush: for the rest
   // of this model turn, arriving audio is DROPPED instead of played.
@@ -856,10 +867,26 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (suppressIdleTimer) { clearTimeout(suppressIdleTimer); suppressIdleTimer = null; }
     if (!suppressAudioOut) return;
     suppressAudioOut = false;
+    // BUG-274 step 5, Q3 (who actually reads this?) — pcm-player.js's jitter cushion
+    // computes cushionSec/underruns and, until this line, nothing anywhere called
+    // stats(). A number with no reader is not instrumentation, and the cushion's own
+    // comment claiming a pinned-at-max cushion "is where that shows up" was pointing
+    // at nowhere. This is the only client->server diagnostic channel that already
+    // exists, so the cushion rides it rather than growing a second one.
+    //
+    // Sent only when the link actually stuttered: `undefined` is dropped by
+    // JSON.stringify and then again by the server's `!== undefined` copy, so a clean
+    // session adds no fields. The keys stay written out as literals either way —
+    // bug-273-suspend-fields-reach-the-log.test.js reads this source to find them,
+    // and a key hidden behind a conditional spread would be invisible to it.
+    const st = player ? player.stats() : null;
+    const stuttered = Boolean(st && st.underruns > 0);
     logSuspendTransition({
       reason: 'barge-in-suppression-' + how,
       suppressedChunks: suppressedChunks,
       suppressedMs: suppressStartedAt ? Date.now() - suppressStartedAt : 0,
+      cushionMs: stuttered ? Math.round(st.cushionSec * 1000) : undefined,
+      underruns: stuttered ? st.underruns : undefined,
     });
     suppressedChunks = 0;
     suppressStartedAt = 0;

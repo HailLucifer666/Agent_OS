@@ -3782,7 +3782,20 @@ function createServer(deps) {
           // been the FOURTH field dropped at this seam; caught before the live session
           // this time by bug-273-suspend-fields-reach-the-log.test.js, which now scans
           // every logSuspendTransition() call site instead of two named ones.
-          'suppressedChunks', 'suppressedMs']) {
+          'suppressedChunks', 'suppressedMs',
+          // BUG-274 step 5: pcm-player.js's jitter cushion, as it stood when the
+          // suppression lifted. cushionMs is how far ahead of the clock the player
+          // is scheduling audio, underruns is how many times the timeline ran dry
+          // anyway. Present only on a session that actually stuttered, so their
+          // ABSENCE means a clean link rather than a dropped field — the one
+          // reading this pair does not support, and the reason the client sends
+          // them as undefined rather than as zeros.
+          //
+          // These are the numbers that separate "the reply was chopped because the
+          // operator interrupted" from "because the audio arrived too late to play
+          // continuously". Both sound identical from the room, and step 4 was built
+          // on a grep that could not tell them apart.
+          'cushionMs', 'underruns']) {
           if (msg[k] !== undefined) fields[k] = msg[k];
         }
         logger.info('voice.capture-suspend', fields);

@@ -914,6 +914,17 @@ from:
 grep -c '"msg":"voice.live.interrupted"' mythos-server.log   ->   0
 ```
 
+> **CORRECTION, added by step 5 on the same day — the grep above is not evidence and the claim
+> below it is false.** `voice.live.interrupted` is a **bus event name** (`bus.emit` in
+> `live-session.js`); no logger has ever written it, so that `grep -c` returns 0 against every log
+> this project has ever produced regardless of what happened. The same session's log carried
+> `interrupted` in `live.turn-parts.scFields` on **129 turns** — Gemini's VAD fired repeatedly.
+> Step 4's FIX is unaffected and stays: a local flush cannot stop a turn the server is still
+> streaming, which is true by construction and never depended on the VAD being silent. Only the
+> "zero interrupts" reading is withdrawn. Left in place rather than edited away because the
+> reasoning it produced is the point of the record; see step 5 for the log line that now answers
+> the question honestly.
+
 **Zero server-side interrupts in the entire session.** Gemini's VAD — the only mechanism that can
 stop the model mid-turn — never fired once, so every hold's turn ran to completion no matter what
 the client flushed. Why it never fired is visible on the same lines and is a **separate, still-open
@@ -984,6 +995,140 @@ twice. The invariants were kept; only the bounds moved to the real closing brace
 **Suite: 5207/5207, 0 fail, 0 skipped** (was 5198; +9 new tests). **Still owed: one live session.
 A green suite proves nothing here — that is this ticket's whole lesson, and the operator's ear is
 the only oracle for step 4.**
+
+#### T4 step 5 — 🔧 CODED 2026-08-19: the reply came out one word at a time because 40ms of lead met 1486ms of jitter
+
+**NOT LIVE-VERIFIED. Stays 🔧 CODED until the operator's ear says otherwise** — see the gate at
+the end of this entry. Every step in this ticket that was scored from a log alone was scored
+wrong, twice.
+
+**THE REPORT.** The operator, 2026-08-19: *"after every word, there is a second delay, and then it
+speaks the other word, as if it's glitching through, getting stuck in between when talking."*
+
+**THE MEASUREMENT — a different fault from step 4's, on the same surface.** Steps 0–4 were all
+about *interruption*: something stopping the speech. This is speech that nobody interrupted
+arriving too slowly to be played continuously. The two are indistinguishable from the room and
+the log could not tell them apart, so `live-session.js` now times chunk arrivals per turn
+(`audioStarveEvents`, `audioStarveMaxMs` on `live.turn-parts`). Against one real session:
+consecutive `inlineData` chunks arrive **272ms, 298ms, 477ms, 954ms and 1486ms** apart on roughly
+half of all turns.
+
+A chunk holds **~100ms** of 24kHz PCM. `pcm-player.js` scheduled each chunk at
+`max(currentTime + 0.04, nextAt)` — gapless in principle, but leading the clock by only **40ms**.
+Any arrival gap past ~140ms therefore drained the scheduled timeline and the room heard silence
+until the next chunk landed. **Nothing was dropped and nothing was broken.** The audio was played
+exactly as fast as it arrived, and it does not arrive evenly. That is what a jitter cushion is
+for, and there was none.
+
+**THE FIX — no threshold, window or sustain constant was changed.**
+
+1. **A jitter cushion in `pcm-player.js`.** A drained timeline restarts at
+   `currentTime + cushionSec` instead of `currentTime + 0.04`. Base **250ms**, which alone
+   absorbs the 272ms and 298ms gaps outright. On a mid-reply underrun the cushion grows to
+   *(the dry period just measured + 250ms margin)* — an underrun reports its own length, so one
+   stutter sizes the cushion rather than seven creeping steps. Capped at **2s**, reset on
+   `close()` because it describes one session's link, not the machine.
+2. **`live.interrupted` is now an actual log line**, with `withFields` (which other
+   `serverContent` keys rode the same frame), `audioPartsSoFar` and `msSinceTurnStart`. Plus
+   per-turn `interrupts` on `live.turn-parts`. This is the second half of the answer: a turn with
+   `audioStarveEvents > 0` was the transport, a turn with `interrupts > 1` and no starve was the
+   client flushing mid-reply. **Opposite fixes**, and until now nothing on either side of the
+   wire recorded either number.
+
+**THE HONEST LIMIT, and it is not small.** The cushion's **growth** is gated on the player still
+believing it is mid-reply, and `END_GRACE_MS` (250ms) ends that belief shortly after the timeline
+empties. Measured on a live clock (frozen-clock unit tests cannot see this — the end-timer never
+fires): a **477ms** gap grows the cushion; **954ms and 1486ms gaps do not**. The two worst
+measured gaps leave the cushion at its 250ms base.
+
+This is a **deliberate disposition, pinned by two tests**, not an oversight. The player cannot
+distinguish a stalled network from a finished reply followed by an operator turn — only the turn
+boundary can, and that lives in `s2s-bridge.js`. Counting a conversational pause as an underrun
+would pin the cushion at 2s and put two seconds of latency in front of every first word for the
+rest of the session. Under-learning is recoverable by ear; that is not. **The named remedy, if
+this proves insufficient live:** feed the `live-turn-complete` broadcast the HUD already receives
+into the player, making the attribution exact. Not done here — it fails open in the wrong
+direction (a turn-complete that never arrives leaves the run permanently "open" and inflates the
+cushion to max), and it is a new seam, which this step is not scoped for.
+
+The other cost, stated plainly: **the cushion buys continuity by delaying the first word of every
+reply by up to `cushionSec`.** A cushion pinned at 2s that is still underrunning is a verdict
+about the connection, not a tuning problem — `stats().cushionAtMax` says so.
+
+**ADVERSARIAL PASS (`rules/core.md` §11) — this step's two gaps were found by it, after the code
+was written.**
+
+- **Q3 who actually reads this?** *Nothing did.* `pcm-player.js` exposed `stats()` and its own
+  comment claimed a pinned cushion "is where that shows up" — while `grep -rn "\.stats()"` over
+  `ui/` and `src/` returned **zero non-test consumers**. Now wired: `endAudioOutSuppression()`
+  puts `cushionMs`/`underruns` on the existing `voice.capture-suspend` transition, and both names
+  are allowlisted in `server/index.js`. Sent as `undefined` on a clean link, so their **absence
+  means no stutter rather than a dropped field**. Would have been the **fifth** client field
+  dropped at that two-places seam; `bug-273-suspend-fields-reach-the-log.test.js` caught it RED
+  before the allowlist entry existed, which is what that file is for.
+- **Q2 does this hide evidence?** *One comment did.* `s2s-bridge.js` carried a paragraph headed
+  "THE NUMBER THAT SETTLES IT" asserting Gemini's VAD "never fired once in the whole session",
+  built on `grep -c '"msg":"voice.live.interrupted"'` → 0. **That grep matches a bus event name no
+  logger writes**, so it returns 0 against every log ever produced. The same log had `interrupted`
+  in `scFields` on **129 turns**. The paragraph is rewritten to the mechanism's real justification
+  — the server keeps forwarding audio after a *local* barge-in whatever Gemini's VAD does, which
+  is true by construction — and step 4's BUGS.md entry carries a correction block above the same
+  claim. **The suppression mechanism itself is unaffected and stays.**
+- **Q6 what class?** *"A gate that passes on a metric it cannot read"* — **second occurrence**;
+  `verify-voice-session.js:205-232` documents the first, in which this same phantom name printed
+  `0/61 turns = 0%` and a PASS while the real figure was 43%. Also *"inert mechanism that looks
+  like coverage"*: the self-tuning growth described above is inert past `END_GRACE_MS`, and the
+  frozen-clock test asserting growth to 2.0s passes for a reason production cannot reproduce. Both
+  are now stated in the source and pinned by `pcm-player-jitter-cushion.test.js`'s two live-clock
+  cases rather than left for the next session to rediscover.
+- **Q4 what is standing next to it?** `verify-voice-session.js:227` filters
+  `e.msg === 'voice.live.interrupted'` **exactly**, and the new line is `live.interrupted` — so it
+  is **not** double-counted, and the script's `Math.max(scFields-turns, msg-count)` would not
+  double-count it even if the names matched. Deliberately **not** added to that filter: the msg
+  count is per-frame while the criterion is per-turn, so ORing it in could report >100%. The
+  `scFields` path already measures this correctly at turn granularity.
+- **Q8 dispositions pinned in code:** `PENDING_HOLD_MS` 350, `PROTECTED_MS` 500,
+  `INITIAL_BLEED_FLOOR` 0.035, both backstop tiers and `TAIL_GUARD_SEC` all **UNCHANGED**. The
+  planned **Stage 2/3** sensitivity widenings (incl. `PENDING_HOLD_MS` 350 → 200) stay
+  **unshipped** — a previous session's stray edit of that constant was already reverted once.
+  Nothing new is sent to the server; the frozen Live wire protocol (V2 spine §3 / AD-1) has no
+  client-initiated cancel and none was invented.
+- **`flush()`'s tail guard was corrected for the cushion.** It compared `nextAt - currentTime`,
+  which with a cushion counts up to two seconds of scheduled **silence** as speech worth
+  protecting — a 100ms reply would have looked like a 350ms one and a barge-in would have been
+  declined. It now measures from `max(currentTime, runStartsAt)`, i.e. the audio actually left to
+  play. `stopAll()` pins `nextAt` to `currentTime`, so a stale `runStartsAt` (past *or* future)
+  can only yield `remainingAudio <= 0` and falls through to a real stop — verified, and noted in
+  the source.
+
+**A naming disagreement left alone deliberately:** these BUGS.md "step" headings and the
+`BUG-274 step N` comments in `s2s-bridge.js` are offset by one in places. Not renumbered —
+churning committed comments to fix a label costs more than the label is worth. Read the code
+comments as pointers to this ticket, not as an index into it.
+
+**Suite: 5324/5324, 0 fail, 0 skipped** (+2: the two live-clock cases pinning the growth
+boundary). `README.md`/`ROADMAP.md` were **already 10 behind** before this step — `sync-test-count
+--write` corrected 7 stale numbers, so part of that diff is arrears, not this change.
+
+**LIVE GATE — the operator's step, not a session's. This one session gates BOTH open behaviours.**
+Reload the HUD (files are served no-cache), converse 4–5 turns, **interrupt MYTHOS 4–5 times
+mixing normal and quiet voice**, then run
+`node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"`.
+
+- **Interruption half (step 4):** at least one hold reporting `stopped playback`, a
+  `barge-in-suppression-*` line with non-zero `suppressedChunks`, and **the operator confirming by
+  ear that MYTHOS went quiet and stayed quiet** for that turn. A released mic beside continuing
+  speech is the exact trap that produced this ticket's earlier false success.
+- **Continuity half (step 5):** replies continuous **by ear**, per-turn `audioStarveEvents`
+  visible in `live.turn-parts`, and `live.interrupted` lines present where Gemini actually cut a
+  turn.
+- **Expected to FAIL, and not regressions:** (a) very quiet interruptions (peak ~0.024–0.031,
+  roughly half of quiet attempts) sit below any workable floor and will still not land — closing
+  that band needs speaker verification or a tolerance for self-interruption, an operator scope
+  decision. (b) **A repeat of a >600ms gap will still be audible** — the criterion "at most one
+  audible gap per link degradation" holds only for stalls inside the end-grace window; see THE
+  HONEST LIMIT above. If the operator still hears word-by-word playback with
+  `audioStarveMaxMs > 600`, the remedy is the named turn-boundary seam, not a bigger base cushion.
 
 #### T5 findings — 🔍 MEASURED 2026-08-19 (`d9f2ad2`): three of this item's premises do not survive
 
