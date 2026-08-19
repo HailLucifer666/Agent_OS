@@ -1,6 +1,6 @@
 # MYTHOS — Complete Bug Registry
 
-<!-- BUG-275 and BUG-274 are the newest entries; they are placed immediately after this
+<!-- BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed immediately after this
      header so the handoff is the first thing a new session reads. -->
 
 Comprehensive issue log covering the entire MYTHOS history, mined from:
@@ -11,6 +11,128 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Code comments (D-NN drift items, SPEC/REALITY GAPs)
 - Git commit history
 - Live session bug reports
+
+---
+
+## BUG-276 — "show me the news" failed six ways, and only one of them was the model's fault (FILED, NOT STARTED) — opened 2026-08-19
+
+**Operator, 2026-08-19: "Every time how do you manage to fuck things up?" / "you keep doing
+cannot do basic stuff" / "Which was working before".** They are right that it failed. The
+useful finding is that **the causes are mostly environmental, one is a genuine code defect,
+and the tool layer was largely HONEST about failing** — the model's narration of those
+failures is where it went wrong.
+
+Evidence: `%APPDATA%\MYTHOS\vault\Conversation\session.json` turns 10-39 (the `SYSTEM`
+turns carry verbatim action outcomes) and the `pid=17536` run in
+`%APPDATA%\MYTHOS\mythos-server.log`.
+
+### F1 (P0, ENVIRONMENT not code) — 13 browser tools were WITHHELD, so there was no way to navigate
+
+```
+live-tools.unavailable count:13
+  tools: browser_navigate, browser_snapshot, browser_click, browser_type,
+         browser_get_title, browser_get_text, browser_tabs, browser_dismiss_overlays,
+         browser_check_captcha, browser_upload_file, browser_select_option,
+         browser_press_key, browser_hover
+  reasons: ["no debuggable browser is attached (CDP endpoint unreachable) —
+            browser_launch_debug can start one"]
+```
+
+`browser-agent connect failed … ECONNREFUSED 127.0.0.1:9222` × 6, then
+`browser-automation.standby`. **This is the root cause of the whole episode.** With
+`browser_navigate` withheld, `open_web` degrades to handing a URL to the OS **default**
+browser — which on this machine is **Brave** — so the operator's "open it on Chrome" could
+not be honoured, and nothing downstream could verify what rendered.
+
+**MYTHOS told the truth about this** (turn 27: *"I don't have a direct navigate tool, but I
+can launch Chrome or YouTube and try there"*). Credit where due — that is the withheld-tool
+machinery working. **Remedy is operator-side**: start a debuggable browser
+(`browser_launch_debug`, or `scripts/setup-chrome-debug.ps1`). Worth deciding whether boot
+should say this loudly rather than leaving it in a `warn` line.
+
+### F2 (P0, REAL CODE DEFECT) — Wikipedia is the last-resort search provider and its irrelevant results ship as `ok: true`
+
+Turn 18, for the query **"CNN live news"**:
+
+```json
+{"widgetType":"search","cards":[{"title":"Clive, New South Wales",
+ "url":"https://en.wikipedia.org/wiki/Clive,_New_South_Wales","snippet":""}],
+ "title":"CNN live news","source":"wikipedia","renderDispatched":true}
+```
+
+`src/core/effectors/web-search.js:463-469`: Wikipedia OpenSearch is provider #5, and the
+chain returns `{ ok: true }` on **any non-empty array** — there is no relevance check at all.
+Wikipedia OpenSearch fuzzy-matches titles, so "CNN live news" matched *Clive, New South
+Wales*, and it was reported to the model as a **successful search**.
+
+**This is the repo's own "reports success it did not earn" class**, and it directly
+manufactured a wrong answer the operator saw. Note also that Wikipedia OpenSearch **cannot
+answer a news query by construction**, yet sits in the chain for every query type. Two
+candidate fixes, and the choice matters: gate the result on relevance to the query, or drop
+Wikipedia from the chain for time-sensitive intents. **Do not "fix" this by making the
+failure silent** — `ok: false` with a reason is the correct outcome here.
+
+### F3 (P1) — a news request was routed to YouTube video search
+
+Turns 12, 13, 25: `open_web FAILED: No results found for "CNN news dashboard"`,
+`No YouTube videos found for "CNN"`, `No YouTube videos found for "CNN live news"`. Asked
+for news, `open_web` looked for videos. Check `from-web.js`/`open_web`'s intent routing:
+"news" should not resolve to a video-search provider.
+
+### F4 (P1) — provider outages and billing, reported honestly by the tools
+
+- `cerebras`: **402 Payment required to access this resource**
+- `nim` and `nim2`: aborted at ~7,000ms (timeout), both attempts
+- `mistral`: the only lane that answered
+- `gemini-tts`: **503 high demand**
+- `web_search`: *"All search providers are unavailable"* (turn 23)
+
+`think_deeply` therefore took **15,669ms across 4 attempts** to produce 168 characters.
+Nothing here is a code fault; it is an unpaid provider, a timing-out provider, and a
+provider outage stacking up. **Operator action: cerebras billing.** See also the standing
+memory that a missing/short-lived NIM key silently voids the nim lanes.
+
+### F5 (P1) — `browser_switch` returned `switched:false` and MYTHOS announced a switch
+
+Turn 32: `browser_switch succeeded … {"switched":false,"alreadyOnline":true,"browser":"chrome"}`.
+Turn 33: *"Switched to Chrome now."*
+
+The tool was truthful and the narration was not. Same class as BUG-275 H4 — a supplied field
+contradicted by the spoken claim. Note also that `succeeded` is arguably wrong for a call
+that switched nothing; `switched:false` deserves to surface as a non-success so the model
+cannot read past it.
+
+### F6 (P1) — `think_deeply` answered before the tool returned, and the operator got two different stories
+
+Turn 8 delivers a bedtime story (*"an overworked data scientist dreamt of spreadsheets…"*)
+while turn 9 is `think_deeply started (outcome pending)`. Turn 14 then returns a **different**
+story (the Vulcan/Spock one), which turn 15 reads out as well. The operator asked for one
+story and got two unrelated ones. Turn 8 is also visibly garbled and duplicated:
+*"…Next step: rest now.Thinking, Sir. Better luck next sleep cycle, Sir. Rest now."*
+
+**This is BUG-275 H6 reproducing live**, and it is now the second independent sighting. Treat
+the ordering defect as the common cause and fix it there rather than per symptom.
+
+### What is working correctly and must NOT be "fixed"
+
+`open_web`'s browser-handoff failure message is exemplary and should be the template for
+every unverifiable action:
+
+> *"your default browser was handed https://news.google.com and accepted it — that part IS
+> confirmed. NOT confirmed: whether the page actually rendered in the browser."*
+
+That is the evidence contract doing exactly its job: naming what was proven and what was
+not, instead of claiming a render it cannot see. Turns 30, 36 and 39 report `FAILED` for a
+partial success, which is the right side to err on. **Do not soften this into a success.**
+
+### The summary a fix session needs
+
+Two operator actions (start a debuggable browser; settle cerebras billing) would have
+prevented most of what was experienced. **One real code defect** (F2, Wikipedia junk as
+`ok:true`) and **one routing defect** (F3, news → video search) are ours. **Two narration
+defects** (F5, F6) belong with BUG-275 and share its root cause. Do not start by rewriting
+the browser stack — establish which failures survive a debuggable browser and a paid
+provider first.
 
 ---
 
