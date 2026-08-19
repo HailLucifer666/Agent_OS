@@ -88,8 +88,13 @@ function createIdentity({ bus, config, fs, identityStore }) {
     return Math.max(0, Math.min(10, n));
   }
 
-  function loadLevels() {
-    var stored = fs.readJSON(PERSONA_LEVELS_PATH, {});
+  // strict=true is for the read-mutate-write path in setPersonaLevel below.
+  // The lenient read stays the default for display/composition, where treating a
+  // corrupt file as "no overrides" degrades to defaults and hurts nobody.
+  function loadLevels(strict) {
+    var stored = strict
+      ? fs.readJSONStrict(PERSONA_LEVELS_PATH, {})
+      : fs.readJSON(PERSONA_LEVELS_PATH, {});
     var out = {};
     for (var i = 0; i < TRAITS.length; i++) {
       var t = TRAITS[i];
@@ -366,7 +371,21 @@ function createIdentity({ bus, config, fs, identityStore }) {
       if (v === null) {
         return { ok: false, error: 'Value must be a number 0-10.' };
       }
-      if (!levels) levels = loadLevels();
+      // Re-read strictly, every time, immediately before the write. Two failure
+      // modes close here: a CORRUPT persona.json read leniently comes back as {},
+      // so the writeJSON below would commit DEFAULTS over every dial the operator
+      // has ever set — keeping only the one just changed — and still report
+      // ok:true. And a cached `levels` from boot would clobber anything written
+      // since. readJSONStrict throws on corruption (and emits health.anomaly), so
+      // the write is skipped and the operator is told, rather than the file being
+      // quietly rebuilt from defaults.
+      var fresh;
+      try {
+        fresh = loadLevels(true);
+      } catch (err) {
+        return { ok: false, error: 'The saved persona levels are unreadable (' + err.message + '), so I left them alone rather than overwriting them.' };
+      }
+      levels = fresh;
       levels[t] = v;
       try {
         fs.writeJSON(PERSONA_LEVELS_PATH, levels);
