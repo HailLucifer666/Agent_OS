@@ -93,10 +93,17 @@ describe('the explainer never invents a component', () => {
   // triggering a limit" about a deliberate idle close. The prompt no longer asks
   // for prose at all, so the stronger property is now assertable — there is
   // nothing in the response for the operator to hear.
+  // FIXTURE REPOINTED, BUG-278 (2026-08-20). This used to fire `target: ''`, which now
+  // takes the no-brain-call path on purpose: with no target, neither suppress_tool nor
+  // probe_provider can act, so the remedy menu is empty and there is no question to ask
+  // (91 of 104 health.anomaly emit sites carry no target, so that path is the common one).
+  // The property under test here is the SHAPE OF THE PROMPT, not whether an empty target
+  // produces one — the empty string was incidental to it. A tool-shaped target keeps the
+  // brain in the loop so the assertions below still traverse the branch they describe.
   test('the prompt asks for a remedy only, so there is no prose to fabricate', async () => {
     const { explainer, prompts } = capturedPrompt();
     await explainer._onHealed({ payload: {
-      kind: 'some-anomaly', target: '', outcome: 'no-match', detail: {},
+      kind: 'some-anomaly', target: 'some_tool', outcome: 'no-match', detail: {},
     } });
 
     assert.equal(prompts.length, 1);

@@ -208,8 +208,24 @@ function jinaSearch(q, maxResults, bus) {
       signal: controller.signal,
       headers: { 'Accept': 'application/json', 'X-Return-Format': 'text' }
     })
-    .then(function(res) { clearTimeout(timer); return res.text() })
+    .then(function(res) {
+      clearTimeout(timer)
+      // BUG-276 F4 (2026-08-20): a non-OK status used to fall straight into the parser
+      // below, find no URLs in the error body, and resolve([]) — indistinguishable from
+      // "this provider answered and matched nothing". Measured on this machine: the free
+      // no-key tier this comment promises now returns **HTTP 401**, so the provider was
+      // failing on every single call and reporting it as an empty result set. Emitting the
+      // same anomaly the transport catch below emits is what makes it visible to the
+      // failure message AND to the search-provider-degrade playbook, which can now rest a
+      // provider that is refusing us rather than paying its timeout every call.
+      if (!res.ok) {
+        if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'jina', error: 'HTTP ' + res.status })
+        return null
+      }
+      return res.text()
+    })
     .then(function(text) {
+      if (text === null) { resolve([]); return }
       var results = []
       // Jina returns either JSON or plain text with URL: Title: patterns.
       // Try JSON first.
@@ -302,7 +318,12 @@ async function exaMcpSearch(q, maxResults, bus) {
         body: JSON.stringify(body)
       })
       clearTimeout(timer)
-      if (!res.ok) return null
+      // BUG-276 F4: the same silent swallow as jina's. A bare `return null` here made a
+      // 429/402/500 from the free MCP tier read as "no results" upstream.
+      if (!res.ok) {
+        if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: 'HTTP ' + res.status })
+        return null
+      }
       return parseSse(await res.text())
     } catch (err) {
       clearTimeout(timer)
@@ -369,8 +390,53 @@ async function web_search({ query, maxResults, bus }) {
     var q = String(query).trim()
     var max = Math.min(maxResults || 5, 10)
 
+    // BUG-276 F4 (2026-08-20) — WHAT WAS TRIED, AND WHY EACH ONE FAILED.
+    //
+    // This chain has six members and, when all six came up empty, said exactly one thing:
+    // "All search providers are unavailable." The audited session lost four user-visible
+    // searches to that sentence. Measured here the same day, the six outcomes were:
+    // exa skipped for a missing key, exa-mcp empty, ddg-html and ddg-lite both `fetch
+    // failed` at ~10s, jina **HTTP 401**, wikipedia 200-with-no-match — six different
+    // facts, five of them actionable, all discarded.
+    //
+    // Q2 of the fix checklist. No retry, no new provider, no new mechanism: the chain
+    // already knew all of this and threw it away at the last line. Now it is in the
+    // failure string, so the next four-miss session is diagnosable from its own log.
+    var tried = []
+    function note(provider, cause) { tried.push(provider + ' ' + cause) }
+    function outcome(provider) { return seen[provider] || 'no results' }
+
+    // The helpers already emit `search-provider-failed` for a transport fault, so their
+    // causes are collected by wrapping the bus rather than by threading a new parameter
+    // through five signatures. This forwards every event untouched — the real bus keeps
+    // driving the search-provider-degrade playbook exactly as before. It also exists
+    // unconditionally, because the helpers guard their emits on `if (bus)`: with no bus
+    // passed (the autonomous path and most tests) the causes would otherwise be lost
+    // again, which is the bug this fixes.
+    // A provider that was never called has a cause too, and it is a different cause from
+    // failing: "no key configured" is the operator's to fix, and "suppressed" means the
+    // immune system is deliberately resting it. Reporting either as a failure is how a
+    // working self-heal gets read as a broken chain.
+    function skipReason(provider, keyEnv) {
+      if (keyEnv && !process.env[keyEnv]) return 'no ' + keyEnv + ' set'
+      if (isSearchProviderSuppressed(provider)) return 'suppressed by the immune system'
+      return null
+    }
+
+    var seen = {}
+    var traceBus = {
+      emit: function(type, payload) {
+        if (type === 'health.anomaly' && payload && payload.kind === 'search-provider-failed' && payload.provider) {
+          seen[payload.provider] = payload.error || 'failed'
+        }
+        if (bus) return bus.emit(type, payload)
+      }
+    }
+
     // 1a. Exa REST API — only if EXA_API_KEY is configured (higher rate limits)
-    if (process.env.EXA_API_KEY && !isSearchProviderSuppressed('exa')) {
+    var exaSkip = skipReason('exa', 'EXA_API_KEY')
+    if (exaSkip) note('exa', exaSkip)
+    else {
       try {
         var controller = new AbortController()
         var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
@@ -401,25 +467,31 @@ async function web_search({ query, maxResults, bus }) {
             return { ok: true, result: { query: q, results: results.slice(0, max), source: 'exa' } }
           }
         }
-      } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa', error: err.message }); }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa', error: err.message }); }
+      note('exa', outcome('exa'))
     }
 
     // 1b. Exa MCP free tier — zero-config default (no key needed, 150 calls/day)
-    if (!isSearchProviderSuppressed('exa-mcp')) {
+    var mcpSkip = skipReason('exa-mcp')
+    if (mcpSkip) note('exa-mcp', mcpSkip)
+    else {
       try {
-        var mcpResults = await exaMcpSearch(q, max, bus)
+        var mcpResults = await exaMcpSearch(q, max, traceBus)
         if (mcpResults.length) {
           return { ok: true, result: { query: q, results: mcpResults.slice(0, max), source: 'exa-mcp' } }
         }
-      } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
+      note('exa-mcp', outcome('exa-mcp'))
     }
 
     // 2. DuckDuckGo HTML direct (+ fallback parser if primary returns nothing).
     // Suppression key matches the anomaly's own `provider` field ('ddg-html'),
     // not the success-path `source` label ('duckduckgo-html') — they differ.
-    if (!isSearchProviderSuppressed('ddg-html')) {
+    var ddgHtmlSkip = skipReason('ddg-html')
+    if (ddgHtmlSkip) note('ddg-html', ddgHtmlSkip)
+    else {
       try {
-        var ddgResults = await ddgHtml(q, max, bus)
+        var ddgResults = await ddgHtml(q, max, traceBus)
         if (!ddgResults.length) {
           // A2: try the fallback parser against the same HTML — DDG rotates
           // markup variants and the primary class-targeted regex misses sometimes.
@@ -436,40 +508,57 @@ async function web_search({ query, maxResults, bus }) {
         if (ddgResults.length) {
           return { ok: true, result: { query: q, results: ddgResults, source: 'duckduckgo-html' } }
         }
-      } catch (_) { /* DDG HTML unavailable — fall through */ }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-html', error: err.message }); }
+      note('ddg-html', outcome('ddg-html'))
     }
 
     // 3. DuckDuckGo Lite (suppression key: 'ddg-lite', matching the anomaly's provider field)
-    if (!isSearchProviderSuppressed('ddg-lite')) {
+    var ddgLiteSkip = skipReason('ddg-lite')
+    if (ddgLiteSkip) note('ddg-lite', ddgLiteSkip)
+    else {
       try {
-        var liteResults = await ddgLite(q, max, bus)
+        var liteResults = await ddgLite(q, max, traceBus)
         if (liteResults.length) {
           return { ok: true, result: { query: q, results: liteResults, source: 'duckduckgo-lite' } }
         }
-      } catch (_) { /* DDG Lite unavailable — fall through */ }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-lite', error: err.message }); }
+      note('ddg-lite', outcome('ddg-lite'))
     }
 
-    // 4. Jina AI search (free, no key)
-    if (!isSearchProviderSuppressed('jina')) {
+    // 4. Jina AI search — NOT key-free any more; measured HTTP 401 on 2026-08-20.
+    var jinaSkip = skipReason('jina')
+    if (jinaSkip) note('jina', jinaSkip)
+    else {
       try {
-        var jinaResults = await jinaSearch(q, max, bus)
+        var jinaResults = await jinaSearch(q, max, traceBus)
         if (jinaResults.length) {
           return { ok: true, result: { query: q, results: jinaResults, source: 'jina' } }
         }
-      } catch (_) { /* Jina unavailable — fall through */ }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'jina', error: err.message }); }
+      note('jina', outcome('jina'))
     }
 
-    // 5. Wikipedia OpenSearch
-    if (!isSearchProviderSuppressed('wikipedia')) {
+    // 5. Wikipedia OpenSearch. Title-prefix only, so it cannot answer a natural-language
+    // query by construction — measured: 'London' returns 3 hits, 'weather in London today'
+    // returns 0. An empty answer from it is CORRECT behaviour, not a fault, which is why
+    // its note falls through to 'no results' and it emits no anomaly.
+    var wikiSkip = skipReason('wikipedia')
+    if (wikiSkip) note('wikipedia', wikiSkip)
+    else {
       try {
-        var wikiResults = await wikiSearch(q, max, bus)
+        var wikiResults = await wikiSearch(q, max, traceBus)
         if (wikiResults.length) {
           return { ok: true, result: { query: q, results: wikiResults, source: 'wikipedia' } }
         }
-      } catch (_) { /* Wikipedia unavailable */ }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'wikipedia', error: err.message }); }
+      note('wikipedia', outcome('wikipedia'))
     }
 
-    return { ok: false, result: 'All search providers are unavailable.' }
+    // The failure now carries the evidence instead of discarding it. Note the shape: the
+    // caller contract is unchanged ({ ok:false, result:<string> }) — this is a more
+    // informative string in the same field, not a new response shape, so no consumer or
+    // widget needs to change.
+    return { ok: false, result: 'All search providers are unavailable (tried: ' + tried.join('; ') + ').' }
   } catch (err) {
     return { ok: false, result: 'Search failed: ' + err.message }
   }

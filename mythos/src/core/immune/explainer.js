@@ -51,17 +51,57 @@ var announcerLib = require('../conversation/announcer');
 // model's answer is untrusted input: the control has to be here, in code, not in
 // the request. Rejected at the edge rather than sanitised downstream.
 //
-// Deliberately a small, explicit list rather than "ask the registry": the registry
-// is exactly the subsystem this remedy perturbs, so consulting it to decide whether
-// to perturb it invites the failure mode where a broken registry can no longer
-// refuse a refresh. Names are the lanes and the brain itself, which is all the
-// remedy has ever been able to act on.
-var PROBEABLE_TARGETS = ['brain', 'provider', 'providers', 'llm', 'lane',
-  'voice', 'simple', 'vision', 'coding', 'reasoning'];
-function canProbeProvider(target) {
-  var t = String(target || '').trim().toLowerCase();
-  if (!t) return false;
-  return PROBEABLE_TARGETS.indexOf(t) !== -1;
+// Deliberately NOT "ask the registry": the registry is exactly the subsystem this
+// remedy perturbs, so consulting it to decide whether to perturb it invites the
+// failure mode where a broken registry can no longer refuse a refresh.
+//
+// BUG-278, 2026-08-20 — THE VOCABULARY WAS WRONG IN BOTH DIRECTIONS, and one constant
+// caused both halves. This used to gate on the TARGET against a list of target names:
+// ['brain','provider','providers','llm','lane','voice','simple','vision','coding',
+// 'reasoning'] — lane names and generic words. Not one of the 13 target-bearing anomaly
+// emitters in this tree produces a name from that vocabulary, so the guard:
+//
+//   - REFUSED its own legitimate case. `quota-low` carries `q.provider` (probes.js:58)
+//     and its playbook matches only target eq 'groq' (healer.js:86), so a quota-low for
+//     mistral/nim/gemini reaches this no-match path with a real AI provider as its
+//     target — and was logged as "not an AI provider — a re-probe cannot affect this
+//     target". About an actual AI provider.
+//   - and still had to refuse gmail and '' downstream, which is the noise the
+//     2026-08-20 session audit reported (probe_provider proposed against Gmail once and
+//     an empty target twice).
+//
+// The anomaly KIND is the honest gate. It is a closed set emitted by this subsystem
+// itself, it cannot drift when a provider id is added or renamed, and it needs no
+// registry call — which is what the paragraph above actually wanted. Q5 of the fix
+// checklist ("is this constant actually correct?"): it was not. It was defending with a
+// value that traced to nothing.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Both kinds below are emitted only by immune/probes.js,
+// never from user input or a model's answer, so there is no crafted string to consider:
+// the set is closed at the emitter. `provider-down` additionally has a playbook, so in
+// practice `quota-low` is the one that reaches here — the other is kept because a
+// playbook can be edited and this must not silently become a dead branch again.
+var PROVIDER_ANOMALY_KINDS = ['provider-down', 'quota-low'];
+function canProbeProvider(kind) {
+  return PROVIDER_ANOMALY_KINDS.indexOf(String(kind || '').trim().toLowerCase()) !== -1;
+}
+
+// Whether `suppress_tool` has anything it could act on. Shape only, and deliberately so:
+// the one real oracle for "is this a live effector name" is the hub, and importing all
+// 171 effectors onto the Live-session hot path to validate a remedy costs more than the
+// remedy is worth.
+//
+// Q3/Q4 — the residual is bounded and inert, verified rather than assumed:
+// goals/index.js:532 is the ONLY reader of the suppression map and it tests real effector
+// names (`e.name`), so a suppression keyed on something that is not a tool (goal ids
+// arrive here via goal-grant-empty and goal-save-failed) matches nothing and expires in
+// SUPPRESS_TTL_MS. It cannot disable a working tool. The anchored character class also
+// means nothing containing a space, quote, path separator or newline can pass, so a
+// target echoed from an error string cannot widen this.
+var TOOL_SHAPED = /^[a-z][a-z0-9_-]*$/i;
+function canSuppressTool(target) {
+  var t = String(target === undefined || target === null ? '' : target).trim();
+  return t !== '' && TOOL_SHAPED.test(t);
 }
 
 var EXPLAIN_COOLDOWN_MS = 10 * 60 * 1000;
@@ -133,8 +173,44 @@ function createExplainer({ bus, brain, memory, config, logger }) {
         spoken: explanation + ' This one needs your attention.' };
     }
 
+    // BUG-278: THE MENU IS BUILT FROM APPLICABILITY, NOT ARGUED FOR IN PROSE.
+    //
+    // The prompt below used to offer all three remedies on every call and constrain the
+    // inapplicable ones in English — "Choose probe_provider ONLY if an AI provider seems
+    // down". On 2026-08-18 the model picked probe_provider for a revoked Google OAuth
+    // token, and the 2026-08-20 audit caught it twice more (against gmail, and against an
+    // empty target). This repo already has the class on record: a capitalised instruction
+    // loses to a menu entry. So the entry is removed rather than argued with — reject at
+    // the edge, and the edge is the question, not the answer.
+    var menu = [];
+    if (canSuppressTool(target)) {
+      menu.push({
+        id: 'suppress_tool',
+        guidance: 'Choose suppress_tool ONLY if ' + target + ' is a failing tool that should rest for a minute.'
+      });
+    }
+    if (canProbeProvider(kind)) {
+      menu.push({
+        id: 'probe_provider',
+        guidance: 'Choose probe_provider ONLY if an AI provider seems down. Otherwise choose none.'
+      });
+    }
+
+    // Nothing mechanical can apply, so there is no question to ask. This is the COMMON
+    // path, not an edge case: 91 of this tree's 104 health.anomaly emit sites carry no
+    // target at all (only 13 do), and with no target neither remedy is reachable. Every
+    // one of those calls was a round trip on the lane that serves the live voice socket
+    // whose only honest answers were 'none' or noise. Skipping it is cheaper AND more
+    // honest than filtering the answer afterwards — same reasoning as the needsOperator
+    // return above, which is why they produce the identical result.
+    if (!menu.length) {
+      return { explanation: explanation, remedy: 'none',
+        spoken: explanation + ' This one needs your attention.' };
+    }
+
     // The brain is asked for the remedy ONLY. No prose, no cause, no narration.
-    // A choice from three fixed values is not a fabrication risk; a sentence is.
+    // A choice from a fixed set of applicable values is not a fabrication risk; a
+    // sentence is.
     var result = await brain.think({
       lane: 'simple',
       messages: [{
@@ -147,11 +223,10 @@ function createExplainer({ bus, brain, memory, config, logger }) {
           recentLines.length ? 'Recent related activity:\n' + recentLines.join('\n') : '',
           '',
           'Respond with ONE JSON object, nothing else:',
-          '{"remedy": "suppress_tool" | "probe_provider" | "none"}',
-          'Choose suppress_tool ONLY if the target is a failing tool that should rest for a minute.',
-          'Choose probe_provider ONLY if an AI provider seems down. Otherwise choose none.',
+          '{"remedy": ' + menu.map(function(m) { return '"' + m.id + '"'; }).concat('"none"').join(' | ') + '}'
+        ].concat(menu.map(function(m) { return m.guidance; }), [
           'Do not include any other field. Do not explain your choice.'
-        ].filter(Boolean).join('\n')
+        ]).filter(Boolean).join('\n')
       }],
       source: 'immune-explain'
     });
@@ -161,10 +236,10 @@ function createExplainer({ bus, brain, memory, config, logger }) {
     var remedy = (result && !result.offline && result.parsed) ? result.parsed.remedy : 'none';
 
     var remedyNote = '';
-    if (remedy === 'suppress_tool' && target && /^[a-z][a-z0-9_-]*$/i.test(target)) {
+    if (remedy === 'suppress_tool' && canSuppressTool(target)) {
       healerLib.suppressTool(target, SUPPRESS_TTL_MS);
       remedyNote = " I've suppressed " + target + ' for a minute.';
-    } else if (remedy === 'probe_provider' && canProbeProvider(target)) {
+    } else if (remedy === 'probe_provider' && canProbeProvider(kind)) {
       try {
         require('../brain/registry').refresh(true);
         remedyNote = " I'm re-probing the AI providers now.";
@@ -174,9 +249,21 @@ function createExplainer({ bus, brain, memory, config, logger }) {
       // that quietly swallows the answer makes the next "why did nothing happen?"
       // investigation start from zero — and this one fired in production on its
       // first day, so it will fire again.
-      if (remedy === 'probe_provider') {
-        log.info('immune-explain.remedy-refused', { remedy: remedy, target: target,
-          reason: 'not an AI provider — a re-probe cannot affect this target' });
+      //
+      // BUG-278: this is now DEFENCE IN DEPTH rather than the primary control. The menu
+      // above no longer contains a remedy that cannot apply, so reaching this branch
+      // means the model answered OUTSIDE the menu it was given. That is a different and
+      // more interesting event than "picked the wrong one from three", so the line
+      // records what was actually offered — without it, the next reader cannot tell a
+      // model going off-menu from a menu that was built wrong. Both remedies are covered
+      // now, not just probe_provider: an off-menu suppress_tool would otherwise have been
+      // downgraded in silence, which is the exact behaviour this log exists to prevent.
+      if (remedy === 'suppress_tool' || remedy === 'probe_provider') {
+        log.info('immune-explain.remedy-refused', {
+          remedy: remedy, kind: kind, target: target,
+          offered: menu.map(function(m) { return m.id; }).join(',') || 'none',
+          reason: 'answered outside the offered menu — this remedy cannot act on this anomaly'
+        });
         remedy = 'none';
       }
       remedyNote = ' This one needs your attention.';
