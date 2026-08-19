@@ -2780,7 +2780,14 @@ function createServer(deps) {
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
       if (!liveSession) {
-        const { declarations, withheld, unavailable } = buildFunctionDeclarations(effectors, {
+        // Hoisted into a named builder so it can be re-run. It used to be called
+        // exactly once, and its result handed to createLiveSession as a frozen
+        // array — which meant a session that rotated at the 10-minute ceiling
+        // came back declaring the capabilities the machine had before the
+        // rotation, contradicting this function's own comment below. Passed as a
+        // FUNCTION now, the same way buildLiveSystemInstruction is (BUG-079), so
+        // live-session.js rebuilds it on every open()/reconnect.
+        const rebuildDeclarations = () => buildFunctionDeclarations(effectors, {
           allowlist: String(config.LIVE_TOOL_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
           // Do not declare a tool whose machinery is absent on this machine.
           // The freshly installed build fired gmail_unread / media_status /
@@ -2803,6 +2810,12 @@ function createServer(deps) {
           }),
           log: (m) => logger.info('live-tools', { detail: m }),
         });
+        const { declarations, withheld, unavailable } = rebuildDeclarations();
+        // Only the tool NAMES go to the session; withheld/unavailable are
+        // reported here. Re-logging them on every rotation would turn a
+        // once-per-session diagnostic into a recurring one, so the rebuild
+        // closure below deliberately keeps just `declarations`.
+        const declarationsForSession = () => rebuildDeclarations().declarations;
         if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
         // Logged as its own event, not folded into the line above: "withheld by
         // curation" and "withheld because this machine cannot do it" are
@@ -2828,7 +2841,9 @@ function createServer(deps) {
           // time (and anything else composed here) never goes stale across a
           // long-running or rotated session.
           systemInstruction: buildLiveSystemInstruction,
-          functionDeclarations: declarations,
+          // BUG-079's reasoning applied to the catalog, not just the prompt: a
+          // function, so a rotation re-reads which adapters are actually up.
+          functionDeclarations: declarationsForSession,
           onToolCall: liveAdapter.handleLiveToolCalls,
           onAudioOut: (b64) => {
             send({ type: 'live-audio-out', data: b64 });

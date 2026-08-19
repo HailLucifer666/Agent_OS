@@ -165,7 +165,7 @@ function createLiveSession(deps) {
   const {
     config, bus, logger, spend, breakers,
     systemInstruction,      // string — full RULES + persona (Phase 6)
-    functionDeclarations,   // [] from live-tools.js (Phase 2)
+    functionDeclarations,   // [] from live-tools.js, or a () => [] rebuilt per open — see currentFunctionDeclarations
     onToolCall,             // async (calls[], {sendToolResponse}) => void  (Phase 3)
     onAudioOut,             // (base64Pcm24k) => void
     onTranscript,           // ({role:'user'|'assistant', text, final}) => void
@@ -236,6 +236,13 @@ function createLiveSession(deps) {
   let userText = '', assistantText = '';
   let closedByUs = false;
   let idleRotationsWithoutSpeech = 0;
+  // Audio captured while the socket is down between rotations — see sendAudio.
+  // 512KB of base64 is roughly 12 seconds of 16kHz mono PCM16, comfortably more
+  // than a reconnect needs and still a hard ceiling if one never completes.
+  const MAX_PENDING_AUDIO_BYTES = Number(config.LIVE_PENDING_AUDIO_BYTES) || 512 * 1024;
+  let pendingAudio = [];
+  let pendingAudioBytes = 0;
+  let pendingAudioDropped = 0;
   // 2026-08-10: which serverContent fields this turn actually carried, by name.
   // The vault says every Live turn since ~08-09 stored an EMPTY user transcript
   // (21 of 21 on 08-10, 144 of 153 on 08-09, 51 of 147 on 08-07) while the reply
@@ -434,7 +441,44 @@ function createLiveSession(deps) {
     return typeof systemInstruction === 'function' ? systemInstruction() : systemInstruction;
   }
 
+  // Same treatment for the tool catalog, and for the same reason. The setup
+  // frame's `tools` was built once at construction and then replayed verbatim on
+  // every reconnect, so a session that rotated at the 10-minute ceiling came
+  // back declaring the capabilities the machine had ten minutes ago. That is the
+  // frozen-capability-snapshot shape recorded as BUG-046/136: an adapter that
+  // comes online mid-session (a browser attaching to CDP, pc-child restarting)
+  // stayed invisible to the model until the operator closed and reopened Live
+  // entirely — and server/index.js's own comment at the build site says the
+  // opposite is the intent ("an adapter that comes online later must become
+  // declarable on the next session without a restart").
+  //
+  // Falls back to the last good list rather than to nothing: a builder that
+  // throws mid-reconnect must not silently strip every tool from the session,
+  // which would look to the operator like MYTHOS suddenly losing all its
+  // abilities for no stated reason.
+  let lastDeclarations = Array.isArray(functionDeclarations) ? functionDeclarations : [];
+  function currentFunctionDeclarations() {
+    if (typeof functionDeclarations !== 'function') return functionDeclarations;
+    try {
+      const built = functionDeclarations();
+      if (Array.isArray(built)) lastDeclarations = built;
+      return lastDeclarations;
+    } catch (err) {
+      logger.warn('live.tool-declarations-failed', { error: err.message, kept: lastDeclarations.length });
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('health.anomaly', {
+          kind: 'live-tool-declarations-failed',
+          target: 'live-session',
+          reason: 'rebuilding the Live tool catalog threw (' + err.message
+            + '), so the previous catalog of ' + lastDeclarations.length + ' tools was reused',
+        });
+      }
+      return lastDeclarations;
+    }
+  }
+
   function buildSetup() {
+    const declarations = currentFunctionDeclarations();
     const setup = {
       model: MODEL,
       generationConfig: {
@@ -450,7 +494,7 @@ function createLiveSession(deps) {
         ),
       },
       systemInstruction: { parts: [{ text: currentSystemInstruction() }] },
-      tools: (functionDeclarations && functionDeclarations.length) ? [{ functionDeclarations }] : undefined,
+      tools: (declarations && declarations.length) ? [{ functionDeclarations: declarations }] : undefined,
       // Pinned rather than inherited. `{}` took whatever Google's current
       // defaults happen to be, which means the operator's barge-in behaviour
       // could change under them with no release on this side and nothing to
@@ -522,6 +566,9 @@ function createLiveSession(deps) {
           // reconnect via resumeHandle, never dead-end.
           maxTimer = setTimeout(() => close('session-max', { final: false }), MAX_MS);
           if (maxTimer.unref) maxTimer.unref();
+          // After setState('open'), so the frames go out on the live socket
+          // rather than back into the buffer they came from.
+          flushPendingAudio();
           resolve(true);
         }
         handleFrame(msg);
@@ -839,6 +886,33 @@ function createLiveSession(deps) {
   }
 
   function sendAudio(base64Pcm16k) {
+    // ROTATION IS NOT A REASON TO DROP SPEECH.
+    //
+    // This used to be a bare `if (state !== 'open') return false`, and the
+    // session rotates on purpose: MAX_MS fires at the ~10-minute connection
+    // ceiling, idle timeouts fire, and goAway arrives from Google. Each one
+    // takes the socket down, reconnects, and waits for setupComplete — and for
+    // that entire window every frame the operator spoke was discarded, with
+    // nothing recording that it had happened. The client keeps streaming
+    // throughout (s2s-bridge.js has no idea a rotation is underway), so the
+    // symptom is a sentence that is simply missing from the conversation, at a
+    // moment determined by a ten-minute timer rather than by anything the
+    // operator did.
+    //
+    // Buffered instead, and flushed in order once the new session is up.
+    // Bounded by bytes, because a reconnect that never succeeds must not grow
+    // this forever — and the overflow drops the OLDEST frames, since if the
+    // reconnect is taking that long the newest audio is the part still worth
+    // hearing. Anything dropped is counted and reported, never silent.
+    if (state === 'reconnecting' || state === 'opening') {
+      pendingAudio.push(base64Pcm16k);
+      pendingAudioBytes += base64Pcm16k.length;
+      while (pendingAudioBytes > MAX_PENDING_AUDIO_BYTES && pendingAudio.length > 1) {
+        pendingAudioBytes -= pendingAudio.shift().length;
+        pendingAudioDropped += 1;
+      }
+      return true;   // accepted, not sent — the caller's alternative is to lose it
+    }
     if (state !== 'open') return false;
     // See turnAudioIn's declaration: the missing half of the empty-operator-
     // transcript question. scFields already says whether inputTranscription
@@ -846,6 +920,33 @@ function createLiveSession(deps) {
     turnAudioIn += 1;
     armIdle();
     return sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64Pcm16k } } });
+  }
+
+  // Called once the reconnected session reports setupComplete. Order is
+  // preserved: these frames are the operator's speech and arrived in this order.
+  function flushPendingAudio() {
+    if (!pendingAudio.length && !pendingAudioDropped) return;
+    const frames = pendingAudio;
+    const dropped = pendingAudioDropped;
+    pendingAudio = [];
+    pendingAudioBytes = 0;
+    pendingAudioDropped = 0;
+    for (const frame of frames) {
+      turnAudioIn += 1;
+      if (!sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: frame } } })) break;
+    }
+    logger.info('live.audio-flushed', { frames: frames.length, dropped });
+    // Only an actual loss is a health event. A clean flush is normal operation
+    // and must not add noise to the anomaly channel that the healer reads.
+    if (dropped && bus && typeof bus.emit === 'function') {
+      bus.emit('health.anomaly', {
+        kind: 'live-audio-dropped-across-rotation',
+        target: 'live-session',
+        reason: dropped + ' audio frames were dropped while the Live session reconnected, '
+          + 'because the buffer bound was reached before the new session came up — '
+          + 'the operator may have said something that never arrived',
+      });
+    }
   }
 
   // Screen-share video input (Electron Slice 3, spine §13). One JPEG frame per
@@ -976,6 +1077,12 @@ function createLiveSession(deps) {
   // sees !closedByUs && resumeHandle and reconnects on its own.
   function close(reason, { final = true } = {}) {
     if (final) closedByUs = true;
+    // A FINAL close ends the conversation, so anything still buffered is speech
+    // the operator aimed at a session that no longer exists. Replaying it into
+    // whatever session opens next — minutes or hours later — would put a
+    // stranded sentence at the start of an unrelated conversation. Dropped here
+    // deliberately; the non-final (rotation) path is the one that keeps it.
+    if (final) { pendingAudio = []; pendingAudioBytes = 0; pendingAudioDropped = 0; }
     if (idleTimer) clearTimeout(idleTimer);
     if (maxTimer) clearTimeout(maxTimer);
     // BUG-131: a closed session owes no reply, so a pending stall timer would
