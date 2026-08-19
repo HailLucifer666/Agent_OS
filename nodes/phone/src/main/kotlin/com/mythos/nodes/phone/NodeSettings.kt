@@ -136,24 +136,44 @@ class NodeSettings(private val context: Context) {
         return true
     }
 
-    /** Everything needed to talk to MYTHOS is present. */
+    /**
+     * Everything needed to talk to MYTHOS is present AND the server URL is one
+     * OkHttp will actually accept.
+     *
+     * The scheme check is not cosmetic. `serverUrl` is typed by a human into a
+     * settings field, and the most natural way to get it wrong is to leave the
+     * scheme off entirely — `192.168.0.10:4478`. webSocketUrl() below only
+     * rewrites http/https, so a scheme-less value passed straight through to
+     * OkHttp's `Request.Builder().url()`, which THROWS on it. The throw came out
+     * of NodeLink.openSocket() after the status had already been set to
+     * CONNECTING and before any socket existed, so the link sat on "LINKING"
+     * forever, with no error text, no socket, and no callback that could ever
+     * schedule a retry. That is the "stuck CONNECTING with zero attempts"
+     * symptom, and from the server side it is invisible: no rejection and no
+     * attempt, indistinguishable from the phone being asleep.
+     *
+     * Refused here rather than repaired by guessing a scheme: ws:// and wss://
+     * are not interchangeable, and silently picking the insecure one for an
+     * operator who meant TLS is worse than telling them to type it.
+     */
     fun isConfigured(): Boolean =
         serverUrl.isNotEmpty() && authToken.isNotEmpty() && nodeId.isNotEmpty()
+            && ServerUrl.hasSupportedScheme(serverUrl)
+
+    /**
+     * Null when the URL is usable, otherwise a sentence naming what to fix. The
+     * UI shows this, so it has to be an instruction rather than a diagnosis.
+     */
+    fun serverUrlProblem(): String? = ServerUrl.problem(serverUrl)
 
     /** `ws(s)://host:port/ws?token=…` — the token rides the query string because
      *  a WS upgrade cannot carry an Authorization header from every client, and
      *  MYTHOS's extractToken() accepts it there. */
-    fun webSocketUrl(): String {
-        val base = serverUrl
-            .replace(Regex("^http://", RegexOption.IGNORE_CASE), "ws://")
-            .replace(Regex("^https://", RegexOption.IGNORE_CASE), "wss://")
-        return "$base/ws?token=${android.net.Uri.encode(authToken)}"
-    }
+    fun webSocketUrl(): String =
+        "${ServerUrl.toWebSocketScheme(serverUrl)}/ws?token=${android.net.Uri.encode(authToken)}"
 
     /** Base for REST calls (STT). Kept http(s) whatever the ws scheme is. */
-    fun httpBase(): String = serverUrl
-        .replace(Regex("^ws://", RegexOption.IGNORE_CASE), "http://")
-        .replace(Regex("^wss://", RegexOption.IGNORE_CASE), "https://")
+    fun httpBase(): String = ServerUrl.toHttpScheme(serverUrl)
 
     private fun hexToBytes(hex: String): ByteArray =
         ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
