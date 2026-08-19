@@ -645,6 +645,37 @@ works with the network blocked, since a stalled download must not mute MYTHOS.
 **Q5 (is the constant right?):** do NOT delete edge-tts or piper from the chain. This is a
 reorder, not a removal — the operator keeps BYO options and the rollback is one config line.
 
+#### T1 shipped but was live-inert until 2026-08-20 — the same class as BUG-278
+
+T1 is recorded as shipped, and it is: `config/voice-defaults.js:59-61` derives
+`gemini,kokoro,edge,piper`. **The running system never saw it.** `mythos/.env` carried
+`VOICE_TTS_CHAIN=gemini,edge,piper` — a line predating T1 — and an explicit override beats a
+derived default, so the audited 2026-08-20 session still resolved to
+`gemini-tts,edge-tts,piper-tts`, exactly the chain T1 was written to replace. A
+`gemini-tts` 429 therefore still failed over straight to edge-tts.
+
+This is the same shape as BUG-278 one layer up: **a fix that shipped, passed its tests, and
+never ran**, because the value it produced was overridden downstream of the code that
+produced it. Note that the research memory recorded the symptom at the time — "the live chain
+resolved to `gemini-tts,edge-tts,piper-tts`, Kokoro is not in it" — and it was read as
+motivation for T1 rather than as evidence that T1 was already being reverted.
+
+Corrected 2026-08-20 by editing `mythos/.env` (gitignored, operator-local, so nothing to
+commit): the override now reads `gemini,kokoro,edge,piper`. `providers/tts.js:43`'s `BY_NAME`
+confirms `kokoro` is a name the resolver accepts, so the entry is live rather than silently
+ignored. **Needs a restart to take effect, and is NOT live-verified** — on the next
+`gemini-tts` 429 the failover should land on kokoro and say so in a `tts.spoke` line.
+
+**Correction to T1's own reasoning, carried from step 6.6:** do not repeat "Kokoro is clean
+end to end". It is Apache-2.0 for code and weights, but its dependency tree pulls an LGPLv3
+binary (`sharp`, required at module scope) that edge-tts never did, since edge-tts is BYO and
+ships no code. Exposure moved; it did not vanish. Lawyer's call, flagged not concluded.
+
+**A generalisable check falls out of this:** any default this repo "fixes" in
+`voice-defaults.js` (or any other derived-default module) can be silently reverted by a
+stale `.env` line, and no test can see it — the suite reads the default, the operator runs
+the override. When a default changes, grep `mythos/.env` for the same key in the same commit.
+
 ### T2 (P0, licence) — correct the stale licence claim in `providers/piper-tts.js`
 
 The file states Piper "is MIT and the voice models carry their own open licences, which is
