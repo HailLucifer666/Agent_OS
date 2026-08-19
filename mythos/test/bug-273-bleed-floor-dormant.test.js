@@ -90,8 +90,15 @@ describe('BUG-273 A1 — the adaptive floor is dormant by default', () => {
 
     const startedAt = c.t;
     const d = feed(p, c, OPERATOR_LOUD, 8);
+    // BUG-274: counts the CONFIRMATION transition, not authorised frames. This test's
+    // invariants — the loudest turn releases, and it releases inside 700ms — are both
+    // unchanged and both still asserted below. What changed is that CONFIRMED keeps
+    // answering yes while MYTHOS is still speaking, because the caller that acts on the
+    // answer only fires every third frame and a one-frame-wide yes reached it by
+    // coincidence. See test/bug-274-barge-in-authorisation-is-deliverable.test.js.
     const released = d.filter((x) => x.release);
-    assert.equal(released.length, 1,
+    const confirmations = d.filter((x) => x.reason === 'confirmed-sustained');
+    assert.equal(confirmations.length, 1,
       'this is the session: 49 vetoes, 0 frames dropped, everything arriving 11-13s late');
     assert.equal(released[0].reason, 'confirmed-sustained');
     const latency = (startedAt + (d.indexOf(released[0]) + 1) * 100) - startedAt;

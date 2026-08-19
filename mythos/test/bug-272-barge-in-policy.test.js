@@ -108,9 +108,32 @@ describe('BUG-272 slice 3 — bleed opens a candidacy, it does not release', () 
     feed(p, c, 0.001, 6);                 // leave the protected window quietly
     const d = feed(p, c, SPEECH, 6);      // 600ms of continuous speech
 
-    const released = d.filter((x) => x.release);
-    assert.equal(released.length, 1, 'exactly one release per barge-in, never a repeat');
-    assert.equal(released[0].reason, 'confirmed-sustained');
+    // BUG-274 — WHAT THIS ASSERTION USED TO SAY, AND WHY IT WAS CHANGED.
+    // It used to count frames where release was true and require exactly ONE:
+    // "exactly one release per barge-in, never a repeat". The invariant behind that
+    // is right and is still checked below — a barge-in must be CONFIRMED once, and
+    // only through the sustain path. What was wrong was the measurement, because it
+    // assumed this module ISSUES releases. It does not; it is a veto, and its answer
+    // to "may this release proceed" cannot stop being yes one frame after it became
+    // yes. barge-in-backstop.js is the issuer, and it only fires every third frame
+    // (voice-loop.js:131 zeroes its counter when it fires), so a one-frame-wide
+    // authorisation reached it only by coincidence and interruption failed.
+    // See test/bug-274-barge-in-authorisation-is-deliverable.test.js for the measured
+    // repro: 0 releases and 11 vetoes on continuous speech at the operator's own
+    // recorded 0.27 RMS. Idempotency lives downstream, where it always did —
+    // releaseOwnVoiceGate() early-returns and the backstop has releasedThisRun.
+    const confirmations = d.filter((x) => x.reason === 'confirmed-sustained');
+    assert.equal(confirmations.length, 1, 'exactly one CONFIRMATION per barge-in, never a repeat');
+    assert.equal(confirmations[0].release, true);
+
+    // And the authorisation must then hold, rather than being withdrawn from the
+    // caller that has not had a chance to act on it yet.
+    const authorised = d.filter((x) => x.release);
+    assert.equal(authorised[0].reason, 'confirmed-sustained', 'the first yes must come from the sustain path');
+    assert.ok(
+      authorised.length > 1,
+      'the authorisation was withdrawn one frame after it was granted — the caller fires every third frame',
+    );
   });
 
   it('bleed that decays with the assistant envelope is discarded, not released', async () => {
@@ -321,8 +344,13 @@ describe('BUG-272 slice 3 — the adaptive floor must not be poisoned by the ope
       p.assistantSpeakingStarted();
       feed(p, c, 0.001, 6); // quiet room: floor stays at the initial tier
 
-      const released = feed(p, c, level, 8).filter((x) => x.release);
-      assert.equal(released.length, 1,
+      // BUG-274: counts CONFIRMATIONS rather than authorised frames. This test's own
+      // message names the invariant it cares about — a louder voice must not become
+      // harder to confirm, which is the self-poisoning-floor guard — and that invariant
+      // is untouched. Only the counting changed, because CONFIRMED now keeps answering
+      // yes while MYTHOS is still speaking; see the note in the sustained-speech test.
+      const confirmations = feed(p, c, level, 8).filter((x) => x.reason === 'confirmed-sustained');
+      assert.equal(confirmations.length, 1,
         `speech at ${level} must confirm exactly once; if a louder voice fails to release, the `
         + 'floor is learning from the operator instead of from the bleed');
     }

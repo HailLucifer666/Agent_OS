@@ -288,6 +288,9 @@ function main() {
   // otherwise be the only barge-in number in the log.
   let learnedSeen = null;
   let peakSeen = null;
+  // BUG-274: which of the policy's four causes did the vetoing. Empty on a log that
+  // predates the field, and that stays distinguishable from "no veto happened".
+  const vetoReasons = {};
   for (const e of suspendLines) {
     const v = num(e.bargeVetoed);
     if (v !== null) vetoed += v;
@@ -297,6 +300,14 @@ function main() {
     if (l !== null) learnedSeen = l;
     const bp = num(e.bleedPeak);
     if (bp !== null && (peakSeen === null || bp > peakSeen)) peakSeen = bp;
+    // BUG-274: tally the POLICY's reason, not just the count. The comment below used
+    // to frame the reading as "window or floor too aggressive", and on 2026-08-19 it
+    // was neither — the answer was 'already-confirmed', an authorisation being revoked
+    // one frame after it was granted, which no tuning of either would have reached.
+    // Four causes, four opposite fixes; a bare count cannot choose between them.
+    if (typeof e.bargeVetoPolicyReason === 'string' && e.bargeVetoPolicyReason) {
+      vetoReasons[e.bargeVetoPolicyReason] = (vetoReasons[e.bargeVetoPolicyReason] || 0) + 1;
+    }
   }
   // Not pass/fail. A veto count is the calibration reading, and which direction
   // is "good" depends on what the operator experienced — high vetoes with a happy
@@ -306,7 +317,10 @@ function main() {
     `${vetoed} vetoed barge-in(s)`
     + (floorSeen !== null ? `, floor in force ${floorSeen}` : ', no bleedFloor seen')
     + (learnedSeen !== null ? `, dormant learned floor ${learnedSeen}` : '')
-    + (peakSeen !== null ? `, room bleed peak ${peakSeen}` : ''),
+    + (peakSeen !== null ? `, room bleed peak ${peakSeen}` : '')
+    + (Object.keys(vetoReasons).length
+      ? `, policy reasons ${JSON.stringify(vetoReasons)}`
+      : (vetoed > 0 ? ', policy reasons not reported — log predates BUG-274' : '')),
     CRITERIA_NOTES.policy);
 
   // --- D1: how much of the conversation did MYTHOS start? (BUG-273 D3) ---

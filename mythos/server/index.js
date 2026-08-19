@@ -3768,6 +3768,13 @@ function createServer(deps) {
         // patching instances stops and the assertion gets written.
         for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
           'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
+          // BUG-274: the policy's own veto reason and the level it refused. bargeVetoTier
+          // alone names the blocked BACKSTOP tier, which is the same string whichever of
+          // the four policy causes fired — and those causes want opposite fixes. The
+          // 2026-08-19 session's answer turned out to be 'already-confirmed', a veto
+          // revoking a release granted one frame earlier, which no amount of tuning the
+          // window or the floor would ever have reached.
+          'bargeVetoPolicyReason', 'bargeVetoLevel',
           'bleedPeak', 'learnedFloor',
           'flushedFrames', 'flushedZeroed', 'flushedRaw',
           // BUG-274 W1 Q5: what Chromium actually GRANTED on the Live capture stream,

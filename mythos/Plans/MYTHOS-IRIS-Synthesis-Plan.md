@@ -17,7 +17,68 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **step 6.6's mechanical half is done and gated. Two items remain, and both need the operator physically present.**
+### 2026-08-19 (latest) — **T4's measurement RAN. AEC3 works, the plan's premise is refuted, and interruption was a frame-handoff bug inside the veto. Fixed; needs one live boot to confirm.**
+
+The operator booted, spoke, and reported "interruptions still fails". The log answers T4 and
+answers it against the plan.
+
+**AEC3 is granted and working.** `micEchoCancellation: true` on all 12
+`voice.capture-suspend` lines, read off the live track's own `getSettings()`. Corroborated
+twice more: `peakRms 0.0056` on the hold where the operator stayed silent, and
+`bleedPeak 0.0186` — **under** the 0.05 floor, in a room the policy was designed for at
+0.09-0.38. **There is no missing echo canceller.** Drop `speexdsp` / WebRTC `aec3` from the
+plan; they were contingency for a premise that did not survive.
+
+**The floor was not the fault either.** The operator's speech measured 0.0921, 0.1222 and
+0.2715 — two to five times the floor — while one hold ran **17,565ms** and ended on the
+ceiling instead of an interruption, with **13 vetoed barge-ins**.
+
+**The actual defect: the two halves of the barge-in path count to different numbers.**
+`barge-in-policy.js` authorises on **one** frame (350ms sustain → the 5th frame of a 100ms
+run) and then returned `release: false` forever from `already-confirmed`.
+`barge-in-backstop.js` delivers on **every third** frame, because `decideBargeIn()` zeroes
+its counter when it fires. **5 is not a multiple of 3**, so the single authorised frame was
+handed to a caller that was not listening on it. Measured with both real modules wired as
+`s2s-bridge.js` wires them, at the operator's own 0.27 RMS: **0 releases, 11 vetoes. Not
+intermittent — impossible.** Which is exactly why the operator is right that it "worked
+flawlessly before": before BUG-272 added the veto, the backstop's frame-3 fire went straight
+through.
+
+**Fixed in one line of behaviour, and it is not a retune.** `already-confirmed` now returns
+`release: true` while MYTHOS is still speaking — the policy is a veto, not the issuer, and
+idempotency was already downstream. `PROTECTED_MS`, `PENDING_HOLD_MS`,
+`INITIAL_BLEED_FLOOR`, the dormant learned floor and both backstop tiers are **unchanged**.
+RED-then-GREEN in `test/bug-274-barge-in-authorisation-is-deliverable.test.js`.
+
+**Two BUG-272 tests failed against the fix and they were the assumption**, counting authorised
+frames and demanding exactly one. Their stated invariants — confirmed once via the sustain
+path, and a louder voice must not be harder to confirm — are untouched; they now count
+`confirmed-sustained` transitions. Measurement changed, invariant did not.
+
+**Second defect found, deliberately NOT fixed.** With 100ms dips every 400ms — ordinary
+syllable spacing — PENDING resets on each dip, 350ms is never reached, no authorisation is
+ever issued, and this fix cannot reach it. That is a tuning call on the sustain test, this
+repo has twice shipped opposite-direction failures by guessing at these constants, and it is
+now **measurable** rather than guessable because the veto reason reaches the log. Pinned as a
+known-failing shape. **Do not pick a grace value without reading the next session's log.**
+
+**Next action — one live boot, then read the reasons:**
+
+```bash
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+`already-confirmed` should now be **absent**; its presence means the fix regressed. If
+`pending-decayed` dominates, the sustain test is the remaining fault and the dip tolerance is
+worth deciding. If `below-bleed-floor` dominates, the floor is too high for that room.
+
+**Also revised: the full-duplex rewrite is now unblocked but no longer required.** It was the
+planned fix for "cannot be interrupted"; that fault is fixed without deleting anything, so
+deleting `ownVoiceGate` is a refactor with a benefit rather than a bug fix. Note
+`setCaptureSuspended()` is a separate capture-muting path (Spotify/YouTube) that would still
+block interruption with music playing.
+
+### 2026-08-19 — **step 6.6's mechanical half is done and gated. Two items remain, and both need the operator physically present.**
 
 The operator asked for the whole of BUG-274 with T3 (wake-word weights) skipped. Everything
 in it that does **not** require a live microphone, a signing certificate or a second human is

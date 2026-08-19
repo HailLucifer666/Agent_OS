@@ -507,10 +507,26 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // Wiring a channel before knowing that would be building a mechanism on a
   // guess, which is how this bug has already burned two sessions.
   const lastEchoRatio = null;
+
+  // BUG-274: the policy's OWN reason for the veto, and the level it refused.
+  //
+  // WHY THIS WAS THE EXPENSIVE OMISSION. Until now the log recorded which BACKSTOP tier
+  // was blocked ('flush' / 'eager') and threw the level away on the next line — `void
+  // level` — so five tickets of tuning (BUG-224, 271, 272, 273 A1, 273 A2) read "13
+  // barge-ins vetoed, tier flush" and could not tell apart the four causes the policy
+  // actually distinguishes: protected-window, below-bleed-floor, pending-decayed,
+  // already-confirmed. Those demand opposite fixes — one is a window that is too long,
+  // one a floor that is too high, one a sustain test that is too strict, and the last
+  // was a handoff bug with nothing to tune at all. Recording the count while discarding
+  // the discriminator is how the wrong one got changed twice.
+  let lastVetoPolicyReason = null;
+  let lastVetoLevel = null;
+  let lastPolicyDecision = null;
   function noteBargeVetoed(tier, level) {
     bargeVetoed += 1;
     lastVetoReason = tier;
-    void level;
+    lastVetoPolicyReason = lastPolicyDecision ? lastPolicyDecision.reason : null;
+    lastVetoLevel = typeof level === 'number' ? Math.round(level * 10000) / 10000 : null;
   }
 
   function bargeTuning() {
@@ -590,6 +606,13 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     bargePolicy.assistantSpeakingStarted();
     policyAllowsRelease = false;
     bargeVetoed = 0;
+    // BUG-274: clear the veto detail with the counter. The 2026-08-19 log contains
+    // holds reading `"bargeVetoed":0,"bargeVetoTier":"flush"` — a tier left over from
+    // an earlier hold, attached to a hold that vetoed nothing. Zero vetoes with a
+    // named tier is a small lie, and it is the kind that gets read as a pattern.
+    lastVetoReason = null;
+    lastVetoPolicyReason = null;
+    lastVetoLevel = null;
     armOwnVoiceCeiling();
     armOwnVoiceMaxHold();
     logSuspendTransition({ reason: 'own-voice-hold', ownVoiceGate: true });
@@ -685,6 +708,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // indistinguishable from a dead microphone.
       bargeVetoed: bargeVetoed,
       bargeVetoTier: lastVetoReason,
+      // BUG-274: the paragraph above turned out to be exactly the wrong dichotomy.
+      // The operator complained they could not interrupt, and it was NEITHER the
+      // protection window NOR the learned floor — it was 'already-confirmed', a veto
+      // revoking a release the policy had granted one frame earlier. These two fields
+      // are what make that legible: the policy's own reason, and the level it refused.
+      // null means the hold had no veto, which stays distinguishable from a veto whose
+      // reason went unrecorded.
+      bargeVetoPolicyReason: lastVetoPolicyReason,
+      bargeVetoLevel: lastVetoLevel,
       bleedFloor: Math.round(bargePolicy.bleedFloor() * 10000) / 10000,
       // BUG-273 A1 — Q2. bleedFloor alone used to carry both facts, because the
       // floor in force WAS the learned one. With learning dormant it reads 0.05
@@ -822,10 +854,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // decided by the PREVIOUS frame's verdict — an off-by-one-frame bug that
         // no test on the pure module could ever catch, so the ordering is pinned
         // by a source-shape assertion alongside the existing gate-order one.
-        policyAllowsRelease = bargePolicy.observe({
+        // BUG-274: the whole decision is kept, not just .release — noteBargeVetoed()
+        // reads its .reason so a veto says WHY, and the reason is the policy's own
+        // (protected-window / below-bleed-floor / pending-decayed / already-confirmed),
+        // which is the discriminator the log has been missing for five tickets.
+        lastPolicyDecision = bargePolicy.observe({
           rms: rmsFromPcm16(e.data),
           echoRatio: lastEchoRatio,
-        }).release;
+        });
+        policyAllowsRelease = lastPolicyDecision.release;
         bargeBackstop.observe(e.data, player ? player.isSpeaking() : false);
         // Instrumentation only, and only while the gate is actually held (notePeakRms
         // checks): the question this answers is "how loud did the operator get while

@@ -265,9 +265,47 @@ export function createBargeInPolicy(opts) {
       return decision(false, 'pending-sustaining');
     }
 
-    // CONFIRMED is terminal until the caller resets or assistant speech ends —
-    // the release has already been issued and must not be issued twice.
-    return decision(false, 'already-confirmed');
+    // CONFIRMED holds its answer for as long as MYTHOS is still speaking.
+    //
+    // BUG-274, 2026-08-19 — THIS LINE USED TO RETURN false, AND THAT IS WHY
+    // INTERRUPTION FAILED. The old comment read "the release has already been issued
+    // and must not be issued twice", which assumed the caller acted on the frame that
+    // authorised it. It does not, and it cannot:
+    //
+    //   this module confirms on ONE frame — PENDING opens on the first above-floor
+    //   frame and CONFIRMED lands when pendingHoldMs (350ms) has elapsed, i.e. the 5th
+    //   frame of a 100ms run;
+    //
+    //   barge-in-backstop.js delivers on EVERY THIRD frame, because
+    //   decideBargeIn() zeroes its own counter when it fires (voice-loop.js:131), so
+    //   onFlush/onRelease reach s2s-bridge.js on frames 3, 6, 9 ... and no others.
+    //
+    // 5 is not a multiple of 3. The single authorised frame was handed to a caller that
+    // was not listening on it, and from the next frame this line answered "no" for the
+    // rest of the utterance. Measured with both real modules wired as s2s-bridge.js
+    // wires them: continuous speech at 0.27 RMS — the level the operator's own
+    // 2026-08-19 log recorded, against a 0.05 floor and 0.0186 measured bleed —
+    // produced ZERO releases and eleven vetoes. Not intermittent. Impossible.
+    //
+    // Q1 — WHAT ELSE MATCHES THIS? Only frames while state === CONFIRMED, which is
+    // reachable only through the protected window, the floor and the full sustain test.
+    // Nothing here widens what gets in; it stops revoking what already got in.
+    //
+    // Q3 — WHO READS THIS, and is issuing twice safe? Both consumers are idempotent
+    // and were already written that way: releaseOwnVoiceGate() early-returns on
+    // `if (!ownVoiceGate) return`, player.flush() is a documented no-op on an empty
+    // queue, and the backstop's own releasedThisRun latch bounds onRelease to once per
+    // loud run. In practice the window is one frame wide anyway — the first delivered
+    // release calls releaseOwnVoiceGate(), which calls assistantSpeakingEnded() and
+    // sends this machine back to IDLE, where the next frame answers 'not-speaking'.
+    //
+    // Q8 — WHAT IS DELIBERATELY UNCHANGED: PROTECTED_MS, PENDING_HOLD_MS, the
+    // dormant learned floor, INITIAL_BLEED_FLOOR, and both backstop tiers with their
+    // thresholds and hysteresis. This is not a retune, and the next session must not
+    // read it as permission to become one. Pinned by
+    // test/bug-274-barge-in-authorisation-is-deliverable.test.js, which also keeps the
+    // sustain test's rejection of decaying bleed asserted alongside this.
+    return decision(true, 'already-confirmed');
   }
 
   // The decision to make when a hold has run out of time. Replaces a bare

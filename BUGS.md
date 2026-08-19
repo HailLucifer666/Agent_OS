@@ -164,6 +164,105 @@ transition, so a log that loses its first lines still answers it.
 Suite after: **5163/5163, 0 failures, 0 skipped** (+7, the new guard file).
 
 
+#### T4 step 1 — 🔍 MEASURED + 🔧 FIXED 2026-08-19: AEC3 is granted and working, and interruption was never acoustic
+
+**The measurement ran.** Operator booted, spoke, reported "interruptions still fails". Log:
+`%APPDATA%\MYTHOS\mythos-server.log`, last of 4 runs, 166 entries, 6 real holds.
+
+**Answer to T4's question 1 — the constraint IS honoured.** `micEchoCancellation: true` on
+all 12 `voice.capture-suspend` lines, read off the live track's `getSettings()`. The premise
+this whole item rested on — that AEC3 was silently not applied — is **refuted**. Two more
+readings say the same thing from the other side: `peakRms 0.0056` on the hold where the
+operator stayed silent (that is what the mic hears of MYTHOS with AEC3 on), and
+`bleedPeak 0.0186`, well **under** the 0.05 floor. This room no longer resembles the
+0.09-0.38 bleed the policy was designed against. **AEC3 works. There is no missing library
+and no `speexdsp`/`aec3` work to do.**
+
+**And the floor was not the problem either.** The operator's own speech measured
+`peakRms` 0.0921, 0.1222 and 0.2715 — two to five times the 0.05 floor. One hold ran
+**17,565ms** and ended on `own-voice-ceiling-near-field-energy` rather than on an
+interruption, with **13 barge-ins vetoed** across the run. Loud, clean, unambiguous speech,
+refused.
+
+**THE DEFECT: the two halves of the barge-in path count to different numbers.**
+
+- `barge-in-policy.js` authorises on **one frame**. PENDING opens on the first above-floor
+  frame; CONFIRMED lands when `PENDING_HOLD_MS` (350ms) has elapsed — the 5th frame of a
+  100ms run. Every frame after that returned `already-confirmed` with **`release: false`**,
+  because the state was documented as "terminal — the release has already been issued".
+- `barge-in-backstop.js` delivers on **every third frame**. `decideBargeIn()` zeroes its own
+  counter when it fires (`voice-loop.js:131`), so `onFlush`/`onRelease` reach `s2s-bridge.js`
+  on frames 3, 6, 9 … and on no others.
+
+**5 is not a multiple of 3.** The single authorised frame was handed to a caller that was not
+listening on it, and from the next frame the policy answered "no" for the rest of the
+utterance. Measured with both real modules wired exactly as `s2s-bridge.js` wires them,
+continuous speech at the operator's own recorded 0.27 RMS: **0 releases, 11 vetoes.** Not
+intermittent — **impossible**. Which is also why the operator is right that "it worked
+flawlessly before": before BUG-272 introduced the veto, the backstop's frame-3 fire went
+straight through.
+
+**The fix is one line of behaviour.** `already-confirmed` now returns `release: true` while
+MYTHOS is still speaking. The policy is a **veto**, not the issuer, and its answer to "may
+this release proceed" cannot stop being yes one frame after it became yes. Idempotency was
+already downstream where it belongs: `releaseOwnVoiceGate()` early-returns on
+`if (!ownVoiceGate)`, `player.flush()` is a no-op on an empty queue, and the backstop's
+`releasedThisRun` latch bounds `onRelease` to once per loud run. In practice the window is
+one frame wide anyway — the first delivered release calls `releaseOwnVoiceGate()`, which
+calls `assistantSpeakingEnded()` and returns the machine to IDLE.
+
+**NOT a retune, and the next session must not read it as one.** `PROTECTED_MS` (500),
+`PENDING_HOLD_MS` (350), `INITIAL_BLEED_FLOOR` (0.05), the dormant learned floor and both
+backstop tiers with their thresholds and hysteresis are **all unchanged**.
+
+**Q6 — what class is this?** "A mechanism that looks like coverage and does nothing" — the
+class this ticket was opened over. The veto shipped **with** tests, and those tests exercise
+the policy **alone**, where `release: true` is returned and believed. Nothing had ever asked
+whether the caller could act on it. Five tickets tuned this path (BUG-224, 271, 272, 273 A1,
+273 A2) without once wiring the two halves together in a test.
+
+**Two BUG-272 tests failed against the fix, and they were the assumption.** Both counted
+frames where `release` was true and demanded exactly one. Their own messages name the
+invariants they care about — "confirmed once, via the sustain path" and "a louder voice must
+not become harder to confirm" — and **both invariants are untouched**; they now count
+`confirmed-sustained` transitions instead of authorised frames. The measurement changed, not
+the invariant, and the note saying so is in the test.
+
+**The diagnostic gap that made this cost five tickets is closed.** `noteBargeVetoed()` took
+the level and threw it away (`void level`), and the policy's own reason was never recorded —
+so the log said "13 vetoed, tier flush" for all four policy causes, which want **opposite**
+fixes: a window too long, a floor too high, a sustain test too strict, or a handoff bug with
+nothing to tune. `bargeVetoPolicyReason` and `bargeVetoLevel` now reach the log line (client
+payload **and** the `server/index.js` allowlist — the two-places rule, pinned by the existing
+union guard), and `verify-voice-session.js` tallies the reasons and says
+"not reported — log predates BUG-274" rather than showing nothing. Also fixed: holds were
+logging `"bargeVetoed":0,"bargeVetoTier":"flush"` — a tier left over from an earlier hold,
+attached to a hold that vetoed nothing.
+
+**SECOND DEFECT FOUND, DELIBERATELY NOT FIXED — and this is the honest part.** With 100ms
+dips every 400ms, i.e. ordinary syllable spacing, PENDING resets on every dip, 350ms is never
+reached, **no authorisation is ever issued**, and the fix above cannot help: 0 releases, 14
+vetoes. That is a tuning question about the sustain test itself, this repo has twice shipped
+opposite-direction failures by guessing at these constants, and the prevalence is now
+**measurable** because the veto reason reaches the log. It is pinned as a known-failing shape
+in `test/bug-274-barge-in-authorisation-is-deliverable.test.js` so a session that changes the
+sustain test sees it flip rather than guessing a third time. **Do not pick a grace value from
+this entry — read `bargeVetoPolicyReason` off the next session first.**
+
+**What the next session should read, in one command:**
+
+```bash
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+If `policy reasons` is dominated by `pending-decayed`, the sustain test is the remaining
+fault and the dip tolerance is worth deciding. If it is dominated by `below-bleed-floor`, the
+floor is too high for that room. `already-confirmed` should now be **absent** — its presence
+would mean this fix regressed.
+
+**Still NOT verified live.** The unit path is red-then-green and the full suite is clean, but
+a green suite cannot tell you the operator can interrupt. That needs one more boot.
+
 **Then, only if AEC works:** move to the reference barge-in design, which MYTHOS does not
 currently have —
 1. mic stays **live** while the assistant speaks (no half-duplex gate at all),
@@ -171,6 +270,19 @@ currently have —
 3. the playback worklet clears its queue **with a fade-out**, because cutting hard "tends to
    produce audible clicks/buzzes" (their words) — which matches the clipped-last-word this
    repo has already recorded.
+
+**Q8 — DISPOSITION, REVISED 2026-08-19 BY THE MEASUREMENT ABOVE.** AEC3 *is* granted and
+working, so by this item's own gate the full-duplex rewrite is now **unblocked but no longer
+required**. It was written as the fix for "MYTHOS cannot be interrupted"; that fault turned
+out to be a frame handoff inside the existing gate, and it is fixed without deleting
+anything. Deleting the gate is still attractive on the repo's remove-surface bias — it would
+take the preroll ring, the lost first word and A2's whole class with it — but it is now a
+**refactor with a benefit**, not a bug fix, and it must not be started on the strength of
+this entry alone. The precondition is the same as it has always been: one live session
+confirming the operator can interrupt with the gate in place, plus the second defect below
+decided on measurement. Anyone tempted to delete `ownVoiceGate` today should note that
+`setCaptureSuspended()` is a **separate** capture-muting path for Spotify/YouTube (Q4) and
+would still block interruption with music playing.
 
 **Why this matters more than it looks.** The own-voice gate, the preroll ring, the lost first
 word, the 9.2s holds and the whole A2 investigation exist *because* capture is muted while
@@ -539,7 +651,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did.
+Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.**
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are

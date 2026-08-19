@@ -615,23 +615,47 @@ describe('buildBriefingFacts: no dependencies at all', () => {
 // of latency in front of the 12s brain-compose race. Gathering with
 // Promise.all bounds the wall-clock cost to the slowest single source.
 describe('buildBriefingFacts: sources gather in parallel (FIX 1)', () => {
-  it('total wall time stays close to one slow source, not the sum of several', async () => {
-    const SLOW_MS = 60; // well under FAST_TIMEOUT_MS's usual 30ms elsewhere, but this test needs the source to actually finish, not time out
-    const slow = () => new Promise((resolve) => setTimeout(() => resolve(true), SLOW_MS));
-    const started = Date.now();
+  // BUG-274 2026-08-19: this used to be a STOPWATCH — three 60ms sources and
+  // `assert.ok(elapsedMs < 120)`. It measured the right property with the wrong
+  // instrument, and it failed on 2 of 4 full-suite runs of an unrelated commit
+  // (recorded suite duration 199ms) because node:test runs every file
+  // concurrently and a loaded machine cannot promise 120ms for 60ms of timers.
+  // A test that fails at random teaches the next session to ignore a red suite,
+  // which is more expensive than the flake.
+  //
+  // Raising the threshold was rejected: it keeps the flake and only makes it
+  // rarer, and there is no value of it that is both load-proof and still fails
+  // for a sequential implementation.
+  //
+  // What replaces it OBSERVES the concurrency directly: each slow source
+  // increments an in-flight counter on entry and decrements on resolve, and the
+  // assertion is on the PEAK. Sequential gathering can never exceed 1 in flight;
+  // parallel gathering reaches 3. That is the actual invariant, it is exact
+  // rather than statistical, and it does not care how busy the host is.
+  it('gathers its slow sources concurrently rather than one after another', async () => {
+    const SLOW_MS = 60;   // still real async work, so a sequential implementation genuinely serialises
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const slow = () => {
+      inFlight += 1;
+      if (inFlight > peakInFlight) peakInFlight = inFlight;
+      return new Promise((resolve) => setTimeout(() => { inFlight -= 1; resolve(true); }, SLOW_MS));
+    };
+
     await buildBriefingFacts({
       factTimeoutMs: 500,
       systemSampleGapMs: 0,
-      // Three independently slow sources. Sequential gathering would cost
-      // roughly 3 x SLOW_MS; parallel gathering should cost roughly 1x.
+      // Three independently slow sources. Sequential gathering holds at most one
+      // of them open at a time; parallel gathering holds all three.
       probes: { getStatus: async () => { await slow(); return { providers: {} }; } },
       isProviderDown: () => false,
       dispatch: async (tool) => { await slow(); return tool === 'get_weather' ? { ok: true, result: { temperatureC: 1 } } : { ok: true }; },
       spend: { getStats: async () => { await slow(); return { successRate: 100, today: { calls: 1, tokensIn: 1, tokensOut: 1 } }; } },
     });
-    const elapsedMs = Date.now() - started;
-    assert.ok(elapsedMs < SLOW_MS * 2,
-      `expected parallel gathering to cost roughly one SLOW_MS (${SLOW_MS}ms), took ${elapsedMs}ms — looks sequential`);
+
+    assert.ok(peakInFlight > 1,
+      `expected several sources open at once, peak was ${peakInFlight} — gathering looks sequential`);
+    assert.equal(inFlight, 0, 'every source that was opened must have been awaited');
   });
 
   it('preserves the original fact order regardless of which source resolves first', async () => {
