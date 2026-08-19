@@ -97,15 +97,31 @@ async function driveBargeIn(levels, opts = {}) {
   let gateHeld = true;                        // stands in for ownVoiceGate
   let attemptedThisHold = false;
   let lastReason = null;
+  // BUG-274 step 5: the fake pcm-player. Counting flush() separately from the gate
+  // release is the whole point — until 2026-08-19 the eager tier released the gate
+  // and never touched the player, so a "landed" barge-in could reopen the mic while
+  // MYTHOS carried on talking, and every counter in this harness said success.
+  let playbackStops = 0;
+  const player = { flush: () => { playbackStops += 1; } };
 
   const veto = () => {
     vetoed += 1;
     // Mirrors noteBargeVetoed(): only a candidacy that was building counts.
     if (lastReason === 'pending-sustaining' || lastReason === 'pending-opened') attemptedThisHold = true;
   };
+  // Mirrors s2s-bridge.js's stopAssistantSpeech(): flush FIRST and unconditionally
+  // (releaseOwnVoiceGate early-returns when the gate is already open, so the two
+  // counts are deliberately allowed to differ), then release.
+  // eagerFlush:false is the pre-2026-08-19 wiring, kept so the case below can show
+  // the old shape failing rather than asserting against a harness written to pass.
+  const eagerFlush = opts.eagerFlush !== false;
+  const stopAssistantSpeech = (flushes = true) => {
+    if (flushes) player.flush();
+    if (gateHeld) { released += 1; gateHeld = false; }
+  };
   const backstop = createBargeInBackstop({
-    onFlush: () => { if (!policyAllowsRelease) return veto(); if (gateHeld) { released += 1; gateHeld = false; } },
-    onRelease: () => { if (!policyAllowsRelease) return veto(); if (gateHeld) { released += 1; gateHeld = false; } },
+    onFlush: () => { if (!policyAllowsRelease) return veto(); stopAssistantSpeech(); },
+    onRelease: () => { if (!policyAllowsRelease) return veto(); stopAssistantSpeech(eagerFlush); },
   });
 
   policy.assistantSpeakingStarted();
@@ -124,12 +140,11 @@ async function driveBargeIn(levels, opts = {}) {
     // The deferred delivery, wired exactly as s2s-bridge.js wires it: AFTER the
     // backstop, so a tier firing on this frame takes the normal path first.
     if (deferred && policyAllowsRelease && attemptedThisHold && gateHeld) {
-      released += 1;
-      gateHeld = false;
+      stopAssistantSpeech();
     }
     t += 100;
   }
-  return { released, vetoed, authorised, attemptedThisHold };
+  return { released, vetoed, authorised, attemptedThisHold, playbackStops };
 }
 
 // 500ms of the protected window, then the operator talks over MYTHOS.
@@ -301,6 +316,92 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
         'the deferred delivery must run AFTER bargeBackstop.observe, or it acts on a stale verdict');
       assert.ok(/bargeAttemptedThisHold = false;/.test(src),
         'the attempt flag must be cleared per hold, or a stale candidacy releases the next utterance');
+    });
+  });
+
+  // --- step 5, 2026-08-19: an authorised barge-in must STOP THE SPEECH ---------
+  //
+  // The tier that reopens the microphone was not the tier that stopped the speech.
+  // Before this, s2s-bridge.js read:
+  //
+  //   onFlush:   if (policyAllowsRelease) { player.flush(); releaseOwnVoiceGate('barge-in'); }
+  //   onRelease: if (policyAllowsRelease) { releaseOwnVoiceGate('barge-in-confirmed'); }
+  //
+  // and releaseOwnVoiceGate() never touches the player (every "flush" inside it
+  // refers to the preroll ring). So an eager-tier release opened the mic and MYTHOS
+  // carried on talking — which is the operator's complaint, and it was counted as a
+  // landing by both this file's harness and verify-voice-session.js.
+  //
+  // HOW NARROW THIS IS, stated rather than overclaimed. Both tiers count 3 frames,
+  // so on a run above BACKSTOP_RMS_THRESHOLD they fire on the SAME frame and the
+  // flush tier stops playback anyway. The eager tier is alone only while the level
+  // sits in the band between the two thresholds — quiet-but-real speech. That band
+  // is what this describe block drives, and it is the only thing this change fixes.
+  // The reason MYTHOS keeps talking on LOUD attempts is a different defect entirely:
+  // see test/bug-274-local-flush-does-not-stop-the-turn.test.js.
+  describe('every authorised barge-in route stops playback, not only the mic gate', () => {
+    it('an eager-tier-only release stops playback', async () => {
+      const { INITIAL_BLEED_FLOOR } = await import(POLICY_URL);
+      const { BACKSTOP_RELEASE_RMS_THRESHOLD, BACKSTOP_RMS_THRESHOLD } = await import(BACKSTOP_URL);
+      // Derived, so Stage 2 (aligning the eager tier to the policy floor) cannot make
+      // this test silently vacuous by collapsing the band it drives.
+      assert.ok(INITIAL_BLEED_FLOOR < BACKSTOP_RELEASE_RMS_THRESHOLD,
+        'the policy floor must sit below the eager tier, or there is no level that '
+        + 'confirms the policy without also firing a backstop tier');
+      assert.ok(BACKSTOP_RELEASE_RMS_THRESHOLD < BACKSTOP_RMS_THRESHOLD,
+        'the two backstop tiers are equal, so an eager-only fire is unreachable and '
+        + 'this test proves nothing — say so in the commit that collapsed them');
+      // Above the policy floor, below BOTH backstop tiers: confirms the policy while
+      // no tier fires, so no veto happens and the deferred route stays disarmed.
+      const QUIET_CONFIRM = (INITIAL_BLEED_FLOOR + BACKSTOP_RELEASE_RMS_THRESHOLD) / 2;
+      // Above the eager tier, below the flush tier: only onRelease can fire.
+      const EAGER_ONLY = (BACKSTOP_RELEASE_RMS_THRESHOLD + BACKSTOP_RMS_THRESHOLD) / 2;
+
+      const sequence = afterProtectedWindow([
+        ...Array(6).fill(QUIET_CONFIRM),   // policy reaches CONFIRMED here
+        ...Array(4).fill(EAGER_ONLY),      // eager tier fires on the 3rd of these
+      ]);
+
+      // The old wiring, so this case cannot pass vacuously: the gate opens, the
+      // operator is heard, and MYTHOS is never told to stop.
+      const before = await driveBargeIn(sequence, { eagerFlush: false });
+      assert.equal(before.released, 1, 'the eager tier should have released the gate once');
+      assert.equal(before.playbackStops, 0,
+        'the old wiring is supposed to be the defect: mic reopened, speech untouched');
+
+      const result = await driveBargeIn(sequence);
+      assert.equal(result.vetoed, 0,
+        'this sequence must not veto anything, or the deferred route could be what '
+        + 'delivered the release and the eager tier would be untested');
+      assert.equal(result.released, 1, 'the eager tier should have released the gate once');
+      assert.ok(result.playbackStops > 0,
+        'the gate was reopened and MYTHOS was never told to stop talking — this is '
+        + 'exactly what the operator hears, and every other counter here calls it a landing');
+    });
+
+    it('s2s-bridge.js routes all three barge-in reasons through one door that flushes', () => {
+      // Q6/one-door: three call sites had to remember to flush and one did not. The
+      // assertion is the SHAPE — a single helper — not three separate window scans,
+      // because a fourth tier would otherwise be free to forget again.
+      const src = fs.readFileSync(path.join(voiceDir, 's2s-bridge.js'), 'utf8');
+      const door = /function stopAssistantSpeech\([\s\S]{0,600}?\n {2}}/.exec(src);
+      assert.ok(door, 'stopAssistantSpeech() is missing from s2s-bridge.js');
+      assert.ok(/player\.flush\(\)/.test(door[0]),
+        'the single stop-speech door does not flush the player, so releasing the gate '
+        + 'reopens the mic while MYTHOS keeps talking');
+      assert.ok(/releaseOwnVoiceGate\(/.test(door[0]),
+        'the door must also release the half-duplex gate');
+      for (const reason of ['barge-in', 'barge-in-confirmed', 'barge-in-deferred']) {
+        assert.ok(
+          src.includes(`stopAssistantSpeech('${reason}')`),
+          `'${reason}' does not go through stopAssistantSpeech(), so it can reopen the `
+          + 'mic without stopping the speech',
+        );
+        assert.ok(
+          !src.includes(`releaseOwnVoiceGate('${reason}')`),
+          `'${reason}' still calls releaseOwnVoiceGate() directly, bypassing the flush`,
+        );
+      }
     });
   });
 

@@ -3784,7 +3784,16 @@ function createServer(deps) {
           // logs false, the gate is patching a dropped constraint and the whole class
           // of fix is aimed at the wrong layer. null means not measured, which stays
           // distinguishable from measured-as-false.
-          'micEchoCancellation', 'micNoiseSuppression']) {
+          'micEchoCancellation', 'micNoiseSuppression',
+          // BUG-274 step 5: how much of a model turn the barge-in suppression dropped
+          // after the operator interrupted, and for how long. A local flush only empties
+          // the queue — the server keeps streaming the rest of the turn — so the client
+          // now drops arriving chunks until the turn ends. That mechanism eats speech by
+          // design, and these two numbers are the only evidence of how much. Would have
+          // been the FOURTH field dropped at this seam; caught before the live session
+          // this time by bug-273-suspend-fields-reach-the-log.test.js, which now scans
+          // every logSuspendTransition() call site instead of two named ones.
+          'suppressedChunks', 'suppressedMs']) {
           if (msg[k] !== undefined) fields[k] = msg[k];
         }
         logger.info('voice.capture-suspend', fields);

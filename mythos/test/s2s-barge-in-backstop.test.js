@@ -280,20 +280,34 @@ describe('barge-in backstop: actually wired into s2s-bridge.js', () => {
     const ctorAt = src.indexOf('createBargeInBackstop({');
     assert.ok(ctorAt !== -1, 'the backstop must be constructed with options');
     const ctorBody = src.slice(ctorAt, src.indexOf('\n  });', ctorAt));
-    assert.match(ctorBody, /onFlush:.*\n?[\s\S]*player\.flush\(\)/,
-      'the flush tier must stop OUR OWN playback');
-    assert.match(ctorBody, /releaseOwnVoiceGate\('barge-in'\)/,
-      'and open the half-duplex gate — the local backstop is the only detector running '
-      + 'while the gate is held, so without this, interrupting MYTHOS is impossible');
+    assert.match(ctorBody, /onFlush:[\s\S]*stopAssistantSpeech\('barge-in'\)/,
+      'the flush tier must stop OUR OWN playback and open the half-duplex gate — the '
+      + 'local backstop is the only detector running while the gate is held, so without '
+      + 'this, interrupting MYTHOS is impossible');
     // BUG-272 renamed 'barge-in-eager' -> 'barge-in-confirmed'. The reason string is
     // load-bearing in the log, and 'eager' had become a lie: the tier no longer
     // releases on level alone. It releases only when barge-in-policy.js has CONFIRMED
     // a sustained interruption above this room's learned bleed floor — 46 of these
     // fired on speaker bleed in the 2026-08-17 session precisely because eager meant
-    // eager. The property this pins is unchanged: the tier opens the gate WITHOUT
-    // stopping playback.
-    assert.match(ctorBody, /onRelease:[\s\S]*releaseOwnVoiceGate\('barge-in-confirmed'\)/,
-      'the eager tier must open the gate WITHOUT stopping playback (2026-08-14)');
+    // eager.
+    //
+    // BUG-274 step 5, 2026-08-19 — THIS ASSERTION USED TO READ "the eager tier must
+    // open the gate WITHOUT stopping playback", AND THAT WAS THE BUG. The 2026-08-14
+    // split gave the eager tier the job of reopening the mic fast and left stopping the
+    // speech to the flush tier "for extra evidence". Since BUG-272 the policy supplies
+    // that evidence — the protected window, the floor and the full sustain test all run
+    // BEFORE either callback is allowed to act — so a second level threshold is no
+    // longer a second opinion, just a higher bar. Meanwhile the two tiers fire on the
+    // same frame above BACKSTOP_RMS_THRESHOLD, so the split only ever mattered inside
+    // the band between them, where it silently produced the operator's exact complaint:
+    // the 2026-08-19 log has a hold released as 'barge-in-confirmed' at peak 0.0935 with
+    // zero vetoes, counted as a landed barge-in, while MYTHOS talked on.
+    //
+    // Both tiers now go through stopAssistantSpeech(). The property that must NOT change
+    // is the one below: neither callback may send anything to the server.
+    assert.match(ctorBody, /onRelease:[\s\S]*stopAssistantSpeech\('barge-in-confirmed'\)/,
+      'the eager tier must ALSO stop playback (2026-08-19) — reopening the mic while '
+      + 'MYTHOS keeps talking is the failure the operator reports, logged as a success');
     assert.ok(!/\bsend(Message)?\(/.test(ctorBody),
       'no frame of any kind may be sent from the backstop callbacks: a false positive must '
       + 'never kill a turn the server VAD was correctly keeping alive. Got: ' + ctorBody);

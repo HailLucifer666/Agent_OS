@@ -109,8 +109,14 @@ describe('BUG-224 half-duplex gate — source shape', () => {
     // The CALL, not the import line at the top of the file.
     const start = bridgeSrc.indexOf('createBargeInBackstop({');
     assert.ok(start !== -1, 'the backstop must be constructed with options');
-    const body = bridgeSrc.slice(start, start + 400);
-    assert.match(body, /releaseOwnVoiceGate\('barge-in'\)/,
+    // Bounded by the constructor's own close, not by a character count: a fixed 400-char
+    // window failed on BUG-274 step 5 for adding a comment, which is the brittle-window
+    // class this repo has already paid for twice.
+    const body = bridgeSrc.slice(start, bridgeSrc.indexOf('\n  });', start));
+    // BUG-274 step 5: both tiers now go through stopAssistantSpeech(), which flushes the
+    // player AND releases the gate. The invariant asserted here is unchanged — the
+    // backstop must be able to open the gate — only the name of the door moved.
+    assert.match(body, /stopAssistantSpeech\('barge-in'\)/,
       'the local backstop is the ONLY thing that can notice the operator while the gate is '
       + 'held, so it must open it — otherwise interrupting MYTHOS is impossible');
   });
@@ -145,7 +151,9 @@ describe('BUG-224 half-duplex gate — source shape', () => {
     // The ASSIGNMENT inside start(), not the `let onAudioOutMsg = null` declaration.
     const handlerAt = bridgeSrc.indexOf('onAudioOutMsg = (msg)');
     assert.ok(handlerAt !== -1, 'the audio-out handler must exist');
-    const handler = bridgeSrc.slice(handlerAt, handlerAt + 600);
+    // Bounded by the handler's own close for the same reason as above — a fixed 600-char
+    // window broke when BUG-274 step 5 added the suppression branch and its comment.
+    const handler = bridgeSrc.slice(handlerAt, bridgeSrc.indexOf('\n    };', handlerAt));
     const enqueueAt = handler.indexOf('player.enqueue');
     const refreshAt = handler.indexOf('refreshOwnVoiceCeiling()');
     assert.ok(enqueueAt !== -1 && refreshAt !== -1,

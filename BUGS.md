@@ -802,6 +802,114 @@ hole, the hole is the bug and it is wider than one route.
 failed, `adapters/CLAUDE.md` forbids a fourth. `launch_app`'s windowed-pid resolution is
 related but separate; do not fold them either.
 
+#### T4 step 4 — 🔧 FIXED 2026-08-19: the flush only emptied the queue; the server refilled it, and the verifier called that a landing
+
+**Two corrections to what the previous three steps claimed, both found by reading the delivery
+path instead of the authorisation path.**
+
+**CORRECTION 1 — the tier that reopened the microphone was not the tier that stopped the
+speech.** `s2s-bridge.js` read:
+
+```js
+onFlush:   if (policyAllowsRelease) { player.flush(); releaseOwnVoiceGate('barge-in'); }
+onRelease: if (policyAllowsRelease) { releaseOwnVoiceGate('barge-in-confirmed'); }   // no flush
+```
+
+`releaseOwnVoiceGate()` never touches the player — every "flush" inside it refers to the preroll
+ring. So an eager-tier release opened the mic while MYTHOS kept talking, was logged as
+`barge-in-confirmed`, and `scripts/verify-voice-session.js` counted it as an **operator
+interruption that landed**. Step 2's "the first interruption in this repo's recorded history
+landed" was that line. It is now reported honestly, and against the same 2026-08-19 log the
+verifier prints `0 stopped playback, 1 reopened the mic ONLY (MYTHOS kept talking)`.
+
+How narrow this half is, stated rather than overclaimed: both backstop tiers count 3 frames, so
+above `BACKSTOP_RMS_THRESHOLD` (0.056) they fire on the **same frame** and the flush tier stopped
+playback anyway. The eager tier is alone only for levels inside the 0.05–0.056 band.
+
+**CORRECTION 2 — and this is why LOUD barge-ins also failed: a local flush cannot stop a turn
+the server is still streaming.** `player.flush()` discards only the chunks already queued in the
+browser. The local barge-in deliberately sends nothing to the server, so Gemini keeps generating
+the rest of its turn, the server keeps forwarding `live-audio-out`, and `onAudioOutMsg` enqueued
+every chunk unconditionally. The queue was emptied and instantly refilled.
+
+**The number that settles it**, from the same session log the other three steps were derived
+from:
+
+```
+grep -c '"msg":"voice.live.interrupted"' mythos-server.log   ->   0
+```
+
+**Zero server-side interrupts in the entire session.** Gemini's VAD — the only mechanism that can
+stop the model mid-turn — never fired once, so every hold's turn ran to completion no matter what
+the client flushed. Why it never fired is visible on the same lines and is a **separate, still-open
+defect**: the operator's held speech reaches Gemini as the preroll replay with the noise gate
+having zeroed most of it (`"flushedFrames":84,"flushedZeroed":80,"flushedRaw":4` on the hold that
+"landed"; 68 of 81 zeroed on the other). Four raw frames of a burst is not something a VAD
+interrupts on. That is BUG-273 A2's remaining acoustic question and is NOT fixed here — it is the
+reason the client cannot delegate stopping the speech to the server and has to stop it locally.
+
+**THE FIX — no threshold, window or sustain constant was changed.**
+
+1. **One door.** `stopAssistantSpeech(reason)` flushes the player, arms the suppression and
+   releases the gate. All three barge-in routes (`barge-in`, `barge-in-confirmed`,
+   `barge-in-deferred`) go through it; three hand-copied sequences had to remember to flush and
+   one did not.
+2. **The suppression.** After an authorised barge-in, arriving `live-audio-out` chunks are
+   **dropped for the rest of that model turn** instead of enqueued. It ends on
+   `live-turn-complete` — a frame `server/index.js` has broadcast since it was written and which,
+   until now, **was read by nothing in the HUD**: the exact turn boundary this needs, already on
+   the wire, unused (the "mechanism that looks like coverage and does nothing" class, third
+   instance in this ticket). Also ended by `live-interrupted`, by `stop()`, and by a
+   `SUPPRESS_IDLE_MS` fail-open so a turn that never completes cannot leave a permanently mute
+   assistant.
+3. **The instrument that hid it.** The verifier's criterion is renamed to *operator interruptions
+   that STOPPED THE SPEECH* and splits the count: how many stopped playback vs how many only
+   reopened the mic. It also had to **exclude** the new `barge-in-suppression-*` reasons, which
+   its `barge-in` prefix match would have counted as extra landings — the same over-report in a
+   new place. Its note now says outright that the operator's ear is the oracle.
+
+**ADVERSARIAL PASS (`rules/core.md` §11):**
+
+- **Q1 what else matches this?** Only a barge-in the policy authorised — protected window, floor
+  and full 350ms sustain unchanged. What DID change is the cost of a wrong authorisation: it was
+  a few hundred ms of clipped audio, and it is now the remainder of one reply. Bounded by one
+  turn, never by a guess about the room.
+- **Q2 does this hide evidence?** It eats speech by design, so it reports: a distinct
+  `barge-in-suppression-*` transition line carrying `suppressedChunks` and `suppressedMs`.
+- **Q3 who reads it?** `verify-voice-session.js`, via `server/index.js`'s allowlist — and this
+  would have been the **fourth** client field silently dropped at that seam. Caught before the
+  live session this time, because `bug-273-suspend-fields-reach-the-log.test.js` was widened to
+  scan **every** `logSuspendTransition()` call site instead of two named ones (it read exactly
+  two markers, so a third call site was invisible to it by construction).
+- **Q5 constants?** One, and it is a fail-open window, not a threshold. The stuck state of this
+  mechanism is a mute assistant, which is worse than the bug, so it lifts on its own.
+- **Q6 what class?** "Two independent counters/halves required to agree, with no test wiring them
+  together" — fourth instance in this ticket. The assertions are
+  `test/bug-274-local-flush-does-not-stop-the-turn.test.js` and the flush-parity cases in
+  `test/bug-274-barge-in-authorisation-is-deliverable.test.js`, whose harness now models the OLD
+  wiring too so the new case cannot pass vacuously.
+- **Q7 what did the ticket say?** W1(a) *speaking over MYTHOS stops it* — this is the part of (a)
+  the three earlier steps could not reach, and it is still **not live-verified**. (b) ghost
+  pickup, (c) first-word loss, (d) interruption with media playing, (e) the packaged installer
+  all remain open and untouched.
+- **Q8 dispositions pinned in code:** `PENDING_HOLD_MS` 350, `PROTECTED_MS` 500,
+  `INITIAL_BLEED_FLOOR` 0.035, both backstop tiers, the dormant learned floor, and
+  `pcm-player`'s `TAIL_GUARD_SEC` all UNCHANGED. Nothing new is sent to the server — the frozen
+  Live wire protocol (V2 spine §3) has no client-initiated cancel and AD-1 forbids inventing one;
+  a test fails if such a route ever appears, so adding one becomes a decision rather than drift.
+  The planned **Stage 2** (aligning `BACKSTOP_RELEASE_RMS_THRESHOLD` to the policy floor) and
+  **Stage 3** (`PENDING_HOLD_MS` 350 → 200) were deliberately **NOT** shipped: they widen
+  sensitivity, and this step widens nothing. An uncommitted 350 → 200 edit from the previous
+  session was reverted first.
+
+**Two test files had their fixed-size source windows widened** (`live-half-duplex-gate.test.js`
+400/600 chars) because adding a comment broke them — the brittle-window class, already paid for
+twice. The invariants were kept; only the bounds moved to the real closing brace.
+
+**Suite: 5207/5207, 0 fail, 0 skipped** (was 5198; +9 new tests). **Still owed: one live session.
+A green suite proves nothing here — that is this ticket's whole lesson, and the operator's ear is
+the only oracle for step 4.**
+
 #### T5 findings — 🔍 MEASURED 2026-08-19 (`d9f2ad2`): three of this item's premises do not survive
 
 **1. The contract was never escaped, and there is no false success.** The plan asks the
@@ -1113,7 +1221,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.**
+Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.** **T4 step 4 FIXED, and the two corrections it forced: (1) the eager tier reopened the microphone without stopping playback, so step 2's "first interruption landed" was the operator's own complaint logged as a success — the verifier now prints `0 stopped playback, 1 reopened the mic ONLY` against that very log; (2) a local `player.flush()` cannot stop a turn the server is still streaming, and `voice.live.interrupted` appears ZERO times in the whole session, so Gemini's VAD never cut a single turn. Arriving audio is now dropped for the rest of the interrupted turn, ended by `live-turn-complete` — a frame the server has always broadcast and nothing in the HUD read. No threshold changed; the planned Stage 2/3 widenings were deliberately NOT shipped. Suite 5207/5207. STILL OWED: one live session — the operator's ear is the only oracle.**
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are

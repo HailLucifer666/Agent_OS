@@ -96,12 +96,48 @@ function objectLiteralKeys(marker, why) {
 // Covered surface is now the UNION of both places a client field can be born.
 // `type` is excluded: it is the message discriminator the server matches on, not a
 // diagnostic it logs.
+// BUG-274 step 5 WIDENED IT AGAIN, for the same reason and one level up. The union
+// above still named its call sites by marker, so it covered the release transition and
+// the send() literal and nothing else — and a THIRD logSuspendTransition() call site
+// (the barge-in suppression's end-of-turn line) would have been invisible in exactly
+// the way the paragraph above describes. Rather than add a third marker, every
+// logSuspendTransition({...}) literal in the bridge is now scanned, so a fourth call
+// site is covered before it is written.
+function transitionCallSiteKeys() {
+  const keys = new Set();
+  let at = BRIDGE.indexOf('logSuspendTransition({');
+  let sites = 0;
+  while (at !== -1) {
+    sites += 1;
+    const open = BRIDGE.indexOf('{', at);
+    // Depth-matched rather than close-marker-matched: these literals are one level
+    // deep and contain no nested objects today, and this keeps that from mattering.
+    let depth = 0;
+    let end = open;
+    for (; end < BRIDGE.length; end++) {
+      if (BRIDGE[end] === '{') depth += 1;
+      else if (BRIDGE[end] === '}') { depth -= 1; if (depth === 0) break; }
+    }
+    // Anchored on `{` or `,` — NOT on plain whitespace, which also matches the second
+    // colon of a ternary (`heldMs: x ? Date.now() - x : 0` reported `x` as a key).
+    for (const k of BRIDGE.slice(open, end).match(/[{,]\s*([A-Za-z][A-Za-z0-9]*)\s*:/g) || []) {
+      keys.add(k.replace(/[{,\s]/g, '').replace(':', ''));
+    }
+    at = BRIDGE.indexOf('logSuspendTransition({', end);
+  }
+  assert.ok(sites >= 3,
+    `expected at least 3 logSuspendTransition({...}) call sites, found ${sites} — if one `
+    + 'was removed, say so; if the call shape changed, this scanner is now blind');
+  return [...keys];
+}
+
 function clientFields() {
   const fromExtra = objectLiteralKeys(
     'flushedFrames:', 'the release-transition payload must still be built here');
   const fromSend = objectLiteralKeys(
     "type: 'voice-capture-suspend'", 'the transition message must still be sent here');
-  return [...new Set([...fromExtra, ...fromSend])].filter((k) => k !== 'type');
+  return [...new Set([...fromExtra, ...fromSend, ...transitionCallSiteKeys()])]
+    .filter((k) => k !== 'type');
 }
 
 test('every diagnostic the client computes actually reaches the log line', () => {

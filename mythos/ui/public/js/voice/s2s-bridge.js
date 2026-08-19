@@ -106,13 +106,26 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     onFlush: (level) => {
       notePeakRms(level);   // recorded either way — a vetoed near-miss is evidence
       if (!policyAllowsRelease) { noteBargeVetoed('flush', level); return; }
-      if (player) player.flush();
-      releaseOwnVoiceGate('barge-in');
+      stopAssistantSpeech('barge-in');
     },
     onRelease: (level) => {
       notePeakRms(level);
       if (!policyAllowsRelease) { noteBargeVetoed('eager', level); return; }
-      releaseOwnVoiceGate('barge-in-confirmed');
+      // BUG-274 step 5 (2026-08-19): THE TIER THAT REOPENED THE MIC WAS NOT THE TIER
+      // THAT STOPPED THE SPEECH. This line used to call releaseOwnVoiceGate() alone,
+      // and that function never touches the player — every "flush" inside it refers to
+      // the preroll ring. So an eager-tier release opened the microphone and MYTHOS
+      // carried on talking, which is the operator's complaint verbatim, and it was
+      // logged as 'barge-in-confirmed' and counted as a LANDED barge-in by
+      // scripts/verify-voice-session.js. A success line for the exact failure.
+      //
+      // How narrow this half of the fix is, stated rather than overclaimed: both
+      // backstop tiers count 3 frames, so above BACKSTOP_RMS_THRESHOLD they fire on the
+      // SAME frame and the flush tier stopped playback anyway. The eager tier is alone
+      // only for levels inside the band between the two thresholds. The reason LOUD
+      // barge-ins also failed to stop the speech is stopAssistantSpeech()'s second
+      // half — see its comment, and bug-274-local-flush-does-not-stop-the-turn.test.js.
+      stopAssistantSpeech('barge-in-confirmed');
     },
     ...bargeTuning(),
   });
@@ -141,6 +154,10 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   let onLiveStateMsg = null;
   let onTranscriptMsg = null;
   let onWatchdogClearMsg = null;
+  // BUG-274 step 5: 'live-turn-complete' has been broadcast by server/index.js since it
+  // was written and, until this change, was read by NOTHING in the HUD — the exact
+  // end-of-turn boundary the audio-out suppression needs, already on the wire, unused.
+  let onTurnCompleteMsg = null;
 
   // BUG-059: debounce for the auto-reopen below, so a persistent server-side
   // failure (e.g. breaker tripped) can't turn into a tight live-open retry loop.
@@ -767,6 +784,87 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     prerollDropped = 0;
   }
 
+  // BUG-274 step 5 (2026-08-19) — ONE DOOR FOR "STOP TALKING", AND WHY A FLUSH IS
+  // NOT ENOUGH ON ITS OWN.
+  //
+  // Three call sites had to stop the speech and release the gate, and each had its own
+  // copy of the sequence. One of them (the eager tier) was missing the flush, so a
+  // barge-in it authorised reopened the microphone while MYTHOS kept speaking. Three
+  // copies, one divergence, and no test could see it because both halves were only
+  // ever exercised separately. This is the door; nothing else may release the gate for
+  // a barge-in reason.
+  //
+  // THE SECOND HALF, which is what the operator actually hears. player.flush() only
+  // discards the chunks ALREADY QUEUED in this browser. The local barge-in deliberately
+  // sends nothing to the server (see barge-in-backstop.js's header), so Gemini keeps
+  // generating the rest of its turn, the server keeps forwarding it as 'live-audio-out',
+  // and onAudioOutMsg used to enqueue every chunk unconditionally. The queue was
+  // emptied and instantly refilled: a few hundred milliseconds of silence, then MYTHOS
+  // carrying on — which is precisely the report "interruption does not work".
+  //
+  // THE NUMBER THAT SETTLES IT, from the 2026-08-19 session log:
+  //   grep -c '"msg":"voice.live.interrupted"' mythos-server.log  ->  0
+  // Not one server-side interrupt in the whole session. Gemini's VAD — the only
+  // mechanism that can stop the model mid-turn — never fired, so on every hold the
+  // turn ran to completion no matter what the client flushed. (Why it never fired is a
+  // separate, still-open defect: the preroll replay reaches Gemini mostly zeroed by the
+  // noise gate — "flushedFrames":84,"flushedZeroed":80 on the hold that "landed".)
+  //
+  // So stopping the speech has to be local and has to outlast the flush: for the rest
+  // of this model turn, arriving audio is DROPPED instead of played.
+  function stopAssistantSpeech(reason) {
+    if (player) player.flush();
+    armAudioOutSuppression();
+    releaseOwnVoiceGate(reason);
+  }
+
+  // Fail-open window for the suppression above: if no audio has arrived for this long,
+  // the turn is over whether or not a 'live-turn-complete' ever reached us. Q5 — this
+  // is not a threshold and must never be tuned like one. The stuck state of this
+  // mechanism is a permanently MUTE assistant, which is worse than the bug it fixes, so
+  // it lifts on its own. Every arriving chunk pushes it out (the same idle-window shape
+  // as OWN_VOICE_IDLE_CEILING_MS, and for the same reason: an absolute cap would cut a
+  // long reply short instead of detecting a stuck one).
+  const SUPPRESS_IDLE_MS = 2000;
+  let suppressAudioOut = false;
+  let suppressedChunks = 0;
+  let suppressStartedAt = 0;
+  let suppressIdleTimer = null;
+
+  function armAudioOutSuppression() {
+    suppressAudioOut = true;
+    suppressedChunks = 0;
+    suppressStartedAt = Date.now();
+    refreshSuppressIdleTimer();
+  }
+
+  function refreshSuppressIdleTimer() {
+    if (suppressIdleTimer) clearTimeout(suppressIdleTimer);
+    suppressIdleTimer = setTimeout(() => {
+      suppressIdleTimer = null;
+      endAudioOutSuppression('idle');
+    }, SUPPRESS_IDLE_MS);
+    if (typeof suppressIdleTimer.unref === 'function') suppressIdleTimer.unref();
+  }
+
+  // Q2 — this mechanism eats speech by design, so it reports what it ate. A silent
+  // suppression and a broken player are indistinguishable from the room, and that
+  // ambiguity is what let a barge-in be logged as landed while MYTHOS talked over it.
+  // 'how' is folded into the reason string rather than sent as its own field because
+  // the server's allowlist is deliberately numeric/boolean only.
+  function endAudioOutSuppression(how) {
+    if (suppressIdleTimer) { clearTimeout(suppressIdleTimer); suppressIdleTimer = null; }
+    if (!suppressAudioOut) return;
+    suppressAudioOut = false;
+    logSuspendTransition({
+      reason: 'barge-in-suppression-' + how,
+      suppressedChunks: suppressedChunks,
+      suppressedMs: suppressStartedAt ? Date.now() - suppressStartedAt : 0,
+    });
+    suppressedChunks = 0;
+    suppressStartedAt = 0;
+  }
+
   function arrayBufferToBase64(buf) {
     const bytes = new Uint8Array(buf);
     let bin = '';
@@ -790,6 +888,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
 
     onAudioOutMsg = (msg) => {
       if (!player || !msg || !msg.data) return;
+      // BUG-274 step 5: the operator interrupted, so the rest of THIS turn is not
+      // played. Dropped rather than queued-and-flushed: flushing per chunk would race
+      // the player's TAIL_GUARD_SEC and leak fragments. The idle timer is refreshed
+      // here so the suppression lasts exactly as long as the server keeps streaming.
+      if (suppressAudioOut) {
+        suppressedChunks += 1;
+        refreshSuppressIdleTimer();
+        return;
+      }
       player.enqueue(msg.data);
       // The gate's ceiling is an IDLE window, so every chunk that arrives pushes
       // it out. Without this it was an absolute cap on reply length and tripped
@@ -800,7 +907,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // half-accumulated loud streak cannot tip over on the first frame of the
     // NEXT reply. A local flush that already happened makes this a no-op —
     // flush() on nothing scheduled stops nothing.
-    onInterruptedMsg = () => { bargeBackstop.reset(); if (player) player.flush(); };
+    // BUG-274 step 5: the server winning the race means Gemini itself cut the turn, so
+    // no further chunks belong to it and the suppression must lift — leaving it armed
+    // would eat the start of the next reply.
+    onInterruptedMsg = () => {
+      bargeBackstop.reset();
+      if (player) player.flush();
+      endAudioOutSuppression('server-interrupted');
+    };
     onLiveStateMsg = (msg) => {
       const s = msg && msg.state;
       // BUG-147: the server answered, so the "no answer" fallback must not fire.
@@ -841,7 +955,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // signal on a client that was never suspended (Gemini dropped it
     // server-side instead) is a harmless no-op.
     onWatchdogClearMsg = () => { if (captureSuspended) setCaptureSuspended(false, undefined, 'watchdog-clear'); };
+    // The model turn is over, so there is nothing left to suppress. Also the guard
+    // against suppressing the NEXT reply: turn-complete always precedes the next
+    // turn's first chunk, so the idle window never has to be the thing that ends it.
+    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); };
     onBroadcast('live-audio-out', onAudioOutMsg);
+    onBroadcast('live-turn-complete', onTurnCompleteMsg);
     onBroadcast('live-interrupted', onInterruptedMsg);
     onBroadcast('live-state', onLiveStateMsg);
     onBroadcast('live-transcript', onTranscriptMsg);
@@ -962,8 +1081,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         //   and pcm-player's flush() staying a hard stop with no fade. Each is a
         //   choice, not an oversight.
         if (policyAllowsRelease && bargeAttemptedThisHold && ownVoiceGate) {
-          if (player) player.flush();
-          releaseOwnVoiceGate('barge-in-deferred');
+          stopAssistantSpeech('barge-in-deferred');
         }
         // Instrumentation only, and only while the gate is actually held (notePeakRms
         // checks): the question this answers is "how loud did the operator get while
@@ -1082,6 +1200,9 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (onLiveStateMsg) { offBroadcast('live-state', onLiveStateMsg); onLiveStateMsg = null; }
     if (onTranscriptMsg) { offBroadcast('live-transcript', onTranscriptMsg); onTranscriptMsg = null; }
     if (onWatchdogClearMsg) { offBroadcast('live-watchdog-clear', onWatchdogClearMsg); onWatchdogClearMsg = null; }
+    if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; }
+    // A suppression must not survive the session that armed it.
+    endAudioOutSuppression('session-stopped');
     if (captureNode) { try { captureNode.disconnect(); } catch { /* ok */ } captureNode = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }

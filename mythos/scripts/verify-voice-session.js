@@ -46,6 +46,19 @@ const fs = require('node:fs');
 // assuming it is what produced the 10x error in the original plan.
 const FRAME_MS = 100;
 
+// BUG-274 step 5 — ONE definition of "this suspend line is a barge-in RELEASE", because
+// there are two consumers and they were about to disagree. Both prefix-matched
+// 'barge-in' on the reason string, which was right while the only such reasons were the
+// three release routes. Stopping the speech now also emits 'barge-in-suppression-*'
+// lines (how much of the interrupted turn was dropped), and under the old match each of
+// those counted as another landing in one place and as another release in the other —
+// inflating the success number in the criterion built to stop that exact over-report.
+// The prefix STAYS shared: it is what makes the whole mechanism greppable in a raw log
+// by hand, which is how every finding in this ticket was actually made.
+const BARGE_SUPPRESSION_PREFIX = 'barge-in-suppression-';
+const isBargeRelease = (reason) => reason.indexOf('barge-in') === 0
+  && reason.indexOf(BARGE_SUPPRESSION_PREFIX) !== 0;
+
 // Frames, not milliseconds. BUG-272's own "max preroll < 1.5s" is reported in
 // BOTH units below for exactly that reason.
 //
@@ -246,8 +259,14 @@ function main() {
   // event this criterion is named for, so `modelTurn` is now required.
   const spokeThenCut = interruptedTurns.filter((e) => /(^|,)modelTurn(,|$)/.test(String(e.scFields || ''))).length;
   const neverSpoke = interruptedTurns.length - spokeThenCut;
+  // BUG-274 step 5: `isBargeRelease` rather than a bare 'barge-in' prefix. The
+  // suppression that now stops the speech logs its own 'barge-in-suppression-*' lines,
+  // and this filter would have counted each one as another barge-in RELEASE — inflating
+  // the credit subtracted from self-interruption, i.e. making a self-interruption
+  // problem look smaller than it is. Second place the same prefix bit; see the landed
+  // criterion below for the first.
   const bargeReleases = of('voice.capture-suspend')
-    .filter((e) => String(e.reason || '').indexOf('barge-in') === 0).length;
+    .filter((e) => isBargeRelease(String(e.reason || ''))).length;
   const selfMax = Math.max(0, spokeThenCut - bargeReleases);
   const selfPct = turns.length ? Math.round((selfMax / turns.length) * 1000) / 10 : null;
   const attribution = ` — of those, ${spokeThenCut} had begun speaking and ${neverSpoke} never `
@@ -294,13 +313,49 @@ function main() {
   // tier) and 'barge-in-deferred' (an attempt refused for being early, delivered
   // when the policy caught up) are three routes to the same operator-visible
   // outcome, and a future fourth should be counted without editing this line.
+  //
+  // BUG-274 step 5 — THE PREFIX MATCH WAS WRONG IN BOTH DIRECTIONS, and this criterion
+  // reported a success for the operator's exact complaint.
+  //
+  // (1) IT OVER-REPORTED. 'barge-in-confirmed' was the eager tier, which until
+  //     2026-08-19 released the half-duplex gate and never touched the player — so it
+  //     reopened the microphone while MYTHOS kept talking. Counting it as a landing is
+  //     how a session where nothing audibly stopped printed "1 landed". Both tiers now
+  //     stop playback, but a log written by an OLDER build still needs reading
+  //     correctly, and the discriminator is in the log: a build that stops the speech
+  //     also emits 'barge-in-suppression-*' lines, because stopping it now means
+  //     dropping the rest of the model turn.
+  // (2) IT WOULD HAVE OVER-REPORTED AGAIN. Those new suppression lines are themselves
+  //     'barge-in'-prefixed, so the same filter would have counted each one as another
+  //     landing — inflating exactly the number this ticket exists to make honest.
+  //     Excluded explicitly rather than by renaming: the prefix is what makes the
+  //     mechanism findable in the log by hand.
+  const SUPPRESSION_PREFIX = BARGE_SUPPRESSION_PREFIX;
+  const isLanded = isBargeRelease;
   const bargeLanded = Object.keys(byReason)
-    .filter((r) => r.indexOf('barge-in') === 0)
+    .filter(isLanded)
     .reduce((n, r) => n + byReason[r], 0);
   const bargeLandedBreakdown = Object.keys(byReason)
-    .filter((r) => r.indexOf('barge-in') === 0)
+    .filter(isLanded)
     .map((r) => `${r}=${byReason[r]}`)
     .join(' ');
+  // Does this log come from a build where a landing stops the speech at all?
+  const suppressionReasons = Object.keys(byReason).filter((r) => r.indexOf(SUPPRESSION_PREFIX) === 0);
+  const stopsTheSpeech = suppressionReasons.length > 0;
+  // Pre-step-5 builds: the flush tier and the deferred route called player.flush(),
+  // the eager tier did not. Split the count rather than summing it.
+  const MIC_ONLY_BEFORE_STEP5 = 'barge-in-confirmed';
+  const micOnlyLanded = stopsTheSpeech ? 0 : (byReason[MIC_ONLY_BEFORE_STEP5] || 0);
+  const stoppedPlayback = bargeLanded - micOnlyLanded;
+  let suppressedChunks = 0;
+  let suppressedMs = 0;
+  for (const e of suspendLines) {
+    if (String(e.reason || '').indexOf(SUPPRESSION_PREFIX) !== 0) continue;
+    const c = num(e.suppressedChunks);
+    if (c !== null) suppressedChunks += c;
+    const ms = num(e.suppressedMs);
+    if (ms !== null && ms > suppressedMs) suppressedMs = ms;
+  }
   // BUG-273 A4: a caller-chosen hold that simply elapsed is routine and is counted
   // separately. The 8 counted on 2026-08-18 were ALL of this kind — 8 media-start
   // arms, 8 expiries, 0 clears — and reading them as 8 fail-opens is what filed A4
@@ -378,12 +433,19 @@ function main() {
   // actually tried. It reports the count and the routes so a session can be compared
   // against the previous one, and says plainly when the answer is zero — which is
   // what every log before 2026-08-19 would have said.
-  check('operator interruptions that landed', true,
-    bargeLanded > 0
-      ? `${bargeLanded} landed (${bargeLandedBreakdown})`
-      : 'NONE landed — every hold ended by MYTHOS finishing or by a ceiling',
-    'a landed barge-in is the only positive evidence that interruption works; vetoes '
-    + 'and ceilings only count the failures');
+  check('operator interruptions that STOPPED THE SPEECH', true,
+    bargeLanded === 0
+      ? 'NONE landed — every hold ended by MYTHOS finishing or by a ceiling'
+      : `${stoppedPlayback} stopped playback`
+        + (micOnlyLanded ? `, ${micOnlyLanded} reopened the mic ONLY (MYTHOS kept talking)` : '')
+        + ` of ${bargeLanded} released (${bargeLandedBreakdown})`
+        + (stopsTheSpeech
+          ? `; suppression dropped ${suppressedChunks} audio chunk(s), longest ${suppressedMs}ms`
+          : ' — this log predates BUG-274 step 5, so no landing here silenced the rest of the turn'),
+    'a landed barge-in that only reopened the mic is the operator\'s complaint, not '
+    + 'evidence against it — and even a stopped one is not proof: THE OPERATOR\'S EAR '
+    + 'IS THE ORACLE. On 2026-08-19 this line printed "1 landed" for a session in which '
+    + 'nothing audibly stopped');
 
   check('barge-in policy reported its work', true,
     `${vetoed} vetoed barge-in(s)`

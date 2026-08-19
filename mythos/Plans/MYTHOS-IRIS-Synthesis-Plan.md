@@ -17,7 +17,84 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **Three fixes shipped, one interruption landed live, and the last one is awaiting a reload. The blocker turned out to be two thresholds 2.5x apart answering the same question.**
+### 2026-08-19 (latest) — **The "interruption that landed" did not stop the speech, and a local flush never could. Two corrections, one fix, no threshold touched. Awaiting the live session.**
+
+**Uncommitted at time of writing → see the commit that carries this block.** Suite
+**5207/5207, 0 fail, 0 skipped** (was 5198; +9 tests). Merged-order position UNCHANGED
+(6.5 ☐ · 6.6 ☐ · 7 ☐).
+
+**CORRECTION 1 — the previous block's headline was wrong, and the instrument agreed with it
+wrongly.** The one live `barge-in-confirmed` came from the **eager** backstop tier, which
+released the half-duplex gate and **never touched the player** (`releaseOwnVoiceGate()`'s
+every "flush" refers to the preroll ring). So it reopened the microphone while MYTHOS carried
+on talking — the operator's complaint verbatim — and `verify-voice-session.js` counted it as
+an *operator interruption that landed*. Run against that same log now, it prints
+`0 stopped playback, 1 reopened the mic ONLY (MYTHOS kept talking)`.
+
+**CORRECTION 2 — and this is the one that explains the LOUD failures too.**
+`player.flush()` discards only the chunks already queued in the browser. The local barge-in
+deliberately sends nothing to the server, so Gemini keeps generating, the server keeps
+forwarding `live-audio-out`, and the handler enqueued every chunk unconditionally: emptied,
+then instantly refilled. The decisive number, from the same session log every earlier step
+was derived from:
+
+```
+grep -c '"msg":"voice.live.interrupted"' mythos-server.log   ->   0
+```
+
+**Zero server-side interrupts all session.** Gemini's VAD — the only thing that can stop the
+model mid-turn — never fired once, so no hold's turn was ever cut, whatever the client
+flushed. Why it never fired is on the same lines and is a **separate open defect**: the held
+speech reaches Gemini as the preroll replay with the noise gate having zeroed most of it
+(`flushedFrames 84 / flushedZeroed 80 / flushedRaw 4` on the hold that "landed"). Four raw
+frames is not something a VAD interrupts on. That is BUG-273 A2's acoustic question, and it
+is why stopping the speech has to be done locally.
+
+**THE FIX — and it widens nothing. No threshold, window or sustain constant changed.**
+
+1. **One door.** `stopAssistantSpeech()` flushes the player, arms the suppression, releases
+   the gate. All three routes (`barge-in`, `barge-in-confirmed`, `barge-in-deferred`) use it.
+2. **The suppression.** After an authorised barge-in, arriving audio is **dropped for the
+   rest of that model turn**. Ended by `live-turn-complete` — a frame the server has
+   broadcast since it was written and which **nothing in the HUD read**: the exact turn
+   boundary needed, already on the wire, unused. Also ended by `live-interrupted`, by
+   `stop()`, and by a `SUPPRESS_IDLE_MS` fail-open, because a suppression that can stick is a
+   permanently mute assistant.
+3. **The instrument.** Criterion renamed to *operator interruptions that STOPPED THE SPEECH*
+   and split by tier; the new `barge-in-suppression-*` reasons are excluded from the landed
+   count, which the old `barge-in` prefix match would have inflated. Its note now says
+   outright that the operator's ear is the oracle.
+
+**DELIBERATELY NOT SHIPPED.** The staged plan's **Stage 2** (`BACKSTOP_RELEASE_RMS_THRESHOLD`
+0.05 → 0.035) and **Stage 3** (`PENDING_HOLD_MS` 350 → 200) both widen sensitivity and are
+conditional on this being insufficient. An uncommitted 350 → 200 edit from the previous
+session was reverted before any work started. **Pull them one at a time, and only after a
+live session says this was not enough.**
+
+**Q8 pinned, unchanged:** `PENDING_HOLD_MS` 350, `PROTECTED_MS` 500, `INITIAL_BLEED_FLOOR`
+0.035, both backstop tiers, the dormant learned floor, `pcm-player`'s `TAIL_GUARD_SEC`.
+Nothing new goes to the server — the frozen Live protocol (V2 spine §3) has no
+client-initiated cancel and AD-1 forbids inventing one; a test now fails if such a route
+appears, so adding one is a decision rather than drift.
+
+**NEXT ACTION — the live gate, and nothing else.** The operator reloads the HUD (files are
+served `no-cache`), interrupts 4–5 times mixing normal and quiet, then:
+
+```
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+Pass = at least one hold reporting `stopped playback`, a `barge-in-suppression-*` line with a
+non-zero `suppressedChunks`, **and the operator confirming by ear that it went quiet.** The
+log alone cannot close this — a released gate beside continuing speech is exactly the trap
+that produced the previous block's false success.
+
+**Still open, named so it is not mistaken for done:** the 0.024–0.031 band no scalar floor can
+separate (roughly half the observed attempts), interruption **with media playing**
+(`setCaptureSuspended` returns before the policy sees a frame), first-word loss, and the
+packaged installer. BUG-275 and BUG-276 remain filed and untouched per the operator.
+
+### 2026-08-19 — **Three fixes shipped, one interruption landed live, and the last one is awaiting a reload. The blocker turned out to be two thresholds 2.5x apart answering the same question.**
 
 **Commits: `fbd4484` (step 1) · `2696a1a` (step 2) · `57d6fbe` (step 3).** Suite
 **5198/5198, 0 fail, 0 skipped**. Merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).
