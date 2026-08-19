@@ -2,9 +2,14 @@
 // Polls /api/media every 5s. Shows album art, track title, artist, and playback state.
 // Honest-offline: shows "no media" when nothing is playing or pc-child is offline.
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
-}
+// There used to be an escapeHtml() here that replaced every character with
+// itself — `.replace(/&/g, '&')` and three more like it. It escaped nothing,
+// and it was applied to three values that all go to .textContent, which needs
+// no escaping in the first place. Deleted rather than fixed: a function that
+// LOOKS like a security control and is not one is worse than no function,
+// because the next person to switch a sink to innerHTML will trust it.
+// If a sink here ever becomes innerHTML, import the real helpers from
+// /js/url.js instead of growing another local copy.
 
 // BUG-176: mm:ss for the timeline labels. Pure, exported for node:test.
 // A non-finite position renders as a dash placeholder rather than 0:00 —
@@ -98,7 +103,7 @@ export function mountMedia(el) {
         artEl.innerHTML = '';
         titleEl.textContent = '—';
         artistEl.textContent = 'no media playing';
-        statusEl.textContent = data.error ? `error: ${escapeHtml(data.error)}` : '';
+        statusEl.textContent = data.error ? `error: ${data.error}` : '';
         statusEl.classList.add('media-idle');
         progressEl.hidden = true;
         return;
@@ -120,8 +125,8 @@ export function mountMedia(el) {
         artEl.innerHTML = '';
       }
       // Track info
-      titleEl.textContent = m.title ? escapeHtml(m.title) : '—';
-      artistEl.textContent = m.artist ? escapeHtml(m.artist) : (m.source ? `via ${escapeHtml(m.source)}` : 'unknown artist');
+      titleEl.textContent = m.title ? m.title : '—';
+      artistEl.textContent = m.artist ? m.artist : (m.source ? `via ${m.source}` : 'unknown artist');
       // Status
       if (m.playing) {
         statusEl.textContent = '▶ playing';

@@ -6,7 +6,13 @@
 
 var https = require('https');
 
-var TOKEN_URL = 'https://oauth2.googleapis.com/token';
+var TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+// A `timeout` option on https.request only EMITS an event — the socket is not
+// closed unless something acts on it, so every request below pairs the option
+// with a handler that destroys it. Overridable for a slow link; there is no
+// value at which a stalled Google API call is worth waiting out forever.
+var HTTP_TIMEOUT_MS = Number(process.env.GOOGLE_HTTP_TIMEOUT_MS) || 20000;
 var GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 // §7.6 — Calendar read layer. scripts/google-auth.js has requested
 // 'calendar.readonly' alongside the Gmail scopes since BUG-024 (see that
@@ -41,6 +47,11 @@ function createGoogleAdapter(opts) {
       var opts2 = {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+        // Bounded. An https.request with no timeout does not fail against a
+        // host that accepts the connection and then stalls — it waits
+        // forever, and this one gates every Gmail/Calendar call behind it,
+        // so a stalled token refresh silently freezes the whole adapter.
+        timeout: HTTP_TIMEOUT_MS,
       };
       var req = https.request(TOKEN_URL, opts2, function(res) {
         var chunks = [];
@@ -81,6 +92,7 @@ function createGoogleAdapter(opts) {
           resolve(_tokenCache.token);
         });
       });
+      req.on('timeout', function() { req.destroy(new Error('Google token request timed out after ' + HTTP_TIMEOUT_MS + 'ms')); });
       req.on('error', reject);
       req.write(body);
       req.end();
@@ -100,7 +112,7 @@ function createGoogleAdapter(opts) {
     return getToken().then(function(token) {
       return new Promise(function(resolve, reject) {
         var url = base + path;
-        var opts2 = { method: method || 'GET', headers: { 'Authorization': 'Bearer ' + token } };
+        var opts2 = { method: method || 'GET', headers: { 'Authorization': 'Bearer ' + token }, timeout: HTTP_TIMEOUT_MS };
         if (body) {
           opts2.headers['Content-Type'] = 'application/json';
           body = JSON.stringify(body);
@@ -116,6 +128,7 @@ function createGoogleAdapter(opts) {
             resolve(json);
           });
         });
+        req.on('timeout', function() { req.destroy(new Error('Google API request timed out after ' + HTTP_TIMEOUT_MS + 'ms')); });
         req.on('error', reject);
         if (body) req.write(body);
         req.end();
