@@ -484,6 +484,91 @@ should cancel. **Stated as a suspect, not a finding.**
 live and record which come back as a transcript. That single measurement decides whether this
 is a routing bug or a genuine capability gap.
 
+#### T4 "do first" — 🔧 RUNNABLE + 🔍 RESEARCHED 2026-08-20: the measurement could not be SCORED, and its stated suspect may be the wrong shape of answer
+
+**Asked to run the three-engine echo measurement. It cannot be run by a session, for the same
+reason `verify-tts-echo-gate.js` already records for BUG-027:** there is no way to make sound
+leave a real speaker, cross open air, and land in a real microphone. That IS the phenomenon under
+test. MYTHOS was also not running (nothing on 4478, zero node processes). What was blocking is
+now removed, and two findings change what the run should look for.
+
+**BLOCKER FOUND AND FIXED — the measurement could not be scored even from a perfect session.**
+The three engines reach the speakers three different ways: the TTS chain's MP3 through a `data:`
+`Audio` element, the browser's `speechSynthesis`, and Gemini Live's PCM through an `AudioContext`.
+Only the third was identifiable in the log (`live.turn-parts.audioParts`). **The first two were
+indistinguishable**, because falling back to `speechSynthesis` is a *client-side* decision taken
+when `audioB64` arrives null, and the server recorded nothing about which way a reply went. A
+perfect live session would have produced a log that could not answer the question — the same
+shape as step 0, where the check that had to run first could not run at all.
+
+- **`tts.spoke`** now logs `engine` (`tts-chain` / `browser-speechSynthesis` / `mixed`), the chain
+  name, and chunk counts, on both the reply and proactive speech paths. `mixed` is its own value:
+  a reply that was half MP3 and half `speechSynthesis` cannot be attributed to one engine and must
+  not be silently counted as if it could.
+- **`verify-voice-session.js` scores it.** `live.echo-check` already fires on every
+  `inputTranscription` and says whether the mic's words matched what MYTHOS had been saying — a
+  `dropped` decision means MYTHOS's own voice came back through the microphone, i.e. AEC did not
+  remove that engine's output. The new criterion attributes each echo to the engine that spoke
+  before it and prints one of three verdicts: **capability gap** (every engine echoed — no
+  page-rendered audio is cancelled and swapping engines cannot help), **routing difference** (only
+  one echoed — move it onto the others' path), or **nothing echoed**, which is explicitly *not*
+  reported as success (see below). Two engines inside the same 30s window are reported as
+  `ambiguous(a+b)` rather than assigned by proximity.
+- **The positive-control problem, stated in the tool itself.** Headphones, muted speakers, or a
+  mic on a different device all produce a clean sweep that looks exactly like perfect echo
+  cancellation. The "nothing echoed" verdict says so and defers to the operator confirming they
+  **heard** MYTHOS. Without that, a null run is this ticket's fourth false finding.
+
+**RESEARCH — the plan's prime suspect is not safe to assume, and there is a second lead it does
+not mention.**
+
+- The plan's suspect is that `speechSynthesis` is rendered outside the page audio graph where AEC
+  cannot reach it. Two web searches asserted a stronger and much more consequential claim — that
+  **Chrome's AEC reference signal contains only WebRTC peer-connection audio**, which would mean
+  *none* of MYTHOS's three engines is cancellable and the whole comparison comes out negative.
+  **I could not substantiate that claim.** Neither cited source contains it: the
+  [webrtc/samples issue](https://github.com/webrtc/samples/issues/1243) has no such statement, and
+  the [W3C TAG review](https://tag-github-bot.w3.org/gh/w3ctag/design-reviews-private-brainstorming/163)
+  contains the *proposal* (from Google's Guido Urdaneta and Olga Sharanova) to let applications
+  choose between cancelling only peer-connection audio and all system audio — which confirms the
+  two modes are meaningfully different, and attributes neither to a specific browser. Chrome's own
+  [blog](https://developer.chrome.com/blog/more-native-echo-cancellation) points the other way:
+  its software canceller "uses an internal loopback to get the playout audio to cancel". **Recorded
+  as unresolved, deliberately.** A search summary is not a source, and writing it down as fact is
+  how this ticket got its earlier false findings.
+- **Second lead, not in the plan: MYTHOS runs in Electron, and there is an open, `status/confirmed`
+  Electron issue where `echoCancellation: true` does nothing while working in Chrome**
+  ([electron#47043](https://github.com/electron/electron/issues/47043)). Root cause not identified;
+  reported on Electron 37 / Windows 11 **ARM64**. This machine is **Electron 43.3.0 on x64**, so it
+  is *plausible but not established* here. It matters because BUG-274 W1 Q5 measured
+  `micEchoCancellation: true` — a constraint **granted** — and a granted constraint with an inert
+  implementation looks identical to a working one from inside the page.
+- **Consequence for the run:** do it **twice — once in the Electron shell, once in plain Chrome at
+  the same `http://127.0.0.1:4478`**. One extra axis, and it separates "MYTHOS's engines bypass
+  AEC" from "Electron's AEC is inert", which no amount of engine-swapping would distinguish.
+
+**What the operator runs** (the engines need no config surgery — a normal session exercises all
+three, and `tts.spoke` attributes each reply): converse until MYTHOS has spoken several times over
+**open speakers, not headphones**, then
+
+```
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+and read the `T4 verdict:` line. Repeat in plain Chrome. **The run is void unless the operator
+confirms they actually heard MYTHOS out loud.**
+
+**Suite: 5347/5347, 0 fail, 0 skipped** (+8). Not a behaviour change: additive logging plus a
+read-only criterion.
+
+**Two of my own errors, both caught before commit and both worth the space.** Verifying the new
+log line by grepping test output for it proved **nothing** — `src/core/logger.js` silences itself
+under `NODE_TEST_CONTEXT`, so the grep returned 0 whether the code ran or not; the tests inject a
+logger instead. And the ambiguous-window fixture placed its two engines **60s apart, outside the
+30s attribution window**, so it passed without testing ambiguity at all. Both are the same shape as
+everything else in this ticket: a check that returns a reassuring number for a reason unrelated to
+what it claims to measure.
+
 #### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
 
 **The check that had to run first could not run at all.** The plan's own Q5 says the premise

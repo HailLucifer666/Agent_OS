@@ -1422,6 +1422,51 @@ function createServer(deps) {
   }
   logger.info('tts.chain', { chain: ttsChainRef.chainNames.join(',') });
 
+  // BUG-274 T4 — WHICH ENGINE ACTUALLY MADE THE SOUND, per spoken reply.
+  //
+  // T4's "do first" measurement is: play the same sentence through each engine with
+  // the mic live and record which come back as a transcript. MYTHOS has three, and
+  // they reach the speakers by three different routes — the TTS chain's MP3 through
+  // `new Audio(data:)`, the browser's own speechSynthesis, and Gemini Live's PCM
+  // through an AudioContext. Only the third is identifiable in the log today
+  // (live.turn-parts), and the first two were INDISTINGUISHABLE: the fallback to
+  // speechSynthesis is a CLIENT-side decision taken when audioB64 comes back null,
+  // and the server never recorded which way a reply went.
+  //
+  // So the measurement could not be scored even from a perfect session — the same
+  // shape as T4 step 0, where the check that had to run first could not run at all.
+  // This line makes the engine attributable per reply instead of inferred from the
+  // absence of a tts.chunk-failed warning nearby.
+  //
+  // `engine` is what the CLIENT will do with the chunks, not what the server tried:
+  // a synthesize() that threw still ships the chunk, and the browser still speaks it
+  // — through a different engine, which is the entire distinction being measured.
+  // 'mixed' is kept as its own value rather than rounded to either side, because a
+  // reply that was half MP3 and half speechSynthesis cannot be attributed to one
+  // engine and must not be silently counted as if it could.
+  // Wrapped because this is instrumentation sitting on the speech path, and both call
+  // sites are AFTER the chunks have already gone out. A throw here (a chain without
+  // chainNames, a logger that rejects) would reject out of the speak call and cost the
+  // operator the end of a reply that had already been delivered — a diagnostic
+  // breaking the thing it was added to diagnose. Same rule as the playback callbacks
+  // in pcm-player.js: logging must never be able to stop the audio.
+  function logSpokenEngine(reqId, chunkCount, synthesizedCount, path) {
+    try {
+      const engine = synthesizedCount === 0 ? 'browser-speechSynthesis'
+        : (synthesizedCount === chunkCount ? 'tts-chain' : 'mixed');
+      const chain = ttsChainRef && Array.isArray(ttsChainRef.chainNames)
+        ? ttsChainRef.chainNames.join(',') : null;
+      logger.info('tts.spoke', {
+        reqId,
+        path,
+        engine,
+        chain: engine === 'browser-speechSynthesis' ? null : chain,
+        chunks: chunkCount,
+        synthesized: synthesizedCount,
+      });
+    } catch (_) { /* instrumentation only — never break a reply */ }
+  }
+
   // A voice picked in the HUD has to reach BOTH speech paths. The TTS chain is
   // rebuilt by the route below; Gemini Live reads GEMINI_LIVE_VOICE once when a
   // session is constructed, so it gets the override at that moment instead
@@ -2119,6 +2164,7 @@ function createServer(deps) {
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' }, targetWs);
         idx++;
       }
+      let proactiveSynthesized = 0;
       for (let i = 0; i < textChunks.length; i++) {
         if (ctrl.signal.aborted) break;
         let audioB64 = null;
@@ -2132,10 +2178,12 @@ function createServer(deps) {
             logger.warn('tts.proactive-chunk-failed', { error: err.message, index: i });
           }
         }
+        if (audioB64) proactiveSynthesized++;
         if (ctrl.signal.aborted) break;
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] }, targetWs);
         idx++;
       }
+      if (textChunks.length) logSpokenEngine(reqId, textChunks.length, proactiveSynthesized, 'proactive');
       // chunked forced true on abort, or when the alert tone alone was sent
       // (even with edge-tts down): routes the client's 'done' handling through
       // the session-checked chunk-queue path, never the non-chunked
@@ -3106,6 +3154,7 @@ function createServer(deps) {
       let latencyRecorded = false;
       try {
         if (chunks.length) {
+          let replySynthesized = 0;
           for (let i = 0; i < chunks.length; i++) {
             if (ctrl.signal.aborted) break;
             let audioB64 = null;
@@ -3123,6 +3172,7 @@ function createServer(deps) {
                 logger.warn('tts.chunk-failed', { error: err.message, index: i });
               }
             }
+            if (audioB64) replySynthesized++;
             if (ctrl.signal.aborted) break;
             if (audioB64 && typeof micStoppedAt === 'number' && !latencyRecorded) {
               voiceLatencyTracker.record(Date.now() - micStoppedAt);
@@ -3130,6 +3180,7 @@ function createServer(deps) {
             }
             sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] }, ws);
           }
+          logSpokenEngine(reqId, chunks.length, replySynthesized, 'reply');
         }
         // chunked forced true on abort (even with zero chunks sent): routes the
         // client's 'done' handling through the session-checked chunk-queue path,

@@ -629,6 +629,94 @@ describe('verify-voice-session: audio continuity (BUG-274 step 5/5b)', () => {
     });
   });
 
+  // T4's "do first" measurement, scored from the log instead of by hand. The three
+  // verdicts are the three answers the plan says the measurement can produce, and the
+  // third one — nothing echoed — is the one that must NOT read as success.
+  describe('T4 three-engine echo attribution', () => {
+    const spoke = (at, engine) => JSON.stringify({
+      ts: '2026-08-20T10:0' + at + ':00.000Z', level: 'info', msg: 'tts.spoke',
+      reqId: 'r' + at, path: 'reply', engine, chunks: 1, synthesized: engine === 'tts-chain' ? 1 : 0,
+    });
+    const liveAudio = (at) => JSON.stringify({
+      ts: '2026-08-20T10:0' + at + ':00.000Z', level: 'info', msg: 'live.turn-parts',
+      turnId: at, scFields: 'modelTurn,turnComplete', audioParts: 8,
+    });
+    const echo = (at, dropped) => JSON.stringify({
+      ts: '2026-08-20T10:0' + at + ':05.000Z', level: 'info', msg: 'live.echo-check',
+      turnId: at, ratio: dropped ? 0.9 : 0.1, decision: dropped ? 'dropped' : 'accepted',
+      reason: dropped ? 'matched' : 'no-reference', candidateWords: 6, referenceWords: 6,
+      referenceCount: 1, msSinceSpoken: 800, msSinceAssistantAudio: 800,
+    });
+    const verdictOf = (stdout) => stdout.split('\n').find((l) => /T4 verdict/.test(l)) || '';
+
+    it('calls it a CAPABILITY gap when every engine echoes', () => {
+      withLog([spoke(1, 'tts-chain'), echo(1, true),
+        spoke(2, 'browser-speechSynthesis'), echo(2, true),
+        liveAudio(3), echo(3, true)], (file) => {
+        const v = verdictOf(run([file]).stdout);
+        assert.match(v, /CAPABILITY gap/, v);
+        assert.match(v, /swapping engines cannot fix it/,
+          'the point of the distinction is what to do next, so it must say');
+      });
+    });
+
+    it('calls it a ROUTING difference when only one engine echoes', () => {
+      withLog([spoke(1, 'tts-chain'), echo(1, false),
+        spoke(2, 'browser-speechSynthesis'), echo(2, true),
+        liveAudio(3), echo(3, false)], (file) => {
+        const v = verdictOf(run([file]).stdout);
+        assert.match(v, /ROUTING difference/, v);
+        assert.match(v, /browser-speechSynthesis/, 'and must name the engine that leaked');
+      });
+    });
+
+    it('refuses to read "nothing echoed" as AEC working', () => {
+      // THE POSITIVE-CONTROL CASE. A muted speaker, headphones, or a mic on another
+      // device all produce a clean sweep that looks exactly like perfect echo
+      // cancellation. Reporting that as success is how this ticket would acquire its
+      // fourth false finding, so the verdict names the confound and defers to the ear.
+      withLog([spoke(1, 'tts-chain'), echo(1, false),
+        spoke(2, 'browser-speechSynthesis'), echo(2, false)], (file) => {
+        const v = verdictOf(run([file]).stdout);
+        assert.match(v, /no engine echoed/, v);
+        assert.match(v, /headphones, muted speakers/, v);
+        assert.match(v, /cannot tell those apart/,
+          'an ambiguous result must be reported as ambiguous, never as a pass');
+      });
+    });
+
+    it('does not attribute an echo to an engine when two spoke in the same window', () => {
+      // Timestamps written out rather than built from the minute-stepping helpers
+      // above: those put consecutive marks 60s apart, which is OUTSIDE the 30s
+      // attribution window, so the first version of this test proved nothing about
+      // ambiguity — it just measured a single in-window engine and passed the wrong
+      // way. Both marks are seconds apart here, which is the case being tested.
+      const at = (s, extra) => JSON.stringify(Object.assign({
+        ts: '2026-08-20T10:00:' + String(s).padStart(2, '0') + '.000Z', level: 'info',
+      }, extra));
+      withLog([
+        at(1, { msg: 'tts.spoke', reqId: 'r1', path: 'reply', engine: 'tts-chain', chunks: 1, synthesized: 1 }),
+        at(4, { msg: 'tts.spoke', reqId: 'r2', path: 'reply', engine: 'browser-speechSynthesis', chunks: 1, synthesized: 0 }),
+        at(9, {
+          msg: 'live.echo-check', turnId: 1, ratio: 0.9, decision: 'dropped', reason: 'matched',
+          candidateWords: 6, referenceWords: 6, referenceCount: 1, msSinceSpoken: 800,
+          msSinceAssistantAudio: 800,
+        }),
+      ], (file) => {
+        const line = lineFor(run([file]).stdout, /T4: echo leakage/);
+        assert.match(line, /ambiguous\(browser-speechSynthesis\+tts-chain\)/,
+          'guessing by proximity is how a confident false attribution gets made');
+      });
+    });
+
+    it('says an un-instrumented log is unmeasured, not clean', () => {
+      withLog([turn({ audioStarveEvents: 0, audioStarveMaxMs: 0 })], (file) => {
+        const line = lineFor(run([file]).stdout, /T4: echo leakage/);
+        assert.match(line, /NOT a clean result: an unmeasured one/, line);
+      });
+    });
+  });
+
   it('stays quiet about all of this on a log written before the instrumentation', () => {
     // An old log must report as old, not as broken: these criteria must not manufacture
     // failures for a session that simply predates them.

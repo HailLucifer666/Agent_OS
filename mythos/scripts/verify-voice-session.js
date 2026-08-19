@@ -94,6 +94,7 @@ const CRITERIA_NOTES = {
   starve: 'gaps of 272-1486ms on ~half of turns on 2026-08-19 — heard as one word per second',
   cushion: 'the client half of the same question; absent on a log written before step 5',
   interruptedLine: 'the old grep target was a bus event name and returned 0 on every log ever',
+  t4engines: 'decides routing bug vs capability gap — the operator must confirm they HEARD it',
 };
 
 function parseArgs(argv) {
@@ -402,6 +403,100 @@ function main() {
             + 'live.interrupted line exists — the server is on a pre-step-5 build'
           : 'no server-side interrupts this session, and the line exists to say so')),
     CRITERIA_NOTES.interruptedLine);
+
+  // --- V1c: T4's THREE-ENGINE ECHO MEASUREMENT, scored from the log ---
+  //
+  // The T4 plan's "do first": play the same sentence through each engine with the mic
+  // live and record which come back as a transcript. That decides whether MYTHOS's
+  // echo problem is a ROUTING bug (one engine bypasses AEC) or a CAPABILITY gap (none
+  // of them is cancelled), and those want completely different fixes.
+  //
+  // It is scored here rather than by hand because hand-reading this log is what
+  // produced every false finding in this ticket. The three engines reach the speakers
+  // three different ways — the TTS chain's MP3 through a data: Audio element, the
+  // browser's speechSynthesis, and Gemini Live's PCM through an AudioContext — and
+  // until `tts.spoke` existed the first two were indistinguishable in the log.
+  //
+  // THE ORACLE is live.echo-check, which fires on every inputTranscription and says
+  // whether the words the mic just heard matched what MYTHOS had been saying. A
+  // 'dropped' decision means MYTHOS's own voice came back through the microphone —
+  // i.e. echo cancellation did NOT remove that engine's output. The filter catching it
+  // is not the same as AEC working; it is the evidence that AEC did not.
+  //
+  // ATTRIBUTION is by nearest preceding speech marker within a window. That is an
+  // approximation and is labelled as one: overlapping engines inside the window are
+  // reported as ambiguous rather than assigned to whichever happened to be closer.
+  const ECHO_ATTRIBUTION_WINDOW_MS = 30000;
+  const tsOf = (e) => Date.parse(e.ts || '') || 0;
+  const spokeMarks = of('tts.spoke')
+    .map((e) => ({ at: tsOf(e), engine: String(e.engine || 'unknown') }))
+    .concat(of('live.turn-parts')
+      .filter((e) => Number(e.audioParts) > 0)
+      .map((e) => ({ at: tsOf(e), engine: 'gemini-live' })))
+    .filter((m) => m.at)
+    .sort((a, b) => a.at - b.at);
+
+  const echoAll = of('live.echo-check');
+  const byEngine = {};
+  let unattributed = 0;
+  for (const e of echoAll) {
+    const at = tsOf(e);
+    if (!at) continue;
+    const inWindow = spokeMarks.filter((m) => m.at <= at && at - m.at <= ECHO_ATTRIBUTION_WINDOW_MS);
+    if (!inWindow.length) { unattributed++; continue; }
+    const engines = new Set(inWindow.map((m) => m.engine));
+    // Two engines spoke inside the same window: this transcript cannot be blamed on
+    // either one. Counted as its own bucket instead of guessing by proximity, because
+    // a wrong attribution here is exactly the kind of confident-and-false finding this
+    // ticket has already produced three times.
+    const key = engines.size > 1 ? 'ambiguous(' + [...engines].sort().join('+') + ')'
+      : inWindow[inWindow.length - 1].engine;
+    const b = byEngine[key] || (byEngine[key] = { heard: 0, echoed: 0 });
+    b.heard++;
+    if (String(e.decision) === 'dropped') b.echoed++;
+  }
+
+  const engineKeys = Object.keys(byEngine).sort();
+  const leaked = engineKeys.filter((k) => k.indexOf('ambiguous') !== 0 && byEngine[k].echoed > 0);
+  const summary = engineKeys.length
+    ? engineKeys.map((k) => `${k}: ${byEngine[k].echoed}/${byEngine[k].heard} echoed`).join('; ')
+    : null;
+
+  // Informational, and it must stay that way: this criterion REPORTS a measurement
+  // whose interesting outcomes are all legitimate findings, not failures. Every engine
+  // leaking is a capability gap; one leaking is a routing bug; none leaking on a
+  // session where the operator heard echo means the oracle is not seeing it. A
+  // pass/fail here would have to encode a conclusion the measurement exists to reach.
+  check('T4: echo leakage by voice engine', true,
+    !spokeMarks.length
+      ? 'no tts.spoke or Live audio in this log — nothing spoke, or the log predates '
+        + 'BUG-274 T4 engine attribution. NOT a clean result: an unmeasured one.'
+      : (!echoAll.length
+        ? `${spokeMarks.length} spoken reply/replies and NO live.echo-check lines — the mic `
+          + 'produced no transcript at all, so nothing could have come back. Check the Live '
+          + 'session was open and capturing before reading this as "no echo".'
+        : `${summary}${unattributed ? `; ${unattributed} transcript(s) with no engine in the `
+          + 'preceding 30s (operator speech, most likely)' : ''}`),
+    CRITERIA_NOTES.t4engines);
+
+  // The verdict line, kept separate from the count so the reader is handed the
+  // INTERPRETATION the plan asked for rather than having to derive it.
+  if (spokeMarks.length && echoAll.length) {
+    const realEngines = engineKeys.filter((k) => k.indexOf('ambiguous') !== 0);
+    let verdict;
+    if (!leaked.length) {
+      verdict = 'no engine echoed. Either AEC is working on all three, or nothing was audible '
+        + '(headphones, muted speakers, mic on a different device) — this run cannot tell those '
+        + 'apart, and the operator confirming they HEARD MYTHOS is what separates them.';
+    } else if (leaked.length === realEngines.length && realEngines.length > 1) {
+      verdict = 'EVERY engine measured echoed. That is a CAPABILITY gap, not a routing bug: '
+        + 'no page-rendered audio is being cancelled, and swapping engines cannot fix it.';
+    } else {
+      verdict = `only ${leaked.join(', ')} echoed. That is a ROUTING difference — the other `
+        + 'engine(s) are being cancelled, so the fix is to move this one onto the same path.';
+    }
+    process.stdout.write('\n  T4 verdict: ' + verdict + '\n');
+  }
 
   // --- V2: the ceilings, split by cause ---
   const suspendLines = of('voice.capture-suspend');

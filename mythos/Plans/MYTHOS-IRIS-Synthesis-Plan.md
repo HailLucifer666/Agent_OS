@@ -76,9 +76,34 @@ so on a session where the cushion did its job and absorbed the late chunks, it w
 "the two halves disagree, reload your HUD". It failed hardest on success. `cushionMs` is now sent
 on every transition regardless of health. Suite **5339/5339, 0 fail, 0 skipped** (+10).
 
+**T4's "do first" three-engine echo measurement — MADE SCORABLE, and its suspect questioned.**
+Asked to run it; a session cannot (no way to make sound cross a real room — the precedent is
+`verify-tts-echo-gate.js`, and MYTHOS was not even running). What WAS fixable is that the
+measurement could not be scored **even from a perfect session**: falling back to `speechSynthesis`
+is a client-side decision on a null `audioB64`, so the server never recorded which of the two TTS
+engines actually spoke. `tts.spoke` now does, and `verify-voice-session.js` attributes each
+`live.echo-check` to the engine that spoke before it and prints a verdict — **capability gap**
+(every engine echoed), **routing difference** (one did), or **nothing echoed**, which it refuses to
+call success because headphones or a muted speaker look identical to perfect cancellation.
+
+**Two research findings that change what the run should look for.** The claim that Chrome's AEC
+only references WebRTC peer-connection audio — which would mean *no* MYTHOS engine is cancellable —
+appears in search summaries but **is in neither cited source**, and Chrome's own blog says its
+canceller "uses an internal loopback to get the playout audio". Left explicitly unresolved rather
+than written down as fact. Separately, and absent from the plan: **MYTHOS runs in Electron, and
+there is an open `status/confirmed` Electron issue where `echoCancellation: true` does nothing
+while working in Chrome** (Electron 37 / Win11 ARM64; this machine is Electron 43.3.0 / x64, so
+plausible, not established). That matters because W1 Q5 measured the constraint as **granted** —
+and a granted constraint with an inert implementation is indistinguishable from a working one.
+**So run the measurement twice: once in the Electron shell, once in plain Chrome at the same
+`http://127.0.0.1:4478`.** One extra axis separates "MYTHOS bypasses AEC" from "Electron's AEC is
+inert", which engine-swapping alone never could.
+
 **NEXT ACTION — unchanged: the ONE live session described in the block below**, which gates both
 the step-4 interruption behaviour and the step-5/5b continuity behaviour. The verifier now prints
-the continuity numbers directly, so the gate no longer depends on reading raw JSON by hand. One caveat there is now
+the continuity numbers directly, so the gate no longer depends on reading raw JSON by hand. The T4
+echo measurement rides the same session for free — speak over **open speakers, not headphones**,
+and read the `T4 verdict:` line. One caveat there is now
 withdrawn: *"a repeat of any gap over ~600ms will still be audible"* was step 5's limit and is what
 step 5b removes. The criterion **"at most one audible gap per link degradation"** now applies at
 any stall length up to the 2s cap. The quiet-interruption band (peak ~0.024–0.031) is still
