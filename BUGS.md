@@ -352,6 +352,97 @@ half-corrected: separating them needs a signal distinguishing who caused the int
 inventing one from the fields available would be exactly the guess this ticket keeps warning
 about.
 
+#### T4 step 3 — 🔧 FIXED 2026-08-19 (`57d6fbe`): two floors 2.5x apart answered the same question, and the operator lived in the gap
+
+**The decisive hold, from the same live session:**
+
+```
+own-voice-ended  held=8220ms peak=0.0480 floor=0.05 raw=34 vetoed=0 why=(none reported)
+```
+
+Refused by **0.002**, while `raw=34` says 34 frames — **3.4 seconds** — of the operator's
+speech passed the noise gate and reached the model in that same hold, and Gemini returned
+transcripts of 7-106 words for those turns. **MYTHOS heard the interruption and kept
+talking.**
+
+**THE CAUSE: THIS REPO HAD TWO FLOORS, 2.5x APART, ANSWERING ONE QUESTION.**
+
+| File | Constant | The question it answers |
+|---|---|---|
+| `live-noise-gate.js` | `LIVE_NOISE_GATE_FLOOR_RMS` **0.02** | "the operator is speaking — send it to Gemini" |
+| `barge-in-policy.js` | `INITIAL_BLEED_FLOOR` **0.05** | "the operator is speaking — stop talking" |
+
+Nobody reconciled them, so a **0.02-0.05 band** existed in which the operator was audible,
+transmitted, transcribed and answered while barge-in recorded nothing at all. Not a
+perception failure — two thresholds inside one codebase disagreeing about one judgement.
+
+**And a correction to this ticket's own earlier reasoning.** Step 2 concluded the floor was
+correct "because `below-bleed-floor` never appears across 14 vetoes". That inference was
+**wrong, and structurally so**: a veto is only recorded when a backstop tier fires, and
+those tiers sit at or above the floor, so a too-high floor cannot produce a
+`below-bleed-floor` veto. It produces **silence** — zero vetoes, zero candidacy, a hold
+indistinguishable from the operator saying nothing. Absence of evidence on a signal that
+cannot appear.
+
+**`INITIAL_BLEED_FLOOR` 0.05 → 0.035**, the only value separating the measured populations:
+
+| Population | Measured | Outcome at 0.05 |
+|---|---|---|
+| clean bleed, AEC3 granted, operator silent | 0.0031 - 0.0309 | correctly ignored |
+| operator's **quiet** interruptions | 0.0398, 0.0480 | **nothing happened at all** |
+| operator's **normal** interruptions | 0.1006 - 0.2717 | vetoed, runs too short |
+
+Deliberately **not** the noise gate's 0.02: that sits *inside* the bleed range, would open a
+candidacy on nearly every frame of MYTHOS's own speech, and is how BUG-272's V1 (63%
+self-interruption) returns.
+
+**A tripwire fired as designed and was honoured, not overridden.**
+`test/bug-273-bleed-floor-dormant.test.js` asserted that the quietest measured turn (0.0395)
+does *not* release, with the message *"if this ever starts releasing, the tier was lowered —
+BUG-273 A2 must have the numbers"*. A2's open question was what actually reaches Gemini
+during a hold, and that is exactly what got measured (34-54 frames per hold, transcribed).
+The condition it set is satisfied, so the test now asserts the opposite outcome **and
+carries the evidence**. Separately, `bug-272-barge-in-policy.test.js` asserted equality with
+0.05 under the title "never a sensitivity regression" — the wrong expression of its own
+invariant, since a *lower* floor is strictly more willing to hear the operator. Now `<=`.
+
+**The new test asserts against measured audio, not against the constant.**
+`test/bug-274-barge-in-floor-separates-populations.test.js` holds the levels the operator's
+microphone actually produced and requires the floor to separate them. A test that reads
+`INITIAL_BLEED_FLOOR` and asserts something about `INITIAL_BLEED_FLOOR` is a tautology —
+the phantom-mechanism shape this whole ticket is about.
+
+##### THE HONEST LIMIT — roughly half of the observed attempts are NOT fixed by this
+
+Four measured holds peaked at **0.0242, 0.0245, 0.0258, 0.0266**, and a fifth at 0.0343.
+That band lands on top of this room's clean bleed (0.0031-0.0309). **No scalar floor
+separates them**, and going below 0.031 fires on MYTHOS's own voice. 0.0343 fails even at
+0.035, by 0.0007 — the scalar approach is at its limit here, which is the argument for
+recording the band as a known limit rather than shaving the floor further.
+
+The policy was designed with a third discriminator for exactly this band — the echo
+filter's transcript verdict, which judges **meaning** rather than volume — and it is
+**inert**: `lastEchoRatio` is hardcoded `null` because the server never sends its verdict to
+the client. The module's own note says the way to decide whether wiring it is worth a new
+wire message is whether the echo checks report `no-reference` during bleed. **This session's
+log answers that and the answer is no**: essentially every `live.echo-check` reads
+`no-reference`, so no transcript exists at those instants and the verdict would be `null`
+even if wired. Closing that band needs something this codebase does not have — speaker
+verification, or a deliberate decision to accept some self-interruption. **That is a scope
+call for the operator, not a fix a session should invent.**
+
+**Q8 — PINNED. `PENDING_HOLD_MS` STAYS AT 350 AND MUST NOT BE LOWERED AS A REFLEX.** One
+lever per change; this ticket's predecessors twice made things worse by moving two. More
+importantly the 350ms sustain is now the **primary** bleed discriminator rather than a
+backup — at 0.05 nothing ever reached it, so in this room it has never been exercised. The
+mechanism relied upon: a lower floor means more of each word qualifies, so runs lengthen and
+the existing 350ms becomes reachable. **If self-interruption rises next session, raise the
+FLOOR back toward 0.04 — do NOT lengthen the sustain**, which would re-break the
+interruption step 2 fixed. This instruction is in the code as well as here.
+
+**NOT LIVE-VERIFIED.** Measured, tested and reasoned, but no interruption has yet landed
+with 0.035 in force. The tell on the next boot is hold lines reading `floor=0.035`.
+
 **Q8 — DISPOSITION, REVISED 2026-08-19 BY THE MEASUREMENT ABOVE.** AEC3 *is* granted and
 working, so by this item's own gate the full-duplex rewrite is now **unblocked but no longer
 required**. It was written as the fix for "MYTHOS cannot be interrupted"; that fault turned

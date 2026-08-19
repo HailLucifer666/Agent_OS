@@ -17,7 +17,54 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **AN INTERRUPTION LANDED, LIVE. First one in this repo's recorded history. Roughly 1 in 5 — and the log named the remaining fault itself.**
+### 2026-08-19 (latest) — **Three fixes shipped, one interruption landed live, and the last one is awaiting a reload. The blocker turned out to be two thresholds 2.5x apart answering the same question.**
+
+**Commits: `fbd4484` (step 1) · `2696a1a` (step 2) · `57d6fbe` (step 3).** Suite
+**5198/5198, 0 fail, 0 skipped**. Merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).
+
+**Live-verified so far:** one real `barge-in-confirmed` (held 8132ms, peak 0.1344) — the
+first in this repo's recorded history. Steps 2 and 3's remaining effects are NOT yet
+live-verified; the tell on the next reload is hold lines reading `floor=0.035`.
+
+**The three faults, all the same shape and none of them acoustic.** AEC3 is granted and
+working (`micEchoCancellation: true`, clean bleed 0.0031-0.0309). No echo canceller was
+missing and none was added.
+
+1. **Step 1** — the policy authorised on ONE frame then revoked it; the backstop only
+   delivers every THIRD. 5 is not a multiple of 3.
+2. **Step 2** — the backstop fires at 300ms, the policy confirms at 350ms, so the backstop
+   was *always* early, refused, and spent its shot. The two conditions may now be met at
+   different instants (`barge-in-deferred`).
+3. **Step 3** — **two floors, 2.5x apart, answering one question**: the noise gate's 0.02
+   ("send it to Gemini") and the policy's 0.05 ("stop talking"). The operator lived in the
+   gap: audible, transmitted, transcribed, answered, and invisible to barge-in. The
+   decisive hold peaked at **0.0480 against the 0.05 floor** — refused by 0.002 — with 3.4s
+   of their speech reaching the model in the same hold. Floor now **0.035**.
+
+**A correction this build should keep:** step 2 concluded the floor was fine "because
+`below-bleed-floor` never appears". That was structurally unsound — a veto is only recorded
+when a backstop tier fires, and those tiers sit at or above the floor, so a too-high floor
+produces **silence**, not that reason. Absence of evidence on a signal that cannot appear.
+
+**THE HONEST LIMIT, and it is large.** Five measured holds peaked at 0.0242-0.0343, on top
+of this room's bleed. **No scalar floor separates them**; 0.0343 fails even at 0.035 by
+0.0007. So roughly half the observed attempts remain unfixed. The designed third
+discriminator (the echo filter's transcript verdict — meaning, not volume) is **inert**, and
+the log says wiring it would not help: `live.echo-check` reads `no-reference` essentially
+always, so the verdict would be `null` anyway. Closing that band needs speaker verification
+or a deliberate tolerance for some self-interruption — **an operator scope call, not a
+session's invention.**
+
+**Q8 pinned, and the next session must read this before touching a constant:**
+`PENDING_HOLD_MS` stays 350. It is now the PRIMARY bleed discriminator (at 0.05 nothing ever
+reached it). If self-interruption rises, **raise the FLOOR toward 0.04 — do NOT lengthen the
+sustain**, which re-breaks step 2's fix.
+
+**Still open from W1's checklist:** interruption **with music playing** is untouched
+(`setCaptureSuspended` returns before the policy sees a frame), first-word loss is
+unmeasured, and none of it is tested on the packaged installer.
+
+### 2026-08-19 — **AN INTERRUPTION LANDED, LIVE. First one in this repo's recorded history. Roughly 1 in 5 — and the log named the remaining fault itself.**
 
 **Live-watched session, 385 log entries, 21 turns, `npm start`.** Result:
 `barge-in-confirmed`, held 8132ms, peak 0.1344. Every previous session on record ended
