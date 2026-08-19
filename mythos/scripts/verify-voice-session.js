@@ -499,9 +499,46 @@ function main() {
     const realEngines = engineKeys.filter((k) => k.indexOf('ambiguous') !== 0);
     let verdict;
     if (!leaked.length) {
-      verdict = 'no engine echoed. Either AEC is working on all three, or nothing was audible '
-        + '(headphones, muted speakers, mic on a different device) — this run cannot tell those '
-        + 'apart, and the operator confirming they HEARD MYTHOS is what separates them.';
+      // WHY "no echo" is usually NOT an answer here, learned from the 2026-08-20 live
+      // session. Two things gag the transcript oracle, and both are working as designed:
+      // echo-filter.js keeps a reference for only ECHO_WINDOW_MS (3s) after the last word
+      // spoken, and the own-voice gate holds the microphone shut WHILE MYTHOS talks. So a
+      // leak has to be transcribed inside a window during which capture is deliberately
+      // suppressed. Every check in that session came back `no-reference`, which reads as
+      // "no echo" and means "could not have seen one".
+      //
+      // The bleed numbers are the oracle that is NOT gagged: bleedPeak is the RMS the mic
+      // actually heard while MYTHOS was speaking. If that is above the barge-in floor,
+      // MYTHOS's own voice is reaching the microphone regardless of what the transcripts
+      // say — which is the T4 question, answered.
+      const noRefAll = echoAll.length > 0
+        && echoAll.every((e) => String(e.reason || '') === 'no-reference');
+      let bleedPeak = null;
+      let bleedFloor = null;
+      for (const e of suspendLinesAll) {
+        const bp = Number(e.bleedPeak);
+        if (Number.isFinite(bp) && (bleedPeak === null || bp > bleedPeak)) bleedPeak = bp;
+        const bf = Number(e.bleedFloor);
+        if (Number.isFinite(bf)) bleedFloor = bf;
+      }
+      verdict = 'no engine echoed IN THE TRANSCRIPTS';
+      if (noRefAll) {
+        verdict += ', and every check was `no-reference` — the transcript oracle could not have '
+          + 'seen a leak: echo-filter.js keeps a reference for 3s after the last word, and the '
+          + 'own-voice gate shuts the mic while MYTHOS speaks. Read this as NOT MEASURED';
+      }
+      if (bleedPeak !== null && bleedFloor !== null) {
+        verdict += `. The ungagged oracle: room bleed peaked at ${bleedPeak} against a barge-in `
+          + `floor of ${bleedFloor} — MYTHOS's own voice ${bleedPeak > bleedFloor
+            ? 'IS reaching the microphone, ABOVE the level used to detect the operator. '
+              + 'Echo cancellation is not removing it, whatever the constraint reports as granted'
+            : 'is staying below the level used to detect the operator'}`;
+      } else {
+        verdict += '. Either AEC is working on all three, or nothing was audible (headphones, '
+          + 'muted speakers, mic on a different device) — this run cannot tell those apart, and '
+          + 'the operator confirming they HEARD MYTHOS is what separates them';
+      }
+      verdict += '.';
     } else if (leaked.length === realEngines.length && realEngines.length > 1) {
       verdict = 'EVERY engine measured echoed. That is a CAPABILITY gap, not a routing bug: '
         + 'no page-rendered audio is being cancelled, and swapping engines cannot fix it.';
@@ -570,6 +607,11 @@ function main() {
   const MIC_ONLY_BEFORE_STEP5 = 'barge-in-confirmed';
   const micOnlyLanded = stopsTheSpeech ? 0 : (byReason[MIC_ONLY_BEFORE_STEP5] || 0);
   const stoppedPlayback = bargeLanded - micOnlyLanded;
+  // One episode per armAudioOutSuppression(), which only stopAssistantSpeech() calls —
+  // so this is the count of barge-ins that actually reached the stop door, independent
+  // of whether the gate-release line was written. See the criterion below.
+  const suppressionEpisodes = suspendLines
+    .filter((e) => String(e.reason || '').indexOf(SUPPRESSION_PREFIX) === 0);
   let suppressedChunks = 0;
   let suppressedMs = 0;
   for (const e of suspendLines) {
@@ -656,15 +698,39 @@ function main() {
   // actually tried. It reports the count and the routes so a session can be compared
   // against the previous one, and says plainly when the answer is zero — which is
   // what every log before 2026-08-19 would have said.
+  // FALSE NEGATIVE FIXED 2026-08-20, found in a live session. `bargeLanded` counts
+  // capture-suspend lines whose REASON is a barge-in release — and those are written by
+  // releaseOwnVoiceGate(), which begins `if (!ownVoiceGate) return;`. When a barge-in is
+  // authorised while the own-voice gate is NOT currently held, it flushes the player and
+  // arms the suppression and logs no release line at all. The 2026-08-20 session printed
+  // "NONE landed" while the log held TEN barge-in-suppression episodes, one of which
+  // dropped 9 audio chunks. Suppression is armed from exactly one place —
+  // stopAssistantSpeech() — so an episode IS an authorised stop, and it is the honest
+  // count. Same defect class as the criterion this line replaced: counting a proxy that
+  // can be absent while the thing it stands for happened.
+  const authorisedStops = suppressionEpisodes.length;
+  const stopsThatCutAudio = suppressionEpisodes
+    .filter((e) => (num(e.suppressedChunks) || 0) > 0).length;
+  const stopDoorDetail = `${authorisedStops} barge-in(s) reached the stop door, of which `
+    + `${stopsThatCutAudio} actually cut audio (${suppressedChunks} chunk(s) total, longest `
+    + `suppression ${suppressedMs}ms). ${authorisedStops - stopsThatCutAudio} fired with nothing `
+    + 'left to cut — the reply had already finished, so interrupting changed nothing audible'
+    + (bargeLanded < authorisedStops
+      ? `. Only ${bargeLanded} logged a gate-release reason: releaseOwnVoiceGate() returns `
+        + 'early without logging when the gate is not held, so the release count UNDER-reports'
+      : '');
+
   check('operator interruptions that STOPPED THE SPEECH', true,
-    bargeLanded === 0
+    (bargeLanded === 0 && authorisedStops === 0)
       ? 'NONE landed — every hold ended by MYTHOS finishing or by a ceiling'
-      : `${stoppedPlayback} stopped playback`
+      : (bargeLanded === 0
+        ? stopDoorDetail
+        : `${stoppedPlayback} stopped playback`
         + (micOnlyLanded ? `, ${micOnlyLanded} reopened the mic ONLY (MYTHOS kept talking)` : '')
         + ` of ${bargeLanded} released (${bargeLandedBreakdown})`
         + (stopsTheSpeech
           ? `; suppression dropped ${suppressedChunks} audio chunk(s), longest ${suppressedMs}ms`
-          : ' — this log predates BUG-274 step 5, so no landing here silenced the rest of the turn'),
+          : ' — this log predates BUG-274 step 5, so no landing here silenced the rest of the turn')),
     'a landed barge-in that only reopened the mic is the operator\'s complaint, not '
     + 'evidence against it — and even a stopped one is not proof: THE OPERATOR\'S EAR '
     + 'IS THE ORACLE. On 2026-08-19 this line printed "1 landed" for a session in which '

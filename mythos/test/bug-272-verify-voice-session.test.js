@@ -499,6 +499,47 @@ describe('verify-voice-session: absent flush fields (BUG-273)', () => {
 // thing. That distinction is the entire reason this ticket needed three sessions —
 // `grep -c '"msg":"voice.live.interrupted"'` returned 0 for a session with 129
 // interrupted turns, and a commit's reasoning was built on that 0.
+describe('verify-voice-session: a barge-in that logged no gate release still landed', () => {
+  // THE FALSE NEGATIVE, from the 2026-08-20 live session. The landed-count reads
+  // capture-suspend lines whose REASON is a barge-in release, and those come from
+  // releaseOwnVoiceGate(), which starts `if (!ownVoiceGate) return;`. A barge-in
+  // authorised while the gate is not held flushes the player and arms the suppression
+  // and writes no release line — so the criterion printed "NONE landed" for a session
+  // whose log held ten suppression episodes, one of which dropped 9 audio chunks.
+  // Suppression is armed from exactly one place, stopAssistantSpeech(), so an episode
+  // IS an authorised stop.
+  const suppression = (how, chunks) => JSON.stringify({
+    ts: '2026-08-20T10:00:0' + (chunks ? 1 : 2) + '.000Z', level: 'info',
+    msg: 'voice.capture-suspend', suspended: false,
+    reason: 'barge-in-suppression-' + how, suppressedChunks: chunks, suppressedMs: 800,
+  });
+  const lineOf = (stdout, re) => stdout.split('\n').find((l) => re.test(l)) || '';
+
+  it('counts the stop door, not the release line, and says which it used', () => {
+    withLog([suppression('turn-complete', 0), suppression('server-interrupted', 9)], (file) => {
+      const line = lineOf(run([file]).stdout, /STOPPED THE SPEECH/);
+      assert.doesNotMatch(line, /NONE landed/,
+        'ten suppression episodes is not "none" — that reading is what this fixes');
+      assert.match(line, /2 barge-in\(s\) reached the stop door/, line);
+      assert.match(line, /1 actually cut audio/,
+        'reaching the door and cutting speech are different things and the gate needs both');
+      assert.match(line, /UNDER-reports/,
+        'and it must say WHY the release count disagrees, or the next reader re-derives it');
+    });
+  });
+
+  it('still says NONE when nothing reached the door at all', () => {
+    withLog([JSON.stringify({
+      ts: '2026-08-20T10:00:01.000Z', level: 'info', msg: 'voice.capture-suspend',
+      suspended: false, reason: 'own-voice-ended', prerollFrames: 6, framesDropped: 0,
+    })], (file) => {
+      const line = lineOf(run([file]).stdout, /STOPPED THE SPEECH/);
+      assert.match(line, /NONE landed/,
+        'the fix must not turn every session into a landing — a real zero stays zero');
+    });
+  });
+});
+
 describe('verify-voice-session: audio continuity (BUG-274 step 5/5b)', () => {
   const turn = (extra) => JSON.stringify(Object.assign({
     ts: '2026-08-19T14:00:00.000Z', level: 'info', msg: 'live.turn-parts', turnId: 1,
@@ -706,6 +747,34 @@ describe('verify-voice-session: audio continuity (BUG-274 step 5/5b)', () => {
         const line = lineFor(run([file]).stdout, /T4: echo leakage/);
         assert.match(line, /ambiguous\(browser-speechSynthesis\+tts-chain\)/,
           'guessing by proximity is how a confident false attribution gets made');
+      });
+    });
+
+    it('does not call a gagged transcript oracle "no echo"', () => {
+      // From the 2026-08-20 live session. Two things stop a leak ever reaching a
+      // transcript, both working as designed: echo-filter.js keeps a reference for only
+      // 3s after the last word, and the own-voice gate shuts the mic while MYTHOS
+      // speaks. Every check came back no-reference — which READS as "no echo" and MEANS
+      // "could not have seen one". The bleed numbers are the oracle that is not gagged.
+      withLog([
+        spoke(1, 'tts-chain'),
+        JSON.stringify({
+          ts: '2026-08-20T10:01:05.000Z', level: 'info', msg: 'live.echo-check', turnId: 1,
+          ratio: 0.1, decision: 'accepted', reason: 'no-reference', candidateWords: 6,
+          referenceWords: 0, referenceCount: 0, msSinceSpoken: null, msSinceAssistantAudio: 900,
+        }),
+        JSON.stringify({
+          ts: '2026-08-20T10:01:06.000Z', level: 'info', msg: 'voice.capture-suspend',
+          suspended: false, reason: 'own-voice-ended', prerollFrames: 6, framesDropped: 0,
+          bleedFloor: 0.035, bleedPeak: 0.1193,
+        }),
+      ], (file) => {
+        const v = verdictOf(run([file]).stdout);
+        assert.match(v, /NOT MEASURED/, v);
+        assert.match(v, /IS reaching the microphone/,
+          'bleed above the barge-in floor is the T4 answer, and the verdict must give it '
+          + 'rather than shrugging at the transcripts');
+        assert.match(v, /0\.1193/, 'and must show the number it concluded from');
       });
     });
 

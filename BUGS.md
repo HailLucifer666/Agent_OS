@@ -588,6 +588,66 @@ logger instead. And the ambiguous-window fixture placed its two engines **60s ap
 everything else in this ticket: a check that returns a reassuring number for a reason unrelated to
 what it claims to measure.
 
+#### T4/T5 LIVE SESSION — 🔬 MEASURED 2026-08-20 (55 turns): AEC is NOT removing MYTHOS's voice, and two of this ticket's own instruments were lying
+
+**The operator ran one session covering both gates. Everything below is from its log; the two
+by-ear questions are still outstanding and are named at the end.**
+
+**FINDING 1 — the T4 answer, from an oracle that is not gagged. Room bleed peaked at `0.1193`
+against a barge-in floor of `0.035`** — MYTHOS's own voice reaches the microphone at **3.4× the
+level used to decide the operator is speaking**, while `micEchoCancellation` reports **`true`**.
+A granted constraint with an inert effect is indistinguishable from a working one from inside the
+page, which is exactly what W1 Q5 warned. This is **capability-gap** evidence, and it makes the
+Electron lead (an open `status/confirmed` issue where `echoCancellation` does nothing in Electron
+while working in Chrome) worth the second run in plain Chrome.
+
+**The transcript oracle could not have answered it.** All 23→55 `live.echo-check` decisions came
+back `no-reference`, which reads as "no echo" and means "could not see one": `echo-filter.js`
+holds a reference for only **`ECHO_WINDOW_MS` = 3s** after the last word, and the own-voice gate
+**shuts the mic while MYTHOS speaks**. A leak must be transcribed during a window in which capture
+is deliberately suppressed. Measured transcript arrivals sat **8.9s / 10.2s / 17.9s** after the
+last assistant audio — all operator speech. **The T4 verdict now says NOT MEASURED and falls back
+to the bleed numbers** instead of shrugging at the transcripts.
+
+**FINDING 2 — the landed-barge-in count was a FALSE NEGATIVE, and it is this ticket's own
+instrument.** The verifier printed `NONE landed — every hold ended by MYTHOS finishing or by a
+ceiling` for a session whose log holds **ten `barge-in-suppression-*` episodes**. Suppression is
+armed from exactly one place, `stopAssistantSpeech()`, so an episode **is** an authorised stop.
+The count read capture-suspend lines whose *reason* is a barge-in release — written by
+`releaseOwnVoiceGate()`, which opens `if (!ownVoiceGate) return;`. **A barge-in authorised while
+the gate is not held flushes the player, arms the suppression, and logs nothing.** Same defect
+class as the criterion it replaced in step 4: counting a proxy that can be absent while the thing
+it stands for happened. Now reported as *stop door reached* vs *actually cut audio*, and it says
+outright that the release count under-reports.
+
+**What actually happened on the interruptions, once counted honestly: 10 barge-ins reached the
+stop door; ONE cut real audio (9 chunks, ~900ms); the other NINE fired with nothing left to cut.**
+The reply had already finished, so interrupting changed nothing audible — which is what the
+operator experiences as "interruption does not work", and it is a different fault from the
+authorisation failures steps 1–3 fixed.
+
+**FINDING 3 — the barge-in policy is refusing loud, clear speech.** 24 vetoes, reasons
+`{pending-sustaining: 11, protected-window: 1}`. Veto **levels** were `0.0537, 0.0746, 0.1414,
+0.1482, 0.1685, 0.1709, 0.1983, 0.2144` — the top five are **4–6× the floor** and roughly **2× the
+room bleed**, i.e. unmistakably the operator, refused for not *sustaining*. The staged plan's
+**Stage 3 (`PENDING_HOLD_MS` 350 → 200)** was held back pending "a live session saying this was
+not enough". **This is that session.** Not changed here — threshold retunes are the operator's
+call and the plan says pull them one at a time.
+
+**FINDING 4 — step 5/5b worked, mechanically.** `4/45 → 45/55` turns starved, **worst arrival gap
+3612ms**; the cushion **grew from its 250ms base to 1331ms after 2 underruns**, and
+`missedTurnEnds` stayed **0** all session, so the `live-turn-complete` wiring held. **The growth
+path is the part step 5 could not reach at all** — under the old `END_GRACE_MS` gating a 3.6s gap
+would have grown the cushion by nothing. `live.interrupted` matched `scFields` **16/16**, closing
+the phantom-grep hole for good.
+
+**STILL OUTSTANDING — the two questions only the operator can answer**, and no log line substitutes
+for either: (1) **were the replies continuous by ear**, especially around those 2 underruns; and
+(2) **when you interrupted, did MYTHOS go quiet and stay quiet** — the one episode that cut ~900ms
+is the only candidate, and a released mic beside continuing speech is this ticket's signature trap.
+Also still unrun: the **plain-Chrome** repeat, and the engine comparison itself — this session used
+**gemini-live only**, so `tts-chain` and `browser-speechSynthesis` were never exercised.
+
 #### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
 
 **The check that had to run first could not run at all.** The plan's own Q5 says the premise
