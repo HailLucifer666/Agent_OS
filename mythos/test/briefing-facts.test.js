@@ -614,24 +614,65 @@ describe('buildBriefingFacts: no dependencies at all', () => {
 // each ~timeoutMs cap STACKED — several slow sources in a row added seconds
 // of latency in front of the 12s brain-compose race. Gathering with
 // Promise.all bounds the wall-clock cost to the slowest single source.
+//
+// The guard for that used to be a stopwatch: three 60ms fake sources and an
+// `elapsedMs < 120` assertion. It failed intermittently on a loaded machine
+// (seen 2026-08-19) and blocked commits via the pre-commit hook — three
+// timers plus scheduling overhead simply do not fit a 120ms budget when the
+// box is busy, and raising the threshold would only make the flake rarer.
+// It is now a BARRIER instead of a clock, with no wall-clock assertion at
+// all: every instrumented source parks on one shared promise that is only
+// released once ALL of them have been ENTERED. A parallel gather passes
+// through it in microtasks (Promise.all starts every withTimeout() eagerly,
+// so all three entries happen in the same microtask drain — before any timer
+// can possibly fire, at any machine load). A sequential gather parks on the
+// first source, that source's per-source withTimeout() cap expires, its fact
+// is dropped, and the assertions below fail.
+//
+// Note what is deliberately NOT asserted: a peak "in flight" counter. Under a
+// sequential implementation a timed-out source stays pending forever (nothing
+// cancels the inner promise), so entries pile up and a naive peak counter
+// climbs to 3 there too — it would pass for exactly the implementation this
+// test exists to reject. Whether each source's FACT survived is the honest
+// signal.
 describe('buildBriefingFacts: sources gather in parallel (FIX 1)', () => {
-  it('total wall time stays close to one slow source, not the sum of several', async () => {
-    const SLOW_MS = 60; // well under FAST_TIMEOUT_MS's usual 30ms elsewhere, but this test needs the source to actually finish, not time out
-    const slow = () => new Promise((resolve) => setTimeout(() => resolve(true), SLOW_MS));
-    const started = Date.now();
-    await buildBriefingFacts({
-      factTimeoutMs: 500,
+  it('parks every source on a barrier only a concurrent gather can release', async () => {
+    const LABELS = ['probes', 'weather', 'goals'];
+    const entered = new Set();
+    let release;
+    const allEntered = new Promise((resolve) => { release = resolve; });
+    const barrier = (label) => {
+      entered.add(label);
+      if (entered.size === LABELS.length) release();
+      return allEntered;
+    };
+
+    const facts = await buildBriefingFacts({
+      // Small on purpose: the passing path never waits on this timer (see the
+      // comment above), so it only bounds how long a sequential gather takes
+      // to fail. It is NOT a budget the passing path has to fit inside.
+      factTimeoutMs: 200,
       systemSampleGapMs: 0,
-      // Three independently slow sources. Sequential gathering would cost
-      // roughly 3 x SLOW_MS; parallel gathering should cost roughly 1x.
-      probes: { getStatus: async () => { await slow(); return { providers: {} }; } },
+      probes: { getStatus: async () => { await barrier('probes'); return { providers: {} }; } },
       isProviderDown: () => false,
-      dispatch: async (tool) => { await slow(); return tool === 'get_weather' ? { ok: true, result: { temperatureC: 1 } } : { ok: true }; },
-      spend: { getStats: async () => { await slow(); return { successRate: 100, today: { calls: 1, tokensIn: 1, tokensOut: 1 } }; } },
+      dispatch: async (tool) => {
+        if (tool !== 'get_weather') return { ok: true, result: { reminders: [] } };
+        await barrier('weather');
+        return { ok: true, result: { temperatureC: 1 } };
+      },
+      goalsEffector: { stats: async () => { await barrier('goals'); return { active: 1, done: 0 }; } },
     });
-    const elapsedMs = Date.now() - started;
-    assert.ok(elapsedMs < SLOW_MS * 2,
-      `expected parallel gathering to cost roughly one SLOW_MS (${SLOW_MS}ms), took ${elapsedMs}ms — looks sequential`);
+
+    // Not vacuous: if a source were never called at all, its label would be
+    // missing here and its fact missing below.
+    assert.deepStrictEqual([...entered].sort(), [...LABELS].sort(),
+      'expected all three instrumented sources to be entered');
+    // Each of these only exists if its source got past the barrier, i.e. if
+    // the other two were already in flight when it was waiting.
+    ['Goals: 1 active, 0 done', 'All AI providers online', 'Weather'].forEach((prefix) => {
+      assert.ok(facts.some((f) => f.indexOf(prefix) === 0),
+        `expected "${prefix}" — a sequential gather would have timed this source out: ${JSON.stringify(facts)}`);
+    });
   });
 
   it('preserves the original fact order regardless of which source resolves first', async () => {
