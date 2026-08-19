@@ -17,7 +17,55 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** T1+T2 shipped (`fb574ce`). T4 step 0 shipped (`d0fe19b`) — the AEC readback instrument, because the measurement T4 depends on could not be run: nothing on the Live capture path had ever read `getSettings().echoCancellation` back, so the plan's premise was unfalsifiable. T5 MEASURED (`d9f2ad2`) — **three of its premises did not survive.** The evidence contract was never escaped (every `uia-invoke` ACTION route is oracle-backed; the no-op is in a discovery helper that returns `$null` and fails honestly). The window-station / desktop / integrity hypothesis is **refuted** — pc-child and a direct spawn report an identical interaction context on every axis. And the ticket's own checklist **passes live**: launch/focus/type/click are oracle-confirmed on both a Win32 app (charmap) and an MSIX one (notepad), via `scripts/verify-desktop-automation.js`. What is left of W2 is the narrow WinUI3 **save** path, which already fails honestly — re-set its priority against that, not against the original "failed drastically" report.
+### 2026-08-19 (latest) — **step 6.6's mechanical half is done and gated. Two items remain, and both need the operator physically present.**
+
+The operator asked for the whole of BUG-274 with T3 (wake-word weights) skipped. Everything
+in it that does **not** require a live microphone, a signing certificate or a second human is
+now either shipped or measured-and-refuted. What was still open and actionable without them
+was **step 6.6**, and it is now closed on the mechanical side.
+
+**Shipped this session:** `scripts/audit-licences.js` (+ `--check`) and
+`test/licence-audit.test.js`. The release gate's licence line had no oracle — the notices
+file opened with "npm dependency licenses are not repeated here", so the tree had never been
+enumerated. It is now: **265 shipped production packages**, read from the two lockfiles'
+non-dev entries because electron-builder prunes devDependencies and packs off disk.
+
+**Four previously-unrecorded obligations**, all now in `THIRD_PARTY_NOTICES.md`:
+`@img/sharp-win32-x64` bundles **eight LGPLv3 libraries** and it both ships and loads
+(`require('kokoro-js')` initialises libvips 8.17.3 — measured, not inferred);
+`buffers@0.1.1` declares **no licence at all**; `jszip` is `(MIT OR GPL-3.0-or-later)` with
+the MIT election now stated; **twelve MPL-2.0 packages** ship and the notices file did not
+contain the string "MPL-2.0". The gate fails in both directions — an exception missing from
+the notices file, **and** an exception for a package that no longer ships.
+
+**This qualifies T1 and the qualification matters.** T1 promoted Kokoro partly to move off
+edge-tts's LGPLv3. True of edge-tts, which is BYO and ships no code — but Kokoro's own
+dependency tree ships an LGPLv3 **binary**, which edge-tts never did. Exposure moved rather
+than vanished. Also corrected: adbkit / NodeRT / speexdsp / the MCP monorepo are **not in the
+shipped tree at all**, so their `NOASSERTION` is a pre-adoption task, not a 6.6 blocker.
+
+**The two things left, and why no session can do them alone.**
+
+1. **T4's measurement** — one live boot, mic live, `micEchoCancellation` read off
+   `voice.capture-suspend`, then one sentence through each of the three output paths to see
+   which return as `inputTranscription`. The instrument shipped in `d0fe19b`; the reading has
+   not been taken. **T4's remedy (full duplex, deleting `ownVoiceGate`) must not start before
+   it** — three BUG-273 hypotheses died to exactly that measurement.
+2. **Fresh-machine install** — the release gate's last line asks for someone who is not the
+   author to install it and reach a working voice conversation. That is a second person, plus
+   a signing certificate the repo does not hold.
+
+**W2 is closed and stays closed.** Every client-side hypothesis is refuted (`d9f2ad2`,
+`ae3a40a`); the residual defect is in Notepad's own UIA provider and the honest failure is
+correct. Do not add a fourth UIA rung. **T3 skipped by the operator, 2026-08-19** — it still
+hard-blocks a *paid* release, so 6.5 cannot close without it; nothing else waits on it.
+
+**Not started, and deliberately:** W6 (`deepseek-harness` build brain) begins with a
+standalone spike, not an integration; W5 (LanceDB / tesseract.js / extra MCP servers) is
+YAGNI until something reads it. Neither is blocked — they are simply behind the two items
+above in the operator's stated order.
+
+### 2026-08-19 — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** T1+T2 shipped (`fb574ce`). T4 step 0 shipped (`d0fe19b`) — the AEC readback instrument, because the measurement T4 depends on could not be run: nothing on the Live capture path had ever read `getSettings().echoCancellation` back, so the plan's premise was unfalsifiable. T5 MEASURED (`d9f2ad2`) — **three of its premises did not survive.** The evidence contract was never escaped (every `uia-invoke` ACTION route is oracle-backed; the no-op is in a discovery helper that returns `$null` and fails honestly). The window-station / desktop / integrity hypothesis is **refuted** — pc-child and a direct spawn report an identical interaction context on every axis. And the ticket's own checklist **passes live**: launch/focus/type/click are oracle-confirmed on both a Win32 app (charmap) and an MSIX one (notepad), via `scripts/verify-desktop-automation.js`. What is left of W2 is the narrow WinUI3 **save** path, which already fails honestly — re-set its priority against that, not against the original "failed drastically" report.
 
 **Next actions, in order.** (1) **T4's measurement session** — one live boot: read `micEchoCancellation` off `voice.capture-suspend` in the server log, then play one sentence through each of the three output paths with the mic live and record which return as `inputTranscription`. Do not start T4's remedy before that. (2) **W2 needs no more engineering.** The message-pump axis was measured and **refuted** (`uia_pump_probe`: four variants including a fresh pumped STA thread, two hosts, two independent oracles — `ExpandCollapseState` reports `Expanded` every time and nothing renders anywhere). Every client-side hypothesis is now closed, so the remaining defect is in **Notepad's own UIA provider** and the existing honest failure is the correct behaviour. **Do not add a fourth UIA rung.** The only thing still open is a measurement an operator must take in a terminal they opened themselves — `scripts/probe-uia-pump.js` and `scripts/probe-pc-child-context.js` each print the exact command. Note also that the direct spawn fails identically, so the 2026-08-13 "works standalone" claim is **unconfirmed** and should not be chased as a baseline.
 

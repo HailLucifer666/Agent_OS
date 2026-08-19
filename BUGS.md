@@ -390,6 +390,75 @@ distinguish "invoked and verified" from "invoked, unverified" and report the sec
 **Only after that:** if richer UIA coverage is wanted, FlaUI over pywinauto (better
 maintained, MIT, .NET sidecar). It pays off only once the daemon exists.
 
+### Step 6.6 — 🔍 MEASURED 2026-08-19: the shipped npm tree, enumerated for the first time
+
+**This item had no oracle, and the release gate's licence line was unmeasurable without
+one.** `THIRD_PARTY_NOTICES.md` opened with the sentence "npm dependency licenses are not
+repeated here", which is why nobody had ever enumerated the dependency tree. The file was
+written by hand, from memory, about a set of packages that had never been listed.
+`scripts/audit-licences.js` now lists them, and `test/licence-audit.test.js` fails when the
+list drifts.
+
+**What "shipped" means, and why the source matters.** Not `node_modules` — that tree holds
+electron and electron-builder, which do not ship. It is the non-dev entries of the two
+`package-lock.json` files, because electron-builder prunes devDependencies and then packs
+what remains off disk. Root: 382 locked, 333 dev. `mythos/`: 257 locked, 0 dev. **265
+distinct production packages.**
+
+**Four findings, all previously unrecorded.**
+
+1. **`@img/sharp-win32-x64` bundles eight LGPLv3 libraries, and it ships and loads.** Its
+   own `LICENSE` is Apache-2.0; its own `README.md` then names `fribidi`, `glib`,
+   `libexif`, `libheif`, `librsvg`, `libvips`, `pango` and `proxy-libintl` as **LGPLv3**.
+   Measured rather than inferred: `require('kokoro-js')` pulls 14 `sharp` modules and
+   **libvips 8.17.3** initialises. The chain is `kokoro-js` → `@huggingface/transformers`
+   → `sharp`, and `transformers.node.cjs` requires sharp at **module scope**, so there is
+   no lazy branch that avoids it.
+   **This qualifies T1.** T1 promoted Kokoro to lead the TTS chain partly to move off
+   edge-tts's LGPLv3. That holds for edge-tts, which is BYO and ships zero code — but
+   Kokoro's own tree ships an LGPLv3 **binary**, which edge-tts never did. Exposure was
+   reduced in one place and introduced in another. Not a blocker (dynamically loaded
+   `.node`, no MYTHOS source implicated) and not a conclusion either — obligation
+   recorded, lawyer's call flagged.
+2. **`buffers@0.1.1` declares no licence at all** — no `license` field, no
+   `LICENSE`/`COPYING`, no licence line in its README. **An absent grant is not a
+   permissive grant**, which makes it stricter than the copyleft entries, not looser.
+   Reached only as `exceljs` → `unzipper` → `binary` → `buffers`; `exceljs` has exactly
+   one first-party consumer (`src/core/effectors/from-docs.js`), so removal is bounded.
+3. **`jszip` is `(MIT OR GPL-3.0-or-later)`** — MIT elected, now stated. An election left
+   unwritten is indistinguishable from nobody having noticed the GPL half.
+4. **Twelve MPL-2.0 packages ship** (`@ghostery/*`, `@remusao/*`, via the root
+   `@ghostery/adblocker-electron`) and the notices file did not contain the string
+   "MPL-2.0". Shipped unmodified, so the obligation is notice plus source availability;
+   patching any of those files in place would put that file under the MPL.
+
+**A correction to this entry's own NOASSERTION note.** adbkit, NodeRT, speexdsp and the MCP
+monorepo are **not in the shipped tree** — none is a dependency. adb is spawned per call,
+WinRT is reached by PowerShell reflection, speexdsp is a hypothetical, and `from-mcp.js`
+spawns servers over stdio rather than vendoring them. So `NOASSERTION` on those four is a
+**pre-adoption** task, not a 6.6 blocker. The note stays because it is right about what
+`NOASSERTION` means; what changed is which items it applies to today.
+
+**Q1 respected — nothing runtime was added.** The script is a build-time gate. It changes no
+decision at runtime, ships no classifier, and holds no threshold.
+
+**Q3 — who reads this?** `THIRD_PARTY_NOTICES.md` and the gate now read each other, in both
+directions. An exception missing from the notices file fails, **and** an exception for a
+package that no longer ships fails. The second direction exists because a guard protecting
+nothing, while reading as due diligence, is the exact shape this ticket was opened over.
+
+**What is still NOT closed, and must not be ticked.** The licence line on the release gate
+needs 6.5 as well, and 6.5 still carries one deferred operator decision (how a paid product
+handles the NC wake-word weights — T3, which the operator has now deprioritised). The
+mechanical half is done and repeatable; the legal call is not a session's to make, per
+`CLAUDE.md`.
+
+Run it:
+
+```bash
+cd mythos && node scripts/audit-licences.js --check
+```
+
 ### Considered and deliberately NOT scheduled
 
 | Item | Stars | Licence | Why not now |
@@ -470,7 +539,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app.
+Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did.
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are

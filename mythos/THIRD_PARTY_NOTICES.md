@@ -1,7 +1,94 @@
 # Third-Party Notices
 
 This file documents third-party code and models used by MYTHOS beyond what's
-declared in `package.json` (npm dependency licenses are not repeated here).
+declared in `package.json`, **plus every npm dependency in the shipped tree whose
+licence is not purely permissive** — see "Shipped npm dependencies" immediately
+below.
+
+Until 2026-08-19 this file opened with the line "npm dependency licenses are not
+repeated here", and that sentence is why the section below did not exist. Nobody had
+enumerated the tree, so four non-permissive obligations shipped unrecorded. The
+enumeration is now a tracked gate rather than a claim:
+
+```bash
+cd mythos && node scripts/audit-licences.js --check
+```
+
+## Shipped npm dependencies — the non-permissive set
+
+`scripts/audit-licences.js` reads the non-dev entries of both `package-lock.json`
+files (the root tree and `mythos/`), because electron-builder prunes
+devDependencies and then packs what is left off disk. Of **265** production
+packages, **225** are plainly permissive (MIT, ISC, Apache-2.0, BSD, ISC, and the
+usual long tail), **25** are `@img/sharp-*` prebuilts for other platforms that are
+not installed and therefore cannot be in a Windows artifact, and the following
+**15** carry an obligation. Anything added to the tree that is neither permissive nor
+listed here fails `--check`.
+
+Measured 2026-08-19. As everywhere else in this file, these are readings of what
+upstream states, **not legal conclusions** — the licensing review before a paid
+release is a separate, tracked gate (merged-order steps 6.5 / 6.6).
+
+### `@img/sharp-win32-x64` — Apache-2.0 **AND LGPL-3.0-or-later**
+
+- **Project:** https://github.com/lovell/sharp (prebuilt binaries: `sharp-libvips`)
+- **Licence:** its own `LICENSE` is Apache-2.0; its own `README.md` then lists the
+  bundled native libraries, of which **eight are LGPLv3**: `fribidi`, `glib`,
+  `libexif`, `libheif`, `librsvg`, `libvips`, `pango`, `proxy-libintl`. Upstream
+  notes these are used "via the 'any later version' clause of the LGPLv2 or
+  LGPLv2.1".
+
+**It ships, and it loads.** `require('kokoro-js')` pulls 14 `sharp` modules and
+initialises **libvips 8.17.3** — measured directly, not inferred. The path is
+`kokoro-js` → `@huggingface/transformers` → `sharp`, and
+`transformers.node.cjs` requires sharp at module scope, so there is no lazy branch
+that avoids it. `@huggingface/transformers` is also a direct dependency in its own
+right.
+
+**This qualifies BUG-274 T1.** T1 promoted Kokoro to lead the TTS chain partly to
+move away from edge-tts's LGPLv3. That reasoning holds for edge-tts, which is BYO and
+ships zero code — but Kokoro's own dependency tree ships an LGPLv3 **binary**, which
+edge-tts never did. The exposure was reduced in one place and introduced in another,
+and nothing recorded it until this audit.
+
+**The obligation, as upstream states it:** notice, a copy of the licence, and the
+recipient's ability to replace the library. It is a dynamically loaded `.node`
+addon, so no MYTHOS source is implicated. Whether that is sufficient for a sold
+product is a lawyer's call, not a session's.
+
+### `jszip` — `(MIT OR GPL-3.0-or-later)`
+
+- **Project:** https://github.com/Stuk/jszip
+- **Election: MIT.** The GPL operand is never relied on.
+
+Reached via `exceljs` and `pptxgenjs`. Recorded because an election left unstated is
+indistinguishable from nobody having noticed the GPL half.
+
+### `buffers@0.1.1` — **no licence declared at all**
+
+- **Project:** http://github.com/substack/node-buffers
+- **Licence:** none. No `license` field in `package.json`, no `LICENSE`/`COPYING`
+  file, and no licence line in its `README.markdown` — read in the installed package
+  on 2026-08-19.
+
+**An absent grant is not a permissive grant**, which makes this stricter than the
+copyleft entries above rather than looser. It is reached only as
+`exceljs` → `unzipper` → `binary` → `buffers`, and `exceljs` has exactly one
+first-party consumer (`src/core/effectors/from-docs.js`), so removing it is a bounded
+option if the grant cannot be established upstream.
+
+### `@ghostery/*` and `@remusao/*` (12 packages) — MPL-2.0
+
+- **Projects:** https://github.com/ghostery/adblocker (and its `@remusao/*` helpers)
+- **Licence:** Mozilla Public License 2.0 — file-level weak copyleft.
+
+Pulled by the root dependency `@ghostery/adblocker-electron`, used for ad-blocking in
+the Electron browser surface. MYTHOS ships them **unmodified**, so the obligation is
+notice plus making the MPL-covered source available; no MYTHOS file becomes subject to
+the MPL. If any of these files is ever patched in place, that patched file must be
+published under the MPL — which is the reason to record the group rather than assume it.
+
+
 
 ## edge-tts (optional voice synthesis — BYO, never bundled)
 
