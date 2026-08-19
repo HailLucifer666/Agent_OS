@@ -658,6 +658,30 @@ function createLiveToolAdapter(deps) {
       liveTurnActions.push(entry);
     }
     const responses = [];
+    // SEQUENTIAL ON PURPOSE — do not convert this to Promise.all / fan-out.
+    //
+    // The 2026-08-19 audit proposed exactly that (backlog M3), on the reasoning
+    // that awaiting each call serialises a batch. Measured against the operator's
+    // audit trail first, counting GATE rows only — dispatch-action.js writes a
+    // second row per call with decision:'completed', and counting both makes
+    // every single call look like a 2-call batch (that error put the multi-call
+    // rate at 22%):
+    //
+    //   1,400 gate rows -> 1,337 batches, 55 multi-call (4.1%), largest 5.
+    //
+    // ~96% of batches hold one call and cannot benefit. And the multi-call
+    // shapes that do occur include strictly ordered chains — ui_type + send_key
+    // (x3), close_window + browser_navigate (x2), navigate + close_panel +
+    // navigate, spotify_volume + spotify_play. Running those concurrently races
+    // a keystroke against the typing it is supposed to follow, which is the
+    // BUG-219 / keystrokes-follow-the-caret failure class. This loop is what
+    // makes an ordered batch work; the ordering is pinned by
+    // test/live-tool-batch-ordering.test.js.
+    //
+    // The dedup half of that item needed no change: isDuplicateCall and
+    // isDuplicateSignature each check-and-record on the same tick, so no await
+    // separates the check from the record and two identical calls can never
+    // both pass. Same test file pins it.
     for (const call of calls) {
       // BUG-120: answer the repeat, run nothing. The model still gets a
       // functionResponse for the id it asked about (silence would leave the
