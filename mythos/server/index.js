@@ -3795,7 +3795,15 @@ function createServer(deps) {
           // operator interrupted" from "because the audio arrived too late to play
           // continuously". Both sound identical from the room, and step 4 was built
           // on a grep that could not tell them apart.
-          'cushionMs', 'underruns']) {
+          'cushionMs', 'underruns',
+          // BUG-274 step 5b: how many times a model turn ran past the player's
+          // attribution ceiling while still claiming to be open — i.e. how many
+          // 'live-turn-complete' frames never reached the HUD. The cushion's
+          // underrun accounting depends on that boundary, so this is the field that
+          // says whether the accounting can be trusted at all. Non-zero means read
+          // the server's turn frames, not the cushion; it is a different fault from
+          // a slow link and is deliberately not folded into `underruns`.
+          'missedTurnEnds']) {
           if (msg[k] !== undefined) fields[k] = msg[k];
         }
         logger.info('voice.capture-suspend', fields);

@@ -166,6 +166,27 @@ test("the fields BUG-273's own slices added are present by name", () => {
   }
 });
 
+test("the cushion diagnostics are still VISIBLE to this scanner, not just allowed", () => {
+  // Q3, and the reason this test is about `sent` rather than `allowed`. Every other
+  // check here asks whether the server would keep a field. This one asks whether this
+  // file can still SEE the client sending it — because the failure mode that nearly
+  // shipped on 2026-08-20 was the opposite of the classic one: the fields were
+  // spread into the payload from a helper's return literal (`...cushionStats()`),
+  // which the scanner does not read. They would have been computed, sent, dropped at
+  // the allowlist, and this file would have printed PASS on an empty `dropped` list —
+  // the fabricated pass its own header condemns, produced by hiding the names rather
+  // than by forgetting them.
+  //
+  // So: spelled-out keys are load-bearing, and this fails if anyone re-hides them.
+  const sent = clientFields();
+  for (const field of ['cushionMs', 'underruns', 'missedTurnEnds']) {
+    assert.ok(sent.includes(field),
+      field + ' is no longer visible as a literal key in a scanned payload — if it '
+      + 'moved behind a spread or a computed name, this scanner is blind to it and '
+      + 'the allowlist check above proves nothing about it');
+  }
+});
+
 test('the pre-BUG-273 fields are still allowed — nothing was traded away', () => {
   const allowed = serverAllowlist();
   for (const field of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs',

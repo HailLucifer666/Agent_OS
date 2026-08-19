@@ -160,38 +160,108 @@ describe('pcm-player jitter cushion', () => {
       'a 0.3s gap must not lower a cushion sized for a 1s one');
   });
 
-  it('the cushion is bounded, so a dead link cannot grow unbounded latency', async () => {
+  it('the cushion is bounded, so a bad link cannot grow unbounded latency', async () => {
     const { ctx, player } = await makePlayer();
-    // NOTE ON WHAT THIS DOES AND DOES NOT PROVE. The clock here is frozen except
-    // where the test moves it, so END_GRACE_MS's end-timer never fires and
-    // `speaking` stays true across all five jumps. That is what lets the cushion
-    // reach CUSHION_MAX_SEC at all. It pins the CLAMP — the thing this test is for
-    // — and it must not be read as evidence that a real session reaches 2s; the
-    // live-clock test below shows it does not. Kept frozen deliberately: a clamp
-    // is arithmetic and deserves a deterministic test, not a 60-second one.
-    // Repeated 30-second dry spells — far past any cushion worth paying for.
-    for (let i = 0; i < 5; i++) {
+    // Dry spells of 2.5s: bad enough that the cushion wants more than MAX
+    // (2.5 + 0.25 margin), and still inside UNDERRUN_ATTRIBUTION_MAX_SEC so they
+    // are read as stalls rather than as a lost turn boundary. Three of them,
+    // because the clamp has to hold on repeats and not only on the first.
+    for (let i = 0; i < 3; i++) {
       player.enqueue(chunk());
-      ctx.currentTime += 30;
+      ctx.currentTime += 2.5;
     }
     const s = player.stats();
     assert.equal(s.cushionSec, 2.0, 'must stop at CUSHION_MAX_SEC');
     assert.equal(s.cushionAtMax, true,
       'and say so — a cushion pinned at max while still underrunning is a verdict '
       + 'about the connection, not a tuning problem');
-    assert.ok(s.underruns >= 4);
+    assert.ok(s.underruns >= 2);
+    assert.equal(s.missedTurnEnds, 0, 'these are stalls, not lost turn boundaries');
   });
 
   it('close() resets the cushion — it describes a session, not the machine', async () => {
     const { ctx, player } = await makePlayer();
     player.enqueue(chunk());
-    ctx.currentTime = 9;
+    ctx.currentTime = 2.0;             // dry ~1.65s: a stall, under the ceiling
     player.enqueue(chunk());
     assert.ok(player.stats().cushionSec > 0.25);
 
     player.close();
     assert.equal(player.stats().cushionSec, 0.25);
     assert.equal(player.stats().underruns, 0);
+    assert.equal(player.stats().missedTurnEnds, 0);
+  });
+
+  // ---- the turn boundary, wired 2026-08-20 -------------------------------------
+  //
+  // The cushion may only learn from silence that happened INSIDE a model turn. The
+  // player cannot tell that apart from the operator taking a breath, so it is told:
+  // s2s-bridge.js forwards the server's own 'live-turn-complete' (and
+  // 'live-interrupted') to endTurn(). These three cases are the whole contract.
+
+  it('a long gap ACROSS a turn boundary is not an underrun', async () => {
+    // The false positive that would otherwise pin the cushion at MAX for a session:
+    // MYTHOS finishes a reply, the operator thinks for two seconds and speaks, and
+    // the next reply's first chunk arrives to find an empty timeline. Nothing was
+    // late. Nobody heard a gap in a reply. This must not grow anything.
+    const { ctx, player } = await makePlayer();
+    player.enqueue(chunk());
+    player.endTurn();                  // the server said the turn is over
+    ctx.currentTime = 2.5;             // the operator takes their time
+    player.enqueue(chunk());           // a NEW reply begins
+
+    const s = player.stats();
+    assert.equal(s.underruns, 0,
+      'silence between turns is a conversation, not an underrun — counting it is '
+      + 'what would put 2s of latency in front of every first word');
+    assert.equal(s.cushionSec, 0.25, 'so the cushion is untouched');
+    assert.equal(s.missedTurnEnds, 0, 'and the boundary arrived, so nothing was lost');
+  });
+
+  it('the SAME gap inside an open turn IS an underrun — the boundary is the only difference', async () => {
+    // Deliberately identical to the case above except for the endTurn() call, so the
+    // test names the actual discriminator rather than two unrelated scenarios.
+    const { ctx, player } = await makePlayer();
+    player.enqueue(chunk());
+    ctx.currentTime = 2.5;
+    player.enqueue(chunk());
+
+    const s = player.stats();
+    assert.equal(s.underruns, 1, 'no boundary arrived, so the turn is still open');
+    assert.ok(s.cushionSec > 0.25, 'and the stall sizes the cushion; got ' + s.cushionSec);
+  });
+
+  it('a turn that never ends cannot inflate the cushion — the fail-safe closes it', async () => {
+    // The failure mode that made this wiring risky enough to defer once: if
+    // 'live-turn-complete' is lost (dropped socket, rotated session), turnOpen stays
+    // true and the next reply — after however long the operator spoke — would be
+    // scored as one enormous underrun and pin the cushion at MAX for the session.
+    // Past UNDERRUN_ATTRIBUTION_MAX_SEC the gap is read as a lost boundary instead,
+    // growth is declined, and the run is closed by hand.
+    const { ctx, player } = await makePlayer();
+    player.enqueue(chunk());
+    // No endTurn() — the frame never arrived.
+    ctx.currentTime = 30;              // far past any stall worth cushioning
+    player.enqueue(chunk());
+
+    const s = player.stats();
+    assert.equal(s.underruns, 0, 'a 30s gap is not jitter, whatever turnOpen claims');
+    assert.equal(s.cushionSec, 0.25, 'so it must not inflate the cushion');
+    assert.equal(s.missedTurnEnds, 1,
+      'and it must SAY the boundary was lost — a silent fail-safe is the inert '
+      + 'mechanism this ticket keeps finding');
+
+    // The run is now closed and this chunk reopened it, so the reply continues
+    // normally: a promptly-arriving next chunk is neither an underrun nor another
+    // lost boundary. The fail-safe is charged once per GAP, not once per chunk that
+    // follows one — a counter that ticked per chunk would report a dead link as
+    // hundreds of lost boundaries and drown the signal it exists to give.
+    ctx.currentTime = 30.05;
+    player.enqueue(chunk());
+    const after = player.stats();
+    assert.equal(after.missedTurnEnds, 1, 'no second gap, so no second count');
+    assert.equal(after.underruns, 0);
+    assert.equal(after.cushionSec, 0.25);
   });
 
   // A LIVE clock, as a real AudioContext has. Every test above freezes currentTime
@@ -238,37 +308,38 @@ describe('pcm-player jitter cushion', () => {
     return s;
   }
 
-  // Q8 — PINNING A DISPOSITION, not asserting a wish. The cushion GROWS only while
-  // the player still believes it is mid-reply, and END_GRACE_MS ends that belief
-  // 250ms after the timeline empties. So the growth covers short stalls and stops
-  // covering long ones, and the two worst gaps measured on the operator's link
-  // (954ms, 1486ms) fall on the far side of it. This is deliberate: the player
-  // cannot distinguish a stalled network from a finished reply followed by an
-  // operator turn, and counting the latter would pin the cushion at 2s and put that
-  // much latency in front of every first word for the rest of the session.
+  // WHY A LIVE CLOCK IS STILL REQUIRED HERE, now more than before. The frozen tests
+  // above cannot observe anything a timer decides, and END_GRACE_MS still runs on a
+  // real timer — it drives `speaking` and the mic gate. Until 2026-08-20 it ALSO
+  // gated the cushion's growth, and that is exactly what these two cases caught:
+  // frozen tests asserted the cushion growing to 1.736s and to its 2.0s cap while a
+  // live clock showed the two worst measured gaps (954ms, 1486ms) growing it not at
+  // all, because the reply had been declared over 250ms into the stall.
   //
-  // Written because the frozen-clock tests above assert growth to 1.736s and 2.0s,
-  // which reads as "the cushion self-tunes to any gap" — and a comment claiming
-  // exactly that was in the source until this test was written. If the boundary is
-  // ever moved on purpose (feeding s2s-bridge.js's live-turn-complete into the
-  // player would do it, and would make the attribution exact), this test should be
-  // updated to the new boundary rather than deleted.
-  it('a stall inside the end-grace window grows the cushion', async () => {
-    const s = await oneLateChunk(477);   // measured: the largest gap that still counts
-    assert.equal(s.underruns, 1, 'a 477ms stall lands while the reply is still live');
-    assert.ok(s.cushionSec > 0.25,
-      'so it must size the cushion; got ' + s.cushionSec);
+  // The gate is now the server's turn boundary, which no timer competes with. These
+  // cases are kept, inverted, and are the regression that would catch a re-coupling:
+  // if anything ever re-ties growth to `speaking`, the 1486ms case goes back to
+  // reporting zero and this fails.
+  it('a 477ms stall grows the cushion — unchanged by the rewiring', async () => {
+    const s = await oneLateChunk(477);   // measured on the operator's link
+    assert.equal(s.underruns, 1);
+    assert.ok(s.cushionSec > 0.25, 'it must size the cushion; got ' + s.cushionSec);
   });
 
-  it('a stall past the end-grace window does NOT grow the cushion — the known limit', async () => {
-    const s = await oneLateChunk(1486);  // measured: the worst gap on the operator's link
-    assert.equal(s.underruns, 0,
-      'not a bug in this test: END_GRACE_MS has already ended the reply, so this is '
-      + 'indistinguishable from a new one starting. Growth is declined rather than '
-      + 'risk mistaking an operator turn for a network stall.');
-    assert.equal(s.cushionSec, 0.25,
-      'the base cushion still applies to the recovering chunk — the reply resumes '
-      + 'behind 250ms of lead, it simply does not learn that it needs more');
+  it('a 1486ms stall NOW grows the cushion too — this is what the rewiring bought', async () => {
+    // The worst gap measured on the operator's link, and the one the cushion was
+    // built for. It went uncounted for as long as growth depended on a 250ms timer
+    // rather than on whether the model turn was still open.
+    const s = await oneLateChunk(1486);
+    assert.equal(s.underruns, 1,
+      'no turn boundary arrived during this stall, so the turn was still open and '
+      + 'the silence was the transport — if this reads 0, growth has been re-tied '
+      + 'to END_GRACE_MS and the worst gaps are invisible again');
+    assert.ok(s.cushionSec > 1.0,
+      'and the cushion must now be sized to absorb a repeat of it; got ' + s.cushionSec);
+    assert.equal(s.missedTurnEnds, 0,
+      '1486ms is a stall, not a lost boundary — the fail-safe must not fire here, '
+      + 'or the ceiling has been set below real-world jitter');
   });
 
   it('flush() still stops everything, cushion or not', async () => {

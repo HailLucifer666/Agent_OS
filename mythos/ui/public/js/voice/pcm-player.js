@@ -32,29 +32,55 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
   // exactly how long the timeline was dry, so one is enough to size the cushion
   // instead of creeping up on it over seven more stutters.
   //
-  // BUT THE GROWTH HAS A CEILING IT DOES NOT CHOOSE, AND IT IS NOT MAX. Growth
-  // requires `speaking`, and END_GRACE_MS above flips that false 250ms after the
-  // scheduled audio runs out. So a dry spell longer than END_GRACE_MS is not
-  // counted at all: measured on a live clock, arrival gaps of 477ms grow the
-  // cushion and gaps of 954ms and 1486ms — the worst ones, the ones that sound
-  // like one word per second — leave it at BASE. That is deliberate and it is
-  // the safe direction. The player cannot tell a stalled network from a finished
-  // reply followed by an operator turn; only the turn boundary can, and that
-  // lives in s2s-bridge.js. Counting a conversational pause as an underrun would
-  // pin the cushion at MAX and put two seconds of latency in front of every
-  // first word for the rest of the session. Under-learning is recoverable by ear;
-  // that is not. Pinned by test/pcm-player-jitter-cushion.test.js's live-clock
-  // case so the boundary is visible instead of being rediscovered.
+  // WHAT DECIDES THAT A SILENT TIMELINE IS AN UNDERRUN — and this is the whole
+  // difficulty. A dry timeline mid-reply is the network stalling. A dry timeline
+  // between replies is the operator talking, and growing the cushion for THAT
+  // would pin it at MAX and put two seconds of latency in front of every first
+  // word for the rest of the session. The two are identical from inside this
+  // file.
+  //
+  // Until 2026-08-20 the proxy was `speaking`, which END_GRACE_MS flips false
+  // 250ms after the audio runs out. It never produced a false positive, and it
+  // was deaf to exactly the gaps that motivated the fix: measured on a live
+  // clock, a 477ms arrival gap grew the cushion and the 954ms and 1486ms gaps —
+  // the worst ones, the ones that sound like one word per second — did not,
+  // because the reply had been declared over 250ms into the stall.
+  //
+  // It is now the real thing: `turnOpen`, ended by the `live-turn-complete`
+  // frame the server already broadcasts and s2s-bridge.js already listens to.
+  // A model turn is open or it is not; there is no window to tune, and the
+  // longest network stall inside a turn is still attributed correctly.
   //
   // MAX is 2s because the gaps measured on the operator's own link on
   // 2026-08-19 reached 1486ms. Past that the added latency stops being worth
   // paying and the honest reading is that the connection cannot carry a live
-  // conversation — which is what stats().cushionAtMax is for. Given the ceiling
-  // above, MAX binds only on a link that stutters repeatedly WITHIN the grace
-  // window; it is a backstop, not the operating range.
+  // conversation — which is what stats().cushionAtMax is for.
   const CUSHION_BASE_SEC = 0.25;
   const CUSHION_MARGIN_SEC = 0.25;
   const CUSHION_MAX_SEC = 2.0;
+  // Is a model turn open? Set by any chunk arriving, cleared by endTurn() (the
+  // server's own turn boundary) and by stopAll(). Only while this is true can a
+  // dry timeline be blamed on the transport.
+  let turnOpen = false;
+
+  // THE FAIL-SAFE ON THAT SIGNAL, because trusting it unconditionally fails in the
+  // dangerous direction. If `live-turn-complete` never arrives — dropped socket,
+  // rotated session, a server-side path that forgets to send it — turnOpen stays
+  // true forever, and then the FIRST chunk of the next reply, after however long
+  // the operator took to speak, is scored as one enormous underrun and pins the
+  // cushion at MAX for the session. That is the outcome this whole mechanism
+  // exists to avoid, arrived at by a lost frame.
+  //
+  // So a dry period this long is not treated as jitter no matter what turnOpen
+  // says: growth is declined and the run is closed. 3s is well past the worst
+  // measured stall (1486ms arrival gap, ~1.1s dry) and well short of any
+  // conversational turnaround worth mistaking for one. When it fires it means the
+  // turn boundary was lost, not that the link is bad, so it is counted separately
+  // and reported — a fail-safe nobody can see is the same inert mechanism this
+  // ticket keeps finding.
+  const UNDERRUN_ATTRIBUTION_MAX_SEC = 3.0;
+  let missedTurnEnds = 0;
+
   let cushionSec = CUSHION_BASE_SEC;
   let underruns = 0;
   let worstDrySec = 0;
@@ -138,21 +164,28 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
     // real and bounded: the first word of a reply is delayed by the current
     // cushion. Continuous speech is worth more than a quarter second.
     const drained = nextAt <= c.currentTime;
-    // `speaking` is the guard against learning from the wrong silence. It is still
-    // true only while the player believes this reply is running, so a gap between
-    // TURNS — the operator talking — cannot be mistaken for the network stalling
-    // and inflate the cushion. It also costs the biggest gaps, which stop being
-    // counted once END_GRACE_MS has elapsed; see the constants above for why that
-    // trade goes this way rather than the other.
-    if (drained && speaking) {
+    // `turnOpen` is the guard against learning from the wrong silence: a gap
+    // between TURNS is the operator talking and must never inflate the cushion.
+    // Checked BEFORE this chunk opens a turn of its own — the first chunk after a
+    // boundary is by definition not an underrun, however long the pause before it.
+    if (drained && turnOpen) {
       // Mid-reply underrun: the room just heard a gap, and we know its length —
       // the timeline ran out at nextAt and it is now currentTime. Grow to cover
       // THAT plus a margin, so one stutter is enough to size the cushion rather
       // than the seven it would take to creep there in fixed steps.
       const drySec = c.currentTime - nextAt;
-      if (drySec > worstDrySec) worstDrySec = drySec;
-      cushionSec = Math.min(CUSHION_MAX_SEC, Math.max(cushionSec, drySec + CUSHION_MARGIN_SEC));
-      underruns += 1;
+      if (drySec > UNDERRUN_ATTRIBUTION_MAX_SEC) {
+        // Longer than any stall worth cushioning, inside a turn that says it is
+        // still running: the turn boundary was lost, not the packets. Decline the
+        // growth and close the run by hand, so one missed frame costs a single
+        // uncounted gap instead of a permanently inflated cushion.
+        missedTurnEnds += 1;
+        turnOpen = false;
+      } else {
+        if (drySec > worstDrySec) worstDrySec = drySec;
+        cushionSec = Math.min(CUSHION_MAX_SEC, Math.max(cushionSec, drySec + CUSHION_MARGIN_SEC));
+        underruns += 1;
+      }
     }
     // The 40ms is a FLOOR, not the first chunk's lead: cushionSec starts at
     // CUSHION_BASE_SEC, so the opening chunk of a session is scheduled a full base
@@ -170,8 +203,24 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
     nextAt = startAt + buf.duration;
     live.add(src);
     src.onended = () => live.delete(src);
+    // Audio is arriving, so a model turn is open — whatever the server's boundary
+    // frames have or have not said. Set AFTER the underrun check above, never
+    // before: otherwise every first chunk would score its own arrival as a stall.
+    turnOpen = true;
     markSpeaking();
   }
+
+  // The server's turn boundary, forwarded by s2s-bridge.js from the
+  // 'live-turn-complete' broadcast (and from 'live-interrupted', which ends a turn
+  // just as definitely). This is the ONLY thing that can tell the cushion apart
+  // from a conversation: after this, silence is the operator thinking, not the
+  // link stalling, and the next chunk starts a fresh run rather than closing a gap.
+  //
+  // Deliberately not the same call as flush(): a barge-in stops PLAYBACK while the
+  // server keeps streaming the same turn, and a turn ending stops the TURN while
+  // whatever is already scheduled plays out. Collapsing them would make one of the
+  // two wrong, and it was the flush/turn confusion that produced this ticket.
+  function endTurn() { turnOpen = false; }
 
   // Stage 2 (BUG-061): "consistently cut off at the end, losing the last one
   // or two words." A hard stop-everything flush() amputated the tail whenever
@@ -195,6 +244,12 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
     // no longer scheduled. Every new run reassigns it (enqueue() does so on the
     // drained branch, which a post-stop enqueue always takes).
     nextAt = ctx ? ctx.currentTime : 0;
+    // Closed for ATTRIBUTION purposes only. The server may well still be streaming
+    // this turn (that is exactly what the barge-in suppression in s2s-bridge.js is
+    // for), but nothing that arrives after a stop can tell us anything about jitter:
+    // the timeline was emptied deliberately, so the next gap is not the network's
+    // fault. Erring toward not-counting is the safe direction throughout this file.
+    turnOpen = false;
     // A barge-in cut IS the end of speech, and the mic gate must reopen for it —
     // otherwise interrupting MYTHOS would leave the operator muted until the
     // timer that was measuring the audio we just threw away finally expired.
@@ -238,18 +293,26 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
     return {
       cushionSec, underruns, worstDrySec,
       cushionAtMax: cushionSec >= CUSHION_MAX_SEC,
+      // How many times a turn ran past UNDERRUN_ATTRIBUTION_MAX_SEC while still
+      // claiming to be open. Reported because it means the turn-boundary signal
+      // this file now depends on is not arriving — a different fault from a slow
+      // link, wanting a different fix, and otherwise indistinguishable from a
+      // quiet session. Non-zero here says read the server's turn frames, not the
+      // cushion.
+      missedTurnEnds,
     };
   }
   // close() is a real teardown (session ending), not a barge-in guess — it
   // always stops everything immediately, bypassing flush()'s tail guard. The
   // cushion resets with it: it describes one session's link, not the machine.
   return {
-    enqueue, flush, isSpeaking, stats,
+    enqueue, flush, isSpeaking, stats, endTurn,
     close: () => {
       stopAll();
       cushionSec = CUSHION_BASE_SEC;
       underruns = 0;
       worstDrySec = 0;
+      missedTurnEnds = 0;
       if (ctx) ctx.close().catch(() => {});
       ctx = null;
     },

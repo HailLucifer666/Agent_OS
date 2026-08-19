@@ -17,7 +17,60 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-19 (latest) — **The reply came out one word at a time, and nobody had interrupted it. 40ms of scheduling lead met 1486ms of jitter. Both open voice behaviours now wait on ONE live session.**
+### 2026-08-20 (latest) — **The cushion now learns from the gaps that actually hurt: the server's own turn boundary tells the player when a reply is over, so a 1486ms stall is finally counted as one.**
+
+**BUG-274 T4 step 5b, committed with this block.** Suite **5329/5329, 0 fail, 0 skipped** (+5). Merged-order
+position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). **Still NOT live-verified — same gate as step 5, below.**
+
+**WHAT WAS LEFT UNDONE YESTERDAY, and the operator asked for it.** Step 5's jitter cushion grew
+only while the player believed it was mid-reply, which `END_GRACE_MS` ends 250ms after the audio
+runs out. So a 477ms stall grew it and the **954ms and 1486ms stalls — the ones that sound like
+one word per second — grew nothing.** The self-tuning was inert for exactly the gaps that produced
+the report.
+
+**THE FIX.** `live-turn-complete` (broadcast by the server since it was written; step 4 taught the
+HUD to read it) is now forwarded to the player as `endTurn()`, alongside `live-interrupted`.
+Growth is gated on `turnOpen` rather than on a timer. **A model turn is open or it is not — there
+is no window to tune.** On a live clock the 1486ms gap now sizes the cushion to ~1.39s.
+
+**THE FAIL-SAFE, which is why this was deferred once rather than just done.** If
+`live-turn-complete` is ever lost, `turnOpen` would stay true and the next reply's first chunk —
+after however long the operator spoke — would be scored as one huge underrun and **pin the cushion
+at 2s for the session**, i.e. the exact outcome the mechanism exists to prevent, reached by a lost
+frame. So a dry period past **`UNDERRUN_ATTRIBUTION_MAX_SEC` (3s)** is read as a lost boundary
+instead: growth declined, run closed, and **`missedTurnEnds` counts it** so a broken turn signal is
+visible rather than silently degrading. Charged once per gap, not per chunk.
+
+**Also corrected from step 5:** `cushionMs`/`underruns` were on the barge-in suppression line, so
+they only reached the log on turns the operator interrupted. They now ride every suspend
+transition, with `missedTurnEnds` on its own condition (a lost boundary is a different fault from a
+slow link and can happen with zero underruns).
+
+**Three things the adversarial pass caught before commit**, recorded because two of them are
+repo-classic shapes: the three new fields were first **spread** into the payload from a helper, and
+the guard that exists to catch dropped fields **cannot see a spread** — it would have printed PASS
+while they were dropped, so a new test now pins that the scanner can SEE them. A test expectation
+was wrong before the code was (two boundary-less gaps really are two lost boundaries; the code was
+right). And a first attempt at widening a brittle regex window used a **lazy** quantifier, which
+stops at the first newline exactly like the original — widening a window with a lazy quantifier
+widens nothing.
+
+**Q8 pinned, unchanged:** every threshold listed in the block below, plus `TAIL_GUARD_SEC` and the
+cushion's base/margin/max. `endTurn()` is driven by a frame the server **already** sends, so
+nothing new goes upstream and AD-1 is untouched.
+
+**NEXT ACTION — unchanged: the ONE live session described in the block below**, which gates both
+the step-4 interruption behaviour and the step-5/5b continuity behaviour. One caveat there is now
+withdrawn: *"a repeat of any gap over ~600ms will still be audible"* was step 5's limit and is what
+step 5b removes. The criterion **"at most one audible gap per link degradation"** now applies at
+any stall length up to the 2s cap. The quiet-interruption band (peak ~0.024–0.031) is still
+expected to fail and is still an operator scope decision.
+
+### 2026-08-19 — **The reply came out one word at a time, and nobody had interrupted it. 40ms of scheduling lead met 1486ms of jitter. Both open voice behaviours now wait on ONE live session.**
+
+> **One limit in this block was closed the next day by step 5b (above):** the cushion's growth no
+> longer depends on `END_GRACE_MS`, so the 954ms and 1486ms stalls it says are uncounted are now
+> counted. Everything else here stands.
 
 **BUG-274 T4 step 5, committed with this block.** Suite **5324/5324, 0 fail, 0 skipped** (+2).
 Merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).

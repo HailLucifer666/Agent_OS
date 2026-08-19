@@ -129,14 +129,52 @@ describe('BUG-274 — a local flush does not stop the model turn', () => {
       + 'wire and the client is not listening');
     assert.ok(/offBroadcast\('live-turn-complete'/.test(CODE),
       'the listener must be unsubscribed in stop(), like every other one here');
-    const onTurn = /onTurnCompleteMsg = \(\)[^\n]*\n?/.exec(CODE);
+    // Window widened 2026-08-20 from `[^\n]*\n?` — which stopped at the first
+    // newline, so a handler split across lines would have had only its first line
+    // checked. It now spans the arrow body to its closing brace, matching the shape
+    // the onInterruptedMsg check below already used. The INVARIANT is unchanged;
+    // only the bounds moved. (A first attempt at this used `[\s\S]{0,400}?\n`, which
+    // is lazy and therefore stops at the first newline exactly like the original —
+    // widening a window with a lazy quantifier widens nothing.)
+    const onTurn = /onTurnCompleteMsg = \(\) => \{[^}]*\}/.exec(CODE);
     assert.ok(onTurn && /endAudioOutSuppression\(/.test(onTurn[0]),
       'live-turn-complete must end the suppression');
+    // BUG-274 step 5b: the same frame is also the player's turn boundary. Its jitter
+    // cushion may only learn from silence that happened inside a model turn, and
+    // nothing else on this side of the wire knows where a turn ends. Without this
+    // call the cushion is back to guessing from a 250ms timer and the worst stalls
+    // go uncounted — the wiring, not just the mechanism, is what makes it work.
+    assert.ok(onTurn && /player\.endTurn\(\)/.test(onTurn[0]),
+      'live-turn-complete must also close the player\'s underrun attribution, or the '
+      + 'cushion cannot tell a stalled network from the operator taking a breath');
     // The server winning the race must also clear it: a server interrupt means the
     // turn is already cut, and leaving suppression armed would eat the NEXT reply.
     const onInterrupted = /onInterruptedMsg = \(\) => \{[^}]*\}/.exec(CODE);
     assert.ok(onInterrupted && /endAudioOutSuppression\(/.test(onInterrupted[0]),
       'live-interrupted must end the suppression too, or the next reply is eaten');
+    assert.ok(onInterrupted && /player\.endTurn\(\)/.test(onInterrupted[0]),
+      'a server interrupt ends the turn just as definitely as turn-complete does — '
+      + 'leaving it open charges the next reply\'s opening silence to this turn');
+  });
+
+  it('the player exposes a turn boundary that is SEPARATE from flush()', () => {
+    // Q6, and the confusion that produced this whole ticket: "stop the playback" and
+    // "the turn is over" are different events. A barge-in stops playback while the
+    // server keeps streaming the same turn; a turn ending stops the turn while the
+    // audio already scheduled plays out. Collapsing them into one call makes one of
+    // the two wrong, so endTurn() must exist in its own right rather than being an
+    // alias for flush().
+    const PLAYER = fs.readFileSync(
+      path.join(ROOT, 'ui', 'public', 'js', 'voice', 'pcm-player.js'), 'utf8');
+    assert.match(PLAYER, /function endTurn\(\)/, 'endTurn() must exist');
+    assert.match(PLAYER, /enqueue, flush, isSpeaking, stats, endTurn/,
+      'and be exported, or s2s-bridge.js is calling something undefined — the HUD '
+      + 'has no build step and nothing else would catch that before a live session');
+    // The fail-safe that made this wiring safe enough to do at all: if the boundary
+    // frame is lost, an unbounded turn must not be readable as one huge underrun.
+    assert.match(PLAYER, /const UNDERRUN_ATTRIBUTION_MAX_SEC = /,
+      'a lost live-turn-complete must not be able to pin the cushion at max for the '
+      + 'rest of the session — that failure is worse than the bug being fixed');
   });
 
   it('the suppression cannot stick: it fails OPEN on an idle window', () => {

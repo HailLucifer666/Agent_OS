@@ -1035,25 +1035,19 @@ for, and there was none.
    client flushing mid-reply. **Opposite fixes**, and until now nothing on either side of the
    wire recorded either number.
 
-**THE HONEST LIMIT, and it is not small.** The cushion's **growth** is gated on the player still
-believing it is mid-reply, and `END_GRACE_MS` (250ms) ends that belief shortly after the timeline
-empties. Measured on a live clock (frozen-clock unit tests cannot see this — the end-timer never
-fires): a **477ms** gap grows the cushion; **954ms and 1486ms gaps do not**. The two worst
-measured gaps leave the cushion at its 250ms base.
+**THE LIMIT THIS SHIPPED WITH — CLOSED THE NEXT DAY, see step 5b below.** As first written, the
+cushion's **growth** was gated on the player still believing it was mid-reply, and `END_GRACE_MS`
+(250ms) ended that belief shortly after the timeline emptied. Measured on a live clock
+(frozen-clock unit tests cannot see this — the end-timer never fires): a **477ms** gap grew the
+cushion; **954ms and 1486ms gaps did not**. The two worst measured gaps left it at its 250ms base,
+which is to say the self-tuning was inert for exactly the stalls that produced the report. Shipped
+that way deliberately rather than guessing, with the remedy named; the operator asked for the
+remedy, and it is step 5b.
 
-This is a **deliberate disposition, pinned by two tests**, not an oversight. The player cannot
-distinguish a stalled network from a finished reply followed by an operator turn — only the turn
-boundary can, and that lives in `s2s-bridge.js`. Counting a conversational pause as an underrun
-would pin the cushion at 2s and put two seconds of latency in front of every first word for the
-rest of the session. Under-learning is recoverable by ear; that is not. **The named remedy, if
-this proves insufficient live:** feed the `live-turn-complete` broadcast the HUD already receives
-into the player, making the attribution exact. Not done here — it fails open in the wrong
-direction (a turn-complete that never arrives leaves the run permanently "open" and inflates the
-cushion to max), and it is a new seam, which this step is not scoped for.
-
-The other cost, stated plainly: **the cushion buys continuity by delaying the first word of every
-reply by up to `cushionSec`.** A cushion pinned at 2s that is still underrunning is a verdict
-about the connection, not a tuning problem — `stats().cushionAtMax` says so.
+The remaining cost, stated plainly and unchanged: **the cushion buys continuity by delaying the
+first word of every reply by up to `cushionSec`.** A cushion pinned at 2s that is still
+underrunning is a verdict about the connection, not a tuning problem — `stats().cushionAtMax`
+says so.
 
 **ADVERSARIAL PASS (`rules/core.md` §11) — this step's two gaps were found by it, after the code
 was written.**
@@ -1122,13 +1116,77 @@ mixing normal and quiet voice**, then run
 - **Continuity half (step 5):** replies continuous **by ear**, per-turn `audioStarveEvents`
   visible in `live.turn-parts`, and `live.interrupted` lines present where Gemini actually cut a
   turn.
-- **Expected to FAIL, and not regressions:** (a) very quiet interruptions (peak ~0.024–0.031,
-  roughly half of quiet attempts) sit below any workable floor and will still not land — closing
-  that band needs speaker verification or a tolerance for self-interruption, an operator scope
-  decision. (b) **A repeat of a >600ms gap will still be audible** — the criterion "at most one
-  audible gap per link degradation" holds only for stalls inside the end-grace window; see THE
-  HONEST LIMIT above. If the operator still hears word-by-word playback with
-  `audioStarveMaxMs > 600`, the remedy is the named turn-boundary seam, not a bigger base cushion.
+- **Expected to FAIL, and not a regression:** very quiet interruptions (peak ~0.024–0.031, roughly
+  half of quiet attempts) sit below any workable floor and will still not land — closing that band
+  needs speaker verification or a tolerance for self-interruption, an operator scope decision.
+- **Superseded caveat:** this entry originally also warned that a repeat of any gap over ~600ms
+  would still be audible. Step 5b removes that limit; the criterion "at most one audible gap per
+  link degradation" now applies at any stall length, up to the 2s cushion cap.
+
+#### T4 step 5b — 🔧 CODED 2026-08-20: the cushion now learns from the gaps that actually hurt, because the turn boundary tells it when a reply is over
+
+**Requested by the operator after step 5 shipped with the limit above stated rather than fixed.**
+Still **NOT live-verified** — same gate, same entry status.
+
+**THE PROBLEM, in one line.** A dry audio timeline mid-reply is the network stalling. A dry audio
+timeline between replies is the operator talking. **From inside `pcm-player.js` those are
+identical**, and the cushion must grow for the first and never for the second. Step 5 used
+`speaking` as the proxy, which `END_GRACE_MS` flips false 250ms after the audio runs out — safe,
+and deaf to every stall longer than that.
+
+**THE FIX.** `live-turn-complete` — the frame `server/index.js` has broadcast since it was written
+and which step 4 taught the HUD to read — is now also forwarded to the player as `endTurn()`,
+alongside `live-interrupted`. Growth is gated on `turnOpen` instead of `speaking`. A model turn is
+open or it is not; **there is no window to tune**, and the longest stall inside a turn is
+attributed correctly. Measured on a live clock: the **1486ms** gap now grows the cushion to
+~1.39s, where before it grew nothing.
+
+**THE FAIL-SAFE, which is why this was deferred once and not simply done.** Trusting the boundary
+unconditionally fails in the dangerous direction: if `live-turn-complete` is ever lost (dropped
+socket, rotated session), `turnOpen` stays true, and the first chunk of the next reply — after
+however long the operator spoke — is scored as one enormous underrun and **pins the cushion at 2s
+for the rest of the session.** That is the outcome the whole mechanism exists to avoid, reached by
+a lost frame. So a dry period past **`UNDERRUN_ATTRIBUTION_MAX_SEC` (3s)** is read as a lost
+boundary rather than as jitter: growth is declined, the run is closed by hand, and
+**`missedTurnEnds` counts it**. 3s sits well past the worst measured stall (1486ms arrival gap,
+~1.1s dry) and well short of any conversational turnaround worth mistaking for one. It is charged
+once per gap, not once per chunk after one.
+
+**Where the numbers surface, and a correction to step 5's own wiring.** `cushionMs`/`underruns`
+were put on the **barge-in suppression** line by step 5, which meant they only reached the log on
+turns the operator interrupted — the least likely shape of session for the transport to be at
+fault. They now ride `logSuspendTransition()` itself, so **every** transition carries them, still
+`undefined` on a clean link. `missedTurnEnds` joins them on its **own** condition, deliberately not
+folded into `underruns`: a lost turn boundary is a different fault from a slow link and can occur
+on a session with zero underruns, and folding it in would hide it exactly when it is the only
+thing wrong. All three are allowlisted in `server/index.js`.
+
+**ADVERSARIAL PASS — three findings, all caught before commit:**
+
+- **Q3 / the guard nearly guarded nothing.** The three fields were first spread into the payload
+  from a helper (`...cushionStats()`). `bug-273-suspend-fields-reach-the-log.test.js` reads
+  *literal keys* out of the source, so it **cannot see a spread**: the fields would have been
+  computed, sent, dropped at the allowlist, and the guard would have printed **PASS** — the
+  fabricated-pass shape that file's own header condemns, committed inside the comment warning
+  about it. Fixed by spelling the keys out, and pinned by a **new test asserting the scanner can
+  still SEE them** (`sent.includes`, not `allowed.has`) so re-hiding them fails loudly.
+- **Q6 / two events that are not one event.** `endTurn()` is deliberately **not** an alias for
+  `flush()`. A barge-in stops *playback* while the server keeps streaming the same turn; a turn
+  ending stops the *turn* while scheduled audio plays out. Collapsing them makes one of the two
+  wrong, and it was exactly that confusion that produced this ticket. Pinned by a source-shape
+  test that both exist and that the fail-safe constant is present.
+- **A test expectation was wrong before the code was.** The fail-safe test asserted
+  `missedTurnEnds === 1` after two long boundary-less gaps; the code reported 2, and **the code was
+  right** — two gaps with no boundary are two lost boundaries. The test now pins the real
+  invariant (charged per gap, not per chunk). Also: a first attempt at widening a brittle regex
+  window used a **lazy** quantifier, which stops at the first newline exactly like the original —
+  widening a window with a lazy quantifier widens nothing. Both corrected.
+
+**Behaviour deliberately unchanged:** every threshold in the Q8 list above, `TAIL_GUARD_SEC`, the
+base/margin/max cushion constants, and the wire protocol — `endTurn()` is driven by a frame the
+server **already** sends, so nothing new goes upstream and AD-1 is untouched.
+
+**Suite: 5329/5329, 0 fail, 0 skipped** (+5). **NOT live-verified.**
 
 #### T5 findings — 🔍 MEASURED 2026-08-19 (`d9f2ad2`): three of this item's premises do not survive
 

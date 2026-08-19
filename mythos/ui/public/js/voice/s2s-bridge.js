@@ -249,8 +249,45 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // a record of every suspend/clear, not just the fact a turn later came back
   // blind. Best-effort — sendMessage throwing (socket not open yet) must never
   // block the capture gate itself.
+  // BUG-274 step 5 Q3 (who actually reads this?) — pcm-player.js's jitter cushion
+  // computes cushionSec/underruns and, until this was wired, nothing anywhere called
+  // stats(). A number with no reader is not instrumentation.
+  //
+  // It rides logSuspendTransition()'s own literal rather than one call site's `extra`
+  // because it is SESSION state, not transition state: the cushion is cumulative, and
+  // putting it on a single reason (it was on the barge-in suppression line first) meant
+  // it only reached the log on turns the operator interrupted — the one shape of
+  // session where the transport is least likely to be what went wrong.
+  //
+  // Everything here is undefined on a healthy session: JSON.stringify drops those, and
+  // the server's allowlist copy drops them again, so a clean link adds no fields and
+  // their ABSENCE means no stutter rather than a dropped field. Written out as literal
+  // keys either way — bug-273-suspend-fields-reach-the-log.test.js reads this source to
+  // find them, and a key hidden behind a conditional spread would be invisible to it.
+  function cushionStats() {
+    const st = player ? player.stats() : null;
+    if (!st) return { cushionMs: undefined, underruns: undefined, missedTurnEnds: undefined };
+    const stuttered = st.underruns > 0;
+    return {
+      cushionMs: stuttered ? Math.round(st.cushionSec * 1000) : undefined,
+      underruns: stuttered ? st.underruns : undefined,
+      // Reported on its own condition, NOT alongside underruns: a lost turn boundary
+      // is a different fault from a slow link and can happen on a session with zero
+      // underruns. Folding it into `stuttered` would hide it exactly when it is the
+      // only thing wrong.
+      missedTurnEnds: st.missedTurnEnds > 0 ? st.missedTurnEnds : undefined,
+    };
+  }
+
   function logSuspendTransition(extra) {
     try {
+      // Spelled out as three literal keys below rather than spread in from
+      // cushionStats(). A spread would put the names in a helper's return literal
+      // where bug-273-suspend-fields-reach-the-log.test.js cannot see them, and the
+      // fields would be computed, sent, and dropped at the server allowlist with the
+      // guard printing PASS — the fourth occurrence of the bug that guard exists for,
+      // committed inside the comment warning about it. Verified by watching it go RED.
+      const cushion = cushionStats();
       // Q3 (who actually reads this?) — the transition message is the only channel
       // from here to the server log, and the server copies a hand-maintained
       // allowlist off it, so a field added here and nowhere else is computed,
@@ -263,6 +300,9 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         at: Date.now(),
         micEchoCancellation: micGranted ? micGranted.echoCancellation : null,
         micNoiseSuppression: micGranted ? micGranted.noiseSuppression : null,
+        cushionMs: cushion.cushionMs,
+        underruns: cushion.underruns,
+        missedTurnEnds: cushion.missedTurnEnds,
         ...extra,
       });
     } catch (_) { /* logging only — never block the gate */ }
@@ -867,26 +907,15 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (suppressIdleTimer) { clearTimeout(suppressIdleTimer); suppressIdleTimer = null; }
     if (!suppressAudioOut) return;
     suppressAudioOut = false;
-    // BUG-274 step 5, Q3 (who actually reads this?) — pcm-player.js's jitter cushion
-    // computes cushionSec/underruns and, until this line, nothing anywhere called
-    // stats(). A number with no reader is not instrumentation, and the cushion's own
-    // comment claiming a pinned-at-max cushion "is where that shows up" was pointing
-    // at nowhere. This is the only client->server diagnostic channel that already
-    // exists, so the cushion rides it rather than growing a second one.
-    //
-    // Sent only when the link actually stuttered: `undefined` is dropped by
-    // JSON.stringify and then again by the server's `!== undefined` copy, so a clean
-    // session adds no fields. The keys stay written out as literals either way —
-    // bug-273-suspend-fields-reach-the-log.test.js reads this source to find them,
-    // and a key hidden behind a conditional spread would be invisible to it.
-    const st = player ? player.stats() : null;
-    const stuttered = Boolean(st && st.underruns > 0);
+    // The cushion diagnostics used to be added here and were moved to
+    // logSuspendTransition() itself on 2026-08-20: on this line they only ever
+    // reached the log for turns the operator interrupted, which is the least likely
+    // shape of session for the transport to be the fault. They now ride every
+    // transition. Nothing is lost from this line — it still carries them.
     logSuspendTransition({
       reason: 'barge-in-suppression-' + how,
       suppressedChunks: suppressedChunks,
       suppressedMs: suppressStartedAt ? Date.now() - suppressStartedAt : 0,
-      cushionMs: stuttered ? Math.round(st.cushionSec * 1000) : undefined,
-      underruns: stuttered ? st.underruns : undefined,
     });
     suppressedChunks = 0;
     suppressStartedAt = 0;
@@ -940,6 +969,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     onInterruptedMsg = () => {
       bargeBackstop.reset();
       if (player) player.flush();
+      if (player) player.endTurn();
       endAudioOutSuppression('server-interrupted');
     };
     onLiveStateMsg = (msg) => {
@@ -985,7 +1015,13 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // The model turn is over, so there is nothing left to suppress. Also the guard
     // against suppressing the NEXT reply: turn-complete always precedes the next
     // turn's first chunk, so the idle window never has to be the thing that ends it.
-    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); };
+    // BUG-274 step 5b (2026-08-20): the same boundary now also closes the player's
+    // underrun attribution. pcm-player.js grows its jitter cushion only while a turn
+    // is open, because a dry timeline mid-reply is the network and a dry timeline
+    // between replies is the operator talking — and from inside the player those are
+    // identical. Only this frame can separate them. Kept on ONE line: a source-shape
+    // test in bug-274-local-flush-does-not-stop-the-turn.test.js reads this handler.
+    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); if (player) player.endTurn(); };
     onBroadcast('live-audio-out', onAudioOutMsg);
     onBroadcast('live-turn-complete', onTurnCompleteMsg);
     onBroadcast('live-interrupted', onInterruptedMsg);
