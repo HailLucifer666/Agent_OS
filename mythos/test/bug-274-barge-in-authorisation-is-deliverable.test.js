@@ -439,6 +439,82 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
     });
   });
 
+  // ==========================================================================
+  // THE REGRESSION GUARD, added 2026-08-20 at the operator's request: "make sure
+  // this bug is never appearing again."
+  //
+  // Every other case in this file pins a MECHANISM. This one pins the OPERATOR'S
+  // EXPERIENCE, because that is what kept regressing while the mechanisms
+  // individually passed. Interruption has broken five times in this ticket:
+  // authorisation revoked one frame after being granted; two counters unable to
+  // coincide; two floors 2.5x apart; the eager tier reopening the mic WITHOUT
+  // flushing the player; and the sustain outlasting a real interruption. Four of
+  // those five had green tests over the part that broke.
+  //
+  // So this deliberately does NOT assert "PENDING_HOLD_MS is 200". A constant can be
+  // retuned for a good reason, and this behaviour must either survive it or fail on
+  // the same commit. What must hold is: a two-word interruption STOPS THE PLAYBACK.
+  //
+  // playbackStops, not `released`: the step-4 defect released the microphone while
+  // MYTHOS carried on talking, and every counter in this harness called that success.
+  // The operator hears the player stop. Nothing else is the experience.
+  describe('GUARD: a real short interruption must stop the speech', () => {
+    // ~300ms of loud speech — "stop", "wait, no". The levels measured on the
+    // 2026-08-20 session ran 0.1414-0.2144, so OPERATOR_LOUD is representative
+    // rather than generous.
+    const TWO_WORD_BURST = afterProtectedWindow([
+      OPERATOR_LOUD, OPERATOR_LOUD, OPERATOR_LOUD, OPERATOR_DIP, OPERATOR_DIP,
+    ]);
+
+    it('at the SHIPPED tuning, a two-word burst stops playback', async () => {
+      const result = await driveBargeIn(TWO_WORD_BURST);
+      assert.ok(result.playbackStops > 0,
+        'a ~300ms interruption did not stop the player at the shipped constants. This is the '
+        + 'operator complaint that produced Stage 3 and rated 7-8/10 before it: "sometimes it '
+        + 'still is talking and it is not stopping immediately". Do not relax this test — fix '
+        + 'the tuning, and read the Stage 3 entry in BUGS.md first.');
+    });
+
+    it('names the boundary: a 300ms burst lands ONLY at a sustain of 200ms or below', async () => {
+      // MEASURED, not assumed — a first draft of this test asserted the band was
+      // [150,200,250,300] and was wrong, which is the whole reason it is written as a
+      // sweep instead of a single value. 350 is included because it is what shipped
+      // broken; this records how far wrong it was.
+      const landedAt = [];
+      for (const pendingHoldMs of [150, 200, 250, 300, 350]) {
+        const r = await driveBargeIn(TWO_WORD_BURST, { policy: { pendingHoldMs } });
+        if (r.playbackStops > 0) landedAt.push(pendingHoldMs);
+      }
+      assert.deepEqual(landedAt, [150, 200],
+        'the band in which a two-word interruption still stops MYTHOS has moved. The shipped '
+        + '200 sits at the TOP of this band — 250 already loses a 300ms interruption — so any '
+        + 'increase at all costs the operator the short barge-ins Stage 3 was pulled to fix.');
+    });
+
+    it('the real floor on interruption length is the BACKSTOP, not the sustain', async () => {
+      // The finding that fell out of the sweep above, and it constrains every future
+      // retune of PENDING_HOLD_MS: a 200ms burst lands at NO sustain value, not even
+      // 150ms. barge-in-backstop.js delivers on every third frame, so nothing shorter
+      // than 300ms of speech can ever reach the stop door however the policy is tuned.
+      //
+      // Recorded so the next person chasing "very short interruptions do not work"
+      // does not spend a session tuning the sustain, which cannot reach it. That fix
+      // lives in the backstop cadence, and it is NOT attempted here — the cadence is
+      // 3 frames because a single loud frame is bleed, and loosening it re-opens the
+      // self-interruption failure this ticket has already paid for twice.
+      const ONE_WORD_BURST = afterProtectedWindow([
+        OPERATOR_LOUD, OPERATOR_LOUD, OPERATOR_DIP, OPERATOR_DIP,
+      ]);
+      for (const pendingHoldMs of [150, 200, 250, 300, 350]) {
+        const r = await driveBargeIn(ONE_WORD_BURST, { policy: { pendingHoldMs } });
+        assert.equal(r.playbackStops, 0,
+          `a 200ms burst stopped playback at pendingHoldMs=${pendingHoldMs}. If that is now `
+          + 'possible the backstop cadence changed — check self-interruption on the next live '
+          + 'session before celebrating, because a 2-frame trigger is what bleed looks like.');
+      }
+    });
+  });
+
   // THIS TEST FLIPPED, AND IT WAS BUILT TO. Its previous form asserted that ordinary
   // syllable-spaced speech (300ms loud, 100ms dip, repeating) could NEVER authorise,
   // because PENDING reset on each dip and 350ms was never reached — recorded as a
