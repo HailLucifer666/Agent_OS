@@ -142,4 +142,65 @@ describe('BUG-274 T2 — provider files do not assert licence facts that went st
     assert.deepEqual(offenders, [],
       'state the licence FACTS and point at the 6.5 gate; do not rule on them');
   });
+
+  // 2026-08-20 — THE SWEEP ABOVE STOPS AT `providers/`, AND THAT IS HOW BOTH T1 AND T2
+  // SURVIVED IN THE ONE FILE EVERY NEW INSTALL COPIES.
+  //
+  // `.env.example` is not documentation, it is the template a fresh clone starts from,
+  // and root CLAUDE.md makes it the binding record of supported config for an
+  // open-source user. It carried BOTH defects this ticket had already fixed elsewhere:
+  // its worked example read `VOICE_TTS_CHAIN=gemini,edge,piper` (the exact chain T1
+  // replaced — and an explicit override beats a derived default, so copying it reverts
+  // T1 on the spot), and it repeated T2's corrected claim that piper is "MIT + open
+  // voices. The shippable one."
+  //
+  // Same invariant broken twice, so this is the assertion rather than a third instance
+  // fix: the guard now covers the template as well as the code. Q6, and the operator's
+  // own .env was the untracked third copy — a config file a test cannot read, which is
+  // why the tracked one has to be pinned here.
+  describe('and the template a fresh clone copies says the same thing as the code', () => {
+    const EXAMPLE = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
+    // Q1 — WHAT ELSE MATCHES THIS? Both matchers here were wrong on their first draft,
+    // in opposite directions, and the file caught them:
+    //   - `([a-z,\s]+)` also matched the commented-out `# VOICE_TTS_CHAIN=` placeholder,
+    //     because `\s` matches the CRLF line ending, so an EMPTY value parsed as a chain
+    //     with no kokoro in it and failed. A worked example must start with a letter.
+    //   - a bare doesNotMatch on the stale phrase fired on this suite's OWN historical
+    //     note ("this line used to read ..."), i.e. on the correction rather than on the
+    //     defect. Recording what a claim used to say is how the next reader knows why it
+    //     changed; the test must catch the file ASSERTING it, not MENTIONING it.
+    const lines = EXAMPLE.split(/\r?\n/);
+    const exampleChains = lines
+      .map((l) => (l.match(/^#?\s*VOICE_TTS_CHAIN=([a-z][a-z,]*)/) || [])[1])
+      .filter(Boolean);
+    // A line quoting the old wording must say so on the same line.
+    const HISTORICAL = /used to read|corrected|no longer|used to say/i;
+    const staleClaimLines = lines.filter(
+      (l) => /MIT \+ open voices|The shippable one/i.test(l) && !HISTORICAL.test(l));
+
+    it('does not hand a fresh clone the pre-T1 chain as its worked example', () => {
+      assert.ok(exampleChains.length, 'the example must still show a chain, or there is nothing to check');
+      for (const chain of exampleChains) {
+        assert.ok(order(chain).includes('kokoro'),
+          'this example is copied verbatim into a real .env and then beats the derived '
+          + 'default — omitting kokoro here silently reverts T1 for every new install');
+        assert.ok(before(chain, 'kokoro', 'edge') && before(chain, 'kokoro', 'piper'),
+          'and it must show the same ORDER voice-defaults.js derives, not just the same members');
+      }
+    });
+
+    it('does not repeat the stale Piper licence claim that T2 corrected in code', () => {
+      assert.deepEqual(staleClaimLines, [],
+        'a line stating this as current fact is the defect; quoting it as history is the fix');
+      // And it carries the facts that replaced it, so the next reader is not left
+      // with a gap where a wrong answer used to be.
+      assert.match(EXAMPLE, /archiv/i, 'upstream rhasspy/piper being archived is the load-bearing fact');
+      assert.match(EXAMPLE, /GPL/, 'and that the maintained fork is GPL-licensed');
+    });
+
+    it('does not declare anything safe to sell — the rule that applies to every tracked file', () => {
+      assert.doesNotMatch(EXAMPLE, /usable in a product that is sold|safe to sell|cleared for commercial/i,
+        'CLAUDE.md: a confident legal conclusion in a tracked file is a lawyer\'s call, not ours');
+    });
+  });
 });
