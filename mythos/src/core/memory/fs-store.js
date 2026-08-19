@@ -19,6 +19,98 @@ const { dayKey } = require('../util/day-key');
 // stamp exist today, read unchanged, and there is no migration machinery
 // (per repo YAGNI).
 
+// Read granularity for readTailLines. Big enough that a normal `limit` is
+// satisfied by the first read, small enough that the worst case stays bounded.
+const TAIL_CHUNK_BYTES = 256 * 1024;
+// Largest single line readTailLines will assemble before abandoning a file. A
+// JSONL file containing no newline at all would otherwise defeat the memory
+// bound this function exists to provide.
+const MAX_LINE_BYTES = 4 * 1024 * 1024;
+const LF = 0x0A;
+
+// Reads JSONL records from the END of one file, newest first, and stops as soon
+// as opts.out holds `limit` matched records. Pushes into opts.out so a caller
+// walking several files accumulates across them — which is why `limit` is the
+// caller's TOTAL target and not a per-file budget.
+//
+// Returns { bytesRead, fileSize } — not decoration. It is how a test proves the
+// whole file was not read (bytesRead << fileSize), and the only cheap way to
+// see that a query paid for a 128MB day file to answer a 50-row question.
+function readTailLines(fullPath, opts) {
+  const limit = opts.limit;
+  const match = opts.match;
+  const out = opts.out;
+  const onCorrupt = opts.onCorrupt;
+  const chunkBytes = opts.chunkBytes || TAIL_CHUNK_BYTES;
+
+  let fd;
+  try {
+    fd = fs.openSync(fullPath, 'r');
+  } catch (err) {
+    // Same disposition readText has: a missing file is empty, anything else is
+    // a real failure and must not be swallowed into "no records".
+    if (err.code === 'ENOENT') return { bytesRead: 0, fileSize: 0 };
+    throw err;
+  }
+  try {
+    const fileSize = fs.fstatSync(fd).size;
+    let pos = fileSize;
+    let bytesRead = 0;
+    // Bytes of a record whose start lies in a chunk not yet read.
+    let carry = null;
+
+    function take(lineBuf, byteOffset) {
+      const text = lineBuf.toString('utf8').trim();
+      if (!text) return;   // trailing newline, or a blank line
+      let entry;
+      try {
+        entry = JSON.parse(text);
+      } catch (_) {
+        if (onCorrupt) onCorrupt(byteOffset);
+        return;
+      }
+      if (match(entry)) out.push(entry);
+    }
+
+    while (pos > 0 && out.length < limit) {
+      const len = Math.min(chunkBytes, pos);
+      const buf = Buffer.allocUnsafe(len);
+      fs.readSync(fd, buf, 0, len, pos - len);
+      const chunkStart = pos - len;
+      pos = chunkStart;
+      bytesRead += len;
+
+      // The scan stays at the BYTE level on purpose: 0x0A never occurs inside a
+      // multi-byte UTF-8 sequence, so splitting on it cannot cut a character in
+      // half, and only complete records are ever decoded. Decoding each chunk
+      // to a string first would corrupt any record straddling a chunk boundary.
+      const block = carry ? Buffer.concat([buf, carry]) : buf;
+      carry = null;
+      let end = block.length;
+      for (let i = block.length - 1; i >= 0; i--) {
+        if (block[i] !== LF) continue;
+        take(block.subarray(i + 1, end), chunkStart + i + 1);
+        end = i;
+        if (out.length >= limit) return { bytesRead: bytesRead, fileSize: fileSize };
+      }
+      if (end > 0) {
+        if (end > MAX_LINE_BYTES) {
+          if (onCorrupt) onCorrupt(chunkStart);
+          return { bytesRead: bytesRead, fileSize: fileSize };
+        }
+        // Copied, not aliased: `block` may be the chunk buffer itself.
+        carry = Buffer.from(block.subarray(0, end));
+      }
+      // At the start of the file a carry is not a partial record — it is the
+      // first one, and no earlier chunk will ever complete it.
+      if (pos === 0 && carry) { take(carry, 0); carry = null; }
+    }
+    return { bytesRead: bytesRead, fileSize: fileSize };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function createFsStore(vaultRootFn, bus) {
   const root = typeof vaultRootFn === 'function' ? vaultRootFn : () => vaultRootFn;
   const pathLocks = new Map(); // relPath -> tail promise (D-21)
@@ -188,6 +280,23 @@ function createFsStore(vaultRootFn, bus) {
   // stops as soon as `limit` entries satisfy `match`. Never loads the whole
   // directory history (vault/Audit grows unbounded — reading it all froze the
   // event loop for seconds per panel open).
+  //
+  // 2026-08-19: it stopped short of the whole DIRECTORY and then read each
+  // FILE entire. `readText` + `split` on one day file cost **856ms of blocked
+  // event loop and 217MB RSS** on the operator's vault — measured, not
+  // theorised — because a healer no-match storm on 2026-07-09 (776,913 rows,
+  // before that storm was damped) left a single 128MB file in Audit/.
+  //
+  // What made it latent instead of obvious: the reverse walk only reaches an
+  // old file when the RECENT files cannot satisfy `limit`. So the briefing's
+  // `{decision:'heal', limit:500}` query gets slower the QUIETER the healer
+  // is — it stops at 2026-07-23 in 17ms today, and one healthy month turns
+  // that into the 856ms figure, at boot, in front of the spoken briefing.
+  // A cost that grows as the system gets healthier will not show up in
+  // testing, which is why this is fixed rather than noted.
+  //
+  // readTailLines reads each file's tail in bounded chunks, so the cost tracks
+  // what the caller asked for instead of what the file happens to weigh.
   function readDirLinesReverse(relDir, opts) {
     opts = opts || {};
     const limit = opts.limit || 100;
@@ -196,18 +305,28 @@ function createFsStore(vaultRootFn, bus) {
     files.sort(function(a, b) { return b.name.localeCompare(a.name); }); // newest first
     const out = [];
     for (let i = 0; i < files.length && out.length < limit; i++) {
-      const raw = readText(files[i].path, '');
-      if (!raw) continue;
-      const lines = raw.split('\n');
-      for (let j = lines.length - 1; j >= 0 && out.length < limit; j--) {
-        if (!lines[j].trim()) continue;
-        try {
-          const entry = JSON.parse(lines[j]);
-          if (match(entry)) out.push(entry);
-        } catch (_) {
-          if (bus) bus.emit('health.anomaly', { kind: 'corrupt-line', path: files[i].path, line: j });
-        }
-      }
+      const relPath = files[i].path;
+      readTailLines(files[i].full, {
+        // The TOTAL target, not this file's remainder: readTailLines measures
+        // progress as `out.length`, and `out` already holds what earlier files
+        // contributed. Passing `limit - out.length` made the very first
+        // comparison `out.length >= limit` true for every file after the first,
+        // so each returned without reading a byte — a 50-row query answered
+        // with 28 rows and no error anywhere.
+        limit: limit,
+        match: match,
+        out: out,
+        chunkBytes: opts.chunkBytes,
+        onCorrupt: function(byteOffset) {
+          // `line` — a FORWARD line index — is deliberately not reported here.
+          // Knowing it would mean reading the file from the start, which is the
+          // exact cost this function exists to avoid. Nothing consumes the
+          // field (its only readers, memory.test.js and
+          // chaos-memory-corrupt.test.js, assert on `kind`), so the byte offset
+          // replaces it rather than sitting beside a fabricated line number.
+          if (bus) bus.emit('health.anomaly', { kind: 'corrupt-line', path: relPath, byteOffset: byteOffset });
+        },
+      });
     }
     return out; // already newest-first
   }
@@ -284,4 +403,4 @@ function createFsStore(vaultRootFn, bus) {
   };
 }
 
-module.exports = { createFsStore };
+module.exports = { createFsStore, _readTailLines: readTailLines, _TAIL_CHUNK_BYTES: TAIL_CHUNK_BYTES };

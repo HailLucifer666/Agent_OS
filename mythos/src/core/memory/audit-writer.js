@@ -32,6 +32,32 @@ function createAuditWriter({ fs, config, bus, logger }) {
     return copy;
   }
 
+  // SYNCHRONOUS ON PURPOSE — do not make this async or queue it.
+  //
+  // The 2026-08-19 audit proposed deferring T0–T2 writes to an async queue to
+  // get the blocking appendFileSync off the voice hot path, keeping the sync
+  // path only for the tier >= 3 fail-closed check. Measured before building it,
+  // on the operator's real vault:
+  //
+  //   one write                    0.169ms p50, 0.256ms p95, 0.826ms max
+  //   with a 52MB day file open    0.195ms mean, 0.441ms p99
+  //   burst of 60 (one engagement
+  //   executor pass, back to back) 9.28ms total
+  //
+  // A voice turn makes one to three leash.check() calls, so the whole cost this
+  // would remove is well under a millisecond out of a turn that spends hundreds
+  // of milliseconds in STT, the brain lane and TTS. The thing it would put at
+  // risk is leash.js's failClosedIfUnwritable, which reads `writeResult.ok ===
+  // false` on the same tick: return a promise here and that comparison is false
+  // forever, so every tier >= 3 action with an unwritable audit trail would be
+  // ALLOWED instead of denied — fail-open, silently, with the tests still green
+  // because they assert on the reason string and not on the timing.
+  //
+  // Buying 0.2ms with that is a bad trade, so it was not built. What the
+  // measurement DID find is in fs-store.js's readDirLinesReverse: the cost was
+  // on the read side (856ms, 217MB RSS), not here. See
+  // test/audit-write-sync-contract.test.js, which pins this disposition so a
+  // future async refactor fails a test instead of quietly disarming the gate.
   function write(entry) {
     if (!entry.id) entry.id = 'aud-' + crypto.randomBytes(6).toString('hex');
     if (!entry.ts) entry.ts = Date.now();

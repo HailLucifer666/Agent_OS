@@ -1,7 +1,7 @@
 # MYTHOS — Complete Bug Registry
 
-<!-- BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed immediately after this
-     header so the handoff is the first thing a new session reads. -->
+<!-- BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed immediately
+     after this header so the handoff is the first thing a new session reads. -->
 
 Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Episodic conversation logs (vault/Episodic/)
@@ -11,6 +11,81 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Code comments (D-NN drift items, SPEC/REALITY GAPs)
 - Git commit history
 - Live session bug reports
+
+---
+
+## BUG-277 — the audit reader froze harder the healthier the system got (FIXED 2026-08-19)
+
+**Found by measuring an audit finding instead of implementing it.** The 2026-08-19 whole-repo
+audit filed M2 as "blocking `appendFileSync` on the voice hot path" and proposed an async
+queue for T0–T2 audit writes, keeping the synchronous path only for the tier ≥ 3 fail-closed
+check. The write cost was measured first, on the operator's real vault:
+
+| what | cost |
+|---|---|
+| one `appendLine` | 0.169ms p50, 0.256ms p95, 0.826ms max |
+| same, with a 52MB day file | 0.195ms mean, 0.441ms p99 |
+| burst of 60 (one engagement-executor pass) | 9.28ms total |
+
+A voice turn makes one to three `leash.check()` calls. **The premise did not hold** — the
+saving is a fraction of a millisecond out of a turn that spends hundreds of milliseconds in
+STT, the brain lane and TTS, and the cost would have been `failClosedIfUnwritable`, which
+reads `writeResult.ok === false` on the same tick. Deferring the write makes that comparison
+false forever: every T3/T4 action with an unwritable audit trail would be **allowed** instead
+of denied, silently, with the existing leash tests still green because they assert on the
+reason string and not on timing. Not built. The disposition is pinned in
+`audit-writer.js` and in `test/audit-write-sync-contract.test.js`, whose four tests all fail
+if `write()` is made `async`.
+
+**The real cost was on the READ side, one function away.** `fs-store.js`'s
+`readDirLinesReverse` stopped short of reading the whole directory and then read each
+candidate FILE whole (`readText` + `split`). On this vault that is **856ms of blocked event
+loop and 217MB RSS**, because a healer no-match storm on 2026-07-09 — 776,913 rows, before
+that storm was damped on 2026-08-14 — left a single **127MB** day file in `vault/Audit/`.
+99.6% of all 780,158 audit rows in this vault are that one storm.
+
+**Why it stayed invisible: the cost rises as the system gets healthier.** The reverse walk
+only reaches an old file when the RECENT files cannot satisfy `limit`. The briefing's
+`{decision:'heal', limit:500}` at boot stops at 2026-07-23 today and takes 17ms. Let the
+healer stay quiet for a month and the same query walks back into the 127MB file. Nothing in a
+test run or a short session would ever surface that, and a 186MB allocation spike would also
+trip `monitor.js`'s 50MB `MEMORY_GROWTH_BYTES` threshold — the immune system reacting to the
+audit reader.
+
+BUG (2026-08-15) had already named this exact function: *"`fs-store.js:186-189` already
+documents this exact class of freeze for the audit reader; the episodic reader was its unfixed
+twin."* The twin was fixed then; the original was not. This closes it.
+
+**Fix.** `readTailLines` reads each file's tail in bounded 256KB chunks, scanning for the
+`0x0A` byte rather than decoding chunks to strings — 0x0A cannot occur inside a multi-byte
+UTF-8 sequence, so only complete records are ever decoded and a record straddling a chunk
+boundary cannot be corrupted. Measured A/B against the pre-fix implementation in one process,
+with exact row-for-row parity on every case:
+
+| query | before | after |
+|---|---|---|
+| `{decision:'heal', limit:9100}` (reaches the 127MB file) | 283ms, +164MB | **31ms, +6MB** |
+| 500 rows out of the 127MB file | reads 127MB | **reads 256KB (0.197%)** |
+| `{limit:50}` audit panel | 2ms | 1ms |
+| `{decision:'heal', limit:500}` briefing | 8ms | 10ms |
+| a filter matching nothing (genuine full scan, no caller makes it) | 822ms, +186MB | 1138ms, **+1MB** |
+
+The last row is the honest cost: a scan that truly must read every byte is ~1.4x slower,
+because per-record decoding replaces one bulk decode. It buys a 186x reduction in peak
+allocation on the same case, and no production caller makes that query — all four
+(`briefing.js`, two in `routes/memory.js`, `from-memory.js`'s incident scan) pass a `limit`.
+
+**Two bugs in the first version of the fix**, both found by measuring rather than by review,
+and both now pinned by tests: the per-file call was passed `limit - out.length` while
+`readTailLines` compares against the shared accumulator's total, so every file after the first
+returned without reading a byte (a 50-row query answered 28, silently); and the corrupt-line
+anomaly can no longer report a forward line index, which would require reading the whole file
+— it reports `byteOffset` instead. Nothing consumes that field; its only readers assert on
+`kind`.
+
+**Not touched, deliberately:** the 127MB file itself. It is operator data, `consolidate()`
+archives rather than deletes, and retention is 365 days. Reducing `AUDIT_RETENTION_DAYS` or
+archiving that day is an operator call, not a session's.
 
 ---
 
