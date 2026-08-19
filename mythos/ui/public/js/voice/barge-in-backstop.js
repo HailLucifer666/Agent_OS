@@ -78,6 +78,25 @@ export const BACKSTOP_HOLD_FRAMES = 3;
 export const BACKSTOP_RELEASE_RMS_THRESHOLD = 0.05;
 export const BACKSTOP_RELEASE_HOLD_FRAMES = 3;
 
+// "A release must never double as a flush" (see the tier comment above) was
+// stated in prose and enforced nowhere — and it is not merely a preference, it
+// is load-bearing in observe() below. The once-per-run latch clears on
+// `lastLevel <= releaseRms` precisely BECAUSE the release threshold is the lower
+// of the two; invert them and the latch clears on frames that are still above
+// the flush bar, so onRelease can fire repeatedly inside a single run and the
+// documented at-most-once contract is gone.
+//
+// It is reachable without touching this file. s2s-bridge.js's bargeTuning()
+// reads MYTHOS_BARGE_RMS and MYTHOS_BARGE_RELEASE_RMS from localStorage and
+// passed both straight through with no ordering check, so an operator raising
+// the release bar to quiet a noisy room — the exact thing that override exists
+// for — could silently put it at or above the flush bar.
+//
+// The shipped ratio, kept so a clamp preserves the DESIGNED relationship rather
+// than inventing an epsilon: 0.05 / 0.056 = 0.893.
+export const BACKSTOP_RELEASE_TO_FLUSH_RATIO =
+  BACKSTOP_RELEASE_RMS_THRESHOLD / BACKSTOP_RMS_THRESHOLD;
+
 // Int16 little-endian PCM (what pcm-capture-worklet.js emits) -> RMS in the
 // same -1..1 scale voice-loop.js's rms() produces from its Uint8 analyser data,
 // so the thresholds above mean the same thing in both paths.
@@ -97,9 +116,23 @@ export function rmsFromPcm16(buffer) {
   return Math.sqrt(sum / samples.length);
 }
 
-// onFlush is called at most once per sustained-loud run. It is the caller's
-// player.flush() — which carries its own TAIL_GUARD_SEC, so a near-finished
-// sentence still gets to finish rather than losing its last word (BUG-061).
+// onFlush RE-ARMS. It is called once per `holdFrames` of continuous loud audio,
+// NOT once per run — this comment used to claim "at most once per sustained-loud
+// run" and that was simply untrue: decideBargeIn() returns
+// `newBargeAboveCount: 0` when it fires, so the counter restarts and a long run
+// flushes again every holdFrames. Measured 2026-08-19: 12 loud frames at the
+// shipped 3-frame hold produce FOUR onFlush calls, not one.
+//
+// Left as it is, because the behaviour is harmless where onRelease's would not
+// have been: player.flush() carries its own TAIL_GUARD_SEC and is a no-op on an
+// already-empty queue, so the second and later calls in a run do nothing. Only
+// the false contract is fixed. onRelease is the tier that genuinely needs
+// at-most-once (it reopens the mic path), and that one IS latched, deliberately,
+// by `releasedThisRun` below.
+//
+// It is the caller's player.flush() — which carries its own TAIL_GUARD_SEC, so a
+// near-finished sentence still gets to finish rather than losing its last word
+// (BUG-061).
 //
 // onRelease is the eager tier: also at most once per run, and it must NOT stop
 // playback. Its only job is to open s2s-bridge's half-duplex gate so the
@@ -114,6 +147,24 @@ export function createBargeInBackstop({
     ? releaseThreshold : BACKSTOP_RELEASE_RMS_THRESHOLD;
   const releaseTicks = typeof releaseHoldFrames === 'number'
     ? releaseHoldFrames : BACKSTOP_RELEASE_HOLD_FRAMES;
+  // NO ORDERING CLAMP HERE, and the reason is worth keeping. 2026-08-19 (backlog
+  // M5) added one — refusing a release threshold at or above the flush threshold
+  // and pulling it back under — on the reasoning that observe()'s once-per-run
+  // latch depends on the release tier being the lower of the two. That reasoning
+  // was WRONG, and a probe against this module said so: the latch clears on
+  // `lastLevel <= releaseRms` and fires on `lastLevel > releaseRms`, so the two
+  // conditions are mutually exclusive on any single frame no matter where the
+  // FLUSH threshold sits. onRelease fired exactly once per run at the defaults,
+  // with the tiers inverted and a level above both, and with a level between
+  // them.
+  //
+  // The clamp also cost a real capability: MYTHOS_BARGE_RELEASE_RMS exists so an
+  // operator can walk the eager tier back, and setting it deliberately
+  // unreachable (0.9) is how you turn it off. The clamp rewrote that to ~0.02 and
+  // made it fire on nearly every frame — the opposite of the request. An inverted
+  // ordering does not corrupt any state; it just makes the release tier
+  // unreachable, which is exactly what an operator setting it high is asking for.
+  // See test/barge-in-tier-ordering.test.js, which pins both facts.
   let aboveCount = 0;
   let releaseCount = 0;
   let releasedThisRun = false;
@@ -181,5 +232,15 @@ export function createBargeInBackstop({
     pendingFrames: () => aboveCount,
     pendingReleaseFrames: () => releaseCount,
     lastLevel: () => lastLevel,
+    // The thresholds actually in force, and whether a clamp was applied. Same
+    // reasoning as lastLevel above: "the threshold is wrong" was only ever
+    // inferable from the absence of flushes, so the values a session ran with
+    // must be readable rather than reconstructed from which overrides were set.
+    thresholds: () => ({
+      flushRms: rmsThreshold,
+      flushHoldFrames: ticks,
+      releaseRms,
+      releaseHoldFrames: releaseTicks,
+    }),
   };
 }
