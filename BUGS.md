@@ -115,6 +115,53 @@ on a monthly basis"*. $80/month is not cheaper than $79/year. The unit mixing ma
 transcription artefact of spoken output, but the comparison is wrong as stated and the
 operator was given a purchasing recommendation based on it.
 
+### H8 (P1) — tool-outcome announcements are injected into turns that are then killed before speaking
+
+Found while investigating an unrelated metric on 2026-08-19, and it is a concrete mechanism
+for "it doesn't tell me what it found". In the `pid=17536` run, `live.text-injected` fired
+**12 times: 4 `proactive-speak`, 7 `late-outcome`, 1 `late-for-turn`.** Cross-referencing
+`live.turn-parts` for the same run:
+
+```
+turnId sysInit audioIn interrupted  scFields
+     7    true      39        true   interrupted,turnComplete
+     8    true      15        true   interrupted,turnComplete
+    13    true      58        true   inputTranscription,interrupted,turnComplete
+    14    true     181        true   inputTranscription,interrupted,turnComplete
+    17    true     237        true   inputTranscription,interrupted,turnComplete
+```
+
+**`interrupted,turnComplete` with no `modelTurn` and no `outputTranscription` means the turn
+never produced any audio.** Five system-initiated turns opened, found the operator already
+talking (`audioIn` 39-237), and were killed by Gemini before speaking a word.
+
+Suppressing a proactive remark while the operator talks is **correct**. But `late-outcome`
+is the path that reports what a tool actually returned, and **7 of the 12 injections were
+that kind.** If those land in turns that get suppressed, tool results are silently dropped —
+the operator asked a question, the tool answered, and the answer never reached them. That
+belongs with H6 (speaking before the result arrives): both are the tool-result narration
+path racing the conversation, and together they are a better explanation of the operator's
+experience than "the model makes things up".
+
+**Check first:** whether a suppressed `late-outcome` is retried, queued, or lost. If lost,
+that is a data-loss bug rather than a hallucination one, and it should be split out of this
+ticket with its own number.
+
+### A measurement note, so the next session is not misled the way this one nearly was
+
+`verify-voice-session.js`'s interruption criterion read **71.4%** on this session and was
+briefly taken as evidence that BUG-274's floor change had caused a regression. It had not,
+and could not have: the barge-in floor decides whether to stop **playback**, while what
+reaches Gemini's VAD is gated by `live-noise-gate.js`'s separate and unchanged floor.
+
+The criterion counted three different things as one: turns the operator successfully
+interrupted, turns suppressed **before speaking**, and genuine mid-speech self-interruption.
+It now subtracts the first two and reports an upper bound — the same session reads
+**11/20 interrupted, 5 having begun speaking, 6 never spoken, 1 an operator barge-in, so at
+most 20% genuinely self-caused.** Still above the 15% target, and now a number that can be
+acted on. Fully separating operator-caused server-side interrupts from self-interruption
+still needs a signal the log does not carry.
+
 ### Where to look, and what NOT to assume
 
 - The transcript: `%APPDATA%\MYTHOS\vault\Conversation\session.json` — raw results and

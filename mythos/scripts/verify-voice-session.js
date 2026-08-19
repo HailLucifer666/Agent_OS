@@ -218,11 +218,53 @@ function main() {
   // instead of scoring the session green off a number it could not read.
   const sawScFields = turns.some((e) => typeof e.scFields === 'string' && e.scFields);
   const pct = turns.length ? Math.round((interruptedCount / turns.length) * 1000) / 10 : null;
-  check('self-interruption under 15% of turns',
+
+  // BUG-275 / BUG-274 step 3: THIS NUMBER IS AN UPPER BOUND, NOT SELF-INTERRUPTION.
+  //
+  // `interrupted` in scFields means Gemini cut its own generation. It does NOT say who
+  // caused it, and a turn the OPERATOR successfully interrupted lands here too. On
+  // 2026-08-19 that made a 71.4% reading uninterpretable in a session whose entire
+  // purpose was interrupting MYTHOS — and it was briefly read as this ticket's floor
+  // change having caused a regression, which it cannot have: the barge-in floor decides
+  // whether to stop PLAYBACK, while what reaches Gemini's VAD is gated by
+  // live-noise-gate.js's separate (unchanged) floor.
+  //
+  // Fully separating the two needs a signal saying who caused each interrupt, and the
+  // log does not carry one. What it DOES carry is the count of interrupts MYTHOS's own
+  // barge-in path issued, and every one of those is operator-caused by construction. So
+  // that count is subtracted to give an upper bound, and the label says "at most" rather
+  // than claiming a figure it cannot support. Joining two numbers already in the log is
+  // not the same as inventing the missing signal.
+  // AND a third correction, from the 2026-08-19 table: a turn whose scFields are just
+  // `interrupted,turnComplete` — no `modelTurn`, no `outputTranscription` — NEVER SPOKE.
+  // Gemini killed it before generating any audio. Six of this session's eleven were that
+  // shape, five of them `systemInitiated: true`: MYTHOS injecting proactive-speak or
+  // late-outcome text, opening a turn while the operator was already talking (audioIn
+  // 39-237), and being suppressed at birth. That is arguably CORRECT behaviour — not
+  // talking over the operator — and counting it as self-interruption is what turned a
+  // healthy session into a 71.4% alarm. "Interrupted while actually speaking" is the
+  // event this criterion is named for, so `modelTurn` is now required.
+  const spokeThenCut = interruptedTurns.filter((e) => /(^|,)modelTurn(,|$)/.test(String(e.scFields || ''))).length;
+  const neverSpoke = interruptedTurns.length - spokeThenCut;
+  const bargeReleases = of('voice.capture-suspend')
+    .filter((e) => String(e.reason || '').indexOf('barge-in') === 0).length;
+  const selfMax = Math.max(0, spokeThenCut - bargeReleases);
+  const selfPct = turns.length ? Math.round((selfMax / turns.length) * 1000) / 10 : null;
+  const attribution = ` — of those, ${spokeThenCut} had begun speaking and ${neverSpoke} never `
+    + `produced audio (suppressed before they spoke, which is not self-interruption); `
+    + `${bargeReleases} were the operator's own barge-in landing, so at most `
+    + `${selfMax}/${turns.length} = ${selfPct}% is genuinely self-caused`;
+
+  // The label KEEPS its original prefix on purpose. Renaming it outright broke three
+  // assertions in test/bug-272-verify-voice-session.test.js that match
+  // /\[FAIL\] self-interruption/ — and every one of those cases still behaved correctly,
+  // including the fabricated-pass guard. The behaviour was never in question, only the
+  // string, so the string stays greppable and the qualifier is appended.
+  check('self-interruption under 15% of turns (upper bound)',
     pct === null || (!sawScFields && interruptedMsgs.length === 0) ? false : pct < 15,
     turns.length
       ? (sawScFields || interruptedMsgs.length
-        ? `${interruptedCount}/${turns.length} turns = ${pct}%`
+        ? `${interruptedCount}/${turns.length} turns = ${pct}%${attribution}`
         : `${turns.length} turns but no scFields on any of them — cannot compute, and 0% here `
           + `would be a fabricated pass`)
       : 'no live.turn-parts entries — cannot compute; was the session actually spoken?',
