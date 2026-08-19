@@ -24,8 +24,10 @@ in it that does **not** require a live microphone, a signing certificate or a se
 now either shipped or measured-and-refuted. What was still open and actionable without them
 was **step 6.6**, and it is now closed on the mechanical side.
 
-**Shipped this session:** `scripts/audit-licences.js` (+ `--check`) and
-`test/licence-audit.test.js`. The release gate's licence line had no oracle — the notices
+**Shipped this session (`eb4cf22`):** `scripts/audit-licences.js` (+ `--check`) and
+`test/licence-audit.test.js`. Suite **5179/5179, 0 fail, 0 skipped**. Merged-order position
+**UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐)** — 6.6's mechanical half is done and repeatable, but the
+step cannot be ticked while the legal call is outstanding, and 6.5 still needs T3. The release gate's licence line had no oracle — the notices
 file opened with "npm dependency licenses are not repeated here", so the tree had never been
 enumerated. It is now: **265 shipped production packages**, read from the two lockfiles'
 non-dev entries because electron-builder prunes devDependencies and packs off disk.
