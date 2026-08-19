@@ -606,6 +606,10 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
 
   async function onDiagnosed(event) {
     const diagnosis = event.payload;
+    // diagnostician.js:57 preserves the originating anomaly here verbatim. Absent when a
+    // diagnosis is raised directly (cortex/index.js emits health.diagnosed itself), hence
+    // the default rather than an assumption. See the BUG-278 note on the emit below.
+    const evidence = diagnosis.evidence || {};
     const playbook = activePlaybooks.find(function(p) { return matches(p, diagnosis); });
 
     let outcome, detail, playbookId;
@@ -707,6 +711,32 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
       playbookId: playbookId, kind: diagnosis.kind, target: diagnosis.target, outcome: outcome, detail: detail,
       title: playbook ? (playbook.title || null) : null,
       actions: playbook ? playbook.then.map(function(s) { return s.do; }) : [],
+      // BUG-278 (2026-08-20) — THE TWO FIELDS THAT DECIDE WHETHER A REMEDY IS EVEN
+      // LEGITIMATE WERE DROPPED HERE, WHICH MADE BUG-273 C2 INERT ON THE REAL PATH.
+      //
+      // C2 gave the gmail sensor a `needsOperator: true` flag ("this fault is terminal,
+      // human-only, do not guess a mechanical remedy") and a `reason` carrying the whole
+      // operator instruction. Both are on the anomaly; diagnostician.js:57 keeps the
+      // anomaly under `evidence`; this emit forwarded neither. So immune/explainer.js —
+      // the only reader of the no-match path, and the only module those two fields exist
+      // for — saw `undefined` for both. Measured on the wired chain (bus -> diagnostician
+      // -> healer -> explainer), 2026-08-20: needsOperator absent, reason absent, brain
+      // asked 1 time where C2 intended 0, and the prompt still offered probe_provider for
+      // a revoked Google OAuth token. That is the 2026-08-20 session-audit finding
+      // verbatim, one day after C2 shipped. The operator heard "I do not yet know the
+      // cause" about an anomaly that had shipped a sentence naming the fix.
+      //
+      // Why no test caught it: every C2 test calls explainer._onHealed() with these
+      // fields injected — a fixture more generous than the wire. The guard against a
+      // repeat asserts them ON the bus (bug-278-remedy-fit-must-survive-the-wire.test.js).
+      //
+      // Q8 — the anomaly's own `detail` is deliberately NOT forwarded. In THIS payload
+      // `detail` means "what the heal action did" and is null by definition on no-match;
+      // overloading it with the anomaly's detail would corrupt the field the audit writer
+      // below already records with that meaning. The explainer does not need it: the
+      // condition sentence is built from kind/target/reason.
+      needsOperator: evidence.needsOperator === true,
+      reason: evidence.reason || null,
       // B2: the bus id of the health.anomaly that started this, forwarded from
       // the diagnostician so the anomaly record and this verdict record share a
       // key. Null when a diagnosis was raised directly (cortex/index.js emits

@@ -1,7 +1,7 @@
 # MYTHOS — Complete Bug Registry
 
-<!-- BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed immediately
-     after this header so the handoff is the first thing a new session reads. -->
+<!-- BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed
+     immediately after this header so the handoff is the first thing a new session reads. -->
 
 Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Episodic conversation logs (vault/Episodic/)
@@ -11,6 +11,141 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Code comments (D-NN drift items, SPEC/REALITY GAPs)
 - Git commit history
 - Live session bug reports
+
+---
+
+## BUG-278 — BUG-273 C2 shipped, passed its tests, and never ran: the healer dropped the two fields it keyed on (🔧 CODED 2026-08-20, NOT live-verified)
+
+**Found by measuring a session-audit finding instead of implementing it.** The 2026-08-20
+audit reported "the immune system proposed `probe_provider` against Gmail, and against an
+empty target twice". That is not a new defect — it is **BUG-273 C2 being inert**, one day
+after C2 shipped specifically to prevent it.
+
+### Root cause 1 — the transport dropped the control fields (the real bug)
+
+C2 gave `sensors/gmail-sensor.js` two things: `needsOperator: true` ("this fault is terminal
+and human-only, do not guess a mechanical remedy") and a `reason` carrying the complete
+operator instruction. `immune/explainer.js` reads both. Between them sits
+`immune/healer.js`, whose `health.healed` emit forwarded only
+`playbookId/kind/target/outcome/detail/title/actions/sourceEventId`.
+`immune/diagnostician.js:57` does preserve the whole anomaly — under `evidence` — and the
+healer never forwarded `evidence`.
+
+Measured on the wired production chain (bus → diagnostician → healer → explainer), by
+emitting the exact payload `gmail-sensor.js:84-101` puts on the bus:
+
+```
+needsOperator present? false      reason present? false      detail: null
+brain asked for a remedy? 1  (C2 intended 0)
+prompt offered probe_provider? true
+spoken: "One of my internal checks has no automatic fix: gmail-reauth-required in gmail.
+         I do not yet know the cause. This one needs your attention."
+```
+
+Two consequences, both live: the `needsOperator` short-circuit could never fire, so Gmail
+reached the brain and got `probe_provider` proposed for it; and the `reason` half died too —
+the operator was told the cause was unknown for an anomaly whose emitter had supplied a full
+sentence naming the fix (`node scripts/google-auth.js`). Repo memory already records
+"anomaly payloads need `reason`"; the payload had one and the wire ate it.
+
+**Why every C2 test passed:** they all call `explainer._onHealed({payload: {…needsOperator:
+true, reason: '…'}})`, injecting fields the bus never delivers — a fixture more generous
+than the wire. Fixed at the healer; the guard against a repeat asserts the fields **on the
+bus**, which is the only fixture shape that can catch a field lost in transit.
+
+### Root cause 2 — the remedy menu was argued for in prose instead of built from applicability
+
+The prompt offered all three remedies on every call and constrained them in English
+("Choose `probe_provider` ONLY if an AI provider seems down"). Session-scoped log evidence
+for the incident's own boot (`immune-explainer.ready` at 2026-08-19T19:57:14Z onward):
+
+| kind / target | remedy chosen | outcome |
+|---|---|---|
+| `gmail-reauth-required` / gmail | `probe_provider` | refused |
+| `live-turn-stalled` / (none) | `probe_provider` | refused |
+| `live-turn-no-transcript` / (none) | `probe_provider` | refused |
+
+**3 of 3** — exactly the audit's "Gmail once, empty target twice". Across the whole log file
+(11 boots): 22 `immune-explain` events and 16 `immune-explain.remedy-refused`, plus 5 where
+`probe_provider` was *applied* and fired a real `registry.refresh(true)` — including twice
+for `gmail-reauth-required`. The prose constraint was not occasionally ignored; it lost
+almost every time. This is the repo's documented "prose loses to a menu entry" class, so the
+entry is now **removed rather than argued with**: the menu is built from applicability before
+the brain is called, and when only `none` applies the call is skipped entirely.
+
+That skip is the common path, not an edge case: **91 of this tree's 104 `health.anomaly` emit
+sites carry no `target` at all** (13 do), and with no target neither remedy is reachable.
+
+### Root cause 3 — the guard's allowlist was populated with a vocabulary no emitter produces
+
+`PROBEABLE_TARGETS` held `['brain','provider','providers','llm','lane','voice','simple',
+'vision','coding','reasoning']` — lane names and generic words. Not one of the 13
+target-bearing emitters produces a name from that set, so the same constant caused both
+failure directions:
+
+- **Refused where it belongs.** `quota-low` carries `q.provider` (`probes.js:58`) and its
+  playbook matches only `target: {eq:'groq'}` (`healer.js:86`), so a `quota-low` for
+  mistral/nim/gemini reaches this path with a real AI provider as its target — and was
+  logged as *"not an AI provider — a re-probe cannot affect this target"*. About an actual
+  AI provider.
+- **Offered where it cannot help** — gmail and the empty targets above.
+
+Now gated on the anomaly **kind** (`provider-down`, `quota-low`): a closed set emitted by
+this subsystem itself, which cannot drift when a provider id is added and needs no registry
+call — which is what the original comment actually wanted.
+
+The one test defending this path fired `{kind:'provider-unreachable', target:'brain'}`.
+**Neither string is emitted anywhere in `src/`.** It matched the old allowlist, so it passed
+while the only shape that actually reaches the path was being refused. Fixture corrected to
+`{kind:'quota-low', target:'mistral'}`.
+
+### Verification
+
+```
+node --test test/bug-278-remedy-fit-must-survive-the-wire.test.js        6/6  (was 1/6 pre-fix)
+node --test test/immune-explainer.test.js test/bug-273-c2-remedy-must-fit-the-fault.test.js \
+            test/immune.test.js                                        74/74
+node --test <all 16 healer/immune/anomaly/announcer files>             167/167
+```
+
+Mutation-proven (applied, caught, restored byte-identical each time):
+`needsOperator: evidence.needsOperator === true` → `false` (2 fail) ·
+`if (canProbeProvider(kind))` → `if (true)` (2 fail) ·
+`if (!menu.length)` → `if (false)` (1 fail).
+
+**Q8 — pinned dispositions.** (1) The anomaly's own `detail` is deliberately NOT forwarded:
+in the `health.healed` payload `detail` means "what the heal action did" and is null by
+definition on no-match, so overloading it would corrupt the field the audit writer already
+records with that meaning. (2) `suppress_tool` is gated on target *shape* only, not against
+the real effector catalog — the only oracle is the hub (171 effectors) and loading it on the
+Live-session hot path costs more than the remedy is worth. The residual is bounded and
+verified inert: `goals/index.js:532` is the sole reader of the suppression map and tests real
+effector names, so an entry keyed on a goal id matches nothing and expires in 60s.
+
+**NOT live-verified.** What a healthy next session looks like: zero
+`immune-explain.remedy-refused` lines (the menu can no longer offer an inapplicable remedy,
+so any refusal now means the model answered *off-menu*, which the line records with an
+`offered:` field), and a `gmail-reauth-required` anomaly speaking its
+`node scripts/google-auth.js` instruction instead of "I do not yet know the cause".
+
+### Open, filed not fixed — incident `inc-1787170098385-1` ("repeating myself aloud due to diagnostic loop", warn, 2026-08-19T20:08:18Z)
+
+Triaged, and **the obvious hypothesis is refuted.** The immune explainer was the natural
+suspect (its spoken line is identical across kinds apart from the slug), but in the
+incident's own boot only **1** diagnostic was spoken aloud: 3 explains, 2 held back by
+`immune-explain.not-spoken-during-live`. One line is not a loop.
+
+Same session, measured: 26 `live.interrupted`, 156 `voice.capture-suspend`, 89
+`live.turn-parts`, 12 `camera_look`, 7 `think_deeply` (22 `deepthink.attempt` — retries), 4
+`web_search`, 3 `loop.stalled`. The repetition correlates with the **interruption/barge-in
+path**, which is BUG-274 T4's surface and was under active change by a concurrent session —
+deliberately not touched here.
+
+**Not closed, and not forced into a verdict.** What would settle it: per-turn text for that
+window from `vault/Conversation/` correlated against the 26 `live.interrupted` timestamps.
+The rolling `session.json` holds only 40 turns (12 assistant, 0 repeated) and cannot be
+scoped back to the incident, so it neither confirms nor clears it. Cited here so
+`triage-incidents.js --check` stops counting it untracked (18 untracked at time of writing).
 
 ---
 
@@ -125,6 +260,34 @@ machinery working. **Remedy is operator-side**: start a debuggable browser
 (`browser_launch_debug`, or `scripts/setup-chrome-debug.ps1`). Worth deciding whether boot
 should say this loudly rather than leaving it in a `warn` line.
 
+#### F1 recurrence + regression pin — 2026-08-20 (F1's verdict CONFIRMED, no behaviour change)
+
+The 2026-08-20 session hit the identical shape (`browser-agent connect failed` ×7 in that
+boot, 13 tools withheld, same reason string), and F1's "environment, not code" verdict holds
+on re-reading the source: `voice/tool-capability.js:61-65` already exempts the launcher
+(`except: browser_launch_debug || browser_switch`) and its `reason` string already names the
+remedy, which is why the model reached for a recovery route instead of silently substituting.
+
+What was missing was a **test**. The exemption is one `except:` clause carrying the whole
+recovery path, and a capability refactor could have dropped it without a single test going
+red — which is how a recoverable 13-tool outage becomes a permanent one. Pinned in
+`test/bug-276-f1-browser-recovery-tool-survives-offline.test.js` (5/5), built from F1's own
+log excerpt (the 13 tool names verbatim) and driving the real `buildCapabilitySnapshot` from
+an adapter reporting `OFFLINE` rather than a hand-written `{browserOnline:false}` — the
+builder resolves an *unreadable* adapter to `true`, so a hand-written fixture could have
+passed while withholding nothing. Includes that as an explicit negative control.
+
+Mutation-proven: removing the `except` clause → 2 fail; stripping `browser_launch_debug` out
+of the reason string → 1 fail. Both restored byte-identical.
+
+**Q8 — deliberately NOT fixed here.** The capability snapshot stays frozen for the life of a
+Live session (`live-tools.js:452-456`, the known BUG-046/136 shape), so a browser that comes
+online mid-session does not restore the other 12 tools until the session rotates. Refreshing
+on reconnect touches the frozen Gemini Live wire protocol's rotation path (V2 spine §3 /
+AD-1) and is an operator-sized decision, not a drive-by. The property this pin guarantees is
+the weaker but sufficient one: **the operator always has one declared tool that can end the
+outage.**
+
 ### F2 (P0, REAL CODE DEFECT) — Wikipedia is the last-resort search provider and its irrelevant results ship as `ok: true`
 
 Turn 18, for the query **"CNN live news"**:
@@ -166,6 +329,59 @@ for news, `open_web` looked for videos. Check `from-web.js`/`open_web`'s intent 
 Nothing here is a code fault; it is an unpaid provider, a timing-out provider, and a
 provider outage stacking up. **Operator action: cerebras billing.** See also the standing
 memory that a missing/short-lived NIM key silently voids the nim lanes.
+
+#### F4 correction and code half — 🔧 CODED 2026-08-20 (the search line WAS partly ours)
+
+"Nothing here is a code fault" is wrong for `web_search`, and the 2026-08-20 session
+reproduced the same "All search providers are unavailable" with **4 user-visible misses**.
+Measured on this machine, 2026-08-20, with a negative control first:
+
+| Provider | Result |
+|---|---|
+| `example.com` (control) | 200 in 319ms — **egress is healthy** |
+| exa (REST) | skipped, no `EXA_API_KEY` |
+| exa-mcp | 0 results — really **HTTP 429**, the free tier's 150/day cap |
+| ddg-html | `fetch failed` @10.3s |
+| ddg-lite | `fetch failed` @10.6s |
+| jina | **HTTP 401** — the "free, no key" tier this code documents no longer exists |
+| wikipedia | HTTP 200, 0 results (`London` → 3; `weather in London today` → 0) |
+
+Six distinct facts, five actionable, and the operator plus the log got one sentence. Two of
+them were **swallowed in code**: `jinaSearch` never checked `res.ok` and fed the 401 body to
+its parser, and `exaMcpSearch`'s `if (!res.ok) return null` discarded the status — both then
+indistinguishable from "answered, matched nothing", and neither emitted
+`search-provider-failed`, so the immune system could not rest a provider that was refusing
+us either.
+
+**Fix (Q2 — the failure was destroying its own evidence):** no retry, no new provider, no new
+mechanism. The chain already knew all six causes and threw them away on the last line. It now
+reports them:
+
+```
+All search providers are unavailable (tried: exa no EXA_API_KEY set; exa-mcp HTTP 429;
+ddg-html no results; ddg-lite no results; jina HTTP 401; wikipedia no results).
+```
+
+That is real output from the first live run after the change — and it is how the exa-mcp
+**429** was discovered at all; it had been invisible as "no results". Response shape is
+unchanged (`{ok:false, result:<string>}`), so no consumer or widget moves.
+
+**Q1 — what the fix must NOT catch:** flattening every empty outcome into "failed" would make
+the `search-provider-degrade` playbook suppress a *healthy* provider. Wikipedia answers 200
+with a well-formed empty OpenSearch array — it is a title-prefix search and cannot answer a
+natural-language query by construction (F2 above covers its other half: fuzzy matches
+shipping as `ok:true`). So only transport and HTTP faults emit an anomaly; "answered and
+matched nothing" and "skipped because suppressed" are recorded in the message only. Both
+distinctions are pinned by test.
+
+Verification: `node --test test/bug-276-f4-search-failure-names-its-causes.test.js` → **4/4**
+(1/4 pre-fix; the one that passed was the success-path control, which is unchanged).
+`node --test test/p21-web-search-chain.test.js test/code-search.test.js` → **36/36**.
+
+**Operator actions this leaves standing** (unchanged from F4): DuckDuckGo is unreachable from
+this host, jina now needs a key, and exa-mcp's daily cap is spent — so setting `EXA_API_KEY`
+is currently the only way to give the chain a working general-web provider. That is a
+configuration decision, not a code fix, and the failure line now says so out loud.
 
 ### F5 (P1) — `browser_switch` returned `switched:false` and MYTHOS announced a switch
 

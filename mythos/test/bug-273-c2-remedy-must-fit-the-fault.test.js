@@ -120,8 +120,18 @@ describe('BUG-273 C2 — a remedy must be able to fix the fault it is chosen for
   it('probe_provider still works where it belongs', async () => {
     // Q8: the mechanism is not removed, only aimed. An AI provider actually being down
     // is what it was built for and must still reach it.
+    //
+    // FIXTURE CORRECTED, BUG-278 (2026-08-20). This used to fire
+    // `{kind:'provider-unreachable', target:'brain'}`. Neither string is emitted anywhere
+    // in src/ — `provider-unreachable` is not a real anomaly kind and no emitter ever sets
+    // target 'brain'. It matched the old target allowlist (which held lane names), so this
+    // test passed while the ONLY shape that actually reaches this path was being refused:
+    // `quota-low` carries a provider id (probes.js:58) and its playbook matches only
+    // target eq 'groq' (healer.js:86), so quota-low for mistral/nim/gemini lands on the
+    // no-match path — and 'mistral' was not in that allowlist. A fixture more generous
+    // than the wire agreed with the bug the code contained. Now built from the emitter.
     const h = harness();
-    await h.fire({ kind: 'provider-unreachable', target: 'brain', reason: 'every lane timed out' });
+    await h.fire({ kind: 'quota-low', target: 'mistral', evidence: { provider: 'mistral', remaining: 2 } });
     assert.equal(h.remedy(), 'probe_provider');
     assert.match(h.spoken[0], /re-probing/);
   });
