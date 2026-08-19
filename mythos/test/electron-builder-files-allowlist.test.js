@@ -16,6 +16,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 
@@ -344,4 +345,77 @@ test('scripts/doctor.js ships — the setup route require()s it at runtime', () 
     assert.notEqual(body.replace(/\{,\/\*\*\/\*\}$/, ''), 'mythos/scripts/doctor.js',
       'doctor.js must not be excluded: server/routes/setup.js requires it at request time');
   }
+});
+
+// ---------------------------------------------------------------------------
+// The licence guards that matter most are the ones above that HONESTLY SKIP:
+// the CC BY-NC-SA openWakeWord weights, the LGPLv3 edge-tts package and the
+// Silero VAD weights are all fetched per-machine, so on CI (npm ci + node
+// --test, no setup-*.js run) none of those files exist and every one of those
+// assertions has ALWAYS skipped there — never passed, never failed. The one
+// obligation in this repo that is genuinely non-commercial has therefore never
+// actually been checked by the gate that exists to check it.
+//
+// The skips are still correct and stay exactly as they are: materialising a
+// stand-in at the REAL model path is the trap CLAUDE.md's wakeword rename-race
+// entry documents, because other code stats those directories for presence.
+//
+// So run the same assertions somewhere no real path is involved at all. The
+// patterns in build.files are relative to the matcher's root (FileMatcher's
+// `from`), so a temp directory containing the same RELATIVE layout exercises
+// electron-builder's own FileMatcher with identical glob semantics and cannot
+// touch, hide or fake anything in the checkout. These tests execute on every
+// machine, including CI.
+const MIRROR_FIXTURES = {
+  excluded: [
+    // The non-commercial / non-redistributable set, in build.files order.
+    'mythos/.venv/Lib/site-packages/edge_tts/__init__.py',   // LGPLv3, BYO
+    'mythos/services/edge-tts-server.py',                    // the LGPLv3 sidecar
+    'mythos/ui/public/models/wakeword/hey_jarvis_v0.1.onnx', // CC BY-NC-SA, non-commercial
+    'mythos/ui/public/models/silero/silero_vad.onnx',        // fetched per machine
+    'mythos/node_modules/kokoro-js/node_modules/@huggingface/transformers/.cache/onnx-community/Kokoro-82M-v1.0-ONNX/onnx/model_quantized.onnx',
+    'mythos/vault/Audit/2026-01-01.jsonl',                   // real operator data
+  ],
+  included: [
+    // Positive control. Without it, a mirror root that somehow matched nothing
+    // would make every exclusion above pass vacuously — the exact failure mode
+    // the real-tree positive control further up guards against.
+    'package.json',
+    'mythos/ui/public/index.html',
+    'mythos/ui/public/models/gesture_recognizer.task',        // the one deliberate re-include
+  ],
+};
+
+function withMirroredTree(relPaths, fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-pkg-mirror-'));
+  try {
+    for (const rel of relPaths) {
+      const abs = path.join(root, rel.split('/').join(path.sep));
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, 'x');  // content is irrelevant: the matcher is path + stat based
+    }
+    return fn(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('build.files keeps the non-commercial and BYO assets out — checked without needing them on disk', () => {
+  const { files } = loadBuildConfig();
+  const all = MIRROR_FIXTURES.excluded.concat(MIRROR_FIXTURES.included);
+  withMirroredTree(all, (root) => {
+    const { FileMatcher } = require('app-builder-lib/out/fileMatcher');
+    const matcher = new FileMatcher(root, root, (x) => x, files);
+    const filterFn = matcher.createFilter();
+    for (const rel of MIRROR_FIXTURES.included) {
+      const abs = path.join(root, rel.split('/').join(path.sep));
+      assert.equal(filterFn(abs, fs.statSync(abs)), true,
+        rel + ' must be included in the installer (positive control for the mirror)');
+    }
+    for (const rel of MIRROR_FIXTURES.excluded) {
+      const abs = path.join(root, rel.split('/').join(path.sep));
+      assert.equal(filterFn(abs, fs.statSync(abs)), false,
+        rel + ' must never be packaged — this is the licence boundary, not a tidy-up');
+    }
+  });
 });
