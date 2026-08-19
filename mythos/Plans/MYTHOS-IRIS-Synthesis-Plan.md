@@ -17,7 +17,39 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-20 (latest) — **The cushion now learns from the gaps that actually hurt: the server's own turn boundary tells the player when a reply is over, so a 1486ms stall is finally counted as one.**
+### 2026-08-20 (latest, second entry) — **Stage 3 is pulled. The vetoes were refusing the operator for not LASTING, not for being quiet, and the operator scored the result 7-8/10.**
+
+**`PENDING_HOLD_MS` 350 → 200**, on the operator's instruction and on measured evidence rather than
+feel. The live session vetoed 24 barge-ins, **11 `pending-sustaining`**, at levels up to **0.2144**
+— five of eight above the room's own bleed peak of **0.1193**, i.e. unmistakably the operator,
+refused for not lasting. A one- or two-word interruption is 200-400ms and could not clear a 350ms
+bar plus the backstop's 3-frame cadence. **10 barge-ins reached the stop door; exactly ONE cut real
+audio**, the rest arriving after the reply had ended.
+
+**Two things the code itself predicted, both now recorded.** The deferred branch in
+`s2s-bridge.js` said in writing that lowering this below 300 would make it *"unreachable — dead,
+not broken. Say so in the commit if you do that."* It is, and the commit says so; it is **kept** as
+the safety net if the sustain ever rises again, with a test proving unreachability by equality
+rather than by reading the constant. And the `KNOWN FAILING SHAPE` test — which asserted that
+syllable-spaced speech could never authorise, deliberately left so *"a session which changes the
+sustain test sees this flip"* — has flipped, now names this session, and pins that the same shape
+still fails at 350 so the cause is attributable.
+
+**THE RISK, and the number that settles it next time.** The policy's own comment calls this sustain
+the **primary bleed discriminator**, and the room measured worse than when that was written: bleed
+**0.1193 against a 0.035 floor**, where the design assumed ~0.0309 *below* it. **Self-interruption
+is the counter-failure** and already ran at **26/89 turns** before this change. If it climbs, raise
+`INITIAL_BLEED_FLOOR` toward 0.04 — **do not lengthen the sustain again.** One lever moved; Stage 2
+stays unpulled because the dominant veto reason was never a threshold refusal.
+
+**None of this is a cure.** Echo cancellation is not removing MYTHOS's voice at all (bleed 0.1193
+with `micEchoCancellation` reporting `true`) — every threshold here compensates for that, and T4 is
+where it gets fixed.
+
+**NEXT ACTION — one more live session, reading two numbers:** `self-interruption` must not climb,
+and `barge-in(s) reached the stop door / actually cut audio` should stop being 1-in-10.
+
+### 2026-08-20 — **The cushion now learns from the gaps that actually hurt: the server's own turn boundary tells the player when a reply is over, so a 1486ms stall is finally counted as one.**
 
 **BUG-274 T4 step 5b, committed with this block.** Suite **5329/5329, 0 fail, 0 skipped** (+5). Merged-order
 position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). **Still NOT live-verified — same gate as step 5, below.**

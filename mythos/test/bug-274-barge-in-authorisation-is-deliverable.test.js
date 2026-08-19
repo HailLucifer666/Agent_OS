@@ -243,8 +243,18 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
     // is refused; its next chance would be frame 6, which never comes.
     const FIVE_FRAME_RUN = afterProtectedWindow([...Array(5).fill(OPERATOR_LOUD), OPERATOR_DIP, OPERATOR_DIP]);
 
+    // PINNED AT 350 EXPLICITLY, 2026-08-20. These cases exist to prove the DEFERRED
+    // delivery works when the policy is slower than the backstop — which is a relation,
+    // not a constant, and it was only ever true implicitly because the shipped
+    // PENDING_HOLD_MS happened to be 350. Stage 3 shipped 200, at which the policy
+    // confirms on frame 2 and the backstop's first ask already finds it authorised, so
+    // these scenarios would silently stop testing anything. Passing the 350 in keeps
+    // them measuring the mechanism instead of the current tuning; the case at the end
+    // of this describe covers what the SHIPPED constant does.
+    const SLOW_POLICY = { policy: { pendingHoldMs: 350 } };
+
     it('the old wiring loses it — the backstop asks at 300ms and never asks again', async () => {
-      const result = await driveBargeIn(FIVE_FRAME_RUN, { deferred: false });
+      const result = await driveBargeIn(FIVE_FRAME_RUN, { deferred: false, ...SLOW_POLICY });
       // >= 1 rather than == 1: CONFIRMED keeps answering yes (the first fix), so the
       // trailing frames of the run answer yes too. In production the gate is already
       // released by then; here nothing releases it, which is the point of this case.
@@ -255,10 +265,30 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
     });
 
     it('the deferred delivery lands it on the frame the policy confirms', async () => {
-      const result = await driveBargeIn(FIVE_FRAME_RUN);
+      const result = await driveBargeIn(FIVE_FRAME_RUN, SLOW_POLICY);
       assert.equal(result.released, 1,
         `expected the refused attempt to be delivered once the policy caught up: `
         + `${result.released} release(s), ${result.vetoed} veto(es), authorised ${result.authorised}`);
+    });
+
+    it('at the SHIPPED sustain the deferred branch is unreachable — dead, not broken', async () => {
+      // s2s-bridge.js predicted this in writing: "If PENDING_HOLD_MS is ever lowered to
+      // 300 or below, this branch becomes unreachable — dead, not broken. Say so in the
+      // commit if you do that." Stage 3 shipped 200, so the policy reaches CONFIRMED on
+      // frame 2 and the backstop's first delivery on frame 3 already finds
+      // policyAllowsRelease true and takes the NORMAL path. The deferral has nothing
+      // left to catch.
+      //
+      // Proven by equality rather than by reading the constant: with the deferred wiring
+      // OFF, the shipped tuning must still deliver the release. If these ever diverge,
+      // the branch has become load-bearing again and the comment above it is wrong.
+      const withDeferred = await driveBargeIn(FIVE_FRAME_RUN);
+      const withoutDeferred = await driveBargeIn(FIVE_FRAME_RUN, { deferred: false });
+      assert.equal(withDeferred.released, 1, 'the shipped tuning must land the barge-in');
+      assert.equal(withoutDeferred.released, 1,
+        'and must land it WITHOUT the deferred branch — that is what "unreachable" means. '
+        + 'If this is 0, PENDING_HOLD_MS is back above the backstop cadence and the '
+        + 'deferred delivery is load-bearing again.');
     });
 
     it('is NOT a bypass: without a refused attempt, nothing is delivered early', async () => {
@@ -290,7 +320,11 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
         OPERATOR_LOUD, OPERATOR_LOUD, OPERATOR_LOUD,
         OPERATOR_DIP, OPERATOR_DIP, OPERATOR_DIP, OPERATOR_DIP,
       ]);
-      const result = await driveBargeIn(shortRunThenSilence);
+      // Also pinned at 350: "three frames is too short to confirm" is only true of a
+      // 350ms sustain. At the shipped 200 those same three frames DO confirm, which
+      // would turn this case from "the attempt was cleared when the candidacy died"
+      // into "the candidacy succeeded" — a different scenario wearing the same name.
+      const result = await driveBargeIn(shortRunThenSilence, SLOW_POLICY);
       assert.ok(result.vetoed > 0, 'the backstop must have fired and been refused, or this proves nothing');
       assert.equal(result.attemptedThisHold, false,
         'the attempt outlived the candidacy that created it — a later unrelated sound could cash it in');
@@ -405,20 +439,40 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
     });
   });
 
-  it('KNOWN FAILING SHAPE, recorded not fixed: 100ms dips reset the sustain timer', async () => {
-    // Ordinary syllable spacing inside genuinely loud speech. PENDING resets on each
-    // dip, 350ms is never reached, and no authorisation is ever issued — so this is a
-    // second and independent defect that the handoff fix cannot reach. Asserted as it
-    // stands so that a session which changes the sustain test sees this flip, rather
-    // than a constant being guessed at for the third time.
+  // THIS TEST FLIPPED, AND IT WAS BUILT TO. Its previous form asserted that ordinary
+  // syllable-spaced speech (300ms loud, 100ms dip, repeating) could NEVER authorise,
+  // because PENDING reset on each dip and 350ms was never reached — recorded as a
+  // second, independent defect and left asserted "so that a session which changes the
+  // sustain test sees this flip, rather than a constant being guessed at for the third
+  // time." It asked whoever flipped it to say which session measured it.
+  //
+  // THE SESSION: 2026-08-20, 55 turns. Eleven 'pending-sustaining' vetoes at levels up
+  // to 0.2144, five of them above the room's measured bleed peak of 0.1193. Ten
+  // barge-ins reached the stop door, ONE cut audio. The operator scored it 7-8/10 and
+  // described exactly this: "sometimes it still is talking and it's not stopping."
+  // Stage 3 lowered the sustain to 200ms, and at 200ms three loud frames clear the bar
+  // before the dip arrives. Speech that dips like human speech is now believed, which
+  // is the entire point of the change.
+  //
+  // AND IT IS THE RISK, in the same breath: bleed follows MYTHOS's own syllable
+  // envelope and dips on a similar cadence. This shape authorising is the fix working
+  // AND the mechanism by which self-interruption could rise. That is the trade Stage 3
+  // makes explicit; verify-voice-session.js's self-interruption criterion is where the
+  // next session settles it.
+  it('syllable-spaced loud speech now authorises — Stage 3, and the risk it accepts', async () => {
     const dipped = [];
     for (let i = 0; i < 32; i++) dipped.push(i % 4 === 3 ? OPERATOR_DIP : OPERATOR_LOUD);
     const result = await driveBargeIn(afterProtectedWindow(dipped));
-    assert.equal(
-      result.authorised,
-      0,
-      'the sustain test now tolerates a 100ms dip. That may well be correct — if it was '
-      + 'deliberate, update this test and say which session measured it.',
-    );
+    assert.ok(result.authorised > 0,
+      'at a 200ms sustain, three loud frames clear the bar before the 100ms dip — if this '
+      + 'reads 0 again the sustain has been lengthened back and short interruptions are '
+      + 'broken again');
+
+    // The same shape at the OLD sustain still cannot confirm. Kept so the flip is
+    // attributable to the constant rather than to some other drift in the policy.
+    const atOldSustain = await driveBargeIn(afterProtectedWindow(dipped),
+      { policy: { pendingHoldMs: 350 } });
+    assert.equal(atOldSustain.authorised, 0,
+      'the flip must be caused by PENDING_HOLD_MS and nothing else');
   });
 });

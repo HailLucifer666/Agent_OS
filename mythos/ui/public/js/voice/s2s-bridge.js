@@ -1142,6 +1142,18 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         //   is the RELATION 350ms (PENDING_HOLD_MS) > 300ms (3 backstop frames). If
         //   PENDING_HOLD_MS is ever lowered to 300 or below, this branch becomes
         //   unreachable — dead, not broken. Say so in the commit if you do that.
+        //
+        //   THAT HAPPENED, 2026-08-20: Stage 3 lowered PENDING_HOLD_MS to 200, so the
+        //   policy now reaches CONFIRMED at frame 2 and the backstop's first delivery
+        //   at frame 3 already finds policyAllowsRelease true and takes the NORMAL
+        //   path. This branch is therefore unreachable at the shipped constant —
+        //   DEAD, NOT BROKEN, exactly as predicted above. It is kept rather than
+        //   deleted because it is the safety net if the sustain is ever raised back
+        //   over 300ms, and deleting it would silently re-open the bug it fixed.
+        //   test/bug-274-barge-in-authorisation-is-deliverable.test.js keeps proving
+        //   it works by pinning those scenarios at pendingHoldMs 350 explicitly, and
+        //   has a case asserting it is unreachable at the shipped value — so "dead"
+        //   stays a measured claim rather than an assumption.
         // Q6 — WHAT CLASS IS THIS? The third instance in one day of "two independent
         //   counters required to coincide". The assertion, per the repo's own rule, is
         //   test/bug-274-barge-in-authorisation-is-deliverable.test.js, which drives

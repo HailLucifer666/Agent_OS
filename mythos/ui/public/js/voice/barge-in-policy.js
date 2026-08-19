@@ -54,7 +54,38 @@ export const PROTECTED_MS = 500;
 // A candidate must stay above the floor this long before it is believed. Bleed
 // follows the assistant's amplitude envelope and dips between its own syllables;
 // sustained human speech does not.
-export const PENDING_HOLD_MS = 350;
+//
+// 350 -> 200 on 2026-08-20: the staged plan's Stage 3, pulled because a live session
+// finally said the 350 was insufficient, and said it with numbers rather than by feel.
+// Over 89 turns the policy vetoed 26 barge-ins, TWELVE of them 'pending-sustaining',
+// at 13 recorded levels: 0.0537 0.0623 0.0706 0.0746 0.0826 0.0955 | 0.1414 0.1482
+// 0.1685 0.1709 0.1724 0.1983 0.2144. SEVEN of the thirteen sit ABOVE the room's own
+// measured bleed peak (0.1193), so they are unambiguously the operator — refused not
+// for being too quiet but for not lasting long enough. A one- or two-word interruption
+// ("stop", "wait, no") is 200-400ms of speech; at a 350ms sustain plus the backstop's
+// 3-frame cadence it was over before it could be believed. The operator scored the
+// result 7-8/10: "sometimes it still is talking and it's not stopping immediately."
+//
+// The counting bears that out: 11 barge-ins reached the stop door and only ONE cut real
+// audio; the other ten fired with nothing left to cut, i.e. the authorisation arrived
+// after the reply had already finished.
+//
+// THE RISK, STATED, because this weakens the thing that was doing the discriminating.
+// The comment below still holds: this sustain is the PRIMARY bleed discriminator, and
+// the room measured worse on 2026-08-20 than when that was written — bleed peaked at
+// 0.1193 against a 0.035 floor, where the design assumed a clean peak of ~0.0309 BELOW
+// the floor. So bleed now opens PENDING routinely and only the sustain test rejects it.
+// 200ms should still clear it, because bleed dips between MYTHOS's own syllables at
+// roughly 4-5 per second (~200-250ms apart) while human speech does not — but that
+// margin is thinner than it was, and SELF-INTERRUPTION IS THE COUNTER-FAILURE TO WATCH.
+// It already ran at 26/89 turns (at most 16.9% genuinely self-caused) BEFORE this change.
+// If it rises, the honest response is to raise INITIAL_BLEED_FLOOR back toward 0.04,
+// NOT to lengthen this again — that re-breaks exactly what this fixes.
+//
+// The real cure is upstream and is not a threshold: echo cancellation is not removing
+// MYTHOS's voice at all (bleed 0.1193 with micEchoCancellation reporting true), which
+// is BUG-274 T4. Every number here is a compensation for that.
+export const PENDING_HOLD_MS = 200;
 
 // Learned floor = observed bleed peak x this.
 //

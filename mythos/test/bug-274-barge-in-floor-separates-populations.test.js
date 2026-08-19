@@ -141,13 +141,23 @@ describe('BUG-274 — the barge-in floor must separate measured bleed from measu
       + 'sustain test is the discriminator the lowered floor depends on');
   });
 
-  it('PENDING_HOLD_MS was deliberately NOT lowered alongside the floor', async () => {
+  it('PENDING_HOLD_MS is the staged 200 — Stage 3, pulled on measured evidence', async () => {
+    // Was 350, and was deliberately left alone when the floor moved: one lever at a
+    // time. The 2026-08-20 live session is the evidence the staged plan was waiting
+    // for. Over 55 turns the policy vetoed 24 barge-ins, ELEVEN 'pending-sustaining',
+    // at levels up to 0.2144 — five of the eight recorded levels sit ABOVE the room's
+    // own bleed peak (0.1193), so they are unambiguously the operator, refused for not
+    // LASTING rather than for being too quiet. A one- or two-word interruption is
+    // 200-400ms of speech and could not clear a 350ms bar plus the backstop's 3-frame
+    // cadence. Ten barge-ins reached the stop door and exactly ONE cut real audio.
+    //
+    // The counter-failure to watch is self-interruption, which ran at 26/89 turns
+    // before this change. If it rises, raise INITIAL_BLEED_FLOOR back toward 0.04 —
+    // do NOT lengthen this again, which is the move that broke interruption before.
     const { PENDING_HOLD_MS } = await import(POLICY_URL);
-    assert.equal(PENDING_HOLD_MS, 350,
-      'one lever at a time. This ticket lowered the floor and left the sustain alone, because '
-      + 'the sustain is now the primary bleed discriminator. If self-interruption rises, raise '
-      + 'the FLOOR back toward 0.04 — lengthening the sustain re-breaks the interruption that '
-      + 'was just fixed.');
+    assert.equal(PENDING_HOLD_MS, 200,
+      'if this is being changed again, say which session measured the need — this ticket '
+      + 'has had a constant guessed at three times and measured twice');
   });
 });
 

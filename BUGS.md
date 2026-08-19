@@ -648,6 +648,74 @@ is the only candidate, and a released mic beside continuing speech is this ticke
 Also still unrun: the **plain-Chrome** repeat, and the engine comparison itself — this session used
 **gemini-live only**, so `tts-chain` and `browser-speechSynthesis` were never exercised.
 
+#### T4 STAGE 3 — 🔧 CODED 2026-08-20: `PENDING_HOLD_MS` 350 → 200, because the vetoes were refusing the operator for not lasting, not for being quiet
+
+**Pulled on the operator's instruction after they scored the interruption 7-8/10** — *"sometimes
+it still is talking and it's not stopping immediately, but sometimes it does."* The staged plan
+held Stage 3 until "a live session says this was not enough". The 2026-08-20 session says it, with
+numbers.
+
+**THE EVIDENCE — final figures for the whole 89-turn session** (it kept growing while this was
+being written; these are the numbers the next session must be compared against, not the mid-session
+snapshot). **26 vetoes, 12 `pending-sustaining`**, at 13 recorded levels:
+
+```
+0.0537 0.0623 0.0706 0.0746 0.0826 0.0955  |  0.1414 0.1482 0.1685 0.1709 0.1724 0.1983 0.2144
+                        bleed peak 0.1193 ─┘
+```
+
+**Seven of the thirteen sit ABOVE the room's own measured bleed peak (0.1193)** — unambiguously the
+operator, refused for not *lasting* rather than for being too quiet. A one- or two-word
+interruption ("stop", "wait, no") is **200-400ms** of speech, and could not clear a 350ms bar plus
+the backstop's 3-frame cadence. Counted honestly, **11 barge-ins reached the stop door and exactly
+ONE cut real audio**; the other ten were authorised only after the reply had already ended, which
+is precisely what "sometimes it keeps talking" sounds like.
+
+**PRE-CHANGE BASELINE, to compare the next session against:** self-interruption **26/89 turns =
+29.2%** (at most **15/89 = 16.9%** genuinely self-caused) · **26** vetoes · **11** stop-door
+arrivals, **1** cutting audio · bleed peak **0.1193** against floor **0.035**.
+
+**TWO CONSEQUENCES, both predicted in writing by the code being changed.**
+
+1. **The deferred branch is now unreachable — dead, not broken.** `s2s-bridge.js` said: *"If
+   `PENDING_HOLD_MS` is ever lowered to 300 or below, this branch becomes unreachable — dead, not
+   broken. Say so in the commit if you do that."* At 200 the policy reaches CONFIRMED on frame 2,
+   so the backstop's first delivery on frame 3 already finds it authorised and takes the normal
+   path. **Kept, not deleted** — it is the safety net if the sustain ever goes back over 300ms, and
+   deleting it would silently re-open the bug it fixed. A new test proves unreachability by
+   equality (the shipped tuning must land the barge-in *with the deferred wiring off*), so "dead"
+   stays measured rather than assumed.
+2. **A test written to flip has flipped, and it asked to be told which session did it.**
+   `KNOWN FAILING SHAPE, recorded not fixed: 100ms dips reset the sustain timer` asserted that
+   ordinary syllable-spaced speech could never authorise, *"so that a session which changes the
+   sustain test sees this flip, rather than a constant being guessed at for the third time."* At
+   200ms three loud frames clear the bar before the dip. It now asserts the flip, names this
+   session, **and pins that the same shape still fails at 350** so the change is attributable to
+   this constant and nothing else.
+
+**THE RISK, STATED PLAINLY — this weakens the thing that was doing the discriminating.** The
+policy's own comment calls the sustain the **PRIMARY bleed discriminator**, and the room measured
+*worse* than when that was written: bleed peaked at **0.1193 against a 0.035 floor**, where the
+design assumed a clean peak of ~0.0309 **below** the floor. Bleed now opens PENDING routinely and
+only the sustain rejects it. 200ms should still clear it — bleed dips between MYTHOS's own
+syllables at roughly 4-5/second — but the margin is thinner, and **self-interruption is the
+counter-failure to watch**: it already ran at **26/89 turns** (≤16.9% genuinely self-caused) BEFORE
+this change. **If it rises, raise `INITIAL_BLEED_FLOOR` back toward 0.04 — do NOT lengthen the
+sustain again**, which is the move that broke interruption in the first place.
+
+**Not a cure.** The reason any of these numbers are hard is that echo cancellation is not removing
+MYTHOS's voice at all (bleed 0.1193 while `micEchoCancellation` reports `true`). Every threshold
+here is a compensation for that, and T4 is where it actually gets fixed.
+
+**Unchanged, deliberately:** `PROTECTED_MS` 500, `INITIAL_BLEED_FLOOR` 0.035, both backstop tiers,
+the dormant learned floor, `TAIL_GUARD_SEC`, and the whole cushion. **One lever.** Stage 2
+(`BACKSTOP_RELEASE_RMS_THRESHOLD` → policy floor) stays unpulled — the dominant veto reason was
+`pending-sustaining`, not a threshold refusal.
+
+**NOT live-verified.** The next session decides it, and the two numbers to read are
+`self-interruption` (must not climb) and `barge-in(s) reached the stop door / actually cut audio`
+(the second should stop being 1-in-10).
+
 #### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
 
 **The check that had to run first could not run at all.** The plan's own Q5 says the premise
