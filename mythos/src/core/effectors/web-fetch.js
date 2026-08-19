@@ -24,10 +24,63 @@ function isPrivateIp(ip) {
     if (parts[0] === 0) return true;                                          // 0.0.0.0
   }
   if (net.isIPv6(ip)) {
-    if (ip === '::1' || ip === '::') return true;
-    if (ip.startsWith('fe80:') || ip.startsWith('fc') || ip.startsWith('fd')) return true;
+    var v6 = ip.toLowerCase();
+    if (v6 === '::1' || v6 === '::') return true;
+    if (v6.startsWith('fe80:') || v6.startsWith('fc') || v6.startsWith('fd')) return true;
+    // VERIFIED BYPASS, 2026-08-19: http://[::ffff:127.0.0.1]:PORT/ and its
+    // hex spelling http://[0:0:0:0:0:ffff:7f00:1]/ both passed every check
+    // above and fetched real content off a loopback service. None of the
+    // prefixes match, and net.isIPv4() is false for a bracketed literal, so
+    // the address reached fetch() unexamined. Unwrap to the IPv4 address the
+    // network stack will actually dial, and ask the same question again.
+    var embedded = embeddedIPv4(v6);
+    if (embedded) return isPrivateIp(embedded);
   }
   return false;
+}
+
+// Expand an IPv6 literal to its eight 16-bit groups, or null if it is not one.
+// Handles :: elision and a trailing dotted quad. Deliberately not a regex over
+// the whole address: the point is to end up with the same 128 bits the stack
+// will use, not to recognise a spelling.
+function expandIPv6(v6) {
+  var s = String(v6).toLowerCase();
+  var dotted = s.match(/^(.*:)((?:[0-9]{1,3}[.]){3}[0-9]{1,3})$/);
+  if (dotted) {
+    if (!net.isIPv4(dotted[2])) return null;
+    var b = dotted[2].split(".").map(Number);
+    s = dotted[1] + (((b[0] << 8) | b[1]) >>> 0).toString(16) + ":" + (((b[2] << 8) | b[3]) >>> 0).toString(16);
+  }
+  var halves = s.split("::");
+  if (halves.length > 2) return null;
+  var left = halves[0] ? halves[0].split(":").filter(Boolean) : [];
+  var right = halves.length === 2 && halves[1] ? halves[1].split(":").filter(Boolean) : [];
+  var groups;
+  if (halves.length === 1) {
+    if (left.length !== 8) return null;
+    groups = left;
+  } else {
+    var fill = 8 - left.length - right.length;
+    if (fill < 0) return null;
+    groups = left.concat(new Array(fill).fill("0"), right);
+    if (groups.length !== 8) return null;
+  }
+  var out = [];
+  for (var i = 0; i < 8; i++) {
+    if (!/^[0-9a-f]{1,4}$/.test(groups[i])) return null;
+    out.push(parseInt(groups[i], 16));
+  }
+  return out;
+}
+
+// The IPv4 address embedded in an IPv4-mapped (::ffff:a.b.c.d) or
+// IPv4-compatible (::a.b.c.d) IPv6 literal, in dotted form, else null.
+function embeddedIPv4(v6) {
+  var g = expandIPv6(v6);
+  if (!g) return null;
+  for (var i = 0; i < 5; i++) if (g[i] !== 0) return null;
+  if (g[5] !== 0 && g[5] !== 0xffff) return null;
+  return [(g[6] >> 8) & 255, g[6] & 255, (g[7] >> 8) & 255, g[7] & 255].join(".");
 }
 
 function isBlockedHostname(hostname) {
@@ -57,6 +110,40 @@ async function isInternalUrl(raw) {
   }
 }
 
+// Follow redirects by hand so that every hop is re-checked. redirect: "follow"
+// hands the decision to undici, and the pre-flight guard only ever sees the
+// FIRST url — so a public host answering 302 Location: http://169.254.169.254/
+// walks straight through it. VERIFIED BYPASS, 2026-08-19: a 302 pointing at a
+// loopback service was followed and its body returned to the caller.
+//
+// A blocked hop throws with ssrfBlocked set rather than returning a response,
+// so the direct-fetch catch below cannot mistake it for "this page needs the
+// Jina fallback" — the Jina path is a different request to a different host
+// and re-running it would be answering a blocked request a second time.
+var MAX_REDIRECTS = 5;
+async function guardedFetch(startUrl, init) {
+  var current = startUrl;
+  for (var hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (await isInternalUrl(current)) {
+      var blocked = new Error("blocked: redirect targets a private or internal network");
+      blocked.ssrfBlocked = true;
+      throw blocked;
+    }
+    var res = await fetch(current, Object.assign({}, init, { redirect: "manual" }));
+    if (res.status < 300 || res.status > 399) return res;
+    var location = res.headers.get("location");
+    if (!location) return res;
+    try {
+      current = new URL(location, current).toString();
+    } catch (_) {
+      return res;   // unparseable Location: treat the 3xx as the final answer
+    }
+  }
+  var tooMany = new Error("blocked: too many redirects");
+  tooMany.ssrfBlocked = true;
+  throw tooMany;
+}
+
 async function web_fetch({ url }) {
   if (!url || !String(url).trim()) return { ok: false, error: 'A URL is required.' };
   var raw = String(url).trim();
@@ -71,10 +158,9 @@ async function web_fetch({ url }) {
   try {
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 15000);
-    var res = await fetch(raw, {
+    var res = await guardedFetch(raw, {
       signal: controller.signal,
       headers: { 'User-Agent': BROWSER_UA },
-      redirect: 'follow',
     });
     clearTimeout(timer);
     if (res.ok) {
@@ -95,6 +181,7 @@ async function web_fetch({ url }) {
             content: text.slice(0, MAX_CHARS),
             truncated: truncated,
             totalLength: text.length,
+            source: 'direct',
           }
         };
       }
@@ -106,7 +193,7 @@ async function web_fetch({ url }) {
     var jinaUrl = 'https://r.jina.ai/' + raw.replace(/^https?:\/\//, '');
     var controller2 = new AbortController();
     var timer2 = setTimeout(function() { controller2.abort(); }, 15000);
-    var res2 = await fetch(jinaUrl, {
+    var res2 = await guardedFetch(jinaUrl, {
       signal: controller2.signal,
       headers: { 'User-Agent': BROWSER_UA },
     });
@@ -124,6 +211,7 @@ async function web_fetch({ url }) {
             content: text2.slice(0, MAX_CHARS),
             truncated: truncated2,
             totalLength: text2.length,
+            source: 'jina-reader',
           }
         };
       }
@@ -148,4 +236,15 @@ function stripHtml(html) {
     .trim();
 }
 
-module.exports = { web_fetch: web_fetch, _stripHtml: stripHtml };
+// The SSRF predicates are exported under the same _ convention as _stripHtml:
+// they are the security boundary of this module and had no test at all until
+// 2026-08-19, which is how two live bypasses survived in them.
+module.exports = {
+  web_fetch: web_fetch,
+  _stripHtml: stripHtml,
+  _isPrivateIp: isPrivateIp,
+  _isBlockedHostname: isBlockedHostname,
+  _isInternalUrl: isInternalUrl,
+  _guardedFetch: guardedFetch,
+  _embeddedIPv4: embeddedIPv4,
+};

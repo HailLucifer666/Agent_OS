@@ -34,6 +34,9 @@ const { listOpenCommitments } = require('./from-calendar');
 // "done"), arriving by voice query instead of by proactive speech.
 const { deriveCompletionPayload } = require('./completion-status');
 
+// The ONE fetcher. See web_fetch below for why this file no longer has its own.
+const { web_fetch: sharedWebFetch } = require('./web-fetch');
+
 function ok(result, uiActions) {
   return uiActions ? { ok: true, result, uiActions } : { ok: true, result };
 }
@@ -934,81 +937,24 @@ function buildTools(ctx) {
   // web_fetch: retrieve readable text from a URL. Direct fetch first (with
   // browser UA + naive HTML-to-text strip), falls back to Jina Reader if
   // direct fetch fails or returns nothing useful.
-  async function web_fetch({ url }) {
+  // Delegates to effectors/web-fetch.js. This used to be a second, complete
+  // copy of that fetcher — same browser UA, same Jina fallback, same 15s
+  // bounds — with ONE difference: no SSRF guard at all. web-fetch.js checks
+  // the target against loopback, RFC1918, link-local and the cloud metadata
+  // endpoints, and resolves hostnames to catch DNS rebinding; this copy went
+  // straight from "starts with http" to fetch(). And this is the copy that is
+  // exposed to the model as the `web_fetch` tool (danger:false, tier 0), while
+  // the guarded one was reachable only from the P22 research gate in main.js.
+  // Found 2026-08-19 while writing web-fetch.js's first tests.
+  //
+  // The result shape is unchanged, `source` included, so nothing downstream
+  // has to know this became one function instead of two.
+  async function web_fetch(args) {
     try {
-      if (!url || !String(url).trim()) return fail('A URL is required.');
-      const raw = String(url).trim();
-      if (!/^https?:\/\//i.test(raw)) return fail('URL must start with http:// or https://');
-      const maxChars = 4000;
-      var browserUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
-
-      // Try direct fetch first — fast, no third-party dependency
-      try {
-        var controller = new AbortController();
-        var timer = setTimeout(() => controller.abort(), 15000);
-        var res = await fetch(raw, {
-          signal: controller.signal,
-          headers: { 'User-Agent': browserUA },
-          redirect: 'follow',
-        });
-        clearTimeout(timer);
-        if (res.ok) {
-          var contentType = res.headers.get('content-type') || '';
-          var body = await res.text();
-          var text = body;
-          if (contentType.includes('text/html')) {
-            text = body
-              .replace(/<script[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[\s\S]*?<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
-              .replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-              .replace(/\s+/g, ' ').trim();
-          }
-          if (text && text.trim().length > 0) {
-            var truncated = text.length > maxChars;
-            return ok({
-              url: raw,
-              status: res.status,
-              contentType: contentType.split(';')[0].trim(),
-              content: text.slice(0, maxChars),
-              truncated: truncated,
-              totalLength: text.length,
-              source: 'direct',
-            });
-          }
-        }
-      } catch (_) { /* Direct fetch failed — fall through to Jina */ }
-
-      // Fallback: Jina Reader — prepend https://r.jina.ai/ to the URL
-      try {
-        var jinaController = new AbortController();
-        var jinaTimer = setTimeout(() => jinaController.abort(), 15000);
-        var jinaRes = await fetch('https://r.jina.ai/' + raw, {
-          signal: jinaController.signal,
-          headers: { 'Accept': 'text/plain' },
-        });
-        clearTimeout(jinaTimer);
-        if (jinaRes.ok) {
-          var jinaText = await jinaRes.text();
-          if (jinaText && jinaText.trim().length > 0) {
-            var jinaTruncated = jinaText.length > maxChars;
-            return ok({
-              url: raw,
-              status: jinaRes.status,
-              contentType: 'text/plain',
-              content: jinaText.slice(0, maxChars),
-              truncated: jinaTruncated,
-              totalLength: jinaText.length,
-              source: 'jina-reader',
-            });
-          }
-        }
-      } catch (_) { /* Jina also failed */ }
-
-      return fail('Fetch failed: all providers returned empty or errored.');
+      const out = await sharedWebFetch({ url: args && args.url });
+      return out.ok ? ok(out.result) : fail(out.error);
     } catch (err) {
-      return fail('Fetch failed: ' + err.message);
+      return fail('Fetch failed: ' + ((err && err.message) || String(err)));
     }
   }
 
