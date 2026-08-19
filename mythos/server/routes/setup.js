@@ -19,6 +19,12 @@
 
 const path = require('path');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 function mountSetupRoutes(app, deps) {
   // Injected in tests so a case can describe a machine other than this one.
   // Production passes nothing and gets the real report.
@@ -34,7 +40,7 @@ function mountSetupRoutes(app, deps) {
       // the install. Answering 200 with "no gaps" would be a lie in the safest-
       // looking direction; the client treats a non-200 as indeterminate and
       // paints nothing.
-      return res.status(500).json({ error: 'setup report failed: ' + err.message });
+      return res.status(500).json({ error: 'setup report failed: ' + sanitizeRestError(err) });
     }
 
     // Explicit projection rather than passing `report` through. A future field

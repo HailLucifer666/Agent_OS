@@ -37,6 +37,12 @@ const {
 } = require('../../src/core/config/voice-choice');
 const { readVoiceChoice, writeVoiceChoice } = require('../../src/core/config/voice-choice-store');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 // One sentence. Gemini TTS measures ~3.9s/sentence and is metered, so a sample is
 // deliberately a sample — an operator auditioning eight voices should not be
 // billed for eight paragraphs.
@@ -107,7 +113,7 @@ function mountTtsVoiceRoutes(app, deps) {
       // A listing that cannot be built is a server condition. Answering 200 with
       // an empty engine list would read as "this machine can speak with nothing",
       // which is a different and more alarming claim.
-      res.status(500).json({ error: 'voice listing failed: ' + err.message });
+      res.status(500).json({ error: 'voice listing failed: ' + sanitizeRestError(err) });
     }
   });
 
@@ -143,7 +149,7 @@ function mountTtsVoiceRoutes(app, deps) {
       // Report the failure instead of a save that did not happen — the operator
       // would otherwise restart into the old voice with no explanation.
       log.warn('tts.voice-choice-write-failed', { error: err.message });
-      return res.status(500).json({ error: 'Could not save that choice: ' + err.message });
+      return res.status(500).json({ error: 'Could not save that choice: ' + sanitizeRestError(err) });
     }
 
     // Rebuild the chain so the NEXT reply speaks in it. The reply currently in
@@ -159,7 +165,7 @@ function mountTtsVoiceRoutes(app, deps) {
       // Stored but not live: say so rather than claim success. A restart will
       // pick it up regardless, because the file is already written.
       log.warn('tts.chain-rebuild-failed', { error: err.message });
-      return res.status(200).json({ ok: true, provider, voice, applied: false, error: 'Saved, but it needs a restart to take effect: ' + err.message });
+      return res.status(200).json({ ok: true, provider, voice, applied: false, error: 'Saved, but it needs a restart to take effect: ' + sanitizeRestError(err) });
     }
 
     // A Gemini voice is BOTH surfaces' voice — providers/tts.js's voiceFor()
@@ -284,7 +290,7 @@ function mountTtsVoiceRoutes(app, deps) {
           voice,
         });
       }
-      res.status(502).json({ error: `${provider} could not speak that sample: ` + err.message });
+      res.status(502).json({ error: `${provider} could not speak that sample: ` + sanitizeRestError(err) });
     } finally {
       clearTimeout(timer);
     }

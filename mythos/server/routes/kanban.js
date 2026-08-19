@@ -1,5 +1,11 @@
 'use strict';
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 // server/routes/kanban.js — W9 god-file decomposition (Phase 2).
 // Extracted from server/index.js per the §4.2 factory contract.
 // Deps used: kanbanEffector, agentActions, auditRest.
@@ -20,7 +26,7 @@ function mountKanbanRoutes(app, deps) {
       const card = kanbanEffector.moveCard(req.params.id, req.body.lane);
       res.json({ card, board: kanbanEffector.listBoard() });
       auditRest('rest.kanban.moveCard', { id: req.params.id, lane: req.body.lane }, 'ok');
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); }
   });
   app.delete('/api/kanban/cards/:id', (req, res) => {
     kanbanEffector.deleteCard(req.params.id);
@@ -35,21 +41,21 @@ function mountKanbanRoutes(app, deps) {
     try {
       res.json(agentActions.assembleKanbanPlan(goal.trim()));
       auditRest('rest.kanban.assemble', { goal: String(goal).slice(0, 80) }, 'ok');
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); }
   });
 
   app.post('/api/kanban/cards/:id/build', (req, res) => {
     try {
       res.json(agentActions.buildKanbanCard(req.params.id));
       auditRest('rest.kanban.buildCard', { id: req.params.id }, 'ok');
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); }
   });
 
   app.post('/api/kanban/cards/:id/review', (req, res) => {
     try {
       res.json(agentActions.reviewKanbanCard(req.params.id));
       auditRest('rest.kanban.reviewCard', { id: req.params.id }, 'ok');
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); }
   });
 
   app.post('/api/kanban/cards/:id/accept', (req, res) => {
@@ -59,7 +65,7 @@ function mountKanbanRoutes(app, deps) {
       kanbanEffector.patchCard(req.params.id, { reviewVerdict: null, reviewNotes: null });
       res.json({ board: kanbanEffector.listBoard() });
       auditRest('rest.kanban.acceptCard', { id: req.params.id, lane }, 'ok');
-    } catch (err) { res.status(400).json({ error: err.message }); }
+    } catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); }
   });
 }
 

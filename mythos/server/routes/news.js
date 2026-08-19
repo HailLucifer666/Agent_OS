@@ -10,6 +10,12 @@
 
 const { createNewsFeed } = require('../news-feed');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 function mountNewsRoutes(app) {
   // ---- /api/news — Google News RSS fetched server-side for the NEWS widget
   // (browsers can't: CORS on the feed, X-Frame-Options on the site) ----
@@ -17,7 +23,7 @@ function mountNewsRoutes(app) {
   app.get('/api/news', (req, res) => {
     newsFeed.fetchNews()
       .then((r) => res.json(r))
-      .catch((err) => res.json({ ok: false, error: err.message, items: [] }));
+      .catch((err) => res.json({ ok: false, error: sanitizeRestError(err), items: [] }));
   });
 }
 

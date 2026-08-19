@@ -1,5 +1,11 @@
 'use strict';
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 // server/routes/memory.js — W9 god-file decomposition (Phase 2).
 // Extracted from server/index.js per the §4.2 factory contract.
 // Deps used: memory (the facade with episodic/semantic/skills/identity/audit).
@@ -49,7 +55,7 @@ function mountMemoryRoutes(app, deps) {
       }
       res.json({ store, entries });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: sanitizeRestError(err) });
     }
   });
 
@@ -60,7 +66,7 @@ function mountMemoryRoutes(app, deps) {
       const entries = memory.audit.query({ limit });
       res.json({ entries });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: sanitizeRestError(err) });
     }
   });
 }

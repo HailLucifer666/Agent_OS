@@ -30,6 +30,12 @@
 const path = require('path');
 const child_process = require('child_process');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 const MYTHOS_DIR = path.resolve(__dirname, '..', '..');
 const INSTALL_TIMEOUT_MS = 15 * 60 * 1000; // Hermes builds a venv; adb is a big unzip.
 
@@ -61,7 +67,7 @@ function mountComponentsRoutes(app, deps) {
       // Same rule as /api/setup/status: a report that cannot be built is a
       // server condition, not a verdict about the machine. Answering 200 with
       // "nothing installed" would be a confident lie.
-      return res.status(500).json({ error: 'component report failed: ' + err.message });
+      return res.status(500).json({ error: 'component report failed: ' + sanitizeRestError(err) });
     }
 
     const wslPresent = probeWsl();

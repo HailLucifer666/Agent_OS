@@ -1,5 +1,11 @@
 'use strict';
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 // server/routes/pipeline.js — W9 god-file decomposition (Phase 2).
 // Extracted from server/index.js per the §4.2 factory contract.
 // Deps used: pipelineEffector, buildRunner, agentActions, auditRest.
@@ -31,7 +37,7 @@ function mountPipelineRoutes(app, deps) {
       const goalId = req.body && req.body.goalId;
       res.json(agentActions.executePipelineCard(req.params.id, goalId));
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(400).json({ error: sanitizeRestError(err) });
       return;
     }
     auditRest('rest.pipeline.execute', { id: req.params.id }, 'ok');
@@ -43,29 +49,29 @@ function mountPipelineRoutes(app, deps) {
       const card = pipelineEffector.moveCard(req.params.id, found.stage, { shaped: true });
       res.json({ card, board: pipelineEffector.listAll() });
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(400).json({ error: sanitizeRestError(err) });
       return;
     }
     auditRest('rest.pipeline.shape', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/approve', (req, res) => {
     try { res.json({ card: pipelineEffector.approve(req.params.id), board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); return; }
+    catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); return; }
     auditRest('rest.pipeline.approve', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/reject', (req, res) => {
     try { pipelineEffector.reject(req.params.id); res.json({ board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); return; }
+    catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); return; }
     auditRest('rest.pipeline.reject', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/delete', (req, res) => {
     try { pipelineEffector.reject(req.params.id); res.json({ board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); return; }
+    catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); return; }
     auditRest('rest.pipeline.delete', { id: req.params.id }, 'ok');
   });
   app.post('/api/pipeline/:id/ship', (req, res) => {
     try { res.json({ card: pipelineEffector.ship(req.params.id), board: pipelineEffector.listAll() }); }
-    catch (err) { res.status(400).json({ error: err.message }); return; }
+    catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); return; }
     auditRest('rest.pipeline.ship', { id: req.params.id }, 'ok');
   });
 }

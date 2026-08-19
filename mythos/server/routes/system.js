@@ -28,6 +28,12 @@
 const os = require('os');
 const fs = require('fs');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 // Pure: two os.cpus()-shaped arrays in, per-core busy percentages out.
 // Exported for node:test — easy to get subtly wrong, impossible to eyeball.
 function cpuDeltaPercent(prev, next) {
@@ -142,7 +148,7 @@ function mountSystemRoutes(app, deps) {
       prevCpus = nextCpus;
       res.json(metrics);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: sanitizeRestError(err) });
     }
   });
 }

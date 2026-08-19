@@ -16,6 +16,12 @@ const { SCHEMA } = require('../../src/core/config/schema');
 const { isSecretShaped } = require('../../src/core/config/settings-store');
 const { findModelFile } = require('../../src/core/setup/model-paths');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 function mountConfigRoutes(app, deps) {
   const { config, memory, goalsEffector, kanbanEffector, pipelineEffector } = deps;
 
@@ -201,7 +207,7 @@ function mountConfigRoutes(app, deps) {
         pipeline: { total: pipeTotal, byStage },
       });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: sanitizeRestError(err) });
     }
   });
 }

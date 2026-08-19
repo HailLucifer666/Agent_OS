@@ -32,6 +32,12 @@
 
 const path = require('path');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 const MYTHOS_DIR = path.resolve(__dirname, '..', '..');
 
 function mountImportRoutes(app, deps) {
@@ -70,7 +76,7 @@ function mountImportRoutes(app, deps) {
     } catch (err) {
       // Same rule as /api/setup/status: a scan that could not run is a server
       // condition, not a finding about the machine.
-      res.status(500).json({ error: 'import scan failed: ' + err.message });
+      res.status(500).json({ error: 'import scan failed: ' + sanitizeRestError(err) });
     }
   });
 
@@ -91,7 +97,7 @@ function mountImportRoutes(app, deps) {
     try {
       scan = importer.scanForExisting({ repoMythosDir: MYTHOS_DIR, excludeDir: ownUserDataDir() });
     } catch (err) {
-      return res.status(500).json({ error: 'import scan failed: ' + err.message });
+      return res.status(500).json({ error: 'import scan failed: ' + sanitizeRestError(err) });
     }
     const source = scan.sources.find((s) => path.resolve(s.dir) === path.resolve(dir));
     if (!source) {

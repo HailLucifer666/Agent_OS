@@ -14,6 +14,12 @@
 const path = require('path');
 const express = require('express');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 function mountMediaRoutes(app, deps) {
   const { pcChild, leash, dispatchAction } = deps;
 
@@ -44,7 +50,7 @@ function mountMediaRoutes(app, deps) {
         res.json({ ok: false, error: result.error });
       }
     } catch (err) {
-      res.json({ ok: false, error: err.message });
+      res.json({ ok: false, error: sanitizeRestError(err) });
     }
   });
 
@@ -106,7 +112,7 @@ function mountMediaRoutes(app, deps) {
       const result = await dispatchAction({ tool: 'media_key', args: { key } }, { tier: decision.tier, channel: 'dashboard-media-widget' });
       res.json({ ok: !!result.ok });
     } catch (err) {
-      res.status(502).json({ ok: false, error: err.message });
+      res.status(502).json({ ok: false, error: sanitizeRestError(err) });
     }
   });
 }

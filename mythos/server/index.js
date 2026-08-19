@@ -797,51 +797,11 @@ function createServer(deps) {
     ...(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).filter(isValidOrigin),
   ]);
 
-  // A4 FIX: sanitize error messages before sending to WS clients.
-  // Prevents leaking internal paths, dependency details, stack fragments.
-  //
-  // 2026-08-02: this was flattening EVERY non-matching message to the generic
-  // fallback, including an effector's own honest fail() text (e.g. app_reply's
-  // "whatsapp is not open, so there is no conversation to reply to"), which the
-  // model then received as "An internal error occurred." — a real, spoken-safe
-  // answer thrown away. live-tool-adapter.js's sanitizeResultError routes EVERY
-  // effector failure through this same function, and now tags those values
-  // effectorReason:true — set at the origin, the only place that knows a value is
-  // a fail() string rather than a thrown exception. Everything untagged is still
-  // generalized, so this stays deny-by-default. Tagged text is still scanned for
-  // accidental path/stack/secret leakage (e.g. run_command's raw stderr) before
-  // being allowed through unmodified.
-  function looksLikeUnsafeLeak(msg) {
-    return /[a-zA-Z]:\\|(?:^|[\s(])\/(?:home|Users|root|var|etc|tmp)\//.test(msg) ||
-      /\bat\s+.+\(.+:\d+:\d+\)/.test(msg) ||
-      /\b(?:api[_-]?key|secret|token|password|bearer)\b\s*[:=]/i.test(msg);
-  }
-  function sanitizeErrorForClient(err) {
-    const msg = (err && err.message) || 'Unknown error';
-    // Map common internal errors to safe user-facing strings
-    if (/EACCES|EPERM/.test(msg)) return 'Permission denied — check file permissions.';
-    if (/ENOSPC/.test(msg)) return 'Disk full — unable to write data.';
-    if (/ENOENT/.test(msg)) return 'File not found.';
-    if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg)) return 'Network request failed.';
-    if (/all models failed/.test(msg)) return 'All AI providers are currently unavailable.';
-    // An effector's own honest failure reason, EXPLICITLY tagged as such by
-    // live-tool-adapter.js's sanitizeResultError — the one call site that knows
-    // the value is a fail() string and not a thrown exception. Let it through so
-    // the operator hears what actually went wrong, still scanned for accidental
-    // path/stack/secret leakage (run_command hands back raw stderr) and still
-    // capped so a pathological effector cannot ship an unbounded string.
-    //
-    // Deliberately gated on the tag rather than on "this has no .stack": that
-    // inference would flip this whole function from deny-by-default to
-    // allow-by-default for every hand-built error object anywhere in the server,
-    // which is not a trade a WS-facing sanitizer should make.
-    const isEffectorReason = typeof err === 'object' && err !== null && err.effectorReason === true;
-    if (isEffectorReason && !looksLikeUnsafeLeak(msg)) {
-      return msg.length > 500 ? msg.slice(0, 500) + '…' : msg;
-    }
-    // Generic fallback — strip any paths or technical details
-    return 'An internal error occurred. Check server logs for details.';
-  }
+  // Error sanitization moved to server/sanitize-error.js so the extracted REST
+  // routes can share it — as a closure here it was reachable only from the WS
+  // result path, and routes/*.js answered failures with a raw err.message.
+  // The function bodies are unchanged; see that file for the two policies.
+  const { sanitizeErrorForClient } = require('./sanitize-error');
 
   const app = express();
   app.use((req, res, next) => { req.id = crypto.randomUUID(); next(); });
