@@ -38,7 +38,12 @@ const CLEAN = [
   // list of serverContent field names Gemini sent for the turn. A healthy turn has
   // the list WITHOUT 'interrupted' in it. A turn-parts line with no scFields at all
   // is now an explicit "cannot compute", not a free pass.
-  '{"ts":"2026-08-18T10:00:05.000Z","level":"info","msg":"live.turn-parts","turnId":1,"scFields":"generationComplete,inputTranscription,modelTurn,outputTranscription,turnComplete"}',
+  // BUG-274 step 5b: audioStarveEvents/audioStarveMaxMs at 0 — "measured, and the
+  // chunks kept up". Added for the same reason the flush fields were added below: a
+  // clean fixture has to represent a build that actually SHIPS the instrumentation,
+  // or the healthy case silently pins the un-instrumented reading and the criterion
+  // is never exercised on a session that could have failed it.
+  '{"ts":"2026-08-18T10:00:05.000Z","level":"info","msg":"live.turn-parts","turnId":1,"scFields":"generationComplete,inputTranscription,modelTurn,outputTranscription,turnComplete","audioStarveEvents":0,"audioStarveMaxMs":0}',
   '{"ts":"2026-08-18T10:00:06.000Z","level":"info","msg":"live.echo-check","turnId":1,"ratio":0.2,'
     + '"decision":"accepted","reason":"no-reference","candidateWords":3,"referenceWords":0,'
     + '"referenceCount":0,"msSinceSpoken":null,"msSinceAssistantAudio":120}',
@@ -447,7 +452,16 @@ describe('verify-voice-session: absent flush fields (BUG-273)', () => {
       assert.match(r.stdout, /\[FAIL\] release flush reported/, r.stdout);
       assert.match(r.stdout, /being dropped between client and log/,
         'a discarded field and an old build are different faults and must not share a message');
-      assert.doesNotMatch(r.stdout, /predates/);
+      // Scoped to the release-flush LINE, not to the whole of stdout — the same fix,
+      // for the same reason, as the self-interruption assertion above. BUG-274 step 5b
+      // added continuity criteria that legitimately print "predates BUG-274 step 5" for
+      // a fixture with no live.turn-parts at all, and this over-broad detector matched
+      // them: it means "THIS criterion must not offer the old-build excuse" and was
+      // written as "the word must not appear anywhere". Third time an assertion in this
+      // file has stood in for a per-criterion one. The invariant is unchanged.
+      const flushLine = r.stdout.split('\n').find((l) => /release flush reported/.test(l)) || '';
+      assert.doesNotMatch(flushLine, /predates/,
+        'a discarded field must never be reported as an old build');
     });
   });
 
@@ -470,6 +484,161 @@ describe('verify-voice-session: absent flush fields (BUG-273)', () => {
       const r = run([file]);
       assert.match(r.stdout, /\[PASS\] release flush reported/);
       assert.match(r.stdout, /nothing to report/);
+    });
+  });
+});
+
+// BUG-274 step 5/5b — the CONTINUITY criteria.
+//
+// Everything else in this file is about interruption: something stopping the speech.
+// These cover speech nobody interrupted arriving too slowly to play continuously,
+// which sounds the same from the room and was twice reported as an interruption bug.
+//
+// The rule every case here encodes: an un-instrumented log must read as UNMEASURED,
+// and a measured-and-fine log must read as fine, and the two must never print the same
+// thing. That distinction is the entire reason this ticket needed three sessions —
+// `grep -c '"msg":"voice.live.interrupted"'` returned 0 for a session with 129
+// interrupted turns, and a commit's reasoning was built on that 0.
+describe('verify-voice-session: audio continuity (BUG-274 step 5/5b)', () => {
+  const turn = (extra) => JSON.stringify(Object.assign({
+    ts: '2026-08-19T14:00:00.000Z', level: 'info', msg: 'live.turn-parts', turnId: 1,
+    scFields: 'modelTurn,turnComplete',
+  }, extra || {}));
+  const suspend = (extra) => JSON.stringify(Object.assign({
+    ts: '2026-08-19T14:00:01.000Z', level: 'info', msg: 'voice.capture-suspend',
+    suspended: false, reason: 'own-voice-ended', prerollFrames: 6, framesDropped: 0,
+  }, extra || {}));
+  const lineFor = (stdout, re) => stdout.split('\n').find((l) => re.test(l)) || '';
+
+  it('reports starved turns and the worst gap, in milliseconds', () => {
+    withLog([turn({ audioStarveEvents: 3, audioStarveMaxMs: 1486 }),
+      suspend({ cushionMs: 1736, underruns: 3 })], (file) => {
+      const line = lineFor(run([file]).stdout, /audio arrival/);
+      assert.match(line, /1\/1 turns starved/, line);
+      assert.match(line, /worst gap 1486ms/,
+        'the worst gap is the number that decides whether the cushion can absorb a repeat');
+    });
+  });
+
+  it('does not confuse "measured and fine" with "never measured"', () => {
+    // The two readings that must never share a message. Same criterion, same absence
+    // of any starve event, opposite meanings.
+    withLog([turn({ audioStarveEvents: 0, audioStarveMaxMs: 0 })], (file) => {
+      const line = lineFor(run([file]).stdout, /audio arrival/);
+      assert.match(line, /0\/1 turns starved/, line);
+      assert.doesNotMatch(line, /NOT INSTRUMENTED/, line);
+    });
+    withLog([turn()], (file) => {
+      const line = lineFor(run([file]).stdout, /audio arrival/);
+      assert.match(line, /NOT INSTRUMENTED/,
+        'a turn with no audioStarveEvents was not measured, and saying "0 starved" here '
+        + 'would be the fabricated pass this whole script exists to stop');
+      assert.match(line, /an unmeasured one/, line);
+    });
+  });
+
+  it('FAILS when the server saw starvation and the client reported no cushion at all', () => {
+    // The two halves disagreeing. Either the HUD is on a pre-step-5 bundle, or the
+    // fields are being dropped at server/index.js's allowlist — that seam has eaten a
+    // client field four times, and one of those cost two live sessions.
+    withLog([turn({ audioStarveEvents: 2, audioStarveMaxMs: 954 }), suspend()], (file) => {
+      const r = run([file]);
+      assert.equal(r.status, 1, 'a half-reported stutter must not exit clean');
+      const line = lineFor(r.stdout, /jitter cushion reported back/);
+      assert.match(line, /\[FAIL\]/, line);
+      assert.match(line, /pre-step-5 bundle|dropped at/, line);
+    });
+  });
+
+  it('does not demand a cushion report from a session that never starved', () => {
+    // The inverse false alarm: a criterion that fails on a healthy link teaches the
+    // reader to ignore it.
+    withLog([turn({ audioStarveEvents: 0, audioStarveMaxMs: 0 }), suspend()], (file) => {
+      const line = lineFor(run([file]).stdout, /jitter cushion reported back/);
+      assert.match(line, /\[PASS\]/, line);
+      assert.match(line, /nothing starved/, line);
+    });
+  });
+
+  it('reads an ABSORBED stall as the success it is, not as a missing report', () => {
+    // The bug this test was written for, found by re-reading the criterion rather than
+    // the code. When the cushion does its job the late chunk causes NO underrun, so a
+    // conditionally-sent cushionMs would disappear from the log exactly when the fix
+    // worked — while the server still logged audioStarveEvents > 0 for the same turn.
+    // The criterion above reads that pair, so it would have failed hardest on a
+    // perfectly working session. cushionMs is therefore sent on every transition
+    // regardless of health, and this pins that reading.
+    withLog([turn({ audioStarveEvents: 2, audioStarveMaxMs: 477 }),
+      suspend({ cushionMs: 250 })], (file) => {
+      const r = run([file]);
+      const line = lineFor(r.stdout, /jitter cushion reported back/);
+      assert.match(line, /\[PASS\]/, line);
+      assert.match(line, /0 underrun\(s\) heard/, line);
+      assert.match(line, /the intended outcome/,
+        'starvation on the wire with nothing heard in the room is the mechanism working, '
+        + 'and the tool must say so rather than reporting a gap in its own instrumentation');
+    });
+  });
+
+  it('refuses to pass on the merits when nothing could have carried the answer', () => {
+    // Starvation, no capture-suspend transitions at all: the client had no channel to
+    // report on. That is "not judgeable", and it must not be dressed up as a pass.
+    withLog([turn({ audioStarveEvents: 2, audioStarveMaxMs: 954 })], (file) => {
+      const line = lineFor(run([file]).stdout, /jitter cushion reported back/);
+      assert.match(line, /not judgeable/, line);
+      assert.match(line, /NOT a pass on the merits/, line);
+    });
+  });
+
+  it('FAILS when the turn boundary the cushion depends on is going missing', () => {
+    // missedTurnEnds is the player saying live-turn-complete did not arrive. The
+    // cushion's whole accounting rests on that frame, so a non-zero count means the
+    // numbers beside it describe turns it could not delimit.
+    withLog([turn({ audioStarveEvents: 1, audioStarveMaxMs: 400 }),
+      suspend({ cushionMs: 650, underruns: 1, missedTurnEnds: 2 })], (file) => {
+      const r = run([file]);
+      assert.equal(r.status, 1);
+      const line = lineFor(r.stdout, /turn boundary the cushion depends on/);
+      assert.match(line, /\[FAIL\] .*missedTurnEnds=2/, line);
+      assert.match(line, /not trustworthy/,
+        'it must say the cushion numbers cannot be relied on, not merely report a count');
+    });
+  });
+
+  it('catches a server still on a pre-step-5 build, which the old grep never could', () => {
+    // scFields says Gemini interrupted these turns; no live.interrupted line exists.
+    // This is the exact blind spot that produced "zero server-side interrupts all
+    // session" for a log with 129 of them.
+    withLog([turn({ scFields: 'interrupted,modelTurn', audioStarveEvents: 0, audioStarveMaxMs: 0 })],
+      (file) => {
+        const line = lineFor(run([file]).stdout, /server-side interrupts are logged/);
+        assert.match(line, /NOT ONE live.interrupted line exists/, line);
+        assert.match(line, /pre-step-5 build/, line);
+      });
+  });
+
+  it('reports the live.interrupted lines when the build does write them', () => {
+    withLog([turn({ scFields: 'interrupted,modelTurn', audioStarveEvents: 0, audioStarveMaxMs: 0 }),
+      '{"ts":"2026-08-19T14:00:02.000Z","level":"info","msg":"live.interrupted","turnId":1,'
+      + '"interruptsThisTurn":1,"withFields":"interrupted,modelTurn","audioPartsSoFar":4}'],
+    (file) => {
+      const line = lineFor(run([file]).stdout, /server-side interrupts are logged/);
+      assert.match(line, /1 live.interrupted line\(s\)/, line);
+      assert.match(line, /per-frame vs per-turn/,
+        'the two counts measure different things and must not be read as disagreeing');
+    });
+  });
+
+  it('stays quiet about all of this on a log written before the instrumentation', () => {
+    // An old log must report as old, not as broken: these criteria must not manufacture
+    // failures for a session that simply predates them.
+    withLog(BAD, (file) => {
+      const r = run([file]);
+      for (const re of [/jitter cushion reported back/, /server-side interrupts are logged/]) {
+        const line = lineFor(r.stdout, re);
+        assert.match(line, /\[PASS\]/, line);
+        assert.match(line, /predates BUG-274 step 5/, line);
+      }
     });
   });
 });

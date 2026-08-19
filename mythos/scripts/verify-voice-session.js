@@ -91,6 +91,9 @@ const CRITERIA_NOTES = {
   flush: 'nothing is sent DURING a hold, so the release flush is the only remaining carrier',
   policy: 'informational — read alongside how the session actually felt',
   selftalk: 'was 26 of 61 turns (43%) on 2026-08-18 — the "rambling on by yourself" session',
+  starve: 'gaps of 272-1486ms on ~half of turns on 2026-08-19 — heard as one word per second',
+  cushion: 'the client half of the same question; absent on a log written before step 5',
+  interruptedLine: 'the old grep target was a bus event name and returned 0 on every log ever',
 };
 
 function parseArgs(argv) {
@@ -288,6 +291,117 @@ function main() {
           + `would be a fabricated pass`)
       : 'no live.turn-parts entries — cannot compute; was the session actually spoken?',
     CRITERIA_NOTES.interrupted);
+
+  // --- V1b: AUDIO CONTINUITY (BUG-274 step 5/5b) ---
+  //
+  // A different fault from everything above it. The rest of this script is about
+  // INTERRUPTION — something stopping the speech. This is speech nobody interrupted
+  // arriving too slowly to be played continuously, which from the room sounds like
+  // "one word, a second of silence, the next word" and is indistinguishable from a
+  // barge-in that half-worked. The operator reported it as an interruption bug twice.
+  //
+  // EVERY FAIL BELOW IS CONDITIONAL ON THE INSTRUMENTATION BEING PRESENT. A log
+  // written before step 5 has none of these fields, and an old log must report as old
+  // rather than as broken — the inverse of the fabricated-pass rule, and the same
+  // reason: the reader has to be able to tell "measured and fine" from "not measured".
+  // Its own binding rather than the V2 block's `suspendLines`, which is declared below
+  // this point — reusing that name here would be a temporal-dead-zone crash on the
+  // first log that reached these lines, i.e. only ever in front of the operator.
+  const suspendLinesAll = of('voice.capture-suspend');
+  const starveTurns = turns.filter((e) => typeof e.audioStarveEvents === 'number');
+  const starved = starveTurns.filter((e) => e.audioStarveEvents > 0);
+  const worstStarveMs = starveTurns.reduce(
+    (m, e) => Math.max(m, Number(e.audioStarveMaxMs) || 0), 0);
+  const starveInstrumented = starveTurns.length > 0;
+
+  // Informational, deliberately. A starved turn is a fact about the network, not a
+  // defect in this repo: the cushion's job is to absorb it, and the honest report is
+  // how often and how badly, not pass/fail. What must never be ambiguous is whether
+  // the number was measured at all.
+  check('audio arrival: how often playback ran dry (BUG-274 step 5)', true,
+    !turns.length
+      ? 'no live.turn-parts entries — nothing to measure'
+      : (starveInstrumented
+        ? `${starved.length}/${starveTurns.length} turns starved, worst gap ${worstStarveMs}ms`
+          + (starved.length
+            ? ' — the cushion should have absorbed a REPEAT of that gap; the operator\'s ear decides'
+            : ' — chunks kept up with playback all session')
+        : `NOT INSTRUMENTED: ${turns.length} turns and not one carries audioStarveEvents, so `
+          + 'this log predates BUG-274 step 5. Not a clean session — an unmeasured one.'),
+    CRITERIA_NOTES.starve);
+
+  // The client half, and the trap this exists to catch. pcm-player.js's cushion state
+  // rides voice.capture-suspend as cushionMs/underruns/missedTurnEnds. If the server
+  // saw turns starve and the client reported no cushion at all, the two halves
+  // disagree, and the likeliest causes are both invisible otherwise: the HUD is still
+  // running a pre-step-5 bundle (no reload), or the fields are being dropped at
+  // server/index.js's allowlist. That seam has silently eaten a client field FOUR
+  // times, and one of those cost two live sessions of flushedRaw.
+  const cushionLines = suspendLinesAll.filter((e) => typeof e.cushionMs === 'number');
+  const worstCushionMs = cushionLines.reduce((m, e) => Math.max(m, Number(e.cushionMs) || 0), 0);
+  // MAX, not a sum: underruns is a session-cumulative counter, so the largest value
+  // seen IS the session total. Summing the lines would multiply-count it.
+  const peakUnderruns = cushionLines.reduce((m, e) => Math.max(m, Number(e.underruns) || 0), 0);
+  const missedEnds = suspendLinesAll.reduce(
+    (m, e) => Math.max(m, Number(e.missedTurnEnds) || 0), 0);
+
+  check('the player\'s jitter cushion reported back',
+    // Judgeable only when the server side says there was something to absorb AND there
+    // was at least one transition to carry the answer back on.
+    !starveInstrumented || !starved.length || !suspendLinesAll.length
+      ? true : cushionLines.length > 0,
+    !starveInstrumented
+      ? 'not instrumented in this log (predates BUG-274 step 5)'
+      : (!starved.length
+        ? `nothing starved; cushion ${cushionLines.length ? worstCushionMs + 'ms' : 'not reported'}`
+        : (!suspendLinesAll.length
+          ? `${starved.length} turns starved but no capture-suspend transitions exist to carry `
+            + 'the client\'s answer — not judgeable, and NOT a pass on the merits'
+          : (cushionLines.length
+            // The success case reads as success: starvation on the wire, a cushion that
+            // grew to meet it, and — if underruns is absent — nothing the room heard.
+            ? `cushion reached ${worstCushionMs}ms, ${peakUnderruns} underrun(s) heard`
+              + (peakUnderruns === 0
+                ? ' — the cushion absorbed the late chunks, which is the intended outcome'
+                : '')
+            : `${starved.length} turns starved and the client reported NO cushion state at all. `
+              + 'cushionMs is sent on every transition regardless of health, so its absence is '
+              + 'not "a quiet session": either the HUD is running a pre-step-5 bundle (reload '
+              + 'it — files are served no-cache), or the fields are being dropped at '
+              + 'server/index.js\'s allowlist.'))),
+    CRITERIA_NOTES.cushion);
+
+  // The cushion's whole accounting rests on knowing where a model turn ends, and that
+  // comes from the live-turn-complete frame. When the player sees a turn run past its
+  // attribution ceiling it says so rather than charging the gap to the transport, so a
+  // non-zero count here means the boundary signal is broken — a DIFFERENT fault from a
+  // slow link, wanting a different fix, and silent until this line.
+  check('the turn boundary the cushion depends on is arriving', missedEnds === 0,
+    missedEnds === 0
+      ? 'no lost turn boundaries reported'
+      : `missedTurnEnds=${missedEnds} — live-turn-complete is not reaching the HUD, so the `
+        + 'cushion numbers above describe turns it could not delimit and are not trustworthy',
+    CRITERIA_NOTES.cushion);
+
+  // Cross-check on the log line BUG-274 step 5 added, and the reason it was added: the
+  // old diagnostic grepped 'voice.live.interrupted', which is a BUS EVENT NAME no logger
+  // has ever written, so it returned 0 against every log ever produced and a whole
+  // commit's reasoning was built on that 0. `live.interrupted` is the real line. If the
+  // log is step-5-instrumented and scFields says turns were interrupted while not one
+  // live.interrupted line exists, the server is running an older build than the HUD.
+  const interruptedLines = of('live.interrupted');
+  check('server-side interrupts are logged where they happen', true,
+    !starveInstrumented
+      ? 'not instrumented in this log (predates BUG-274 step 5)'
+      : (interruptedLines.length
+        ? `${interruptedLines.length} live.interrupted line(s) against ${interruptedTurns.length} `
+          + 'turn(s) whose scFields carried `interrupted` (per-frame vs per-turn — they are '
+          + 'not required to match, and the per-turn figure is the one the criterion above uses)'
+        : (interruptedTurns.length
+          ? `${interruptedTurns.length} turns report \`interrupted\` in scFields but NOT ONE `
+            + 'live.interrupted line exists — the server is on a pre-step-5 build'
+          : 'no server-side interrupts this session, and the line exists to say so')),
+    CRITERIA_NOTES.interruptedLine);
 
   // --- V2: the ceilings, split by cause ---
   const suspendLines = of('voice.capture-suspend');

@@ -269,7 +269,19 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (!st) return { cushionMs: undefined, underruns: undefined, missedTurnEnds: undefined };
     const stuttered = st.underruns > 0;
     return {
-      cushionMs: stuttered ? Math.round(st.cushionSec * 1000) : undefined,
+      // ALWAYS sent, unlike the two below, and the asymmetry is deliberate. This field
+      // is what makes "the client is reporting and the cushion is at its base" tell
+      // apart from "the client is not reporting" — and those need opposite responses
+      // (nothing, versus reload the HUD or fix the allowlist).
+      //
+      // The success case forced this. When the cushion ABSORBS a late chunk there is no
+      // underrun, so a conditional cushionMs would vanish from the log exactly when the
+      // mechanism worked, while the server side still logged audioStarveEvents > 0 for
+      // the same turn. verify-voice-session.js reads that pair, and with a conditional
+      // field its "the two halves disagree" criterion would have failed hardest on a
+      // perfectly working session. One number per transition is a cheap price for an
+      // instrument that is not backwards.
+      cushionMs: Math.round(st.cushionSec * 1000),
       underruns: stuttered ? st.underruns : undefined,
       // Reported on its own condition, NOT alongside underruns: a lost turn boundary
       // is a different fault from a slow link and can happen on a session with zero

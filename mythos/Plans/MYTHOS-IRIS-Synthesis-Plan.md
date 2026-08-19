@@ -59,8 +59,26 @@ widens nothing.
 cushion's base/margin/max. `endTurn()` is driven by a frame the server **already** sends, so
 nothing new goes upstream and AD-1 is untouched.
 
+**STEP 5c, same day — the gate asked the operator to read numbers the tool never printed.**
+Steps 5 and 5b added four measurements and `scripts/verify-voice-session.js` reported **none** of
+them, so judging the continuity half meant hand-grepping raw JSON — which is how every false
+finding in this ticket was produced, including the `grep -c` that returned 0 for a session with
+129 interrupted turns. Four criteria added: starved turns and the worst gap (informational — a
+starved turn is the network's fact, not a defect); a **FAIL** when the server saw starvation and
+the client reported no cushion at all (pre-step-5 bundle, or fields dropped at the allowlist — a
+seam that has eaten a client field four times); a **FAIL** on `missedTurnEnds > 0`, saying the
+cushion numbers cannot be trusted; and a cross-check of `live.interrupted` lines against
+`scFields`. **Every new FAIL is conditional on the instrumentation being present**, so an older
+log reads as unmeasured rather than as broken — and "measured and fine" never prints the same
+string as "never measured". **One bug in that criterion, caught by re-reading it:** it compared
+the server's starve count against a `cushionMs` the client only sent when there WAS an underrun —
+so on a session where the cushion did its job and absorbed the late chunks, it would have reported
+"the two halves disagree, reload your HUD". It failed hardest on success. `cushionMs` is now sent
+on every transition regardless of health. Suite **5339/5339, 0 fail, 0 skipped** (+10).
+
 **NEXT ACTION — unchanged: the ONE live session described in the block below**, which gates both
-the step-4 interruption behaviour and the step-5/5b continuity behaviour. One caveat there is now
+the step-4 interruption behaviour and the step-5/5b continuity behaviour. The verifier now prints
+the continuity numbers directly, so the gate no longer depends on reading raw JSON by hand. One caveat there is now
 withdrawn: *"a repeat of any gap over ~600ms will still be audible"* was step 5's limit and is what
 step 5b removes. The criterion **"at most one audible gap per link degradation"** now applies at
 any stall length up to the 2s cap. The quiet-interruption band (peak ~0.024–0.031) is still

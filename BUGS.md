@@ -1186,7 +1186,67 @@ thing wrong. All three are allowlisted in `server/index.js`.
 base/margin/max cushion constants, and the wire protocol — `endTurn()` is driven by a frame the
 server **already** sends, so nothing new goes upstream and AD-1 is untouched.
 
-**Suite: 5329/5329, 0 fail, 0 skipped** (+5). **NOT live-verified.**
+#### T4 step 5c — 🔧 CODED 2026-08-20: the gate asked the operator to read numbers the tool never printed
+
+**The gap, found by re-reading the gate instead of the code.** Steps 5 and 5b added four
+measurements — `audioStarveEvents`, `audioStarveMaxMs`, the client's `cushionMs`/`underruns`/
+`missedTurnEnds`, and the `live.interrupted` log line — and `scripts/verify-voice-session.js`
+**reported none of them.** The pass criteria written for the live session literally require
+"per-turn `audioStarveEvents` visible in `live.turn-parts`" and "`live.interrupted` lines
+present", which meant hand-grepping raw JSON. **Hand-reading this log is what produced every
+false finding in this ticket**, including the `grep -c` that returned 0 for a session with 129
+interrupted turns. An instrument that stops one step short of the number is how that happens.
+
+**Four criteria added**, in the script's existing style:
+
+1. **`audio arrival: how often playback ran dry`** — starved turns over measured turns, and the
+   worst gap in ms. **Informational by design:** a starved turn is a fact about the network, not
+   a defect in this repo — the cushion's job is to absorb it, and the operator's ear is the
+   verdict.
+2. **`the player's jitter cushion reported back`** — **FAILS** when the server saw turns starve
+   and the client reported no cushion state at all. That means the two halves disagree, and both
+   likely causes are otherwise invisible: the HUD is running a pre-step-5 bundle (not reloaded),
+   or the fields are being dropped at `server/index.js`'s allowlist — **a seam that has silently
+   eaten a client field four times**, one of which cost two live sessions.
+3. **`the turn boundary the cushion depends on is arriving`** — **FAILS** on `missedTurnEnds > 0`,
+   and says outright that the cushion numbers beside it describe turns it could not delimit and
+   are therefore not trustworthy.
+4. **`server-side interrupts are logged where they happen`** — cross-checks `live.interrupted`
+   lines against turns whose `scFields` carried `interrupted`. Says explicitly that per-frame and
+   per-turn counts are **not required to match**, so the two are never read as disagreeing.
+
+**THE RULE EVERY ONE OF THEM ENCODES, and the reason none of them is a plain pass/fail:** an
+un-instrumented log must read as **UNMEASURED**, a measured-and-fine log must read as **fine**,
+and the two must never print the same string. **Every new FAIL is conditional on the
+instrumentation being present**, so a log written before step 5 reports as old rather than as
+broken — the inverse of the fabricated-pass rule and the same principle behind it.
+
+**Two brittle things fixed while in there, both the same class the file already names:**
+
+- The `CLEAN` fixture now carries `audioStarveEvents: 0`. The fixture's own comment says a clean
+  fixture must represent a build that actually **ships** the instrumentation "or it pins the very
+  blind spot that let a P0 sit blocked" — without this the healthy case would have asserted the
+  un-instrumented reading forever.
+- One assertion grepped **all of stdout** for `/predates/` to protect a single criterion from
+  offering the old-build excuse, and my new criteria legitimately print "predates BUG-274 step 5".
+  Scoped to that criterion's line, invariant unchanged. **Third time an assertion in this file has
+  stood in for a per-criterion one** — the previous two are commented in place.
+
+**A bug in my own criterion, found by re-reading it rather than the code — and it would have
+fired on success.** The cushion criterion compared the server's `audioStarveEvents` against the
+client's `cushionMs`, and `cushionMs` was sent only when `underruns > 0`. But **when the cushion
+absorbs a late chunk there is no underrun** — so on a perfectly working session the server would
+log starvation, the client would send nothing, and the criterion would report "the two halves
+disagree, reload your HUD". It failed hardest exactly when the fix worked. `cushionMs` is now
+sent on **every** transition regardless of health (`underruns`/`missedTurnEnds` stay conditional),
+which also makes its absence mean something precise: not "a quiet session" but "the client is not
+reporting". Pinned by a test named for the absorbed-stall case, plus one for "starvation with no
+transition to answer on" reporting **not judgeable** rather than passing on the merits.
+
+**Suite: 5339/5339, 0 fail, 0 skipped** (+10). **NOT live-verified** — this makes the gate
+*readable*, it does not run it.
+
+**Suite: 5329/5329, 0 fail, 0 skipped** (+5) at step 5b. **NOT live-verified.**
 
 #### T5 findings — 🔍 MEASURED 2026-08-19 (`d9f2ad2`): three of this item's premises do not survive
 
