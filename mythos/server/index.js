@@ -1595,7 +1595,21 @@ function createServer(deps) {
     return callback(true);
   }
 
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient });
+  // maxPayload is an explicit bound, not a default. The ws library's default is
+  // 100 MiB per frame, while every HTTP body on this server is capped far lower
+  // (express.json at 1mb, the one raw audio route at 15mb). The upgrade rate
+  // limiter throttles NEW connections; it says nothing about how large a frame
+  // an already-authenticated socket may send, so a single client could make the
+  // server buffer 100 MiB at a time.
+  //
+  // 16 MiB is chosen to sit above the largest legitimate inbound frame with room
+  // to spare: the biggest one is a vision-query, which carries a base64 webcam
+  // JPEG at quality 0.7 and full sensor resolution (ui/public/js/vision/camera.js),
+  // and the phone node's audio chunks are orders of magnitude smaller. Raise it
+  // via WS_MAX_PAYLOAD_BYTES if a real frame is ever refused — a refused frame
+  // closes the socket with code 1009, which is loud, not silent.
+  const WS_MAX_PAYLOAD = Number(process.env.WS_MAX_PAYLOAD_BYTES) || 16 * 1024 * 1024;
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient, maxPayload: WS_MAX_PAYLOAD });
 
   function broadcastAll(msg) {
     const payload = JSON.stringify(msg);
