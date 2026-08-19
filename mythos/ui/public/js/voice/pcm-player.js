@@ -280,15 +280,18 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
   // grown to CUSHION_MAX_SEC and is still underrunning is a transport verdict,
   // not a tuning problem, and this is where that shows up.
   //
-  // Q3 — WHO ACTUALLY READS THIS: s2s-bridge.js's endAudioOutSuppression(), which
-  // puts cushionMs/underruns on the voice.capture-suspend line (server/index.js
-  // allowlists both). That is the only reader, and it fires only when a barge-in
-  // suppression lifts — so these numbers reach the log on interrupted turns and
-  // not on quiet ones. Adequate for the question they were added to answer
-  // ("was the operator's chopped reply the network or the barge-in?") and NOT a
-  // continuous record of link health; live.turn-parts.audioStarveEvents is that,
-  // on the server side. Said here because a stat that is only sometimes emitted
-  // reads as a stat that is always emitted, and that is how a zero gets believed.
+  // Q3 — WHO ACTUALLY READS THIS: s2s-bridge.js's logSuspendTransition(), which puts
+  // cushionMs on EVERY capture-suspend line and underruns/missedTurnEnds beside it
+  // when they are non-zero (server/index.js allowlists all three). From there
+  // scripts/verify-voice-session.js reads them against the server's own
+  // live.turn-parts.audioStarveEvents — the client and server halves of one question.
+  //
+  // cushionMs is unconditional on purpose. It was briefly sent only when something had
+  // stuttered, which is wrong in the direction that matters: a cushion doing its job
+  // absorbs the late chunk and records NO underrun, so the field would have vanished
+  // from the log exactly when the mechanism worked, while the server still logged
+  // starvation for the same turn. A stat that is only sometimes emitted reads as a
+  // stat that is always emitted, and that is how a zero gets believed.
   function stats() {
     return {
       cushionSec, underruns, worstDrySec,
