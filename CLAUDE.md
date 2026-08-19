@@ -204,17 +204,22 @@ testing discipline (below).
 - No fix is "done" until live-verified against the running system (or the
   relevant oracle: `media_status` for playback, window title for Spotify).
   Plausible theories have been wrong 3+ times in this repo's history.
-- Baseline (reproduced 2026-08-03 at commit `5ee5306`, full `cd mythos &&
-  node --test`): **2488 tests, 2487 pass, 0 fail, 1 skip, 0 todo.** The 1 skip
-  is `test/sensors-file.test.js` honestly skipping via `t.skip()` — an
-  environment-specific `fs.watch` crash on this Node/Windows build, not a real
-  failure. There are currently no known deterministic failures — anything
-  failing is a regression.
-  - **This number goes stale fast — do not hand-edit it.** The "1735" that sat
-    here until 2026-08-03 was itself the second stale baseline in this file
-    (see the "1197" note below). `scripts/sync-test-count.js` emits the real
-    figures on every commit; trust its output over anything written in prose,
-    here or in a plan document.
+- **Baseline: 0 failures, 0 skips. The test COUNT is deliberately not written
+  here.** Three different numbers have sat in this paragraph and every one of
+  them went stale — 1197, then 1735, then 2488, each presented as current while
+  the real suite had moved on by hundreds of tests. A number a human types is a
+  number nobody updates, and this file is read at the start of every session, so
+  a stale one here misleads more effectively than it informs. Removed 2026-08-19
+  rather than corrected for a fourth time.
+  - Get the real figures from the thing that measures them:
+    `cd mythos && node scripts/sync-test-count.js --check`. It prints
+    `tests=… pass=… fail=… skipped=…` plus the effector/provider/sensor counts,
+    and it is the same code the pre-commit hook and CI run. Trust its output
+    over any number written in prose, here or in a plan document.
+  - What IS stable, and what this baseline actually asserts: **fail=0 and
+    skipped=0.** There are no known deterministic failures — anything failing is
+    a regression. A run that reports 1 skip is almost always the short-`TEMP`
+    artefact described below (`test/sensors-file.test.js`), not a real skip.
   - **The old "1197" baseline in this file was stale for days.** Until
     `42c2b48` (2026-07-30) all three gates — `sync-test-count.js`, the
     pre-commit hook and CI — globbed `test/*.test.js` **non-recursively**, so

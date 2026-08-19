@@ -147,8 +147,21 @@ function computeEffectorCount() {
     let mod;
     try {
       mod = require(path.join(dir, file));
-    } catch {
-      continue; // not a requirable module in isolation — contributes 0, not a crash
+    } catch (err) {
+      // A SyntaxError means the file does not PARSE. Swallowing that made the
+      // effector count quietly drop by however many tools the file declared,
+      // and the gate then compared docs against the smaller number and passed
+      // — a broken effector shipping behind a green commit hook. Anything
+      // else (a module that needs real deps at load time) stays tolerated,
+      // but is now announced instead of vanishing: as of 2026-08-19 every
+      // file in this directory requires cleanly, so any line here is news.
+      if (err instanceof SyntaxError) {
+        throw new Error('sync-test-count: ' + file + ' does not parse — ' + err.message
+          + '. Refusing to report an effector count that silently excludes it.');
+      }
+      console.warn('sync-test-count: ' + file + ' is not requirable in isolation ('
+        + (err.code || err.message) + ') — counted as 0 tools');
+      continue;
     }
     if (Array.isArray(mod.TOOLS)) {
       total += mod.TOOLS.length;
@@ -232,6 +245,12 @@ function readmeSlots(counts) {
     // actually identifies the slot.
     { file, pattern: /(## [^\n]*?)(\d+)(-Tool Effectors)/, value: counts.effectors },
     { file, pattern: /(\]\(#-?)(\d+)(-tool-effectors\))/, value: counts.effectors },
+    // The LINK TEXT of the same anchor. Found stale on 2026-08-19 reading
+    // "[142-Tool Effectors](#146-tool-effectors)" — the href was a slot and the
+    // words in front of it were not, so the two halves of one link disagreed by
+    // four. The heading slot above is anchored on "## " and cannot reach this,
+    // which is exactly why it needs its own.
+    { file, pattern: /(\[)(\d+)(-Tool Effectors\]\(#)/, value: counts.effectors },
     { file, pattern: /(badge\/effectors-)(\d+)(%20tools)/, value: counts.effectors },
     { file, pattern: /(\[\*\*)(\d+)( Tools\*\*\]\(#)/, value: counts.effectors },
     { file, pattern: /(EFF\[")(\d+)( Effectors"\])/, value: counts.effectors },
