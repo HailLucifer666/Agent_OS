@@ -298,7 +298,7 @@ function renderPlanTabContent(engagement) {
       <div class="engag-stage-card${current ? ' current' : ''}">
         <div class="engag-stage-header">
           <span class="engag-stage-name">${escapeHtml(stage.name)}</span>
-          <span class="engag-stage-type-badge ${stage.type}">${stage.type}</span>
+          <span class="engag-stage-type-badge ${escapeAttr(stage.type)}">${escapeHtml(stage.type)}</span>
         </div>
         <div class="engag-stage-prompt">${escapeHtml(stage.prompt || '')}</div>
         ${stage.verification ? `

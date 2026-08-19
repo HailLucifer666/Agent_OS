@@ -32,6 +32,7 @@ import { mountSetupScreen } from './setup/setup-screen.js';
 import { mountComponentBanner } from './setup/component-banner.js';
 import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
+import { safeUrl } from './url.js';
 
 const ctx = { subscribe, onRefresh };
 
@@ -1121,7 +1122,16 @@ subscribe(['open-web'], (msg) => {
     return;
   }
   if (p.widgetType === 'newtab' || p.widgetType === 'news') {
-    const targetUrl = p.url || 'https://news.google.com';
+    // p.url is untrusted: it comes from the open_web tool, whose URLs originate
+    // in web-search results, fetched page content and model output. window.open
+    // honours javascript:, data: and file: just as happily as http(s), so the
+    // scheme has to be gated here and NOT fall back to the default on a reject —
+    // opening a different page than the one asked for would be a silent lie.
+    const targetUrl = p.url ? safeUrl(p.url) : 'https://news.google.com';
+    if (!targetUrl) {
+      ackRender(msg, { mounted: false, reason: 'that link was not an http(s) URL, so I did not open it' });
+      return;
+    }
     // window.open returns null when the popup is blocked, which is a real and
     // common failure that used to be reported to the operator as a success.
     const win = window.open(targetUrl, '_blank', 'noopener');
