@@ -106,25 +106,41 @@ describe('BUG-273 A1 — the adaptive floor is dormant by default', () => {
       `latency ${latency}ms — the BUG-273 target is under 2000ms and the session measured 13,396ms`);
   });
 
-  it('the QUIETEST measured turn still does not release, and that is stated, not hidden', async () => {
+  it('the QUIETEST measured turn NOW releases — the tripwire below fired and the numbers arrived', async () => {
     const { createBargeInPolicy, INITIAL_BLEED_FLOOR } = await import(POLICY_URL);
     const c = clock();
     const p = createBargeInPolicy({ now: c.now });
 
     teachRoomAndLeaveWindow(p, c, BLEED_PEAK);
 
-    // Q5, honestly: 0.0395 < INITIAL_BLEED_FLOOR 0.05. This fix takes the floor
-    // from ~3x the operator's voice down to just under its loud end; it does NOT
-    // reach the quiet end. Lowering the tier further is deliberately BUG-273 A2's
-    // call, because below 0.05 the only thing rejecting 0.123 bleed is the 350ms
-    // sustain test, and whether that holds depends on what actually reaches Gemini
-    // during a hold — which nobody has measured yet. Locking the known limit here
-    // means the next session cannot mistake it for a fix that worked completely.
-    assert.ok(OPERATOR_QUIET < INITIAL_BLEED_FLOOR,
-      'kept as a live reminder: the quiet end of measured operator speech is still under the tier');
+    // THIS TEST WAS A TRIPWIRE AND IT FIRED AS DESIGNED. Its previous assertion was
+    // that OPERATOR_QUIET (0.0395) does NOT release, with the message "if this ever
+    // starts releasing, the tier was lowered — BUG-273 A2 must have the numbers".
+    // BUG-274 lowered the tier 0.05 -> 0.035 on 2026-08-19, and A2's open question —
+    // "what actually reaches Gemini during a hold" — is the very thing that got
+    // answered, so the condition it set is satisfied rather than overridden:
+    //
+    //   * `raw` on the live capture-suspend lines showed 34-54 frames (3.4-5.4s) of the
+    //     operator's speech passing the noise gate and reaching the model DURING holds,
+    //     with Gemini returning transcripts of 7-106 words for those same turns. So
+    //     MYTHOS was hearing the interruption and continuing to speak.
+    //   * The decisive hold peaked at 0.0480 against the 0.05 floor — refused by 0.002.
+    //   * Clean bleed measured 0.0031-0.0309 with AEC3 confirmed granted, i.e. a full
+    //     order of magnitude below the 0.09-0.38 the 0.05 floor was chosen against.
+    //   * The 0.05 floor was ALSO 2.5x the noise gate's own 0.02 "this is the operator"
+    //     threshold, so a band existed where speech was transmitted but invisible here.
+    //
+    // The floor now sits between the two measured populations, so the quiet end that
+    // this test existed to flag as unreachable IS reachable. The honest remaining limit
+    // moved rather than vanished: holds at 0.0242/0.0245 sit inside the bleed range and
+    // no scalar floor separates them — that limit is pinned in
+    // test/bug-274-barge-in-floor-separates-populations.test.js against measured audio.
+    assert.ok(OPERATOR_QUIET > INITIAL_BLEED_FLOOR,
+      `0.0395 must now clear the floor (${INITIAL_BLEED_FLOOR}); if it does not, the floor went `
+      + 'back up and the interruption this unblocked is blocked again');
     const d = feed(p, c, OPERATOR_QUIET, 8);
-    assert.equal(d.filter((x) => x.release).length, 0,
-      'if this ever starts releasing, the tier was lowered — BUG-273 A2 must have the numbers');
+    assert.equal(d.filter((x) => x.reason === 'confirmed-sustained').length, 1,
+      'the quiet end of measured operator speech must now confirm exactly once');
   });
 
   it('the learning still runs and still reports, so the mechanism can be judged later', async () => {

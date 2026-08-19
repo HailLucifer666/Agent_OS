@@ -195,7 +195,17 @@ describe('BUG-272 slice 3 — the adaptive floor is learned from THIS room', () 
     const { createBargeInPolicy, INITIAL_BLEED_FLOOR } = await import(POLICY_URL);
     const p = createBargeInPolicy({ now: clock().now });
     assert.equal(p.bleedFloor(), INITIAL_BLEED_FLOOR);
-    assert.equal(INITIAL_BLEED_FLOOR, 0.05, "BUG-271's raised eager tier");
+    // BUG-274: this asserted equality with 0.05, which was the wrong expression of the
+    // invariant in the title. "Never a sensitivity regression" means the floor must never
+    // be HIGHER than BUG-271's eager tier — a lower floor is strictly more willing to hear
+    // the operator, which is the direction this test exists to protect. BUG-274 lowered it
+    // to 0.035 on measured audio (clean bleed 0.0031-0.0309 vs the operator's quietest
+    // real interruption 0.0398, and a hold refused by 0.002 at 0.0480). Pinning the exact
+    // number here as well would have made this file fail for a change it should welcome.
+    const BUG_271_EAGER_TIER = 0.05;
+    assert.ok(INITIAL_BLEED_FLOOR <= BUG_271_EAGER_TIER,
+      `the floor (${INITIAL_BLEED_FLOOR}) must never rise above BUG-271's eager tier `
+      + `(${BUG_271_EAGER_TIER}) — that would be the sensitivity regression this test names`);
   });
 
   it('rises above measured bleed — and above the flush tier, which BUG-272 got backwards', async () => {

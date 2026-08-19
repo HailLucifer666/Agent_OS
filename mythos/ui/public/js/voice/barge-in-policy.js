@@ -86,7 +86,54 @@ export const MAX_BLEED_FLOOR = 0.45;
 // bleed, and whether that holds is exactly what BUG-273 A2 exists to measure —
 // what actually reaches Gemini during a hold. Lowering it blind is how V1 comes
 // back, which is the pair of opposite failures BUG-272 already walked into once.
-export const INITIAL_BLEED_FLOOR = 0.05;
+// BUG-274, 2026-08-19 — LOWERED 0.05 -> 0.035 ON MEASUREMENT, not on a hunch. This is
+// the one constant this ticket changes, and the argument is a live measurement of both
+// populations rather than a preference about sensitivity.
+//
+// THE FINDING: THIS REPO HAS TWO FLOORS 2.5x APART, ANSWERING THE SAME QUESTION.
+//   live-noise-gate.js  LIVE_NOISE_GATE_FLOOR_RMS = 0.02  "the operator is speaking, so
+//                                                          send this to Gemini"
+//   here                INITIAL_BLEED_FLOOR       = 0.05  "the operator is speaking, so
+//                                                          stop talking"
+// Nobody reconciled them, so a 0.02-0.05 band existed where the operator was audible,
+// transmitted, transcribed and answered — and completely invisible to barge-in. MYTHOS
+// heard the interruption and kept talking. That is not a perception failure; it is two
+// thresholds inside one codebase disagreeing about the same judgement.
+//
+// THE MEASUREMENT (live session 2026-08-19, `why=` telemetry added the same day):
+//   room bleed, AEC3 on, operator silent   0.0031 - 0.0309   (clean readings only)
+//   operator's QUIET interruptions         0.0398, 0.0480    (both produced NOTHING)
+//   operator's normal interruptions        0.1006 - 0.2717   (vetoed, see below)
+// The decisive hold: peak 0.0480 against a 0.05 floor — refused by 0.002 — while `raw`
+// showed 34 frames (3.4s) of the operator's speech passing the noise gate and reaching
+// the model. An 8.2-second interruption attempt that the barge-in path never considered.
+//
+// WHY 0.035. It is the only value that separates the two measured populations: above
+// every clean bleed reading (max 0.0309) and below every level the operator actually
+// interrupted at (min 0.0398). It is deliberately NOT the noise gate's 0.02 — that sits
+// *inside* the bleed range, would open a candidacy on essentially every frame of
+// MYTHOS's own speech, and is how BUG-272's V1 (63% self-interruption) comes back.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Anything in the room above 0.035 while MYTHOS speaks: a
+// television, a second person, a cough. That was already true at 0.05; the band widens
+// by 0.015 and the SUSTAIN TEST is what still has to be satisfied. Which is exactly why:
+//
+// Q8 — PENDING_HOLD_MS IS DELIBERATELY *NOT* LOWERED IN THE SAME CHANGE. One lever at a
+// time, because this ticket's predecessors twice made things worse by moving two. More
+// importantly the 350ms sustain is now the PRIMARY bleed discriminator rather than a
+// backup: at 0.05 nothing ever reached it, so it has never actually been exercised in
+// this room. Bleed follows MYTHOS's own amplitude envelope and dips between its
+// syllables; sustained human speech does not. If self-interruption rises next session,
+// the honest response is to raise this floor back toward 0.04 — NOT to lengthen the
+// sustain, which would re-break interruption in the way just fixed.
+//
+// Q5/Q7 — THE RISK, STATED. The margin over bleed is thin: 0.035 vs a 0.0309 clean peak.
+// Self-interruption is the OPPOSITE failure and it is the one to watch — the release
+// gate wants both. `verify-voice-session.js` reports the landed count and the veto
+// reasons, so the next session can tell which direction it moved instead of guessing.
+// Pinned by test/bug-274-barge-in-floor-separates-populations.test.js, which asserts
+// against the measured numbers above rather than against this constant.
+export const INITIAL_BLEED_FLOOR = 0.035;
 
 // BUG-273 A1 — THE ADAPTIVE FLOOR IS DORMANT BY DEFAULT, AND THIS IS WHY.
 //
