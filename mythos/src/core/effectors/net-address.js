@@ -24,9 +24,31 @@
 // "is this loopback?" with isPrivateAddress() would accept the whole of 10/8,
 // 172.16/12 and 192.168/16 as a valid local search daemon.
 //
-// No dependency on purpose. This is deliberately NOT the place to adopt an IP
-// library: the value here is that one function answers the question, and a
-// library swap is a separate, now-single-site change.
+// NO DEPENDENCY, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+//
+// The standing remediation list carried "replace hand-rolled IP classification
+// with a maintained library" as an adopt-tagged item. Declined 2026-08-20, with
+// reasons, so nobody reads the absence as an oversight and adds one:
+//
+//   - The adopt rule earns its keep on whole capability domains nobody should
+//     re-implement — desktop automation, a search engine. This is sixty lines
+//     of range checks, and the rule's own other half says a defect in our own
+//     code is ours to fix, because importing a package to do it adds surface
+//     for nothing.
+//   - This is the SSRF path. A runtime dependency here is supply-chain surface
+//     on the most security-sensitive code in the repo, which is a strange trade
+//     to make in the name of safety.
+//   - The behaviour is pinned: 27 tests, and six mutations that each fail a
+//     named test. That is what would have justified a swap — an unpinned
+//     hand-rolled guard — and it no longer applies.
+//   - The two bypasses this code is known to have had are closed and
+//     regression-tested. A library would have to be shown to close them too.
+//
+// What HAS changed is that a swap is now a single-site change instead of two.
+// If it is ever wanted, the test file is the specification: make ipaddr.js (or
+// whatever) pass net-address-single-classifier.test.js unmodified, including
+// the loopback allowlist, which most libraries express as a range name rather
+// than a boolean and will not hand you for free.
 
 var net = require('net');
 
