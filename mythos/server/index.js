@@ -4239,9 +4239,26 @@ function createServer(deps) {
       // must surface as an honest ocr-result, never crash the server.
       if (msg && msg.channel === 'mythos:ocr-grab') {
         (async () => {
+          // BUG-268 instrumentation, boundary 2 of 3 (see electron/main.js's
+          // OCR-grab callback for the full read-in-order guide). Entry and
+          // outcome are logged separately on purpose: an entry with no outcome
+          // means screen_read_text hung rather than failed, which the previous
+          // single-log shape could not distinguish. ok:true with text.length 0
+          // localises it to GDI capture or the WinRT OCR call.
+          const startedAt = Date.now();
+          try { log.info('ocr.hotkey.received', {}); } catch { /* never break the handler to log */ }
           try {
             const r = await dispatchAction({ tool: 'screen_read_text', args: {} }, { tier: 0, channel: 'hotkey' });
             const ok = Boolean(r && r.ok);
+            try {
+              log.info('ocr.hotkey.dispatched', {
+                ok: ok,
+                textLength: ok ? String((r.result && r.result.text) || '').length : 0,
+                unverified: Boolean(r && r.unverified),
+                ms: Date.now() - startedAt,
+                error: ok ? undefined : String((r && r.result && r.result.error) || (r && r.error) || 'OCR failed'),
+              });
+            } catch { /* never break the handler to log */ }
             broadcastAll({
               type: 'ocr-result',
               payload: {

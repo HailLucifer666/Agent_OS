@@ -2429,6 +2429,27 @@ function registerOcrGrabHotkey() {
     let registered = false;
     try {
       registered = globalShortcut.register(accel, () => {
+        // BUG-268 instrumentation (2026-08-20). This is boundary 1 of 3 — the
+        // other two are server/index.js's mythos:ocr-grab handler and the HUD's
+        // ocr-result subscriber. The operator reports a "clipboard-looking
+        // toast" and nothing actionable following it, which is consistent with
+        // several different faults at four different stages, and the pipeline
+        // was silent at every one of them except its own failure paths.
+        //
+        // Grep these three lines in order after one press. Missing 1 means the
+        // accelerator never registered or another app holds it; 1-without-2 is
+        // the fork IPC channel; 2 with empty text is GDI capture or WinRT OCR;
+        // 2-without-3 is the broadcast wiring; 3 reporting the gate closed means
+        // the PIN lock ate it; 3 rendering fine means this is not a pipeline bug
+        // and the gap is the operator's expectation, which is a scoping question
+        // rather than a defect.
+        //
+        // A DIAGNOSIS, NOT A FIX. Do not close BUG-268 when this lands.
+        //
+        // Inside its own try: a globalShortcut callback that throws takes down
+        // the Electron main process, and adding an instrumentation line is a
+        // ridiculous way to do that.
+        try { log('OCR-grab hotkey fired (accel ' + accel + ', server child ' + (child ? 'up' : 'DOWN') + ')'); } catch { /* never break the handler to log */ }
         if (!child) { log('OCR-grab hotkey pressed but server child is not running'); return; }
         try {
           child.send({ channel: 'mythos:ocr-grab' });

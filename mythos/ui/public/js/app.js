@@ -1061,7 +1061,21 @@ subscribe(['navigate'], (msg) => {
 // document, and the whole point of the hotkey is that the HUD is NOT focused —
 // a rejected promise just means the caption is the only surface this time).
 subscribe(['ocr-result'], (msg) => {
-  if (isGateClosed(pinLockScreen.lockState())) return;
+  // BUG-268 instrumentation, boundary 3 of 3 (see electron/main.js's OCR-grab
+  // callback for the read-in-order guide). Logged BEFORE the gate check and
+  // recording the gate verdict, because a closed lock gate drops the result
+  // silently — no caption, no clipboard write — and from the operator's side
+  // that is indistinguishable from OCR having failed or never run. This line is
+  // the only way to tell "the PIN lock ate it" from the other four candidates.
+  const gateClosed = isGateClosed(pinLockScreen.lockState());
+  try {
+    console.info('[BUG-268] ocr-result received', {
+      gateClosed: gateClosed,
+      ok: Boolean(msg && msg.payload && msg.payload.ok),
+      textLength: String((msg && msg.payload && msg.payload.text) || '').length,
+    });
+  } catch (_) { /* never break the subscriber to log */ }
+  if (gateClosed) return;
   const p = msg.payload || {};
   if (!p.ok) {
     mic.setCaption('OCR failed: ' + (p.error || 'unknown error'), 'error');
