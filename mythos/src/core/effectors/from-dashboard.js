@@ -490,7 +490,7 @@ function buildTools(ctx) {
           if (attempt1.ok) {
             var hit = attempt1.hit;
             var weatherUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit.latitude + '&longitude=' + hit.longitude +
-              '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
+              '&current=temperature_2m,apparent_temperature,weather_code,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,cloud_cover,is_day';
             return openWebResult({ widgetType: 'weather', weatherUrl: weatherUrl, title: 'Weather: ' + hit.name, location: hit.name });
           }
 
@@ -504,7 +504,7 @@ function buildTools(ctx) {
             if (attempt2.ok) {
               var hit2 = attempt2.hit;
               var weatherUrl2 = 'https://api.open-meteo.com/v1/forecast?latitude=' + hit2.latitude + '&longitude=' + hit2.longitude +
-                '&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m';
+                '&current=temperature_2m,apparent_temperature,weather_code,relative_humidity_2m,wind_speed_10m,wind_gusts_10m,cloud_cover,is_day';
               return openWebResult({ widgetType: 'weather', weatherUrl: weatherUrl2, title: 'Weather: ' + hit2.name, location: hit2.name });
             }
             // If second attempt also has a network error, fail with that
