@@ -66,7 +66,12 @@ function createCalendarEffector({ fs, bus, goals }) {
     if (!text.trim()) return { ok: false, error: 'text required' };
 
     var when = parseWhen(opts.when || opts.due || '');
-    if (!when) return { ok: false, error: 'Could not parse that time. Try ISO date, "in 20 minutes", "tomorrow 9am", or "HH:MM".' };
+    // BUG-289: this used to name four formats and not one of them could express
+    // seconds, so a caller that had just been refused "in 30 seconds" read it as
+    // "you phrased it wrong" rather than "that unit does not exist" — and went
+    // looking for a workaround instead of reporting the limit. Seconds are named
+    // first now because they are the case that used to be impossible.
+    if (!when) return { ok: false, error: 'Could not parse that time. Try "in 30 seconds", "in 20 minutes", "tomorrow 9am", "HH:MM", or an ISO date.' };
 
     // Track B5 — fire-action field. `action` is optional: {tool, args} to run
     // when the reminder fires (e.g. phone_whatsapp_send/whatsapp_send at 9am).
@@ -272,14 +277,38 @@ function createCalendarEffector({ fs, bus, goals }) {
       if (d.getTime() > now) return d.getTime();
     }
 
-    // "in N minutes/hours/days"
-    var rel = str.match(/^in\s+(\d+)\s+(minute|minutes|hour|hours|day|days)$/);
+    // "in N seconds/minutes/hours/days", N optionally fractional.
+    //
+    // BUG-289 (2026-08-21): this was `(\d+)` over (minute|hour|day), and BOTH
+    // halves of that cost the operator a working timer on 2026-08-20.
+    //
+    //   timer_add {minutes: 0.5}  builds "in 0.5 minutes" -> \d+ cannot match it,
+    //                             so the tool could not read its own output and
+    //                             every sub-minute timer was unsettable.
+    //   reminder_add "in 30 seconds"  no seconds unit existed at all.
+    //
+    // Both failed within 20 seconds of each other and the model, out of routes,
+    // claimed it had counted the half-minute internally. The hallucination is
+    // downstream of this regex.
+    //
+    // The decimal is `\d+(?:\.\d+)?` and not `[\d.]+` on purpose: ".5", "5." and
+    // "0..5" stay refused rather than being coerced into a number nobody asked
+    // for. Widening a parser is how "in a few minutes" becomes a silent guess,
+    // so this widens the NUMBER and the UNIT LIST and nothing else.
+    //
+    // Sub-minute is honoured end to end, not just accepted: reminder-sensor.js
+    // arms a precise setTimeout against the next due time and re-arms on
+    // calendar.reminder-added, so a 30s reminder fires at 30s and not on its 30s
+    // safety-poll boundary. Verified before this was widened — a parser that
+    // accepts a duration the scheduler rounds up just moves the lie.
+    var rel = str.match(/^in\s+(\d+(?:\.\d+)?)\s+(second|seconds|minute|minutes|hour|hours|day|days)$/);
     if (rel) {
       var n = +rel[1];
       var unit = rel[2];
-      if (unit.indexOf('minute') === 0) return now + n * 60000;
-      if (unit.indexOf('hour') === 0) return now + n * 3600000;
-      if (unit.indexOf('day') === 0) return now + n * 86400000;
+      if (unit.indexOf('second') === 0) return Math.round(now + n * 1000);
+      if (unit.indexOf('minute') === 0) return Math.round(now + n * 60000);
+      if (unit.indexOf('hour') === 0) return Math.round(now + n * 3600000);
+      if (unit.indexOf('day') === 0) return Math.round(now + n * 86400000);
     }
 
     // Wave 7 (2026-08-13): "in an hour" / "in half an hour" — ordinary
