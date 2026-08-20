@@ -14,6 +14,46 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 
 ---
 
+## BUG-279 — four assistant modules read as live machinery and had no consumers (✅ RESOLVED 2026-08-20)
+
+**Not a defect in behaviour — a defect in what the code told a reader.**
+`src/core/assistant/{intent-router,style,summary,response-planner}.js` each declared
+themselves an implementation of "ENGAGEMENT-SPEC section 1.2" and had **zero non-test
+consumers**. Nothing in `src/`, `server/`, `ui/`, `scripts/` or `electron/` required any of
+them; the only references were their own headers and their own four test files. Verified at
+deletion time rather than trusted from the plan that proposed it, because this repo moves
+fast enough that a later session could have wired one.
+
+The 40 passing tests across those four files were the problem, not a mitigation: they made
+unreachable code read as cared-for, which is worse than no tests at all, because it reads as
+coverage of a path nothing takes. This is the **inert-mechanism class** in its
+documentation form — same family as BUG-278's dropped control fields, the phantom
+`SERIOUS_KINDS` entries, and the `event-storm`/`tick-overrun` severities removed the same
+day.
+
+**The sharpest argument for deleting rather than wiring:** `response-planner.js` was a stub.
+`formatChatResponse()` returned `"I heard: " + text` and `formatQuestionResponse()` returned
+`"That's a good question about: " + question`. Had anything ever routed through it as
+written, MYTHOS would have answered questions by repeating them back.
+
+`assistant/gateway.js` is deliberately **kept**. It sits in the same directory and is
+genuinely wired (`src/main.js:23`, `server/index.js:3296`), and its `classify()`/`route()`
+run at runtime. Confirmed before deleting that `gateway.js` requires none of the four — none
+of the five files requires anything at all, so they were all standalone and the deletion
+could not break it.
+
+**Revisit trigger.** If ENGAGEMENT-SPEC §1.2 is revived, the design is recoverable from git
+history (these files, at their last commit before 2026-08-20). Deleting is reversible;
+leaving misleading code in place is not self-correcting. Re-add only with a consumer in the
+same commit.
+
+**Expect the test count to DROP by 40 in this commit.** A falling count is normally a red
+flag in this repo — `sync-test-count.js` swallows `require` failures, so a syntax error
+looks like a smaller suite. Here it is the deletion and nothing else: 5399 → 5359, with
+`fail=0 skipped=0` unchanged.
+
+---
+
 ## BUG-278 — BUG-273 C2 shipped, passed its tests, and never ran: the healer dropped the two fields it keyed on (🔧 CODED 2026-08-20, NOT live-verified)
 
 **Found by measuring a session-audit finding instead of implementing it.** The 2026-08-20
