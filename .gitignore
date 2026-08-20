@@ -178,3 +178,10 @@ nodes/.kotlin/
 # builds run — runtime-local state, never publish; see mythos/skills/hallmark/)
 .hallmark/
 .superpowers/
+
+# open-webSearch (Aas-ee/open-webSearch, Apache-2.0) — the local search daemon,
+# installed project-local by mythos/scripts/setup-websearch.js --install. Same
+# convention as /Hermes Agent/ above: a third-party npm tree plus the small
+# package.json host that keeps npm from installing it into the repo root.
+# Pulled on demand, never committed.
+/open-websearch/

@@ -49,6 +49,7 @@ const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { createPiperChild } = require('./core/effectors/piper-child');
+const { createWebSearchChild } = require('./core/effectors/websearch-child');
 const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
 const { registerFromCua } = require('./core/effectors/from-cua');
@@ -269,6 +270,7 @@ async function main() {
   let jobSensor = null;
   let edgeTtsChild = null;
   let piperChild = null;
+  let webSearchChild = null;
   let calendarWiring = null;
   let gmailUnread = null;         // bound fn — goes through the hub, wired to gmail-sensor in the 'sensors' step
   let serverHandle = null;        // BUG-111: hoisted so the later 'sensors' step can wire setGmailPollCountGetter
@@ -1250,6 +1252,18 @@ async function main() {
       // VOICE_TTS_CHAIN reports unavailable and the chain uses the next one.
       piperChild = createPiperChild({ logger: logger, config: config });
       piperChild.start();
+    }},
+
+    { name: 'websearch', fail: 'degraded', fn: function() {
+      // Local open-webSearch daemon — the only keyless provider in the web_search
+      // chain that still works. Started here rather than left to the operator
+      // because BUG-280 shipped the rung, documented the launch in a comment, and
+      // search then answered every query from Wikipedia for a day: the daemon was
+      // never running on the machine that needed it. Degraded by design — not
+      // installed means the rung reports the refused connection and the chain
+      // carries on to the keyed providers.
+      webSearchChild = createWebSearchChild({ logger: logger, config: config });
+      webSearchChild.start();
     }}
   ]);
 
@@ -1270,6 +1284,7 @@ async function main() {
     if (mcpWiring && mcpWiring.shutdown) { try { mcpWiring.shutdown(); } catch (_) { /* best-effort */ } }
     if (edgeTtsChild) edgeTtsChild.stop();
     if (piperChild) piperChild.stop();
+    if (webSearchChild) webSearchChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
     if (screenSensor) screenSensor.stop();
