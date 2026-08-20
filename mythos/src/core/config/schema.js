@@ -583,6 +583,12 @@ const SCHEMA = {
   // late answer. deep-think.js clamps the per-attempt bound below the total.
   DEEP_THINK_TIMEOUT_MS:       { type: 'number', default: 20000, min: 1000 },
   DEEP_THINK_ATTEMPT_TIMEOUT_MS: { type: 'number', default: 7000, min: 500 },
+  // BUG-287: minimum gap between think_deeply calls. The 2026-08-20 session made
+  // four inside 91 seconds, each restating the same diagnosis, and the operator
+  // asked "why are you thinking deeply for everything?". 60s is the cut that
+  // blocks the three rapid calls measured (12s, 17s, 22s) and allows the four
+  // spaced ones (61s, 153s, 416s). 0 disables it — the deliberate opt-out.
+  DEEP_THINK_MIN_INTERVAL_MS:  { type: 'number', default: 60000, min: 0 },
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply

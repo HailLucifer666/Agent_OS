@@ -698,10 +698,85 @@ let deepThinkBrain = null;
 let deepThinkConfig = null;
 let deepThinkLogger = null;
 
+// BUG-287 (2026-08-20): think_deeply had no rate limit, and the reasoning lane
+// is slow and rate-limited upstream, so nothing stopped it being called in a
+// tight loop.
+//
+// Measured from that day's audit: eight calls, all actor:"cortex", with gaps of
+// 61s, 12s, 17s, 153s, 416s and 22s — four of them inside 91 seconds, each
+// restating the same browser-offline diagnosis. The operator said "Why are you
+// repeating yourself? You just told me that" and "why are you thinking deeply
+// for everything?", then told it to log the bug, which is incident
+// inc-1787170098385-1. The loop is legible in the arguments: at 20:07:59 it
+// asked the reasoning lane why it had repeated itself, and at 20:08:16 it asked
+// the reasoning lane why it kept calling the reasoning lane — each call adding
+// the latency that produced the next repetition.
+//
+// A CONTENT DIFF-GATE WOULD NOT HAVE CAUGHT THIS, and diff-gate.js already
+// exists for a neighbouring problem (mull() speaks only when its thought
+// changed), so that was the obvious first idea. All eight questions are
+// textually different — different questions about the same stuck situation. The
+// only thing they share is being seconds apart, so the gate has to be time.
+//
+// 60s is not a round number chosen for looking sensible: it is the cut that
+// blocks the three rapid calls (12s, 17s, 22s) and allows the four spaced ones
+// (61s, 153s, 416s). Change the reasoning if you change the number.
+//
+// The tool description already says "DEFAULT TO ANSWERING IT YOURSELF... this
+// call is expensive". It is still there, still right, and it lost — the third
+// time prose guidance has lost to a tool call in this codebase.
+const DEEP_THINK_MIN_INTERVAL_DEFAULT_MS = 60000;
+let lastDeepThinkAt = 0;
+
+function deepThinkMinIntervalMs() {
+  const raw = deepThinkConfig && deepThinkConfig.DEEP_THINK_MIN_INTERVAL_MS;
+  if (raw === undefined || raw === null || raw === '') return DEEP_THINK_MIN_INTERVAL_DEFAULT_MS;
+  const n = Number(raw);
+  // A threshold that parses to NaN makes every comparison below false, which
+  // switches the guard OFF while leaving it looking on — the exact shape this
+  // repo has been bitten by before. Fall back to the DEFAULT, never to zero:
+  // a broken value must leave the guard standing, and it says so out loud.
+  // An explicit 0 is different and is honoured — that is the deliberate opt-out.
+  if (!Number.isFinite(n) || n < 0) {
+    if (deepThinkLogger && typeof deepThinkLogger.warn === 'function') {
+      try {
+        deepThinkLogger.warn('DEEP_THINK_MIN_INTERVAL_MS is not a non-negative number — using the default',
+          { value: raw, usingMs: DEEP_THINK_MIN_INTERVAL_DEFAULT_MS });
+      } catch (_) { /* logging must never take the tool down */ }
+    }
+    return DEEP_THINK_MIN_INTERVAL_DEFAULT_MS;
+  }
+  return n;
+}
+
 async function think_deeply({ question, context }) {
   if (!deepThinkBrain || typeof deepThinkBrain.think !== 'function') {
     return fail('No brain is wired for deep reasoning, so I cannot think this through properly.');
   }
+  // Checked AFTER the brain check on purpose: telling the operator to wait 45
+  // seconds for a lane that is not wired at all would be a confident wrong
+  // answer, and "no brain" is the more actionable of the two.
+  // The `minIntervalMs > 0` clause below is an EQUIVALENT MUTANT under testing:
+  // with the interval at 0, `sinceLast < 0` is already false for any forward
+  // clock, so flipping it to >= 0 changes nothing a test can observe. It is kept
+  // deliberately — it is what makes the 0 opt-out true even if the system clock
+  // steps backwards mid-session, which is the one case where sinceLast can go
+  // negative. Recorded so the next reader does not delete it as dead.
+  const minIntervalMs = deepThinkMinIntervalMs();
+  const sinceLast = Date.now() - lastDeepThinkAt;
+  if (minIntervalMs > 0 && lastDeepThinkAt > 0 && sinceLast < minIntervalMs) {
+    const waitS = Math.ceil((minIntervalMs - sinceLast) / 1000);
+    // Deliberately NOT phrased as a fault. A message the model reads as broken
+    // sends it diagnosing a healthy system, which is the loop this is closing.
+    // It has to be actionable, so it names the one action available: answer now.
+    return fail('Deep reasoning was used ' + Math.round(sinceLast / 1000) + 's ago and is rate-limited '
+      + 'for another ' + waitS + 's. Nothing is wrong. Answer this yourself now, from what you already '
+      + 'know — you are capable of it, and a fast good answer beats a slow better one.');
+  }
+  // Stamped BEFORE the call, not after. A lane that is down burns the full
+  // timeout on every attempt, so a failing call is the one most worth spacing
+  // out; stamping on success only would leave a broken lane hammerable.
+  lastDeepThinkAt = Date.now();
   const { deepThink } = require('./deep-think');
   try {
     const r = await deepThink(deepThinkBrain, {
@@ -767,7 +842,7 @@ const TOOLS = [
   // operator feels — a turn that stalled 19s after the tool itself answered in
   // 580ms. So the default is now ANSWERING, and calling requires a positive
   // test the model can actually apply: would you otherwise guess?
-  { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. DEFAULT TO ANSWERING IT YOURSELF — you are capable, and this call is expensive: it costs a scarce rate-limited request and roughly doubles how long the operator waits. Only reach for it when you would otherwise GUESS: a genuinely multi-step problem you cannot hold in one pass, a real trade-off between options where being wrong matters, or a described failure whose cause you cannot name. If you already know the shape of the answer, say it — a fast good answer beats a slow better one. Never for chat, opinions, recall, or anything you could answer in a sentence. Not for looking something up (use web_search) or anything on screen (use screen_look). Pass the FULL question plus any facts in `context` — it cannot see the conversation. It takes several seconds, so say you are thinking first.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
+  { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. DEFAULT TO ANSWERING IT YOURSELF — you are capable, and this call is expensive: it costs a scarce rate-limited request and roughly doubles how long the operator waits. Only reach for it when you would otherwise GUESS: a genuinely multi-step problem you cannot hold in one pass, a real trade-off between options where being wrong matters, or a described failure whose cause you cannot name. If you already know the shape of the answer, say it — a fast good answer beats a slow better one. Never for chat, opinions, recall, or anything you could answer in a sentence. Not for looking something up (use web_search) or anything on screen (use screen_look). Pass the FULL question plus any facts in `context` — it cannot see the conversation. It takes several seconds, so say you are thinking first. It is rate-limited to roughly one call a minute across the whole system; if it says it is cooling down, that is normal — answer the question yourself instead of retrying or apologising.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
 ];
 
 // ctx (optional) — { brain, config, logger }. think_deeply needs ctx.brain;
@@ -790,6 +865,9 @@ function registerFromComputer(hub, ctx) {
 
 module.exports = {
   registerFromComputer,
+  // BUG-287 test seam: lets the suite assert the schema default and the code
+  // default are the same number, since the reasoning for 60s lives in both.
+  _deepThinkMinIntervalDefaultMs: () => DEEP_THINK_MIN_INTERVAL_DEFAULT_MS,
   TOOLS,
   open_folder,
   list_folder,
