@@ -8,7 +8,6 @@
 // honestly flagged as "with-issues" rather than silently passing garbage.
 
 var path = require('path');
-var { execFile } = require('child_process');
 var designSystemEngine = require('../design/system');
 var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
@@ -234,50 +233,37 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     }
   }
 
-  // ---- A3: Social-media research via agent-reach (optional, gracefully degrading) ----
-  // agent-reach (pip install agent-reach) provides CLIs for Twitter/Reddit/YouTube/
-  // GitHub reading that Mythos lacks natively. If installed, this enriches the
-  // research brief with social signals; if not, it returns null silently (same
-  // graceful-degradation pattern as the browser/vision checks). Never blocks a build.
-  var agentReachAvailable = null; // cached availability check
-  function isAgentReachAvailable() {
-    if (agentReachAvailable !== null) return Promise.resolve(agentReachAvailable);
-    return new Promise(function(resolve) {
-      execFile('agent-reach', ['--version'], { timeout: 3000, windowsHide: true }, function(err) {
-        agentReachAvailable = !err;
-        resolve(agentReachAvailable);
-      });
-    });
-  }
-
-  function runAgentReach(cmd, args, timeout) {
-    return new Promise(function(resolve) {
-      execFile(cmd, args, { timeout: timeout || 8000, windowsHide: true, maxBuffer: 1024 * 512 }, function(err, stdout) {
-        if (err) { resolve(''); return; }
-        resolve(String(stdout).trim());
-      });
-    });
-  }
-
-  async function socialResearchForBuild(topic) {
-    if (!await isAgentReachAvailable()) return null;
-    try {
-      // agent-reach exposes platform-specific CLIs. Query reddit + hackernews
-      // for community discussion on the topic (most useful for build grounding).
-      var results = [];
-      var reddit = await runAgentReach('agent-reach', ['reddit', '--query', topic, '--limit', '2']);
-      if (reddit) results.push({ source: 'reddit', text: reddit.slice(0, 600) });
-      var hn = await runAgentReach('agent-reach', ['hackernews', '--query', topic, '--limit', '2']);
-      if (hn) results.push({ source: 'hackernews', text: hn.slice(0, 600) });
-      if (!results.length) return null;
-      var lines = ['SOCIAL SIGNALS (community discussion — use for tone/relevance, verify facts):'];
-      results.forEach(function(r) { lines.push('[' + r.source + '] ' + r.text); });
-      var brief = lines.join('\n');
-      return brief.length > 1200 ? brief.slice(0, 1200) + '\n[...truncated]' : brief;
-    } catch (_) {
-      return null;
-    }
-  }
+  // ---- A3: social-media research via agent-reach — REMOVED 2026-08-20 ----
+  //
+  // This block shelled out to two commands that do not exist and never did:
+  //     agent-reach reddit     --query <topic> --limit 2
+  //     agent-reach hackernews --query <topic> --limit 2
+  //
+  // The vendored skill at mythos/skills/agent-reach/ documents exactly five
+  // binary subcommands — doctor, configure, transcribe, install, check-update.
+  // agent-reach is a ROUTING skill: it tells an agent which OTHER tool to drive.
+  // Reddit goes through a separate, login-backed `reddit` binary
+  // (`reddit search "query" -f yaml`), and agent-reach covers no Hacker News
+  // channel at any layer.
+  //
+  // It never ran, so removing it cannot change behaviour: the CLI is not
+  // installed, isAgentReachAvailable() returned false, and socialResearchForBuild
+  // returned null on every call it has ever received. There were no tests.
+  //
+  // Installing the CLI — which is what the remediation plan proposed — would have
+  // made this WORSE. `agent-reach --version` would succeed, availability would
+  // flip to true, both invented commands would error, runAgentReach swallowed any
+  // error to '', and the function would go on returning null forever while
+  // reporting the capability as present. A fail-open that claims to work beats an
+  // honest absence only in the logs.
+  //
+  // Removed rather than rewritten against the real commands, deliberately.
+  // Writing this against documentation that cannot be executed here is exactly
+  // how the invented commands came to be written; the real path needs an
+  // installed binary and an interactive login before one line of it could be
+  // verified. test/agent-reach-commands-must-exist.test.js derives the legal
+  // subcommand set from the vendored skill itself, so a re-add against the real
+  // CLI passes and a re-add against a guessed one does not.
 
   // ---- P22: Visual verification — render + look at the built page ----
   // Opens the built HTML in the automated browser, screenshots it, and sends
@@ -582,10 +568,6 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var researchStatus = needsResearch ? 'pending' : 'not-required';
         if (needsResearch) {
           var researchBrief = await researchForBuild(card.text, 5);
-          // A3: enrich with social signals if agent-reach is installed (optional)
-          var socialBrief = await socialResearchForBuild(String(card.text).slice(0, 120));
-          if (researchBrief && socialBrief) researchBrief += '\n\n' + socialBrief;
-          else if (!researchBrief && socialBrief) researchBrief = socialBrief;
 
           // FOR FEATURE/ARCH-CHANGE: research is mandatory - throw if failed
           if (!researchBrief) {
@@ -781,10 +763,6 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         if (needsResearch) {
           var researchTopic = card.title + ' ' + (card.detail || '');
           var researchBrief = await researchForBuild(researchTopic, 5);
-          // A3: enrich with social signals if agent-reach is installed (optional)
-          var socialBrief = await socialResearchForBuild(String(researchTopic).slice(0, 120));
-          if (researchBrief && socialBrief) researchBrief += '\n\n' + socialBrief;
-          else if (!researchBrief && socialBrief) researchBrief = socialBrief;
           if (researchBrief) {
             researchStatus = 'grounded';
             try {
