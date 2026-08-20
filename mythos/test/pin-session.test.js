@@ -1,135 +1,392 @@
 'use strict';
 
-// pin-session.test.js — the server-side half of the PIN lock.
+// test/pin-session.test.js — Track B1: real server-side PIN session
+// enforcement. RED-FIRST: written and run BEFORE server/index.js or
+// server/routes/pin.js gained any session-issuing/checking code — every
+// enforcement assertion below failed on first run (see the roadmap Progress
+// log / session report for the pasted red-run output). Mirrors
+// test/server-auth.test.js's and test/pin-routes.test.js's real-server
+// harness pattern exactly (real createServer, real createPinLock).
 //
-// WHY THIS FILE EXISTS. pin-session.js is the store that makes the PIN lock real:
-// before it, the lock screen was a client-side visual and pointer deterrent only,
-// and `curl 127.0.0.1/api/...` bypassed it entirely. It is wired into the
-// server's auth decision at server/index.js:65,652,731-738 — so a defect here is
-// an authentication bypass, not a UI glitch. It had no direct test.
-//
-// Asserted here: the CSPRNG token, the timing-safe comparison surviving a
-// length-mismatched input without throwing, expiry, the sliding window, and the
-// deliberate single-active-session behaviour. Timer behaviour is tested against a
-// real clock with a short TTL rather than a fake one the test advances by hand —
-// a frozen clock cannot see a window that slides.
-//
-// Run: cd mythos && node --test test/pin-session.test.js
+// Back-compat is the whole point of the gate: the schema default flipped to
+// true in Task A2 (2026-08-17), but pinSessionRequired() (server/index.js)
+// requires BOTH the flag AND a configured PIN, and a config object handed to
+// createServer directly carries no schema defaults at all — so a loopback
+// install with no token and no PIN configured (the default, and every
+// pre-existing test) must keep behaving exactly as before. Only tests in the
+// 'enforcement ON' describe block exercise the new refusal path.
 
-const { describe, it } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('http');
+const WebSocket = require('ws');
+const { createBus } = require('../src/core/bus');
+const { createServer } = require('../server');
+const { createPinLock } = require('../src/core/security/pin-lock');
 
-const { createPinSessionStore } = require('../src/core/security/pin-session');
+function fakeFs() {
+  const store = {};
+  return {
+    readJSON: (p, fb) => (store[p] !== undefined ? JSON.parse(JSON.stringify(store[p])) : fb),
+    readJSONStrict: (p, fb) => (store[p] !== undefined ? JSON.parse(JSON.stringify(store[p])) : fb),
+    writeJSON: (p, d) => { store[p] = d === null ? null : JSON.parse(JSON.stringify(d)); },
+    vaultPath: (...s) => s.join('/'),
+  };
+}
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function baseDeps(bus, overrides) {
+  return Object.assign({
+    bus,
+    config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: '' },
+    logger: { info() {}, warn() {}, error() {} },
+    memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() },
+    goalsEffector: { listGoals: () => [], stats: () => ({ total: 0, done: 0, active: 0 }) },
+    kanbanEffector: { listBoard: () => ({ cards: [] }) },
+    pipelineEffector: { listAll: () => ({}) },
+    effectors: { breakers: new Map(), invoke: async () => ({ ok: true }), effectors: new Map() },
+    leash: { confirm: { create: () => 'cf-1', accept: () => null, reject: () => true } },
+    goals: { debitBudget: () => {} },
+    probes: { getStatus: async () => ({ ok: true }) },
+    agentActions: {
+      assembleKanbanPlan: () => ({ job: { id: 'j1', status: 'queued' } }),
+      buildKanbanCard: () => ({ job: { id: 'j1', status: 'queued' }, board: { cards: [] } }),
+      reviewKanbanCard: () => ({ job: { id: 'j1', status: 'queued' } }),
+    },
+    buildRunner: { getJob: () => null, onJobUpdate: () => () => {} },
+  }, overrides || {});
+}
 
-describe('pin session: token issuance', () => {
-  it('issues a 256-bit hex token', () => {
-    const store = createPinSessionStore({});
-    const token = store.issue();
-    assert.match(token, /^[0-9a-f]{64}$/, '32 CSPRNG bytes, hex-encoded');
+function realPinLock() {
+  return createPinLock({ fs: fakeFs() });
+}
+
+function httpGet(port, pathName, headers) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path: pathName, headers: headers || {} }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    }).on('error', reject);
   });
+}
 
-  it('never issues the same token twice', () => {
-    // The point of crypto.randomBytes over Math.random. A collision here would
-    // mean a predictable session token, which is the whole attack.
-    const store = createPinSessionStore({});
-    const seen = new Set();
-    for (let i = 0; i < 200; i++) seen.add(store.issue());
-    assert.equal(seen.size, 200);
+function httpPostJson(port, pathName, obj, headers) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(obj || {});
+    const req = http.request({
+      host: '127.0.0.1', port, path: pathName, method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }, headers || {}),
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(body || '{}') }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+// Extracts the `mythos_token` value from a Set-Cookie response header, the
+// same cookie name extractToken() (server/index.js) already parses.
+function extractSessionCookie(setCookieHeader) {
+  const arr = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+  for (const line of arr) {
+    if (!line) continue;
+    const m = /mythos_token=([^;]+)/.exec(line);
+    if (m) return decodeURIComponent(m[1]);
+  }
+  return null;
+}
+
+describe('PIN session (Track B1): enforcement flag unset on a raw config — total back-compat', () => {
+  test('a PIN configured but PIN_SESSION_ENFORCE unset: /api/status is still 200 with no token at all', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(baseDeps(bus, { pinLock }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpGet(port, '/api/status');
+      assert.equal(res.status, 200);
+    } finally {
+      await server.stop();
+    }
   });
 });
 
-describe('pin session: validation', () => {
-  it('rejects everything before a session is issued', () => {
-    const store = createPinSessionStore({});
-    assert.equal(store.isValid('anything'), false);
-    assert.equal(store.isValid(''), false);
-    assert.equal(store.isValid(undefined), false);
-  });
+describe('PIN session (Track B1): enforcement ON + a PIN configured — the real gate', () => {
+  function enforceDeps(bus, pinLock, overrides) {
+    return baseDeps(bus, Object.assign({
+      pinLock,
+      config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: '', PIN_SESSION_ENFORCE: true, PIN_SESSION_TTL_MS: 1800000 },
+    }, overrides || {}));
+  }
 
-  it('accepts the issued token and rejects a wrong one of the same length', () => {
-    const store = createPinSessionStore({});
-    const token = store.issue();
-    assert.equal(store.isValid(token), true);
-    // Same length, so the comparison reaches timingSafeEqual rather than being
-    // short-circuited by the length check — this is the branch that actually
-    // exercises the constant-time compare.
-    const wrong = token.slice(0, -1) + (token.endsWith('0') ? '1' : '0');
-    assert.equal(wrong.length, token.length);
-    assert.equal(store.isValid(wrong), false);
-  });
-
-  it('does not throw on a length-mismatched or non-string input', () => {
-    // crypto.timingSafeEqual THROWS when the buffers differ in length. The guard
-    // is the `a.length === b.length &&` short-circuit before it. If that is ever
-    // reordered, every malformed cookie becomes a 500 from the auth path — a
-    // crash where a refusal belongs.
-    const store = createPinSessionStore({});
-    store.issue();
-    for (const bad of ['', 'short', 'x'.repeat(200), null, undefined, 0, 12345, {}, []]) {
-      assert.equal(store.isValid(bad), false, JSON.stringify(String(bad)) + ' must be refused, not thrown on');
+  // THE MONEY TEST — this is the bug from the roadmap, made concrete:
+  // "curl 127.0.0.1/api/... bypasses the lock screen entirely." With a PIN
+  // configured and enforcement on, a request presenting NOTHING must be
+  // refused, not silently allowed through by tokenOk()'s no-AUTH_TOKEN
+  // back-compat branch.
+  test('a request with no session and no bearer token is refused (401) on /api/*', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(enforceDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpGet(port, '/api/status');
+      assert.equal(res.status, 401, `expected 401 with no session; got ${res.status}. This is the bypass the roadmap flagged: PIN lock is real access control, or it is not.`);
+    } finally {
+      await server.stop();
     }
   });
 
-  it('issuing again invalidates the previous session', () => {
-    // Deliberate, documented behaviour: one PIN, one operator, one live session.
-    // Pinned so it reads as a decision rather than looking like a bug to the next
-    // reader — and so a change to per-client sessions is a conscious one.
-    const store = createPinSessionStore({});
-    const first = store.issue();
-    const second = store.issue();
-    assert.equal(store.isValid(first), false, 'the superseded token must stop working');
-    assert.equal(store.isValid(second), true);
+  test('the WS upgrade is refused too — REST-only would be half a fix', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(enforceDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const rejected = await new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+        ws.on('open', () => resolve('opened'));
+        ws.on('unexpected-response', () => resolve('rejected'));
+        ws.on('error', () => resolve('rejected'));
+      });
+      assert.equal(rejected, 'rejected');
+    } finally {
+      await server.stop();
+    }
   });
 
-  it('revoke() ends the session', () => {
-    const store = createPinSessionStore({});
-    const token = store.issue();
-    assert.equal(store.isValid(token), true);
-    store.revoke();
-    assert.equal(store.isValid(token), false);
+  test('POST /api/pin/verify with the correct PIN issues a session cookie that then unlocks /api/*', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(enforceDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const denied = await httpGet(port, '/api/status');
+      assert.equal(denied.status, 401);
+
+      const verifyRes = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
+      assert.equal(verifyRes.status, 200);
+      const cookie = extractSessionCookie(verifyRes.headers['set-cookie']);
+      assert.ok(cookie, 'expected /api/pin/verify to set a mythos_token session cookie on success');
+
+      const allowed = await httpGet(port, '/api/status', { Cookie: `mythos_token=${cookie}` });
+      assert.equal(allowed.status, 200);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('the session cookie also unlocks the WS upgrade', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(enforceDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const verifyRes = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
+      const cookie = extractSessionCookie(verifyRes.headers['set-cookie']);
+      assert.ok(cookie);
+
+      const accepted = await new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Cookie: `mythos_token=${cookie}` } });
+        ws.on('open', () => { ws.close(); resolve('opened'); });
+        ws.on('unexpected-response', () => resolve('rejected'));
+        ws.on('error', () => resolve('rejected'));
+      });
+      assert.equal(accepted, 'opened');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a wrong/garbage cookie value is refused, same as no cookie at all', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(enforceDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpGet(port, '/api/status', { Cookie: 'mythos_token=not-a-real-session-token' });
+      assert.equal(res.status, 401);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a wrong PIN never issues a session, and the failed attempt does not leak the PIN in the error body', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(enforceDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const verifyRes = await httpPostJson(port, '/api/pin/verify', { pin: '9999' });
+      assert.equal(verifyRes.status, 401);
+      assert.equal(verifyRes.headers['set-cookie'], undefined, 'a failed verify must not set any session cookie');
+      assert.equal(JSON.stringify(verifyRes.body).includes('9999'), false, 'the presented PIN must never be echoed back');
+
+      const stillDenied = await httpGet(port, '/api/status');
+      assert.equal(stillDenied.status, 401);
+    } finally {
+      await server.stop();
+    }
   });
 });
 
-describe('pin session: expiry', () => {
-  it('rejects the token once the TTL has passed', async () => {
-    const store = createPinSessionStore({ ttlMs: 60 });
-    const token = store.issue();
-    assert.equal(store.isValid(token), true);
-    await sleep(120);
-    assert.equal(store.isValid(token), false, 'genuine inactivity past the TTL must re-lock');
+describe('PIN session (Track B1): enforcement ON but NO PIN configured yet — fail open, not locked out', () => {
+  test('with PIN_SESSION_ENFORCE true and no PIN ever set, /api/* stays open (nothing to enforce yet)', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock(); // never setPin()
+    const server = createServer(baseDeps(bus, {
+      pinLock,
+      config: { MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: '', PIN_SESSION_ENFORCE: true },
+    }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpGet(port, '/api/status');
+      assert.equal(res.status, 200, 'a fresh install with the flag on but no PIN set yet must not lock the operator out of their own server');
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+// H1 (security audit, 2026-08-08): MYTHOS_AUTH_TOKEN set AND
+// PIN_SESSION_ENFORCE true AND a real PIN configured — the untested
+// combination every existing PIN test above deliberately avoided (they all
+// pin MYTHOS_AUTH_TOKEN: ''). RED-FIRST against the pre-fix tokenOk(), which
+// returned true on a matching bearer token without ever consulting
+// pinSessionRequired() — the bearer token alone fully bypassed PIN
+// enforcement. Also covers the mirror-image bug the fix must not introduce:
+// a live PIN session alone (obtainable from the deliberately-unauthenticated
+// POST /api/pin/verify) must NOT be sufficient either once a token is
+// configured, or that endpoint's 5-attempt lockout becomes the entire
+// remaining attack surface on a network-exposed instance.
+describe('PIN session (Track B1) + H1: BOTH layers configured — neither alone is sufficient', () => {
+  const AUTH_TOKEN = 'h1-combined-layer-token-do-not-reuse';
+
+  function bothDeps(bus, pinLock, overrides) {
+    return baseDeps(bus, Object.assign({
+      pinLock,
+      config: {
+        MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST',
+        MYTHOS_IDLE_SALIENCE: 0.3, ACTION_TIMEOUT_MS: 30000,
+        MYTHOS_AUTH_TOKEN: AUTH_TOKEN, PIN_SESSION_ENFORCE: true, PIN_SESSION_TTL_MS: 1800000,
+      },
+    }, overrides || {}));
+  }
+
+  async function getSessionCookie(port) {
+    const verifyRes = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
+    assert.equal(verifyRes.status, 200);
+    const cookie = extractSessionCookie(verifyRes.headers['set-cookie']);
+    assert.ok(cookie, 'expected a session cookie from a correct PIN');
+    return cookie;
+  }
+
+  test('bearer token alone (correct, no PIN session) is refused — the H1 bypass, made concrete', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(bothDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const res = await httpGet(port, '/api/status', { Authorization: `Bearer ${AUTH_TOKEN}` });
+      assert.equal(res.status, 401, `bearer token alone must not bypass an active PIN session requirement; got ${res.status}`);
+    } finally {
+      await server.stop();
+    }
   });
 
-  it('slides the window forward on each successful check', async () => {
-    // An operator actively using the HUD must never be kicked out mid-session.
-    // Three checks at half the TTL each span 1.5x the TTL in total, so this
-    // passes only if the window actually moves.
-    const store = createPinSessionStore({ ttlMs: 100 });
-    const token = store.issue();
-    for (let i = 0; i < 3; i++) {
-      await sleep(50);
-      assert.equal(store.isValid(token), true, 'still valid at check ' + (i + 1));
+  test('PIN session alone (correct, no bearer token) is refused — the mirror bypass this fix must not create', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(bothDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const cookie = await getSessionCookie(port);
+      const res = await httpGet(port, '/api/status', { Cookie: `mythos_token=${cookie}` });
+      assert.equal(res.status, 401, `a live PIN session alone must not grant access once a bearer token is configured; got ${res.status}`);
+    } finally {
+      await server.stop();
     }
-    // And the slide is driven by SUCCESS, not by being asked: a rejected check
-    // must not keep a session alive.
-    const other = createPinSessionStore({ ttlMs: 100 });
-    other.issue();
-    for (let i = 0; i < 3; i++) {
-      await sleep(50);
-      other.isValid('wrong-token');
-    }
-    assert.equal(other.isValid('wrong-token'), false);
   });
 
-  it('exposes the TTL it is using', () => {
-    assert.equal(createPinSessionStore({ ttlMs: 1234 }).ttlMs, 1234);
-    assert.equal(createPinSessionStore({}).ttlMs, 1800000, 'the 30-minute default');
-    // 0 must not be read as "no TTL given" and silently replaced by 30 minutes.
-    // It currently is, via `(opts && opts.ttlMs) || DEFAULT`. Pinned as the
-    // present behaviour rather than changed: PIN_SESSION_TTL_MS comes from the
-    // schema with a real minimum, so 0 cannot arrive from config, and a
-    // zero-length session would be indistinguishable from the lock being broken.
-    assert.equal(createPinSessionStore({ ttlMs: 0 }).ttlMs, 1800000);
+  test('both credentials together, on their own channels, are accepted', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(bothDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const cookie = await getSessionCookie(port);
+      const res = await httpGet(port, '/api/status', {
+        Authorization: `Bearer ${AUTH_TOKEN}`,
+        Cookie: `mythos_token=${cookie}`,
+      });
+      assert.equal(res.status, 200, `bearer (header) + PIN session (cookie) together must be accepted; got ${res.status}`);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('WS upgrade: bearer via ?token= alone (no PIN session cookie) is refused', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(bothDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const rejected = await new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${AUTH_TOKEN}`);
+        ws.on('open', () => resolve('opened'));
+        ws.on('unexpected-response', () => resolve('rejected'));
+        ws.on('error', () => resolve('rejected'));
+      });
+      assert.equal(rejected, 'rejected', 'a WS upgrade with only the bearer token must not bypass PIN enforcement');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('WS upgrade: bearer via ?token= AND the PIN session cookie together are accepted', async () => {
+    const bus = createBus({ historySize: 50 });
+    const pinLock = realPinLock();
+    pinLock.setPin('4242');
+    const server = createServer(bothDeps(bus, pinLock));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const cookie = await getSessionCookie(port);
+      const accepted = await new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${AUTH_TOKEN}`, { headers: { Cookie: `mythos_token=${cookie}` } });
+        ws.on('open', () => { ws.close(); resolve('opened'); });
+        ws.on('unexpected-response', () => resolve('rejected'));
+        ws.on('error', () => resolve('rejected'));
+      });
+      assert.equal(accepted, 'opened', 'a WS upgrade presenting both credentials on their own channels must succeed');
+    } finally {
+      await server.stop();
+    }
   });
 });
