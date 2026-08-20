@@ -441,9 +441,37 @@ function ddgHtmlFallback(html, maxResults) {
   return results
 }
 
-// Jina AI search — free, no key. Uses s.jina.ai/q/<query> which returns
-// readable text results. A good third-tier fallback before Wikipedia.
+// Jina AI search — s.jina.ai returns readable text results. A good third-tier
+// fallback before Wikipedia.
+//
+// BUG-302 (2026-08-21): this rung had no way to present a credential at all. It
+// sent Accept and X-Return-Format and nothing else, and EXA_API_KEY was the only
+// key the whole chain read — so once Jina withdrew its no-key tier the rung was
+// permanently HTTP 401 and got written off as dead, when it was one free API key
+// away from working. That mattered more than one rung: by this date every
+// keyless engine the local daemon supports was refusing too (startpage token
+// extraction, bing 301, brave 429, DuckDuckGo CAPTCHA, baidu socket hang up), so
+// reviving a rung that takes a key beats adopting another scraper that gets
+// blocked the same way.
+//
+// The keyless attempt is deliberately NOT removed. It costs one fast 401 that the
+// rung already reports honestly, and deleting it would bake a two-machine
+// measurement into a permanent refusal to try. This adds a capability and takes
+// nothing away.
 var JINA_SEARCH_URL = 'https://s.jina.ai/'
+
+// Built per call, not captured at module load: the key may be injected after this
+// file is required, and a header object shared across calls is a place for one
+// request's credential to outlive it.
+function jinaHeaders() {
+  var headers = { 'Accept': 'application/json', 'X-Return-Format': 'text' }
+  var key = String(process.env.JINA_API_KEY || '').trim()
+  // Only when non-empty — an absent key must not become "Bearer undefined",
+  // which reads to the server as a malformed credential rather than none.
+  if (key) headers['Authorization'] = 'Bearer ' + key
+  return headers
+}
+
 function jinaSearch(q, maxResults, bus) {
   return new Promise(function(resolve) {
     var controller = new AbortController()
@@ -451,7 +479,9 @@ function jinaSearch(q, maxResults, bus) {
     fetch(JINA_SEARCH_URL + encodeURIComponent(q), {
       method: 'GET',
       signal: controller.signal,
-      headers: { 'Accept': 'application/json', 'X-Return-Format': 'text' }
+      // The key rides in the Authorization header, never in the URL — a query
+      // string ends up in logs, proxies and the anomaly payloads this rung emits.
+      headers: jinaHeaders()
     })
     .then(function(res) {
       clearTimeout(timer)
