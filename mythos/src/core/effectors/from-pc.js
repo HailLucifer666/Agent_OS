@@ -765,6 +765,37 @@ async function ui_click({ pid, elementPath }) {
   // per-element oracle — a state change, a new window — picked per element
   // type); ceiling is "clicked in the right window", upgrade path is a
   // per-element post-condition if a false-positive click surfaces live.
+  //
+  // 2026-08-20 — THE UPGRADE PATH ABOVE IS NOW TAKEN, where the element offers
+  // it. Handle-UiClick's pattern ladder returns a per-element oracle for the
+  // rungs that have one: ToggleState moved, IsSelected flipped, the top-level
+  // window count changed, the range Value moved. That is strictly stronger
+  // evidence than "still foreground" and costs no extra round trip, because the
+  // property read is already paid for by the pattern call.
+  //
+  // A `confirmed: false` is the interesting case and must NOT be flattened into
+  // success: it means the pattern call returned cleanly and the element did not
+  // move. That is the BUG-274 T5 shape exactly — Notepad's WinUI3 MenuBarItem
+  // reporting ExpandCollapseState 'Expanded' while no flyout renders — so the
+  // one situation this oracle exists to catch is the one a bare ok would hide.
+  var elementOracle = res.result && res.result.oracle;
+  if (elementOracle && elementOracle.name) {
+    var moved = 'before ' + JSON.stringify(elementOracle.before) + ', after ' + JSON.stringify(elementOracle.after);
+    if (elementOracle.confirmed === true) {
+      return evidence.verifiedOk(res, {
+        oracle: 'ui-pattern-state',
+        expected: elementOracle.name + ' to change',
+        observed: elementOracle.name + ': ' + moved,
+      });
+    }
+    if (elementOracle.confirmed === false) {
+      return evidence.unverified(res,
+        'the ' + String(res.result.mechanism) + ' call returned cleanly but the element did not change — ' +
+        elementOracle.name + ' says ' + moved + '. The control may have a broken accessibility provider; ' +
+        'see_and_click or click_at drive it a different way.');
+    }
+  }
+
   var fg = await delegate({ cmd: 'get_foreground_window' });
   if (fg.ok && fg.result && fg.result.pid === targetPid) {
     return evidence.verifiedOk(res, {

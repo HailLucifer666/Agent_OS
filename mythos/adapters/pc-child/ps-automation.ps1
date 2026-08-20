@@ -1997,31 +1997,163 @@ function Handle-UiClick($TargetPid, $elementPath) {
         if ($element.error) { return $element.error }
         $el = $element.element
 
-        # Get Invoke pattern if available, otherwise use SetFocus + click rect
-        $invoked = $false
+        # THE PATTERN LADDER (2026-08-20). Five UIA patterns, each with its own
+        # element-specific oracle, and NO silent coordinate fallback.
+        #
+        # WHY IT GREW. This function had two rungs: InvokePattern, then a synthetic
+        # coordinate click. Invoke covers buttons and menu items and nothing else, so
+        # checkboxes, radio buttons, tabs, list items, combo boxes and sliders ALL
+        # fell through to synthetic input - which is exactly what MSIX-packaged apps
+        # silently discard and what foreground-lock blocks. By contrast ui_type
+        # already had four rungs including a WM_CHAR post route.
+        #
+        # WHY THE COORDINATE FALLBACK IS GONE RATHER THAN LAST. ui_click's oracle at
+        # the from-pc.js end is `foreground-pid` - "the click landed in the right
+        # window" - which that file's own comment says does NOT prove the element
+        # reacted. A silent coordinate fallback under that oracle can report success
+        # on an MSIX checkbox that never toggled. Each rung below carries a tighter,
+        # element-specific post-condition instead, and it is cheap: one property read
+        # already paid for by the pattern call.
+        #
+        # The capability is NOT lost. click_at is its own tool for a deliberate
+        # synthetic click, see_and_click reads the screen with OCR when the tree is
+        # useless, and cua_click UIA-hit-tests an exact pixel. The failure below
+        # names them rather than guessing on the operator's behalf. Consequence worth
+        # knowing: a plain text field exposes none of these five patterns, so
+        # ui_click on one now fails honestly and points at click_at instead of
+        # silently clicking its centre.
+        #
+        # Ordering is deliberate: Invoke stays first so every button and menu item
+        # keeps its existing, live-verified behaviour unchanged.
+        #
+        # PowerShell has NO C-style comments - a `/* ... */` parses as a command
+        # named '/*' and once killed every ui_click on a non-invokable element. Use
+        # '#' only.
+        $mechanism = $null
+        $tried = @()
+        $oracle = $null
+
+        # Rung 1 - InvokePattern. Buttons, menu items, links.
         try {
             $invokePattern = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern]
             if ($invokePattern) {
+                $tried += 'invoke'
                 $invokePattern.Invoke()
-                $invoked = $true
+                $mechanism = 'invoke'
             }
-        } catch {
-            # No invoke pattern on this element - fall through to the coordinate
-            # click below. PowerShell has NO C-style comments: a `/* ... */` here
-            # parses as a command named '/*', so the catch itself threw
-            # "The term '/*' is not recognized..." and killed every ui_click on
-            # a non-invokable element (text fields included). Use '#' only.
+        } catch { }
+
+        # Rung 2 - TogglePattern. Checkboxes, switches, checkable menu items.
+        # Oracle: ToggleState actually moved. This is the rung that catches the MSIX
+        # case the old fallback reported as success.
+        if (-not $mechanism) {
+            try {
+                $togglePattern = $el.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern) -as [System.Windows.Automation.TogglePattern]
+                if ($togglePattern) {
+                    $tried += 'toggle'
+                    $before = [string]$togglePattern.Current.ToggleState
+                    $togglePattern.Toggle()
+                    Start-Sleep -Milliseconds 120
+                    $after = [string]$togglePattern.Current.ToggleState
+                    $mechanism = 'toggle'
+                    $oracle = @{ name = 'toggle-state'; before = $before; after = $after; confirmed = ($before -ne $after) }
+                }
+            } catch { }
         }
 
-        if (-not $invoked) {
-            # Fall back to clicking the center of the element's bounding rect
-            $rect = $el.Current.BoundingRectangle
-            $cx = [int]($rect.X + $rect.Width / 2)
-            $cy = [int]($rect.Y + $rect.Height / 2)
-            Click-AtScreenCoords $cx $cy
+        # Rung 3 - SelectionItemPattern. Radio buttons, list items, tabs.
+        # Oracle: IsSelected is true afterwards.
+        if (-not $mechanism) {
+            try {
+                $selectPattern = $el.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern) -as [System.Windows.Automation.SelectionItemPattern]
+                if ($selectPattern) {
+                    $tried += 'selection-item'
+                    $before = [bool]$selectPattern.Current.IsSelected
+                    $selectPattern.Select()
+                    Start-Sleep -Milliseconds 120
+                    $after = [bool]$selectPattern.Current.IsSelected
+                    $mechanism = 'selection-item'
+                    $oracle = @{ name = 'is-selected'; before = $before; after = $after; confirmed = $after }
+                }
+            } catch { }
         }
 
-        return @{ clicked = $true; invoked = $invoked; path = $elementPath }
+        # Rung 4 - ExpandCollapsePattern. Combo boxes, tree nodes, menu bar items.
+        #
+        # DO NOT TRUST ExpandCollapseState ALONE. That is precisely the property that
+        # lied: BUG-274 T5 measured Notepad's WinUI3 MenuBarItem reporting
+        # ExpandCollapseState = Expanded while no flyout rendered anywhere, verified
+        # with two independent oracles. The state is paired here with a real content
+        # check - did the number of top-level windows change, which is what a flyout
+        # or dropdown actually does. `confirmed` is false when the state moved but
+        # nothing appeared, which is the WinUI3 provider defect showing itself rather
+        # than being reported as a successful click.
+        if (-not $mechanism) {
+            try {
+                $expandPattern = $el.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) -as [System.Windows.Automation.ExpandCollapsePattern]
+                if ($expandPattern) {
+                    $tried += 'expand-collapse'
+                    $before = [string]$expandPattern.Current.ExpandCollapseState
+                    $windowsBefore = Get-TopLevelWindowCount $TargetPid
+                    if ($before -eq 'Expanded') { $expandPattern.Collapse() } else { $expandPattern.Expand() }
+                    Start-Sleep -Milliseconds 180
+                    $after = [string]$expandPattern.Current.ExpandCollapseState
+                    $windowsAfter = Get-TopLevelWindowCount $TargetPid
+                    $mechanism = 'expand-collapse'
+                    $oracle = @{
+                        name = 'top-level-window-count'
+                        before = $before; after = $after
+                        windowsBefore = $windowsBefore; windowsAfter = $windowsAfter
+                        confirmed = ($windowsBefore -ne $windowsAfter)
+                    }
+                }
+            } catch { }
+        }
+
+        # Rung 5 - RangeValuePattern. Sliders, scrollbars, spinners.
+        # Oracle: Value moved. A click on a slider nudges it by one small step, which
+        # is the closest honest reading of "click" for a range control. Read-only
+        # ranges are skipped rather than attempted.
+        if (-not $mechanism) {
+            try {
+                $rangePattern = $el.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern) -as [System.Windows.Automation.RangeValuePattern]
+                if ($rangePattern -and -not $rangePattern.Current.IsReadOnly) {
+                    $tried += 'range-value'
+                    $before = [double]$rangePattern.Current.Value
+                    $min = [double]$rangePattern.Current.Minimum
+                    $max = [double]$rangePattern.Current.Maximum
+                    $step = [double]$rangePattern.Current.SmallChange
+                    if ($step -le 0) { $step = [Math]::Max((($max - $min) / 100), 1) }
+                    $target = [Math]::Min($max, [Math]::Max($min, ($before + $step)))
+                    if ($target -eq $before) { $target = [Math]::Max($min, ($before - $step)) }
+                    $rangePattern.SetValue($target)
+                    Start-Sleep -Milliseconds 120
+                    $after = [double]$rangePattern.Current.Value
+                    $mechanism = 'range-value'
+                    $oracle = @{ name = 'range-value'; before = $before; after = $after; confirmed = ($before -ne $after) }
+                }
+            } catch { }
+        }
+
+        if (-not $mechanism) {
+            $name = ''
+            try { $name = [string]$el.Current.Name } catch { }
+            return ('This element exposes none of the UIA patterns a click can drive (Invoke, Toggle, SelectionItem, ExpandCollapse, RangeValue)' +
+                $(if ($name) { ' - element "' + $name + '"' } else { '' }) +
+                '. Clicking its centre with synthetic input would report success whether or not it reacted, so it is not done silently. ' +
+                'Use click_at with its coordinates for a deliberate synthetic click, see_and_click to find it by its visible text with OCR, ' +
+                'or cua_click to hit-test the exact pixel.')
+        }
+
+        $result = @{
+            clicked = $true
+            invoked = ($mechanism -eq 'invoke')
+            mechanism = $mechanism
+            path = $elementPath
+        }
+        if ($tried.Count -gt 1) { $result.mechanismsTried = $tried }
+        if ($null -ne $oracle) { $result.oracle = $oracle }
+        return $result
     } catch {
         return ('Click failed: ' + $_.Exception.Message)
     }
@@ -2128,27 +2260,43 @@ function Find-InvokableSaveDescendant($Root) {
 # window (Handle-FocusWindow's own AttachThreadInput workaround) before
 # invoking, unconditionally force a Collapse-then-Expand toggle rather than
 # trust a possibly-stale ExpandCollapseState, then re-scan both the original
-# root and the current foreground window with one retry - is all verified
-# correct in isolation: an identical sequence run from a plain
-# `powershell.exe -File script.ps1` process against the exact same live
-# window opens the File menu and finds Save/Save As/Save all every time.
+# root and the current foreground window with one retry - is correct code.
 #
-# It still returns $null when actually called through Handle-SendKey in this
-# file, because THIS file only ever runs as pc-child/index.js's spawned child
-# (`child_process.spawn('powershell.exe', ...)`), and InvokePattern.Invoke()/
-# ExpandCollapsePattern.Expand() on this specific WinUI3 MenuBarItem are a
-# silent no-op - no exception, ExpandCollapseState transitions and reports
-# 'Expanded', yet no flyout ever renders - SPECIFICALLY when the calling
-# PowerShell process was spawned as a Node child_process, regardless of
-# -NonInteractive/windowsHide (tested with both removed - same result,
-# confirmed live). Every other UIA route this file already uses successfully
-# from inside this same daemon (uia-setvalue for typing, click_at, etc.) is
-# unaffected - this is narrow to Invoke/ExpandCollapse on this one control,
-# in this one process-spawn shape. Kept in the file rather than reverted:
-# harmless when it fails (never opens the menu -> never finds Save -> the
-# caller's honest-failure path below is unchanged), and it is the correct
-# code if this file is ever invoked a different way (a real terminal-attached
-# daemon, a different automation host) where the same block does not apply.
+# CORRECTED 2026-08-20. This header used to say the no-op happened
+# "SPECIFICALLY when the calling PowerShell process was spawned as a Node
+# child_process", and treated a plain `powershell.exe -File script.ps1` run as a
+# clean baseline that "opens the File menu and finds Save/Save As/Save all every
+# time". BUG-274 T5 (commit d9f2ad2, 2026-08-19) overturned both halves: the
+# no-op REPRODUCES in a direct, non-adapter spawn, which falsifies the original
+# 2026-08-13 "works standalone" report, and every remaining client-side
+# hypothesis was then measured and refuted - -NonInteractive/windowsHide;
+# window-station, desktop and integrity level (identical on every field via the
+# new uia_context command and scripts/probe-pc-child-context.js); and the
+# message-pump / STA-apartment axis (four variants x two hosts via
+# uia_pump_probe, all eight runs identical).
+#
+# The stale version cost a session: it named a cause, so the next reader
+# re-opened a closed question from a comment. Same class as BUG-274 T1 and T2 -
+# a claim fixed in one place and left standing in another.
+#
+# WHAT IT ACTUALLY IS: a defect in Notepad's own UIA provider.
+# ExpandCollapseState reports 'Expanded' while no flyout renders, verified with
+# two independent oracles, on this one WinUI3 MenuBarItem. Not a defect in how
+# pc-child calls it - launch/focus/type/click all pass live and oracle-backed on
+# both a Win32 app (charmap) and an MSIX app (notepad).
+#
+# ONE CHECK REMAINS, and it is the operator's to run: the original "works
+# standalone" claim came from a script run in a terminal a person opened - a
+# CONSOLE-ATTACHED host that probe-uia-pump.js cannot produce, because libuv maps
+# `detached` to DETACHED_PROCESS, i.e. no console at all. Run the one-line
+# command that probe prints, from a real interactive terminal, against a live
+# Notepad. If saveAnywhere is still 0 the console-attached axis closes too and
+# Save's honest-failure path (which names write_file) is the permanent answer.
+#
+# DO NOT open a sixth client-side hypothesis. Kept in the file rather than
+# reverted: harmless when it fails (never opens the menu -> never finds Save ->
+# the caller's honest-failure path below is unchanged), and it is the correct
+# code for any host where the provider behaves.
 function Find-SaveViaFileMenu($Root, $TargetPid) {
     if ($TargetPid) {
         try {

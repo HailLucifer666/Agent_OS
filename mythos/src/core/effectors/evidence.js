@@ -70,6 +70,18 @@ var ORACLES = [
   // were. The HUD is a separate page reporting on its own DOM, same spirit as
   // page-state.
   'dashboard-render',
+  // 2026-08-20: the clicked element's own UIA pattern property, re-read AFTER
+  // the click — ToggleState moved, IsSelected flipped, the owning process gained
+  // or lost a top-level window, the range Value moved. Independent of the call
+  // in the way that matters: InvokePattern.Invoke() and
+  // ExpandCollapsePattern.Expand() both return cleanly on controls that do not
+  // react, which is BUG-274 T5's WinUI3 MenuBarItem reporting 'Expanded' with no
+  // flyout on screen. Strictly stronger than ui_click's previous ceiling of
+  // 'foreground-pid' ("the click landed in the right window"), and free — the
+  // property read is already paid for by the pattern call. The specific property
+  // is named in `observed`, so one oracle covers the class without the allowlist
+  // growing a row per UIA pattern.
+  'ui-pattern-state',
 ];
 
 function isPlainObject(v) {
