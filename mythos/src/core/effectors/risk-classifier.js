@@ -18,7 +18,14 @@ var GATE_PATHS = {
   'tiny-fix': ['artifact'],
   'quick-win': ['artifact', 'verify'],
   'feature': ['research', 'artifact', 'visual', 'review'],
-  'architecture-change': ['research', 'adr', 'artifact', 'visual', 'review'],
+  // 2026-08-20: 'adr' REMOVED from architecture-change. It is deliberately not
+  // required: no ADR generator exists in this repo, so gating on an artifact
+  // nothing produces is a deadlock, not a stricter gate. Re-add to gatePath()
+  // in the same commit that adds a producer — and add the matching check in
+  // evidence-validator.js, which is where the phase was declared-but-unenforced
+  // for as long as it sat here. test/evidence-gate-visual-and-adr.test.js fails
+  // if 'adr' reappears in any gate path.
+  'architecture-change': ['research', 'artifact', 'visual', 'review'],
 };
 
 function classify(text) {

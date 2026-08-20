@@ -33,22 +33,36 @@ function createEvidenceValidator() {
     // web data was fetched (that's best-effort), but we can verify the field exists.
     // Skipped here — research is best-effort and network may be down.
 
-    // adr: architecture-change requires an Architecture Decision Record.
-    // Check if shipMeta or card has an adr field (future: the builder would produce one)
-    if (requiredPhases.indexOf('adr') !== -1) {
-      // ADR not yet wired — for now this is informational, not blocking.
-      // When ADR generation is added, check card.adr or artifact.adr exists.
-    }
+    // adr: DELIBERATELY NOT REQUIRED, and removed from risk-classifier.js's
+    // architecture-change gate path on 2026-08-20 rather than enforced here.
+    //
+    // Nothing in this repo produces an ADR artifact. Gating on one would block
+    // every architecture-change card forever, waiting on a document no code can
+    // create — a deadlock, not a stricter gate, and this repo's bias is that no
+    // mechanism beats a mechanism that cannot pass. The block that used to sit
+    // here contained only comments, so it read as an enforced phase while
+    // enforcing nothing, which is worse than its absence.
+    //
+    // Re-add BOTH the phase and a check here in the same commit that adds a
+    // producer. test/evidence-gate-visual-and-adr.test.js fails if 'adr' returns
+    // to any gate path, so this cannot be un-decided silently.
 
-    // visual: if visual verification was required (risk class includes it),
-    // check that review has a visualDescription or was explicitly skipped
+    // visual: required by the feature and architecture-change classes. The
+    // condition below was already written correctly and its result was thrown
+    // away — the `if` body was empty, so the gate detected a card shipping with
+    // no visual verification and returned pass:true anyway. Using it is the whole
+    // fix.
+    //
+    // _visualSkipped is the honest degradation path: agent-actions.js's
+    // fullReview sets it when verifyBuildVisually reports checked:false (browser
+    // automation unavailable, browser offline, vision brain unavailable,
+    // screenshot failed). An offline browser must not block delivery. That field
+    // did NOT exist when this gate was written — it was read here and set
+    // nowhere, so enforcing this condition before fullReview recorded it would
+    // have blocked every card whose browser was down.
     if (requiredPhases.indexOf('visual') !== -1 && review) {
-      // review.visualDescription is set when vision brain described the page.
-      // If browser was offline, visual is 'skipped' — that's acceptable degradation,
-      // not a missing evidence failure.
       if (!review.visualDescription && !review._visualSkipped) {
-        // visual was supposed to run but left no description and wasn't marked skipped
-        // This catches the case where visual verify was required but never invoked
+        missing.push('visual verification was required but never ran');
       }
     }
 

@@ -40,7 +40,12 @@ describe('P23: Risk Classifier', () => {
     assert.deepEqual(gatePath('tiny-fix'), ['artifact']);
     assert.deepEqual(gatePath('quick-win'), ['artifact', 'verify']);
     assert.deepEqual(gatePath('feature'), ['research', 'artifact', 'visual', 'review']);
-    assert.deepEqual(gatePath('architecture-change'), ['research', 'adr', 'artifact', 'visual', 'review']);
+    // 'adr' was removed from this path on 2026-08-20. It was declared here and
+    // enforced nowhere — evidence-validator.js's adr block held only comments —
+    // and nothing in the repo produces an ADR artifact, so enforcing it would
+    // have deadlocked every architecture-change card. The disposition and its
+    // revisit trigger live in test/evidence-gate-visual-and-adr.test.js.
+    assert.deepEqual(gatePath('architecture-change'), ['research', 'artifact', 'visual', 'review']);
   });
 
   it('requiresReview/research/visual flags are correct', () => {

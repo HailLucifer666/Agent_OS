@@ -413,6 +413,18 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
     // 1. Visual verification (if browser is online)
     var visual = await verifyBuildVisually(artifact.path, specText);
+    // 2026-08-20: record WHY visual produced nothing, not just that it did.
+    // evidence-validator.js gates the visual phase for feature and
+    // architecture-change cards, and its only way to tell "the browser was
+    // offline" from "this step was never invoked" is this flag. Without it the
+    // gate cannot distinguish honest degradation from a skipped phase, so it
+    // would either block every offline build or (as it did until this commit)
+    // enforce nothing at all. visualSkipReason carries the description
+    // verifyBuildVisually already produces — 'browser offline', 'vision brain
+    // unavailable', 'screenshot failed' — so the reason survives to the operator
+    // instead of being flattened into a boolean.
+    var visualSkipped = !visual.checked;
+    var visualSkipReason = visualSkipped ? (visual.description || 'visual verification did not run') : null;
     if (visual.checked) {
       visualDescription = visual.description;
       if (visual.verdict === 'reject' && visual.issues.length) {
@@ -477,7 +489,11 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     return {
       verdict: allIssues.length === 0 ? 'approve' : 'reject',
       issues: allIssues,
-      visualDescription: visualDescription
+      visualDescription: visualDescription,
+      // Read by evidence-validator.js's visual gate. See the note at the visual
+      // verification call above for why the reason rides along.
+      _visualSkipped: visualSkipped,
+      _visualSkipReason: visualSkipReason
     };
   }
 
