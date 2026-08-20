@@ -267,3 +267,107 @@ describe('BUG-280: deliberate non-changes', () => {
     assert.ok(typeof search._exaMcpSearch === 'function');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-280, second half — a STALE answer returned as a fresh one.
+//
+// THE INCIDENT, and it is the sibling of BUG-291. 2026-08-20: web_search ran for
+// "Durand Cup East Bengal vs Mohun Bagan result August 20 2026", came back
+// ok:true with source:'wikipedia', and the five results were Durand Cup pages
+// from 2023 and 2025. MYTHOS read them correctly at first — "the search results
+// show Durand Cup finals of previous years, not today's result" — and then, two
+// turns later, told the operator Mohun Bagan had won and WROTE THAT TO A NOTE.
+//
+// The chain did nothing wrong: Wikipedia is the last rung and, on that host, the
+// only live one. The defect is that ok:true + source:'wikipedia' carries no
+// signal that an encyclopaedia cannot answer "what was today's result", so the
+// model had a success and a gap and filled the gap. Same missing-signal class as
+// BUG-291 (a successful navigate that read no page) — one is an empty body, this
+// one is a body from the wrong decade.
+// ---------------------------------------------------------------------------
+describe('BUG-280: a stale source is labelled stale', () => {
+  afterEach(() => { global.fetch = realFetch; });
+
+  const LIVE_QUERY = 'Durand Cup East Bengal vs Mohun Bagan result August 20 2026';
+
+  it('a time-sensitive query answered from Wikipedia carries an explicit caution', async () => {
+    stubChain({ local: 'refused' });
+    const res = await search.web_search({ query: LIVE_QUERY, maxResults: 5 });
+    assert.equal(res.ok, true, 'the results are real results — this must not become a failure');
+    assert.equal(res.result.source, 'wikipedia');
+    assert.ok(res.result.caution, 'a time-sensitive query answered by an encyclopaedia must say so');
+    // AMENDED by BUG-294's review. The first version of this asserted the word
+    // "encyclopaedia", because the guard was keyed on a list of source NAMES. That
+    // was wrong: a name list leaves every rung added later silently exempt, and it
+    // cost a real defect inside one commit — the local daemon returns UNDATED
+    // results, was not on the list, and answered a live football question with a
+    // fixture that never took place. The invariant is provable recency, so the
+    // caution names the missing date rather than the source's genre.
+    assert.match(res.result.caution, /NO publication date/i,
+      'the caution has to name WHY the answer cannot be shown to be current');
+    assert.match(res.result.caution, /do NOT/i,
+      'and it has to forbid the invented answer — that is the behaviour being fixed');
+  });
+
+  it('the results themselves are untouched — the caution adds, it does not redact', async () => {
+    stubChain({ local: 'refused' });
+    const res = await search.web_search({ query: LIVE_QUERY, maxResults: 5 });
+    assert.ok(res.result.results.length > 0, 'the operator still gets what was found');
+    assert.equal(res.result.results[0].title, WIKI.query.search[0].title);
+  });
+
+  // AMENDED by BUG-294's review, and the amendment IS the finding. This used to
+  // assert that the local daemon answering a live query carried no caution, on the
+  // reasoning that a live engine is the right source for a live question. It is
+  // not, if it cannot say WHEN: localWebSearch maps { title, url, snippet } with no
+  // date field at all, so its answer to "what was today's result" is
+  // indistinguishable from its answer about last season. That is not hypothetical
+  // — commit f34be26 recorded the daemon returning "Mohun Bagan edge past East
+  // Bengal", a fixture that never took place, and it was accepted as proof the
+  // freshness fix worked.
+  it('an UNDATED live engine answering a live question IS cautioned', async () => {
+    stubChain({ local: 'ok' });
+    const res = await search.web_search({ query: LIVE_QUERY, maxResults: 3 });
+    assert.equal(res.result.source, 'local-websearch');
+    assert.ok(res.result.caution,
+      'being a live engine is not the same as being able to prove recency');
+  });
+
+  // NEGATIVE CONTROL 1 — the real one. Hedging every search result teaches the
+  // model to distrust all of them, which is a worse failure than the one being
+  // fixed, so a source that CAN prove recency must come through clean.
+  it('a DATED source answering the same question carries no caution', async () => {
+    stubChain({ local: 'ok' });
+    const res = await search.web_search({ query: 'x', maxResults: 3 });
+    const dated = search._succeed(LIVE_QUERY, res.result.results.map(
+      (r) => Object.assign({}, r, { published: '5h ago' })), 'google-news-rss');
+    assert.equal(dated.result.caution, undefined,
+      'a per-result date is the exemption — do not invent doubt about a dated answer');
+  });
+
+  // NEGATIVE CONTROL 2 — Wikipedia is the RIGHT source for a timeless question.
+  // Without this the guard degenerates into "always distrust Wikipedia".
+  it('a timeless query answered from Wikipedia carries no caution', async () => {
+    stubChain({ local: 'refused' });
+    const res = await search.web_search({ query: 'who is Ada Lovelace', maxResults: 3 });
+    assert.equal(res.result.source, 'wikipedia');
+    assert.equal(res.result.caution, undefined,
+      'an encyclopaedia answering an encyclopaedia question is not a defect');
+  });
+
+  it('the freshness test is on the QUERY, and it is exported so it can be argued with', () => {
+    // Q1 — WHAT ELSE MATCHES THIS? It is a word list over attacker-adjacent
+    // input (the operator's own speech, via STT that produced "आदिए" that day),
+    // so it will over-match: "the result of the French Revolution" trips it and
+    // gets a caution it does not need. That is deliberate — the failure mode of
+    // a false positive is one extra sentence of hedging, and the failure mode of
+    // a false negative is a fabricated football score written to a note.
+    assert.equal(typeof search._isTimeSensitive, 'function');
+    assert.equal(search._isTimeSensitive(LIVE_QUERY), true);
+    assert.equal(search._isTimeSensitive('what is the score'), true);
+    assert.equal(search._isTimeSensitive('weather in Kolkata today'), true);
+    assert.equal(search._isTimeSensitive('latest news'), true);
+    assert.equal(search._isTimeSensitive('who is Ada Lovelace'), false);
+    assert.equal(search._isTimeSensitive('parmesan garlic bread recipe'), false);
+  });
+});

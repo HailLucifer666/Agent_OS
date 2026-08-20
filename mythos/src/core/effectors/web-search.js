@@ -33,6 +33,126 @@ var WIKI_SEARCH_URL = 'https://en.wikipedia.org/w/api.php?action=query&list=sear
 var WIKI_ARTICLE_URL = 'https://en.wikipedia.org/wiki/'
 var PROVIDER_TIMEOUT = 10000
 
+// BUG-280, second half — 2026-08-20. A STALE answer returned as a fresh one.
+//
+// web_search ran for "Durand Cup East Bengal vs Mohun Bagan result August 20
+// 2026" and returned ok:true, source:'wikipedia', five Durand Cup pages from
+// 2023 and 2025. The chain behaved correctly — Wikipedia is the last rung and,
+// on that host, the only reachable one. But ok:true carried no signal that an
+// encyclopaedia cannot answer "what was today's result", so the model had a
+// success with a gap in it and filled the gap: two turns later it told the
+// operator Mohun Bagan had won, congratulated him, and wrote it to a note.
+//
+// This is the sibling of BUG-295's missing NO_CONTENT_CLAIM. One is an empty
+// body; this is a body from the wrong decade. Both are a successful tool result
+// that does not answer the question asked, with nothing in the payload saying so.
+// KEYED ON PROVABLE RECENCY, NOT ON A LIST OF SOURCE NAMES. The first version of
+// this guard held `{ wikipedia: true }`, and that was wrong for a reason worth
+// writing down: a name list has to be extended by hand for every rung added
+// afterwards, so every new provider arrives silently EXEMPT. That is this repo's
+// phantom-allowlist class — a list that names things nothing emits, or fails to
+// name the thing that matters. It cost a real defect here within one commit: the
+// local daemon returns undated results, was not in the list, and therefore
+// answered a live football question with a fixture that never took place.
+//
+// The real invariant is whether the winning source can PROVE recency, and the
+// evidence for that is in the results themselves: a rung that knows when its
+// items were published stamps `published` on them. `.some` rather than `.every`
+// on purpose — one dated item demonstrates the SOURCE carries dates, and Defect 4
+// below makes any individual undated item say so in its own snippet, so a mixed
+// batch is fully described rather than silently averaged.
+function carriesPublicationDates(results) {
+  return Array.isArray(results) && results.some(function(r) { return r && r.published })
+}
+
+// Q1 — WHAT ELSE MATCHES THIS? A word list over the operator's transcribed
+// speech, i.e. over input this project has already watched STT mangle into
+// "आदिए". It WILL over-match: "the result of the French Revolution" trips it and
+// earns a caution it does not need. That asymmetry is deliberate and is the whole
+// design — a false positive costs one extra sentence of hedging, a false negative
+// costs a fabricated football score written to a note. Exported as
+// _isTimeSensitive so the list can be argued with in a test rather than guessed at.
+var FRESHNESS_MARKERS = /\b(today|tonight|tomorrow|yesterday|now|current|currently|latest|live|recent|breaking|score|scores|result|results|final|standings|who won|price|prices|weather|forecast|this (?:morning|afternoon|evening|week|month|year))\b|\b20[2-9][0-9]\b/i
+
+function isTimeSensitive(query) {
+  return FRESHNESS_MARKERS.test(String(query || ''))
+}
+
+var STALE_SOURCE_CAUTION = 'These results carry NO publication date, so none of them can be shown '
+  + 'to be current — they may describe a different year entirely. Say plainly that you could not '
+  + 'find dated, current information, and do NOT state, guess or infer an answer that is not '
+  + 'written in these results — not now, and not later in this conversation either.'
+
+// BUG-294 — the Google News RSS rung. We already own this code: server/
+// news-feed.js has fetched news.google.com/rss for the HUD news card since it
+// shipped, with a PURE parseRss(), an agoLabel(), MAX_ITEMS 12 and an 8s timeout
+// that already fits inside this chain's provider budget. Exactly two things were
+// missing — the module never sent a QUERY, and the voice path could not reach it.
+//
+// parseRss IS NOT TOUCHED. It already returns everything this rung needs, the HUD
+// card depends on it, and leaving it alone keeps that card safe by construction
+// rather than by test. bug-294-news-rss-rung.test.js pins that it was not edited.
+var newsFeed = require('../../../server/news-feed')
+
+// THE HEADLINE IS THE ENTIRE ANSWER, so no article is ever fetched. Real first
+// item for q=Mohun+Bagan+Durand+Cup, captured 2026-08-21:
+//   "Durand Cup 2026 semifinal Highlights: Mohun Bagan beats NorthEast United on
+//    penalties to reach final - Sportstar"
+// Who played, what happened, how, and the publisher — all in one string. That
+// deletes the hardest half of this rung, and it deletes a security problem with it.
+//
+// Q1/Q4 — WHAT IS STANDING NEXT TO IT? The <link>. It is NOT the publisher URL:
+// Google News RSS hands back an opaque redirector
+// (https://news.google.com/rss/articles/CBMiigJBVV95cUxPc3J1…) which passes
+// parseRss's ^https?:// guard and therefore flows through looking exactly like a
+// normal citation. news-feed.js's httpGet follows up to 3 redirects, so fetching
+// one would walk an attacker-influenced redirect chain — the same shape as the two
+// SSRF bypasses already recorded in web-fetch.js (IPv4-mapped loopback at :30, a
+// 302 to cloud metadata at :116). It is display/attribution ONLY, and the publisher
+// name is already in the title suffix, so attribution costs no request at all.
+//
+// `ago` rides in `snippet` on purpose: it is the freshness signal, it is the one
+// thing that lets the model tell today from last year, and snippet is the field
+// both the model and the HUD result card already read.
+async function newsRssSearch(q, max, traceBus) {
+  var url = newsFeed.feedUrl(q)
+  var res = await fetch(url, {
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT),
+    headers: { 'user-agent': BROWSER_UA },
+  })
+  if (!res.ok) {
+    traceBus.emit('health.anomaly', {
+      kind: 'search-provider-failed', provider: 'google-news-rss', error: 'HTTP ' + res.status,
+    })
+    return []
+  }
+  var items = newsFeed.parseRss(await res.text(), Date.now())
+  return items.slice(0, max).map(function(item) {
+    // agoLabel() returns '' for a missing or unparseable pubDate. For a rung whose
+    // ENTIRE safety property is freshness, an item that silently loses its age is
+    // the one result the model must not read as current — an empty snippet next to
+    // a confident headline is exactly the raw material this whole ticket exists to
+    // deny it. So a dateless item says so, and `published` stays null, which is
+    // what the caution keys on.
+    return {
+      title: item.title,
+      url: item.link,
+      published: item.ago || null,
+      snippet: item.ago ? 'Published ' + item.ago + '.' : 'Publication date unknown.',
+    }
+  })
+}
+
+// The one success door for every rung. Seven rungs used to build this object
+// themselves, which is exactly why a signal like the caution below could be
+// added to none of them — Q3: the model reads `result`, so the caution has to
+// ride there, on every provider, or it is a mechanism that covers one rung.
+function succeed(q, results, source) {
+  var payload = { query: q, results: results, source: source }
+  if (isTimeSensitive(q) && !carriesPublicationDates(results)) payload.caution = STALE_SOURCE_CAUTION
+  return { ok: true, result: payload }
+}
+
 // BUG-280: the adopted local search daemon (open-webSearch, Apache-2.0). Treated
 // exactly like cua-driver — an OPTIONAL external binary the operator installs and
 // runs. Absent daemon means this rung records why and the chain continues; it is
@@ -534,6 +654,37 @@ async function web_search({ query, maxResults, bus }) {
       }
     }
 
+    // 0a. Google News RSS (BUG-294) — FIRST, ahead of the local daemon, and ONLY
+    // for a question carrying a freshness marker.
+    //
+    // IT WAS AT 0b, BEHIND THE DAEMON, AND THAT MADE IT UNREACHABLE FOR EVERY
+    // QUERY IT EXISTS FOR. Since BUG-288 the daemon autostarts, so a live question
+    // hit it first, and localWebSearch maps { title, url, snippet: description }
+    // with NO DATE FIELD — a non-empty undated answer returned immediately and the
+    // news rung never ran. This branch's own commit f34be26 recorded the daemon
+    // answering "Mohun Bagan edge past East Bengal with a hard-fought win" as
+    // proof the freshness fix worked; on 2026-08-20 Mohun Bagan played NORTHEAST
+    // UNITED, and the two clubs had not met at all. An older fixture, undated,
+    // accepted as evidence of freshness. Ordering was the whole defect.
+    //
+    // The freshness gate is still the safety property (see the no-second-position
+    // note further down): RSS never returns zero, so it must never be a catch-all.
+    // A timeless query does not enter this block at all and the chain below is
+    // byte-for-byte the order it always had.
+    if (isTimeSensitive(q)) {
+      var newsSkip = skipReason('google-news-rss')
+      if (newsSkip) note('google-news-rss', newsSkip)
+      else {
+        try {
+          var newsResults = await newsRssSearch(q, max, traceBus)
+          if (newsResults && newsResults.length) {
+            return succeed(q, newsResults.slice(0, max), 'google-news-rss')
+          }
+        } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'google-news-rss', error: err.message }); }
+        note('google-news-rss', outcome('google-news-rss'))
+      }
+    }
+
     // 0. Local open-webSearch daemon — FIRST on purpose. It is free, unmetered
     // and on loopback; spending Exa's 150-a-day free quota before trying a free
     // local engine is backwards. A missing daemon costs one refused TCP connect.
@@ -543,7 +694,7 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var localResults = await localWebSearch(q, max, traceBus)
         if (localResults && localResults.length) {
-          return { ok: true, result: { query: q, results: localResults.slice(0, max), source: 'local-websearch' } }
+          return succeed(q, localResults.slice(0, max), 'local-websearch')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: err.message }); }
       note('local-websearch', outcome('local-websearch'))
@@ -580,7 +731,7 @@ async function web_search({ query, maxResults, bus }) {
                 snippet: (r.text || '').slice(0, 300)
               }
             })
-            return { ok: true, result: { query: q, results: results.slice(0, max), source: 'exa' } }
+            return succeed(q, results.slice(0, max), 'exa')
           }
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa', error: err.message }); }
@@ -594,7 +745,7 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var mcpResults = await exaMcpSearch(q, max, traceBus)
         if (mcpResults.length) {
-          return { ok: true, result: { query: q, results: mcpResults.slice(0, max), source: 'exa-mcp' } }
+          return succeed(q, mcpResults.slice(0, max), 'exa-mcp')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
       note('exa-mcp', outcome('exa-mcp'))
@@ -622,7 +773,7 @@ async function web_search({ query, maxResults, bus }) {
           } catch (_) { /* fallback parse failed — continue to next provider */ }
         }
         if (ddgResults.length) {
-          return { ok: true, result: { query: q, results: ddgResults, source: 'duckduckgo-html' } }
+          return succeed(q, ddgResults, 'duckduckgo-html')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-html', error: err.message }); }
       note('ddg-html', outcome('ddg-html'))
@@ -635,7 +786,7 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var liteResults = await ddgLite(q, max, traceBus)
         if (liteResults.length) {
-          return { ok: true, result: { query: q, results: liteResults, source: 'duckduckgo-lite' } }
+          return succeed(q, liteResults, 'duckduckgo-lite')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-lite', error: err.message }); }
       note('ddg-lite', outcome('ddg-lite'))
@@ -648,12 +799,26 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var jinaResults = await jinaSearch(q, max, traceBus)
         if (jinaResults.length) {
-          return { ok: true, result: { query: q, results: jinaResults, source: 'jina' } }
+          return succeed(q, jinaResults, 'jina')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'jina', error: err.message }); }
       note('jina', outcome('jina'))
     }
 
+    // NO SECOND NEWS POSITION HERE, AND THAT IS THE SAFETY PROPERTY — not an
+    // omission. Measured 2026-08-21: Google News RSS NEVER returns zero. It
+    // answered "FIFA World Cup 2030 host countries" correctly, answered
+    // "Argentina FIFA ranking" with a related-but-wrong power-rankings headline,
+    // and answered "how to fix a leaking tap" with a content farm (59 items).
+    // A source that always produces something plausible is the worst possible
+    // partner for a model that already fabricates: unlike an empty result, it can
+    // never trigger the "I don't have this" path. So the rung fires ONLY on a
+    // freshness-marked query, never as a catch-all, never when an earlier
+    // provider came back empty, and never in the last-resort slot.
+    //
+    // Wikipedia keeps that slot DELIBERATELY: an encyclopaedia miss is honest,
+    // and an RSS miss is not.
+    //
     // 5. Wikipedia full-text search (BUG-280). This used to be action=opensearch, whose
     // title-prefix matching could not answer a sentence at all — 'weather in London today'
     // scored 0 hits against 3 for the bare word 'London'. It is still a last resort and
@@ -666,7 +831,7 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var wikiResults = await wikiSearch(q, max, traceBus)
         if (wikiResults.length) {
-          return { ok: true, result: { query: q, results: wikiResults, source: 'wikipedia' } }
+          return succeed(q, wikiResults, 'wikipedia')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'wikipedia', error: err.message }); }
       note('wikipedia', outcome('wikipedia'))
@@ -696,5 +861,7 @@ module.exports = {
   _resolveLocalSearchUrl: resolveLocalSearchUrl,
   _localSearchEngines: localSearchEngines,
   _exaMcpSearch: exaMcpSearch,
-  _parseExaMcpText: parseExaMcpText
+  _parseExaMcpText: parseExaMcpText,
+  _isTimeSensitive: isTimeSensitive,
+  _succeed: succeed
 }
