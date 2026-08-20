@@ -27,66 +27,27 @@ function fail(msg) { return { ok: false, result: { error: msg } }; }
 // text can name the actual remedy instead of leaving the model to guess a cause.
 // Matching on the flag rather than on message text, per the same reasoning that
 // put `attemptTimedOut` in chain.js's decision instead of a regex.
-// F1 (2026-08-15): the message B5 added was right and still got retried forever,
-// because saying "do not retry" in prose does not stop the circuit breaker. This
-// is the machine-readable half of the same fact — see hub.js's isTerminalResult.
-// Deliberately narrow: only the two OAuth grant signatures, never a blanket
-// 4xx rule, so a rate limit or a transient 401 stays retryable.
-// BUG-273 C2 — PRECEDENCE BUG, found while exporting this for gmail-sensor.js. It
-// used to read `!!(err && (err.isAuthError || RE.test(reason)))`, so the leading
-// `err &&` short-circuited the WHOLE expression and the reason-regex fallback could
-// never fire without an error object. The comment above calls the regex the fallback
-// for exactly the case where there is no flag to read, which is the case it could not
-// serve. Every caller inside this file happens to pass a truthy `err`, so the bug was
-// latent — but the sensor reaching for the same helper is precisely a caller that may
-// have only a string, and a dead fallback there would silently stop announcing a
-// revoked token.
-function isTerminalAuthError(err, reason) {
-  return !!((err && err.isAuthError) || /invalid_grant|unauthorized_client/.test(String(reason)));
-}
+// BUG-296 (2026-08-21): the classifier and the remedy text moved to
+// ./google-auth-failure.js and are re-exported here unchanged.
+//
+// They were never Gmail-specific — Gmail and Calendar authenticate with the SAME
+// refresh token, so when it dies they fail together. Only Gmail handled it.
+// Calendar returned a bare 'Calendar fetch failed: invalid_grant...' with no
+// remedy and no terminal flag, and was retried forever. One invariant, two
+// implementations, one of them missing.
+//
+// The names below are kept because gmail-sensor.js and four test files import
+// them; only the home of the logic changed. The BUG-273 C2 precedence fix and
+// the BUG-291 publish-first ordering both live in the shared module now.
+var {
+  isTerminalAuthError,
+  googleAuthFailureText,
+  googleAuthFailure,
+} = require('./google-auth-failure');
 
-function gmailFailureText(prefix, err) {
-  var reason = reasonText(err);
-  if (isTerminalAuthError(err, reason)) {
-    // BUG-291 (2026-08-21): everything below the first line is new, and it is
-    // here because the message above was ALREADY correct and still cost the same
-    // session twice. Following it exactly — run the script, paste the token —
-    // reproduces the fault a week later, so the remedy was a loop with no exit
-    // written into it.
-    //
-    // From Google's OAuth documentation: a project whose consent screen is
-    // external user type with publishing status 'Testing' is issued refresh
-    // tokens that EXPIRE IN 7 DAYS. This project requests gmail.readonly,
-    // gmail.compose, gmail.send and calendar.readonly, so it is squarely in that
-    // rule. That is a fact about the deployment, recoverable from no amount of
-    // reading this code, which is exactly why it belongs in the failure string
-    // rather than in a session transcript that the next reader will not have.
-    //
-    // The ORDER is the load-bearing part: publish first, THEN re-authorise. Doing
-    // it the other way round mints another 7-day token and files this incident
-    // again. Publishing unverified is fine for a single operator — it costs an
-    // "unverified app" interstitial and a 100-user lifetime cap on the project.
-    return prefix + ': ' + reason
-      + ' — this is NOT a network problem and will not recover on its own: the Google refresh token is '
-      + 'expired or revoked. Tell the operator it needs re-authorising by running '
-      + '`node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in mythos/.env. '
-      + 'If this recurs roughly every 7 days, re-authorising alone will NOT fix it: an OAuth consent '
-      + 'screen with external user type and publishing status "Testing" is issued refresh tokens that '
-      + 'expire in 7 days. Publish the app first (Google Cloud Console -> APIs & Services -> OAuth '
-      + 'consent screen -> Publish app), and only then re-authorise, or the new token expires the same '
-      + 'way. Do not retry.';
-  }
-  return prefix + ': ' + reason;
-}
+function gmailFailureText(prefix, err) { return googleAuthFailureText(prefix, err); }
 
-function gmailFailure(prefix, err) {
-  var out = fail(gmailFailureText(prefix, err));
-  // `terminal` travels BESIDE ok/result, never folded into either — the evidence
-  // contract in src/core/CLAUDE.md has been flattened before and it cost a
-  // ui_type action being audited as delivered.
-  if (isTerminalAuthError(err, reasonText(err))) out.terminal = true;
-  return out;
-}
+function gmailFailure(prefix, err) { return googleAuthFailure(prefix, err); }
 
 // A recipient of "me" (or an omitted one) means "the authenticated account".
 function isSelfRecipient(to) {

@@ -14,6 +14,11 @@
 // as from-gmail.js. Write-side (creating/editing events) is still not built
 // — calendar_upcoming only reads.
 
+// BUG-296: shared with from-gmail.js. Gmail and Calendar authenticate with the
+// SAME refresh token, so a dead grant breaks both at once — one classifier and
+// one remedy, not two, and not one-plus-a-gap.
+var { googleAuthFailure } = require('./google-auth-failure');
+
 var FILE = 'Calendar/reminders.json';
 var READ_FAILED = 'Could not read the reminder store (it may be locked by another process) — refusing to overwrite it. Try again in a moment.';
 
@@ -398,9 +403,26 @@ function ensureGoogleAdapter(logger) {
   return _googleAdapter;
 }
 
+// BUG-296 (2026-08-21): Calendar had none of the dead-token handling Gmail has
+// had since BUG-273 C2, despite sharing the token with it. The catch below
+// returned a bare 'Calendar fetch failed: invalid_grant: Token has been expired
+// or revoked.' — no remedy for the operator, and no `terminal` flag, so hub.js's
+// isTerminalResult never fired and the breaker retried a token that could never
+// succeed. It read like a network blip and was nothing of the sort.
+//
+// `err.message` is also the wrong reader: some adapter failures carry the reason
+// in an object, which stringifies to '[object Object]'. googleAuthFailure goes
+// through reasonText, the same normalisation dispatch-action.js uses.
 async function calendarUpcoming(args, ctx) {
   var logger = (ctx && ctx.logger) || { warn: function() {} };
-  var a = ensureGoogleAdapter(logger);
+  // Injectable adapter. Without this seam a test either reaches the operator's
+  // REAL Google account (the module caches _googleAdapter from live env
+  // credentials) or cannot exercise this path at all — and a test that calls a
+  // third party turns someone else's rate limit into a blocked commit. `null`
+  // passed explicitly means 'no adapter', which is a different case from absent.
+  var a = (ctx && Object.prototype.hasOwnProperty.call(ctx, 'googleAdapter'))
+    ? ctx.googleAdapter
+    : ensureGoogleAdapter(logger);
   if (!a) {
     return { ok: false, result: { error: 'Google Calendar is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.' } };
   }
@@ -409,7 +431,7 @@ async function calendarUpcoming(args, ctx) {
     var events = await a.listUpcomingEvents(max);
     return { ok: true, result: { events: events } };
   } catch (err) {
-    return { ok: false, result: { error: 'Calendar fetch failed: ' + err.message } };
+    return googleAuthFailure('Calendar fetch failed', err);
   }
 }
 
