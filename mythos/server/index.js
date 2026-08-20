@@ -1585,18 +1585,57 @@ function createServer(deps) {
   // unconditional tokenOk() check, so a configured token is required on every
   // branch; tokenOk() itself is a no-op when no MYTHOS_AUTH_TOKEN is set, so
   // the loopback-no-token back-compat path is unaffected either way.
+  // BUG-292 — 2026-08-20. 147 `ws-upgrade-rejected` lines in one session, every
+  // one of them reading exactly "bad or missing token" and nothing else. That is
+  // a client retrying forever, and 147 identical lines cannot tell you which
+  // client, so there was no action available: you cannot hand the right client a
+  // token, or stop the wrong one retrying, until you can name it.
+  //
+  // Q2 — and this is the whole risk of the change. A fix for an auth problem must
+  // not become a credential leak in a log file. So: `credential` is PRESENCE and
+  // CHANNEL only, never the value; `path` is truncated at '?' so a `?token=`
+  // cannot ride in on the URL; and the Authorization header is never copied. The
+  // fields that identify a client (peer address, user-agent) are not secrets, and
+  // are already visible to anyone who can read this log.
+  //
+  // Q3 — WHO READS THIS? A human triaging a retry storm, which is why it goes in
+  // the existing warn rather than a new event: a second event name would split
+  // one storm across two greps.
+  function upgradeCallerFingerprint(req) {
+    const headers = (req && req.headers) || {};
+    const socket = (req && req.socket) || {};
+    const rawUrl = typeof (req && req.url) === 'string' ? req.url : '';
+    const queryIndex = rawUrl.indexOf('?');
+    const query = queryIndex >= 0 ? rawUrl.slice(queryIndex + 1) : '';
+    let credential = 'none';
+    if (typeof headers.authorization === 'string' && headers.authorization.length) credential = 'header';
+    // Deliberately a substring test rather than URLSearchParams: this must not be
+    // able to throw on a malformed upgrade URL, because the only thing worse than
+    // an unattributable rejection is an unattributable crash inside verifyClient.
+    else if (/(^|&)token=/.test(query)) credential = 'query';
+    const ua = typeof headers['user-agent'] === 'string' ? headers['user-agent'] : null;
+    return {
+      remote: socket.remoteAddress
+        ? String(socket.remoteAddress) + ':' + String(socket.remotePort == null ? '?' : socket.remotePort)
+        : null,
+      userAgent: ua ? ua.slice(0, 120) : null,
+      path: queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : (rawUrl || null),
+      credential,
+    };
+  }
+
   function verifyClient(info, callback) {
     // H3(a) — checked before any origin/token logic, so a brute-force run
     // against the token check itself (not just successful connections) is
     // capped regardless of which branch below would otherwise accept or
     // reject it.
     if (wsUpgradeRateLimited(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'rate limit exceeded' });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'rate limit exceeded' }, upgradeCallerFingerprint(info.req)));
       return callback(false, 429, 'Too Many Requests');
     }
     const origin = info.origin;
     if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'foreign origin', origin }, upgradeCallerFingerprint(info.req)));
       return callback(false, 403, 'Forbidden');
     }
     if (!origin && !isLoopback(info.req)) {
@@ -1617,7 +1656,7 @@ function createServer(deps) {
       // Reject stays the default: any of those three failing lands on the 403.
       const nodeTrusted = config.AETHER_NODE_TRUST === true && !!AUTH_TOKEN;
       if (!nodeTrusted) {
-        logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
+        logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'no origin, non-loopback' }, upgradeCallerFingerprint(info.req)));
         return callback(false, 403, 'Forbidden');
       }
       // ...and the credential really is MYTHOS_AUTH_TOKEN and nothing else.
@@ -1629,12 +1668,12 @@ function createServer(deps) {
       // remote socket, which is exactly the widening this branch is supposed not
       // to be. So the node path checks the shared secret directly.
       if (!authTokenMatches(extractToken(info.req))) {
-        logger.warn('ws-upgrade-rejected', { reason: 'node trust: not the auth token' });
+        logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'node trust: not the auth token' }, upgradeCallerFingerprint(info.req)));
         return callback(false, 401, 'Unauthorized');
       }
     }
     if (!tokenOk(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'bad or missing token' });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'bad or missing token' }, upgradeCallerFingerprint(info.req)));
       return callback(false, 401, 'Unauthorized');
     }
     return callback(true);
