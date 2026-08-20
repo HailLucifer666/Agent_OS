@@ -14,6 +14,235 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 
 ---
 
+## ⚠ NUMBERING COLLISION — BUG-280 is assigned twice (recorded 2026-08-21)
+
+`main` carries a **BUG-280 for `close_window`** (merged via PR #16, commit `842d7f6`), and the
+branch `fix/weather-enrichment-inert-hud-card` independently used **BUG-280 for the search
+provider chain** (commit `fddc3ab`) plus BUG-281…BUG-290 for nine further tickets. None of
+BUG-280…BUG-290 was ever written into this file, which is why the collision was invisible: the
+registry stopped at BUG-279 while eleven ticket numbers were in use in commit subjects, code
+comments and test filenames.
+
+**Not renumbered here on purpose.** Those numbers are embedded in shipped commits, ~10 test
+filenames and dozens of code comments; rewriting them is a large, purely cosmetic churn and it is
+the operator's call, not a session's. What is fixed is the invisibility: the numbers below are
+recorded, and the next session should grep the branch — not this file alone — before assigning.
+
+**It happened again, live, the same day.** While this session was staging its work, a concurrent
+session in the same working tree created `test/bug-291-reauth-failure-names-its-cause.test.js`
+alongside a `from-gmail.js` change. Neither ticket was committed yet, so the narration guard
+written here was renumbered **BUG-291 → BUG-295** rather than contest the number; 291 belongs to
+the gmail re-auth ticket. **291 will therefore look skipped in this file until that session lands
+its entry — that is expected, not a gap.** The general lesson, and the reason this note exists:
+grepping `BUGS.md` for the highest number is not enough on a shared tree. Grep the branch, the
+untracked test files, and `git status`, immediately before assigning — a number is only yours once
+it is committed.
+
+---
+
+## BUG-294 — a live question could not reach a live source, and the one that answered had no date (✅ RESOLVED 2026-08-21)
+
+**Measured on this host 2026-08-21: every free search provider except Wikipedia is dead.** exa
+skipped (no `EXA_API_KEY`), exa-mcp HTTP 429 (the 150/day free cap, spent), `ddg-html` +
+`ddg-lite` + `api.duckduckgo.com` all `fetch failed` at ~10.5s (host-blocked), jina HTTP 401 (the
+vendor removed the free no-key tier). Control in the same run: `example.com` HTTP 200 in 234ms —
+the network is fine, and none of this is a MYTHOS regression. Three independent free routes died
+within days of each other for three unrelated reasons.
+
+**The fix used code this repo already owned.** `server/news-feed.js` has fetched
+`news.google.com/rss` for the HUD news card since it shipped — a pure `parseRss()`, an
+`agoLabel()`, `MAX_ITEMS` 12 and an 8s timeout that already fits inside the search chain's
+provider budget. Exactly two things were missing: the module never sent a **query** (the same host
+answers `/rss/search?q=`), and it was wired to the HUD card only, so the voice path could not
+reach it. `parseRss` was **not modified** — the HUD card stays safe by construction, and a test
+pins that it was not "improved" in passing.
+
+**The headline is the entire answer, so no article is ever fetched.** Real first item for
+`q=Mohun+Bagan+Durand+Cup`, captured 2026-08-21: *"Durand Cup 2026 semifinal Highlights: Mohun
+Bagan beats NorthEast United on penalties to reach final - Sportstar"* — who played, what
+happened, how, and the publisher, all in one string. That deletes the hardest half of the ticket
+and a security problem with it: the RSS `<link>` is **not** the publisher URL but an opaque Google
+redirector (`/rss/articles/CBMiigJBVV95cUxPc3J1…`) which passes `parseRss`'s `^https?://` guard and
+therefore flows through looking exactly like a citation. `news-feed.js`'s `httpGet` follows up to 3
+redirects, so fetching one would walk an attacker-influenced redirect chain — the same shape as the
+two SSRF bypasses already recorded in `web-fetch.js`. It is display/attribution only, pinned by a
+test asserting no request is ever issued for an item link.
+
+**No locale is hardcoded.** Measured on one query three ways: no locale params → 92 items;
+`hl=en-IN&gl=IN` → 92 items, identical top result; `hl=en-US&gl=US` → 100 items, different ranking.
+Identical results with none, and the en-US row proves it is a real knob — which is exactly why
+baking one in would violate the root `CLAUDE.md` portability rule and degrade results for every
+other clone. If it is ever wanted it is one optional config key defaulting to empty, and empty must
+omit the parameters entirely.
+
+**The freshness gate is the safety property, not a nice-to-have.** Google News RSS **never returns
+zero**. Measured: *"FIFA World Cup 2030 host countries"* → 100 items, correct and useful;
+*"Argentina FIFA ranking"* → 100 items, top hit a World Cup power-rankings piece (related, and not
+the answer); *"how to fix a leaking tap"* → 59 items, top hit a content farm. A source that always
+produces something plausible is the worst possible partner for a model that already fabricates,
+because unlike an empty result it can never trigger an "I don't have this" path. So the rung fires
+**only** on a freshness-marked query, is never a catch-all, never runs when an earlier provider
+returns empty, and never occupies the last-resort slot. **Wikipedia keeps that slot deliberately:
+an encyclopaedia miss is honest and an RSS miss is not.**
+
+**Review round 2 found the rung correct and unreachable.** It was placed at 0b, *after* the local
+daemon at 0a, and since BUG-288 the daemon autostarts — so this was armed, not latent. A live
+question hit the daemon first; `localWebSearch` maps `{title, url, snippet: description}` with **no
+date field**; a non-empty undated answer returned immediately and the news rung never executed.
+The evidence is in this branch's own history: commit `f34be26`'s end-to-end verification recorded
+the daemon returning *"Mohun Bagan edge past East Bengal with a hard-fought win"*. On 2026-08-20
+Mohun Bagan played **NorthEast United**; the two clubs had not met, and MB was qualifying to face
+them. An older undated fixture was accepted as proof that the freshness fix worked. Ordering was
+the whole defect; the rung now runs ahead of 0a for a freshness-marked query only.
+
+**And the stale-source caution was keyed on the wrong property** (this is BUG-280's second half,
+below). It held a list of source *names*, `{wikipedia: true}` — so every rung added afterwards
+arrived silently **exempt**, which is this repo's phantom-allowlist class. It cost a real defect
+inside one commit. The caution now keys on whether the winning result set can **prove recency**
+(any result carrying `published`), so the guard grows correctly as rungs are added. A dateless item
+is labelled *"Publication date unknown."* rather than returned with an empty snippet next to a
+confident headline.
+
+**Live verification, 2026-08-21** (`node -e` against the real chain, not a test):
+
+| query | source | top result | caution |
+|---|---|---|---|
+| `East Bengal vs Mohun Bagan Durand Cup result today` | google-news-rss | *Durand Cup 2026 scores, points table…* — **Published 5h ago** | no (dated) |
+| `Kolkata local news today` | google-news-rss | *Record Rainfall Since 1978…* — **Published 85d ago** | no (dated) |
+| `how to fix a leaking tap` | wikipedia | — | no |
+| `who is Ada Lovelace` | wikipedia | *Ada Lovelace* | no |
+
+**Known-imperfect, reported rather than hidden:** the Kolkata query returns items 85/52/107 days
+old, because Google ranks by relevance rather than recency. The age labels make that honest — the
+model can say "the most recent I found is 85 days old" — but it is not "news from today". Measured
+remedy, **not shipped** because it changes query semantics and was not asked for: appending
+Google's own `when:` operator. `Kolkata local news today when:1d` → ages 2h/4h/14h/10h;
+`Kolkata news when:2d` → 36m/1h/1d/13h. That is the next cheap win and it is the operator's call.
+
+**Files:** `server/news-feed.js` (a `feedUrl()` builder replacing the `FEED_URL` constant, exported),
+`src/core/effectors/web-search.js` (the rung, the one-door `succeed()`, `carriesPublicationDates()`),
+`test/bug-294-news-rss-rung.test.js` (20 tests), fixture
+`test-fixtures/news-rss/search-mohun-bagan.xml` (real capture, 92 items live, trimmed to 6).
+
+---
+
+## BUG-293 — `open_web`'s failures were written from the resolver's point of view (✅ RESOLVED 2026-08-21)
+
+**Measured 2026-08-20: `open_web` is the most-failing tool in the system.** 34 calls, **44**
+`live.tool-ack-deadline` breaches — more breaches than calls, i.e. it is being retried — and six
+distinct failure strings in one day, including *"No location found for "Kullu Manali current
+weather""* and two *"No YouTube videos found"* for what were plainly music requests.
+
+`open_web` is a widget/location **resolver**. The model was using it as the universal "show me X"
+verb, and every failure string was phrased from the resolver's side, so *"No location found"* read
+to the model as **the weather is unavailable** rather than **wrong tool** — and it then answered
+from memory. The description already led with what the tool is *not* (BUG-107's fix); this covers
+what to do *after* choosing wrong.
+
+**Two of the six are deliberately NOT redirected**, and this corrects the plan that requested the
+change. The plan proposed pointing the search failure at `web_search`. `open_web`'s youtube and
+search branches **already call `web_search` internally**, so "use `web_search` instead" would send
+the model straight back into the code that just returned nothing. Those two now say the search
+chain came back empty, which is the actionable truth.
+
+`from-dashboard.js`; `test/open-web-is-not-a-browser.test.js` (+3), `test/bug-023-weather-fallback.test.js`
+(assertion updated to the new wording, behaviour under test unchanged).
+
+---
+
+## BUG-292 — 147 socket rejections, and nothing said which client (✅ RESOLVED 2026-08-21)
+
+`ws-upgrade-rejected` **147 times** in the 2026-08-20 session, every one carrying the same
+one-field reason: *"bad or missing token"*. A client retrying forever against a server that is
+correctly refusing it — and 147 identical lines cannot name it, so no action was available.
+
+**`verifyClient` was NOT loosened, and must not be.** `MYTHOS_AUTH_TOKEN` is mandatory for the
+phone node and is known to kill the HUD socket when set. The defect was that the rejection was
+unactionable, so this is a **logging commit first, on purpose**; the second half of the ticket is
+whatever the named client turns out to be.
+
+**Q2 — this is where a fix for an auth problem becomes a credential leak, so:** the fingerprint
+records the peer address:port, the user-agent (truncated) and the path, plus `credential` as
+**presence and channel only** (`none` / `query` / `header`) — never a value. The logged path is
+truncated at `?` so a `?token=` cannot ride in on the URL either. Both are pinned with a canary
+string, not assumed. All **five** reject branches carry it, counted from source rather than
+trusted, because a fingerprint on two of five is the same partial-coverage defect BUG-273 was.
+
+`server/index.js`; `test/bug-292-name-the-rejected-ws-client.test.js` (6 tests).
+
+---
+
+## BUG-295 — MYTHOS narrated the contents of a page it never read (✅ RESOLVED 2026-08-21)
+
+**The trust-destroying one.** 2026-08-20, live voice: `browser_navigate` succeeded and returned,
+verbatim from the conversation log,
+`{"url":"https://www.google.com/search?q=weather+in+Kolkata+current","title":"weather in Kolkata
+current - Google Search","newTab":true,"browser":"chrome"}` — no page content, no temperature, no
+conditions. MYTHOS then told the operator, in Bengali, that it was 28 °C with thunderstorms and
+high humidity. Every number and every condition was fabricated. `get_weather` returned `ok`
+**ten times** the same day: the working tool existed and was not used.
+
+**ROOT CAUSE, and it is not a fourth instance of BUG-273.** `live-tool-adapter.js` already carried
+two prohibitions and both are correct: `NO_SUCCESS_CLAIM` for an outcome that **failed**, and
+`UNVERIFIED_NO_PROOF_CLAIM`/`UNVERIFIED_PARTIAL_CLAIM` for one that is **unverified**. There was no
+guard for the third case: **a tool that succeeds and returns no readable body.** That payload is a
+truthful report of a *navigation*; nothing in it says "you have not read this page", so a
+successful navigate reads to the model as having seen the page and it supplies the rest from
+weights. Nothing lied, and nothing hedged either.
+
+`NO_CONTENT_CLAIM` is attached on **all four** narration sites (awaited, late/ack-deadline,
+confirm-resolution, and the late-for-turn re-narration), keyed on tool name — `browser_navigate`
+and `open_web` only. **The narrowness is deliberate**: they are the only two with a logged
+fabrication behind them, and the comment names `browser_click`/`browser_type`/`cua_click`/
+`focus_window` as known-blind so a future widening needs its own evidence.
+
+**Q6 — the fourth occurrence of "only some narration paths carry the honesty sentence"** (BUG-068,
+BUG-116, BUG-273 B1). Three is past a pattern, so the test does two things: it asserts the new
+branch on every path, **and pins the population of claim constants**, so a fifth constant added to
+one branch only fails there by name rather than in a voice session.
+
+**Q8 — `get_weather` is deliberately not touched.** It works (10 × ok). The defect is narration,
+not the effector, and nobody should "fix" `from-system.js` on the strength of this bug.
+
+**Known gap, found while fixing this and deliberately left open:** at the late-for-turn site
+`entry.ok` is `true` for an **unverified** outcome, so an unverified outcome arriving there still
+gets the neutral default instead of `UNVERIFIED_NO_PROOF_CLAIM`. That is a BUG-273 B1 hole in a
+path BUG-273 never enumerated. It is recorded in the code and needs its own ticket and its own red
+test — not a no-content commit.
+
+`src/core/voice/live-tool-adapter.js`; `test/bug-295-narrating-unread-content.test.js` (13 tests).
+
+---
+
+## BUG-280 (second half) — a stale answer returned as a fresh one (✅ RESOLVED 2026-08-21)
+
+The sibling of BUG-295, and the operator's actual complaint. `web_search` ran for *"Durand Cup East
+Bengal vs Mohun Bagan result August 20 2026"*, returned `ok:true` with `source:'wikipedia'`, and
+the five results were Durand Cup pages from **2023 and 2025**. The chain did nothing wrong —
+Wikipedia was the last rung and, on that host, the only living one. MYTHOS read them correctly at
+first (*"the search results show Durand Cup finals of previous years, not today's result"*) and
+then, two turns later and immediately after the STT produced the unintelligible transcript
+`"आदिए"`, announced *"মোহনবাগান জিতে গেছে"* and **wrote it to a note**. The fabrication is
+persisted. One is an empty body (BUG-295); this is a body from the wrong decade.
+
+The caution now keys on **provable recency**, not on a source-name list — see BUG-294 above for why
+the first version was wrong and what it cost. `web_search` gained one success door (`succeed()`)
+so a signal like this can never again be added to one rung out of seven.
+
+**Still open, and ranked, from the same incident:** step 3 of that sequence has **no tool call
+behind it at all**, so no payload-attached sentence can police it. Two follow-ons, deliberately not
+built here because the news rung must be measured alone first: (a) **a garbled-transcript gate** —
+`"आदিए"` is not a question and must not license a factual assertion; build the fixture from the real
+logged string. (b) **a volatile-facts-need-a-tool-call-this-turn rule** — the only thing that would
+have guaranteed silence, and the most likely to over-fire; scope it to volatile classes, since a
+blanket "cite a tool for every claim" makes MYTHOS unusable in conversation. The garbled-transcript
+gate ranks above it: the freshness matcher reads operator speech, and a garbled transcript that
+happens to contain "result" routes to RSS and receives a plausible headline.
+
+`src/core/effectors/web-search.js`; `test/bug-280-search-has-a-working-provider.test.js`.
+
+---
+
 ## BUG-279 — four assistant modules read as live machinery and had no consumers (✅ RESOLVED 2026-08-20)
 
 **Not a defect in behaviour — a defect in what the code told a reader.**
