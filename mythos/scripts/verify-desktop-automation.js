@@ -403,14 +403,13 @@ async function main() {
     console.log('');
   }
 
-  const blocking = results.flatMap((r) => r.steps)
-    .filter((s) => s.verdict === VERDICT.FAIL || s.verdict === VERDICT.UNVERIFIED);
+  const { met, blocking, unproven } = gateVerdict(results.flatMap((r) => r.steps));
 
-  if (blocking.length === 0) {
+  if (met) {
     console.log('GATE: every verb is oracle-confirmed on both a Win32 and an MSIX app.');
     console.log('That satisfies the release-gate line for desktop automation, for THESE two');
     console.log('apps, on this machine, now — it is not a claim about every app.');
-  } else {
+  } else if (blocking.length) {
     console.log('GATE: NOT MET — ' + blocking.length + ' verb(s) failed or could not be verified.');
     console.log('');
     console.log('UNVERIFIED is not a softer PASS. It means the route reported success and');
@@ -421,9 +420,20 @@ async function main() {
       console.log('  ' + s.name + ' [' + s.verdict + '] ' + s.detail);
       if (s.raw) console.log('    raw: ' + JSON.stringify(s.raw).slice(0, 400));
     }
+  } else {
+    console.log('GATE: NOT ESTABLISHED — ' + unproven.length + ' verb(s) were never exercised.');
+    console.log('');
+    console.log('Nothing failed. That is not the same as everything passing, and this is the');
+    console.log('exact substitution this file warns about twelve lines into itself: "a skipped');
+    console.log('column that prints like a passing one is how a gate lies". Until every verb');
+    console.log('has been RUN against an oracle, the release line below cannot be asserted.');
+    console.log('');
+    for (const s of unproven) {
+      console.log('  ' + s.name + ' [' + s.verdict + '] ' + s.detail);
+    }
   }
   console.log('');
-  process.exit(blocking.length === 0 ? 0 : 1);
+  process.exit(met ? 0 : 1);
 }
 
 // Requiring this file must not launch windows on the operator's desktop — the
@@ -436,4 +446,36 @@ if (require.main === module) {
   });
 }
 
-module.exports = { refusalFor, existingTextOf, typedTextOf, PROBE_TEXT, VERDICT };
+// The gate decision, pure and exported so it can be tested without launching a
+// single window. It was inline, and it silently counted UNTESTED as a pass.
+//
+// Caught on a live run, 2026-08-21: charmap's `type` came back UNTESTED and the
+// script still printed "every verb is oracle-confirmed on both a Win32 and an
+// MSIX app" and exited 0 — so the Win32 typing route had no proof that run and
+// the summary said the opposite. The doctrine was already written twelve lines
+// into this file — "a skipped column that prints like a passing one is how a
+// gate lies" — and simply not implemented, the same shape as the blank-document
+// gate this script already had to have fixed once (287bc38).
+//
+// WHY THAT RUN WENT UNTESTED, since the next one did not: charmap's window was
+// still titled "(untitled)" when the probe sampled it, and its text could not be
+// read, so the blank-document gate refused to type — correctly. An immediate
+// re-run launched a window already titled "Character Map" and typed into it via
+// wm-char-post with a TextPattern read-back. So it is a launch-time sampling
+// race in the probe, NOT a capability gap in charmap and NOT the gate
+// misfiring. Both readings were available from the same output; the reason this
+// matters is that the flaky run is exactly the one the old code called green.
+//
+// EXPECTED-FAIL is deliberately NOT blocking: a documented, reproduced refusal
+// (focus_window's foreground lock) is knowledge, not an unknown.
+function gateVerdict(steps) {
+  const all = Array.isArray(steps) ? steps : [];
+  const blocking = all.filter((s) => s.verdict === VERDICT.FAIL || s.verdict === VERDICT.UNVERIFIED);
+  const unproven = all.filter((s) => s.verdict === VERDICT.UNTESTED);
+  // A run that collected NO steps is not a clean sweep — it is a run that did not
+  // happen (adapter never loaded, both targets absent). Zero failures out of zero
+  // checks is the purest form of the lie this function exists to stop.
+  return { met: all.length > 0 && blocking.length === 0 && unproven.length === 0, blocking, unproven };
+}
+
+module.exports = { refusalFor, existingTextOf, typedTextOf, gateVerdict, PROBE_TEXT, VERDICT };

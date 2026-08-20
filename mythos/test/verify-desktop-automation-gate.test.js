@@ -13,7 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { refusalFor, existingTextOf } = require('../scripts/verify-desktop-automation.js');
+const { refusalFor, existingTextOf, gateVerdict, VERDICT } = require('../scripts/verify-desktop-automation.js');
 
 const OK = { ok: true, result: { fresh: true } };
 
@@ -74,4 +74,73 @@ test('requiring the script does not launch anything', () => {
   const src = require('node:fs').readFileSync(
     require('node:path').join(__dirname, '..', 'scripts', 'verify-desktop-automation.js'), 'utf8');
   assert.match(src, /if \(require\.main === module\)/);
+});
+
+// --- the gate's own verdict (2026-08-21) -----------------------------------
+//
+// A live run that day came back 7 PASS and 1 UNTESTED — charmap's `type`, refused
+// by the blank-document gate because the window was still titled "(untitled)" and
+// its text could not be read — and the script printed "every verb is
+// oracle-confirmed on both a Win32 and an MSIX app" and exited 0. So the Win32
+// typing route had no live proof and the run reported success anyway.
+//
+// An immediate re-run came back 8/8: charmap typed via wm-char-post, read back
+// through TextPattern. The UNTESTED was a launch-time sampling race in the probe,
+// not a capability gap — which makes the old behaviour worse, not better: the run
+// it called green was the flaky one.
+//
+// The doctrine was already written at the top of that file: "a skipped column
+// that prints like a passing one is how a gate lies". It just was not implemented.
+
+const step = (name, verdict) => ({ name, verdict, detail: '' });
+
+test('an UNTESTED verb does not satisfy the gate', () => {
+  const v = gateVerdict([step('launch', VERDICT.PASS), step('type', VERDICT.UNTESTED)]);
+  assert.equal(v.met, false);
+  assert.equal(v.blocking.length, 0, 'UNTESTED is not a failure...');
+  assert.deepEqual(v.unproven.map((s) => s.name), ['type'], '...it is an absence of proof, and must be named as one');
+});
+
+test('the exact shape of the 2026-08-21 run does not report success', () => {
+  // 7 PASS + charmap type UNTESTED. This is the regression, verbatim.
+  const steps = [
+    step('launch', VERDICT.PASS), step('focus', VERDICT.PASS),
+    step('type', VERDICT.UNTESTED), step('click', VERDICT.PASS),
+    step('launch', VERDICT.PASS), step('focus', VERDICT.PASS),
+    step('type', VERDICT.PASS), step('click', VERDICT.PASS),
+  ];
+  assert.equal(gateVerdict(steps).met, false);
+});
+
+test('a documented EXPECTED-FAIL still satisfies the gate', () => {
+  // focus_window's foreground lock is reproduced, understood and recorded in
+  // adapters/CLAUDE.md. A known refusal is knowledge, not an unknown — treating it
+  // as blocking would make the gate permanently red for a closed question.
+  const v = gateVerdict([step('focus', VERDICT.EXPECTED), step('type', VERDICT.PASS)]);
+  assert.equal(v.met, true);
+});
+
+test('FAIL and UNVERIFIED both block, and are reported separately from UNTESTED', () => {
+  const v = gateVerdict([step('type', VERDICT.UNVERIFIED), step('click', VERDICT.FAIL), step('focus', VERDICT.UNTESTED)]);
+  assert.equal(v.met, false);
+  assert.deepEqual(v.blocking.map((s) => s.name).sort(), ['click', 'type']);
+  assert.deepEqual(v.unproven.map((s) => s.name), ['focus']);
+});
+
+test('an all-pass run is the only thing that satisfies the gate', () => {
+  assert.equal(gateVerdict([step('a', VERDICT.PASS), step('b', VERDICT.PASS)]).met, true);
+});
+
+test('no steps at all is not a pass', () => {
+  // A run that collected nothing — adapter never loaded, both targets absent —
+  // must not read as a clean sweep. Zero failures out of zero checks is the
+  // purest form of the substitution this whole function exists to stop.
+  assert.equal(gateVerdict([]).met, false);
+});
+
+test('the exit code follows the verdict, not just the failures', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'scripts', 'verify-desktop-automation.js'), 'utf8');
+  assert.match(src, /process\.exit\(met \? 0 : 1\)/,
+    'exit must key on the gate verdict — keying it on blocking.length alone is what let UNTESTED exit 0');
 });
