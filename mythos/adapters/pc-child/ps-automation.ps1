@@ -286,6 +286,23 @@ public static class NativeInput {
 
     public const uint WM_CHAR = 0x0102;
 
+    // BUG-280 (2026-08-20): close_window's route for a HOSTED dialog, whose host
+    // process reports MainWindowHandle == 0 while genuinely owning a visible
+    // top-level window (rundll32 running a .cpl, window class #32770).
+    // Process.CloseMainWindow cannot act without that handle; posting WM_CLOSE to
+    // the handle UIA reports can. PostMessage rather than SendMessage on purpose:
+    // SendMessage blocks THIS shell until the target's message loop answers, and a
+    // dialog that puts up a confirmation prompt would hang the whole pc-child
+    // adapter behind a modal the operator has to find first.
+    public const uint WM_CLOSE = 0x0010;
+
+    // The oracle for that route. The process cannot be asked whether its window
+    // went away - its MainWindowHandle was already zero BEFORE the close - so
+    // "did it close" is answered by the handle itself no longer existing.
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
+
     public const int SW_RESTORE = 9;
     public const int SW_MINIMIZE = 6;
     public const int SW_MAXIMIZE = 3;
@@ -985,6 +1002,48 @@ function Handle-FocusWindow($TargetPid) {
     }
 }
 
+# BUG-280: the top-level windows THIS pid owns, read from the same UIA source
+# Handle-ListWindows reads - so what close_window is able to act on matches what
+# list_windows just told the operator exists.
+#
+# Why this has to exist: Get-Process's MainWindowHandle is a Win32 notion and says
+# nothing about whether a process owns a top-level window UIA/EnumWindows can see.
+# A HOSTED dialog reports MainWindowHandle == 0 while owning a visible window with
+# a real handle. Measured live 2026-08-20 on Mouse Properties (launch_app
+# main.cpl): hosted by rundll32, class #32770, hwnd 1443112, visible:true in
+# list_windows - and close_window answered "has no window to close" three
+# consecutive runs while that one dialog instance stayed open the whole time.
+#
+# Returns @() or an array of @{ hwnd = [IntPtr]; title = ...; className = ... },
+# restricted to windows with a real handle AND a non-empty rectangle. Never
+# throws: an unreachable UIA root is "no owned windows", which lets the caller
+# fall through to its existing windowed-sibling fallback.
+function Get-OwnedTopLevelWindows($TargetPid) {
+    $found = @()
+    try {
+        $cond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$TargetPid)
+        $all = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [System.Windows.Automation.TreeScope]::Children, $cond)
+        foreach ($child in $all) {
+            # Same stale-element guard as Handle-ListWindows: a window can close
+            # between FindAll() enumerating it and these property reads, and every
+            # .Current access on a dead element throws. Skip that one window rather
+            # than aborting the enumeration for all of them.
+            try {
+                $h = $child.Current.NativeWindowHandle
+                $rect = Get-RectBounds $child.Current.BoundingRectangle
+                $title = $child.Current.Name
+                $cls = $child.Current.ClassName
+            } catch { continue }
+            if (-not $h -or $h -eq 0) { continue }
+            if ($rect.width -le 0 -or $rect.height -le 0) { continue }
+            $found += @{ hwnd = [IntPtr]$h; title = $title; className = $cls }
+        }
+    } catch { }
+    return @($found)
+}
+
 function Handle-CloseWindow($TargetPid) {
     # BUG-103 (2026-08-05 incident): this handler failed both ways on browsers.
     #   1. Chrome: the pid held upstream was a non-windowed child (or the process
@@ -997,8 +1056,10 @@ function Handle-CloseWindow($TargetPid) {
     #      the dispatcher reads any hashtable as ok:true - a window that was still
     #      open was audited as a successful close. Returning a STRING is how this
     #      file reports an honest failure (see Handle-FocusWindow's FIX 2).
-    # The oracle is now the window handle itself, and a pid with no main window is
-    # re-resolved to the windowed process of the same executable.
+    # The oracle is now the window handle itself. A pid with no main window is
+    # resolved in two steps (BUG-280): first to a top-level window that pid actually
+    # OWNS, then - only if it owns none - to the windowed process of the same
+    # executable, which is BUG-103's multi-process browser case.
     if (-not $TargetPid) { return 'PID is required.' }
     try {
         $proc = Get-Process -Id $TargetPid -ErrorAction Stop
@@ -1008,8 +1069,46 @@ function Handle-CloseWindow($TargetPid) {
 
     $resolvedPid = $TargetPid
     $resolvedBy = 'pid'
+    # BUG-280: the handle this call will post WM_CLOSE to when the target is a
+    # hosted dialog whose host reports no main window. Zero means the ordinary
+    # CloseMainWindow route, unchanged.
+    $ownedHwnd = [IntPtr]::Zero
     if ($proc.MainWindowHandle -eq [IntPtr]::Zero) {
-        # A non-windowed process of a multi-process app (browser renderer/utility,
+        # BUG-280 (measured live 2026-08-20): MainWindowHandle == 0 does NOT mean
+        # "this pid owns no window". This handler used to read it that way and drop
+        # straight to Resolve-WindowedProcessByName, which matches on the process
+        # NAME - so for a hosted dialog like Mouse Properties there was no OTHER
+        # windowed rundll32 to find and the reply was "has no window to close"
+        # while the dialog sat there visible in list_windows.
+        # Same defect class as the ui_elements MainWindowHandle guard. That one
+        # could be deleted outright because its lookup was already by ProcessId;
+        # this handler genuinely needs a handle to act on, so ask the source
+        # list_windows reads which windows THIS pid owns before giving up on it.
+        # The @() is load-bearing, and its absence was measured live on the first
+        # probe run of this very fix. A PowerShell function that returns a
+        # one-element array UNROLLS it: the caller receives the bare hashtable, and
+        # $owned.Count then counts its KEYS (3: hwnd/title/className) rather than
+        # its elements. So the single-window case - the case this whole fix exists
+        # for - took the >1 ambiguous-refusal branch and reported that rundll32
+        # owned 3 visible windows when it owned exactly one.
+        $owned = @(Get-OwnedTopLevelWindows $TargetPid)
+        if ($owned.Count -eq 1) {
+            $ownedHwnd = $owned[0].hwnd
+            $resolvedBy = 'owned-window'
+        } elseif ($owned.Count -gt 1) {
+            # Deliberately NOT a guess. close_window is addressed by pid, so the
+            # caller has no way to say which window it meant, and picking one would
+            # be a wrong-target close of something the operator never mentioned.
+            # Name them and stop - a string, so the dispatcher reports ok:false.
+            $titles = (($owned | ForEach-Object { "'" + $_.title + "' (hwnd " + ([string]$_.hwnd) + ")" }) -join ', ')
+            return ('PID ' + $TargetPid + ' (' + $proc.ProcessName + ') reports no main window and owns ' +
+                    $owned.Count + ' visible top-level windows, so there is no unambiguous one to close: ' +
+                    $titles + '. Nothing was closed. Tell me which window, or ask me to click its close button.')
+        }
+    }
+    if ($proc.MainWindowHandle -eq [IntPtr]::Zero -and $ownedHwnd -eq [IntPtr]::Zero) {
+        # BUG-103's case, and now only its case: this pid owns no window of its own
+        # either, so it is a non-windowed process of a multi-process app (browser renderer/utility,
         # or a launcher stub). Same class as launch_app's MSIX fix: resolve the
         # process that actually OWNS a window before acting.
         $windowed = Resolve-WindowedProcessByName $proc.ProcessName 1500
@@ -1034,8 +1133,20 @@ function Handle-CloseWindow($TargetPid) {
     # the thing that is ambiguous for a multi-window, multi-process browser.
     $targetHwnd = ([string]$proc.MainWindowHandle)
     $targetName = $proc.ProcessName
+    # BUG-280: on the owned-window route $proc.MainWindowHandle is zero BY
+    # DEFINITION, so reporting it would put a useless '0' in the field BUG-122
+    # added precisely so a close could be traced to a specific window.
+    if ($ownedHwnd -ne [IntPtr]::Zero) { $targetHwnd = ([string]$ownedHwnd) }
 
-    $proc.CloseMainWindow() | Out-Null
+    if ($ownedHwnd -ne [IntPtr]::Zero) {
+        # WM_CLOSE is the message CloseMainWindow sends; this addresses the window
+        # directly because there is no main window to send it through. On a property
+        # sheet WM_CLOSE is Cancel, not OK - it dismisses the dialog WITHOUT
+        # applying pending edits, which is the correct reading of "close this".
+        [void][NativeInput]::PostMessage($ownedHwnd, [NativeInput]::WM_CLOSE, [IntPtr]::Zero, [IntPtr]::Zero)
+    } else {
+        $proc.CloseMainWindow() | Out-Null
+    }
 
     # Oracle: the main window is gone (or the whole process exited). Poll rather
     # than WaitForExit - a browser with other windows open stays alive on purpose.
@@ -1043,7 +1154,16 @@ function Handle-CloseWindow($TargetPid) {
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
             $proc.Refresh()
-            if ($proc.HasExited -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {
+            # BUG-280: MainWindowHandle was ALREADY zero on the owned-window route,
+            # so the shared oracle below would report closed:true on the first poll
+            # without the window having gone anywhere - a false success of exactly
+            # the kind BUG-103 was about. Ask the handle instead.
+            if ($ownedHwnd -ne [IntPtr]::Zero) {
+                if ($proc.HasExited -or -not [NativeInput]::IsWindow($ownedHwnd)) {
+                    return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true;
+                              resolvedBy = $resolvedBy; hwnd = $targetHwnd; processName = $targetName }
+                }
+            } elseif ($proc.HasExited -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {
                 return @{ pid = $resolvedPid; requestedPid = $TargetPid; closed = $true; graceful = $true;
                           resolvedBy = $resolvedBy; hwnd = $targetHwnd; processName = $targetName }
             }

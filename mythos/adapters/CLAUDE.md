@@ -50,6 +50,36 @@ pointer) — this file adds what's specific to this directory.
   user-hostile. Fail honestly and let the operator click. If typing into a
   launched app silently succeeds-but-lands-elsewhere, that is the SEPARATE
   caret-vs-foreground-window issue above, not this.
+- **`MainWindowHandle == 0` does NOT mean "this process owns no window"**
+  (BUG-280, measured live 2026-08-20). It is a Win32 notion and says nothing
+  about whether the process owns a top-level window UIA/EnumWindows can see.
+  A **hosted dialog** — `rundll32` running a `.cpl`, window class `#32770` —
+  reports `0` while owning a visible window with a real hwnd that
+  `list_windows` reports without difficulty. Two handlers read it as an
+  ownership test. `close_window` is **fixed** (BUG-280): it needs a handle to
+  act on, so it resolves one from the same UIA source `list_windows` reads, via
+  `Get-OwnedTopLevelWindows`, before falling back to the name match.
+  `Handle-UiElements` still carries the same guard at the time of writing —
+  its `MainWindowHandle -eq Zero` early return fires on a hosted dialog even
+  though its own lookup is already `FindFirst` by ProcessId and would have
+  found the window, so there the guard can simply be **deleted**. A fix for it
+  was reported to live on a separate branch (`fix/ui-elements-hosted-dialogs`),
+  which is not present on `origin` or in this tree — verify before assuming it
+  landed. **Never use MainWindowHandle as a "does this pid have a window"
+  test.** Enumerate by ProcessId instead.
+  Related: `Resolve-WindowedProcessByName` matches on the process NAME, so for
+  a single hosted dialog it searches for a sibling that does not exist and
+  reports "no window" about a window that is right there.
+- **A PowerShell function returning a one-element array UNROLLS it, and
+  `.Count` on the resulting hashtable counts its KEYS.** `return @($found)`
+  inside the callee does not survive the return: the caller receives the bare
+  hashtable, and `$x.Count` answers 3 for a 3-key hashtable. This shipped
+  inside the BUG-280 fix itself and inverted it — the single-window case took
+  the "more than one window, refusing to guess" branch and reported that
+  rundll32 owned 3 visible windows when it owned exactly one. Wrap at the
+  **call site**: `$owned = @(Get-OwnedTopLevelWindows $TargetPid)`. Any
+  `.Count` on a value returned by a function in this file is suspect unless
+  the call site wraps.
 - **DPI awareness**: `ps-automation.ps1` has a DPI-awareness block that must
   stay intact — screen coordinates are wrong without it on any non-100%-scale
   display.

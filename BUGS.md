@@ -1,7 +1,8 @@
 # MYTHOS — Complete Bug Registry
 
-<!-- BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed
-     immediately after this header so the handoff is the first thing a new session reads. -->
+<!-- BUG-280, BUG-279, BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries;
+     they are placed immediately after this header so the handoff is the first thing a new
+     session reads. -->
 
 Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Episodic conversation logs (vault/Episodic/)
@@ -11,6 +12,78 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Code comments (D-NN drift items, SPEC/REALITY GAPs)
 - Git commit history
 - Live session bug reports
+
+---
+
+## BUG-280 — close_window could not close a hosted dialog: MainWindowHandle == 0 was read as "owns no window" (✅ RESOLVED, LIVE-VERIFIED 2026-08-20)
+
+**Symptom, measured live.** `launch_app main.cpl` opens Mouse Properties, which is hosted by
+`rundll32`: window class `#32770`, a real hwnd, `visible:true`, and `list_windows` saw it
+without any trouble. `close_window` on that pid did **not** close it across three consecutive
+probe runs. The same dialog instance stayed open the whole time — which is why a probe's
+slider edits appeared to "persist" between runs. They did not: `HKCU\Control Panel\Mouse` was
+unchanged. It was one long-lived dialog being re-observed, and reading that as persistence is
+the more expensive half of this bug.
+
+**Root cause.** `Handle-CloseWindow` treated `MainWindowHandle == 0` as "this pid owns no
+window" and fell through to `Resolve-WindowedProcessByName`, which matches on the process
+NAME. For a hosted dialog there is no *other* windowed `rundll32` to find, so the handler
+returned "has no window to close" about a window that was visible and owned by the very pid
+it had been handed.
+
+`Process.MainWindowHandle` is a Win32 notion. It says nothing about whether a process owns a
+top-level window that UIA/EnumWindows can see. Same defect class as the `ui_elements`
+MainWindowHandle guard — but that one could simply be **deleted**, because its lookup was
+already by ProcessId. `close_window` genuinely needs a handle to act on, so deleting the guard
+was not available.
+
+**Fix** (`adapters/pc-child/ps-automation.ps1`). New `Get-OwnedTopLevelWindows`, which asks
+the same UIA source `Handle-ListWindows` reads for the top-level windows a given pid owns
+(real handle + non-empty rectangle only). When `MainWindowHandle == 0`, `Handle-CloseWindow`
+now consults that FIRST:
+- exactly one candidate -> `PostMessage(hwnd, WM_CLOSE)`, `resolvedBy: 'owned-window'`;
+- none -> the existing BUG-103 windowed-sibling fallback, unchanged, which is now reached
+  only in the multi-process-browser case it was written for;
+- more than one -> an honest refusal **string** naming the candidates. `close_window` is
+  addressed by pid, so the caller cannot say which window it meant, and picking one would be
+  a wrong-target close of something the operator never mentioned.
+
+`PostMessage`, not `SendMessage`: SendMessage blocks the pc-child shell until the target's
+message loop answers, so a dialog raising a confirmation prompt would hang the whole adapter
+behind a modal. And the owned-window route needed its **own oracle** — `MainWindowHandle` is
+already zero there, so the shared `MainWindowHandle -eq Zero` success test would have
+reported `closed:true` on the first poll without the window moving. It now asks
+`IsWindow(hwnd)`.
+
+**The bug this fix caused, caught by its own live probe.** First run reported *"PID 6060
+(rundll32) reports no main window and owns **3** visible top-level windows"* — for a pid that
+owned exactly one. A PowerShell function returning a one-element array **unrolls** it, so the
+caller got the bare hashtable and `$owned.Count` counted its KEYS (`hwnd`/`title`/`className`
+= 3). The single-window case, i.e. the entire point of the fix, took the ambiguous-refusal
+branch and left the dialog open — indistinguishable from the original bug from the outside.
+Fixed by `@()` at the **call site**; the callee's own `@()` cannot survive its return. Pinned
+by a test, because a reviewer will not see this by reading.
+
+**Live verification** (2026-08-20, real node -> pc-child round trip; a PowerShell-tool probe
+is UIPI-blocked and would have measured nothing). Two runs, the second from a clean desktop
+with zero `rundll32` processes:
+- `list_windows` saw the dialog (premise reproduced), and `(Get-Process -Id <pid>)
+  .MainWindowHandle` was `0` (defect condition confirmed, not assumed);
+- `close_window` -> `ok:true`, `resolvedBy:'owned-window'`, naming the hwnd it acted on;
+- the hwnd was gone from `list_windows` afterwards;
+- `HKCU\Control Panel\Mouse` was **byte-identical** before and after. WM_CLOSE on a property
+  sheet is Cancel, not OK — a close must not apply pending edits, and now demonstrably does
+  not.
+
+**Regression check.** `scripts/verify-desktop-automation.js` — the load-bearing matrix for
+this adapter — is 8/8 PASS (launch/focus/type/click across charmap-Win32 and notepad-MSIX),
+and it left no windows behind, so the ordinary `CloseMainWindow` path is intact. Full suite
+`fail=0`. Tests: `test/bug-280-close-hosted-dialog.test.js` (14).
+
+**Noticed in passing, NOT fixed here.** `verify-desktop-automation.js` types into whatever
+document Notepad restores from its previous session — this run's target was the operator's
+own `CaesarSaladRecipe.txt`. Nothing was saved (`LastWriteTime` still 2026-08-14) and the
+script never saves, but a probe should create a blank document rather than rely on that.
 
 ---
 
