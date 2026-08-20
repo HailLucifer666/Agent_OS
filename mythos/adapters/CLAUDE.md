@@ -50,6 +50,39 @@ pointer) — this file adds what's specific to this directory.
   user-hostile. Fail honestly and let the operator click. If typing into a
   launched app silently succeeds-but-lands-elsewhere, that is the SEPARATE
   caret-vs-foreground-window issue above, not this.
+- **`MainWindowHandle == 0` does NOT mean "this process owns no window".** It has two
+  causes needing opposite targets, and conflating them was BUG-280 (fixed 2026-08-20).
+  (a) The pid really owns nothing - a browser renderer/utility child, or a launcher
+  stub - and the right target is a *sibling process of the same executable*
+  (`Resolve-WindowedProcessByName`, BUG-103). (b) The pid owns a real, visible
+  top-level window that .NET simply does not classify as "main". **Every
+  rundll32-hosted Control Panel dialog is (b)**: `launch_app main.cpl` opens Mouse
+  Properties under rundll32, `list_windows` reports it (className `#32770`, a real
+  hwnd, `visible:true`), and `MainWindowHandle` is still 0. For (b) the sibling search
+  is guaranteed to miss - rundll32 IS the host - so `close_window` answered "no window
+  to close" about a dialog sitting on screen.
+  - **Resolve a window by PID the way `Handle-ListWindows` does** (enumerate the UIA
+    desktop's children and match `ProcessId`, take `NativeWindowHandle`), *then* fall
+    back to the name-based sibling search. Two commands in this file disagreeing about
+    whether a window exists is the smell; sharing one enumeration is the cure.
+  - **`Process.CloseMainWindow()` cannot serve case (b)** - it posts WM_CLOSE to
+    `MainWindowHandle`, the exact handle that is zero. Send `WM_CLOSE` (0x0010) to the
+    enumerated hwnd with `SendMessageTimeout` + `SMTO_ABORTIFHUNG`. Not `SendMessage`
+    (one modal dialog wedges this single-threaded adapter until it is answered), not
+    `PostMessage` (no delivery signal, so a dropped message reads like a refused close).
+  - **`IsWindow` is the oracle, never the send call's return** - a dialog can acknowledge
+    WM_CLOSE and stay open on a confirmation prompt. Same wrong-oracle class as BUG-103's
+    `WaitForExit` on a multi-window browser.
+  - 0x0010 already appears in `NativeInput` as `MOUSEEVENTF_RIGHTUP` and `SWP_NOACTIVATE`.
+    Unrelated constants that share a number - do not reuse either name for a window
+    message.
+- **`verify-desktop-automation.js`'s charmap type/click cells go red if anyone types
+  during the run.** Seen 2026-08-20: two runs failed and read as a regression from an
+  unrelated `close_window` change; the **unmodified** script failed identically on its
+  next run, reading back the operator's own keystrokes instead of the probe text. Charmap's
+  typing route follows the caret (see the caret-vs-foreground entry above), so an idle
+  desktop is part of the instrument. Before believing a red cell, re-run it quiet and pair
+  it against the pre-change file.
 - **DPI awareness**: `ps-automation.ps1` has a DPI-awareness block that must
   stay intact — screen coordinates are wrong without it on any non-100%-scale
   display.

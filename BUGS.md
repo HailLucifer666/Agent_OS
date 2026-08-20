@@ -1,7 +1,8 @@
 # MYTHOS — Complete Bug Registry
 
-<!-- BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed
-     immediately after this header so the handoff is the first thing a new session reads. -->
+<!-- BUG-280, BUG-279, BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest
+     entries; they are placed immediately after this header so the handoff is the first
+     thing a new session reads. -->
 
 Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Episodic conversation logs (vault/Episodic/)
@@ -11,6 +12,102 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Code comments (D-NN drift items, SPEC/REALITY GAPs)
 - Git commit history
 - Live session bug reports
+
+---
+
+## BUG-280 — close_window said "no window to close" about a dialog that was on screen (✅ RESOLVED 2026-08-20, live-verified)
+
+**Measured, not theorised.** On main @ `5cfe91a`, through a real node → pc-child round
+trip (a PowerShell-tool probe is UIPI-blocked and measures nothing):
+
+```
+launch_app main.cpl  -> Mouse Properties opens, hosted by rundll32 pid 11500
+list_windows         -> {processName:"rundll32", pid:11500, className:"#32770",
+                         title:"Mouse Properties", hwnd:"3343574", visible:true}
+(Get-Process -Id 11500).MainWindowHandle -> 0
+close_window pid=11500 -> ok:false, "PID 11500 (rundll32) has no window to close, and no
+                          windowed rundll32 process was found. Nothing was closed."
+list_windows after     -> dialog STILL OPEN, same hwnd.
+```
+
+Two commands in the same script disagreeing about whether a window exists — one enumerating
+it with a handle, the other denying it — is the whole defect in one line.
+
+**Root cause: one condition treated as one cure, when it is two conditions needing opposite
+targets.** `Handle-CloseWindow` reads `MainWindowHandle == 0` and concludes "this pid owns
+no window", then hunts for a *sibling process of the same executable* that does. That is
+right for **(a)**, a browser renderer/utility child or a launcher stub — BUG-103's case, and
+`Resolve-WindowedProcessByName` is the correct answer there. It is wrong for **(b)**, a pid
+that owns a real visible top-level window .NET simply does not classify as "main". Every
+rundll32-hosted Control Panel dialog is (b), and for it the sibling search is *guaranteed*
+to miss: rundll32 IS the host, so there is no second rundll32 holding that window.
+
+**The fix is an ORDER, not a deletion.** `Resolve-TopLevelWindowByPid` asks whether the pid
+itself owns a top-level window, using the **same UIA enumeration `Handle-ListWindows`
+answers `list_windows` with** — so the two commands can no longer disagree. Only when that
+finds nothing does the name-based sibling search run, unchanged. A visible window wins over
+a zero-size one (minimized or hidden): `close_window` is destructive and an invisible window
+is the wrong target.
+
+Deliberately **not** a second `Get-Process`/`MainWindowHandle` scan. `MainWindowHandle` is
+the field that is wrong here; re-reading it inside a helper would have relocated the bug
+rather than fixed it.
+
+**A new close mechanism was required, and there was no WM_CLOSE path anywhere in
+`ps-automation.ps1` before this.** `.NET`'s `Process.CloseMainWindow()` posts WM_CLOSE to
+`MainWindowHandle` — the exact handle that is zero here — so it cannot be reused. The hosted
+path sends WM_CLOSE (0x0010) to the enumerated handle via `SendMessageTimeout` with
+`SMTO_ABORTIFHUNG`: `SendMessage` would block until the target's message loop replied, and
+one modal dialog would then wedge this single-threaded adapter for the rest of the session;
+`PostMessage` reports nothing about delivery, so a dropped message would be
+indistinguishable from a refused close. Note 0x0010 already appears twice in `NativeInput`
+as `MOUSEEVENTF_RIGHTUP` and `SWP_NOACTIVATE` — unrelated constants sharing a number, and
+reusing either name would have been a real bug wearing a passing test.
+
+**The oracle is `IsWindow`, never the send call's return.** A dialog can acknowledge
+WM_CLOSE and stay open on a confirmation prompt. Trusting the send would be BUG-103's
+wrong-oracle mistake (`WaitForExit` on a multi-window browser) in a new costume. Both hosted
+failure branches return a **STRING**, keeping BUG-223's convention — a hashtable would be
+read as `ok:true` for a window still on screen, which is what BUG-103 comment #3 in this
+very handler already warns about.
+
+**Adjacent, deliberately deferred by `380e5b3`, and never ticketed.** That commit fixed
+`ui_elements` for the same dialogs by *deleting* its `MainWindowHandle` guard — `ui_elements`
+needs no handle at all. `close_window` needs one to act on, so the same deletion would not
+have worked; its note said the fix "needs a WM_CLOSE-by-hwnd path, which does not belong
+inside this change". It was correct to defer and wrong to leave unticketed: `git grep`
+found no BUG-28x anywhere, so this shipped as a known-but-invisible defect.
+
+**Live verification (2026-08-20, node → pc-child, with the fix in place).**
+
+| case | result |
+|---|---|
+| `main.cpl` → `close_window` pid 23424 | `ok:true {closed:true, resolvedBy:"owned-top-level", hwnd:"788408"}`, and `list_windows` no longer lists it |
+| `charmap` (ordinary Win32) | `ok:true, resolvedBy:"pid"` — unchanged path |
+| a `PING` pid (owns no window, no windowed sibling possible) | `ok:false`, "has no window to close…" — BUG-103's honest refusal, unchanged |
+| Brave, 10 live processes | all 9 windowless children resolve to **no** top-level window in the same enumeration, so a browser child pid still falls through to the sibling branch |
+
+`scripts/verify-desktop-automation.js` → **8/8 PASS** on a quiet desktop.
+
+**A warning about that gate, paid for during this fix.** Its charmap `type`/`click` cells
+failed on two runs here and looked like a regression from this change. They are not: the
+**unmodified** script failed identically on its second run, reading back the operator's own
+keystrokes instead of the probe text. Charmap's typing route follows the caret, so anyone
+typing anywhere during the run contaminates it. Before treating a red cell in that gate as a
+code defect, re-run it on an idle desktop — and pair it against the pre-change file, which
+is what settled it here.
+
+**What was NOT touched.** No control inside Mouse Properties is driven at any point.
+Some Control Panel controls apply the instant they are driven, with no Apply and no OK — a
+probe on 2026-08-20 swapped the operator's mouse buttons that way, and the registry read `0`
+while they were physically swapped. The live probe for this fix launches the dialog and
+closes it, nothing else, and still reads `GetSystemMetrics(SM_SWAPBUTTON)` and
+`GetDoubleClickTime()` before and after (both unchanged: `swap=0, dblclick=500`).
+
+Regression test: `test/bug-280-hosted-dialog-close.test.js` (12 tests). Mutation-proved —
+restoring the pre-fix behaviour (sibling search unconditional, pid-owned window never
+consulted) fails exactly the two ordering guards by name while the PowerShell parse check
+still passes, so the failures are behavioural rather than syntactic.
 
 ---
 
