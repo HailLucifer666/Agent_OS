@@ -1,6 +1,11 @@
 # Mythos Adoption Matrix
 
-Consolidated from GitHub trending (daily + weekly + monthly, Aug 2026). 43 unique repos.
+Consolidated from GitHub trending (daily + weekly + monthly, Aug 2026). 43 unique repos —
+that figure covers **sections 1-10 only**, which came from that one trending sweep.
+**Section 11 (web search & research) was appended 2026-08-20** from a different source: the
+BUG-280 investigation, where candidates were found by need and then measured from this
+machine rather than found by popularity. Later sections may be added the same way; do not
+read the count above as a total.
 **Status legend:** 🟢 adopt now · 🟡 decide/conditional · ⚪ pattern/template only · ❌ skip
 **Phase legend:** P1 = immediate · P2 = next · P3 = strategic
 
@@ -10,6 +15,8 @@ Consolidated from GitHub trending (daily + weekly + monthly, Aug 2026). 43 uniqu
 - Mythos already runs the **SKILL.md skills standard** (superpowers). Skill repos (add `skills` to their names) install directly into the existing skills layer.
 - Mythos runs sidecar children from the server (edge-tts child pattern). Python/Go single binaries fit the same pattern.
 - Mythos surfaces to map onto: **server** (`mythos/server`), **HUD** (`mythos/ui`), **Electron shell** (`electron/`), **phone node** (`nodes/phone`, Kotlin/Gradle + BLE), **voice chain** (edge-tts / Live-audio / wake word), **approvals** (confirm-request/confirm-resolved + ttl), **review/verify gates** (launch guards, pre-commit, e2e harness).
+- **Star count has been anti-correlated with usefulness in both domains measured so far, so rank by a measurement from THIS host, never by popularity.** Two cases on record, both 2026-08-20. Windows automation: the three most-starred candidates (Windows-MCP 6.8k, robotjs 12.8k, WinAppDriver 4.0k) all drive with synthetic input, which UIPI/MSIX silently discards — that failure mode *is* the problem they were being considered for. Web search: `nickclyde/duckduckgo-mcp-server` (1.4k, MIT, healthy) is dead here because all three DuckDuckGo hosts are unreachable from this network, while an `example.com` control returned 200 in 234ms.
+- **And a sharper version of the same trap: a service being reachable is not the same as a repo's parser working against it.** open-webSearch was adopted specifically because a raw request to Bing from this machine returned HTTP 200 with 136 result links. Driven through that repo's own Bing engine, the same query from the same machine returns **HTTP 301 and zero results**. Always measure through the candidate's own code path.
 
 ---
 
@@ -104,6 +111,27 @@ Consolidated from GitHub trending (daily + weekly + monthly, Aug 2026). 43 uniqu
 | `microsoft/AI-For-Beginners` | https://github.com/microsoft/AI-For-Beginners | Course, not a component |
 | `ZhuLinsen/daily_stock_analysis` | https://github.com/ZhuLinsen/daily_stock_analysis | Finance niche (unless a finance agent is wanted) |
 | `donnemartin/system-design-primer` | https://github.com/donnemartin/system-design-primer | Learning resource — but mintable into an architecture-review skill via book-to-skill |
+
+---
+
+## 11. Web search & research
+
+Added 2026-08-20 (BUG-280). Every row here was measured from this machine on that
+date, and the measurements are quoted rather than summarised because two of them
+contradict what a reasonable reading of the repos would predict.
+
+| Status | Repo | Link | What to take | Lands in | Notes |
+|---|---|---|---|---|---|
+| 🟢 **ADOPTED, shipped** | `Aas-ee/open-webSearch` | https://github.com/Aas-ee/open-webSearch | Multi-engine keyless search; MCP server plus a plain REST daemon (`POST /search {query, limit, engines[]}`, `GET /health`) | Shipped: `web-search.js`'s FIRST chain rung, over loopback HTTP to an operator-run daemon. Optional exactly like cua-driver — NOT in `package.json`, connection refused means the rung records the refusal and the chain continues | Apache-2.0 per the **published tarball's LICENSE file**; its `package.json` omits the `license` field, so tooling reports "unknown". **Adopted on one engine, not three.** Measured through its own CLI: startpage 3 relevant results; bing HTTP 301; baidu socket hang up; brave HTTP 429; sogou anti-bot page; duckduckgo and csdn nothing. The plan adopted it "for Bing's reachability" — that justification is void, and it earns its place on startpage alone, because the alternative was a chain with zero working providers. `WEB_SEARCH_ENGINES` defaults to startpage. 203 transitive packages, licence-unaudited — recorded as owed in `THIRD_PARTY_NOTICES.md` |
+| 🟡 P2 — **vendored, wired, never executed** | `Panniantong/Agent-Reach` | https://github.com/Panniantong/Agent-Reach | 15-platform reader: Twitter/X, Reddit, YouTube, GitHub, Bilibili, XiaoHongShu, V2EX, LinkedIn, RSS. `doctor --json` health check | Already vendored at `mythos/skills/agent-reach/` (SKILL.md + 6 reference files + LICENSE). Consumer already written: the `RESEARCH FINDINGS` injection into `packBlockFor()` (`Plans/MYTHOS-Post-Parity-Plan.md:1217-1269`) | **Not the fix for BUG-280** — its `references/search.md` routes general web search to **Exa**, which is the provider whose free quota ran out. The CLI is **not installed**, so the injection has never run once against a real `agent-reach`: the shipped-but-inert class. To activate: install the CLI, run `agent-reach doctor --json`, then live-verify the injection actually fires. Owes the step-6.6 resale audit |
+| ❌ reject — **unreachable from this host** | `nickclyde/duckduckgo-mcp-server` | https://github.com/nickclyde/duckduckgo-mcp-server | — | — | 1.4k★ MIT, healthy repo, rejected on measurement rather than quality: all three DuckDuckGo hosts fail from this machine (`fetch failed` @10.5s) against a 200-in-234ms `example.com` control. Popularity is not reachability. Do not re-research |
+| ❌ reject | public SearXNG instances | https://searx.space | — | — | Measured: `searx.be` returns HTML not JSON (API disabled), `searxng.site` **403**, `priv.au` **403**, `search.bus-hit.me` dead. Self-hosting needs Docker, heavier than the portability rule allows. `slinusc/web-search-mcp-server` (6★, **no licence file at all**) depends on one and is rejected with it |
+| ❌ reject | `canilc/mcp-open-webresearch` | https://github.com/canilc/mcp-open-webresearch | — | — | 0★, last pushed 2025-11-18. Same idea as open-webSearch with no adoption signal or maintenance |
+| ⚪ ours, not adoptable | Wikipedia full-text API | https://en.wikipedia.org/w/api.php | `action=query&list=search` | Shipped in `web-search.js` | Not an adoption — a defect in our own call. The chain had been using `action=opensearch`, which is title-prefix matching: `London` → 3 hits, `weather in London today` → **0 hits**; full text on the same host → **10 hits**. Listed here so the "why is Wikipedia useless for search" question is not re-asked |
+
+**Not adopted and deliberately so:** nothing was written to replace the DuckDuckGo
+rungs. They are unreachable from this operator's network, not broken, and other clones
+will reach them.
 
 ---
 
