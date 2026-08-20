@@ -108,6 +108,13 @@ const ALLOWED_EVENTS = new Set([
   'conversation.suppressed',
   'conversation.intent',   // Phase 5a — conversation-gateway.js's non-engagement route() fallback
   'cortex.thought',
+  // BUG-282: the cortex re-proposed a confirm-blocked action every tick — 42
+  // browser_click confirms for the identical {ref:"e12"} in 41.6 seconds in the
+  // audited 2026-08-20 session. act() now asks once per unresolved confirm, and
+  // emits this each time it declines to ask again, carrying a running count.
+  // The event is not optional decoration: suppressing 41 of 42 emissions removes
+  // 41 log lines, and silence would turn a visible spin into an invisible stall.
+  'cortex.confirm-suppressed',
 
   // engagement.* (Phase 5a — engagement layer wired end-to-end: store, state
   // machine transitions, gateway action routing, immune hooks). The two
