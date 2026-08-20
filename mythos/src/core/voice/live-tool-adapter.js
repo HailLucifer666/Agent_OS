@@ -569,6 +569,55 @@ function createLiveToolAdapter(deps) {
     'not confirmed, and do not claim the rest: not now, and not later in this conversation. Do NOT report ' +
     'the whole action as done, and do NOT report it as FAILED either.';
 
+  // BUG-295 — 2026-08-20. THE MISSING THIRD CASE. The two claims above cover an
+  // outcome that FAILED and an outcome that is UNVERIFIED. Neither covers a tool
+  // that SUCCEEDS and hands back no readable body, and that is the shape that
+  // produced the worst narration this project has logged.
+  //
+  // browser_navigate returned, verbatim from the session log:
+  //   {"url":"https://www.google.com/search?q=weather+in+Kolkata+current",
+  //    "title":"weather in Kolkata current - Google Search","newTab":true,"browser":"chrome"}
+  // ok:true, no error, nothing unverified — a truthful report of a NAVIGATION.
+  // MYTHOS then told the operator it was 28C with thunderstorms and high
+  // humidity. Every number and every condition was invented. Nothing in that
+  // payload says "you have not read this page", so a successful navigate reads
+  // to the model as having SEEN the page, and it supplies the rest from weights.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? Every tool that can succeed while returning no
+  // readable body. The population is larger than this list: browser_click and
+  // browser_type change a page and return no body; cua_click and focus_window do
+  // the same to a window. THE NARROWNESS IS DELIBERATE — these two are the only
+  // two with a LOGGED fabrication behind them, and a guard that quietly
+  // generalises is a guard nobody can reason about. Those others are known-blind;
+  // widening this list needs its own evidence, and the bug-291 path matrix is
+  // where the widening gets asserted.
+  //
+  // Q2 — DOES THIS HIDE EVIDENCE? No. It appends an instruction and leaves the
+  // payload whole: the URL, the title and the browser still reach the model, so
+  // the diagnostic trail is unchanged. And it is the LAST branch on every path,
+  // so a failure or an unverified outcome keeps its stronger prohibition — two
+  // prohibitions on one outcome would disagree with each other.
+  //
+  // Q8 — get_weather is DELIBERATELY NOT TOUCHED. It returned ok ten times that
+  // same day; the model bypassed a working tool. The defect is narration, not the
+  // effector, and nobody should "fix" from-system.js on the strength of this bug.
+  const NO_CONTENT_CLAIM = 'This returned NO page content — you have NOT read this page, only opened it. ' +
+    'Report only that it is open, and call a read tool if you need what it says. Do NOT state, summarise ' +
+    'or answer from anything on the page: not now, and not later in this conversation either.';
+
+  // Keyed on tool NAME, not on payload shape. A shape probe would have to decide
+  // what counts as "readable", and every one of these payloads is a legitimate
+  // success object — the thing that makes them content-free is what the tool
+  // does, which only its name knows. See Q1 above for why the list is this short.
+  const NO_CONTENT_TOOLS = {
+    browser_navigate: true,
+    open_web: true,
+  };
+
+  function returnsNoReadableContent(toolName) {
+    return NO_CONTENT_TOOLS[toolName] === true;
+  }
+
   // BUG-273 B1, second half. Q4 — WHAT IS STANDING NEXT TO IT? On the awaited
   // branch the hedge lived in `message` while the effector's raw, success-shaped
   // result object was attached beside it, un-nested. ui_type's unverified payload
@@ -650,8 +699,28 @@ function createLiveToolAdapter(deps) {
         // announcing, so sending "outcome pending" here would be noise ahead
         // of the answer.
         if (!entry.started) {
-          sendSystemNotice(entry.summary, entry.ok ? 'Report this to the operator accurately.' : NO_SUCCESS_CLAIM,
-            { site: 'late-for-turn', tool: entry.tool || null, claim: entry.ok ? 'ok' : 'failed' });
+          // BUG-295: the fourth narration site, and it is a RE-narration — the
+          // instruction is recomputed here from {tool, ok} because the outcome
+          // object is long gone by now. Tool name is all this branch has, which
+          // is the other reason NO_CONTENT_TOOLS is keyed on the name.
+          //
+          // KNOWN GAP, deliberately not widened here: `entry.ok` is true for an
+          // UNVERIFIED outcome (commitAction is called with ok: ev.ok alongside
+          // unverified: ev.unverified), so an unverified outcome arriving on this
+          // site still gets the neutral default rather than
+          // UNVERIFIED_NO_PROOF_CLAIM. That is a BUG-273 B1 hole in a path
+          // BUG-273 did not enumerate, found while fixing this one. It is left
+          // alone on purpose — closing it belongs to its own ticket with its own
+          // red test, not to a no-content commit.
+          const noContent = returnsNoReadableContent(entry.tool);
+          const instruction = entry.ok
+            ? (noContent ? NO_CONTENT_CLAIM : 'Report this to the operator accurately.')
+            : NO_SUCCESS_CLAIM;
+          sendSystemNotice(entry.summary, instruction, {
+            site: 'late-for-turn',
+            tool: entry.tool || null,
+            claim: entry.ok ? (noContent ? 'ok-no-content' : 'ok') : 'failed',
+          });
         }
         return;
       }
@@ -829,6 +898,11 @@ function createLiveToolAdapter(deps) {
         } else {
           summary = `${call.name} done.`;
           response = { status: 'ok', result: truncateForModel(ev.result) };
+          // BUG-295: the success branch, and the one instance A came through.
+          // `message` is the instruction on every other branch here, so it is
+          // the instruction on this one too rather than a fourth field the model
+          // has to learn. status stays 'ok' — the navigation really did happen.
+          if (returnsNoReadableContent(call.name)) response.message = NO_CONTENT_CLAIM;
         }
         // BUG-272 T2: remember a failed/unproven outcome so the identical call
         // re-issued on the NEXT turn is suppressed for a few seconds. This is the
@@ -878,6 +952,12 @@ function createLiveToolAdapter(deps) {
       instruction = ev.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
+      // BUG-295: open_web breached the 1500ms ack deadline 44 times in the
+      // 2026-08-20 session — more breaches than calls — so a content-free tool
+      // reaches the operator through THIS path routinely, not exceptionally.
+      // Same split as the failure branch above: the record keeps the plain
+      // statement, the instruction carries the prohibition.
+      if (returnsNoReadableContent(toolName)) instruction = NO_CONTENT_CLAIM;
     }
     liveTurnActions.push({ tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict });
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
@@ -992,6 +1072,10 @@ function createLiveToolAdapter(deps) {
       instruction = step ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`;
+      // BUG-295: a confirmation gates INTENT. It says nothing about whether the
+      // page was read, so an approved navigate needs the same prohibition as an
+      // unapproved one.
+      if (returnsNoReadableContent(pending.name)) instruction = NO_CONTENT_CLAIM;
     }
 
     // Record BEFORE the session check: this entry feeds AD-4 reconciliation and
