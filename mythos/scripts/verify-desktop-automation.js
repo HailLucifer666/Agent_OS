@@ -40,11 +40,16 @@
 // the trap this comment exists to prevent.
 //
 // SIDE EFFECTS, STATED PLAINLY. This launches real windows on the operator's
-// desktop and types into them. It uses a throwaway string, never touches an
-// existing document, and closes what it opened. It does NOT save anything: a
-// Notepad window with unsaved text opens a "Save changes?" modal on close, which
-// is a pending dialog rather than a failure to close (a correction the operator
-// themselves made on 2026-08-13, after the opposite conclusion was recorded).
+// desktop and types into them. It uses a throwaway string and closes what it
+// opened. It never types into an existing document, and that is now ENFORCED
+// rather than asserted: see the fail-closed gate in the type step, which demands a
+// confirmed-blank, readable target and refuses otherwise. The sentence used to make
+// the same promise on nothing but new_document happening to work.
+//
+// It does NOT save anything: a Notepad window with unsaved text opens a "Save
+// changes?" modal on close, which is a pending dialog rather than a failure to
+// close (a correction the operator themselves made on 2026-08-13, after the
+// opposite conclusion was recorded).
 // That modal is answered where possible and reported where not.
 //
 // Usage:
@@ -107,14 +112,59 @@ function typedTextOf(result) {
 }
 
 // Whatever the app currently holds, used to refuse typing into real content.
+//
+// `currentText` FIRST, because it is the only key read_compose_box answers with:
+// Handle-ReadComposeBox returns {name, controlType, currentText, headerName,
+// candidateCount, readFromPid}. Until 2026-08-20 this list did not contain it, so
+// the function returned null on every run and the refusal gate below never fired
+// once. The other three keys are kept for the read-back shapes ui_type returns,
+// but they are not what this command answers with. Precisely the defect the
+// typedTextOf comment above describes, in the check meant to protect the
+// operator's documents: a field name that looks like the payload and is not.
+//
+// null means UNREADABLE, which is a third outcome and not a synonym for empty.
+// The caller must treat it as a refusal.
 function existingTextOf(envelope) {
   if (!envelope || !envelope.ok) return null;
   const r = envelope.result;
   if (typeof r === 'string') return r;
   if (r && typeof r === 'object') {
-    for (const k of ['text', 'readBackText', 'value']) {
+    for (const k of ['currentText', 'text', 'readBackText', 'value']) {
       if (typeof r[k] === 'string') return r[k];
     }
+  }
+  return null;
+}
+
+// The title of the window we are about to type into, read FRESH. The launch step's
+// title is a snapshot taken before new_document ran, so on Win11 Notepad it names
+// the session-restored document while the blank tab that actually receives the text
+// is opened afterwards. Printing only the stale one is how a run that behaved
+// correctly still read as though it had typed into the operator's own file.
+async function titleOf(adapter, targetPid) {
+  const w = await call(adapter, { cmd: 'list_windows' });
+  const list = (w.ok && Array.isArray(w.result)) ? w.result
+    : (w.ok && w.result && Array.isArray(w.result.windows)) ? w.result.windows : [];
+  const m = list.find((x) => x && Number(x.pid) === Number(targetPid));
+  return (m && m.title) || '(no window title)';
+}
+
+// The typing gate, as a pure function so it can be tested without launching an app.
+// Returns a reason to REFUSE, or null to proceed. It is deliberately written as
+// "prove it is safe", not "prove it is unsafe": every path that is not a confirmed
+// blank, readable document returns a reason. The version this replaced could only
+// refuse on one of those paths, and a lookup bug meant it never reached even that.
+function refusalFor(fresh, existing) {
+  if (!fresh || !fresh.ok) {
+    return 'new_document could not produce a blank document ('
+      + ((fresh && fresh.error) || 'no response') + ')';
+  }
+  if (typeof existing !== 'string') {
+    return 'nothing could read what the target currently holds, so it cannot be shown'
+      + ' to be empty';
+  }
+  if (existing.trim().length > 0) {
+    return 'the target already holds ' + existing.trim().length + ' characters of content';
   }
   return null;
 }
@@ -171,25 +221,43 @@ async function runTarget(adapter, target, opts) {
 
   // ---- type --------------------------------------------------------------
   //
-  // SAFETY, LEARNED THE HARD WAY ON THIS SCRIPT'S FIRST RUN. Windows 11 Notepad
-  // restores its previous session, so `launch_app notepad` did not open a blank
-  // window — it reopened the operator's own document (cleanupEmailDraft.txt) and
-  // this probe typed into it. Nothing was saved and the file on disk was never
-  // modified, but that was luck, not design: a probe that writes into whatever
-  // document happens to be open is unacceptable regardless of the outcome.
+  // SAFETY, AND A CORRECTION TO WHAT THIS COMMENT USED TO CLAIM. Windows 11
+  // Notepad is single-instance, tab-based and restores its previous session, so
+  // `launch_app notepad` never opens a blank window — it reopens whatever the
+  // operator had, which on this machine was a real document on their Desktop.
   //
-  // So typing is now gated twice. First ask the app for a NEW document, which is
-  // the honest way to get a blank target. Then READ what the target holds, and if
-  // it is not empty, refuse to type at all and report UNTESTED with the reason.
+  // What this comment previously recorded — that the probe typed INTO that
+  // restored document and only luck kept the file intact — is not what happened,
+  // and the correction matters because the wrong version points at the wrong fix.
+  // Measured 2026-08-20 from Notepad's own TabState files: the restored document's
+  // tab held no probe text at all, and the probe text sat in a separate untitled
+  // tab. new_document had done its job. What made the run LOOK like an incident was
+  // the launch step printing the pre-new_document title (see titleOf).
+  //
+  // The real defect was the second layer: the refusal gate read a field name
+  // read_compose_box does not emit, so it evaluated null on every run — and null
+  // took the "go ahead and type" branch. Two independent holes, both silent, which
+  // left exactly one thing between this probe and the operator's work: new_document
+  // happening to succeed. So the gate is now explicit and FAIL-CLOSED. All three
+  // must hold before a single character is typed:
+  //   1. new_document reports a blank document on its OWN oracle — the tab count
+  //      rose and the active document reads empty — not on a keystroke being sent.
+  //   2. the target's current content reads back empty.
+  //   3. that content was READABLE. An unreadable target is a refusal, because
+  //      "we could not check" is not evidence that it is safe.
   // Refusing loses a data point; typing into someone's work loses their work.
   const fresh = await call(adapter, { cmd: 'new_document', pid: targetPid });
   const existing = existingTextOf(await call(adapter, { cmd: 'read_compose_box', pid: targetPid }));
-  if (existing !== null && existing.trim().length > 0) {
+  // Read AFTER new_document, so the reported title is the document being typed into.
+  const titleNow = await titleOf(adapter, targetPid);
+
+  const refusal = refusalFor(fresh, existing);
+
+  if (refusal) {
     steps.push(step('type', VERDICT.UNTESTED,
-      'the target already holds ' + existing.trim().length + ' characters of content'
-      + (fresh.ok ? '' : ' and new_document did not give a blank one (' + fresh.error + ')')
-      + ' — refusing to type into it. Close the document by hand and re-run.',
-      { fresh, existingLength: existing.trim().length }));
+      refusal + ' — refusing to type into it. The window at this point is "' + titleNow
+      + '". Close the document by hand and re-run.',
+      { fresh, titleNow, existingLength: existing === null ? null : existing.trim().length }));
   } else {
     const typed = await call(adapter, { cmd: 'ui_type', text: PROBE_TEXT, pid: targetPid });
     if (!typed.ok) {
@@ -199,9 +267,12 @@ async function runTarget(adapter, target, opts) {
       const readBackText = typedTextOf(r);
       const landed = readBackText.includes(PROBE_TEXT);
       if (landed) {
+        // The title is part of the verdict, not decoration: a PASS has to say WHICH
+        // document accepted the text, or the reader has to go and assume.
         steps.push(step('type', VERDICT.PASS,
           'read back out of the control via ' + (r.readBackVia || 'an unnamed reader')
-          + ', typed via ' + (r.mechanism || 'an unnamed mechanism'), typed));
+          + ', typed via ' + (r.mechanism || 'an unnamed mechanism')
+          + ', into "' + titleNow + '"', typed));
       } else if (!readBackText) {
         // The honest middle outcome the evidence contract exists to express.
         steps.push(step('type', VERDICT.UNVERIFIED,
@@ -355,7 +426,14 @@ async function main() {
   process.exit(blocking.length === 0 ? 0 : 1);
 }
 
-main().catch((err) => {
-  console.error('verify-desktop-automation failed: ' + (err && err.stack ? err.stack : err));
-  process.exit(1);
-});
+// Requiring this file must not launch windows on the operator's desktop — the
+// refusal gate above is only worth having if it is tested, and a test cannot
+// require a module whose top level starts typing into applications.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('verify-desktop-automation failed: ' + (err && err.stack ? err.stack : err));
+    process.exit(1);
+  });
+}
+
+module.exports = { refusalFor, existingTextOf, typedTextOf, PROBE_TEXT, VERDICT };
