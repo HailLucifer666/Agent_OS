@@ -1,10 +1,11 @@
 'use strict';
 
-// effectors/web-search.js — web search effector with a four-tier provider chain.
+// effectors/web-search.js — web search effector with a provider chain.
+// 0. Local open-webSearch daemon (BUG-280) — POST http://127.0.0.1:3100/search
 // 1. Exa (only when EXA_API_KEY is set) — POST with x-api-key header
 // 2. DuckDuckGo HTML direct — https://html.duckduckgo.com/html/?q=
 // 3. DuckDuckGo Lite — https://lite.duckduckgo.com/lite/?q=
-// 4. Wikipedia OpenSearch — https://en.wikipedia.org/w/api.php?action=opensearch
+// 4. Wikipedia full-text — https://en.wikipedia.org/w/api.php?action=query&list=search
 //
 // Response shape unchanged: { ok, result: { query, results, source } }
 // Each result: { title, url, snippet }
@@ -21,8 +22,107 @@ var EXA_SEARCH_URL = 'https://api.exa.ai/search'
 var EXA_MCP_URL = 'https://mcp.exa.ai/mcp'
 var DDG_HTML_URL = 'https://html.duckduckgo.com/html/?q='
 var DDG_LITE_URL = 'https://lite.duckduckgo.com/lite/?q='
-var WIKI_SEARCH_URL = 'https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit='
+// BUG-280 (2026-08-20): action=opensearch is TITLE-PREFIX matching, so it could
+// not answer a natural-language query by construction. Measured on the same
+// host: 'London' returned 3 hits, 'weather in London today' returned 0, and the
+// same host with action=query&list=search returned HTTP 200 with 10 hits on that
+// identical query. The old comment further down called the empty answer "CORRECT
+// behaviour, not a fault" — true of OpenSearch, and also the argument against
+// using OpenSearch.
+var WIKI_SEARCH_URL = 'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit='
+var WIKI_ARTICLE_URL = 'https://en.wikipedia.org/wiki/'
 var PROVIDER_TIMEOUT = 10000
+
+// BUG-280: the adopted local search daemon (open-webSearch, Apache-2.0). Treated
+// exactly like cua-driver — an OPTIONAL external binary the operator installs and
+// runs. Absent daemon means this rung records why and the chain continues; it is
+// never fatal and never silent. Install/run instructions live in .env.example.
+//
+// Loopback only, and validated rather than trusted: this rung takes a URL from
+// configuration and fetches it, which is an SSRF-shaped surface. A non-loopback
+// value is refused by name instead of being defaulted away, because a wrong
+// default that quietly 404s makes a broken install look like "no results".
+var WEB_SEARCH_LOCAL_URL_DEFAULT = 'http://127.0.0.1:3100'
+var WEB_SEARCH_ENGINES_DEFAULT = 'startpage'
+var LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1', '[::1]']
+
+function localSearchBase() {
+  return String(process.env.WEB_SEARCH_LOCAL_URL || WEB_SEARCH_LOCAL_URL_DEFAULT).trim()
+}
+
+// Returns { ok:true, url } or { ok:false, reason } — never throws, so a typo in
+// the operator's .env cannot take out the whole chain.
+function resolveLocalSearchUrl() {
+  var raw = localSearchBase()
+  var parsed
+  try { parsed = new URL(raw) } catch (_) {
+    return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL is not a URL: "' + raw + '"' }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL must be http or https, got ' + parsed.protocol }
+  }
+  if (LOOPBACK_HOSTS.indexOf(parsed.hostname) === -1) {
+    return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL must point at loopback (127.0.0.1 or localhost), got "' + parsed.hostname + '"' }
+  }
+  return { ok: true, url: parsed.origin + '/search' }
+}
+
+function localSearchEngines() {
+  return String(process.env.WEB_SEARCH_ENGINES || WEB_SEARCH_ENGINES_DEFAULT)
+    .split(',').map(function(s) { return s.trim() }).filter(Boolean)
+}
+
+// Local open-webSearch daemon. Its REST contract, captured from the running
+// daemon on 2026-08-20 (test-fixtures/web-search/local-daemon-search.json):
+//   POST /search {query, limit, engines[]}
+//   -> {status:'ok', data:{query, engines, totalResults,
+//        results:[{title, url, description, source, engine}]}}
+// Note the field name: 'description', not 'snippet'. Every other provider in this chain returns
+// 'snippet' and the widget reads 'snippet', so the rename below is load-bearing:
+// passing the daemon's shape straight through would render a blank line under
+// every result while every count assertion still passed.
+async function localWebSearch(q, maxResults, bus) {
+  var target = resolveLocalSearchUrl()
+  if (!target.ok) {
+    if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: target.reason })
+    return null
+  }
+  var controller = new AbortController()
+  var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
+  try {
+    var res = await fetch(target.url, {
+      method: 'POST',
+      signal: controller.signal,
+      // No redirect following: this is a loopback daemon, and a redirect is the
+      // one way a validated loopback URL can still reach somewhere else.
+      redirect: 'error',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, limit: maxResults, engines: localSearchEngines() })
+    })
+    clearTimeout(timer)
+    if (!res.ok) {
+      if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: 'HTTP ' + res.status })
+      return null
+    }
+    var body = await res.json()
+    if (!body || body.status !== 'ok' || !body.data || !Array.isArray(body.data.results)) {
+      var why = body && body.error && body.error.message ? body.error.message : 'unexpected response shape'
+      if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: why })
+      return null
+    }
+    return body.data.results.slice(0, maxResults).map(function(r) {
+      return {
+        title: r.title || '',
+        url: r.url || '',
+        snippet: String(r.description || '').slice(0, 300)
+      }
+    })
+  } catch (err) {
+    clearTimeout(timer)
+    if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: err.message })
+    return null
+  }
+}
 
 // --- helpers (exported for testing) ---
 
@@ -248,25 +348,32 @@ function jinaSearch(q, maxResults, bus) {
   })
 }
 
-// Wikipedia OpenSearch — last resort for factual queries.
+// Wikipedia full-text search — last resort for factual queries.
 function wikiSearch(q, maxResults, bus) {
   return new Promise(function(resolve) {
     var controller = new AbortController()
     var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
-    fetch(WIKI_SEARCH_URL + maxResults + '&search=' + encodeURIComponent(q), {
+    fetch(WIKI_SEARCH_URL + maxResults + '&srsearch=' + encodeURIComponent(q), {
       signal: controller.signal,
       headers: { 'User-Agent': BROWSER_UA }
     })
     .then(function(res) { clearTimeout(timer); return res.json() })
     .then(function(data) {
-      // OpenSearch returns [ query, titles[], descriptions[], urls[] ]
-      if (!Array.isArray(data) || data.length < 4) { resolve([]); return }
+      // list=search returns { query: { search: [ {title, snippet, ...} ] } }.
+      // Two differences from the OpenSearch shape this replaced, both easy to get
+      // wrong quietly: there is no url field (it has to be built from the title),
+      // and the snippet carries <span class="searchmatch"> highlight markup that
+      // would otherwise be read out loud verbatim.
+      var hits = data && data.query && Array.isArray(data.query.search) ? data.query.search : null
+      if (!hits) { resolve([]); return }
       var results = []
-      for (var i = 0; i < data[1].length && results.length < maxResults; i++) {
+      for (var i = 0; i < hits.length && results.length < maxResults; i++) {
+        var title = hits[i] && hits[i].title ? String(hits[i].title) : ''
+        if (!title) continue
         results.push({
-          title: data[1][i] || '',
-          url: data[3][i] || '',
-          snippet: (data[2][i] || '').slice(0, 300)
+          title: title,
+          url: WIKI_ARTICLE_URL + encodeURIComponent(title.replace(/ /g, '_')),
+          snippet: stripTags(String(hits[i].snippet || '')).slice(0, 300)
         })
       }
       resolve(results)
@@ -417,6 +524,21 @@ async function web_search({ query, maxResults, bus }) {
       }
     }
 
+    // 0. Local open-webSearch daemon — FIRST on purpose. It is free, unmetered
+    // and on loopback; spending Exa's 150-a-day free quota before trying a free
+    // local engine is backwards. A missing daemon costs one refused TCP connect.
+    var localSkip = skipReason('local-websearch')
+    if (localSkip) note('local-websearch', localSkip)
+    else {
+      try {
+        var localResults = await localWebSearch(q, max, traceBus)
+        if (localResults && localResults.length) {
+          return { ok: true, result: { query: q, results: localResults.slice(0, max), source: 'local-websearch' } }
+        }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: err.message }); }
+      note('local-websearch', outcome('local-websearch'))
+    }
+
     // 1a. Exa REST API — only if EXA_API_KEY is configured (higher rate limits)
     var exaSkip = skipReason('exa', 'EXA_API_KEY')
     if (exaSkip) note('exa', exaSkip)
@@ -522,10 +644,12 @@ async function web_search({ query, maxResults, bus }) {
       note('jina', outcome('jina'))
     }
 
-    // 5. Wikipedia OpenSearch. Title-prefix only, so it cannot answer a natural-language
-    // query by construction — measured: 'London' returns 3 hits, 'weather in London today'
-    // returns 0. An empty answer from it is CORRECT behaviour, not a fault, which is why
-    // its note falls through to 'no results' and it emits no anomaly.
+    // 5. Wikipedia full-text search (BUG-280). This used to be action=opensearch, whose
+    // title-prefix matching could not answer a sentence at all — 'weather in London today'
+    // scored 0 hits against 3 for the bare word 'London'. It is still a last resort and
+    // still an encyclopaedia, so an empty answer for a shopping or recipe query remains
+    // CORRECT behaviour rather than a fault, which is why its note falls through to
+    // 'no results' and it emits no anomaly.
     var wikiSkip = skipReason('wikipedia')
     if (wikiSkip) note('wikipedia', wikiSkip)
     else {
@@ -558,6 +682,9 @@ module.exports = {
   _ddgLite: ddgLite,
   _jinaSearch: jinaSearch,
   _wikiSearch: wikiSearch,
+  _localWebSearch: localWebSearch,
+  _resolveLocalSearchUrl: resolveLocalSearchUrl,
+  _localSearchEngines: localSearchEngines,
   _exaMcpSearch: exaMcpSearch,
   _parseExaMcpText: parseExaMcpText
 }
