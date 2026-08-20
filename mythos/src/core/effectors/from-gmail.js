@@ -48,11 +48,33 @@ function isTerminalAuthError(err, reason) {
 function gmailFailureText(prefix, err) {
   var reason = reasonText(err);
   if (isTerminalAuthError(err, reason)) {
+    // BUG-291 (2026-08-21): everything below the first line is new, and it is
+    // here because the message above was ALREADY correct and still cost the same
+    // session twice. Following it exactly — run the script, paste the token —
+    // reproduces the fault a week later, so the remedy was a loop with no exit
+    // written into it.
+    //
+    // From Google's OAuth documentation: a project whose consent screen is
+    // external user type with publishing status 'Testing' is issued refresh
+    // tokens that EXPIRE IN 7 DAYS. This project requests gmail.readonly,
+    // gmail.compose, gmail.send and calendar.readonly, so it is squarely in that
+    // rule. That is a fact about the deployment, recoverable from no amount of
+    // reading this code, which is exactly why it belongs in the failure string
+    // rather than in a session transcript that the next reader will not have.
+    //
+    // The ORDER is the load-bearing part: publish first, THEN re-authorise. Doing
+    // it the other way round mints another 7-day token and files this incident
+    // again. Publishing unverified is fine for a single operator — it costs an
+    // "unverified app" interstitial and a 100-user lifetime cap on the project.
     return prefix + ': ' + reason
       + ' — this is NOT a network problem and will not recover on its own: the Google refresh token is '
       + 'expired or revoked. Tell the operator it needs re-authorising by running '
       + '`node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in mythos/.env. '
-      + 'Do not retry.';
+      + 'If this recurs roughly every 7 days, re-authorising alone will NOT fix it: an OAuth consent '
+      + 'screen with external user type and publishing status "Testing" is issued refresh tokens that '
+      + 'expire in 7 days. Publish the app first (Google Cloud Console -> APIs & Services -> OAuth '
+      + 'consent screen -> Publish app), and only then re-authorise, or the new token expires the same '
+      + 'way. Do not retry.';
   }
   return prefix + ': ' + reason;
 }
