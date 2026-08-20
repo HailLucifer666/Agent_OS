@@ -188,6 +188,23 @@ async function main() {
     }, {}),
   });
 
+  // 2026-08-20: a raised default that the machine never gets. BUG-274 T1 was
+  // fixed in config/voice-defaults.js, shipped, recorded as done — and stayed
+  // inert here for a day because this machine's .env carried the pre-fix chain,
+  // and an explicit override beats a derived default silently. The counted
+  // origins above could show "3 keys came from .env"; they could never show
+  // WHICH key, or that its value was the one a fix had just replaced.
+  //
+  // Warn, not info: this is a fix that is not in effect. Both values are named
+  // because "overridden" alone does not tell the operator whether theirs is the
+  // stale one. No committed test can read a gitignored .env, so this log line is
+  // the only place the override is observable — see
+  // test/derived-default-override-visibility.test.js for the tracked-template
+  // half and its stated limit.
+  if (configResult.derivedOverridden && configResult.derivedOverridden.length > 0) {
+    logger.warn('config.derived.overridden', { keys: configResult.derivedOverridden });
+  }
+
   // Step 4: Ensure vault directories
   const vaultDirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints'];
   const vaultRoot = path.resolve(config.MYTHOS_VAULT_ROOT);

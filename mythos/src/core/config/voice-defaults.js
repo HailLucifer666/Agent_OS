@@ -109,4 +109,29 @@ function deriveWakewordDefaults(rawEnv, hasWakewordModels) {
   return { WAKEWORD_ENABLED: 'true' };
 }
 
-module.exports = { deriveVoiceDefaults, deriveLiveVoiceDefaults, deriveWakewordDefaults };
+// Every key whose presence in the environment SUPPRESSES derivation above. Not
+// the same set as the keys derivation produces: VOICE_TTS_PROVIDER is never
+// derived, but setting it stops VOICE_TTS_CHAIN from being derived, so an
+// override report that ignored it would miss a real suppression.
+//
+// WHY THIS LIST EXISTS AT ALL. BUG-274 T1 was fixed in this file, shipped, and
+// stayed inert on the operator's machine for a day because their .env carried
+// the pre-fix chain — an explicit override beats a derived default, silently.
+// loadConfig uses this list to compute what derivation WOULD have produced had
+// the environment set none of them, and reports the difference so the next T1 is
+// visible at boot rather than a day later.
+//
+// GOOGLE_API_KEY is deliberately NOT here: it is read as a capability probe, and
+// its presence ENABLES derivation rather than suppressing it.
+//
+// A list is exactly the thing that goes stale, so it is not trusted:
+// test/derived-default-override-visibility.test.js scans this file for the
+// override reads it actually performs and fails if any is unregistered here.
+const OVERRIDE_KEYS = [
+  'VOICE_TTS_CHAIN',
+  'VOICE_TTS_PROVIDER',
+  'VOICE_S2S_ENABLED',
+  'WAKEWORD_ENABLED',
+];
+
+module.exports = { deriveVoiceDefaults, deriveLiveVoiceDefaults, deriveWakewordDefaults, OVERRIDE_KEYS };

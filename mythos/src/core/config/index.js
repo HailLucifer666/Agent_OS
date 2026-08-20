@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { SCHEMA } = require('./schema');
-const { deriveVoiceDefaults, deriveLiveVoiceDefaults, deriveWakewordDefaults } = require('./voice-defaults');
+const { deriveVoiceDefaults, deriveLiveVoiceDefaults, deriveWakewordDefaults, OVERRIDE_KEYS } = require('./voice-defaults');
 const { applyVoiceChoice } = require('./voice-choice');
 const { readVoiceChoice } = require('./voice-choice-store');
 const { readSettings } = require('./settings-store');
@@ -151,9 +151,48 @@ function loadConfig({ envOverrides, wakewordModelsDir, settings, envFileKeys, se
     else origins[key] = 'default';
   }
 
+  // WHICH derived default the environment beat, and to WHAT. origins{} above
+  // already says which LAYER won each key, and main.js logs a count per layer —
+  // enough to see "3 keys came from .env", never enough to see that one of them
+  // is the stale chain BUG-274 T1 replaced. That gap is why T1 read as shipped
+  // while being inert on this machine for a day.
+  //
+  // Computed as a counterfactual: derivation is run again against an environment
+  // with every override key stripped, so we learn what the operator would have
+  // got had they set nothing. Reporting needs BOTH values — "this key was
+  // overridden" alone does not tell anyone whether their value is the stale one.
+  // The same value as derivation is NOT an override: a warning that fires on
+  // agreement is noise, and noise is how a real warning stops being read.
+  const bare = { ...raw };
+  for (const key of OVERRIDE_KEYS) delete bare[key];
+  const wouldDerive = {
+    ...deriveVoiceDefaults(bare),
+    ...deriveLiveVoiceDefaults(bare),
+    ...deriveWakewordDefaults(bare, wakewordModelsPresent(wakewordModelsDir)),
+  };
+  const derivedOverridden = [];
+  for (const key of Object.keys(wouldDerive)) {
+    if (origins[key] === 'derived' || origins[key] === 'default') continue;
+    // result is validate()'s {ok, config, errors} — the effective value lives on
+    // .config. Reading result[key] directly yields undefined for every key, which
+    // makes the report fire on agreement and name the effective value
+    // "undefined". Caught by this guard's own test before it shipped.
+    if (String(result.config[key]) === String(wouldDerive[key])) continue;
+    derivedOverridden.push({
+      key,
+      derived: String(wouldDerive[key]),
+      effective: String(result.config[key]),
+      origin: origins[key],
+    });
+  }
+
   return {
     ...result,
     origins: Object.freeze(origins),
+    // Read by main.js, which warns once at boot when it is non-empty. Frozen for
+    // the same reason origins is: a consumer must not be able to edit the record
+    // of where configuration came from.
+    derivedOverridden: Object.freeze(derivedOverridden),
     // Passed up so main.js can report a corrupt or typo'd settings file ONCE on
     // the bus. loadConfig stays pure and never touches the bus itself.
     settingsFile: settingsResult.file,
