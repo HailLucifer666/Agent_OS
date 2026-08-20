@@ -148,3 +148,96 @@ describe('open_web browser:true — the explicit real-browser route', () => {
     assert.ok(tool.params.browser, 'and the params table must document it');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-293 — the failure text has to name the right tool too, not just the
+// description.
+//
+// MEASURED, 2026-08-20: open_web is the most-failing tool in the system. 34
+// calls, 44 `live.tool-ack-deadline` breaches (more breaches than calls, i.e. it
+// is being retried), and six distinct failure strings in one day:
+//
+//   No YouTube videos found for "Starboy The Weeknd".
+//   No YouTube videos found for "Pink Floyd Comfortably Numb Live".
+//   No results found for "daily news update cnn".
+//   No location found for "Kullu Manali current weather".
+//   Found results but could not extract a YouTube video ID. Try rephrasing.
+//   the dashboard did not answer, so I cannot confirm it rendered
+//
+// open_web is a widget/location RESOLVER. The model was using it as the
+// universal "show me X" verb — for music, for weather, for news — and each
+// failure string is written from the resolver's point of view, so "No location
+// found" reads to the model as THE WEATHER IS UNAVAILABLE rather than WRONG
+// TOOL. The description fix above tells the model what open_web is before it
+// chooses; this tells it what to do after it chose wrong.
+//
+// TWO OF THE SIX ARE DELIBERATELY NOT REDIRECTED, and this matters — the plan
+// this came from proposed pointing the search failure at web_search. open_web's
+// youtube and search branches ALREADY CALL web_search internally (from-dashboard
+// .js:418, :575), so "use web_search instead" would send the model straight back
+// into the code that just returned nothing. Those two say the search chain came
+// back empty instead, which is the actionable truth.
+// ---------------------------------------------------------------------------
+describe('BUG-293: open_web failures name the tool that would have worked', () => {
+  const realFetch = global.fetch;
+
+  function openWeb() {
+    const { TOOLS: tools } = buildTools({
+      goalsEffector: {}, pipeline: {}, kanban: {}, agentActions: {}, buildRunner: {},
+      vault: {}, config: {}, bus: { emit() {} },
+      probes: { getStatus: async () => ({}) },
+      abtop: { getState: () => ({}), killSession: async () => {} },
+    });
+    return tools.find((t) => t.name === 'open_web').fn;
+  }
+
+  // Nothing here may reach the network: node --test collects everything under
+  // test/, so a live call would block commits the day a host rate-limits.
+  function stubNoResults() {
+    global.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes('geocoding-api.open-meteo.com')) {
+        return { ok: true, status: 200, json: async () => ({ generationtime_ms: 0.4 }) };
+      }
+      throw new Error('fetch failed');
+    };
+  }
+
+  it('a weather lookup that cannot geocode points at get_weather', async () => {
+    stubNoResults();
+    try {
+      const res = await openWeb()({ type: 'weather', location: 'Kullu Manali current weather' }, { bus: { emit() {} } });
+      assert.equal(res.ok, false);
+      const msg = String(res.result || res.error || '');
+      assert.match(msg, /Kullu Manali current weather/, 'the operator must still see what was looked up');
+      assert.match(msg, /get_weather/,
+        'open_web resolves PLACES, not weather — the failure has to name the tool that answers '
+        + 'the question, or the model reads it as "the weather is unavailable" and invents one');
+    } finally { global.fetch = realFetch; }
+  });
+
+  it('a youtube lookup with no hits points at spotify_play for music', async () => {
+    stubNoResults();
+    try {
+      const res = await openWeb()({ type: 'youtube', query: 'Starboy The Weeknd' }, { bus: { emit() {} } });
+      assert.equal(res.ok, false);
+      const msg = String(res.result || res.error || '');
+      assert.match(msg, /spotify_play/,
+        'both logged youtube failures were music requests — the model wanted to LISTEN, and '
+        + 'open_web resolves a video to embed');
+    } finally { global.fetch = realFetch; }
+  });
+
+  it('the search branch does NOT redirect to web_search — it already called it', async () => {
+    stubNoResults();
+    try {
+      const res = await openWeb()({ type: 'search', query: 'daily news update cnn' }, { bus: { emit() {} } });
+      assert.equal(res.ok, false);
+      const msg = String(res.result || res.error || '');
+      assert.doesNotMatch(msg, /use web_search|try web_search/i,
+        'open_web(search) IS web_search plus a card — a redirect there is a loop, not a fix');
+      assert.match(msg, /search provider|search chain/i,
+        'the actionable truth is that the search chain came back empty, not that the tool was wrong');
+    } finally { global.fetch = realFetch; }
+  });
+});

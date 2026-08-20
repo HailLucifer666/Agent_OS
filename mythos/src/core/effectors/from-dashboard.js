@@ -417,7 +417,13 @@ function buildTools(ctx) {
         // actually play in the iframe.
         var ytRes = await web_search({ query: q + ' site:youtube.com', maxResults: 6, bus: ctx.bus });
         if (!ytRes.ok || !ytRes.result || !ytRes.result.results || !ytRes.result.results.length) {
-          return fail('No YouTube videos found for "' + q + '".');
+          // BUG-293: both logged instances of this string were MUSIC requests
+          // ("Starboy The Weeknd", "Pink Floyd Comfortably Numb Live"). Naming
+          // spotify_play is the redirect; naming web_search would NOT be — this
+          // branch just called it (line above), so pointing there is a loop.
+          return fail('No YouTube videos found for "' + q + '" — the search chain returned no '
+            + 'youtube.com results. If the operator wanted to LISTEN to music rather than watch a '
+            + 'video, use spotify_play instead; open_web only resolves a video to embed on the HUD.');
         }
         // Collect ALL candidate video IDs (in result order), not just the first.
         var candidates = [];
@@ -426,7 +432,7 @@ function buildTools(ctx) {
           var idM = String(r.url).match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
           if (idM) candidates.push({ id: idM[1], title: r.title || (title || q) });
         }
-        if (!candidates.length) return fail('Found results but could not extract a YouTube video ID. Try rephrasing.');
+        if (!candidates.length) return fail('Found results but could not extract a YouTube video ID — the hits were not watch pages. Try a more specific title, or use spotify_play if the operator wanted to listen rather than watch.');
 
         // Check YOUTUBE_MODE config: 'newtab' opens in the external browser
         // (operator's own ad blocker); 'electron' (default) and the legacy
@@ -512,7 +518,7 @@ function buildTools(ctx) {
           }
 
           // Both attempts returned zero results, or there was no comma to retry on
-          return fail('No location found for "' + loc + '".');
+          return fail('No PLACE matched "' + loc + '" — open_web resolves places and media, not weather. Use get_weather for conditions and forecasts; it takes the place name on its own, without the words "current weather" attached.');
         } catch (e) { return fail('Weather lookup failed: ' + e.message); }
       }
 
@@ -575,7 +581,7 @@ function buildTools(ctx) {
       if (!q) return fail('A search query is required.');
       var searchRes = await web_search({ query: q, maxResults: 6, bus: ctx.bus });
       if (!searchRes.ok || !searchRes.result || !searchRes.result.results || !searchRes.result.results.length) {
-        return fail('No results found for "' + q + '".');
+        return fail('No results found for "' + q + '" — every search provider in the chain came back empty. This branch already ran web_search, so calling web_search will not help; say the search found nothing rather than answering from memory.');
       }
       var searchCards = searchRes.result.results.map(function(r) {
         return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
