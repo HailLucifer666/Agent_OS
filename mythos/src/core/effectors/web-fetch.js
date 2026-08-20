@@ -24,7 +24,15 @@ function isPrivateIp(ip) {
     if (parts[0] === 0) return true;                                          // 0.0.0.0
   }
   if (net.isIPv6(ip)) {
-    var v6 = ip.toLowerCase();
+    // Drop the zone id before classifying. net.isIPv6 accepts 'fe80::1%eth0' and
+    // '::1%1', but every check below is a prefix or exact-string match against
+    // the address alone — so '::1%1' matched neither the `=== '::1'` loopback
+    // test nor any prefix, and expandIPv6 rejected the '1%1' group, leaving a
+    // zoned loopback address classified as public. Found 2026-08-20 while
+    // measuring the guard rather than reading it. The zone selects an interface,
+    // never a different host, so removing it cannot make a public address look
+    // private.
+    var v6 = ip.toLowerCase().replace(/%.*$/, '');
     if (v6 === '::1' || v6 === '::') return true;
     if (v6.startsWith('fe80:') || v6.startsWith('fc') || v6.startsWith('fd')) return true;
     // VERIFIED BYPASS, 2026-08-19: http://[::ffff:127.0.0.1]:PORT/ and its
@@ -94,7 +102,20 @@ function isBlockedHostname(hostname) {
 
 async function isInternalUrl(raw) {
   var parsed;
-  try { parsed = new URL(raw); } catch (_) { return false; }
+  // FAIL CLOSED on anything this function cannot read. Until 2026-08-20 this
+  // catch returned false — "not internal" — so an unparseable URL was approved
+  // by the one function whose whole job is refusing. Measured: every IPv6
+  // zone-id form ('http://[fe80::1%25eth0]/' and friends) throws ERR_INVALID_URL
+  // in new URL() and reached this branch.
+  //
+  // No live exploit path existed, and saying so is part of the record: undici
+  // rejects the same input with the same error, so the request died one layer
+  // later. What was broken is the control — a refusal that depended on Node's
+  // URL parser and undici's parser agreeing about every malformed input forever,
+  // with "allow" as the default when they diverge. Failing closed costs nothing:
+  // a URL neither parser accepts cannot be fetched, so nothing legitimate is
+  // refused by this line.
+  try { parsed = new URL(raw); } catch (_) { return true; }
   // Fast-path: blocked hostnames
   if (isBlockedHostname(parsed.hostname)) return true;
   // Fast-path: IP literals in private ranges
@@ -221,19 +242,17 @@ async function web_fetch({ url }) {
   return { ok: false, error: 'Could not fetch content from ' + raw };
 }
 
+// 2026-08-20: this was a weaker near-duplicate of web-search.js's stripTags. It
+// decoded six entities; the search copy also handled numeric (&#8212;) and hex
+// (&#x2014;) references, &apos;, &mdash;/&ndash;, and replaced an unrecognised
+// entity with a space. So the same page produced different text depending on
+// which effector read it — and this path, whose output is handed to the brain as
+// research, was the weaker one. Both now call the one implementation in
+// html-text.js. Kept as a named local so the export below and its call site do
+// not move.
+var stripTags = require('./html-text').stripTags;
 function stripHtml(html) {
-  return String(html)
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return stripTags(html);
 }
 
 // The SSRF predicates are exported under the same _ convention as _stripHtml:

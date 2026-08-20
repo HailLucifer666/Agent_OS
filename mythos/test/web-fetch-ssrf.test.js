@@ -276,3 +276,78 @@ test('the guarded fetcher has exactly one implementation', () => {
   assert.doesNotMatch(src, /r\.jina\.ai/,
     'the Jina fallback belongs to web-fetch.js alone — a second copy here is the duplicate coming back');
 });
+
+// --- 2026-08-20: the guard failed OPEN on a URL it could not parse -----------
+//
+// isInternalUrl began `try { parsed = new URL(raw) } catch (_) { return false }`
+// — an unparseable URL was reported as NOT internal, which is the permissive
+// answer. Measured, not theorised: `new URL('http://[fe80::1%25eth0]/')` throws
+// ERR_INVALID_URL, so every IPv6 zone-id form reached that catch and was
+// approved by the one function whose entire job is refusing.
+//
+// HONEST BOUNDING OF THE RISK, both halves. No live exploit path existed: undici
+// rejects the same input with the same ERR_INVALID_URL, so the request died one
+// layer later and no internal service was reached. What was broken is the
+// control, not the outcome — a security guard whose refusal depended on Node's
+// URL parser and undici's parser continuing to agree about every malformed
+// input, forever, with the permissive branch as the default when they diverge.
+// Fixed by failing closed, which costs nothing: a URL neither parser accepts
+// cannot be fetched anyway, so nothing legitimate is refused.
+//
+// WHAT THIS IS NOT. A measurement of 18 exotic address spellings against the
+// pre-existing guard — decimal (2130706433), hex (0x7f000001), octal
+// (0177.0.0.1), short form (127.1), mixed (0x7f.1), bare 0, 0.0.0.0, IPv4-mapped
+// and IPv4-compatible IPv6, [::], trailing dot, uppercase LOCALHOST, and the
+// public resolver 127.0.0.1.nip.io — found 17 already blocked. The DNS-resolution
+// fallback is what catches them: dns.lookup('2130706433') answers 127.0.0.1, and
+// the resolved address is classified. So the address-classification core was NOT
+// the defect, and replacing it with an IP-parsing library would not have found
+// this one — no such library parses URLs.
+//
+// KNOWN LIMIT, stated rather than implied: the DNS check and the connect are two
+// separate resolutions, so a record whose TTL expires in between can still be
+// re-pointed (classic rebinding). That is not fixable here without owning the
+// socket, and no library closes it either.
+
+test('an unparseable URL is refused, not approved', async () => {
+  // Every one of these throws in new URL(). Before the fix each returned false.
+  const unparseable = [
+    'http://[fe80::1%25eth0]/',   // IPv6 link-local with a zone id
+    'http://[fd00::1%252]/',      // unique-local with a numeric zone
+    'http://[::1%251]/',          // loopback with a zone
+    'http://[:::1]/',             // malformed literal
+  ];
+  for (const url of unparseable) {
+    assert.throws(() => new URL(url), 'fixture is wrong: ' + url + ' parses fine, so it proves nothing');
+    assert.equal(await _isInternalUrl(url), true,
+      url + ' could not be parsed and was approved. A guard that cannot read its ' +
+      'input must refuse it, not wave it through.');
+  }
+});
+
+test('a zone-id address is classified as private once it can be read', () => {
+  // The classification itself was always right — net.isIPv6 accepts a zoned
+  // address and isPrivateIp matches the fe80:/fc/fd prefixes. Pinned so a future
+  // "cleanup" of the prefix checks cannot quietly drop the zoned spelling while
+  // the fail-closed path above hides the regression.
+  for (const ip of ['fe80::1%eth0', 'fe80::1%1', 'fd00::1%2', '::1%1']) {
+    assert.equal(_isPrivateIp(ip), true, ip + ' is a private address with a zone id');
+  }
+});
+
+test('the exotic address spellings stay blocked', async () => {
+  // A regression fence around the measurement above. These are the forms the
+  // remediation plan expected to be bypasses; they are not, and this test is
+  // what makes that true tomorrow as well as today. Offline: every one resolves
+  // through the numeric parser rather than a nameserver.
+  const numeric = [
+    'http://2130706433/', 'http://0x7f000001/', 'http://0177.0.0.1/',
+    'http://127.1/', 'http://0x7f.1/', 'http://0/', 'http://0.0.0.0/',
+    'http://[::1]/', 'http://[::]/', 'http://[::ffff:127.0.0.1]/',
+    'http://[0:0:0:0:0:ffff:7f00:1]/', 'http://[::ffff:169.254.169.254]/',
+    'http://127.0.0.1./', 'http://LOCALHOST/', 'http://169.254.169.254/',
+  ];
+  for (const url of numeric) {
+    assert.equal(await _isInternalUrl(url), true, url + ' reached the network');
+  }
+});

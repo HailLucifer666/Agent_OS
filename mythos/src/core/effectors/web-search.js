@@ -26,27 +26,11 @@ var PROVIDER_TIMEOUT = 10000
 
 // --- helpers (exported for testing) ---
 
-function stripTags(s) {
-  if (!s) return ''
-  return String(s)
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&#(\d+);/g, function(_, n) { return String.fromCharCode(Number(n)) })
-    .replace(/&#[xX]([0-9a-fA-F]+);/g, function(_, hex) { return String.fromCharCode(parseInt(hex, 16)) })
-    .replace(/&apos;/g, "'")
-    .replace(/&mdash;/g, '—')
-    .replace(/&ndash;/g, '–')
-    .replace(/&\w+;/g, ' ')  // replace remaining unknown entities with space
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+// stripTags moved to html-text.js on 2026-08-20. web-fetch.js had a weaker
+// near-duplicate of it, so the same page produced different text depending on
+// which effector read it. Kept as a local alias so every call site below is
+// untouched.
+const { stripTags } = require('./html-text');
 
 // Unwrap a DuckDuckGo redirect URL: //duckduckgo.com/l/?uddg=<encoded>&rut=...
 // Decodes the uddg parameter and returns the real URL, or the original if not a DDG redirect.
