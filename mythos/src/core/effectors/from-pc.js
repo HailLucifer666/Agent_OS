@@ -782,10 +782,19 @@ async function ui_click({ pid, elementPath }) {
   if (elementOracle && elementOracle.name) {
     var moved = 'before ' + JSON.stringify(elementOracle.before) + ', after ' + JSON.stringify(elementOracle.after);
     if (elementOracle.confirmed === true) {
+      // An element that was ALREADY in the target state is a weaker claim than
+      // one that moved into it: the post-condition holds, but this click did not
+      // prove it caused anything. Live-measured on Mouse Properties' first tab
+      // (is-selected true -> true). Said out loud in the evidence rather than
+      // presented as a state change, because the whole point of this oracle is
+      // not overstating what was observed.
+      var note = elementOracle.alreadySelected === true
+        ? ' (it was already selected, so this click changed nothing observable)'
+        : '';
       return evidence.verifiedOk(res, {
         oracle: 'ui-pattern-state',
         expected: elementOracle.name + ' to change',
-        observed: elementOracle.name + ': ' + moved,
+        observed: elementOracle.name + ': ' + moved + note,
       });
     }
     if (elementOracle.confirmed === false) {

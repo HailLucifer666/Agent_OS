@@ -234,3 +234,89 @@ describe('ui_click: the ladder in the PowerShell handler', () => {
     assert.match(body, /\$result\.mechanismsTried/, 'the tried-list convention Handle-UiType already uses');
   });
 });
+
+describe('ui_click: an already-selected element is a weaker claim, and says so', () => {
+  it('names the fact that nothing observable changed', async () => {
+    // Live-measured 2026-08-20 on Mouse Properties' first tab: SelectionItem's
+    // post-condition (IsSelected true afterwards) held while before was ALSO
+    // true, so the click proved nothing. The evidence must not read like a state
+    // change — this oracle exists to avoid overstating what was seen.
+    const child = pcChild({
+      ok: true,
+      result: {
+        clicked: true, invoked: false, mechanism: 'selection-item', path: ['0', '2'],
+        oracle: { name: 'is-selected', before: true, after: true, confirmed: true, alreadySelected: true },
+      },
+    });
+    await withMockedPcChild(child.adapter, async (fromPc) => {
+      const res = await fromPc.ui_click({ pid: PID, elementPath: ['0', '2'] });
+      assert.equal(res.ok, true);
+      assert.equal(res.evidence.oracle, 'ui-pattern-state');
+      assert.match(res.evidence.observed, /already selected/,
+        'evidence must say the element was already in the target state: ' + res.evidence.observed);
+    });
+  });
+
+  it('does not add the caveat when the selection actually moved', async () => {
+    const child = pcChild({
+      ok: true,
+      result: {
+        clicked: true, invoked: false, mechanism: 'selection-item', path: ['0', '3'],
+        oracle: { name: 'is-selected', before: false, after: true, confirmed: true, alreadySelected: false },
+      },
+    });
+    await withMockedPcChild(child.adapter, async (fromPc) => {
+      const res = await fromPc.ui_click({ pid: PID, elementPath: ['0', '3'] });
+      assert.doesNotMatch(res.evidence.observed, /already selected/,
+        'a real selection change must not be hedged: ' + res.evidence.observed);
+    });
+  });
+});
+
+describe('ui_elements reaches a dialog whose host reports no main window', () => {
+  // Live-measured 2026-08-20: Mouse Properties (main.cpl) is hosted by rundll32,
+  // whose MainWindowHandle is 0. list_windows saw the dialog (pid 17136, class
+  // #32770, hwnd 1443112, visible) and ui_elements answered "Process 17136 has no
+  // main window" — so every control-panel applet dialog was unreachable, which is
+  // most of the Windows settings surface that has real checkboxes, radios and
+  // sliders on it. The rejected handle was never used: the lookup is by ProcessId
+  // through UIA.
+  // CODE ONLY — comments stripped. The removal note in this function quotes the
+  // old error string verbatim ("has no main window"), and the first draft of the
+  // assertion below matched that comment and reported the guard as restored. A
+  // scan that counts prose is the same defect as a guard that reads its own
+  // documentation, which is what test/control-field-survival.test.js also had to
+  // strip around.
+  function handleUiElementsBody() {
+    const src = fs.readFileSync(PS_PATH, 'utf8');
+    const start = src.indexOf('function Handle-UiElements');
+    assert.notEqual(start, -1, 'Handle-UiElements not found — fix the extraction, do not delete the assertion');
+    const next = src.indexOf('\nfunction ', start + 10);
+    assert.notEqual(next, -1);
+    return src.slice(start, next)
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  }
+
+  it('does not reject a target on MainWindowHandle', () => {
+    const body = handleUiElementsBody();
+    assert.doesNotMatch(body, /has no main window/,
+      'the MainWindowHandle rejection is back. It blocks every rundll32-hosted ' +
+      'control-panel dialog, and the handle it checks is never used — the lookup ' +
+      'below it is FindFirst(ProcessIdProperty).');
+    assert.doesNotMatch(body, /\$hwnd\s*-eq\s*\[IntPtr\]::Zero/);
+  });
+
+  it('still validates that the process exists, and still finds by ProcessId', () => {
+    // Removing the guard must not remove the real checks around it: a dead pid
+    // has to fail loudly, and a live pid with genuinely no window must still get
+    // the accurate "No UIA window found" answer rather than an empty tree.
+    const body = handleUiElementsBody();
+    assert.match(body, /Get-Process -Id \$TargetPid -ErrorAction Stop/,
+      'a dead pid must still throw rather than return an empty element list');
+    assert.match(body, /ProcessIdProperty/, 'the window is located by ProcessId through UIA');
+    assert.match(body, /No UIA window found for PID/,
+      'a pid that really owns no window must still get an honest answer');
+  });
+});

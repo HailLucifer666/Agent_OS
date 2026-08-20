@@ -1936,11 +1936,34 @@ function Handle-ScreenReadText($TargetPid) {
 function Handle-UiElements($TargetPid, $depth) {
     if (-not $depth) { $depth = 2 }
     try {
-        $proc = Get-Process -Id $TargetPid -ErrorAction Stop
-        $hwnd = $proc.MainWindowHandle
-        if ($hwnd -eq [IntPtr]::Zero) {
-            return ('Process ' + $TargetPid + ' has no main window.')
-        }
+        # The process must exist - that check stays, so a dead pid says so. The
+        # result is deliberately discarded: it is the -ErrorAction Stop throw that
+        # does the work, not the object, and binding it to a variable nothing
+        # reads is what made the removed guard below look load-bearing.
+        $null = Get-Process -Id $TargetPid -ErrorAction Stop
+
+        # 2026-08-20: the MainWindowHandle rejection that used to sit here was
+        # REMOVED. It refused any process whose MainWindowHandle is 0 - but this
+        # function never used that handle. Its actual lookup is
+        # FindFirst(ProcessIdProperty == pid) below, which finds the window
+        # through UIA and does not care what Get-Process thinks the "main" window
+        # is. So the guard rejected targets the code immediately after it handles
+        # correctly.
+        #
+        # MEASURED, live, 2026-08-20: Mouse Properties (main.cpl) is hosted by
+        # rundll32, which reports MainWindowHandle 0. list_windows saw the dialog
+        # fine - pid 17136, class #32770, hwnd 1443112, visible true - and
+        # ui_elements answered "Process 17136 has no main window." That is every
+        # control-panel applet dialog, i.e. most of the Windows settings surface
+        # with real checkboxes, radio buttons and sliders on it, unreachable for
+        # no reason. Found while live-verifying the ui_click pattern ladder, which
+        # could not be tested against a radio button or a slider because of it.
+        #
+        # Nothing is lost by removing it: a pid that genuinely owns no window
+        # falls through to the "No UIA window found for PID" return below, which
+        # is the more accurate message anyway - Get-Process's MainWindowHandle is
+        # a Win32 notion that says nothing about whether UIA can see a window.
+
         # Get the window element from UIA
         $root = [System.Windows.Automation.AutomationElement]::RootElement
         $condition = New-Object System.Windows.Automation.PropertyCondition(
@@ -2073,7 +2096,13 @@ function Handle-UiClick($TargetPid, $elementPath) {
                     Start-Sleep -Milliseconds 120
                     $after = [bool]$selectPattern.Current.IsSelected
                     $mechanism = 'selection-item'
-                    $oracle = @{ name = 'is-selected'; before = $before; after = $after; confirmed = $after }
+                    # alreadySelected is not decoration. Live-measured 2026-08-20
+                    # against Mouse Properties' first tab: before=true, after=true,
+                    # so the post-condition held while the click proved nothing -
+                    # this oracle cannot tell "the selection moved" from "it was
+                    # already there". Reported so the caller can say which it saw
+                    # rather than presenting the weaker case as the stronger one.
+                    $oracle = @{ name = 'is-selected'; before = $before; after = $after; confirmed = $after; alreadySelected = $before }
                 }
             } catch { }
         }

@@ -53,3 +53,26 @@ pointer) — this file adds what's specific to this directory.
 - **DPI awareness**: `ps-automation.ps1` has a DPI-awareness block that must
   stay intact — screen coordinates are wrong without it on any non-100%-scale
   display.
+- **Some control-panel controls APPLY THE MOMENT YOU DRIVE THEM — and the
+  registry is not the oracle for that. Learned the hard way 2026-08-20.**
+  A live probe of `ui_click`'s pattern ladder toggled Mouse Properties'
+  "Switch primary and secondary buttons" checkbox via `TogglePattern.Toggle()`.
+  **The operator's mouse buttons swapped immediately**, with no Apply and no OK.
+  The assumption that "a property sheet commits nothing until Apply/OK" is
+  FALSE for at least that checkbox; the double-click **Speed** slider on the
+  same tab behaved the other way (`RangeValuePattern.SetValue` moved the dialog
+  control and `GetDoubleClickTime()` never changed). So it is per-control, and
+  it cannot be predicted from the dialog.
+  Worse, the verification was wrong in a way that read as reassuring:
+  `HKCU\Control Panel\Mouse\SwapMouseButtons` still said `0` **while the buttons
+  were physically swapped**, because Mouse Properties writes that value on Apply
+  while the live state is set through `SystemParametersInfo`. The registry is the
+  *persisted* value, not the live one.
+  - **Live oracles for mouse state**: `GetSystemMetrics(SM_SWAPBUTTON=23)` and
+    `GetDoubleClickTime()`. Never the registry.
+  - **Restore** with `SystemParametersInfo(SPI_SETMOUSEBUTTONSWAP=0x0021, 0,
+    IntPtr.Zero, SPIF_UPDATEINIFILE|SPIF_SENDCHANGE=3)`.
+  - **Rule for any live desktop probe**: read the live oracle before AND after,
+    restore in a `finally`, and never target a control that changes an input
+    device. Prefer `charmap` — its controls are app-local. A settings dialog is
+    not a safe test fixture just because you never press OK.
