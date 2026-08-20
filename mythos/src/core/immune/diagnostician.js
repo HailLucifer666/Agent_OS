@@ -14,8 +14,16 @@ const SEVERITY = {
   'provider-down':      'major',
   'effector-flapping':  'major',
   'budget-exhausted':   'major',
-  'event-storm':        'major',
-  'tick-overrun':       'minor',
+  // 2026-08-20: 'event-storm' (major) and 'tick-overrun' (minor) were REMOVED,
+  // not corrected. Nothing in src/ or server/ ever emitted either one, so both
+  // rows classified a condition that cannot occur while reading as coverage of
+  // a bus storm and a stalled loop. The real signals are elsewhere and are not
+  // anomalies: the storm guard emits 'perception.coalesced' (bus/index.js:49)
+  // and the only overrun signal is logger.warn('loop.stalled')
+  // (loop-lag.js:51). Deliberately deleted rather than wired — giving either a
+  // severity requires a real emitter AND a healer playbook, which is a feature,
+  // not a table fix. Re-add in the same commit that adds an emitter.
+  // test/anomaly-kind-conformance.test.js now fails on any phantom kind here.
   'memory-growth':      'minor',
   'quota-low':          'minor',
   // reflection.js:215 emits this when reflectOnActions spots a repeated
