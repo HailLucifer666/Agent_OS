@@ -1,9 +1,15 @@
 // goals.js — Goals surface: stat tiles, add-goal row, filter chips, goal list. Full CRUD against /api/goals.
 
+import { subscribe } from '/js/ws.js';
 import { attachMic } from './speech-to-text.js';
 import { h, keyedList } from '../dom.js';
 
 const CATEGORIES = ['General', 'Work', 'Personal', 'Learning', 'Health'];
+
+// Trailing-edge window for coalescing a burst of goal-update broadcasts into a
+// single refetch. Long enough to absorb the four-in-one-second bursts seen in
+// the audited session, short enough that a toggle still looks immediate.
+const GOAL_REFRESH_DEBOUNCE_MS = 150;
 
 let state = {
   goals: [],
@@ -197,4 +203,40 @@ export async function render(mount) {
   });
 
   await load();
+
+  // BUG-290 (2026-08-21): this panel fetched once on open and re-rendered only
+  // after its OWN clicks, so any change made anywhere else never reached it.
+  //
+  // From the operator's logs, 2026-08-20: four voice `toggle_goal` calls at
+  // 19:27:05, all audited ok, all four persisted (Goals.md shows [x] and every
+  // goal JSON reads status:"done"). The panel was open and kept drawing them as
+  // active, so at 19:27:22 the operator filed "completed goals show as active
+  // after successful toggle_goal calls" and then re-did all of them by hand
+  // through the HUD. Nothing was broken behind the panel; the panel just could
+  // not see it.
+  //
+  // The event already existed and was already on the wire: goals/index.js emits
+  // goal.updated, server/index.js collapses the whole goal.* channel into a
+  // broadcast of type "goal-update", and the neural-map canvas has been
+  // listening to it all along. This view simply never subscribed — it was the
+  // only goals surface not wired to the goals event.
+  //
+  // Refetch rather than patch state from the payload: the broadcast carries
+  // {id, status, title} while a row needs {id, text, category, done} and the
+  // tiles need stats. Reconstructing those from a partial payload is a second
+  // source of truth for the same data, which is the bug one layer down.
+  //
+  // Debounced because toggles arrive in bursts — four inside one second in the
+  // audited session, and a batch of goal.* events on boot sync. Trailing edge,
+  // so a burst costs one refetch and the last event still lands.
+  let reloadTimer = null;
+  const unsub = subscribe(['goal-update'], () => {
+    if (reloadTimer) return;
+    reloadTimer = setTimeout(() => { reloadTimer = null; load(); }, GOAL_REFRESH_DEBOUNCE_MS);
+  });
+
+  return () => {
+    if (reloadTimer) { clearTimeout(reloadTimer); reloadTimer = null; }
+    unsub();
+  };
 }
