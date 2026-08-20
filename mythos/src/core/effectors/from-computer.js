@@ -249,15 +249,49 @@ async function open_folder({ path: rawPath }) {
     if (!fs.existsSync(sandboxed.resolved)) return fail(`Folder not found: ${sandboxed.resolved}`);
     let stat;
     try { stat = fs.statSync(sandboxed.resolved); } catch (_) { stat = null; }
-    if (stat && !stat.isDirectory()) {
-      return fail(`That is a file, not a folder: ${sandboxed.resolved}. Use open_artifact for files.`);
-    }
-
-    const child = spawn('explorer.exe', [sandboxed.resolved], { detached: true, stdio: 'ignore' });
+    // BUG-283 (2026-08-20): a file path used to be refused outright, with a
+    // message naming open_artifact. Measured against the audited session: the
+    // model did not take the pointer. open_folder was handed
+    // Desktop\capabilities.txt, got exactly that refusal, and later — asked to
+    // reopen a saved recipe — told the operator "Cannot open that specific file.
+    // System limitation." while open_artifact sat declared in the Live allowlist,
+    // uncalled, for the entire session.
+    //
+    // This is the third time this tool has lost a tool-selection race for this
+    // intent (see the launch_app('explorer.exe "D:\\..."') history above), and
+    // the second time the remedy was prose. Prose lost twice, so the dead end
+    // goes: a file path now REVEALS the file — Explorer opens the containing
+    // folder with the file selected, which is what "open the folder" means when
+    // you are pointed at a file — and the result still names open_artifact for
+    // opening the file itself.
+    //
+    // Deliberately NOT a silent delegation to open_artifact. This tool opens
+    // Explorer; launching a document from something called open_folder would
+    // trade one dishonesty for another. `opened` and `revealed` stay separate
+    // fields for the same reason.
+    const isFile = Boolean(stat && !stat.isDirectory());
+    // `/select,<path>` must be ONE argument — split in two, Explorer quietly
+    // opens the wrong thing and the spawn still succeeds.
+    const spawnArgs = isFile ? [`/select,${sandboxed.resolved}`] : [sandboxed.resolved];
+    const child = spawn('explorer.exe', spawnArgs, { detached: true, stdio: 'ignore' });
     child.unref();
 
-    const leaf = path.basename(sandboxed.resolved);
-    const base = { ok: true, result: { opened: sandboxed.resolved, name: leaf } };
+    // The window that appears is the CONTAINING folder's, so the oracle below
+    // must look for that name, not the file's.
+    const openedPath = isFile ? path.dirname(sandboxed.resolved) : sandboxed.resolved;
+    const leaf = path.basename(openedPath);
+    const base = isFile
+      ? {
+        ok: true,
+        result: {
+          opened: openedPath,
+          name: leaf,
+          revealed: sandboxed.resolved,
+          note: 'That path is a file, so I opened its folder with the file selected. '
+            + 'Call open_artifact on the same path to open the file itself.',
+        },
+      }
+      : { ok: true, result: { opened: sandboxed.resolved, name: leaf } };
 
     // Explorer needs a moment to create and title the window — and a single
     // check after a fixed 700ms was a coin flip on a busy machine, reporting
@@ -690,7 +724,7 @@ async function think_deeply({ question, context }) {
 }
 
 const TOOLS = [
-  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - the folder path to open' }, danger: false, fn: open_folder },
+  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. Given a FILE path it opens that file\'s folder with the file selected — to open the file itself in its app, call open_artifact instead. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - a folder path, or a file path to reveal in its folder' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
   // 2026-08-14 (BUG-219): the description now names the phrasing that should reach
