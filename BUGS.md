@@ -3303,20 +3303,38 @@ introduces a `runForgeStage` kind.
 
 ## 📋 TRACKED — ROADMAP.md D-NN Drift Items (architectural debt)
 
-These are formally tracked in `ROADMAP.md`, not user-facing bugs. 43 open (20 MAJOR + 23 MINOR). Most impactful:
+These are formally tracked in `ROADMAP.md`, not user-facing bugs.
 
-| ID | Severity | Description |
-|---|---|---|
-| D-07 | MAJOR | Graceful 7-step shutdown sequence missing (only hard-exit timer exists) |
-| D-19 | MAJOR | Missing store methods: `consolidate()`, audit `recall()`/`get()` |
-| D-21 | MAJOR | No per-path mutex on fs-store — unlocked read→mutate→write race |
-| D-29 | MAJOR | Providers don't implement canonical interface `{name, chat, isAvailable, getStatus, getModel}` |
-| D-30 | MAJOR | `openrouter.js`, `claude-cli.js` built but never imported — dead code |
-| D-47 | MAJOR | Goal budget field dropped from brain.think() — Brain never learns remaining tokens |
-| D-49 | MAJOR | Goals hardcode budget `tokens:50000, actions:50` instead of reading config |
-| D-51 | MINOR | MAX_ACTIVE_GOALS slices before scoring — high-priority goal created 6th is permanently excluded |
+**`ROADMAP.md` is the source of truth for D-NN status, and no count is written here.**
+Corrected 2026-08-20 — this section previously read "43 open (20 MAJOR + 23 MINOR)" and then
+listed as "most impactful" seven items that `ROADMAP.md` marks ✅ **RESOLVED**: D-07
+(`ROADMAP.md:296`), D-21 (`:335`), D-29 (`:365`), D-30 (`:366`), D-47 (`:425`), D-49
+(`:427`) and D-51 (`:429`). So the one paragraph a reader consults to decide what to work on
+next pointed at seven closed tickets and overstated the backlog. This is the same failure as
+the hand-typed test count that root `CLAUDE.md` removed rather than corrected for a fourth
+time: a number a human types is a number nobody updates, and a stale one in a file read at
+the start of every session misleads more effectively than it informs.
 
-Full list in `ROADMAP.md` lines 396-403.
+Get the real status from the rows themselves:
+
+```bash
+grep -nE "^\| D-[0-9]+ \| (MAJOR|MINOR) \|" ROADMAP.md
+```
+
+A row carrying ✅ **RESOLVED** is closed; one carrying 🔧 **PARTIALLY RESOLVED** is not.
+
+**Measured 2026-08-20, with its limits stated.** That grep finds 39 `D-NN` rows: 10 marked
+RESOLVED, 1 PARTIALLY RESOLVED (D-19), 28 carrying no resolved marker in the row. Treat 28
+as an upper bound on what is open, not a count — several rows are closed in ROADMAP prose
+rather than in the row (`:484` and `:492` retire D-13/D-41/D-48/D-51/D-54 in a paragraph),
+and a scan of row text cannot see that. Reconciling the prose into the rows is worth doing
+and is **not** done here; that is a ROADMAP edit, not a BUGS.md correction.
+
+The one item from the old "most impactful" list that is genuinely still open:
+
+| ID | Severity | Status | What remains |
+|---|---|---|---|
+| D-19 | MAJOR | 🔧 PARTIALLY RESOLVED (`ROADMAP.md:333`) | `memory/skills.js` is now fully spec-compliant, and `audit-writer.js` gained an honest no-op `consolidate()` — but it still exposes `{ write, query, stats, consolidate, init, redact }` with **no `recall()` or `get()`**, so the spec's "all 5 stores implement recall/get" is unmet for the audit store. `query()` stands in their place as a deliberate scope-guard. |
 
 ---
 
