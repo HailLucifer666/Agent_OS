@@ -388,3 +388,107 @@ describe('BUG-294: the daemon must not preempt the news rung on a live question'
       'if not one item can prove its age, the batch cannot prove recency and must be cautioned');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-294 follow-up — the recency window. Shipped after the first round measured
+// the rung answering "Kolkata local news today" with items 85, 52 and 107 days
+// old: Google ranks by relevance, not recency, and "today" in the query text
+// carries no weight with it. The age labels made that honest, but honest and
+// useless is still useless.
+//
+// MEASURED 2026-08-21, three real queries x four windows:
+//
+//   "Kolkata local news today"        (none) 12 items, top 85d ago
+//                                     when:1d 12 items, top 1h ago
+//                                     when:3d 12 items, top 2d ago
+//                                     when:7d 12 items, top 2d ago
+//   "…Durand Cup result today"        (none) 12 items, top 6h ago
+//                                     when:1d 12 items, top 6h ago
+//                                     when:7d 12 items, but 4d-old items admitted
+//   "Bengal panchayat election news"  (none) 12 items, top 26d ago
+//                                     when:1d  2 items, top 6h ago
+//                                     when:7d  5 items, top 2d ago
+//
+// Two things follow, and they are why this is an escalation rather than one
+// constant. A tight window is right for "today" and starves a slower topic (the
+// panchayat query drops from 12 to 2); a loose one re-admits 2-4 day old items
+// into a question that said today. So: ask for 1 day, and widen to 7 only when 1
+// came back empty.
+//
+// AND IT REPAIRS THE SAFETY PROPERTY RATHER THAN WEAKENING IT. The unwindowed
+// endpoint NEVER returns zero — that is why the freshness gate exists at all. A
+// windowed one can, and does (2 items, and 0 for a quiet topic), so the rung can
+// now decline instead of always producing something plausible. The chain then
+// continues, which is the honest outcome.
+//
+// The window is added by the RUNG, never by feedUrl() — the HUD news card must
+// keep asking for exactly what it always asked for.
+// ---------------------------------------------------------------------------
+describe('BUG-294 follow-up: the recency window', () => {
+  afterEach(() => { global.fetch = realFetch; });
+
+  const EMPTY_FEED = '<rss><channel><title>x</title></channel></rss>';
+
+  function stubWindows(byWindow) {
+    const calls = [];
+    global.fetch = async (url) => {
+      const u = String(url);
+      calls.push(u);
+      if (u.includes('news.google.com')) {
+        const key = /when%3A1d|when:1d/.test(u) ? '1d' : (/when%3A7d|when:7d/.test(u) ? '7d' : 'none');
+        const body = byWindow[key];
+        return { ok: true, status: 200, text: async () => (body === undefined ? EMPTY_FEED : body) };
+      }
+      if (u.includes('wikipedia.org')) return { ok: true, json: async () => ({ query: { search: [] } }) };
+      throw new Error('fetch failed');
+    };
+    return calls;
+  }
+
+  it('a freshness-marked query asks for the last day first', async () => {
+    const calls = stubWindows({ '1d': FIXTURE });
+    await search.web_search({ query: 'Kolkata local news today', maxResults: 5 });
+    const news = calls.filter((u) => u.includes('news.google.com'));
+    assert.equal(news.length, 1, 'one request when the tight window answers');
+    assert.match(news[0], /when%3A1d|when:1d/,
+      'without a window Google ranks by relevance and answered "today" with an 85-day-old item');
+  });
+
+  it('an empty day widens to a week, once', async () => {
+    const calls = stubWindows({ '7d': FIXTURE });
+    const res = await search.web_search({ query: 'Bengal panchayat election news', maxResults: 5 });
+    const news = calls.filter((u) => u.includes('news.google.com'));
+    assert.equal(news.length, 2, 'exactly two attempts — tight, then wide, and no further');
+    assert.match(news[1], /when%3A7d|when:7d/);
+    assert.equal(res.result.source, 'google-news-rss');
+  });
+
+  it('a productive day window is NOT widened — assert the mechanism', async () => {
+    // A result-count assertion would pass just as happily with both requests
+    // issued and the second discarded, which is a wasted round-trip on the voice
+    // path's critical latency.
+    const calls = stubWindows({ '1d': FIXTURE, '7d': FIXTURE });
+    await search.web_search({ query: 'Kolkata local news today', maxResults: 5 });
+    assert.deepEqual(calls.filter((u) => /when%3A7d|when:7d/.test(u)), []);
+  });
+
+  it('both windows empty: the rung declines and the chain carries on', async () => {
+    // The repaired safety property. The unwindowed endpoint never returns zero;
+    // a windowed one can, so the rung is now able to have no answer.
+    const calls = stubWindows({});
+    const res = await search.web_search({ query: 'some very quiet topic today', maxResults: 5 });
+    assert.equal(calls.filter((u) => u.includes('news.google.com')).length, 2);
+    assert.ok(calls.some((u) => u.includes('wikipedia.org')), 'the chain must continue past it');
+    assert.equal(res.ok, false);
+    assert.match(res.result, /google-news-rss/, 'and the rung must be named in the tried list');
+  });
+
+  it('the HUD news card never gets a window', () => {
+    // feedUrl is the card's own URL builder. The window belongs to the rung.
+    assert.equal(newsFeed.feedUrl('Kolkata news'), 'https://news.google.com/rss/search?q=Kolkata%20news');
+    assert.equal(newsFeed.feedUrl(), 'https://news.google.com/rss');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'news-feed.js'), 'utf8');
+    assert.equal(src.indexOf('when:'), -1,
+      'the recency window must not leak into the module the HUD card shares');
+  });
+});

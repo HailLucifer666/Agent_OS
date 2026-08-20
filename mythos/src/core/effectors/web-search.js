@@ -72,7 +72,13 @@ function carriesPublicationDates(results) {
 // design — a false positive costs one extra sentence of hedging, a false negative
 // costs a fabricated football score written to a note. Exported as
 // _isTimeSensitive so the list can be argued with in a test rather than guessed at.
-var FRESHNESS_MARKERS = /\b(today|tonight|tomorrow|yesterday|now|current|currently|latest|live|recent|breaking|score|scores|result|results|final|standings|who won|price|prices|weather|forecast|this (?:morning|afternoon|evening|week|month|year))\b|\b20[2-9][0-9]\b/i
+// `news` and `headlines` were missing from the first version of this list and the
+// spec named `news` explicitly. The recency-window test caught it: "Bengal
+// panchayat election news" never entered the rung at all, so a plainly
+// news-shaped question was answered by an encyclopaedia. They are also the two
+// safest possible additions — Correction 6's hazard case ("how to fix a leaking
+// tap") contains neither.
+var FRESHNESS_MARKERS = /\b(news|headlines|today|tonight|tomorrow|yesterday|now|current|currently|latest|live|recent|breaking|score|scores|result|results|final|standings|who won|price|prices|weather|forecast|this (?:morning|afternoon|evening|week|month|year))\b|\b20[2-9][0-9]\b/i
 
 function isTimeSensitive(query) {
   return FRESHNESS_MARKERS.test(String(query || ''))
@@ -114,19 +120,44 @@ var newsFeed = require('../../../server/news-feed')
 // `ago` rides in `snippet` on purpose: it is the freshness signal, it is the one
 // thing that lets the model tell today from last year, and snippet is the field
 // both the model and the HUD result card already read.
+// THE RECENCY WINDOW, and it belongs to the rung rather than to feedUrl() — the
+// HUD news card must keep asking for exactly what it always asked for.
+//
+// Google ranks by relevance, not recency, and the word "today" inside the query
+// text carries no weight with it: the first version of this rung answered
+// "Kolkata local news today" with items 85, 52 and 107 days old. Measured
+// 2026-08-21 across three real queries — 'when:1d' turned that 85d top hit into
+// 1h, while 'when:7d' re-admitted 2-4 day old items into a question that said
+// today. But a tight window starves a slower topic ("Bengal panchayat election
+// news": 12 items unwindowed, 2 at one day, 5 at seven). One constant cannot
+// serve both, so this asks for a day and widens to a week only on an empty day.
+//
+// AND IT REPAIRS THE SAFETY PROPERTY RATHER THAN WEAKENING IT. The UNWINDOWED
+// endpoint never returns zero, which is the entire reason for the freshness gate
+// on this rung. A windowed one can, and does — so the rung is now able to have no
+// answer and let the chain continue, instead of always producing something
+// plausible for a model that fabricates.
+var NEWS_WINDOWS = ['when:1d', 'when:7d']
+
 async function newsRssSearch(q, max, traceBus) {
-  var url = newsFeed.feedUrl(q)
-  var res = await fetch(url, {
-    signal: AbortSignal.timeout(PROVIDER_TIMEOUT),
-    headers: { 'user-agent': BROWSER_UA },
-  })
-  if (!res.ok) {
-    traceBus.emit('health.anomaly', {
-      kind: 'search-provider-failed', provider: 'google-news-rss', error: 'HTTP ' + res.status,
+  var items = []
+  for (var w = 0; w < NEWS_WINDOWS.length; w++) {
+    var res = await fetch(newsFeed.feedUrl(q + ' ' + NEWS_WINDOWS[w]), {
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT),
+      headers: { 'user-agent': BROWSER_UA },
     })
-    return []
+    if (!res.ok) {
+      traceBus.emit('health.anomaly', {
+        kind: 'search-provider-failed', provider: 'google-news-rss', error: 'HTTP ' + res.status,
+      })
+      return []
+    }
+    items = newsFeed.parseRss(await res.text(), Date.now())
+    // Stop at the first window that answers: widening after a productive day is a
+    // wasted round-trip on the voice path's critical latency, and a strictly worse
+    // answer besides.
+    if (items.length) break
   }
-  var items = newsFeed.parseRss(await res.text(), Date.now())
   return items.slice(0, max).map(function(item) {
     // agoLabel() returns '' for a missing or unparseable pubDate. For a rung whose
     // ENTIRE safety property is freshness, an item that silently loses its age is
