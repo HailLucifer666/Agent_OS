@@ -704,22 +704,42 @@ function createLiveToolAdapter(deps) {
           // object is long gone by now. Tool name is all this branch has, which
           // is the other reason NO_CONTENT_TOOLS is keyed on the name.
           //
-          // KNOWN GAP, deliberately not widened here: `entry.ok` is true for an
-          // UNVERIFIED outcome (commitAction is called with ok: ev.ok alongside
-          // unverified: ev.unverified), so an unverified outcome arriving on this
-          // site still gets the neutral default rather than
-          // UNVERIFIED_NO_PROOF_CLAIM. That is a BUG-273 B1 hole in a path
-          // BUG-273 did not enumerate, found while fixing this one. It is left
-          // alone on purpose — closing it belongs to its own ticket with its own
-          // red test, not to a no-content commit.
+          // BUG-297 — the fourth narration site, and BUG-273 B1's "all three
+          // narration paths" never knew it existed. It used to read
+          // `entry.ok ? neutral : NO_SUCCESS_CLAIM`, and `evaluateOutcome`
+          // computes `ok: dispatchOk && !isUnverified` — so `entry.ok` is FALSE
+          // for an UNVERIFIED outcome and this branch told the model the action
+          // DID NOT SUCCEED.
+          //
+          // That is the collapse BUG-273 B2's Q8 forbids in writing: "reporting
+          // that as a failure would make MYTHOS deny things it actually did — its
+          // own kind of lying." ui_type's unverified outcome means the text may
+          // well be sitting in the document; here MYTHOS was told to announce
+          // that it is not. BUG-295's comment on this same block described it as
+          // a fall-through to the neutral default, which was wrong — the red run
+          // of bug-297-late-for-turn-unverified.test.js printed the real notice.
+          //
+          // `unverified` and `confirmedStep` now ride on the entry so this site
+          // can make the same three-way distinction as the other three paths,
+          // rather than inferring it from a flag that cannot carry it.
           const noContent = returnsNoReadableContent(entry.tool);
-          const instruction = entry.ok
-            ? (noContent ? NO_CONTENT_CLAIM : 'Report this to the operator accurately.')
-            : NO_SUCCESS_CLAIM;
+          let instruction;
+          let claim;
+          if (entry.unverified) {
+            instruction = entry.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
+            claim = entry.confirmedStep ? 'unverified-partial' : 'unverified';
+          } else if (!entry.ok) {
+            instruction = NO_SUCCESS_CLAIM;
+            claim = 'failed';
+          } else if (noContent) {
+            instruction = NO_CONTENT_CLAIM;
+            claim = 'ok-no-content';
+          } else {
+            instruction = 'Report this to the operator accurately.';
+            claim = 'ok';
+          }
           sendSystemNotice(entry.summary, instruction, {
-            site: 'late-for-turn',
-            tool: entry.tool || null,
-            claim: entry.ok ? (noContent ? 'ok-no-content' : 'ok') : 'failed',
+            site: 'late-for-turn', tool: entry.tool || null, claim,
           });
         }
         return;
@@ -910,7 +930,11 @@ function createLiveToolAdapter(deps) {
         // `call.args || {}` exactly as isDuplicateSignature computes it — the two
         // must produce the same signature string or the memory never matches.
         noteToolOutcome(call.name, call.args || {}, ev);
-        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, summary });
+        // BUG-297: confirmedStep travels too, so the late-for-turn re-narration can
+        // tell a partial hand-off from a wholly unproven outcome exactly as the other
+        // three paths do.
+        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified,
+          confirmedStep: ev.confirmedStep, summary });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         const reason = sanitize(err);
