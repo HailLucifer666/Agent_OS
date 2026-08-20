@@ -1029,8 +1029,12 @@ the phantom-grep hole for good.
 for either: (1) **were the replies continuous by ear**, especially around those 2 underruns; and
 (2) **when you interrupted, did MYTHOS go quiet and stay quiet** — the one episode that cut ~900ms
 is the only candidate, and a released mic beside continuing speech is this ticket's signature trap.
-Also still unrun: the **plain-Chrome** repeat, and the engine comparison itself — this session used
-**gemini-live only**, so `tts-chain` and `browser-speechSynthesis` were never exercised.
+Also still unrun *at the time of this session*: the **plain-Chrome** repeat, and the engine
+comparison itself — this session used **gemini-live only**, so `tts-chain` and
+`browser-speechSynthesis` were never exercised. **BOTH NOW RUN**, not as a live session but as a controlled acoustic measurement with the RMS
+oracle instead of the transcript one: see **T4 ACOUSTIC PROBE** below. Headline: page audio IS
+cancelled (15-20dB, in Chrome AND Electron), `speechSynthesis` is not cancelled at all, and the
+WebRTC-loopback remedy is unnecessary. It does NOT explain the 0.1193 above — that stays open.
 
 #### T4 STAGE 3 — 🔧 CODED 2026-08-20: `PENDING_HOLD_MS` 350 → 200, because the vetoes were refusing the operator for not lasting, not for being quiet
 
@@ -1178,6 +1182,102 @@ behaviour locked by the guard above. *Recorded here so this is not re-litigated.
 change that removes this trade instead of re-choosing which side to fail on is **T4**: echo
 cancellation is not removing MYTHOS's voice at all (bleed 0.1309 while `micEchoCancellation` reports
 `true`).
+
+#### T4 ACOUSTIC PROBE — 🔬 MEASURED 2026-08-20: AEC removes MYTHOS's page audio by 15-20dB; the one engine it does nothing to is `speechSynthesis`
+
+**This closes the "do first" three-engine measurement, the plain-Chrome repeat, and the Electron
+axis, all three of which the entries above list as still owed.** It also corrects the "do first"
+entry's central claim. That entry says the measurement "cannot be run by a session … there is no way
+to make sound leave a real speaker, cross open air, and land in a real microphone". There is. You
+play a known signal and read the microphone. What could not be run was the measurement *as specified*
+— scored off `live.echo-check`'s transcripts — and the reason is recorded two paragraphs later in
+this same ticket: `echo-filter.js` holds a reference for 3s and the own-voice gate shuts the mic
+while MYTHOS speaks, so a leak must be transcribed during a window in which capture is deliberately
+suppressed. **The oracle was the blocker, not the physics.** Swapping to the RMS oracle the barge-in
+policy already gates on makes it runnable, repeatable, and scorable in about three minutes.
+
+**THE INSTRUMENT.** `mythos/scripts/probe-aec-routes.js` (+ `scripts/aec-probe/probe.html`,
+`scripts/aec-probe/electron-main.js`). It serves its page alongside the **real** `ui/public/js`, so
+it imports `pcm-capture-worklet.js` and `barge-in-backstop.js`'s `rmsFromPcm16` and builds the
+capture graph `s2s-bridge.js:1197-1204` builds. The number it prints is computed by the code that
+computes `bleedPeak`; a reimplemented RMS would not be comparable to 0.1193. Plays a deterministic
+speech-shaped signal (band-limited 300-3400Hz, 4Hz syllable envelope, seeded, normalised to source
+RMS 0.20) through each route in turn, then repeats every route with `echoCancellation:false`.
+
+**THE RESULTS.** 4 runs, 1 Chrome 151 + 3 Electron 43.3.0, same room, same signal. Reductions are
+floor-subtracted and each route is compared only against **itself** with AEC off, so source level
+cannot masquerade as cancellation:
+
+| route | what uses it in MYTHOS | Chrome | Electron |
+|---|---|---|---|
+| `AudioContext` -> destination | Gemini Live, via `pcm-player.js` | >=13.4dB | >=14.7 / >=20.4dB |
+| `<audio>` element | the TTS chain's MP3 | >=7.8dB | >=10.0 / 14.7dB |
+| `RTCPeerConnection` loopback | the proposed remedy | >=13.3dB | >=12.6 / >=18.5dB |
+| **`speechSynthesis`** | **the fallback when `audioB64` is null** | **-1.1dB** | **-1.2 / -1.5dB** |
+
+**THREE HYPOTHESES REFUTED, one of them this ticket's own prime suspect inverted.**
+
+1. **"Chrome's AEC reference contains only WebRTC peer-connection audio"** (recorded above as
+   unsubstantiated, and correctly so) — **refuted**. Ordinary page audio is cancelled as well as, and
+   on both environments slightly better than, the WebRTC loopback route. The loopback spike buys
+   nothing and should not be built.
+2. **"Electron's AEC is inert where Chrome's works"** ([electron#47043](https://github.com/electron/electron/issues/47043))
+   — **does not reproduce** on Electron 43.3.0 x64. It cancels the same 15-20dB Chrome does. The
+   issue is real upstream but was reported on Windows 11 ARM64; this is not that machine.
+3. **The plan's suspect was that `speechSynthesis` is rendered outside the page audio graph "where
+   AEC cannot reach it".** The *conclusion* is confirmed and the *reasoning* needs no browser
+   internals: with all processing off, `speechSynthesis` has the **lowest** raw acoustic coupling of
+   the four routes (0.0163-0.0197 against 0.0184-0.0584). It leaks while being the quietest thing in
+   the room, so this is not a level artefact. **Routing difference, not capability gap.**
+
+**WHAT THIS DOES NOT EXPLAIN, stated plainly because the temptation is to call T4 closed.** The
+2026-08-20 live session's **0.1193 bleed peak is still unexplained.** This probe measures one room at
+one playback level with one signal; its absolute numbers are **not** interchangeable with a live
+`bleedPeak`. Remaining candidates, none of them eliminated: real Gemini Live playback louder than
+0.20 source RMS; `bleedPeak` counting operator speech as well as bleed; or a `speechSynthesis`
+fallback firing in that session and being attributed to `gemini-live` (the session is recorded as
+"gemini-live only", but `tts.spoke`'s `engine` field was added in the same 2026-08-20 window, so
+that attribution is worth re-reading before it is trusted).
+
+**THE BLEED-FLOOR REVISIT TRIGGER IS *NOT* FIRED.** Stage 5's record above sets it as "if bleed ever
+measures *below* ~0.04 (i.e. echo cancellation starts working), the remedy becomes valid again". This
+probe measures 0.0017-0.0141 on the route MYTHOS uses — which looks exactly like that trigger, and
+**is not it.** The trigger is about bleed in a *live session at MYTHOS's own playback level*; a probe
+reading at a level nobody has matched to production cannot satisfy it. Do not raise
+`INITIAL_BLEED_FLOOR` on the strength of this entry. Recorded so the next session does not read the
+table above and act on it.
+
+**WHAT IS ACTIONABLE, and deliberately NOT done here** (this entry is a measurement): MYTHOS falls
+back to `speechSynthesis` client-side when `audioB64` arrives null, and browser AEC cannot touch that
+audio. While the mic is live, that fallback makes MYTHOS hear itself, and no threshold change fixes
+it. The two candidate remedies are to not use that fallback while capture is open, or to hold the
+own-voice gate for its full duration. Both are behaviour changes and need their own entry.
+
+**Testing.** `test/aec-route-probe-scoring.test.js` (13 tests) pins the scoring arithmetic against
+real measured frames from these runs: power-domain aggregation, the quieter-of-two floor plus its
+disagreement report, the SNR validity gate, and the below-floor case reporting a **bound** rather than
+a value. Every one of those was mutation-proven — 5 mutations, each failing 1-3 specific tests, file
+restored byte-identical.
+
+**WHAT CI STRUCTURALLY CANNOT CATCH, and no green run should be read as covering.** That the page
+opens the mic; that the worklet yields frames; that any route reaches the speakers; that Chrome or
+Electron are still launchable; that the operator's speakers are not muted or on headphones. Only a
+room does that. The probe's own defence is the **validity gate**: a route whose AEC-off reference is
+under +6dB over the room floor is reported `UNDER-DRIVEN`, and a run where nothing is driven verdicts
+`INVALID` with the words "a clean sweep here is NOT evidence of working cancellation". That gate is
+not decoration — **run 1 of this probe hit it**, because the signal was ~20dB below the OS voice, and
+without it the run would have printed as perfect cancellation on every page route.
+
+**Two of my own errors, both caught by the design rather than by luck.** Run 1 was under-driven as
+above. Run 2 turned `echoCancellation` + `noiseSuppression` + `autoGainControl` off *together*, so
+AGC and AEC were conflated and `speechSynthesis` read **louder with AEC on** (0.0587) than with it off
+(0.0143) — arithmetically impossible as an echo result, and entirely explained by AGC boosting a
+quiet source. Pass 2 now moves one flag; the all-off reading survives as its own third pass, where it
+belongs. Also worth recording: two Electron runs appeared to disagree by 15dB on the AudioContext
+route (0.0125/peak 0.0788 vs 0.0017/peak 0.0069). They did not disagree about anything. **An AEC-on
+reading at or below the room floor has no value, only a bound** — and the noisier run's own silence
+windows differed by 9dB, with a later run drifting 12.4dB mid-pass while the operator was at the
+keyboard. The report now prints that warning itself.
 
 #### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
 
@@ -2254,7 +2354,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.** **T4 step 4 FIXED, and the two corrections it forced: (1) the eager tier reopened the microphone without stopping playback, so step 2's "first interruption landed" was the operator's own complaint logged as a success — the verifier now prints `0 stopped playback, 1 reopened the mic ONLY` against that very log; (2) a local `player.flush()` cannot stop a turn the server is still streaming, and `voice.live.interrupted` appears ZERO times in the whole session, so Gemini's VAD never cut a single turn. Arriving audio is now dropped for the rest of the interrupted turn, ended by `live-turn-complete` — a frame the server has always broadcast and nothing in the HUD read. No threshold changed; the planned Stage 2/3 widenings were deliberately NOT shipped. Suite 5207/5207. STILL OWED: one live session — the operator's ear is the only oracle.**
+Last updated: 2026-08-20 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.** **T4 step 4 FIXED, and the two corrections it forced: (1) the eager tier reopened the microphone without stopping playback, so step 2's "first interruption landed" was the operator's own complaint logged as a success — the verifier now prints `0 stopped playback, 1 reopened the mic ONLY` against that very log; (2) a local `player.flush()` cannot stop a turn the server is still streaming, and `voice.live.interrupted` appears ZERO times in the whole session, so Gemini's VAD never cut a single turn. Arriving audio is now dropped for the rest of the interrupted turn, ended by `live-turn-complete` — a frame the server has always broadcast and nothing in the HUD read. No threshold changed; the planned Stage 2/3 widenings were deliberately NOT shipped. Suite 5207/5207. STILL OWED: one live session — the operator's ear is the only oracle.** **T4 ACOUSTIC PROBE MEASURED 2026-08-20 (`scripts/probe-aec-routes.js`): browser AEC removes MYTHOS page audio by 15-20dB on BOTH the AudioContext (gemini-live) and `<audio>` (tts-chain) routes, in Chrome 151 AND Electron 43.3.0 — so electron#47043 does not reproduce here and the WebRTC-loopback remedy is unnecessary. The one route AEC does nothing to is `speechSynthesis` (-1.1 to -1.5dB), which is the client-side fallback when `audioB64` is null, and it leaks while having the LOWEST raw acoustic coupling of the four routes. Verdict: ROUTING DIFFERENCE, not capability gap. This does NOT explain the live 0.1193 bleed peak and does NOT fire the bleed-floor revisit trigger — probe levels are not live levels. The transcript oracle could never have answered this; the RMS oracle can.**
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are

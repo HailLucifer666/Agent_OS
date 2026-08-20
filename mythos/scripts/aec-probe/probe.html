@@ -1,0 +1,290 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AEC route probe</title>
+<style>body{font:13px/1.5 monospace;background:#111;color:#ddd;padding:16px}
+pre{white-space:pre-wrap}</style>
+<h3>MYTHOS AEC route probe</h3>
+<pre id="log">starting…</pre>
+<script type="module">
+// AEC ROUTE PROBE — BUG-274 T4 / plan §5.1 Phase 0.
+//
+// WHAT THIS MEASURES. MYTHOS's barge-in policy gates on the RMS of 100ms mic
+// frames while the assistant speaks ("bleed"). The 2026-08-20 session measured
+// bleed peaking at 0.1193 against a 0.035 floor while micEchoCancellation
+// reported true. Two hypotheses were left open: that Chrome's AEC reference
+// contains only WebRTC peer-connection audio (so none of MYTHOS's three engines
+// is cancellable), and that Electron's AEC is inert where Chrome's works
+// (electron#47043). The transcript oracle could not answer either — echo-filter
+// holds a reference for 3s and the own-voice gate shuts the mic while MYTHOS
+// speaks — so this uses the RMS oracle with a fixed deterministic signal.
+//
+// WHY IT IMPORTS FROM /js/. rmsFromPcm16 and pcm-capture-worklet.js are the
+// production files. A reimplemented RMS would not be comparable to 0.1193.
+//
+// EVERY ROUTE GETS ITS OWN AEC-OFF REFERENCE, and that is what makes this
+// scorable. Run 1 of this probe played its buffer routes ~20dB below the OS
+// TTS voice, so speech-synthesis "leaked" and the others did not — which is
+// indistinguishable from a level difference. Comparing each route only against
+// ITSELF with echoCancellation:false removes source level from the question
+// entirely: what is reported per route is a reduction ratio, not a level.
+//
+// THE POSITIVE CONTROL IS STILL THE WHOLE DESIGN. Headphones, muted speakers or
+// a mic on another device produce near-zero everywhere, which reads exactly like
+// perfect cancellation — this ticket's recorded trap. A route whose AEC-off
+// reference is not clearly above the room floor is scored UNDER-DRIVEN, not
+// "cancelled". Scoring lives in score.js; this page only collects frames.
+import { buildAudioConstraints, trackSettingsOf } from '/js/voice/mic-device.js';
+import { rmsFromPcm16 } from '/js/voice/barge-in-backstop.js';
+
+const ENV = new URL(location.href).searchParams.get('env') || 'unknown';
+const logEl = document.getElementById('log');
+const lines = [];
+function log(s) {
+  lines.push(s);
+  logEl.textContent = lines.join('\n');
+  fetch('/log', { method: 'POST', body: ENV + ': ' + s }).catch(() => {});
+}
+
+const WARMUP_MS = 2500;   // AGC/AEC ramp after the stream opens; run 1 measured into it
+const SETTLE_MS = 1200;   // AEC3 re-adapts after a route change
+const MEASURE_MS = 5000;  // 50 frames at the production 100ms frame
+const TARGET_RMS = 0.20;  // source RMS the buffer routes are normalised to (~-14dBFS)
+
+// ---------------------------------------------------------------------------
+// The signal. Speech-shaped: white noise band-limited roughly 300-3400Hz by a
+// one-pole high-pass and low-pass, amplitude-modulated at 4Hz to mimic
+// syllables, then NORMALISED TO A KNOWN RMS. Deterministic (seeded LCG) so
+// Chrome and Electron, pass 1 and pass 2, all play a byte-identical waveform.
+function buildSignal(ctx, seconds) {
+  const rate = ctx.sampleRate;
+  const n = Math.floor(rate * seconds);
+  const buf = ctx.createBuffer(1, n, rate);
+  const d = buf.getChannelData(0);
+  let seed = 20260820;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return (seed / 0x7fffffff) * 2 - 1; };
+  const aHP = Math.exp(-2 * Math.PI * 300 / rate);
+  const aLP = Math.exp(-2 * Math.PI * 3400 / rate);
+  let hp = 0, lp = 0, prev = 0;
+  for (let i = 0; i < n; i++) {
+    const x = rnd();
+    hp = aHP * (hp + x - prev); prev = x;
+    lp = lp + (1 - aLP) * (hp - lp);
+    const env = 0.35 + 0.65 * Math.pow(0.5 + 0.5 * Math.sin(2 * Math.PI * 4 * i / rate), 2);
+    d[i] = lp * env;
+  }
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += d[i] * d[i];
+  const rms = Math.sqrt(sum / n) || 1e-9;
+  const k = TARGET_RMS / rms;
+  let peak = 0;
+  for (let i = 0; i < n; i++) { d[i] = Math.max(-1, Math.min(1, d[i] * k)); peak = Math.max(peak, Math.abs(d[i])); }
+  return { buf, sourceRms: TARGET_RMS, sourcePeak: +peak.toFixed(3) };
+}
+
+function toWav(buf) {
+  const n = buf.length, rate = buf.sampleRate;
+  const src = buf.getChannelData(0);
+  const out = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(out);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 2, true);
+  const pcm = new Int16Array(out, 44);
+  for (let i = 0; i < n; i++) pcm[i] = Math.max(-32768, Math.min(32767, Math.round(src[i] * 32767)));
+  return new Blob([out], { type: 'audio/wav' });
+}
+
+// ---------------------------------------------------------------------------
+// Capture. Exactly s2s-bridge.js:1197-1204's graph — source -> pcm-capture
+// worklet -> muted gain -> destination. The worklet is not pulled without a path
+// to the destination, and the gain must be 0 or the mic feeds the speakers.
+async function openCapture(ctx, stream, onFrame) {
+  const source = ctx.createMediaStreamSource(stream);
+  await ctx.audioWorklet.addModule('/js/voice/pcm-capture-worklet.js');
+  const node = new AudioWorkletNode(ctx, 'pcm-capture', {
+    processorOptions: { targetRate: 16000, frameMs: 100 },
+  });
+  node.port.onmessage = (e) => onFrame(rmsFromPcm16(e.data));
+  const muted = ctx.createGain();
+  muted.gain.value = 0;
+  source.connect(node); node.connect(muted); muted.connect(ctx.destination);
+  return () => { try { source.disconnect(); node.disconnect(); muted.disconnect(); } catch (_) {} };
+}
+
+// ---------------------------------------------------------------------------
+// Playback routes. The route is the independent variable; the buffer is
+// identical in all three buffer-fed routes and its gain is 1 (the buffer is
+// already normalised), so nothing between here and the speakers differs except
+// the route itself.
+function routeAudioContext(ctx, buf) {
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  src.connect(ctx.destination); src.start();
+  return () => { try { src.stop(); src.disconnect(); } catch (_) {} };
+}
+
+function routeAudioElement(wavUrl) {
+  const el = new Audio(wavUrl);
+  el.loop = true; el.volume = 1;
+  const p = el.play();
+  if (p && p.catch) p.catch((e) => log('  audio-element play() rejected: ' + e.name));
+  return () => { try { el.pause(); el.src = ''; } catch (_) {} };
+}
+
+function routeSpeechSynthesis() {
+  const text = 'This is the MYTHOS echo cancellation route probe. '
+    + 'The assistant is speaking continuously so the microphone can measure how much of '
+    + 'this voice returns through the room while echo cancellation is active. ';
+  let stopped = false;
+  const speak = () => {
+    if (stopped) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.onend = speak;
+    speechSynthesis.speak(u);
+  };
+  speak();
+  return () => { stopped = true; try { speechSynthesis.cancel(); } catch (_) {} };
+}
+
+// The spike: the same buffer out to the speakers through a local
+// RTCPeerConnection, so the playout IS peer-connection audio. If Chrome's AEC
+// reference only contains WebRTC audio, this is the one route that cancels.
+async function routeRtcLoopback(ctx, buf) {
+  const src = ctx.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  const dest = ctx.createMediaStreamDestination();
+  src.connect(dest); src.start();
+  const pc1 = new RTCPeerConnection();
+  const pc2 = new RTCPeerConnection();
+  pc1.onicecandidate = (e) => e.candidate && pc2.addIceCandidate(e.candidate);
+  pc2.onicecandidate = (e) => e.candidate && pc1.addIceCandidate(e.candidate);
+  const el = new Audio();
+  el.volume = 1;
+  const playing = new Promise((resolve) => {
+    pc2.ontrack = (e) => {
+      el.srcObject = e.streams[0];
+      const p = el.play();
+      if (p && p.catch) p.catch((err) => log('  rtc play() rejected: ' + err.name));
+      resolve();
+    };
+  });
+  pc1.addTrack(dest.stream.getAudioTracks()[0], dest.stream);
+  const offer = await pc1.createOffer();
+  await pc1.setLocalDescription(offer);
+  await pc2.setRemoteDescription(offer);
+  const answer = await pc2.createAnswer();
+  await pc2.setLocalDescription(answer);
+  await pc1.setRemoteDescription(answer);
+  await Promise.race([playing, new Promise((r) => setTimeout(r, 4000))]);
+  return () => {
+    try { el.pause(); el.srcObject = null; src.stop(); src.disconnect(); pc1.close(); pc2.close(); } catch (_) {}
+  };
+}
+
+// ---------------------------------------------------------------------------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function runPass(label, base, conditions, out) {
+  log('');
+  log('=== pass ' + label + ' — getUserMedia ' + JSON.stringify(base));
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(null, base));
+  } catch (e) {
+    log('  getUserMedia FAILED: ' + e.name + ' ' + e.message);
+    out.passes[label] = { error: e.name + ': ' + e.message };
+    return;
+  }
+  const granted = trackSettingsOf(stream);
+  log('  granted: ' + JSON.stringify(granted));
+
+  const ctx = new AudioContext();
+  if (ctx.state !== 'running') { try { await ctx.resume(); } catch (_) {} }
+  const sig = buildSignal(ctx, 5);
+  const wavUrl = URL.createObjectURL(toWav(sig.buf));
+  log('  AudioContext ' + ctx.state + ' @' + ctx.sampleRate + 'Hz — source rms '
+    + sig.sourceRms + ' peak ' + sig.sourcePeak);
+
+  let collecting = null;
+  const stopCapture = await openCapture(ctx, stream, (rms) => { if (collecting) collecting.push(rms); });
+  await sleep(WARMUP_MS); // discarded: AGC/AEC ramp
+
+  const results = {};
+  for (const name of conditions) {
+    const route = name.replace(/^silence-.*/, 'silence').replace(/-2$/, '');
+    let stop = () => {};
+    if (route === 'audiocontext') stop = routeAudioContext(ctx, sig.buf);
+    else if (route === 'audio-element') stop = routeAudioElement(wavUrl);
+    else if (route === 'speech-synthesis') {
+      if (!window.speechSynthesis) {
+        results[name] = { unavailable: 'no speechSynthesis' };
+        log('  ' + name.padEnd(17) + ' UNAVAILABLE');
+        continue;
+      }
+      stop = routeSpeechSynthesis();
+    } else if (route === 'rtc-loopback') stop = await routeRtcLoopback(ctx, sig.buf);
+
+    await sleep(SETTLE_MS);
+    collecting = [];
+    await sleep(MEASURE_MS);
+    const frames = collecting; collecting = null;
+    stop();
+    await sleep(700); // let the room and the canceller settle before the next cell
+    results[name] = { frames: frames.map((x) => +x.toFixed(5)) };
+    const mean = Math.sqrt(frames.reduce((t, x) => t + x * x, 0) / (frames.length || 1));
+    log('  ' + name.padEnd(17) + ' n=' + frames.length + ' rmsMean=' + mean.toFixed(4)
+      + ' peak=' + Math.max(0, ...frames).toFixed(4));
+  }
+
+  stopCapture();
+  stream.getTracks().forEach((t) => t.stop());
+  const rate = ctx.sampleRate;
+  try { await ctx.close(); } catch (_) {}
+  URL.revokeObjectURL(wavUrl);
+  out.passes[label] = { requested: base, granted, sampleRate: rate, source: { rms: sig.sourceRms, peak: sig.sourcePeak }, conditions: results };
+}
+
+// Silence is measured at both ends of each pass: one floor reading can be
+// polluted by a single transient (run 1's was) and two disagreeing readings say
+// so instead of hiding it.
+// audiocontext is measured TWICE — first position and last — at the same settle.
+// Two Electron samples disagreed by ~15dB on this one route, and it is always the
+// first playback cell after silence, so AEC3 convergence and Electron are
+// confounded. If first-position is consistently the worse of the pair, the settle
+// is too short and there is no Electron defect to chase.
+const ORDER = ['silence-pre', 'audiocontext', 'audio-element', 'speech-synthesis', 'rtc-loopback', 'audiocontext-2', 'silence-post'];
+
+(async () => {
+  const out = { env: ENV, ua: navigator.userAgent, startedAt: new Date().toISOString(), passes: {} };
+  lines.length = 0;
+  log('env=' + ENV);
+  log('ua=' + navigator.userAgent);
+
+  // Pass 1: MYTHOS's production constraints. Pass 2: the uncancelled reference
+  // for the SAME routes. Sequential, not two simultaneous streams — Chrome may
+  // share one processed capture session between two streams on one device,
+  // which would silently make pass 2 a copy of pass 1.
+  //
+  // PASS 2 CHANGES ONE FLAG. Run 2 of this probe turned echoCancellation,
+  // noiseSuppression and autoGainControl off together and produced an
+  // impossible reading: speech-synthesis came back LOUDER with AEC on (0.0587)
+  // than with it off (0.0143). That is AGC — the OS voice is quiet at source, so
+  // with autoGainControl on the residue gets amplified, and with it off the
+  // whole capture sits lower. Two variables moved and the arithmetic silently
+  // attributed both to AEC. Pass 3 keeps the all-off reading, but as its own
+  // cell rather than as the AEC reference.
+  await runPass('aec-on', {}, ORDER, out);
+  await runPass('aec-off', { echoCancellation: false }, ORDER, out);
+  await runPass('raw', { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, ORDER, out);
+
+  out.finishedAt = new Date().toISOString();
+  await fetch('/result?env=' + encodeURIComponent(ENV), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(out),
+  }).catch((e) => log('POST /result failed: ' + e.message));
+  log('');
+  log('DONE — results posted.');
+})();
+</script>
