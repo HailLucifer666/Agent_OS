@@ -12,93 +12,15 @@ var MAX_CHARS = 4000;
 
 // --- SSRF protection --------------------------------------------------------
 // Block requests targeting private/internal/loopback/metadata networks.
-
-function isPrivateIp(ip) {
-  if (net.isIPv4(ip)) {
-    var parts = ip.split('.').map(Number);
-    if (parts[0] === 127) return true;                                        // 127.0.0.0/8
-    if (parts[0] === 10) return true;                                         // 10.0.0.0/8
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;   // 172.16.0.0/12
-    if (parts[0] === 192 && parts[1] === 168) return true;                    // 192.168.0.0/16
-    if (parts[0] === 169 && parts[1] === 254) return true;                    // 169.254.0.0/16 (link-local / cloud metadata)
-    if (parts[0] === 0) return true;                                          // 0.0.0.0
-  }
-  if (net.isIPv6(ip)) {
-    // Drop the zone id before classifying. net.isIPv6 accepts 'fe80::1%eth0' and
-    // '::1%1', but every check below is a prefix or exact-string match against
-    // the address alone — so '::1%1' matched neither the `=== '::1'` loopback
-    // test nor any prefix, and expandIPv6 rejected the '1%1' group, leaving a
-    // zoned loopback address classified as public. Found 2026-08-20 while
-    // measuring the guard rather than reading it. The zone selects an interface,
-    // never a different host, so removing it cannot make a public address look
-    // private.
-    var v6 = ip.toLowerCase().replace(/%.*$/, '');
-    if (v6 === '::1' || v6 === '::') return true;
-    if (v6.startsWith('fe80:') || v6.startsWith('fc') || v6.startsWith('fd')) return true;
-    // VERIFIED BYPASS, 2026-08-19: http://[::ffff:127.0.0.1]:PORT/ and its
-    // hex spelling http://[0:0:0:0:0:ffff:7f00:1]/ both passed every check
-    // above and fetched real content off a loopback service. None of the
-    // prefixes match, and net.isIPv4() is false for a bracketed literal, so
-    // the address reached fetch() unexamined. Unwrap to the IPv4 address the
-    // network stack will actually dial, and ask the same question again.
-    var embedded = embeddedIPv4(v6);
-    if (embedded) return isPrivateIp(embedded);
-  }
-  return false;
-}
-
-// Expand an IPv6 literal to its eight 16-bit groups, or null if it is not one.
-// Handles :: elision and a trailing dotted quad. Deliberately not a regex over
-// the whole address: the point is to end up with the same 128 bits the stack
-// will use, not to recognise a spelling.
-function expandIPv6(v6) {
-  var s = String(v6).toLowerCase();
-  var dotted = s.match(/^(.*:)((?:[0-9]{1,3}[.]){3}[0-9]{1,3})$/);
-  if (dotted) {
-    if (!net.isIPv4(dotted[2])) return null;
-    var b = dotted[2].split(".").map(Number);
-    s = dotted[1] + (((b[0] << 8) | b[1]) >>> 0).toString(16) + ":" + (((b[2] << 8) | b[3]) >>> 0).toString(16);
-  }
-  var halves = s.split("::");
-  if (halves.length > 2) return null;
-  var left = halves[0] ? halves[0].split(":").filter(Boolean) : [];
-  var right = halves.length === 2 && halves[1] ? halves[1].split(":").filter(Boolean) : [];
-  var groups;
-  if (halves.length === 1) {
-    if (left.length !== 8) return null;
-    groups = left;
-  } else {
-    var fill = 8 - left.length - right.length;
-    if (fill < 0) return null;
-    groups = left.concat(new Array(fill).fill("0"), right);
-    if (groups.length !== 8) return null;
-  }
-  var out = [];
-  for (var i = 0; i < 8; i++) {
-    if (!/^[0-9a-f]{1,4}$/.test(groups[i])) return null;
-    out.push(parseInt(groups[i], 16));
-  }
-  return out;
-}
-
-// The IPv4 address embedded in an IPv4-mapped (::ffff:a.b.c.d) or
-// IPv4-compatible (::a.b.c.d) IPv6 literal, in dotted form, else null.
-function embeddedIPv4(v6) {
-  var g = expandIPv6(v6);
-  if (!g) return null;
-  for (var i = 0; i < 5; i++) if (g[i] !== 0) return null;
-  if (g[5] !== 0 && g[5] !== 0xffff) return null;
-  return [(g[6] >> 8) & 255, g[6] & 255, (g[7] >> 8) & 255, g[7] & 255].join(".");
-}
-
-function isBlockedHostname(hostname) {
-  var h = hostname.toLowerCase();
-  if (h === 'localhost' || h === 'local' || h.endsWith('.local')) return true;
-  if (h === '[::1]' || h === '::1') return true;
-  // Cloud metadata endpoints
-  if (h === '169.254.169.254' || h === 'metadata.google.internal') return true;
-  return false;
-}
+//
+// The classifier moved to net-address.js on 2026-08-20. It had grown a second,
+// weaker near-duplicate in web-search.js (BUG-280 added a four-entry
+// exact-match loopback list), which is the same reason stripTags moved to
+// html-text.js. Two implementations of one invariant always agree on the day
+// they are written and diverge silently afterwards. The local aliases below
+// keep every call site in this file — and its whole test suite — unchanged.
+const { isPrivateAddress, isBlockedHostname, embeddedIPv4 } = require('./net-address');
+const isPrivateIp = isPrivateAddress;
 
 async function isInternalUrl(raw) {
   var parsed;

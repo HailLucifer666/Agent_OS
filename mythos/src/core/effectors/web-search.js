@@ -44,7 +44,17 @@ var PROVIDER_TIMEOUT = 10000
 // default that quietly 404s makes a broken install look like "no results".
 var WEB_SEARCH_LOCAL_URL_DEFAULT = 'http://127.0.0.1:3100'
 var WEB_SEARCH_ENGINES_DEFAULT = 'startpage'
-var LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1', '[::1]']
+
+// The loopback test is the SHARED classifier, not a list local to this file.
+// This rung originally carried its own four-entry exact-match array while
+// web-fetch.js already held a full one — IPv6 expansion, IPv4-mapped-IPv6
+// unwrapping, zone-id stripping, two recorded bypasses closed. That is one
+// invariant with two implementations, which is the defect class this repo hits
+// most often. Note the POLICY here is the inverse of web-fetch's: that one
+// refuses private addresses, this one REQUIRES loopback, and 'private' is
+// strictly larger than 'loopback' — so they share the classification and keep
+// their own policies. See net-address.js.
+var isLoopbackHost = require('./net-address').isLoopbackHost
 
 function localSearchBase() {
   return String(process.env.WEB_SEARCH_LOCAL_URL || WEB_SEARCH_LOCAL_URL_DEFAULT).trim()
@@ -61,7 +71,7 @@ function resolveLocalSearchUrl() {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL must be http or https, got ' + parsed.protocol }
   }
-  if (LOOPBACK_HOSTS.indexOf(parsed.hostname) === -1) {
+  if (!isLoopbackHost(parsed.hostname)) {
     return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL must point at loopback (127.0.0.1 or localhost), got "' + parsed.hostname + '"' }
   }
   return { ok: true, url: parsed.origin + '/search' }
