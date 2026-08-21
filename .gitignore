@@ -18,6 +18,16 @@ _devtools/
 # Leading slash pins this to the repo root (see the /design/ note above for why).
 /Hermes Agent/
 
+# DeepSeek Harness (deepseek-ai/deepseek-harness, MIT) — the build engine that
+# REPLACES Hermes-Agent above, per W6 in mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md.
+# Same convention as /Hermes Agent/: a third-party npm tree never belongs in git,
+# and contributors install their own copy. dsh pulls 30+ @deepseek-ai/* packages,
+# so this is deliberately its OWN install root rather than a dependency of
+# mythos/package.json — adding it there forced npm to re-resolve mythos's whole
+# 191-package tree, which ran >25 minutes without extracting a single file.
+# W6 step 1 creates this by hand; step 4's setup-dsh.js takes it over.
+/DeepSeek Harness/
+
 # Android platform-tools (Google, Apache 2.0) — the ADB bridge's `adb`
 # binary, installed project-local via mythos/scripts/setup-android.js
 # --install. Same convention as /Hermes Agent/ above: a third-party tool

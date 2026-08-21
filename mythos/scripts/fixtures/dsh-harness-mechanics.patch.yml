@@ -1,0 +1,69 @@
+# W6 step 1 — HARNESS-MECHANICS overlay. Added 2026-08-21.
+#
+# READ THIS BEFORE QUOTING ANY NUMBER PRODUCED WITH IT.
+#
+# This overlay does NOT measure DeepSeek. It routes dsh at Mistral, the provider
+# Hermes is already driving on this machine, for one purpose: to answer the
+# questions that are about dsh's MACHINERY rather than about model quality —
+#
+#   * does `dsh --profile headless` boot, run a turn, and exit 0 at all?
+#   * does it obey MYTHOS's OUTPUT_CONTRACT (reply only, write nothing)?
+#   * on the Forge write path, does it write files where told?
+#   * does it STALL on an approval it cannot answer (W6.11 risk 2)?
+#   * does anything land outside the workspace root?
+#
+# Every one of those is a property of the harness and the profile, not of the
+# model behind it. Build QUALITY is the one question this cannot answer, and the
+# comparison table in W6.14 must not be filled in from a run using this file.
+#
+# WHY IT EXISTS. Measured 2026-08-21: the OpenRouter overlay
+# (dsh-openai-compatible.patch.yml) is correct and now wires end to end — dsh
+# boots, loads it, selects the route, authenticates — but OpenRouter itself
+# refuses every request on this account:
+#
+#   404 {"message":"No endpoints available matching your guardrail restrictions
+#        and data policy. Configure: https://openrouter.ai/settings/privacy"}
+#
+# Verified account-wide, not DeepSeek-specific: `deepseek/deepseek-v4-pro`,
+# `deepseek/deepseek-v4-flash`, `deepseek/deepseek-chat` AND
+# `mistralai/mistral-small-3.2-24b-instruct` all return the same message on the
+# same key, and `/api/v1/key` reports `is_free_tier: true` with `usage: 0`. It is
+# an account privacy setting plus (for DeepSeek, which has no `:free` tier)
+# credits — an operator decision, not a code defect. Until it is taken, or a
+# DEEPSEEK_API_KEY appears, this overlay keeps the harness questions answerable
+# instead of leaving all of step 1 blocked on one setting.
+#
+# `apiKeyEnv` is a credential reference resolved per request, so no secret is in
+# this file.
+
+- id: agent-default-model
+  config:
+    provider: mistral
+    model: mistral-large-2512
+
+- id: llm-pi-ai
+  config:
+    providers:
+      mistral:
+        displayName: Mistral (harness mechanics only)
+        apiKeyEnv: MISTRAL_API_KEY
+        api: openai-completions
+        baseURL: https://api.mistral.ai/v1
+        compat:
+          # pi-ai cannot recognize this endpoint, and for an unrecognized host it
+          # shapes the request as though it were OpenAI itself — which would send
+          # the system prompt in a `developer` role Mistral does not accept.
+          supportsDeveloperRole: false
+          # Added after a first attempt returned `PI_AI_ERROR: 422 status code
+          # (no body)`. The request WAS authenticated and delivered — a third
+          # sample came back 429 RATE_LIMIT — so 422 is Mistral rejecting the
+          # request SHAPE, not the credential. dsh ships a large tool set, and
+          # OpenAI strict-mode function schemas are the usual thing an
+          # OpenAI-compatible gateway refuses outright.
+          supportsStrictMode: false
+        models:
+          - id: mistral-large-2512
+            contextWindow: 131072
+        retryPolicy:
+          mode: normal
+          maxRetries: 3

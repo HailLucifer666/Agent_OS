@@ -1,0 +1,157 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>7-Day CPU Temperature Chart</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f4f4f4;
+        }
+        .chart-container {
+            width: 800px;
+            height: 500px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            position: relative;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+        .axis-label {
+            position: absolute;
+            font-size: 14px;
+            color: #333;
+        }
+        .x-axis-label {
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        .y-axis-label {
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%) rotate(-90deg);
+        }
+        .title {
+            text-align: center;
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="chart-container">
+        <div class="title">7-Day CPU Temperature (°C)</div>
+        <div class="axis-label y-axis-label">Temperature (°C)</div>
+        <div class="axis-label x-axis-label">Day</div>
+        <canvas id="temperatureChart"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('temperatureChart');
+        const ctx = canvas.getContext('2d');
+
+        // Set canvas resolution to match display size
+        canvas.width = 800;
+        canvas.height = 450;
+
+        // Data: 7 days of CPU temperatures (randomized between 40-85°C)
+        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const temperatures = Array.from({length: 7}, () => Math.floor(Math.random() * 46) + 40);
+
+        // Chart dimensions
+        const padding = 50;
+        const chartWidth = canvas.width - 2 * padding;
+        const chartHeight = canvas.height - 2 * padding;
+        const xStep = chartWidth / (days.length - 1);
+        const yMin = 40;
+        const yMax = 85;
+        const yStep = chartHeight / (yMax - yMin);
+
+        // Draw grid lines
+        function drawGrid() {
+            ctx.strokeStyle = '#eee';
+            ctx.lineWidth = 1;
+
+            // Horizontal grid lines
+            for (let i = yMin; i <= yMax; i += 5) {
+                const y = canvas.height - padding - (i - yMin) * yStep;
+                ctx.beginPath();
+                ctx.moveTo(padding, y);
+                ctx.lineTo(canvas.width - padding, y);
+                ctx.stroke();
+
+                // Y-axis labels
+                ctx.fillStyle = '#666';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'right';
+                ctx.fillText(i, padding - 10, y + 4);
+            }
+
+            // Vertical grid lines
+            for (let i = 0; i < days.length; i++) {
+                const x = padding + i * xStep;
+                ctx.beginPath();
+                ctx.moveTo(x, padding);
+                ctx.lineTo(x, canvas.height - padding);
+                ctx.stroke();
+
+                // X-axis labels
+                ctx.fillStyle = '#666';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(days[i], x, canvas.height - padding + 20);
+            }
+        }
+
+        // Draw temperature line
+        function drawTemperatureLine() {
+            ctx.strokeStyle = '#e74c3c';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(padding, canvas.height - padding - (temperatures[0] - yMin) * yStep);
+
+            for (let i = 1; i < temperatures.length; i++) {
+                const x = padding + i * xStep;
+                const y = canvas.height - padding - (temperatures[i] - yMin) * yStep;
+                ctx.lineTo(x, y);
+            }
+
+            ctx.stroke();
+
+            // Draw data points
+            ctx.fillStyle = '#e74c3c';
+            for (let i = 0; i < temperatures.length; i++) {
+                const x = padding + i * xStep;
+                const y = canvas.height - padding - (temperatures[i] - yMin) * yStep;
+                ctx.beginPath();
+                ctx.arc(x, y, 5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Display temperature value
+                ctx.fillStyle = '#333';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(temperatures[i], x, y - 10);
+            }
+        }
+
+        // Draw chart
+        drawGrid();
+        drawTemperatureLine();
+    </script>
+</body>
+</html>
+```
