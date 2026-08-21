@@ -3853,12 +3853,38 @@ it **stalls** on an approval it cannot answer (W6.11 risk 2), and whether it
 stays inside its workspace root. **Zero runs have reached dsh's agent**, so all
 three are *unanswered, not passed*; the report now prints exactly that word
 rather than a reassuring line.
-`mythos/scripts/fixtures/dsh-harness-mechanics.patch.yml` was added to settle
-them without a DeepSeek key by routing dsh at Mistral. It reached authenticated
-requests and then hit Mistral's own limits — one `422` request-shape rejection,
-the rest `429 RATE_LIMIT` — so it did not settle them either. It is kept because
-it will, once a request budget exists, and its header says in capitals that it
-cannot answer build *quality*.
+
+**The operator asked for the harness-only measurement, and it was attempted
+against four providers on 2026-08-21. Every one is blocked by something outside
+this repo's code.** Recorded in full so nobody repeats the sweep:
+
+| Provider | Result | What it would take |
+|---|---|---|
+| **OpenRouter** | `404 No endpoints available matching your guardrail restrictions and data policy` on **every** model tried — three DeepSeek routes *and* `mistralai/mistral-small-3.2-24b-instruct`. `/api/v1/key` → `is_free_tier: true, usage: 0` | Allow the data policy at `openrouter.ai/settings/privacy`, add credits. Account setting — not a session's call |
+| **Groq** | Reached, authenticated, tool-calling confirmed on `openai/gpt-oss-20b` (200, TOOL CALL OK). Then `413 ... TPM: Limit 8000, Requested 10808` on **all 12** attempts | Groq Dev tier. This is a per-**request** ceiling, so waiting cannot fix it |
+| **Mistral** | Reached and authenticated. `422 union_tag_invalid: Input tag 'developer' found using 'role' does not match any of the expected tags` — dsh sends the system prompt in a `developer` role Mistral refuses. `compat.supportsDeveloperRole: false` was tried at **route** level and at **model** level; neither suppressed it. Also `429` on a third of calls | A pi-ai compat fix, or a provider that accepts the role. Not needed for production, which uses the native DeepSeek adapter |
+| **NVIDIA / NIM** | `/v1/models` advertises **102** models **including `deepseek-ai/deepseek-v4-flash-0731`** — but a tool-call request to it **hangs** with no response. This independently corroborates `lanes.default.js:294`, which already records the NIM DeepSeek route dead by 404/timeout | Nothing available. The route is advertised and does not answer |
+| **Cerebras** | `404 model_not_found` on all three ids tried | A correct model id for this account |
+
+**Two things were measured on the way, and both are real findings.**
+
+1. **dsh's fixed request overhead is ~10,700–10,820 tokens** before any task
+   text — read off Groq's `413`, twelve times, with a ~120-token spread, so it
+   is the system prompt plus tool definitions rather than anything about the
+   task. It is a per-request floor, and a cost input W6.4's per-call-site model
+   table should be read against: at `deepseek-v4-pro`'s ~$1.60/M that is about
+   **$0.017 of prompt per turn**, and a Forge build is many turns.
+2. **dsh's request assembly works completely.** Groq rejected the request for
+   being too large, which means dsh had already built a full one — system
+   prompt, tools, task — and shipped it. Combined with the earlier
+   ENOENT → `MISSING_CREDENTIAL` → gateway-`404` progression, every link from
+   boot to provider I/O is now proven. What is missing is a provider that will
+   answer, not code.
+
+`mythos/scripts/fixtures/dsh-harness-mechanics.patch.yml` is kept pointing at
+Groq — the closest to working, needing only a paid tier — with all of the above
+recorded in its header, and a capitalised warning that it cannot answer build
+quality and must never fill in the comparison table.
 
 ---
 
@@ -4537,3 +4563,6 @@ Copy this to a fresh agent. It should need nothing else but this document and
 | 2026-08-21 | Step 1 — **Hermes baseline measured: 3/9** | `0394cd2` | `node mythos/scripts/rescore-w6-fixtures.js` → `hermes: 3/9 pass`. `dated-landing` 3/3 PASS; `interactive-snake` 0/3; `data-dashboard` 0/3. Rule frequency: **6 × `no @media queries (not responsive)`** and nothing else. Re-scored from the 9 committed fixtures rather than regenerated — which is the whole reason W6.7 says commit raw replies, not a summary |
 | 2026-08-21 | Step 1 — dsh wiring PROVEN end to end, measurement BLOCKED on a credential | `0394cd2` | Overlay fixed twice against the installed bundle: patch id was `llm` where `dsh-base/cordis.patch.yml:95` calls it `llm-pi-ai`, and declaring a route does not select it — the headless runner reads `ctx.agentDefaultModel`, base `deepseek-official/deepseek-v4-flash`. Failure then advanced ENOENT → `MISSING_CREDENTIAL` → **`PI_AI_ERROR: 404 No endpoints available matching your guardrail restrictions and data policy`**, i.e. dsh boots, loads, routes, authenticates and reaches OpenRouter. **Blocker verified account-wide, not DeepSeek-specific:** `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-chat` and `mistralai/mistral-small-3.2-24b-instruct` all return that same message on this key; `/api/v1/key` → `is_free_tier: true, usage: 0`. Operator decision, not a code defect |
 | 2026-08-21 | Step 1 — harness-mechanics fallback attempted, did NOT settle risk 2 | `0394cd2` | `dsh-harness-mechanics.patch.yml` (routes dsh at Mistral to answer harness questions without a DeepSeek key) → `PI_AI_ERROR: 422` on one call, `RATE_LIMIT: 429` on the rest, both after authentication. **0 of 4 runs reached dsh's agent**, so the Forge oracle, the approval-stall question (W6.11 risk 2) and workspace confinement remain **UNANSWERED, not passed** — which is now what the report prints |
+| 2026-08-21 | Step 1 — harness-only measurement attempted across **five** providers on the operator's instruction; every one blocked outside this repo's code | *(this commit)* | **OpenRouter** `404` data-policy on 3 DeepSeek routes + 1 Mistral route, `/api/v1/key` → `is_free_tier: true, usage: 0`. **Groq** authenticated, tool-calling confirmed (`openai/gpt-oss-20b` → 200 TOOL CALL OK), then `413 TPM: Limit 8000, Requested 10808` on **12/12**. **Mistral** authenticated, `422 union_tag_invalid` on a `developer` role; `compat.supportsDeveloperRole: false` tried at route AND model level, neither suppressed it; `429` on ~1/3 of calls. **NVIDIA/NIM** advertises 102 models incl. `deepseek-ai/deepseek-v4-flash-0731`, but a tool-call request to it **hangs with no response** — corroborates `lanes.default.js:294`'s dead-route note by the timeout path. **Cerebras** `404 model_not_found` on 3 ids |
+| 2026-08-21 | Step 1 — **dsh's fixed request overhead measured: ~10,700–10,820 tokens** before any task text | *(this commit)* | Read off Groq's `413` twelve times (9 single-artifact + 3 Forge), spread ~120 tokens, so it is system-prompt-plus-tools rather than task-dependent. A per-**request** floor, so pacing cannot evade it. Cost input for W6.4: ≈ **$0.017 of prompt per turn** at `deepseek-v4-pro`'s ~$1.60/M, and a Forge build is many turns |
+| 2026-08-21 | Step 1 — dsh's request ASSEMBLY proven, in addition to its boot and routing | *(this commit)* | Groq rejected the request for being too large, which means dsh had already assembled a complete one — system prompt, tool definitions, task — and shipped it. With the earlier ENOENT → `MISSING_CREDENTIAL` → gateway-`404` progression, every link from boot to provider I/O is proven. **What is missing is a provider that answers, not code** |

@@ -2,9 +2,10 @@
 #
 # READ THIS BEFORE QUOTING ANY NUMBER PRODUCED WITH IT.
 #
-# This overlay does NOT measure DeepSeek. It routes dsh at Mistral, the provider
-# Hermes is already driving on this machine, for one purpose: to answer the
-# questions that are about dsh's MACHINERY rather than about model quality —
+# This overlay does NOT measure DeepSeek, and a run using it must never be
+# entered in W6.14's engine-comparison table. It routes dsh at whatever provider
+# this machine can actually reach, for one purpose: to answer the questions that
+# are about dsh's MACHINERY rather than about model quality —
 #
 #   * does `dsh --profile headless` boot, run a turn, and exit 0 at all?
 #   * does it obey MYTHOS's OUTPUT_CONTRACT (reply only, write nothing)?
@@ -13,56 +14,98 @@
 #   * does anything land outside the workspace root?
 #
 # Every one of those is a property of the harness and the profile, not of the
-# model behind it. Build QUALITY is the one question this cannot answer, and the
-# comparison table in W6.14 must not be filled in from a run using this file.
+# model behind it. Build QUALITY is the one question it cannot answer.
 #
 # WHY IT EXISTS. Measured 2026-08-21: the OpenRouter overlay
-# (dsh-openai-compatible.patch.yml) is correct and now wires end to end — dsh
-# boots, loads it, selects the route, authenticates — but OpenRouter itself
-# refuses every request on this account:
+# (dsh-openai-compatible.patch.yml) is correct and wires end to end — dsh boots,
+# loads it, selects the route, authenticates — but OpenRouter refuses every
+# request on this account:
 #
 #   404 {"message":"No endpoints available matching your guardrail restrictions
 #        and data policy. Configure: https://openrouter.ai/settings/privacy"}
 #
-# Verified account-wide, not DeepSeek-specific: `deepseek/deepseek-v4-pro`,
-# `deepseek/deepseek-v4-flash`, `deepseek/deepseek-chat` AND
-# `mistralai/mistral-small-3.2-24b-instruct` all return the same message on the
-# same key, and `/api/v1/key` reports `is_free_tier: true` with `usage: 0`. It is
-# an account privacy setting plus (for DeepSeek, which has no `:free` tier)
-# credits — an operator decision, not a code defect. Until it is taken, or a
-# DEEPSEEK_API_KEY appears, this overlay keeps the harness questions answerable
-# instead of leaving all of step 1 blocked on one setting.
+# Verified account-wide, not DeepSeek-specific: three DeepSeek routes AND
+# `mistralai/mistral-small-3.2-24b-instruct` return that same message on that
+# key, and `/api/v1/key` reports `is_free_tier: true` with `usage: 0`. It is an
+# account privacy setting plus credits — an operator decision, not a code
+# defect. Until it is taken, or a DEEPSEEK_API_KEY appears, this overlay keeps
+# the harness questions answerable instead of leaving all of step 1 blocked.
+#
+# WHY GROQ AND NOT MISTRAL. The first version of this file routed at Mistral,
+# the provider Hermes already drives here. It failed `PI_AI_ERROR: 422` after
+# authenticating, and a direct probe named the cause exactly:
+#
+#   422 {"detail":[{"type":"union_tag_invalid","loc":["body","messages",0],
+#        "msg":"Input tag 'developer' found using 'role' does not match any of
+#        the expected tags: <Roles.system: ..."}]}
+#
+# So dsh sent the system prompt in a `developer` role, which Mistral rejects
+# outright — and it did so with `compat.supportsDeveloperRole: false` already
+# set. That switch was then tried in BOTH documented positions, route level and
+# model level (the README says compat resolves model → route → catalog →
+# pi-ai's own detection), and **neither suppressed the developer role**: the
+# 422 is identical each time. Either the switch does not reach this path in
+# 0.1.1-rc.2, or dsh emits that message for a reason the switch does not govern.
+# Recorded rather than chased — it is a note for whoever writes the adapter, not
+# a blocker for it, because production will not route through pi-ai at all once
+# DEEPSEEK_API_KEY exists (the base bundle mounts the native DeepSeek adapter).
+#
+# Rather than keep guessing at pi-ai's compat surface for a provider that is
+# also rate-limiting (`429` on 3 of 4 calls), this routes at Groq, whose
+# OpenAI-compatible endpoint accepts the `developer` role. Measured on this
+# machine the same day, with a real tool-call request:
+#
+#   groq openai/gpt-oss-20b              200  TOOL CALL OK
+#   mistral max_tokens                   200  TOOL CALL OK   (plain shape)
+#   mistral developer-role               422  union_tag_invalid
+#   groq llama-3.1-8b-instant            404  model_not_found
+#   cerebras (3 ids tried)               404  model_not_found
+#
+# Tool calling is the part that matters: dsh's Forge path writes files through
+# tools, so a provider that answers plain chat but refuses a tools array cannot
+# exercise the write path at all.
+#
+# GROQ'S FREE TIER IS TOO SMALL, and the number is worth keeping. Running this
+# overlay produced, identically on all 12 attempts:
+#
+#   413 {"message":"Request too large for model `openai/gpt-oss-20b` ... service
+#        tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested
+#        10808 ...","code":"rate_limit_exceeded"}
+#
+# **dsh's request is ~10,700–10,820 tokens before the task text** — measured
+# nine times on the single-artifact prompts and three on the Forge prompt, with
+# a spread of ~120 tokens, so that is its fixed system-prompt-plus-tools
+# overhead rather than anything about the task. Two consequences:
+#
+#   * This is a per-REQUEST ceiling, not a pacing problem: no amount of waiting
+#     makes a 10.7k request fit an 8k-per-minute cap. Groq needs its Dev tier.
+#   * It is a real cost input for W6. At `deepseek-v4-pro`'s ~$1.60/M prompt
+#     tokens that is roughly $0.017 of prompt per turn before the task, and a
+#     Forge build is many turns. W6.4's per-call-site model assignment should be
+#     read with that in mind.
+#
+# It also proves one more link in the chain: dsh assembled a complete request —
+# system prompt, tool definitions, task — and shipped it. The failure is the
+# provider's ceiling, not dsh's request building.
 #
 # `apiKeyEnv` is a credential reference resolved per request, so no secret is in
 # this file.
 
 - id: agent-default-model
   config:
-    provider: mistral
-    model: mistral-large-2512
+    provider: groq
+    model: openai/gpt-oss-20b
 
 - id: llm-pi-ai
   config:
     providers:
-      mistral:
-        displayName: Mistral (harness mechanics only)
-        apiKeyEnv: MISTRAL_API_KEY
+      groq:
+        displayName: Groq (harness mechanics only)
+        apiKeyEnv: GROQ_API_KEY
         api: openai-completions
-        baseURL: https://api.mistral.ai/v1
-        compat:
-          # pi-ai cannot recognize this endpoint, and for an unrecognized host it
-          # shapes the request as though it were OpenAI itself — which would send
-          # the system prompt in a `developer` role Mistral does not accept.
-          supportsDeveloperRole: false
-          # Added after a first attempt returned `PI_AI_ERROR: 422 status code
-          # (no body)`. The request WAS authenticated and delivered — a third
-          # sample came back 429 RATE_LIMIT — so 422 is Mistral rejecting the
-          # request SHAPE, not the credential. dsh ships a large tool set, and
-          # OpenAI strict-mode function schemas are the usual thing an
-          # OpenAI-compatible gateway refuses outright.
-          supportsStrictMode: false
+        baseURL: https://api.groq.com/openai/v1
         models:
-          - id: mistral-large-2512
+          - id: openai/gpt-oss-20b
             contextWindow: 131072
         retryPolicy:
           mode: normal
