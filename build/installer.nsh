@@ -11,10 +11,10 @@
 ; WHAT THIS PAGE DOES AND DOES NOT DO — the honest part:
 ;
 ; None of the optional components live inside this .exe. build.files excludes
-; mythos/models and mythos/ui/public/models; adb is a download; Hermes installs
-; into WSL. They are runtime installs with their own scripts under
+; mythos/models and mythos/ui/public/models; adb is a download; the build engine
+; is an npm install. They are runtime installs with their own scripts under
 ; mythos/scripts/ (setup-silero.js, setup-wakeword.js, setup-android.js,
-; setup-hermes.js, setup-autostart.js).
+; setup-dsh.js, setup-autostart.js).
 ;
 ; So this page does NOT copy component files, and it must not imply that it did.
 ; It records the operator's CHOICE into
@@ -95,13 +95,13 @@
 Var ComponentsDialog
 Var CbSilero
 Var CbWakeword
-Var CbHermes
+Var CbEngine
 Var CbAdb
 Var CbAutostart
 Var SelSilero
 Var SelWakeword
 Var SelPiper
-Var SelHermes
+Var SelEngine
 Var SelAdb
 Var SelAutostart
 Var WslPresent
@@ -109,7 +109,7 @@ Var WslPresent
 ; ---- already-installed detection (operator, 2026-08-12) ----------------------
 ;
 ; "When updating, it's asking me for the same things — the phone install, the
-; Hermes install. Those are already installed."
+; build-engine install. Those are already installed."
 ;
 ; They were, and this page asked anyway: every checkbox above was hardcoded
 ; checked or unchecked and nothing ever looked at the disk. On an update that is
@@ -122,23 +122,25 @@ Var WslPresent
 ; productName MYTHOS — the same reasoning the install-selection.json write at the
 ; bottom of this file already documents. If those move, this moves with them.
 ;
-; Hermes is checked in three places because it has three legitimate homes: the
-; userData one setup-hermes.js writes to now, the HERMES_HOME the operator may
-; have set (this machine has it as a user env var), and the in-tree location
-; every install before 2026-08-12 used.
+; The build engine is checked in two places because it has two legitimate homes,
+; the same pair setup-dsh.js writes to and reads: the userData one (survives an
+; update) and the in-tree one a dev checkout uses. W6 (2026-08-22) replaced
+; Hermes-Agent with DeepSeek Harness; the third Hermes home was an HERMES_HOME
+; env var, and dsh has no equivalent because it resolves a pinned project-local
+; install rather than a configurable one.
 ;
 ; DETECTED MEANS UNCHECKED AND DISABLED, not hidden: "Silero VAD — already
 ; installed" is information; a silently missing row reads as a downgrade.
 
 Var FoundSilero
 Var FoundWakeword
-Var FoundHermes
+Var FoundEngine
 Var FoundAdb
 
 !macro DetectComponents
   StrCpy $FoundSilero "0"
   StrCpy $FoundWakeword "0"
-  StrCpy $FoundHermes "0"
+  StrCpy $FoundEngine "0"
   StrCpy $FoundAdb "0"
 
   ${If} ${FileExists} "$APPDATA\MYTHOS\models\silero\silero_vad.onnx"
@@ -154,16 +156,11 @@ Var FoundAdb
     StrCpy $FoundWakeword "1"
   ${EndIf}
 
-  ${If} ${FileExists} "$APPDATA\MYTHOS\tools\Hermes Agent\hermes-agent\venv\Scripts\hermes.exe"
-    StrCpy $FoundHermes "1"
-  ${ElseIf} ${FileExists} "$INSTDIR\resources\app.asar.unpacked\Hermes Agent\hermes-agent\venv\Scripts\hermes.exe"
-    StrCpy $FoundHermes "1"
-  ${Else}
-    ReadEnvStr $0 "HERMES_HOME"
-    ${If} $0 != ""
-    ${AndIf} ${FileExists} "$0\hermes-agent\venv\Scripts\hermes.exe"
-      StrCpy $FoundHermes "1"
-    ${EndIf}
+  ; The pinned CLI entry point, which is what setup-dsh.js checks for too.
+  ${If} ${FileExists} "$APPDATA\MYTHOS\tools\DeepSeek Harness\node_modules\@deepseek-ai\dsh\lib\bin.js"
+    StrCpy $FoundEngine "1"
+  ${ElseIf} ${FileExists} "$INSTDIR\resources\app.asar.unpacked\DeepSeek Harness\node_modules\@deepseek-ai\dsh\lib\bin.js"
+    StrCpy $FoundEngine "1"
   ${EndIf}
 
   ${If} ${FileExists} "$APPDATA\MYTHOS\tools\Android Platform Tools\platform-tools\adb.exe"
@@ -245,8 +242,12 @@ Function mythosComponentsPage
   ; app's gap list reports it.
   StrCpy $SelPiper "false"
 
-  ; Hermes needs WSL. Probing here rather than offering a box that fails later:
-  ; "wsl.exe --status" exits non-zero when WSL is absent or not provisioned.
+  ; WSL is still probed and still reported in install-selection.json, because the
+  ; app's own component registry keys other rows on it. It is no longer a GATE on
+  ; the build engine: W6 replaced Hermes-Agent (a Python venv inside WSL) with
+  ; DeepSeek Harness (an npm package). Gating the one component whose absence
+  ; fails every build on a WSL install nobody needs would refuse it on every
+  ; Windows machine without WSL.
   nsExec::ExecToStack '"$SYSDIR\wsl.exe" --status'
   Pop $0
   Pop $1
@@ -256,17 +257,13 @@ Function mythosComponentsPage
     StrCpy $WslPresent "0"
   ${EndIf}
 
-  ${If} $FoundHermes == "1"
-    ${NSD_CreateCheckbox} 0 30u 100% 12u "Hermes build agent — already installed"
-    Pop $CbHermes
-    EnableWindow $CbHermes 0
-  ${ElseIf} $WslPresent == "1"
-    ${NSD_CreateCheckbox} 0 30u 100% 12u "Hermes build agent (installs into WSL)"
-    Pop $CbHermes
+  ${If} $FoundEngine == "1"
+    ${NSD_CreateCheckbox} 0 30u 100% 12u "DeepSeek Harness build engine — already installed"
+    Pop $CbEngine
+    EnableWindow $CbEngine 0
   ${Else}
-    ${NSD_CreateCheckbox} 0 30u 100% 12u "Hermes build agent — needs WSL (run: wsl --install)"
-    Pop $CbHermes
-    EnableWindow $CbHermes 0
+    ${NSD_CreateCheckbox} 0 30u 100% 12u "DeepSeek Harness build engine (npm, ~450 packages)"
+    Pop $CbEngine
   ${EndIf}
 
   ${If} $FoundAdb == "1"
@@ -302,12 +299,12 @@ Function mythosComponentsLeave
     StrCpy $SelWakeword "false"
   ${EndIf}
 
-  ; A disabled checkbox cannot be checked, so this also encodes "WSL missing".
-  ${NSD_GetState} $CbHermes $0
+  ; A disabled checkbox cannot be checked, so this also encodes "already installed".
+  ${NSD_GetState} $CbEngine $0
   ${If} $0 == ${BST_CHECKED}
-    StrCpy $SelHermes "true"
+    StrCpy $SelEngine "true"
   ${Else}
-    StrCpy $SelHermes "false"
+    StrCpy $SelEngine "false"
   ${EndIf}
 
   ${NSD_GetState} $CbAdb $0
@@ -359,7 +356,7 @@ FunctionEnd
       StrCpy $SelWakeword "true"
     ${EndIf}
     StrCpy $SelPiper "false"
-    StrCpy $SelHermes "false"
+    StrCpy $SelEngine "false"
     StrCpy $SelAdb "false"
     StrCpy $SelAutostart "false"
   ${EndIf}
@@ -377,7 +374,7 @@ FunctionEnd
   FileWrite $0 '    "silero": $SelSilero,$\r$\n'
   FileWrite $0 '    "wakeword": $SelWakeword,$\r$\n'
   FileWrite $0 '    "piper": $SelPiper,$\r$\n'
-  FileWrite $0 '    "hermes": $SelHermes,$\r$\n'
+  FileWrite $0 '    "dsh": $SelEngine,$\r$\n'
   FileWrite $0 '    "adb": $SelAdb,$\r$\n'
   FileWrite $0 '    "autostart": $SelAutostart$\r$\n'
   FileWrite $0 '  }$\r$\n'

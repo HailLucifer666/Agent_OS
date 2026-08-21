@@ -5,6 +5,18 @@
 // Answers ONE question with a number: does DeepSeek Harness (`dsh`) produce
 // build artifacts at least as good as Hermes-Agent on MYTHOS's own prompts?
 //
+// ANSWERED 2026-08-22, and the Hermes half of this script is GONE with Hermes
+// (W6 step 6). On the SAME model — `mistral-large-2512`, what Hermes's own
+// config.yaml pinned — the two harnesses scored IDENTICALLY: 3/9 each, prompt
+// for prompt, every rejection the single rule "no @media queries (not
+// responsive)". The swap is quality-neutral.
+//
+// The Hermes baseline is NOT lost with the adapter. Its nine raw replies are
+// committed under test/fixtures/w6-spike/hermes--*.txt and
+// scripts/rescore-w6-fixtures.js re-scores both engines from those fixtures with
+// no model calls and no Hermes install — which is exactly why W6.7 said to commit
+// raw replies rather than a summary. `--engines` is now dsh-only.
+//
 // STANDALONE BY CONSTRUCTION. It wires nothing, changes nothing, and is safe to
 // delete. It does not touch src/main.js, build-engine.js, or any adapter. The
 // plan (Plans/MYTHOS-IRIS-Synthesis-Plan.md, section W6) forbids writing adapter
@@ -88,7 +100,7 @@ const PROMPTS = [
 // `--sample` was mistyped would produce exactly the one-sample result this
 // repo has already been burned by.
 function parseArgs(argv) {
-  const out = { samples: 3, engines: ['hermes', 'dsh'], timeoutMs: 300000 };
+  const out = { samples: 3, engines: ['dsh'], timeoutMs: 300000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--samples') { out.samples = Number(argv[++i]); continue; }
@@ -115,7 +127,11 @@ function parseArgs(argv) {
       + 'run to run; a single sample measures luck, not the engine.');
   }
   for (const e of out.engines) {
-    if (e !== 'hermes' && e !== 'dsh') throw new Error('unknown engine: ' + e);
+    if (e === 'hermes') {
+      throw new Error('the hermes engine was removed with the adapter (W6 step 6). Its baseline '
+        + 'is reproducible with no model calls: node mythos/scripts/rescore-w6-fixtures.js');
+    }
+    if (e !== 'dsh') throw new Error('unknown engine: ' + e);
   }
   return out;
 }
@@ -524,31 +540,15 @@ function dshEnv() {
   return env;
 }
 
-// Hermes, through the adapter production already uses — not a reimplementation,
-// so the comparison is against what actually ships.
-async function runHermes(prompt, opts) {
-  const hermes = require('../adapters/hermes-agent');
-  const started = Date.now();
-  try {
-    const reply = await hermes.runTask(prompt, {
-      requireCli: true,
-      cwd: opts.cwd,
-      timeoutMs: opts.timeoutMs,
-      maxPromptChars: 24000,
-    });
-    const ms = Date.now() - started;
-    if (!reply || !String(reply).trim()) return { ok: false, ms: ms, error: 'Hermes returned an empty reply' };
-    // Hermes reports provider failures on stdout WITH EXIT CODE 0 (BUG-058 /
-    // BUG-245), which is why this regex exists in the adapter at all. Reuse it
-    // rather than trusting the exit status.
-    if (hermes.HERMES_ERROR_REPLY_RE.test(String(reply))) {
-      return { ok: false, ms: ms, error: 'Hermes provider error (exit 0, error on stdout): ' + String(reply).trim().slice(0, 300) };
-    }
-    return { ok: true, ms: ms, content: String(reply) };
-  } catch (err) {
-    return { ok: false, ms: Date.now() - started, error: String((err && err.message) || err) };
-  }
-}
+// runHermes() WAS HERE and went with the adapter (W6 step 6, 2026-08-22).
+// Deleted rather than stubbed, per W6-AD-8: a function that cannot run the engine
+// it names is a lie about capability. The baseline it produced survives as the
+// committed fixtures under test/fixtures/w6-spike/hermes--*.txt plus
+// scripts/rescore-w6-fixtures.js, which needs no model call and no install.
+//
+// The SHAPE is worth copying for whatever replaces dsh: it drove the adapter
+// production actually used rather than reimplementing the CLI invocation, so the
+// comparison measured what shipped.
 
 // ---------------------------------------------------------------------------
 async function attempt(engine, prompt, contract, verifier, opts) {
@@ -558,7 +558,7 @@ async function attempt(engine, prompt, contract, verifier, opts) {
   try {
     const run = engine === 'dsh'
       ? await runDsh(full, { cwd: ws.dir, timeoutMs: opts.timeoutMs, dshPatch: opts.dshPatch })
-      : await runHermes(full, { cwd: ws.dir, timeoutMs: opts.timeoutMs });
+      : (() => { throw new Error('spike: only the dsh engine exists (W6 step 6)'); })();
 
     // The no-write oracle. OUTPUT_CONTRACT says "Do NOT create, write or modify
     // any files. Your reply IS the deliverable." Both engines are agentic and
@@ -606,8 +606,8 @@ async function attempt(engine, prompt, contract, verifier, opts) {
 //   3. Does anything land OUTSIDE the workspace?   (the confinement question
 //      `writeRoot` has to answer once HERMES_WRITE_SAFE_ROOT is deleted)
 //
-// dsh only. Hermes is not run here on purpose: the operator has already decided
-// to remove it, so a Hermes column on this table would cost money and change
+// dsh only. Hermes was never run here: the operator had already decided to
+// remove it, so a Hermes column on this table would have cost money and changed
 // no decision. What is still open is whether dsh can drive Forge AT ALL.
 const FORGE_PROMPT = 'Create a small static web project in the current directory. '
   + 'Write exactly three files: index.html, styles.css and app.js. index.html must link '
@@ -837,9 +837,9 @@ async function main() {
     process.exit(2);
   }
   if (opts.help) {
-    console.log('spike-dsh-build.js — W6 step 1. Measures dsh against Hermes on MYTHOS\'s own prompts.\n');
+    console.log('spike-dsh-build.js — W6 step 1. Measures dsh on MYTHOS\'s own build prompts.\n');
     console.log('  --samples N       samples per prompt per engine (default 3, below 3 warns)');
-    console.log('  --engines a,b     subset of: hermes, dsh (default both)');
+    console.log('  --engines a,b     dsh only (the hermes engine went with the adapter, W6 step 6)');
     console.log('  --timeout-ms N    per attempt (default 300000)');
     console.log('  --dsh-patch F     cordis.patch.yml declaring a non-DeepSeek provider route,');
     console.log('                    so no DEEPSEEK_API_KEY is needed (measures dsh + that provider)');

@@ -2441,15 +2441,20 @@ function createServer(deps) {
     } catch (_) { /* memory must never block boot */ }
   }
 
-  // Two-brain key separation (.env.example's HERMES_PROVIDER_KEY block): the
-  // Hermes build engine and the Mythos brain must not share one Mistral
-  // workspace key — a 20-60-call build then eats the same rate limit as voice,
-  // vision and memory consolidation, and voice turns fall back to the weakest
-  // model in the chain mid-conversation. Logs a BOOLEAN only; never a key value.
-  if (config.MISTRAL_API_KEY && process.env.HERMES_PROVIDER_KEY &&
-      config.MISTRAL_API_KEY === process.env.HERMES_PROVIDER_KEY) {
-    logger.warn('hermes.shared-provider-key', { sameAsMistral: true });
-  }
+  // TWO-BRAIN KEY SEPARATION — REMOVED AS A CHECK, KEPT AS A NOTE (W6,
+  // 2026-08-22). This compared config.MISTRAL_API_KEY against
+  // HERMES_PROVIDER_KEY and warned when they matched, because Hermes held its
+  // OWN provider key and sharing one Mistral workspace key meant a 20-60-call
+  // build ate the same rate limit as voice, vision and memory consolidation —
+  // voice turns then fell back to the weakest model in the chain mid-conversation.
+  //
+  // Under dsh there is no separate key to compare. The engine authenticates with
+  // whatever credential the BUILD LANE names, which is MISTRAL_API_KEY, so the
+  // two are the same key BY CONSTRUCTION and this check would fire on every
+  // boot — a warning that always fires is noise, and one that can never fire is
+  // worse. The rate-limit arithmetic has NOT changed and is documented in
+  // .env.example: if you hold a second Mistral workspace key, express that by
+  // putting it first in the build lane, not by setting an env var nothing reads.
 
   // BUG-112: one greeting-shaped announcement per session, shared across every
   // source (boot greeting here, the daily planner's morning brief below) via

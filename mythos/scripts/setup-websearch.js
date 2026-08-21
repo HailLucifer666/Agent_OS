@@ -14,7 +14,7 @@
 // that needed it. "Optional dependency" and "dependency nothing can install"
 // look identical from the outside and are not the same thing.
 //
-// SAME CONVENTION AS setup-hermes.js: a third-party checkout, project-local and
+// SAME CONVENTION AS setup-dsh.js: a third-party tree, project-local and
 // gitignored, installed on demand and never committed or redistributed in the
 // installer. Never a global install — see the project-isolation rule in
 // CLAUDE.md. The daemon is genuinely optional: with it absent the search rung

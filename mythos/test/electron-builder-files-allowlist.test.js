@@ -263,7 +263,7 @@ test('build.files still includes the files the packaged app needs to run', () =>
     path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-silero.js'),                // components step: VAD weights
     path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-android.js'),               // components step: adb
     path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-autostart.js'),             // components step: start at sign-in
-    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-hermes.js'),                // components step: build engine
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-dsh.js'),                   // components step: build engine
     path.join(REPO_ROOT, 'mythos', 'services', 'piper-server.py'),               // the ONE sidecar script that may ship (piper is MIT; edge-tts is not)
     path.join(REPO_ROOT, 'mythos', 'adapters', 'pc-child', 'ps-automation.ps1'), // desktop control — doctor marks it REQUIRED
     path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'index.html'),                // the HUD itself

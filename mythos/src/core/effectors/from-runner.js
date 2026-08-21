@@ -119,7 +119,7 @@ function scrubEnv(env) {
     // Strip secret-shaped keys hard.
     if (/(API_KEY|SECRET|TOKEN|PASSWORD|PASSPHRASE|CREDENTIAL)$/i.test(k)) continue;
     if (/^GOOGLE_/.test(k)) continue;        // GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, etc.
-    if (/^GROQ_|^MISTRAL_|^NIM_|^ZCODE_|^OPENROUTER_|^CEREBRAS_|^EXA_|^HERMES_|^OLLAMA_/.test(k)) continue;
+    if (/^GROQ_|^MISTRAL_|^NIM_|^ZCODE_|^OPENROUTER_|^CEREBRAS_|^EXA_|^DSH_|^OLLAMA_/.test(k)) continue;
     if (/^MYTHOS_/.test(k) && !MYTHOS_ENV_KEEP.test(k)) continue;
     if (ENV_KEEP.test(k)) { scrubbed[k] = src[k]; continue; }
     // Default: keep (operators may set NODE_PATH, etc.). The explicit strips

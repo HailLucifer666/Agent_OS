@@ -273,7 +273,7 @@ test('the app version is injected into the child, not derived from a path', () =
     'the injected version must be preferred over both file lookups');
 });
 
-test('an in-tree HERMES_HOME is called out rather than silently defeating the rescue', () => {
+test('an in-tree build-engine install dir is called out rather than silently defeating the rescue', () => {
   // Measured on the operator's machine, 2026-08-13: a user-level HERMES_HOME
   // pointing into resources/app.asar.unpacked outranks MYTHOS_TOOLS_DIR in
   // setup-hermes.js, so a reinstall puts the whole venv back in the tree and the
@@ -283,7 +283,7 @@ test('an in-tree HERMES_HOME is called out rather than silently defeating the re
   const start = code.indexOf('function warnIfHermesHomeIsInTheInstallTree(');
   assert.ok(start !== -1, 'the check must exist');
   const body = code.slice(start, code.indexOf('\nfunction ', start + 10));
-  assert.ok(/process\.env\.HERMES_HOME/.test(body), 'it reads the operator env var');
+  assert.ok(/process\.env\.MYTHOS_DSH_INSTALL_DIR/.test(body), 'it reads the operator env var');
   assert.ok(/startsWith/.test(body), 'and compares it against the install root');
 
   const rescue = code.slice(code.indexOf('function rescueToolDirs('));

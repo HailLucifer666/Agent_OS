@@ -619,7 +619,7 @@ ipcMain.handle('mythos:restart-server', async (event) => {
 // the bridge. config.json holds the ~140 non-secret schema keys the packaged
 // build previously had no way to set at all — VOICE_S2S_ENABLED,
 // VOICE_TTS_PROVIDER, WAKEWORD_ENABLED, AUTONOMOUS_MAX_TIER, the AETHER_*/
-// HERMES_* block, the local tool paths. Plain text on purpose: it is read by the
+// DSH_* block, the local tool paths. Plain text on purpose: it is read by the
 // forked server through MYTHOS_SETTINGS_PATH, and settings-store.js refuses to
 // write a secret-shaped key into it.
 //
@@ -1498,7 +1498,7 @@ function checkForUpdates() {
 // Blocking an update is not an option, so every failure logs and installs anyway.
 const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
 
-// An operator HERMES_HOME pointing INSIDE the install tree defeats all of this,
+// An operator MYTHOS_DSH_INSTALL_DIR pointing INSIDE the install tree defeats all of this,
 // and did on the machine this was written on (2026-08-13): it outranks
 // MYTHOS_TOOLS_DIR in mythos/scripts/setup-hermes.js, so every reinstall puts
 // ~17.6k files back into the tree, every update then deletes them, and the slow
@@ -1506,16 +1506,16 @@ const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
 // operator's, and the next reinstall would undo any move — so say so in the log
 // rather than silently rescuing a directory that is about to be recreated.
 function warnIfHermesHomeIsInTheInstallTree(installRoot) {
-  const home = process.env.HERMES_HOME;
+  const home = process.env.MYTHOS_DSH_INSTALL_DIR;
   if (!home || !installRoot) return;
   try {
     const inTree = path.resolve(home).toLowerCase().startsWith(path.resolve(installRoot).toLowerCase());
     if (!inTree) return;
-    log('auto-update: HERMES_HOME points inside the install tree —', home);
+    log('auto-update: MYTHOS_DSH_INSTALL_DIR points inside the install tree —', home);
     log('auto-update: every update will delete that Hermes install. Repoint it at',
       path.join(app.getPath('userData'), 'tools', 'Hermes Agent'), 'and reinstall there.');
   } catch (err) {
-    log('auto-update: could not check HERMES_HOME —', err && err.message);
+    log('auto-update: could not check MYTHOS_DSH_INSTALL_DIR —', err && err.message);
   }
 }
 

@@ -17,11 +17,14 @@
 //    /api/setup/status reporting "none of: GOOGLE_API_KEY, GROQ_API_KEY, …" with
 //    needsSetup:true, which is what puts the wizard over the HUD.
 //
-// 2. HERMES DELIVERED WHERE UPDATES DELETE. setup-hermes.js installed into
-//    <repo>/Hermes Agent, and for a packaged install <repo> is inside the
+// 2. THE BUILD ENGINE DELIVERED WHERE UPDATES DELETE. setup-hermes.js installed
+//    into <repo>/Hermes Agent, and for a packaged install <repo> is inside the
 //    install tree — the NSIS updater removes it wholesale (23,283 files,
 //    measured). doctor.js restated that one path by hand, so it also could not
-//    see an install anywhere else.
+//    see an install anywhere else. W6 (2026-08-22) replaced the engine with
+//    DeepSeek Harness and setup-dsh.js carries the SAME dual-search rule, so
+//    this section is re-pointed rather than deleted: the defect was about the
+//    delivery location, not about which program was delivered.
 //
 // 3. THE INSTALLER ASKED WITHOUT LOOKING. build/installer.nsh hardcoded every
 //    checkbox default and never touched the disk, and its update-path fallback
@@ -40,7 +43,7 @@ const {
   rankSiblingFiles,
   ORPHANED_USERDATA_FILES,
 } = require('../../electron/vault-migration');
-const hermes = require('../scripts/setup-hermes.js');
+const dsh = require('../scripts/setup-dsh.js');
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-reinstall-')); }
 function write(file, text, mtimeMs) {
@@ -79,7 +82,7 @@ describe('1. keys.json survives the userData rename', () => {
     // moment the file is staged — which is why it passed before `git add` and
     // failed inside the pre-commit hook.
     const fakeCli = path.join(os.tmpdir(), 'hermes.exe');
-    write(path.join(parent, 'agent-os', 'config.json'), JSON.stringify({ HERMES_CLI: fakeCli }));
+    write(path.join(parent, 'agent-os', 'config.json'), JSON.stringify({ DSH_TASK_TIMEOUT_MS: 600000, _fake: fakeCli }));
 
     const results = adoptSiblingUserDataFiles({ userDataDir: userData, siblingUserDataNames: ['agent-os'] });
 
@@ -155,47 +158,74 @@ describe('1. keys.json survives the userData rename', () => {
   });
 });
 
-describe('2. Hermes is delivered where an update cannot erase it', () => {
+describe('2. the build engine is delivered where an update cannot erase it', () => {
   it('writes into MYTHOS_TOOLS_DIR when Electron injected one', () => {
     const tools = path.join(os.tmpdir(), 'ud-tools');
-    const home = hermes.resolveHermesHome({ MYTHOS_TOOLS_DIR: tools });
-    assert.equal(home, path.resolve(path.join(tools, 'Hermes Agent')));
+    const home = dsh.resolveDshHome({ MYTHOS_TOOLS_DIR: tools });
+    assert.equal(home, path.resolve(path.join(tools, 'DeepSeek Harness')));
   });
 
-  it('falls back to the repo for a bare dev-checkout run', () => {
-    assert.equal(hermes.resolveHermesHome({}), hermes.REPO_HERMES_HOME);
+  it('falls back to the repo root for a bare dev-checkout run', () => {
+    assert.equal(dsh.resolveDshHome({}), dsh.REPO_DSH_HOME);
   });
 
-  it('an explicit HERMES_HOME still wins — it is the documented escape hatch', () => {
-    const explicit = path.join(os.tmpdir(), 'custom-hermes');
-    const home = hermes.resolveHermesHome({ HERMES_HOME: explicit, MYTHOS_TOOLS_DIR: path.join(os.tmpdir(), 'ud-tools') });
+  it('an explicit MYTHOS_DSH_INSTALL_DIR still wins — the documented escape hatch', () => {
+    const explicit = path.join(os.tmpdir(), 'custom-dsh');
+    const home = dsh.resolveDshHome({ MYTHOS_DSH_INSTALL_DIR: explicit, MYTHOS_TOOLS_DIR: path.join(os.tmpdir(), 'ud-tools') });
     assert.equal(home, path.resolve(explicit));
   });
 
-  it('a READ searches every home, so an install that predates this change is still found', () => {
-    const homes = hermes.hermesSearchHomes({ MYTHOS_TOOLS_DIR: path.join(os.tmpdir(), 'ud-tools') });
-    assert.ok(homes.some((h) => h.includes('tools')), 'the new location');
-    assert.ok(homes.includes(hermes.REPO_HERMES_HOME), 'the pre-2026-08-12 location must stay searchable');
+  it('a READ searches every home, so an install in either location is still found', () => {
+    const homes = dsh.dshSearchHomes({ MYTHOS_TOOLS_DIR: path.join(os.tmpdir(), 'ud-tools') });
+    assert.ok(homes.some((h) => h.includes('tools')), 'the userData location');
+    assert.ok(homes.includes(dsh.REPO_DSH_HOME), 'the dev-checkout location must stay searchable');
   });
 
-  it('finds a real binary in the userData home', () => {
+  it('finds a real install in the userData home', () => {
     const tools = tmpDir();
-    const bin = process.platform === 'win32'
-      ? path.join(tools, 'Hermes Agent', 'hermes-agent', 'venv', 'Scripts', 'hermes.exe')
-      : path.join(tools, 'Hermes Agent', 'hermes-agent', 'venv', 'bin', 'hermes');
-    write(bin, 'binary');
+    const pkgDir = path.join(tools, 'DeepSeek Harness', 'node_modules', '@deepseek-ai', 'dsh');
+    write(path.join(pkgDir, 'lib', 'bin.js'), '#!/usr/bin/env node\n');
+    write(path.join(pkgDir, 'package.json'),
+      JSON.stringify({ name: '@deepseek-ai/dsh', version: dsh.DSH_VERSION, bin: { dsh: 'lib/bin.js' } }));
 
-    const found = hermes.findInstalledBinary({ MYTHOS_TOOLS_DIR: tools });
-    assert.ok(found, 'an installed Hermes must be detected, or the wizard re-offers it');
-    assert.equal(found.bin, bin);
+    const found = dsh.findInstalled({ MYTHOS_TOOLS_DIR: tools });
+    assert.ok(found, 'an installed engine must be detected, or the wizard re-offers it');
+    assert.equal(found.version, dsh.DSH_VERSION);
+    assert.equal(found.entry, path.join(pkgDir, 'lib', 'bin.js'));
+  });
+
+  it('reads the bin entry from the package rather than guessing a file name', () => {
+    // dsh is a developer preview. `bin` is a string on some packages and a map on
+    // others, and guessing would break silently on the next release.
+    const tools = tmpDir();
+    const pkgDir = path.join(tools, 'DeepSeek Harness', 'node_modules', '@deepseek-ai', 'dsh');
+    write(path.join(pkgDir, 'other', 'entry.js'), '');
+    write(path.join(pkgDir, 'package.json'),
+      JSON.stringify({ version: dsh.DSH_VERSION, bin: 'other/entry.js' }));
+    const found = dsh.findInstalled({ MYTHOS_TOOLS_DIR: tools });
+    assert.equal(found.entry, path.join(pkgDir, 'other', 'entry.js'));
+  });
+
+  it('a present-but-wrong-version install is reported with its version, not as OK', () => {
+    // The adapter asserts the pin before every task, so "installed" for a
+    // version it refuses is the same half-truth that let six builds fail
+    // silently. findInstalled reports the version; doctor.js decides.
+    const tools = tmpDir();
+    const pkgDir = path.join(tools, 'DeepSeek Harness', 'node_modules', '@deepseek-ai', 'dsh');
+    write(path.join(pkgDir, 'lib', 'bin.js'), '');
+    write(path.join(pkgDir, 'package.json'),
+      JSON.stringify({ version: '0.0.1-not-the-pin', bin: { dsh: 'lib/bin.js' } }));
+    const found = dsh.findInstalled({ MYTHOS_TOOLS_DIR: tools });
+    assert.equal(found.version, '0.0.1-not-the-pin');
+    assert.notEqual(found.version, dsh.DSH_VERSION);
   });
 
   it('reports nothing when nothing is installed in any searched home', () => {
-    // The homes are injected, not derived from env: the repo home is always in
-    // the real search list, and THIS machine has Hermes in its dev checkout, so
-    // an env-only version of this test would assert the host's state rather than
-    // the function's behaviour.
-    assert.equal(hermes.findInstalledBinary({}, [tmpDir(), tmpDir()]), null);
+    // The homes are injected, not derived from env: the real search list always
+    // includes the repo root, and THIS machine has dsh there, so an env-only
+    // version of this test would assert the host's state rather than the
+    // function's behaviour.
+    assert.equal(dsh.findInstalled({}, [tmpDir(), tmpDir()]), null);
   });
 
   it('doctor asks setup-dsh rather than restating a path', () => {
@@ -210,10 +240,10 @@ describe('2. Hermes is delivered where an update cannot erase it', () => {
       'the hand-restated path is what let doctor and the installer disagree');
   });
 
-  it('requiring setup-hermes does not run its probe', () => {
+  it('requiring setup-dsh does not run its probe', () => {
     // doctor.js requires it on every report; an unguarded entry point would
     // spawn a child process each time.
-    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'setup-hermes.js'), 'utf8');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'setup-dsh.js'), 'utf8');
     assert.match(src, /require\.main === module/);
   });
 });
@@ -224,7 +254,7 @@ describe('3. the installer looks before it asks', () => {
   it('probes the userData paths electron/main.js actually injects', () => {
     assert.match(nsh, /\$APPDATA\\MYTHOS\\models\\silero\\silero_vad\.onnx/);
     assert.match(nsh, /\$APPDATA\\MYTHOS\\models\\wakeword\\melspectrogram\.onnx/);
-    assert.match(nsh, /\$APPDATA\\MYTHOS\\tools\\Hermes Agent/);
+    assert.match(nsh, /\$APPDATA\\MYTHOS\\tools\\DeepSeek Harness/);
     assert.match(nsh, /\$APPDATA\\MYTHOS\\tools\\Android Platform Tools\\platform-tools\\adb\.exe/);
   });
 
@@ -236,16 +266,38 @@ describe('3. the installer looks before it asks', () => {
     assert.match(detect, /\$\{AndIf\}/, 'all-or-nothing, not any-of');
   });
 
-  it('checks all three legitimate Hermes homes, including HERMES_HOME', () => {
+  it('checks both legitimate build-engine homes', () => {
+    // W6 (2026-08-22) dropped the third one. Hermes had an HERMES_HOME env var;
+    // dsh deliberately has no equivalent — it resolves a PINNED, project-local
+    // install and refuses to reach for a global one, which is the property that
+    // makes its version assertion meaningful. Two homes remain: userData (which
+    // survives an update) and the in-tree one a dev checkout uses.
     const detect = nsh.slice(nsh.indexOf('!macro DetectComponents'), nsh.indexOf('Function mythosComponentsPage'));
-    assert.match(detect, /ReadEnvStr \$0 "HERMES_HOME"/);
-    assert.match(detect, /\$INSTDIR\\resources\\app\.asar\.unpacked\\Hermes Agent/);
+    assert.match(detect, /\$APPDATA\\MYTHOS\\tools\\DeepSeek Harness/);
+    assert.match(detect, /\$INSTDIR\\resources\\app\.asar\.unpacked\\DeepSeek Harness/);
+    assert.equal(/HERMES_HOME/.test(detect), false,
+      'a probe for a deleted program\'s env var would report an install that cannot exist');
+  });
+
+  it('the build-engine checkbox is not gated on WSL', () => {
+    // dsh is an npm package where Hermes-Agent was a Python venv inside WSL.
+    // Gating the one component whose absence fails every build on a WSL install
+    // it does not need would refuse it on every Windows machine without WSL.
+    const page = nsh.slice(nsh.indexOf('Function mythosComponentsPage'));
+    const engineRows = page.split('\n').filter((l) => /DeepSeek Harness build engine/.test(l));
+    assert.ok(engineRows.length >= 1, 'the engine must still have a checkbox');
+    for (const row of engineRows) {
+      assert.equal(/WSL/i.test(row), false, 'no WSL gate on the build engine: ' + row.trim());
+    }
+    // WSL is still PROBED, because install-selection.json reports it and the
+    // app's component registry keys other rows on it.
+    assert.match(nsh, /wsl\.exe" --status/);
   });
 
   it('shows a found component as installed and disables it rather than hiding it', () => {
     assert.match(nsh, /"Silero VAD — already installed"/);
     assert.match(nsh, /'Wake word "hey jarvis" — already installed'/);
-    assert.match(nsh, /"Hermes build agent — already installed"/);
+    assert.match(nsh, /"DeepSeek Harness build engine — already installed"/);
     assert.match(nsh, /"Phone control via adb — already installed"/);
   });
 
@@ -305,26 +357,55 @@ describe('3. the installer looks before it asks', () => {
   });
 });
 
-// ---- the provider check must not fail against a value that is already right --
+// ---- the install check must not report a half-truth ---------------------------
 //
-// 2026-08-13: `provider: "openai-api"` — valid YAML, and exactly what the fix
-// hint asks for once the operator keeps the quotes the Hermes installer writes —
-// was reported as `must be "openai-api" (found: "openai-api")`, because the
-// check compared the RAW regex capture (quotes included) against a bare string.
-// An unactionable error that reads as a MYTHOS bug is worse than no check, and
-// this bites by default: the installer writes `provider: "auto"` quoted, so
-// every reinstall walks the operator into it. Source-shape assertion — the check
-// lives inline in a reporting function and is not exported.
-describe('setup-hermes.js provider check', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'setup-hermes.js'), 'utf8');
+// DELETED WITH HERMES (W6 step 6, 2026-08-22): this used to test
+// setup-hermes.js's YAML provider check, which existed because Hermes read
+// `model.provider` from its own config.yaml and a fresh install defaulted to
+// OpenRouter, so pointing the env vars elsewhere yielded a 401. dsh has no
+// config.yaml of its own in MYTHOS's path — the provider route is a generated
+// per-run overlay — so the whole class of defect is gone rather than moved.
+//
+// What replaces it is the check that CAN still be got wrong: reporting an
+// install as usable when the adapter would refuse it.
+describe('setup-dsh.js install check', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'setup-dsh.js'), 'utf8');
 
-  it('strips YAML quotes before comparing the provider id', () => {
-    assert.match(src, /replace\(\/\^\['"\]\|\['"\]\$\/g, ''\)/,
-      'the captured value must have surrounding quotes stripped before the comparison');
+  it('keeps its version pin in step with the adapter, and refuses if they drift', () => {
+    // Two literals that can disagree is how a script ends up installing a
+    // version the adapter then refuses to run.
+    const adapterPin = require('../adapters/dsh-agent').DSH_PINNED_VERSION;
+    assert.equal(dsh.DSH_VERSION, adapterPin);
+    assert.match(src, /VERSION PIN MISMATCH/,
+      '--check must refuse rather than install a version the adapter asserts against');
   });
 
-  it('compares the unquoted value, not the raw match object', () => {
-    assert.match(src, /if \(provider !== 'openai-api'\)/,
-      "comparing provider[1] against 'openai-api' is what made a correct quoted value fail");
+  it('verifies the pin against the CLI as well as package.json', () => {
+    // A half-finished reinstall makes those two disagree, and that is the state
+    // that produces inexplicable results rather than a clean failure.
+    assert.match(src, /INCONSISTENT INSTALL/);
+    assert.match(src, /'--version'/);
+  });
+
+  it('reports whether the BUILD LANE is reachable, not just whether dsh is present', () => {
+    // "installed" is only half of "builds will work"; the other half is BUG-168.
+    assert.match(src, /NOT USABLE FOR BUILDS/);
+    assert.match(src, /selectModel/);
+  });
+
+  it('never pipes a remote script into a shell', () => {
+    // COMMENTS STRIPPED FIRST, and the reason is that the naive version of this
+    // test FAILED on its own subject: setup-dsh.js's header explains that it
+    // never does `curl | bash` / `iex (irm …)`, and a scanner that cannot tell
+    // code from prose matched the explanation. Same class of false positive this
+    // repo already recorded when an /api/* inside a comment blanked a smoke
+    // test's input. Line-based, because the file uses // comments only, and the
+    // stripper is asserted so it cannot silently end up scanning nothing.
+    const code = src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    assert.ok(code.length < src.length, 'nothing was stripped — the filter is broken');
+    assert.ok(code.includes('async function install()'), 'real code must survive the strip');
+    assert.equal(/curl[^\n]*\|\s*(ba)?sh/.test(code), false);
+    assert.equal(/iex\s*\(/.test(code), false);
+    assert.match(code, /--save-exact/, 'the version must be pinned at install time');
   });
 });

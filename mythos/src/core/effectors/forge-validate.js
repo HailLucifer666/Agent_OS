@@ -4,9 +4,9 @@
 // the Forge pipeline (P22). Node builtins only (fs, path), zero deps, no LLM.
 // Phase 3 of the Hermes orchestration change removed validateFileContent/
 // writeProjectFile/summarizeGeneratedFile: Hermes writes its own files inside
-// its own HERMES_WRITE_SAFE_ROOT-enforced sandbox now, so the per-file
+// its own sandbox-enforced workspace root now, so the per-file
 // content-validate-then-write path (and its path-traversal guard, which
-// HERMES_WRITE_SAFE_ROOT replaces) is dead. What's left is slug/URL bookkeeping
+// the workspace sandbox replaces) is dead. What's left is slug/URL bookkeeping
 // plus walkProjectFiles, which forge-runner.js uses to poll a build's output
 // directory.
 

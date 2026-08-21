@@ -52,7 +52,7 @@ function tmpDir() {
 function withCleanEnv(extra, fn) {
   const saved = { ...process.env };
   for (const key of Object.keys(process.env)) {
-    if (/^(MYTHOS_|VOICE_|WAKEWORD_|AETHER_|HERMES_|GOOGLE_|GEMINI_|AUTONOMOUS_|DUCK_|PIPER_|LIVE_)/.test(key)) {
+    if (/^(MYTHOS_|VOICE_|WAKEWORD_|AETHER_|DSH_|GOOGLE_|GEMINI_|AUTONOMOUS_|DUCK_|PIPER_|LIVE_)/.test(key)) {
       delete process.env[key];
     }
   }
