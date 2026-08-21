@@ -1,7 +1,8 @@
 # MYTHOS — Complete Bug Registry
 
-<!-- BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest entries; they are placed
-     immediately after this header so the handoff is the first thing a new session reads. -->
+<!-- BUG-280, BUG-279, BUG-278, BUG-277, BUG-276, BUG-275 and BUG-274 are the newest
+     entries; they are placed immediately after this header so the handoff is the first
+     thing a new session reads. -->
 
 Comprehensive issue log covering the entire MYTHOS history, mined from:
 - Episodic conversation logs (vault/Episodic/)
@@ -414,6 +415,99 @@ gate ranks above it: the freshness matcher reads operator speech, and a garbled 
 happens to contain "result" routes to RSS and receives a plausible headline.
 
 `src/core/effectors/web-search.js`; `test/bug-280-search-has-a-working-provider.test.js`.
+## BUG-280 — close_window said "no window to close" about a dialog that was on screen (✅ RESOLVED 2026-08-20, live-verified)
+
+**Measured, not theorised.** On main @ `5cfe91a`, through a real node → pc-child round
+trip (a PowerShell-tool probe is UIPI-blocked and measures nothing):
+
+```
+launch_app main.cpl  -> Mouse Properties opens, hosted by rundll32 pid 11500
+list_windows         -> {processName:"rundll32", pid:11500, className:"#32770",
+                         title:"Mouse Properties", hwnd:"3343574", visible:true}
+(Get-Process -Id 11500).MainWindowHandle -> 0
+close_window pid=11500 -> ok:false, "PID 11500 (rundll32) has no window to close, and no
+                          windowed rundll32 process was found. Nothing was closed."
+list_windows after     -> dialog STILL OPEN, same hwnd.
+```
+
+Two commands in the same script disagreeing about whether a window exists — one enumerating
+it with a handle, the other denying it — is the whole defect in one line.
+
+**Root cause: one condition treated as one cure, when it is two conditions needing opposite
+targets.** `Handle-CloseWindow` reads `MainWindowHandle == 0` and concludes "this pid owns
+no window", then hunts for a *sibling process of the same executable* that does. That is
+right for **(a)**, a browser renderer/utility child or a launcher stub — BUG-103's case, and
+`Resolve-WindowedProcessByName` is the correct answer there. It is wrong for **(b)**, a pid
+that owns a real visible top-level window .NET simply does not classify as "main". Every
+rundll32-hosted Control Panel dialog is (b), and for it the sibling search is *guaranteed*
+to miss: rundll32 IS the host, so there is no second rundll32 holding that window.
+
+**The fix is an ORDER, not a deletion.** `Resolve-TopLevelWindowByPid` asks whether the pid
+itself owns a top-level window, using the **same UIA enumeration `Handle-ListWindows`
+answers `list_windows` with** — so the two commands can no longer disagree. Only when that
+finds nothing does the name-based sibling search run, unchanged. A visible window wins over
+a zero-size one (minimized or hidden): `close_window` is destructive and an invisible window
+is the wrong target.
+
+Deliberately **not** a second `Get-Process`/`MainWindowHandle` scan. `MainWindowHandle` is
+the field that is wrong here; re-reading it inside a helper would have relocated the bug
+rather than fixed it.
+
+**A new close mechanism was required, and there was no WM_CLOSE path anywhere in
+`ps-automation.ps1` before this.** `.NET`'s `Process.CloseMainWindow()` posts WM_CLOSE to
+`MainWindowHandle` — the exact handle that is zero here — so it cannot be reused. The hosted
+path sends WM_CLOSE (0x0010) to the enumerated handle via `SendMessageTimeout` with
+`SMTO_ABORTIFHUNG`: `SendMessage` would block until the target's message loop replied, and
+one modal dialog would then wedge this single-threaded adapter for the rest of the session;
+`PostMessage` reports nothing about delivery, so a dropped message would be
+indistinguishable from a refused close. Note 0x0010 already appears twice in `NativeInput`
+as `MOUSEEVENTF_RIGHTUP` and `SWP_NOACTIVATE` — unrelated constants sharing a number, and
+reusing either name would have been a real bug wearing a passing test.
+
+**The oracle is `IsWindow`, never the send call's return.** A dialog can acknowledge
+WM_CLOSE and stay open on a confirmation prompt. Trusting the send would be BUG-103's
+wrong-oracle mistake (`WaitForExit` on a multi-window browser) in a new costume. Both hosted
+failure branches return a **STRING**, keeping BUG-223's convention — a hashtable would be
+read as `ok:true` for a window still on screen, which is what BUG-103 comment #3 in this
+very handler already warns about.
+
+**Adjacent, deliberately deferred by `380e5b3`, and never ticketed.** That commit fixed
+`ui_elements` for the same dialogs by *deleting* its `MainWindowHandle` guard — `ui_elements`
+needs no handle at all. `close_window` needs one to act on, so the same deletion would not
+have worked; its note said the fix "needs a WM_CLOSE-by-hwnd path, which does not belong
+inside this change". It was correct to defer and wrong to leave unticketed: `git grep`
+found no BUG-28x anywhere, so this shipped as a known-but-invisible defect.
+
+**Live verification (2026-08-20, node → pc-child, with the fix in place).**
+
+| case | result |
+|---|---|
+| `main.cpl` → `close_window` pid 23424 | `ok:true {closed:true, resolvedBy:"owned-top-level", hwnd:"788408"}`, and `list_windows` no longer lists it |
+| `charmap` (ordinary Win32) | `ok:true, resolvedBy:"pid"` — unchanged path |
+| a `PING` pid (owns no window, no windowed sibling possible) | `ok:false`, "has no window to close…" — BUG-103's honest refusal, unchanged |
+| Brave, 10 live processes | all 9 windowless children resolve to **no** top-level window in the same enumeration, so a browser child pid still falls through to the sibling branch |
+
+`scripts/verify-desktop-automation.js` → **8/8 PASS** on a quiet desktop.
+
+**A warning about that gate, paid for during this fix.** Its charmap `type`/`click` cells
+failed on two runs here and looked like a regression from this change. They are not: the
+**unmodified** script failed identically on its second run, reading back the operator's own
+keystrokes instead of the probe text. Charmap's typing route follows the caret, so anyone
+typing anywhere during the run contaminates it. Before treating a red cell in that gate as a
+code defect, re-run it on an idle desktop — and pair it against the pre-change file, which
+is what settled it here.
+
+**What was NOT touched.** No control inside Mouse Properties is driven at any point.
+Some Control Panel controls apply the instant they are driven, with no Apply and no OK — a
+probe on 2026-08-20 swapped the operator's mouse buttons that way, and the registry read `0`
+while they were physically swapped. The live probe for this fix launches the dialog and
+closes it, nothing else, and still reads `GetSystemMetrics(SM_SWAPBUTTON)` and
+`GetDoubleClickTime()` before and after (both unchanged: `swap=0, dblclick=500`).
+
+Regression test: `test/bug-280-hosted-dialog-close.test.js` (12 tests). Mutation-proved —
+restoring the pre-fix behaviour (sibling search unconditional, pid-owned window never
+consulted) fails exactly the two ordering guards by name while the PowerShell parse check
+still passes, so the failures are behavioural rather than syntactic.
 
 ---
 
@@ -1335,8 +1429,12 @@ the phantom-grep hole for good.
 for either: (1) **were the replies continuous by ear**, especially around those 2 underruns; and
 (2) **when you interrupted, did MYTHOS go quiet and stay quiet** — the one episode that cut ~900ms
 is the only candidate, and a released mic beside continuing speech is this ticket's signature trap.
-Also still unrun: the **plain-Chrome** repeat, and the engine comparison itself — this session used
-**gemini-live only**, so `tts-chain` and `browser-speechSynthesis` were never exercised.
+Also still unrun *at the time of this session*: the **plain-Chrome** repeat, and the engine
+comparison itself — this session used **gemini-live only**, so `tts-chain` and
+`browser-speechSynthesis` were never exercised. **BOTH NOW RUN**, not as a live session but as a controlled acoustic measurement with the RMS
+oracle instead of the transcript one: see **T4 ACOUSTIC PROBE** below. Headline: page audio IS
+cancelled (15-20dB, in Chrome AND Electron), `speechSynthesis` is not cancelled at all, and the
+WebRTC-loopback remedy is unnecessary. It does NOT explain the 0.1193 above — that stays open.
 
 #### T4 STAGE 3 — 🔧 CODED 2026-08-20: `PENDING_HOLD_MS` 350 → 200, because the vetoes were refusing the operator for not lasting, not for being quiet
 
@@ -1484,6 +1582,102 @@ behaviour locked by the guard above. *Recorded here so this is not re-litigated.
 change that removes this trade instead of re-choosing which side to fail on is **T4**: echo
 cancellation is not removing MYTHOS's voice at all (bleed 0.1309 while `micEchoCancellation` reports
 `true`).
+
+#### T4 ACOUSTIC PROBE — 🔬 MEASURED 2026-08-20: AEC removes MYTHOS's page audio by 15-20dB; the one engine it does nothing to is `speechSynthesis`
+
+**This closes the "do first" three-engine measurement, the plain-Chrome repeat, and the Electron
+axis, all three of which the entries above list as still owed.** It also corrects the "do first"
+entry's central claim. That entry says the measurement "cannot be run by a session … there is no way
+to make sound leave a real speaker, cross open air, and land in a real microphone". There is. You
+play a known signal and read the microphone. What could not be run was the measurement *as specified*
+— scored off `live.echo-check`'s transcripts — and the reason is recorded two paragraphs later in
+this same ticket: `echo-filter.js` holds a reference for 3s and the own-voice gate shuts the mic
+while MYTHOS speaks, so a leak must be transcribed during a window in which capture is deliberately
+suppressed. **The oracle was the blocker, not the physics.** Swapping to the RMS oracle the barge-in
+policy already gates on makes it runnable, repeatable, and scorable in about three minutes.
+
+**THE INSTRUMENT.** `mythos/scripts/probe-aec-routes.js` (+ `scripts/aec-probe/probe.html`,
+`scripts/aec-probe/electron-main.js`). It serves its page alongside the **real** `ui/public/js`, so
+it imports `pcm-capture-worklet.js` and `barge-in-backstop.js`'s `rmsFromPcm16` and builds the
+capture graph `s2s-bridge.js:1197-1204` builds. The number it prints is computed by the code that
+computes `bleedPeak`; a reimplemented RMS would not be comparable to 0.1193. Plays a deterministic
+speech-shaped signal (band-limited 300-3400Hz, 4Hz syllable envelope, seeded, normalised to source
+RMS 0.20) through each route in turn, then repeats every route with `echoCancellation:false`.
+
+**THE RESULTS.** 4 runs, 1 Chrome 151 + 3 Electron 43.3.0, same room, same signal. Reductions are
+floor-subtracted and each route is compared only against **itself** with AEC off, so source level
+cannot masquerade as cancellation:
+
+| route | what uses it in MYTHOS | Chrome | Electron |
+|---|---|---|---|
+| `AudioContext` -> destination | Gemini Live, via `pcm-player.js` | >=13.4dB | >=14.7 / >=20.4dB |
+| `<audio>` element | the TTS chain's MP3 | >=7.8dB | >=10.0 / 14.7dB |
+| `RTCPeerConnection` loopback | the proposed remedy | >=13.3dB | >=12.6 / >=18.5dB |
+| **`speechSynthesis`** | **the fallback when `audioB64` is null** | **-1.1dB** | **-1.2 / -1.5dB** |
+
+**THREE HYPOTHESES REFUTED, one of them this ticket's own prime suspect inverted.**
+
+1. **"Chrome's AEC reference contains only WebRTC peer-connection audio"** (recorded above as
+   unsubstantiated, and correctly so) — **refuted**. Ordinary page audio is cancelled as well as, and
+   on both environments slightly better than, the WebRTC loopback route. The loopback spike buys
+   nothing and should not be built.
+2. **"Electron's AEC is inert where Chrome's works"** ([electron#47043](https://github.com/electron/electron/issues/47043))
+   — **does not reproduce** on Electron 43.3.0 x64. It cancels the same 15-20dB Chrome does. The
+   issue is real upstream but was reported on Windows 11 ARM64; this is not that machine.
+3. **The plan's suspect was that `speechSynthesis` is rendered outside the page audio graph "where
+   AEC cannot reach it".** The *conclusion* is confirmed and the *reasoning* needs no browser
+   internals: with all processing off, `speechSynthesis` has the **lowest** raw acoustic coupling of
+   the four routes (0.0163-0.0197 against 0.0184-0.0584). It leaks while being the quietest thing in
+   the room, so this is not a level artefact. **Routing difference, not capability gap.**
+
+**WHAT THIS DOES NOT EXPLAIN, stated plainly because the temptation is to call T4 closed.** The
+2026-08-20 live session's **0.1193 bleed peak is still unexplained.** This probe measures one room at
+one playback level with one signal; its absolute numbers are **not** interchangeable with a live
+`bleedPeak`. Remaining candidates, none of them eliminated: real Gemini Live playback louder than
+0.20 source RMS; `bleedPeak` counting operator speech as well as bleed; or a `speechSynthesis`
+fallback firing in that session and being attributed to `gemini-live` (the session is recorded as
+"gemini-live only", but `tts.spoke`'s `engine` field was added in the same 2026-08-20 window, so
+that attribution is worth re-reading before it is trusted).
+
+**THE BLEED-FLOOR REVISIT TRIGGER IS *NOT* FIRED.** Stage 5's record above sets it as "if bleed ever
+measures *below* ~0.04 (i.e. echo cancellation starts working), the remedy becomes valid again". This
+probe measures 0.0017-0.0141 on the route MYTHOS uses — which looks exactly like that trigger, and
+**is not it.** The trigger is about bleed in a *live session at MYTHOS's own playback level*; a probe
+reading at a level nobody has matched to production cannot satisfy it. Do not raise
+`INITIAL_BLEED_FLOOR` on the strength of this entry. Recorded so the next session does not read the
+table above and act on it.
+
+**WHAT IS ACTIONABLE, and deliberately NOT done here** (this entry is a measurement): MYTHOS falls
+back to `speechSynthesis` client-side when `audioB64` arrives null, and browser AEC cannot touch that
+audio. While the mic is live, that fallback makes MYTHOS hear itself, and no threshold change fixes
+it. The two candidate remedies are to not use that fallback while capture is open, or to hold the
+own-voice gate for its full duration. Both are behaviour changes and need their own entry.
+
+**Testing.** `test/aec-route-probe-scoring.test.js` (13 tests) pins the scoring arithmetic against
+real measured frames from these runs: power-domain aggregation, the quieter-of-two floor plus its
+disagreement report, the SNR validity gate, and the below-floor case reporting a **bound** rather than
+a value. Every one of those was mutation-proven — 5 mutations, each failing 1-3 specific tests, file
+restored byte-identical.
+
+**WHAT CI STRUCTURALLY CANNOT CATCH, and no green run should be read as covering.** That the page
+opens the mic; that the worklet yields frames; that any route reaches the speakers; that Chrome or
+Electron are still launchable; that the operator's speakers are not muted or on headphones. Only a
+room does that. The probe's own defence is the **validity gate**: a route whose AEC-off reference is
+under +6dB over the room floor is reported `UNDER-DRIVEN`, and a run where nothing is driven verdicts
+`INVALID` with the words "a clean sweep here is NOT evidence of working cancellation". That gate is
+not decoration — **run 1 of this probe hit it**, because the signal was ~20dB below the OS voice, and
+without it the run would have printed as perfect cancellation on every page route.
+
+**Two of my own errors, both caught by the design rather than by luck.** Run 1 was under-driven as
+above. Run 2 turned `echoCancellation` + `noiseSuppression` + `autoGainControl` off *together*, so
+AGC and AEC were conflated and `speechSynthesis` read **louder with AEC on** (0.0587) than with it off
+(0.0143) — arithmetically impossible as an echo result, and entirely explained by AGC boosting a
+quiet source. Pass 2 now moves one flag; the all-off reading survives as its own third pass, where it
+belongs. Also worth recording: two Electron runs appeared to disagree by 15dB on the AudioContext
+route (0.0125/peak 0.0788 vs 0.0017/peak 0.0069). They did not disagree about anything. **An AEC-on
+reading at or below the room floor has no value, only a bound** — and the noisier run's own silence
+windows differed by 9dB, with a later run drifting 12.4dB mid-pass while the operator was at the
+keyboard. The report now prints that warning itself.
 
 #### T4 step 0 — 🔧 CODED 2026-08-19: the measurement was not runnable, and now is
 
@@ -2560,7 +2754,7 @@ assertion, the phantom-kind guard, the log-rotation tests) and they are the temp
 
 ---
 
-Last updated: 2026-08-19 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.** **T4 step 4 FIXED, and the two corrections it forced: (1) the eager tier reopened the microphone without stopping playback, so step 2's "first interruption landed" was the operator's own complaint logged as a success — the verifier now prints `0 stopped playback, 1 reopened the mic ONLY` against that very log; (2) a local `player.flush()` cannot stop a turn the server is still streaming, and `voice.live.interrupted` appears ZERO times in the whole session, so Gemini's VAD never cut a single turn. Arriving audio is now dropped for the rest of the interrupted turn, ended by `live-turn-complete` — a frame the server has always broadcast and nothing in the HUD read. No threshold changed; the planned Stage 2/3 widenings were deliberately NOT shipped. Suite 5207/5207. STILL OWED: one live session — the operator's ear is the only oracle.**
+Last updated: 2026-08-20 - BUG-274 T1+T2 shipped; T4 step 0 (AEC readback instrument) CODED, measurement still owed; T5 MEASURED and every client-side hypothesis now REFUTED - the remaining defect is in Notepad's own UIA provider, and launch/focus/type/click pass live on both a Win32 and an MSIX app. Step 6.6's mechanical half MEASURED and now gated (`scripts/audit-licences.js --check` + `test/licence-audit.test.js`): 265 shipped packages enumerated, four previously-unrecorded obligations found, and T1's "removes the LGPL exposure" reasoning qualified - Kokoro's own tree ships an LGPLv3 binary that edge-tts never did. **T4 step 1 MEASURED + FIXED: AEC3 is granted and working (`micEchoCancellation: true`, bleed 0.0186 under a 0.05 floor), so T4's premise is refuted and no echo canceller is needed. Interruption was failing because the policy authorises on frame 5 of a run and the backstop only delivers on frames 3/6/9 - 0 releases and 11 vetoes on continuous speech at the operator's own 0.27 RMS. One-line behavioural fix, no constants retuned, RED-then-GREEN. A SECOND defect (100ms syllable dips reset the 350ms sustain timer) is pinned as a known-failing shape and left for measurement rather than guessed at.** **T4 step 4 FIXED, and the two corrections it forced: (1) the eager tier reopened the microphone without stopping playback, so step 2's "first interruption landed" was the operator's own complaint logged as a success — the verifier now prints `0 stopped playback, 1 reopened the mic ONLY` against that very log; (2) a local `player.flush()` cannot stop a turn the server is still streaming, and `voice.live.interrupted` appears ZERO times in the whole session, so Gemini's VAD never cut a single turn. Arriving audio is now dropped for the rest of the interrupted turn, ended by `live-turn-complete` — a frame the server has always broadcast and nothing in the HUD read. No threshold changed; the planned Stage 2/3 widenings were deliberately NOT shipped. Suite 5207/5207. STILL OWED: one live session — the operator's ear is the only oracle.** **T4 ACOUSTIC PROBE MEASURED 2026-08-20 (`scripts/probe-aec-routes.js`): browser AEC removes MYTHOS page audio by 15-20dB on BOTH the AudioContext (gemini-live) and `<audio>` (tts-chain) routes, in Chrome 151 AND Electron 43.3.0 — so electron#47043 does not reproduce here and the WebRTC-loopback remedy is unnecessary. The one route AEC does nothing to is `speechSynthesis` (-1.1 to -1.5dB), which is the client-side fallback when `audioB64` is null, and it leaks while having the LOWEST raw acoustic coupling of the four routes. Verdict: ROUTING DIFFERENCE, not capability gap. This does NOT explain the live 0.1193 bleed peak and does NOT fire the bleed-floor revisit trigger — probe levels are not live levels. The transcript oracle could never have answered this; the RMS oracle can.**
 A 15-area GitHub sweep was run against every capability MYTHOS has. The headline is that MOST
 areas need no change - Gmail, calendar, VAD, STT and browser are already on the highest-star,
 permissively-licensed, actively-maintained option. Five items are worth doing and they are
