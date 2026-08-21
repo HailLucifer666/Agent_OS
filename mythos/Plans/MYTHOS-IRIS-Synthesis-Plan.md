@@ -3737,11 +3737,28 @@ Per-wave gates, in order. Nothing advances on a green unit suite alone — this 
 Deepseek Harness"). Supersedes the one-line placeholder at this document's
 `Not started, and deliberately` note, which named W6 without ever defining it.
 
-**W6 RESUME HERE — position: step 0 of 8. Nothing is built. No code has been
-written. The blocking item is an operator ruling (W6.4), not engineering.**
+**W6 RESUME HERE — position: step 1 of 8, WRITTEN BUT NEVER RUN.**
 
-Next action: read W6.4, get the ruling, then start W6.7 step 1 (the standalone
-spike). Do not write adapter code before the spike returns a number.
+`mythos/scripts/spike-dsh-build.js` and its optional provider overlay
+`mythos/scripts/fixtures/dsh-openai-compatible.patch.yml` are committed. Its four
+refusal branches are verified (see the progress log). It has **never executed a
+single `dsh` invocation** — no credential for the engine exists on the authoring
+machine, so the measurement W6 turns on has not been taken.
+
+**Next action, and it needs the operator:** supply a credential, then run
+
+```bash
+node mythos/scripts/spike-dsh-build.js --samples 3
+```
+
+Either set `DEEPSEEK_API_KEY` in `mythos/.env` (the clean measurement), or pass
+`--dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml` to route
+through an OpenAI-compatible gateway using a key this repo already holds (a wiring
+smoke test, not the comparison — it measures dsh *and* that gateway).
+
+Then record the printed table in the progress log, commit the fixtures, and only
+then read W6.4 for the ruling. **Do not write adapter code before the spike returns
+a number** (W6-AD-2).
 
 ---
 
@@ -3801,6 +3818,20 @@ is why W6 is a swap and not a rewrite.
 
 ### VERIFIED — configuration surface
 
+- **A DeepSeek account is NOT strictly required.** The base bundle — which the
+  `headless` profile rides on — already ships `@deepseek-ai/dsh-llm-pi-ai`, a generic
+  multi-provider adapter. A provider route is declared in a `cordis.patch.yml` layer
+  with `apiKeyEnv` naming *any* environment variable, and a route pi-ai does not carry
+  in its catalog is declared outright with `api: openai-completions` + `baseURL`. So an
+  OpenAI-compatible gateway is configuration, not a code change, and **no plugin install
+  is needed**. Verified against `packages/llm/llm-pi-ai/README.md` and
+  `packages/bundle/base/package.json`. `apiKeyEnv` is a *reference* resolved per request,
+  so no secret enters the patch file, and a reference that resolves to nothing fails with
+  `MISSING_CREDENTIAL` rather than falling through to an unrelated key.
+  **Caveat that keeps this optional rather than default:** routing through a gateway
+  measures dsh *and* that gateway. W6 asks whether *dsh* builds better artifacts than
+  Hermes, so the comparison that goes in the progress log wants a direct
+  `DEEPSEEK_API_KEY` run.
 - **Credential resolution order:** inherited environment → `$DSH_HOME/.credentials.yaml`
   → the invoking directory's `.env` → `$DSH_HOME/.env`. The managed document is
   never materialized into `process.env`.
@@ -4250,8 +4281,8 @@ repo's standing rule: a green suite cannot tell you the app works.
 
 | Step | Status | Commit | Verification command and result |
 |---|---|---|---|
-| 0 | ☐ blocked on operator | — | — |
-| 1 | ☐ | — | — |
+| 0 | ☐ blocked on operator | — | ruling not given |
+| 1 | ◐ **written, never run** | this commit | `node --check` OK. Four refusal branches exercised, all exit 2: no credential and no `--dsh-patch`; `--dsh-patch` naming a missing file; an unknown flag (`--sample`); and `--samples` below 3 warns. AD-1 contract read verified live — `createBuildEngine({hermes:{runTask(){throw}}}).OUTPUT_CONTRACT` returns 671 chars beginning `OUTPUT CONTRACT — read before doing anything:`, with the stub never called. The degenerate-verifier guard is verified as **necessary, not theoretical**: `createVerifier({}).verify('literally anything')` resolves `{"pass":true,"issues":[],"warnings":[]}`, so scoring against a brainless verifier would have printed 100% PASS for both engines. A brain-backed verifier IS available here (`brain.think` is a function). **NOT RUN: zero `dsh` invocations — no engine credential on this machine.** |
 | 2 | ☐ | — | — |
 | 3 | ☐ | — | — |
 | 4 | ☐ | — | — |

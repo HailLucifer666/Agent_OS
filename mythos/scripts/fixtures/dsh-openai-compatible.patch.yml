@@ -1,0 +1,52 @@
+# W6 step 1 — optional provider overlay for the dsh spike.
+#
+# Lets the spike run WITHOUT a DeepSeek account, by pointing dsh's LLM seam at
+# an OpenAI-compatible gateway you already hold a key for. Pass it with:
+#
+#   node mythos/scripts/spike-dsh-build.js --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml
+#
+# WHY THIS WORKS. dsh's base bundle — which the `headless` profile rides on —
+# already ships @deepseek-ai/dsh-llm-pi-ai, a generic multi-provider adapter.
+# A route pi-ai does not ship in its catalog is declared outright, so an
+# OpenAI-compatible endpoint is configuration rather than a code change. No
+# plugin install is required. Verified 2026-08-21 against
+# packages/llm/llm-pi-ai/README.md and packages/bundle/base/package.json at
+# deepseek-ai/deepseek-harness@master.
+#
+# CAVEAT, and it is the reason this file is optional rather than the default:
+# routing through a gateway measures dsh AND that gateway's model. W6's question
+# is whether *dsh* builds better artifacts than Hermes. Use a direct
+# DEEPSEEK_API_KEY run for the comparison that goes in the progress log, and
+# treat a gateway run as a smoke test that the wiring works at all.
+#
+# `apiKeyEnv` is a credential REFERENCE resolved per request — no secret goes in
+# this file, and this file is safe to commit. A reference that resolves to
+# nothing fails the request with MISSING_CREDENTIAL rather than falling through
+# to whatever unrelated key the environment happens to hold.
+#
+# The values below are a WORKED EXAMPLE against OpenRouter, chosen because this
+# repo already carries an OPENROUTER_API_KEY. Change the route, baseURL and
+# model to whatever you actually hold. UNVERIFIED: no run has been made through
+# this file — see W6.0's not-verified list.
+
+- id: llm
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      # A hand-declared route: pi-ai ships nothing under this key, so the
+      # profile supplies the whole provider.
+      openrouter:
+        displayName: OpenRouter
+        apiKeyEnv: OPENROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://openrouter.ai/api/v1
+        # Needed for an endpoint whose URL pi-ai cannot recognize; without it
+        # the request is shaped as though the host were OpenAI itself.
+        compat:
+          thinkingFormat: deepseek
+        models:
+          - id: deepseek/deepseek-chat
+            contextWindow: 65536
+        retryPolicy:
+          mode: normal
+          maxRetries: 3
