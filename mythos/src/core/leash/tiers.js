@@ -211,15 +211,22 @@ const TIER_TABLE = {
   'spotify_play':          2,
   'spotify_search':        2,
   // RE-TIERED BACK TO T3 (2026-07-29). The T3->T2 reasoning above no longer
-  // holds for the build tools: as of the Hermes engine change every one of
-  // these drives an external coding agent that runs real commands (Forge sets
-  // HERMES_YOLO_MODE=1, which bypasses Hermes's own dangerous-command
-  // approval), so "sandboxed to vault/builds/" is no longer a true description
-  // of the blast radius. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
+  // holds for the build tools: every one of these drives an external coding
+  // agent that runs real commands, so "sandboxed to vault/builds/" is no longer
+  // a true description of the blast radius.
+  //
+  // MECHANISM UPDATED BY W6 (2026-08-22), TIER DELIBERATELY NOT CHANGED. This
+  // used to say Forge sets `HERMES_YOLO_MODE=1`, bypassing Hermes's own
+  // dangerous-command approval. Under `dsh` the equivalent is
+  // `autoApprove: true` -> `DSH_PERMISSION_MODE=workspace-write`, which is a
+  // NARROWER grant: writes are confined to the cwd the runner hands it, and
+  // `danger-full-access` is never passed. A narrower grant is NOT a reason to
+  // re-tier, and the tier is staying at 3 — because the second reason below
+  // never depended on the write radius at all. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
   // which is how a build launched itself unasked mid-conversation on
   // 2026-07-29 while the user was reporting an unrelated bug. Spotify and the
   // docs-gen tools keep T2; they genuinely are local and bounded.
-  'build_project':         3,  // P22 Forge — multi-file build; drives the Hermes CLI
+  'build_project':         3,  // P22 Forge — multi-file build; drives the build-engine CLI
   'revise_project':        3,  // P22 Forge — targeted regen; drives the Hermes CLI
   'pipeline_execute':      3,
   'kanban_assemble':       3,

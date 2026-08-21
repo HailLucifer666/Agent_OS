@@ -21,7 +21,10 @@
 // empty-prompt refusal below; the success path still returns the raw job record.
 function fail(reason) { return { ok: false, result: { error: reason } }; }
 
-// Content generation moved to build-engine.js (Hermes-Agent). `buildEngine` is
+// Content generation moved to build-engine.js — whose engine is `dsh` (DeepSeek
+// Harness) since W6 2026-08-22, and was Hermes-Agent before it. This module does
+// not care which: it holds an injected `buildEngine` and never names one.
+// `buildEngine` is
 // what production wires; when it is present brain.think is NEVER consulted for
 // build content — there is deliberately no fallback, because a plausible-but-
 // wrong artifact is worse than a failed job (see build-engine.js's header).

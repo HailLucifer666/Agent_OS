@@ -11,9 +11,9 @@
 // only the file that sets reviewStatus (agent-actions.js) had the second one.
 //
 // Two independent signals must degrade the announced status, per the repo's
-// CLAUDE.md (Hermes-Agent is the only build-content engine as of 2026-07-29 —
-// a build with no engine FAILS rather than shipping a plausible-but-wrong
-// artifact):
+// CLAUDE.md (there is exactly ONE build-content engine — `dsh` since W6
+// 2026-08-22, Hermes-Agent from 2026-07-29 until then — and a build with no
+// engine FAILS rather than shipping a plausible-but-wrong artifact):
 //   - reviewStatus === 'failed'   -> the reviewer/reality-checker rejected it.
 //   - a fallback engine was used  -> the content did not come from the real
 //     engine at all, so "it works" was never actually checked.

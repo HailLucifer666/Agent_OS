@@ -1,8 +1,12 @@
 'use strict';
 
 // effectors/forge.js — multi-file agentic build pipeline (P22). Phase 3 of the
-// Hermes orchestration change: Forge now drives the Hermes-Agent CLI (via
-// forge-runner.js) instead of calling brain.think({lane:'build'}) per file.
+// build-engine orchestration change: Forge drives an external coding-agent CLI
+// (via forge-runner.js) instead of calling brain.think({lane:'build'}) per file.
+// That CLI is `dsh` (DeepSeek Harness) since W6 2026-08-22; it was Hermes-Agent
+// when this pipeline was written. forge-runner.js takes the engine INJECTED, so
+// neither file names a program — see its header for why the rename stopped
+// there.
 // Checkpoints (P21 sibling module, connectionId:'system' so a voice-started
 // build stays HUD-approvable) gate the plan and the final review. Pending
 // checkpoints hold live closures and cannot survive a restart — init() re-arms

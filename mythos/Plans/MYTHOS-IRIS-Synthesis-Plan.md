@@ -17,7 +17,50 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-20 (latest, second entry) — **Stage 3 is pulled. The vetoes were refusing the operator for not LASTING, not for being quiet, and the operator scored the result 7-8/10.**
+### 2026-08-22 (latest) — **W6 is closed, and the thing it measured turned out to matter more than the swap itself: build quality was a PROMPT gap, not an engine gap.**
+
+**W6 COMPLETE, all 8 steps, pushed on `docs/w6-deepseek-harness-build-engine` (PR #18).**
+`512debd` the swap, `7e4f498` the deletion, `24b75c8` the close-out, `38300be` the two
+measured fixes. DeepSeek Harness (`dsh`, pinned `0.1.1-rc.2`) is the only build-content
+engine; Hermes-Agent is gone from the codebase. Ruling A is re-pointed, not weakened.
+
+**The swap was quality-NEUTRAL, and that was the correct result.** dsh and Hermes scored
+**3/9 each on the same model, prompt for prompt**, and all 12 rejections across both
+engines named ONE rule: `no @media queries (not responsive)`. A single rule dominating on
+two independent engines is a defect in the INSTRUCTION. `OUTPUT_CONTRACT` asked for a ready
+state and a visible scale and never asked for a page that works on a phone.
+
+**Two fixes, both measured with the clause as the only variable.**
+
+| fix | before | after |
+| --- | --- | --- |
+| responsive clause in `OUTPUT_CONTRACT` (`codestral-latest`) | 2/9 | **8/9** |
+| Whisper recognition hints (`providers/stt-hints.js`) | 4/8 | **8/8** |
+
+The first measurement of the responsive fix was **discarded as uncontrolled** — it moved the
+model *and* the contract (3/9 → 8/9) and could attribute the gain to neither. The controlled
+re-run is the number above. The STT fix came from Claude Code's published dictation
+behaviour ("project name and git branch are added as recognition hints automatically"); that
+*service* is unusable here (needs a Claude.ai session, explicitly unavailable to an API key)
+but the technique ported: `groq-stt.js` was sending Whisper **no `prompt` at all**.
+
+**NEXT ACTION — one open item, and it needs the operator.** The 8/8 STT number is on
+**synthesized** speech, which is cleaner than a human on a laptop microphone with music
+playing. It is a LOWER bound and says nothing about the operator's accent, and two of six
+cases were lost to a Google TTS 429 (n=1 per term). **Re-run `scripts/verify-stt-hints.js`
+against a real recording before deciding anything else about the voice path.** A dual-path
+change — dictation-grade transcription separate from the conversational Live stream — is the
+candidate that measurement would justify or kill; it is deliberately NOT started, because it
+touches the path the operator reports as working.
+
+**The one surviving verifier failure is `interactive-snake`** — a game canvas is the case a
+general "be responsive" instruction reaches least well. Left as its own question rather than
+answered by widening the clause on a guess.
+
+**Also settled:** the dsh licence closure is enumerated (434 packages, one non-permissive —
+`@img/sharp-win32-x64`, `Apache-2.0 AND LGPL-3.0-or-later`, the **same** libvips exposure
+this repo already ships and documents). No legal conclusion written, per root `CLAUDE.md`.
+### 2026-08-20 — **Stage 3 is pulled. The vetoes were refusing the operator for not LASTING, not for being quiet, and the operator scored the result 7-8/10.**
 
 **`PENDING_HOLD_MS` 350 → 200**, on the operator's instruction and on measured evidence rather than
 feel. The live session vetoed 24 barge-ins, **11 `pending-sustaining`**, at levels up to **0.2144**
@@ -3760,7 +3803,14 @@ install hint: all still true. The engine is now `dsh`.
 Harness, no Hermes code or config remains, and the suite still reports
 **0 failures and 0 skips**.
 
-**W6 COMPLETE — all 8 steps done, live-verified and pushed (`512debd` swap, `7e4f498` deletion). DeepSeek Harness is the build engine; Hermes-Agent is gone from the codebase. Suite 5776/5776/0/0. Nothing in W6 is outstanding. THE ONE MEASURED WEAKNESS IS NOT THE HARNESS: 6 of 9 verifier rejections, on BOTH harnesses, were the single rule `no @media queries (not responsive)` — `OUTPUT_CONTRACT` never asks for responsive CSS. That is a one-line prompt change with a 6/9 upside and it is the next thing worth doing, measured not assumed.**
+**W6 COMPLETE — all 8 steps done, live-verified and pushed (`512debd` swap, `7e4f498` deletion). DeepSeek Harness is the build engine; Hermes-Agent is gone from the codebase. Suite 5776/5776/0/0. Nothing in W6 is outstanding. THE ONE MEASURED WEAKNESS IS NOT THE HARNESS: 6 of 9 verifier rejections, on BOTH harnesses, were the single rule `no @media queries (not responsive)` — `OUTPUT_CONTRACT` never asks for responsive CSS. THAT ONE-LINE PROMPT CHANGE IS NOW SHIPPED AND MEASURED (`38300be`): a responsive clause in
+`OUTPUT_CONTRACT` took the verifier from **2/9 to 8/9** on one model with the clause as the
+only variable. The first attempt at that number was discarded as uncontrolled — it moved the
+model *and* the contract. The one surviving failure is `interactive-snake`. Shipped alongside
+it: Whisper recognition hints (`providers/stt-hints.js`), **4/8 → 8/8** on MYTHOS jargon,
+because `groq-stt.js` was sending no `prompt` field at all. Nothing in W6 is outstanding; the
+only open item is re-measuring STT against a **real** recording rather than synthesized
+speech — see the 2026-08-22 RESUME HERE entry.**
 
 ### The correction that reshaped this section
 

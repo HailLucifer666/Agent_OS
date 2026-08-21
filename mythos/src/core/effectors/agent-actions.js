@@ -138,8 +138,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
   }
 
   // Single content-generation seam (2026-07-31). build-runner already routes
-  // FIRST-DRAFT content through buildEngine (Hermes-Agent, the one build engine
-  // per build-engine.js), but the research-grounded regeneration and the
+  // FIRST-DRAFT content through buildEngine (`dsh` since W6 2026-08-22, and
+  // Hermes-Agent before it — the ONE build engine either way, per
+  // build-engine.js), but the research-grounded regeneration and the
   // review-retry below called brain.think directly and OVERWROTE that draft with
   // the result. Because risk='feature' covers nearly every real request (landing
   // page, dashboard, and the verbs build/create/design — see risk-classifier.js),

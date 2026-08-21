@@ -169,9 +169,17 @@ const PREF_BUILD = [
   // `ollama pull`ed — silently filtered out, so every build fell through anyway.
   // Optional local models sit last so their absence never costs a build attempt.
   //
-  // NOTE: since 2026-07-29 Hermes-Agent is the only build-CONTENT engine (see
+  // NOTE: since 2026-07-29 there has been exactly one build-CONTENT engine (see
   // CLAUDE.md / build-engine.js), so this lane no longer carries real build
   // traffic — it serves whatever still requests brain lane 'build'.
+  //
+  // W6 (2026-08-22) made that engine DeepSeek Harness (`dsh`) instead of
+  // Hermes-Agent, and the entries BELOW are why the swap needed no key change:
+  // dsh runs whatever this table ranks first that the machine can reach, so the
+  // harness changed and the models did not. "DeepSeek Harness" is a program
+  // name, not an instruction to run DeepSeek's models — there is no
+  // DEEPSEEK_API_KEY anywhere in MYTHOS. Reorder this list and you have
+  // reconfigured the build engine; that is deliberate.
   { provider: 'mistral',    model: 'codestral-latest' },                     // 344ms — code-specialist AND faster than -large
   // mistral-medium-2604 inserted ABOVE -large on 2026-08-14: 4/4 vs 3/4 (-large
   // missed a reasoning probe) and 461ms vs 701ms. Same key, same lane, strictly
