@@ -152,6 +152,86 @@ about 1¢ per dsh turn — but needs allow-listing plus credit.
 
 ---
 
+## Vision — does the model accept an image?
+
+The `vision` lane feeds `screen_look`, `camera_look`, the screen sensor and build
+render verify, so image input is not optional there. Measured by sending a real
+PNG part.
+
+**This tests ACCEPTANCE, not accuracy.** A tiny synthetic PNG proves the wire
+shape works and says nothing about reading a 320KB screenshot well —
+`free-tier-model-map.md` already records that a small test image gives
+misleading quality signal.
+
+| Provider | Accepts images |
+|---|---|
+| Google | `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemma-4-31b-it` |
+| Mistral | `mistral-small-latest`, `mistral-large-2512`, `mistral-medium-latest` |
+| NVIDIA / NIM | `meta/llama-3.2-11b-vision-instruct`, `nvidia/llama-3.1-nemotron-nano-vl-8b-v1`, `meta/muse-glimmer-30b`, `thinkingmachines/inkling`, `google/gemma-4-31b-it` |
+| Groq | `qwen/qwen3.6-27b` |
+| opencode | `mimo-v2.5-free` |
+
+Text-only despite being capable text models: `b.ai/deepseek-v4-flash` (400) and
+`opencode/nemotron-3-ultra-free` (400).
+
+## Embeddings — and why this lane must not be swapped casually
+
+| Model | Dimensions |
+|---|---|
+| `mistral/mistral-embed` | **1024** |
+| `nvidia/nemotron-3-embed-1b` | **2048** |
+| `google/gemini-embedding-001` | **3072** |
+
+Dead: `nvidia/baai/bge-m3` (`500`), `google/text-embedding-004` (`404`).
+
+All three have **different dimensions**, and changing dimensions invalidates
+every vector already stored. That is why the embed lane has deliberately never
+moved, and nothing measured here changes that.
+
+## Lane health — measured against the real ids in `lanes.default.js`
+
+Probed in priority order, so "starts at" is where a call actually gets its first
+answer. `ollama` entries are local and skipped rather than failed — absent-but-
+filtered is not the same as dead.
+
+| Lane | Cloud alive | Starts at | Dead entries |
+|---|---|---|---|
+| `voice` | 3 of 5 | **#1** | `cerebras/gemma-4-31b` 402 · `groq/llama-3.3-70b-versatile` 404 |
+| `build` | 4 of 7 | **#1** | `cerebras/gpt-oss-120b` 402 · `groq/llama-3.3-70b-versatile` 404 · `cerebras/zai-glm-4.7` 404 archived |
+| `memory` | 2 of 3 | **#1** | `cerebras/gemma-4-31b` 402 |
+| `vision` | 3 of 5 | **#1** | `google/gemini-flash-latest` no response (2 runs) · `nvidia/nemotron-nano-12b-v2-vl` `500 EngineCore` after 100s |
+| `embed` | 1 of 1 cloud | **#2** | — (`#1` is local `ollama/nomic-embed-text`) |
+| `simple` | 3 of 5 | **#2** ⚠ | `groq/llama-3.1-8b-instant` **404 — head of lane** |
+| `text` | 2 of 4 | **#3** ⚠ | `cerebras/zai-glm-4.7` 404 · `cerebras/gpt-oss-120b` 402 — **both top entries** |
+| `reasoning` | 2 of 4 | **#3** ⚠ | `cerebras/gpt-oss-120b` 402 · `cerebras/zai-glm-4.7` 404 — **both top entries** |
+
+`reasoning` is the expensive one: eight roles ride it — `mull`, `think_deeply`,
+self-reflection ×2, reviewer, reality-checker, design verify, orchestrator
+synthesize, `ask_agent`, engagement interview — and every one of them burns two
+failed attempts before reaching `nim/nvidia/nemotron-3.5-lightning-30b-a3b`,
+which is measured healthy and already sits at rank 3.
+
+`nvidia/nemotron-nano-12b-v2-vl` is worth watching rather than deleting: this
+repo recorded it at 386ms in July, then 7.5-15s with hallucinated content on
+2026-08-14, and now a `500` after 100s. It is degrading, not flapping.
+
+## What can go on each lane
+
+Candidates below are measured usable for the capability that lane needs — not a
+recommendation about ordering, which is what `free-tier-model-map.md` argues.
+
+| Lane | Usable models |
+|---|---|
+| `build` | Mistral `mistral-code-agent-latest`, `devstral-medium-latest`, `devstral-latest`, `mistral-code-latest`, `codestral-latest`, `codestral-2508` · NVIDIA `deepseek-ai/deepseek-v4-flash-0731`, `poolside/laguna-xs-2.1` · opencode `laguna-s-2.1-free`, `mimo-v2.5-free` · b.ai `deepseek-v4-flash` |
+| `reasoning` | NVIDIA `nvidia/nemotron-3-ultra-550b-a55b`, `nvidia/nemotron-3.5-lightning-30b-a3b`, `thinkingmachines/inkling`, `moonshotai/kimi-k3` · opencode `nemotron-3-ultra-free`, `nemotron-3.5-lightning-free`, `hy3-free` · Mistral `mistral-medium-2604`, `mistral-large-latest` · Google `gemini-3.6-flash` |
+| `memory` | Google `gemini-3-flash-preview` · Mistral `mistral-medium-2604` · NVIDIA `meta/llama-3.1-70b-instruct` |
+| `voice` | Google `gemini-flash-lite-latest`, `gemini-3.5-flash`, `gemini-3.6-flash` · Mistral `mistral-medium-latest`, `ministral-3b-latest` · NVIDIA `meta/llama-3.1-8b-instruct` · opencode free models |
+| `simple` | Mistral `ministral-3b-latest` · NVIDIA `meta/llama-3.1-8b-instruct` · Google `gemini-flash-lite-latest` · Groq `openai/gpt-oss-20b` (its 413 only bites at 10k; this lane sends tiny prompts) |
+| `text` | Google `gemini-3.6-flash` · NVIDIA `nvidia/nemotron-3-ultra-550b-a55b` (1M context), `moonshotai/kimi-k3` |
+| `vision` | see the vision table above |
+| `embed` | see the embeddings table above — **dimension change is destructive** |
+| Live voice (STT/TTS) | `gemini-3.1-flash-live-preview` over the Gemini Live WebSocket. Separate API; still no Pro-tier Live model at any price |
+
 ## Can host DeepSeek Harness as a build engine
 
 Everything that passed all three gates, so any of these can drive agentic builds:
