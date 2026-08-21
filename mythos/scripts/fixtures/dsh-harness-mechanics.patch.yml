@@ -91,22 +91,55 @@
 # `apiKeyEnv` is a credential reference resolved per request, so no secret is in
 # this file.
 
+# ---------------------------------------------------------------------------
+# UPDATED 2026-08-21 (third target). The operator added **GLM 5.2 (free)** to
+# their OpenRouter "Allowed Models" list, which changes the picture: OpenRouter's
+# guardrail is a strict ALLOW-list, and being on it is exactly what removes the
+# data-policy 404. Verified by trying five models on one key:
+#
+#   429  z-ai/glm-5.2:free                       ON the allowlist  -> upstream 429
+#   404  nvidia/nemotron-3-ultra-550b-a55b:free  not on it         -> data policy
+#   404  google/gemma-4-31b-it:free              not on it         -> data policy
+#   404  cohere/north-mini-code:free             not on it         -> data policy
+#   404  deepseek/deepseek-v4-flash              not on it         -> data policy
+#
+# So `z-ai/glm-5.2:free` is REACHABLE (256k context, advertises `tools`), and the
+# remaining obstacle is upstream free-pool congestion rather than permission:
+# six manual attempts over ~2.5 minutes were all
+# `429 z-ai/glm-5.2:free is temporarily rate-limited upstream`. dsh's own
+# retryPolicy gets a longer run at it than a hand loop, which is why maxRetries
+# is raised here.
+#
+# Uses OPENROUTER_API_KEY from the repo-root .env.local. The allowlist is
+# ACCOUNT-level, so the key already stored there reaches GLM too — confirmed
+# separately, so nothing here depends on a temporary key.
+#
+# STILL NOT A DEEPSEEK MEASUREMENT. GLM is not DeepSeek; this answers the harness
+# questions only. There are **14 DeepSeek routes on OpenRouter and 0 with a
+# `:free` variant** (re-verified 2026-08-21), so measuring actual DeepSeek needs
+# a paid route allowlisted plus credit — and it is cheap: at
+# `deepseek/deepseek-v4-flash`'s **$0.080/M** prompt, dsh's measured ~10,760-token
+# request across the spike's 12 turns is about **$0.01** on the prompt side.
+# ---------------------------------------------------------------------------
+
 - id: agent-default-model
   config:
-    provider: groq
-    model: openai/gpt-oss-20b
+    provider: openrouter
+    model: z-ai/glm-5.2:free
 
 - id: llm-pi-ai
   config:
     providers:
-      groq:
-        displayName: Groq (harness mechanics only)
-        apiKeyEnv: GROQ_API_KEY
+      openrouter:
+        displayName: OpenRouter GLM (harness mechanics only)
+        apiKeyEnv: OPENROUTER_API_KEY
         api: openai-completions
-        baseURL: https://api.groq.com/openai/v1
+        baseURL: https://openrouter.ai/api/v1
         models:
-          - id: openai/gpt-oss-20b
-            contextWindow: 131072
+          - id: z-ai/glm-5.2:free
+            contextWindow: 256000
         retryPolicy:
           mode: normal
-          maxRetries: 3
+          # Raised from 3: the blocker is a congested free pool, not a bad
+          # request, and a 429 that clears is worth waiting through.
+          maxRetries: 8

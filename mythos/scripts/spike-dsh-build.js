@@ -528,9 +528,20 @@ function reportForge(records) {
   // function printed "W6.11 risk 2 did NOT reproduce" and "Confinement held"
   // across three runs that had died in dsh's overlay loader 380ms in, before the
   // agent existed. Both lines were true statements about nothing, and both read
-  // as evidence. A run reached the agent iff it produced a terminal turn (ok) or
-  // was killed at the wall (timedOut); a fast non-zero exit is a boot failure.
-  const reachedAgent = records.filter((r) => r.ok || r.timedOut).length;
+  // as evidence.
+  //
+  // CORRECTED the same day, because the first version of this test was wrong in
+  // the OTHER direction and quietly UNDERSTATED real evidence. It counted a run
+  // as having reached the agent only if it produced a terminal turn (ok) or was
+  // killed at the wall (timedOut). The GLM run then showed two samples that each
+  // ran 75-98 seconds, drove tools, and WROTE ALL THREE REQUESTED FILES before
+  // dying on a provider 429 on a later turn — classified as "never started", so
+  // the summary claimed 1 of 3 runs when the truth was 3 of 3.
+  //
+  // Files on disk are the strongest proof available that the agent ran: nothing
+  // upstream of the agent can create them. So a run counts if it finished, or
+  // hit the wall, or left anything behind.
+  const reachedAgent = records.filter((r) => r.ok || r.timedOut || r.wrote > 0).length;
   console.log('');
   if (reachedAgent === 0) {
     console.log('UNMEASURED: 0 of ' + records.length + ' runs got past dsh boot, so this table says '

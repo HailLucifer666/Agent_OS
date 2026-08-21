@@ -1,0 +1,7 @@
+Done. I created three files in the workspace:
+
+- **index.html** — links `styles.css` in the head and `app.js` before `</body>`, with a `#clock` element to receive the time.
+- **styles.css** — styling for the page and the clock card.
+- **app.js** — renders the current time into `#clock` and updates it every second.
+
+Open `index.html` in a browser to see the live clock.

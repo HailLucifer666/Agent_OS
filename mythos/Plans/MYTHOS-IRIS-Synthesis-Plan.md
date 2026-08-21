@@ -3760,7 +3760,7 @@ install hint: all still true. The engine is now `dsh`.
 Harness, no Hermes code or config remains, and the suite still reports
 **0 failures and 0 skips**.
 
-**W6 RESUME HERE — position: step 0 COMPLETE. Step 1 code COMPLETE and RUN. The dsh half of the measurement is BLOCKED ON AN OPERATOR DECISION (a credential), and the Hermes half is measured: 3/9.**
+**W6 RESUME HERE — position: step 0 COMPLETE. Step 1 RUN, and dsh works: it wrote files 3/3, stayed confined 3/3, did not stall, and obeyed the no-write contract 1/1. Hermes baseline measured at 3/9. The ONE thing still missing is dsh build quality on a DeepSeek model, and that now costs about a cent.**
 
 Step 0 was copying the operator's 2026-08-21 removal plan into this tracked
 section. Done in the commit that carries this block. The earlier staging copy
@@ -3847,44 +3847,105 @@ node mythos/scripts/spike-dsh-build.js --samples 3 --forge
 Then record both tables in the progress log, commit the new fixtures, and only
 then write adapter code (**W6-AD-2**).
 
-**Still UNMEASURED — and the tables must not be read as implying otherwise:**
-whether dsh writes files when told (the Forge file-appearance oracle), whether
-it **stalls** on an approval it cannot answer (W6.11 risk 2), and whether it
-stays inside its workspace root. **Zero runs have reached dsh's agent**, so all
-three are *unanswered, not passed*; the report now prints exactly that word
-rather than a reassuring line.
+**THREE OF THE FOUR OPEN QUESTIONS ARE NOW ANSWERED — dsh ran end to end.**
+The operator added **GLM 5.2 (free)** to their OpenRouter allow-list, which was
+the whole blocker: that guardrail is a strict allow-list, and being on it is
+exactly what removes the data-policy 404. Measured on one key:
 
-**The operator asked for the harness-only measurement, and it was attempted
-against four providers on 2026-08-21. Every one is blocked by something outside
-this repo's code.** Recorded in full so nobody repeats the sweep:
-
-| Provider | Result | What it would take |
+| Model | On the allow-list? | Result |
 |---|---|---|
-| **OpenRouter** | `404 No endpoints available matching your guardrail restrictions and data policy` on **every** model tried — three DeepSeek routes *and* `mistralai/mistral-small-3.2-24b-instruct`. `/api/v1/key` → `is_free_tier: true, usage: 0` | Allow the data policy at `openrouter.ai/settings/privacy`, add credits. Account setting — not a session's call |
-| **Groq** | Reached, authenticated, tool-calling confirmed on `openai/gpt-oss-20b` (200, TOOL CALL OK). Then `413 ... TPM: Limit 8000, Requested 10808` on **all 12** attempts | Groq Dev tier. This is a per-**request** ceiling, so waiting cannot fix it |
-| **Mistral** | Reached and authenticated. `422 union_tag_invalid: Input tag 'developer' found using 'role' does not match any of the expected tags` — dsh sends the system prompt in a `developer` role Mistral refuses. `compat.supportsDeveloperRole: false` was tried at **route** level and at **model** level; neither suppressed it. Also `429` on a third of calls | A pi-ai compat fix, or a provider that accepts the role. Not needed for production, which uses the native DeepSeek adapter |
-| **NVIDIA / NIM** | `/v1/models` advertises **102** models **including `deepseek-ai/deepseek-v4-flash-0731`** — but a tool-call request to it **hangs** with no response. This independently corroborates `lanes.default.js:294`, which already records the NIM DeepSeek route dead by 404/timeout | Nothing available. The route is advertised and does not answer |
-| **Cerebras** | `404 model_not_found` on all three ids tried | A correct model id for this account |
+| `z-ai/glm-5.2:free` | **yes** | `429` from upstream — **through the guardrail** |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | no | `404` data policy |
+| `google/gemma-4-31b-it:free` | no | `404` data policy |
+| `cohere/north-mini-code:free` | no | `404` data policy |
+| `deepseek/deepseek-v4-flash` | no | `404` data policy |
 
-**Two things were measured on the way, and both are real findings.**
+The allow-list is **account-level**, so the `OPENROUTER_API_KEY` already in the
+repo-root `.env.local` reaches GLM too — nothing here depends on a temporary key.
 
-1. **dsh's fixed request overhead is ~10,700–10,820 tokens** before any task
-   text — read off Groq's `413`, twelve times, with a ~120-token spread, so it
-   is the system prompt plus tool definitions rather than anything about the
-   task. It is a per-request floor, and a cost input W6.4's per-call-site model
-   table should be read against: at `deepseek-v4-pro`'s ~$1.60/M that is about
-   **$0.017 of prompt per turn**, and a Forge build is many turns.
-2. **dsh's request assembly works completely.** Groq rejected the request for
-   being too large, which means dsh had already built a full one — system
-   prompt, tools, task — and shipped it. Combined with the earlier
-   ENOENT → `MISSING_CREDENTIAL` → gateway-`404` progression, every link from
-   boot to provider I/O is now proven. What is missing is a provider that will
-   answer, not code.
+### Forge write path — ANSWERED, 3 of 3 runs
 
-`mythos/scripts/fixtures/dsh-harness-mechanics.patch.yml` is kept pointing at
-Groq — the closest to working, needing only a paid tier — with all of the above
-recorded in its header, and a capitalised warning that it cannot answer build
-quality and must never fill in the comparison table.
+```
+sample  exit      files-written  strays  ms      names
+1       failed    3              0       75641   app.js,index.html,styles.css
+2       failed    3              0       97803   app.js,index.html,styles.css
+3       ok        3              0       18437   app.js,index.html,styles.css
+```
+
+- **Does dsh write files when told? YES.** 3/3 runs wrote exactly the three
+  requested files, no more and no fewer.
+- **W6.11 risk 2 — does it stall on an approval it cannot answer? It did NOT
+  reproduce**, on 3/3 runs that reached the agent. That is evidence about this
+  prompt under this profile, not a general guarantee: a build touching something
+  outside the workspace can still hit an approval with nowhere to answer.
+- **Confinement HELD.** Zero strays beside the workspace root in 3/3 runs.
+- The two "failed" exits are **not** write-path failures. Both wrote all three
+  files and then died on a provider `429` on a *later* turn — 75 s and 98 s in.
+  Which exposed a defect in this spike's own reporting, now fixed: the
+  reached-the-agent test was `ok || timedOut`, so it counted those two as
+  "never started" and printed **1 of 3** where the truth was **3 of 3**. Files on
+  disk are the strongest available proof the agent ran — nothing upstream of it
+  can create them — so the predicate is now `ok || timedOut || wrote > 0`.
+  Replaying the observed records through both: old → 1/3, fixed → 3/3.
+
+### Single-artifact path — dsh obeys the contract, and fails the same rule Hermes does
+
+```
+engine  attempts  produced  verifier-pass  obeyed-no-write  median-ms
+dsh     9         1         0              1                14677
+```
+
+Eight of nine attempts were lost to the free pool's upstream `429`
+(`provider_name: "Decart"`, `limit_source: "upstream_provider_shared_pool"`).
+The one that produced is committed as
+`test/fixtures/w6-spike/dsh--data-dashboard--03.txt`: a **6,680-byte** dark-themed
+single-file CPU-temperature chart titled `CPU Temperature — 7 Day Chart`, i.e.
+derived from the spec rather than an invented brand name.
+
+Two findings from that single sample, and the second is why it is only
+suggestive:
+
+- **dsh obeyed `OUTPUT_CONTRACT`: 1 of 1 produced runs wrote nothing** while
+  being told the reply is the deliverable. Combined with 3/3 writing files when
+  told to, dsh honours both directions of the instruction.
+- It failed on **`no @media queries (not responsive)`** — *the same single rule*
+  that fails 6 of Hermes's 9. **n=1. Do not read a comparison into it.**
+
+### STILL UNMEASURED: dsh build quality on DeepSeek
+
+That is the one question W6 turns on, and GLM cannot answer it — GLM is not
+DeepSeek. Re-verified 2026-08-21: **14 DeepSeek routes on OpenRouter, 0 with a
+`:free` variant.** But it is cheap, and the cost is now measured rather than
+guessed:
+
+| Route | $/M prompt | Est. prompt cost, 12-turn spike |
+|---|---|---|
+| `deepseek/deepseek-v4-flash` | **$0.080** | **≈ $0.01** |
+| `deepseek/deepseek-v4-flash-0731` | $0.080 | ≈ $0.01 |
+| `deepseek/deepseek-chat-v3.1` | $0.250 | ≈ $0.03 |
+| `deepseek/deepseek-v4-pro` | ~$1.60 | ≈ $0.21 |
+
+**Next action:** allow-list `deepseek/deepseek-v4-flash` (and `-v4-pro` for the
+quality-critical call sites W6.4 assigns it), add credit, then run
+
+```bash
+node mythos/scripts/spike-dsh-build.js --samples 3 --forge --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml
+```
+
+Setting `DEEPSEEK_API_KEY` in `mythos/.env` and dropping `--dsh-patch` remains
+the cleaner measurement — it uses dsh's native DeepSeek adapter and sidesteps
+pi-ai entirely, including the `supportsDeveloperRole` defect below.
+
+### Recorded for whoever writes the adapter
+
+`compat.supportsDeveloperRole: false` **does not work** in dsh 0.1.1-rc.2's
+pi-ai adapter. Mistral rejected the request with
+`422 union_tag_invalid: Input tag 'developer' found using 'role' does not match
+any of the expected tags`, with the switch set — tried at **route** level and at
+**model** level, the two positions its README documents. Production will not
+route through pi-ai once `DEEPSEEK_API_KEY` exists (the base bundle mounts the
+native DeepSeek adapter), so this is a note rather than a blocker. It is also a
+preview-quality signal about the engine W6 is about to make the only one.
 
 ---
 
@@ -4566,3 +4627,7 @@ Copy this to a fresh agent. It should need nothing else but this document and
 | 2026-08-21 | Step 1 — harness-only measurement attempted across **five** providers on the operator's instruction; every one blocked outside this repo's code | *(this commit)* | **OpenRouter** `404` data-policy on 3 DeepSeek routes + 1 Mistral route, `/api/v1/key` → `is_free_tier: true, usage: 0`. **Groq** authenticated, tool-calling confirmed (`openai/gpt-oss-20b` → 200 TOOL CALL OK), then `413 TPM: Limit 8000, Requested 10808` on **12/12**. **Mistral** authenticated, `422 union_tag_invalid` on a `developer` role; `compat.supportsDeveloperRole: false` tried at route AND model level, neither suppressed it; `429` on ~1/3 of calls. **NVIDIA/NIM** advertises 102 models incl. `deepseek-ai/deepseek-v4-flash-0731`, but a tool-call request to it **hangs with no response** — corroborates `lanes.default.js:294`'s dead-route note by the timeout path. **Cerebras** `404 model_not_found` on 3 ids |
 | 2026-08-21 | Step 1 — **dsh's fixed request overhead measured: ~10,700–10,820 tokens** before any task text | *(this commit)* | Read off Groq's `413` twelve times (9 single-artifact + 3 Forge), spread ~120 tokens, so it is system-prompt-plus-tools rather than task-dependent. A per-**request** floor, so pacing cannot evade it. Cost input for W6.4: ≈ **$0.017 of prompt per turn** at `deepseek-v4-pro`'s ~$1.60/M, and a Forge build is many turns |
 | 2026-08-21 | Step 1 — dsh's request ASSEMBLY proven, in addition to its boot and routing | *(this commit)* | Groq rejected the request for being too large, which means dsh had already assembled a complete one — system prompt, tool definitions, task — and shipped it. With the earlier ENOENT → `MISSING_CREDENTIAL` → gateway-`404` progression, every link from boot to provider I/O is proven. **What is missing is a provider that answers, not code** |
+| 2026-08-21 | Step 1 — **dsh RAN END TO END.** Forge write path, approval-stall and confinement all ANSWERED | *(this commit)* | Operator allow-listed **GLM 5.2 (free)** on OpenRouter; allow-list proven strict by trying 5 models on one key (`z-ai/glm-5.2:free` → `429` upstream = through the guardrail; four others incl. `deepseek/deepseek-v4-flash` → `404` data policy). Then `--samples 3 --forge`: **3/3 Forge runs wrote exactly `app.js,index.html,styles.css`**, **0 strays in 3/3** (confinement HELD), **0 stalls** (W6.11 risk 2 did NOT reproduce), at 75.6 s / 97.8 s / 18.4 s. Single-artifact: 9 attempts, 1 produced (8 lost to upstream `429`, `provider_name: Decart`, shared free pool), median 14,677 ms, **obeyed-no-write 1/1**, verifier-pass 0/1 failing on `no @media queries` — *the same single rule that fails 6 of Hermes's 9*, **n=1, not a comparison**. Artifact committed: 6,680-byte dark-themed chart titled `CPU Temperature — 7 Day Chart`, i.e. spec-derived |
+| 2026-08-21 | Step 1 — the spike's reached-the-agent test UNDERSTATED its own evidence; fixed | *(this commit)* | The predicate was `ok \|\| timedOut`, so two Forge runs that drove tools for 75-98 s and **wrote all three files** before dying on a later-turn provider `429` were counted as "never started" — the report printed **1 of 3** where the truth was **3 of 3**. Files on disk are the strongest proof the agent ran, since nothing upstream of it can create them, so the predicate is now `ok \|\| timedOut \|\| wrote > 0`. Verified by replaying the observed records: old → `1/3`, fixed → `3/3`. Note the direction: the earlier fix stopped the report OVERstating; this one stopped it UNDERstating |
+| 2026-08-21 | Step 1 — DeepSeek cost measured, so the last gap is priced rather than guessed | *(this commit)* | Re-verified **14 DeepSeek routes on OpenRouter, 0 with a `:free` variant**. Against dsh's measured ~10,760-token request over the spike's 12 turns, prompt side: `deepseek-v4-flash` **$0.080/M → ≈ $0.01**; `deepseek-chat-v3.1` $0.250/M → ≈ $0.03; `deepseek-v4-pro` ~$1.60/M → ≈ $0.21. The remaining blocker is a one-cent purchase, not an architectural unknown |
+| 2026-08-21 | Step 1 — `compat.supportsDeveloperRole: false` is INERT in dsh 0.1.1-rc.2's pi-ai adapter | *(this commit)* | Mistral returned `422 union_tag_invalid: Input tag 'developer' found using 'role' does not match any of the expected tags` **with the switch set**, at both documented positions (route level and model level). Not a blocker — production uses the native DeepSeek adapter once `DEEPSEEK_API_KEY` exists — but a preview-quality signal about the engine W6 is making the only one, and a trap for whoever writes the adapter |
