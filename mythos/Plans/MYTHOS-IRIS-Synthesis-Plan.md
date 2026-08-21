@@ -3760,7 +3760,7 @@ install hint: all still true. The engine is now `dsh`.
 Harness, no Hermes code or config remains, and the suite still reports
 **0 failures and 0 skips**.
 
-**W6 RESUME HERE — position: steps 0–4 COMPLETE and live-verified. dsh is the wired build engine. Next action: step 5's two LIVE builds (a single-artifact build and a Forge multi-file build through the running app), then step 6's deletion. The harness comparison is settled: on the SAME model, dsh and Hermes score identically — 3/9 each, prompt for prompt, same failing rule.**
+**W6 COMPLETE — all 8 steps done, live-verified and pushed (`512debd` swap, `7e4f498` deletion). DeepSeek Harness is the build engine; Hermes-Agent is gone from the codebase. Suite 5776/5776/0/0. Nothing in W6 is outstanding. THE ONE MEASURED WEAKNESS IS NOT THE HARNESS: 6 of 9 verifier rejections, on BOTH harnesses, were the single rule `no @media queries (not responsive)` — `OUTPUT_CONTRACT` never asks for responsive CSS. That is a one-line prompt change with a 6/9 upside and it is the next thing worth doing, measured not assumed.**
 
 ### The correction that reshaped this section
 
