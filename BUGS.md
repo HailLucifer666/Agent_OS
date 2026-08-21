@@ -40,6 +40,158 @@ it is committed.
 
 ---
 
+## BUG-300 — the fabricated result was not only spoken, it was written down (✅ RESOLVED 2026-08-21)
+
+MYTHOS did not only say *"মোহনবাগান জিতে গেছে"* — it said *"আমি নোট করে রাখলাম"* and called
+`write_note`. A spoken wrong answer decays with the conversation; a written one is read back later
+as something the operator once confirmed. BUG-299 makes the model correct itself out loud on the
+same turn and does nothing about the note.
+
+**What this deliberately is NOT.** The ask was a volatile-facts-need-a-tool-call rule that
+**refuses** the claim, and the same ask called it *"the most likely to over-fire"* and said not to
+attempt it until the earlier fixes were live-verified and the residual measured. **That gate has
+not been met** — no live session has run since BUG-294 and BUG-299 shipped. Refusing to write a
+note, on a text classifier nobody has measured, is exactly the change that makes MYTHOS unusable in
+conversation, and its failure mode is silent: the operator asks for a note and simply does not get
+one.
+
+So this ships the half that **cannot** over-fire. `write_note` never refuses, is never blocked, and
+what the model wrote is never edited — one sentence is appended recording whether any tool
+established anything during the same exchange. The note is still saved and still readable; it just
+cannot later be mistaken for something that was checked.
+
+The rule keys on the turn's own action log, never on the note's text: no classifier, nothing
+language-specific, no threshold to tune. That is the whole reason it is safe to ship ahead of the
+measurement. A **failed** tool and an **unverified** tool both count as establishing nothing, and a
+previous note is not evidence for the next one — without that exclusion the mechanism launders
+itself.
+
+**Q1** — `capture_idea`, `create_goal` and `kanban_add_card` also persist model-authored text and
+are deliberately **not** stamped: `write_note` is the one with a logged incident, and a footer on a
+goal title or kanban card would corrupt a field the HUD renders verbatim in a small space. Named
+known-blind in the source.
+
+Mutations M30–M33 (never stamp; count a note as evidence for the next note; count an unverified
+outcome as evidence; prepend instead of append) each failed the right assertions.
+
+---
+
+## BUG-299 — a four-character fragment could license a fabricated fact (✅ RESOLVED 2026-08-21)
+
+**The half of BUG-280 that no payload guard can reach.** Verbatim order from the 2026-08-20 log:
+
+1. `web_search` returned five REAL Wikipedia results.
+2. MYTHOS described them **correctly**: *"previous years, not today's result, Sir… I don't have
+   live scores for today's match."* No defect yet.
+3. The STT produced the transcript `"आदिए"`.
+4. MYTHOS announced *"মোহনবাগান জিতে গেছে"* — Mohun Bagan won — and persisted it.
+
+No tool call backs step 4, and the fact was not merely wrong: **East Bengal and Mohun Bagan had not
+played each other at all.** Mohun Bagan had beaten NorthEast United on penalties to reach a final
+against East Bengal. MYTHOS announced a winner for a fixture that never took place, on the strength
+of four characters. BUG-295's `NO_CONTENT_CLAIM` and BUG-280's caution both ride on a tool payload;
+step 4 has none.
+
+**Detect-and-correct, not prevent — a deliberate narrowing of the original "ask again".** A
+transcript-time gate must fire on the fragment before knowing what the model will do with it, and a
+four-character single-token transcript is also what "no", "stop", "yes" and their Bengali and Hindi
+equivalents look like. `NEGATIVE_RE` is English-only, so no exemption list covers a trilingual
+speaker. Firing there makes MYTHOS answer *"I didn't catch that"* to an operator who said no — and
+BUG-273 D3 measured what injections cost: 26 of 61 turns in one session were MYTHOS answering
+MYTHOS.
+
+So **both halves must be present**: a fragment transcript AND a substantive assertion built on it. A
+control word draws a short acknowledgement and never trips it; a fabricated match report does. It
+sits beside the AD-4 corrections that already exist for this shape.
+
+**Q2 — privacy.** The fragment is never logged and never read back to the model:
+`live-session.js`'s invariant that a log line carries no transcript text is binding here too, and
+quoting the garbage at the model only invites it to interpret the garbage. Only the two lengths are
+recorded.
+
+**Mutation M29 applied and did NOT bite, which is the finding.** Every other negative case in the
+file contains whitespace and was being caught by the single-token rule, so the length check was
+untested. A long unbroken token — a dictated URL, a filename, a compound word — is a real
+false-positive class. Added "a LONG single word is not a fragment"; M29 then failed it.
+
+The thresholds (8 chars, 40 chars) are judgements calibrated on one incident's real strings —
+*"Okay, Sir."* is 10, the fabrication was 63 — and should be revisited against a second session
+rather than trusted.
+
+---
+
+## BUG-298 — the HUD hammered a server that was refusing it, 147 times (✅ RESOLVED 2026-08-21)
+
+**BUG-292's second half, and the client is named.** The fingerprint was not needed in the end — the
+live log carried the arithmetic:
+
+```
+%APPDATA%/MYTHOS/mythos-server.log
+147 rejections, ALL between 2026-08-19T15:23:04.462Z and 15:44:33.465Z
+= 1289s / 147 attempts = one every ~8.8s
+and `server.listening` is the line immediately before the first
+```
+
+`ui/public/js/ws.js` sets `BACKOFF_MAX_MS = 8000`. A saturated 8s backoff plus the handshake is
+~8.8s. **The client is the HUD itself**, hammering from the moment the server comes up: `wsUrl()`
+builds `ws://host/ws` with no `?token=`, and a browser cannot set an `Authorization` header on a
+WebSocket upgrade, so with `MYTHOS_AUTH_TOKEN` configured there is **no channel** through which the
+HUD can authenticate. `ws.js`'s own header comment had diagnosed this and said the fix was "purely
+additive — reconnect behaviour below is untouched". That is the half this closes.
+
+**`verifyClient` is NOT loosened** — the server is refusing correctly, and the token is mandatory
+for the phone node. **No auth channel was invented for the HUD** either; the PIN session that
+`tokenOk()` already accepts is the intended one, and wiring it is a feature, not something to
+improvise inside a retry loop.
+
+A rejected upgrade reaches the browser as a bare close (1006 at best) with no status, so the socket
+genuinely cannot tell "server down" from "server up and refusing me". After three consecutive
+failures it asks over HTTP — `/api/config/vad` is token-gated — and on a 401/403 sets state
+`unauthorized` and stretches the retry to 60s. `ok` and `unreachable` both leave the fast backoff
+alone: a developer restarting the server must still reconnect in seconds, and reporting a cause that
+was not established is the same dishonesty the evidence contract exists to prevent.
+
+**Mutation M26 is why mutation testing is in this repo's rules.** It applied cleanly and the suite
+stayed **green**: the open handler resets `backoffMs` to 500 regardless, and `scheduleReconnect`
+records the delay *before* updating it, so a stale flag was invisible for exactly one cycle and the
+recovery test only checked that delay. The test now reads the flag directly and drives a second
+cycle; M26 then failed it. A weak test found by a mutation, not by a review.
+
+---
+
+## BUG-297 — an unproven action was announced as a failure (✅ RESOLVED 2026-08-21)
+
+**The fourth narration path, and BUG-273 B1 never knew it existed** — despite its own test file
+promising that "a fourth path fails here rather than in a voice session".
+
+When a tool resolves inside the ack deadline but its turn has already closed underneath it, the
+outcome cannot go back as a `functionResponse`, so `commitAction` re-narrates it onto the [SYSTEM]
+channel. That branch read `entry.ok ? neutral : NO_SUCCESS_CLAIM`, and `evaluateOutcome` computes
+`ok: dispatchOk && !isUnverified` — so **`entry.ok` is false for an unverified outcome** and the
+branch told the model the action **did not succeed**.
+
+That is the collapse BUG-273 B2's Q8 forbids in writing: *"reporting that as a failure would make
+MYTHOS deny things it actually did — its own kind of lying."* `ui_type`'s unverified outcome means
+the text may well be sitting in the document; here MYTHOS was instructed to announce that it is not.
+
+**This corrects BUG-295's own comment** on the same block, which described the defect as a
+fall-through to the neutral default. The red run printed the real notice — *"ui_type ran but could
+NOT be confirmed … This action did NOT succeed."* — which is the argument for writing a red test
+instead of patching from a code read.
+
+**Q6 — fifth occurrence** of "only some narration paths carry the honesty sentence" (BUG-068,
+BUG-116, BUG-273 B1, BUG-295). Every previous fix enumerated the paths it knew about, and none could
+enumerate a path it had not found. So the new guard pins the **population** of [SYSTEM]-channel
+narration sites — and it immediately earned itself twice: the real population is **six**, not the
+three BUG-273 assumed; and its first character class omitted digits, so
+`ad4-correction-premature`/`-retract` were skipped silently. A guard against "a narration path
+nobody enumerated" that itself under-counted narration paths is the exact class it exists to catch.
+
+Two of the four red-run failures were **my test's wrong premises**, not product defects:
+`browser_switch` and `launch_app` are `SLOW_TOOLS` and never reach this branch.
+
+---
+
 ## BUG-294 — a live question could not reach a live source, and the one that answered had no date (✅ RESOLVED 2026-08-21)
 
 **Measured on this host 2026-08-21: every free search provider except Wikipedia is dead.** exa
@@ -111,6 +263,28 @@ confident headline.
 | `Kolkata local news today` | google-news-rss | *Record Rainfall Since 1978…* — **Published 85d ago** | no (dated) |
 | `how to fix a leaking tap` | wikipedia | — | no |
 | `who is Ada Lovelace` | wikipedia | *Ada Lovelace* | no |
+
+**FOLLOW-UP SHIPPED 2026-08-21 — the recency window.** The `when:` measurement below was
+acted on rather than left as a recommendation. Google ranks by relevance, not recency, and the word
+"today" in the query text carries no weight with it. Measured across three real queries: a tight
+window is right for "today" and starves a slower topic ("Bengal panchayat election news": 12 items
+unwindowed, 2 at one day, 5 at seven), while a loose one re-admits 2-4 day old items into a question
+that said today. One constant cannot serve both, so the rung asks for `when:1d` and widens to
+`when:7d` only on an empty day; a productive day is never widened.
+
+**And it REPAIRS the safety property rather than weakening it.** The unwindowed endpoint never
+returns zero, which is the entire reason this rung is gated to freshness-marked queries. A windowed
+one can, and does — so the rung is now able to have no answer and let the chain continue.
+
+`news` and `headlines` were also missing from the freshness markers though the spec named `news`
+explicitly; the window test caught it, because "Bengal panchayat election news" never entered the
+rung at all. Live after the change: Kolkata **85d ago becomes 1h ago**, the panchayat query **26d
+becomes 6h**, and the match query now surfaces *"Mohun Bagan beats NorthEast United to set up
+Kolkata derby in Durand Cup 2026 final"* — the exact fact MYTHOS fabricated the opposite of.
+
+**Mutation M22 silently failed to apply and the suite went green**, which reads exactly like a
+working guard. Caught by diffing the mutation before trusting it, then re-applied with an
+applied-or-exit check.
 
 **Known-imperfect, reported rather than hidden:** the Kolkata query returns items 85/52/107 days
 old, because Google ranks by relevance rather than recency. The age labels make that honest — the
