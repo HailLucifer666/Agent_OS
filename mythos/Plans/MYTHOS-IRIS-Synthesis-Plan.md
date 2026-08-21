@@ -499,10 +499,18 @@ shipped tree at all**, so their `NOASSERTION` is a pre-adoption task, not a 6.6 
 correct. Do not add a fourth UIA rung. **T3 skipped by the operator, 2026-08-19** — it still
 hard-blocks a *paid* release, so 6.5 cannot close without it; nothing else waits on it.
 
-**Not started, and deliberately:** W6 (`deepseek-harness` build brain) begins with a
-standalone spike, not an integration; W5 (LanceDB / tesseract.js / extra MCP servers) is
-YAGNI until something reads it. Neither is blocked — they are simply behind the two items
-above in the operator's stated order.
+**W6 IS NOW OPEN — see the `W6` section at the end of this document.** The operator
+instructed the swap on **2026-08-21** ("So i want that to change it to Deepseek Harness"),
+so the line that used to sit here — naming `deepseek-harness` as a deferred "build brain"
+and defining it nowhere — is superseded. W6 is now specified: upstream contract verified
+against `deepseek-ai/deepseek-harness@master`, seam mapped, anti-drift contract, build
+order, mutations. It still begins with a standalone spike, not an integration, and it is
+blocked on ONE operator ruling (W6.4) because root `CLAUDE.md` currently names Hermes-Agent
+the single build-content engine.
+
+**Still not started, and deliberately:** W5 (LanceDB / tesseract.js / extra MCP servers) is
+YAGNI until something reads it. Not blocked — simply behind the two items above in the
+operator's stated order.
 
 ### 2026-08-19 — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** T1+T2 shipped (`fb574ce`). T4 step 0 shipped (`d0fe19b`) — the AEC readback instrument, because the measurement T4 depends on could not be run: nothing on the Live capture path had ever read `getSettings().echoCancellation` back, so the plan's premise was unfalsifiable. T5 MEASURED (`d9f2ad2`) — **three of its premises did not survive.** The evidence contract was never escaped (every `uia-invoke` ACTION route is oracle-backed; the no-op is in a discovery helper that returns `$null` and fails honestly). The window-station / desktop / integrity hypothesis is **refuted** — pc-child and a direct spawn report an identical interaction context on every axis. And the ticket's own checklist **passes live**: launch/focus/type/click are oracle-confirmed on both a Win32 app (charmap) and an MSIX one (notepad), via `scripts/verify-desktop-automation.js`. What is left of W2 is the narrow WinUI3 **save** path, which already fails honestly — re-set its priority against that, not against the original "failed drastically" report.
 
@@ -3720,3 +3728,725 @@ Per-wave gates, in order. Nothing advances on a green unit suite alone — this 
 4. **Wi-Fi ADB IP churn.** A renewed DHCP lease silently breaks every phone tool. **Mitigation:** persist to `vault/Identity/android-devices.json`, retry on boot, recommend a DHCP reservation, and have `phone_list_devices` surface last-seen staleness honestly. Boot can only retry, not rediscover.
 5. **`ps-automation.ps1` concurrency (BUG-037).** Wave 1 Task 3 and Wave 2 Task 11 both edit it. **Mitigation:** `git pull` + diff before editing, re-verify the six load-bearing pieces survive, worktree-isolate or serialize the agents, commit live-verified work immediately, and `TaskStop` any background agent holding the file before editing inline.
 6. **S2S cost.** Duplex audio bills for open-mic time; today's model bills per utterance. **Mitigation:** V2's three-layer gate (wake-word-only open, `LIVE_IDLE_TIMEOUT_MS`, `LIVE_SESSION_MAX_MS`) plus real `usageMetadata` in the spend widget. Measure at verification step 4 before expanding usage.
+
+---
+
+# W6 — Replace Hermes-Agent with DeepSeek Harness (`dsh`) as the build-content engine
+
+**Opened 2026-08-21 on the operator's instruction** ("So i want that to change it to
+Deepseek Harness"). Supersedes the one-line placeholder at this document's
+`Not started, and deliberately` note, which named W6 without ever defining it.
+
+**W6 RESUME HERE — position: step 0 of 8. Nothing is built. No code has been
+written. The blocking item is an operator ruling (W6.4), not engineering.**
+
+Next action: read W6.4, get the ruling, then start W6.7 step 1 (the standalone
+spike). Do not write adapter code before the spike returns a number.
+
+---
+
+## W6.0 — Evidence register: what is verified, and what is not
+
+Everything in this section was measured on **2026-08-21**, on this machine, with
+the command named beside it. Nothing here is recalled from a model's memory of
+the ecosystem. Re-verify anything older than a week before acting on it — `dsh`
+is eight days old and explicitly unstable.
+
+### VERIFIED — the upstream project
+
+| Fact | Value | How |
+|---|---|---|
+| Repository | `deepseek-ai/deepseek-harness` | `gh api repos/deepseek-ai/deepseek-harness` |
+| Licence | **MIT** | same call, `.license.spdx_id` |
+| Language | TypeScript | same call |
+| Default branch | `master` (**not `main`** — raw URLs against `main` 404) | same call |
+| Created | 2026-08-13 | same call |
+| Last push | 2026-08-21 | same call |
+| Stars / forks | 179,287 / 19,529 | same call |
+| npm package | `@deepseek-ai/dsh@0.1.1-rc.2`, `latest` and `next` both point at the rc | `npm view @deepseek-ai/dsh version dist-tags` |
+| Node requirement | `^22.19.0 \|\| >=24.0.0` | root `package.json` `engines` |
+| Stability | *"Developer preview … THERE WILL BE COMPATIBILITY-BREAKING CHANGES."* | `README.md`, verbatim |
+
+**This machine satisfies the toolchain:** `node -v` → **v26.1.0**, `pnpm -v` →
+**10.10.0**. Both checked 2026-08-21. pnpm matters because `dsh plugin` shells
+out to it.
+
+### VERIFIED — the one-shot surface, which is the whole reason this is feasible
+
+From `apps/cli/README.md` and `apps/cli/reference/README.md` (the reference file
+is authoritative — the top-level README documents only `dsh web` and would have
+led a reader to conclude there is no headless mode):
+
+```
+dsh --profile headless "job"
+```
+
+> *"Run one fresh persisted session, print the final answer, and exit."*
+
+Behavioural contract, quoted from `packages/bundle/headless/README.md` and the
+CLI reference:
+
+- Creates one fresh persisted Agent, submits the task as an ordinary user
+  message, waits for quiescence.
+- **Writes the last non-empty assistant text to stdout.**
+- **Exit 0 iff the final `turn/end` reason is `completed`; otherwise 1.**
+- A terminal `error` reason writes its code and message to **stderr**;
+  a successful run leaves stderr **empty**.
+- Opens **no listening port**. Mounts no ApiProxy, Host, HTTP server, Web
+  runtime, or browser client.
+- A missing or whitespace-only task is rejected before the runner activates.
+
+That is the same shape MYTHOS's `runTask(prompt) -> text` already consumes. This
+is why W6 is a swap and not a rewrite.
+
+### VERIFIED — configuration surface
+
+- **Credential resolution order:** inherited environment → `$DSH_HOME/.credentials.yaml`
+  → the invoking directory's `.env` → `$DSH_HOME/.env`. The managed document is
+  never materialized into `process.env`.
+- **Key name:** `DEEPSEEK_API_KEY`. The base bundle mounts the native DeepSeek
+  adapter, so the model is DeepSeek's own API, not an OpenAI-compatible shim.
+- **`DSH_TOOLS_MODE`** selects `native`, `code`, or `both`; any other value
+  **fails at boot**.
+- **`DSH_PERMISSION_MODE`** changes the process permission fallback. New sessions
+  default to `workspace-write`.
+- **`DSH_TELEMETRY_DISABLED`** — any non-empty value is *"an authoritative hard
+  opt-out."*
+- **`DSH_HOME`** roots profiles at `$DSH_HOME/profiles/<name>`. The `headless`
+  profile auto-initializes from a shipped template on first use.
+
+### VERIFIED — MYTHOS's side of the seam
+
+| Fact | Location |
+|---|---|
+| One and only construction site | `mythos/src/main.js:448` — `createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus })` |
+| The contract the engine demands | `build-engine.js:112-117` — throws `createBuildEngine requires the hermes-agent adapter` unless `deps.hermes.runTask` is a function |
+| The exact call made | `build-engine.js:206-210` — `runTask(full, { requireCli: true, cwd: dir, timeoutMs, maxPromptChars: 24000 })` |
+| Adapter's public surface | `adapters/hermes-agent/index.js` exports `probe · runTask · getStatus · scrubbedEnv · providerSlots · describeSlot · onProviderRotated · HERMES_ERROR_REPLY_RE` |
+| Second, separate Hermes consumer | `effectors/hermes-runner.js` — Forge multi-file builds, `runPlan/runBuild/classify`, 30-minute budget, polls the output directory. **Out of scope for W6 phase 1.** |
+| Downstream of `generate()` | `build-runner.js:174`, `agent-actions.js:161-163`, `engagements/executor.js` |
+| Who reads the `engine` tag | `completion-status.js:41` and `announcer.js:129` — both only special-case `'brain-fallback'` and `'fallback'` |
+
+**Nothing in the repo string-matches `engine === 'hermes'`.** Checked across
+`src/` and `ui/`. The `--module-hermes` CSS custom property in
+`ui/public/css/tokens/semantic.css:82` is a **colour token** (`#4fd8ff`) that has
+nothing to do with the build engine — a name collision, not a consumer. Do not
+rename it as part of W6; that is unrelated churn.
+
+### NOT VERIFIED — and the check that would settle each
+
+1. **Whether `dsh` produces build artifacts as good as Hermes on MYTHOS's own
+   prompts.** Nobody has run it. Settled by W6.7 step 1, the spike. *This is the
+   only fact that decides whether W6 proceeds at all.*
+2. **Whether `dsh --profile headless` honours MYTHOS's `OUTPUT_CONTRACT`** (reply
+   with artifact content only, write no files). `dsh` is agentic and defaults to
+   `workspace-write`; so is Hermes, and MYTHOS already contains that risk with a
+   scratch dir plus `verifier.verify()`. Settled by the spike's file-count
+   assertion.
+3. **Cold-start latency and whether `npx` resolution adds a per-call penalty.**
+   Settled by timing the spike.
+4. **Whether the rc's CLI grammar survives the week.** Cannot be settled — see
+   W6.10 risk 1.
+
+---
+
+## W6.1 — Intake: what the build engine is today, in plain English
+
+When you ask MYTHOS to build something — a landing page, a snake game, a kanban
+card's content — the words that end up in the artifact are written by an external
+program, not by MYTHOS's conversational brain. That program is **Hermes-Agent**,
+driven as a command-line tool.
+
+There are two separate paths and they are frequently confused:
+
+- **`build-engine.js`** — *one artifact, text in one reply.* This is what
+  `pipeline_execute`, `kanban_build_card`, `start_project`, `run_mission` and the
+  engagement build stage all funnel into. **This is what W6 replaces.**
+- **`hermes-runner.js`** — *a whole project tree, many files, 30-minute budget,
+  driven by Forge.* Different verbs (`runPlan`/`runBuild`/`classify`), different
+  oracle (it watches files appear on disk). **W6 phase 1 does not touch it.**
+
+Both currently point at the same `adapters/hermes-agent`. Phase 1 moves the first
+one and leaves the second alone, so a failed swap costs you single-artifact
+builds and not Forge.
+
+**Current provider under Hermes** (measured 2026-08-21): `Hermes Agent/config.yaml`
+lines 3–4 say `provider: openai-api`, `base_url: https://api.mistral.ai/v1`, and
+`mythos/.env:278-280` forwards a Mistral key and `mistral-large-2512`. Note that
+Hermes' own `config.yaml` **wins** over the forwarded environment. So today's
+build engine is *Hermes the harness driving Mistral the model.*
+
+That decomposition matters, because it means there were always **two** possible
+readings of "switch to DeepSeek", and they cost very different amounts:
+
+- **Swap the model, keep the harness** — point Hermes at DeepSeek's
+  OpenAI-compatible endpoint. Three config values, reversible in a minute.
+  `setup-hermes.js:206` hard-requires `provider: openai-api`, and DeepSeek serves
+  an OpenAI-compatible API, so this needs no code at all.
+- **Swap the harness** — what the operator actually asked for on 2026-08-21, and
+  what the rest of this section plans.
+
+The cheap option is recorded here deliberately, because it is the correct
+**rollback target** if W6 fails: it gets DeepSeek-authored builds with zero new
+surface.
+
+---
+
+## W6.2 — The seam, and why this is a swap rather than a rewrite
+
+`createBuildEngine` asks its dependency for exactly one method:
+
+```js
+// build-engine.js:112-117 — the entire contract, quoted
+function createBuildEngine(deps) {
+  var hermes = deps && deps.hermes;
+  ...
+  if (!hermes || typeof hermes.runTask !== 'function') {
+    throw new Error('createBuildEngine requires the hermes-agent adapter');
+  }
+```
+
+Plus one optional method, `onProviderRotated`, used only to republish a bus
+event. Everything else the adapter exports is consumed by `hermes-runner.js`, the
+health probes, or its own tests.
+
+So the swap surface is: **one function, `runTask(prompt, opts) -> Promise<string>`,
+honouring `{ cwd, timeoutMs, maxPromptChars, requireCli }`.**
+
+That is small enough to do honestly. It is also small enough that the temptation
+will be to skip the spike and just write the adapter. Do not — see W6.5, AD-2.
+
+---
+
+## W6.3 — Target architecture
+
+```
+                       BEFORE                                    AFTER
+        ┌──────────────────────────────┐          ┌──────────────────────────────┐
+        │ main.js:448                  │          │ main.js:448                  │
+        │  createBuildEngine({         │          │  createBuildEngine({         │
+        │    hermes: hermes-agent  ────┼──┐       │    engine: selectBuildEngine()│
+        │  })                          │  │       │  })                          │
+        └──────────────────────────────┘  │       └───────────────┬──────────────┘
+                                          │                       │
+                                          │       ┌───────────────▼──────────────┐
+                                          │       │ adapters/build-agent/        │
+                                          │       │   index.js  (selector)       │
+                                          │       │   MYTHOS_BUILD_ENGINE=       │
+                                          │       │     hermes | dsh             │
+                                          │       └───┬───────────────────┬──────┘
+                                          │           │                   │
+        ┌─────────────────────────────────▼───┐  ┌────▼──────────────┐ ┌──▼──────────────┐
+        │ adapters/hermes-agent/index.js      │  │ hermes-agent      │ │ adapters/       │
+        │   runTask -> hermes CLI -> Mistral  │  │ (unchanged)       │ │  dsh-agent/     │
+        └─────────────────────────────────────┘  └───────────────────┘ │  index.js       │
+                                                                        │  runTask ->     │
+        hermes-runner.js (Forge) ────────────────────────────────────►  │  dsh --profile  │
+        keeps its DIRECT require of hermes-agent in phase 1             │  headless "…"   │
+                                                                        │  -> DeepSeek    │
+                                                                        └─────────────────┘
+```
+
+Three deliberate properties of this shape:
+
+1. **The selector is the only new decision point.** Both adapters implement the
+   same one-method contract; nothing downstream learns which one ran except
+   through the `engine` tag on the result, which is already a free-form string.
+2. **Hermes is not deleted.** It stays wired, installable, and selectable. A
+   rollback is one environment variable, not a revert.
+3. **Forge is untouched.** `hermes-runner.js` keeps its direct
+   `require('../../../adapters/hermes-agent')`. Migrating Forge is W6 phase 2 and
+   is a genuinely harder problem, because Forge's oracle is *files appearing on
+   disk* and `dsh`'s sandbox/permission model governs exactly that.
+
+---
+
+## W6.4 — The decision that must land before any code is written
+
+**Root `CLAUDE.md` is binding and it currently forbids this.** Its words:
+
+> *"Hermes-Agent is the exception: since 2026-07-29 it is the only build-content
+> engine … and there is no brain.think fallback by design."*
+
+This is not documentation drift. It is a ruling the operator made **on
+2026-08-15** (BUG-244, recorded as "operator ruling A"), after a
+brain-generated artifact was shipped despite the verifier correctly rejecting it.
+The ruling deleted `brainFallback()`, removed the `brain` dependency from
+`createBuildEngine` entirely, and pinned itself with
+`test/build-engine-no-fallback.test.js`. BUGS.md carries the disposition:
+
+> *"if builds ever need to work without Hermes, that is a change to the documented
+> architecture argued on its own terms — not a fallback re-added inside a catch
+> block."*
+
+W6 **is** that change, argued on its own terms. What is needed from the operator
+is one sentence choosing between:
+
+- **(a) Single engine, swapped.** `dsh` becomes the only build-content engine;
+  Hermes is removed from the default path. Strongest guarantee, and preserves the
+  property the 2026-08-15 ruling was protecting: exactly one behaviour, so a bad
+  artifact has exactly one suspect.
+- **(b) Two engines, one selected.** Both stay wired, `MYTHOS_BUILD_ENGINE`
+  chooses, default `dsh`. Cheap rollback, at the cost of reintroducing the
+  "which engine produced this?" ambiguity the single-engine rule exists to
+  prevent.
+
+**Recommendation: (b) during the swap, converging to (a) once `dsh` has produced
+N green builds.** A selector is not a fallback — the distinction is that a
+selector is chosen *before* the run by configuration, whereas a fallback fires
+*after* a failure inside a catch block and hides it. The 2026-08-15 ruling was
+against the second thing. Say so explicitly in the commit message so the next
+reader does not mistake one for the other.
+
+**Whichever is chosen, root `CLAUDE.md` changes in the same commit as the code.**
+A rule that the code no longer obeys is worse than no rule.
+
+---
+
+## W6.5 — Anti-drift contract (W6-AD-1 … W6-AD-10)
+
+These are binding on any agent executing W6. They exist because this repo's
+recorded history says each one has already cost it a session.
+
+- **W6-AD-1 — Measure `dsh`, never recall it.** The project is eight days old and
+  post-dates every model's training data. Any claim about its flags, exit codes
+  or config must cite a file in the repo at a named path, or a command that was
+  run. "DeepSeek Harness supports X" with no citation is drift.
+- **W6-AD-2 — The spike gates the adapter.** No adapter code before W6.7 step 1
+  returns a measured artifact-quality number. The repo's own record
+  (`measure-before-accepting-audit-premise`) is that 4 of 6 backlog items changed
+  shape on contact with evidence.
+- **W6-AD-3 — `cwd` is REQUIRED for the dsh adapter, and its absence fails loud.**
+  See W6.9 Q5. Never inherit the process working directory.
+- **W6-AD-4 — Do not touch `hermes-runner.js` or Forge in phase 1.** If a change
+  seems to require it, stop and re-scope.
+- **W6-AD-5 — Do not weaken `test/build-engine-no-fallback.test.js`.** If `dsh`
+  fails, the build fails. No cross-engine retry, no "try Hermes if dsh is down"
+  inside a catch. A selector reads configuration before the run; that is allowed.
+  A catch block choosing a different engine is the exact thing ruling A killed.
+- **W6-AD-6 — One artifact of evidence per claim in the plan's progress log:** a
+  command, its output, and the date. "Verified" without a command is not.
+- **W6-AD-7 — No absolute machine paths in tracked files.** The repo's AD-7 gate
+  scans tracked files and only fires after `git add`. Derive from `os.homedir()`,
+  `os.tmpdir()`, `process.env.LOCALAPPDATA`.
+- **W6-AD-8 — Every new environment variable lands in `mythos/.env.example` in the
+  same commit,** and in `ui/public/js/setup/settings-panel-model.js:26`'s
+  grouping regex, or it will be invisible in the settings panel.
+- **W6-AD-9 — The engine tag on a result must name the engine that ran.** Do not
+  leave `engine: 'hermes'` hardcoded in a payload produced by `dsh`. That string
+  reaches the HUD through `completion-status.js` and `announcer.js`.
+- **W6-AD-10 — Push through a PR branch, never straight to `main`.** Two machines
+  share this repo and one git index. Commit by pathspec.
+
+---
+
+## W6.6 — Anti-context-loss: the handoff protocol
+
+The failure this guards against is specific and has happened here: a session ends
+mid-work, the next session reads a plan that describes intent rather than state,
+and re-does or contradicts the work.
+
+1. **State lives in this document, not in a chat transcript.** After every step,
+   rewrite the `W6 RESUME HERE` block at the top of W6 to name (i) the current
+   step number, (ii) the next action as an imperative sentence, (iii) anything
+   blocking. A tick that is not pushed does not exist.
+2. **Every step gets a progress-log row** in W6.7 with the commit SHA and the
+   verification command. Not "done" — the command and its counts.
+3. **Never trust a `- [x]` you did not personally verify this session.** Re-run
+   the named command. The repo's record is that a plan's coverage claims have
+   been false before.
+4. **Before editing any file W6 names, `git pull` and diff it against what this
+   plan says is in it.** If they disagree, stop and reconcile (BUG-037's rule —
+   a concurrent session once reverted live-verified fixes through a clean
+   fast-forward).
+5. **The spike's raw output is committed as a fixture**, not summarized in prose.
+   A number in a sentence rots; a committed artifact can be re-scored.
+6. **If context runs out mid-step, the handoff is: this document's RESUME block
+   plus `git log --oneline -5`.** Nothing else should be required. If an agent
+   would need the chat history to continue, the RESUME block is incomplete —
+   fix it before stopping.
+
+---
+
+## W6.7 — Build order
+
+Each step is independently deployable and independently revertible. Progress-log
+rows are appended as steps complete.
+
+| # | Step | Gate to pass before the next step |
+|---|---|---|
+| 0 | Operator ruling (W6.4) | one sentence, (a) or (b) |
+| 1 | Standalone spike — no repo wiring | measured artifact quality + timing |
+| 2 | `adapters/dsh-agent/index.js` | unit tests, adapter offline path |
+| 3 | Selector + `build-engine.js` param rename | full suite green |
+| 4 | Config, env, installer, settings panel | fresh-clone walk |
+| 5 | Mutation proof | every mutation caught |
+| 6 | Live acceptance | one spoken build, artifact rendered |
+| 7 | Docs: root `CLAUDE.md`, `.env.example`, `THIRD_PARTY_NOTICES.md` | AD-7 gate + licence audit green |
+
+### Step 1 — the spike (do this first, and be willing to stop here)
+
+Standalone. Touches no MYTHOS file. Its only job is to answer *"is a `dsh`-authored
+artifact at least as good as a Hermes-authored one on our own prompts?"*
+
+```bash
+node mythos/scripts/spike-dsh-build.js --samples 3
+```
+
+Write it to:
+
+- take MYTHOS's real `OUTPUT_CONTRACT` by requiring `build-engine.js` and reading
+  the exported constant — **never a retyped copy**, which would drift;
+- run the same 3 prompts through both engines, **at least 3 samples each**
+  (`one-sample-hides-model-flakiness` is on this repo's record);
+- run in a temp workspace under `os.tmpdir()` that contains **no** `AGENTS.md` or
+  `CLAUDE.md`;
+- assert the workspace file count is unchanged after each run — that is the
+  "did it obey 'write no files'" oracle;
+- score with the existing `verifier.verify()` rather than a new rubric;
+- write every raw reply to `mythos/test/fixtures/w6-spike/` and commit them.
+
+Skeleton:
+
+```js
+'use strict';
+// scripts/spike-dsh-build.js — W6 step 1. Standalone: wires nothing, changes
+// nothing, and is safe to delete. Answers one question with a number.
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
+
+// AD-1: the contract comes from the module that owns it, so a drift in
+// build-engine.js shows up here as a changed prompt rather than a silent
+// divergence between what we spiked and what we ship.
+const { createBuildEngine } = require('../src/core/effectors/build-engine');
+
+function runDsh(prompt, { cwd, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    // Launcher flags FIRST, then the task as the single positional argument.
+    // The reference is explicit that the launcher's flags end at the first
+    // token it does not recognize.
+    const args = ['--yes', '@deepseek-ai/dsh', '--profile', 'headless', prompt];
+    execFile('npx', args, {
+      cwd,                                  // AD-3: always explicit
+      timeout: timeoutMs,
+      maxBuffer: 32 * 1024 * 1024,
+      windowsHide: true,
+      env: scrubbedEnv(),
+    }, (err, stdout, stderr) => {
+      // Exit 0 iff final turn/end reason is `completed`. A successful run
+      // leaves stderr empty; an error reason writes code + message there.
+      if (err) return reject(new Error('dsh exit ' + err.code + ': ' + String(stderr).slice(0, 400)));
+      resolve(String(stdout));
+    });
+  });
+}
+```
+
+**Stop condition.** If `dsh` scores materially worse than Hermes, or disobeys the
+no-write contract, W6 stops here and the honest outcome is the cheap swap from
+W6.1 (point Hermes at DeepSeek's endpoint). Record that as the result — a spike
+that says "no" is a successful spike.
+
+### Step 2 — the adapter
+
+New file `mythos/adapters/dsh-agent/index.js`. Mirror `hermes-agent`'s exported
+shape so the selector can return either without the caller branching.
+
+```js
+'use strict';
+// adapters/dsh-agent/index.js — DeepSeek Harness (`dsh`) as a build-content
+// engine. Same one-method contract build-engine.js already consumes from
+// adapters/hermes-agent: runTask(prompt, opts) -> Promise<string>.
+//
+// UPSTREAM CONTRACT, verified 2026-08-21 against
+// apps/cli/reference/README.md and packages/bundle/headless/README.md at
+// deepseek-ai/deepseek-harness@master. dsh is in developer preview and its
+// README states there WILL be compatibility-breaking changes, so every
+// assumption below is asserted at runtime rather than trusted:
+//   * `dsh --profile headless "<task>"` runs one session and exits.
+//   * stdout carries the last non-empty assistant text.
+//   * exit 0 iff the final turn/end reason is `completed`, else 1.
+//   * stderr is EMPTY on success; an error reason writes code + message there.
+//   * no listening port is opened.
+
+const DSH_PACKAGE = '@deepseek-ai/dsh';
+
+// AD-3 / Q5. cwd is REQUIRED and its absence is fatal, which is a deliberate
+// divergence from the hermes adapter, where a missing cwd merely inherits the
+// process working directory.
+//
+// Why the difference is not gratuitous: dsh treats the invoking directory as
+// the workspace root, grants `workspace-write` to it by default, AND loads that
+// directory's AGENTS.md or CLAUDE.md as agent instructions under a 65,536-byte
+// render budget. This repo's root CLAUDE.md is 21,033 bytes and AGENTS.md is
+// 20,379 — both would load IN FULL. A build task inheriting MYTHOS's own
+// operating rules as its instructions, with write access to the repo, is a
+// failure mode Hermes does not have. Failing loudly beats a default that makes
+// a misconfiguration look healthy.
+function requireCwd(cwd) {
+  if (!cwd || typeof cwd !== 'string') {
+    throw new Error(
+      'dsh-agent: cwd is required. dsh treats the invoking directory as its '
+      + 'workspace root and reads AGENTS.md/CLAUDE.md from it; inheriting the '
+      + "process cwd would hand a build task this repo's own instructions and "
+      + 'write access to the repo. Pass an explicit scratch directory.'
+    );
+  }
+  return cwd;
+}
+```
+
+`scrubbedEnv()` must be written before `runTask`, not after. It has to:
+
+- set `DSH_TELEMETRY_DISABLED=1` — the shipped base bundle has **no telemetry
+  redaction rule**, so an enabled export can carry message text, tool arguments
+  and results, and workspace paths. This is stated in the CLI reference and is
+  not speculative;
+- pin `DSH_HOME` to a MYTHOS-owned directory derived from the environment, so a
+  build never mutates the operator's personal `dsh` profiles;
+- pass `DEEPSEEK_API_KEY` through and **nothing else key-shaped**. Hermes'
+  adapter already has a `scrubbedEnv` — read it and match its approach rather
+  than inventing a second one.
+
+### Step 3 — selector and rename
+
+`build-engine.js`'s parameter is currently named `hermes`. Once it can receive
+either adapter, that name is a lie, and this repo treats a comment or a name that
+contradicts the code as a defect. Rename `deps.hermes` → `deps.engine`, update the
+single production call site at `main.js:448`, and update the tests.
+
+Keep the change surgical: the parameter name, the error string, and the `engine:`
+tag literal. Do not reformat the file.
+
+### Step 4 — infrastructure
+
+- `mythos/scripts/setup-dsh.js` with `--check` and `--install`, modelled on
+  `setup-hermes.js`. **Never `curl | sh`** — the root `CLAUDE.md` forbids it and
+  `dsh` does not need it (`npx @deepseek-ai/dsh` or a pnpm workspace install).
+- `mythos/.env.example` — a `DSH_*` block documenting every variable, with no
+  key values.
+- `ui/public/js/setup/settings-panel-model.js:26` — add `DSH_` to the `devices`
+  group regex or the new variables never appear in the settings panel.
+- First-run wizard: `dsh` becomes an installable component beside Hermes and adb.
+- `THIRD_PARTY_NOTICES.md` — `dsh` is MIT, but its **dependency closure is not
+  audited**. Run `scripts/audit-licences.js --check` and treat any new exception
+  as blocking. `dsh` vendors a large pnpm workspace; this is a real cost, not a
+  formality.
+
+### Step 5 — mutations
+
+Listed in W6.8. Every one must be caught, and each must be proved to have applied
+**where intended** — this repo has a recorded case of three mutations silently
+editing the wrong function because the anchor text appeared twice.
+
+### Step 6 — live acceptance
+
+One spoken build through the real HUD, artifact rendered and looked at. The
+repo's standing rule: a green suite cannot tell you the app works.
+
+### Progress log
+
+| Step | Status | Commit | Verification command and result |
+|---|---|---|---|
+| 0 | ☐ blocked on operator | — | — |
+| 1 | ☐ | — | — |
+| 2 | ☐ | — | — |
+| 3 | ☐ | — | — |
+| 4 | ☐ | — | — |
+| 5 | ☐ | — | — |
+| 6 | ☐ | — | — |
+| 7 | ☐ | — | — |
+
+---
+
+## W6.8 — Test plan, and the mutations that must fail
+
+New file: `mythos/test/dsh-build-engine.test.js`. Every test states the branch it
+traverses.
+
+| Scenario | Why it matters |
+|---|---|
+| `runTask` without `cwd` throws, and the message names the AGENTS.md/CLAUDE.md reason | AD-3. The whole hazard in one assertion |
+| `dsh` exits 1 → `generate()` returns `{ offline: true }` with the stderr text in `error` | Exit code is the only success oracle; losing stderr loses the diagnosis |
+| `dsh` exits 0 with empty stdout → treated as failure, not as an empty artifact | An empty artifact that reports success is the class of bug this repo keeps hitting |
+| `scrubbedEnv()` sets `DSH_TELEMETRY_DISABLED` | Prompt text and workspace paths would otherwise be exportable |
+| `scrubbedEnv()` does not forward unrelated key-shaped variables | Assert the mechanism, not the return value |
+| The selector honours `MYTHOS_BUILD_ENGINE=hermes` and returns the Hermes adapter unchanged | Rollback must be real, not aspirational |
+| An unknown `MYTHOS_BUILD_ENGINE` value fails at boot, loudly | A typo must not silently pick a default |
+| `engine` tag on a dsh result reads `'dsh'` | AD-9; the tag reaches the HUD |
+| `hermes-runner.js` still requires `adapters/hermes-agent` directly | AD-4, pins the phase-1 boundary |
+| `build-engine.js` contains no `brain.think` and no cross-engine retry | Keeps ruling A pinned |
+
+Required mutations, each restored from a **file copy** (never `git checkout --`,
+which would discard concurrent uncommitted work):
+
+1. Make `cwd` optional again → the AD-3 test must fail.
+2. Drop `DSH_TELEMETRY_DISABLED` from `scrubbedEnv` → its test must fail.
+3. Treat a non-zero exit as success → two tests must fail.
+4. Swallow stderr on failure → the diagnosis test must fail.
+5. Return `engine: 'hermes'` from the dsh path → the tag test must fail.
+6. Make the selector fall back to Hermes inside a catch → the ruling-A test must
+   fail. **If this mutation passes, W6-AD-5 is unenforced and the step is not
+   done.**
+7. Point `hermes-runner.js` at the selector → the boundary test must fail.
+
+Run the suite with the port overrides this repo requires, or two unrelated tests
+fail on `EADDRINUSE` and look like a regression:
+
+```bash
+MYTHOS_PORT=4999 EDGE_TTS_PORT=5099 EDGE_TTS_URL=http://127.0.0.1:5099 node --test
+```
+
+Baseline to beat: **fail=0, skipped=0**. Get the current count from
+`node scripts/sync-test-count.js --check`, never from a number typed in prose.
+
+---
+
+## W6.9 — Adversarial checklist, pre-answered
+
+Answered here so the executing agent inherits them; each must be re-answered in
+code comments at the site it applies to.
+
+**Q1 — What else matches this?** The engine selector reads a string from the
+environment. Treat it as untrusted configuration: match against an explicit
+allow-list of exactly `hermes` and `dsh`, and fail at boot on anything else.
+Never `includes()`, never a prefix match. The prompt itself is another string
+that crosses a boundary — the CLI reference notes that a first app argument equal
+to `web` or `plugin` selects that subcommand, so a task text that collides with a
+subcommand name is a real, if narrow, input class. Pass the task as a single
+positional argument after `--profile headless` and assert it is non-empty.
+
+**Q2 — Does this hide evidence?** `dsh` writes its error code and message to
+stderr and leaves stderr empty on success — that is a clean, high-signal channel
+and it must reach `health.anomaly`, not be replaced by a generic "build failed".
+The existing Hermes path has a directly relevant precedent: Hermes reports
+provider failures **on stdout with exit code 0**, which is why
+`HERMES_ERROR_REPLY_RE` exists. Check whether `dsh` has an equivalent
+exit-0-but-failed mode during the spike; if it does, it needs its own detector,
+and if it does not, pin that as a disposition so nobody adds a speculative one.
+
+**Q3 — Who actually reads this?** Before mirroring Hermes' full export surface
+onto the dsh adapter, grep each consumer. `providerSlots`, `describeSlot` and
+`HERMES_ERROR_REPLY_RE` are Hermes-specific and are read by Hermes-specific code.
+Do **not** stub them on the dsh adapter to make the shapes match — an unused stub
+is surface to maintain and a lie about capability. Implement `runTask`, `probe`,
+`getStatus`, `scrubbedEnv`. Add nothing else until something reads it.
+
+**Q4 — What is standing next to it?** The `engine` tag travels with the build
+result into `completion-status.js`, `announcer.js`, `from-dashboard.js` and the
+HUD. Read the whole payload, not just the field being changed. Also standing next
+to it: `job.engine` values `'brain'` and `'brain-fallback'` still exist in the
+type space from before ruling A — do not accidentally widen their meaning.
+
+**Q5 — Is this constant actually correct?** This is the sharpest one in W6, and
+it is a live defect waiting to be created, not a hypothetical.
+`build-engine.js:142-151`'s `scratchDir()` returns `undefined` when the vault is
+absent or the `mkdir` fails, and the comment beside it says *"no scratch dir →
+adapter falls back to cwd inheritance."* Under Hermes that is untidy. Under
+`dsh` it is a different class of problem: the invoking directory becomes the
+workspace root, gets `workspace-write`, and has its `AGENTS.md`/`CLAUDE.md` loaded
+as agent instructions under a 64 KiB budget — and this repo's two files total
+41,412 bytes, so **both load in full**. A build task would inherit MYTHOS's own
+operating rules and hold write access to the repository. Hence AD-3: for the dsh
+adapter `cwd` is required and its absence throws. Prefer failing loudly over a
+default that makes a broken configuration look healthy.
+
+**Q6 — What class is this an instance of?** Three, all with prior incidents in
+this repo. (i) *An optional dependency nothing installs or launches is absent* —
+so step 4's installer and first-run-wizard work is not optional polish; without
+it `dsh` is a feature that exists only on the author's machine. (ii) *A probe
+that proves the binary exists proves nothing about whether a task will produce
+content* — BUG-245, recorded against this exact engine surface. Do not let
+`probe()` become the success oracle. (iii) *Reachability is not permission* —
+wiring the adapter does not make the tool usable from voice.
+
+**Q7 — What did the ticket actually say?** The operator's words on 2026-08-21
+were: *"So now the brain build engine is hermes right? whatever build i ask mythos
+to build it uses Hermes cli to build it? So i want that to change it to Deepseek
+Harness."* Checklist: (1) confirm Hermes is the engine — **done, with the
+correction that there are two Hermes paths**, `build-engine.js` and Forge's
+`hermes-runner.js`; (2) confirm every build routes through it — **yes for
+single-artifact builds; Forge is the second path**; (3) change it to DeepSeek
+Harness — **planned here, phase 1 covers path one only.** Item 3 is not closed by
+phase 1 and the plan must not claim otherwise.
+
+**Q8 — Pin the disposition.** Three deliberate non-changes, each needing a code
+comment and a regression test: **Forge stays on Hermes** in phase 1 (its oracle is
+files-on-disk, which interacts with `dsh`'s permission model in ways nothing has
+measured); **Hermes is not uninstalled** (it is the rollback path); and **no
+cross-engine retry exists**, because a selector chosen before the run is a
+different mechanism from a fallback fired inside a catch block, and ruling A
+killed the second one.
+
+---
+
+## W6.10 — Risks
+
+1. **The upstream is eight days old and says so.** *"THERE WILL BE
+   COMPATIBILITY-BREAKING CHANGES."* The CLI grammar this adapter depends on can
+   move under it. **Mitigation:** pin the exact version in `package.json` rather
+   than floating on `latest`; assert the contract at runtime (exit code and
+   stdout shape) instead of trusting it; keep the Hermes rollback wired. Do not
+   treat 179k stars as maturity — the repo is eight days old, so that number
+   measures attention, not stability.
+2. **A second heavy external toolchain.** `dsh` is a pnpm workspace with a large
+   dependency closure and a native component directory. Hermes already made this
+   repo's install story long. **Mitigation:** measure install size and cold-start
+   in the spike and record both; make it genuinely optional (absent `dsh` →
+   adapter OFFLINE → the operator sees an install hint, boot still succeeds).
+3. **Licence closure is unaudited.** `dsh` itself is MIT; its dependencies are
+   not yet enumerated here. The repo has been bitten by exactly this — an LGPLv3
+   binary shipping inside a dependency tree that was assumed clean.
+   **Mitigation:** step 7 runs `audit-licences.js --check` and any new exception
+   blocks. This matters more than usual because MYTHOS is intended to be sold.
+4. **Telemetry defaults.** Local by default, but the shipped base has no
+   redaction rule, so an enabled export can carry prompt text and workspace
+   paths. **Mitigation:** `DSH_TELEMETRY_DISABLED` set explicitly in
+   `scrubbedEnv()` and pinned by a test — never left to the default.
+5. **Two DeepSeek-adjacent things that are not this.** `DeepSeek-Reasonix` is on
+   this repo's kill-list for provenance, and `lanes.default.js:294` records
+   `deepseek-ai/deepseek-v4-flash` as dead (404/timeout) — that is the
+   **NIM-hosted** route for the conversational brain and says nothing about
+   DeepSeek's own API. Do not let either be cited as evidence about `dsh`.
+
+---
+
+## W6.11 — What to leave alone
+
+- `effectors/hermes-runner.js` and everything Forge (phase 1).
+- `test/build-engine-no-fallback.test.js` — strengthen it if anything, never relax.
+- The `--module-hermes` CSS token — a colour, not a consumer.
+- `Hermes Agent/config.yaml` and the `HERMES_*` block in `.env` — the rollback
+  path must keep working.
+- `setup-hermes.js`'s `provider: openai-api` requirement.
+
+---
+
+## W6.12 — Agent handoff brief
+
+Copy this to a fresh agent. It should need nothing else but this document and
+`git log`.
+
+> You are executing **W6** in `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`:
+> replacing Hermes-Agent with DeepSeek Harness (`dsh`) as MYTHOS's
+> single-artifact build-content engine.
+>
+> Read W6.0 through W6.12 before touching a file. Then read, in this order:
+> `mythos/src/core/effectors/build-engine.js`, `mythos/adapters/hermes-agent/index.js`,
+> `mythos/src/main.js:440-460`, and the root `CLAUDE.md` section on Hermes.
+>
+> Start at the step named in the `W6 RESUME HERE` block, not at step 1 —
+> earlier steps may already be done. Verify a `- [x]` by re-running its command
+> before trusting it.
+>
+> Binding: W6-AD-1 … W6-AD-10 in W6.5. The three most likely ways to get this
+> wrong, in order: writing adapter code before the spike returns a number
+> (AD-2); letting `cwd` default and handing a build task this repo's own
+> `CLAUDE.md` plus write access (AD-3); and adding a cross-engine retry inside a
+> catch block, which is the exact mechanism the operator's 2026-08-15 ruling
+> deleted (AD-5).
+>
+> Do not start a new plan document. Update this section in place, rewrite the
+> RESUME block before you stop, and push through a PR branch.
