@@ -854,6 +854,10 @@ function createLiveToolAdapter(deps) {
       // existed. Awaiting harder cannot fix it — the turn boundary is the model's,
       // not ours. So say "started", and deliver the real outcome afterwards through
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
+      // BUG-300: one call site, ahead of both dispatch paths below, so a note can
+      // never reach the effector unstamped by going down the slow branch.
+      stampProvenanceIfUnbacked(decision);
+
       if (SLOW_TOOLS[call.name]) {
         commitAction(pendingAck(call.name));
         responses.push({ id: call.id, name: call.name, response: {
@@ -1174,6 +1178,84 @@ function createLiveToolAdapter(deps) {
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
   // shape handleUtterance already uses, so recall/audit stay consistent
   // whether a turn came through the batch or Live path.
+  // BUG-299's classifier, kept separate and thresholds named, because every number
+  // in it is a judgement call that a later reader will want to argue with.
+  //
+  // FRAGMENT: a single token, no internal whitespace, short. "आदिए" is four
+  // characters. Deliberately measured in code points rather than words — the
+  // operator speaks Bengali, Hindi and English, and a word count is meaningless
+  // for scripts this STT segments badly.
+  //
+  // SUBSTANTIVE: long enough that it cannot be an acknowledgement. "Okay, Sir."
+  // and "ঠিক আছে।" are 10 and 9; the fabricated match report was 63. 40 sits well
+  // clear of both, and erring high is the safe direction — a missed correction
+  // leaves the existing behaviour, a false one interrupts a working turn.
+  const FRAGMENT_MAX_CHARS = 8;
+  const SUBSTANTIVE_MIN_CHARS = 40;
+
+  // BUG-300 — the DURABLE half of the same fabrication. MYTHOS did not only say
+  // "মোহনবাগান জিতে গেছে"; it said "আমি নোট করে রাখলাম" and wrote it down. A spoken
+  // wrong answer decays with the conversation. A written one is read back later as
+  // something the operator once confirmed.
+  //
+  // WHAT THIS DELIBERATELY IS NOT. The ask was a volatile-facts-need-a-tool-call
+  // rule that REFUSES the claim, and the same ask called it "the most likely to
+  // over-fire" and said not to attempt it until the earlier fixes were
+  // live-verified and the residual measured. That gate has not been met. Refusing
+  // to write a note, on a text classifier nobody has measured, is exactly the
+  // change that makes MYTHOS unusable in conversation — and its failure mode is
+  // silent: the operator asks for a note and simply does not get one.
+  //
+  // So this ships the half that cannot over-fire. It never refuses, never blocks,
+  // never edits what the model wrote. It appends one sentence recording what was
+  // true at the time of writing. The note is still saved and still readable; it
+  // just cannot later be mistaken for something that was checked.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? capture_idea, create_goal and kanban_add_card
+  // also persist model-authored text. They are deliberately NOT stamped:
+  // write_note is the one with a logged incident behind it, and appending a
+  // footer to a goal title or a kanban card would corrupt fields the HUD renders
+  // verbatim in a small space. Known-blind, and widening needs its own evidence.
+  //
+  // Q5 — the rule keys on the turn's own action log, never on the note's text.
+  // No classifier, nothing language-specific, no threshold to tune. That is the
+  // whole reason it is safe to ship ahead of the measurement.
+  const PROVENANCE_STAMPED_TOOLS = { write_note: true };
+  const UNBACKED_NOTE_STAMP = '\n\n[Recorded from conversation — not verified by any tool '
+    + 'during this exchange.]';
+
+  // A persistence call is not evidence for the next persistence call: without the
+  // exclusion, two notes in one turn would leave the second looking checked purely
+  // because the first was written. And `unverified` is excluded because Wave 0's
+  // evidence contract is explicit that it means "cannot be proven", which is not a
+  // basis for writing something down as established.
+  function establishedSomethingThisTurn() {
+    return liveTurnActions.some((a) => a && a.ok === true && a.unverified !== true
+      && !PROVENANCE_STAMPED_TOOLS[a.tool]);
+  }
+
+  function stampProvenanceIfUnbacked(decision) {
+    if (!PROVENANCE_STAMPED_TOOLS[decision.tool]) return;
+    const text = decision.args && decision.args.text;
+    // An absent or blank note is left exactly as it is: from-pc.js's write_note
+    // fails on missing text, and stamping it would turn a clean rejection into a
+    // note containing nothing but a disclaimer.
+    if (typeof text !== 'string' || !text.trim()) return;
+    if (establishedSomethingThisTurn()) return;
+    decision.args = Object.assign({}, decision.args, { text: text + UNBACKED_NOTE_STAMP });
+  }
+
+  function isAssertionOnUnintelligibleInput(userText, assistantText) {
+    const heard = String(userText || '').trim();
+    // An EMPTY transcript is not a fragment. MYTHOS speaks unprompted on
+    // proactive and entity-initiated turns, and treating those as garbled would
+    // fire this correction on every one of them.
+    if (!heard) return false;
+    if (heard.length > FRAGMENT_MAX_CHARS) return false;
+    if (/\s/.test(heard)) return false;
+    return String(assistantText).trim().length >= SUBSTANTIVE_MIN_CHARS;
+  }
+
   function onLiveTurnComplete({ userText, assistantText, turnId }) {
     // B3 — before any of this turn's ORDINARY handling (history append,
     // episodic write, reflection), a spoken "no" cancels whatever is pending.
@@ -1187,6 +1269,53 @@ function createLiveToolAdapter(deps) {
     // routes itself to health.anomaly instead of the array below.
     turnGeneration += 1;
     const actionsThisTurn = liveTurnActions.splice(0, liveTurnActions.length);
+
+    // BUG-299 — a fragment transcript cannot license a factual assertion.
+    //
+    // 2026-08-20, verbatim order from the log: web_search returned real Wikipedia
+    // results; MYTHOS described them CORRECTLY ("previous years, not today's
+    // result… I don't have live scores"); the STT then produced the transcript
+    // "आदिए"; and MYTHOS announced that Mohun Bagan had won and wrote it to a
+    // note. No tool call backs that last step, and the fact was not merely wrong —
+    // the two clubs had not played each other at all.
+    //
+    // This is the half of BUG-280 that no payload guard can reach. BUG-295's
+    // NO_CONTENT_CLAIM and the stale-source caution both ride on a tool result;
+    // there is no result here to ride on.
+    //
+    // BOTH HALVES ARE REQUIRED TO FIRE, and that is the safety property rather
+    // than a convenience. A four-character single-token transcript is also what
+    // "no", "stop", "yes" and their Bengali and Hindi equivalents look like, and
+    // NEGATIVE_RE is English-only, so no exemption list covers a trilingual
+    // speaker. Firing at transcript time would make MYTHOS answer "I didn't catch
+    // that" to an operator who said no — and BUG-273 D3 measured what injections
+    // cost: 26 of 61 turns in one session were MYTHOS answering MYTHOS. A control
+    // word draws a short acknowledgement and never trips this; a fabricated match
+    // report does.
+    //
+    // Q2 — PRIVACY. The fragment itself is never logged and never read back to the
+    // model: live-session.js's invariant that a log line carries no transcript
+    // text is binding here too, and quoting the garbage at the model only invites
+    // it to interpret the garbage.
+    if (assistantText && isAssertionOnUnintelligibleInput(userText, assistantText)) {
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('health.anomaly', {
+          kind: 'assertion-on-unintelligible-input',
+          tool: 'transcript', target: 'transcript',
+          userTextLength: String(userText || '').trim().length,
+          assistantTextLength: String(assistantText).trim().length,
+        });
+      }
+      sendSystemNotice(
+        'CORRECTION of your own prior statement — what the operator said this turn did not '
+        + 'transcribe as anything intelligible, so no question was actually asked, and you answered '
+        + 'as though one had been.',
+        'Say so now: tell the operator you did not catch that and ask them to repeat it. Do NOT '
+        + 'restate the claim you just made, do NOT treat it as established later in this '
+        + 'conversation, and if you wrote it down, say that it needs checking.',
+        { site: 'ad4-correction-unheard', tool: 'transcript', claim: 'assertion-on-fragment' },
+      );
+    }
 
     // F3 — a promised action is either performed or retracted. Detect-only:
     // this reports a mismatch on the health.anomaly stream, it never rewrites

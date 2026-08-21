@@ -201,13 +201,28 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       path.join(__dirname, '..', 'src', 'core', 'voice', 'live-tool-adapter.js'), 'utf8');
     // Every injection tags itself with a `site:` label — BUG-273 D3's injection
     // log — so these labels are load-bearing already, not a shape invented here.
-    const sites = [...src.matchAll(/site:\s*'([a-z-]+)'/g)].map((m) => m[1]).sort();
+    //
+    // THE CHARACTER CLASS IS THE WHOLE TEST. The first version of this matcher was
+    // /site:\s*'([a-z-]+)'/ and reported FOUR sites. There are six: 'ad4-correction-
+    // premature' and 'ad4-correction-retract' contain a digit, so the class failed
+    // mid-label and skipped them silently. A guard against "a narration path nobody
+    // enumerated" that itself under-counted narration paths is the exact class it
+    // exists to catch, and it was caught by reading the real output rather than by
+    // the guard going red. Keep 0-9 in the class.
+    const sites = [...src.matchAll(/site:\s*'([a-z0-9-]+)'/g)].map((m) => m[1]).sort();
     assert.deepEqual(sites, [
+      'ad4-correction-premature',
+      'ad4-correction-retract',
+      // Added by BUG-299, and this assertion is how it got enumerated: the new
+      // site made this test fail on the same commit that introduced it, which is
+      // precisely the job. Its prohibition is checked in
+      // bug-299-fragment-cannot-license-a-fact.test.js.
+      'ad4-correction-unheard',
       'confirm-rejected-by-voice',
       'confirm-resolved',
       'late-for-turn',
       'late-outcome',
-    ], 'these are the sendSystemNotice sites; the fifth narration path is the awaited '
+    ], 'these are the sendSystemNotice sites; the remaining narration path is the awaited '
       + 'functionResponse, which does not inject. If this list changed, a narration path was '
       + 'added or removed — enumerate it here and in bug-273-unverified-payload.test.js, and '
       + 'check the new one carries a prohibition, BEFORE changing this assertion.');
