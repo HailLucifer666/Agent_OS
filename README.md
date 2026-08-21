@@ -3,7 +3,7 @@
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:24243e&height=220&section=header&text=MYTHOS&fontSize=80&fontColor=43e5a0&fontAlignY=35&desc=Autonomous%20Entity%20OS&descSize=24&descAlignY=58&descColor=4fd8ff&animation=fadeIn" width="100%" alt="MYTHOS header"/>
 
 <a href="https://github.com/HailLucifer666/Agent_OS">
-  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;5776+tests+green.+Zero+build+step." alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;5793+tests+green.+Zero+build+step." alt="Typing SVG" />
 </a>
 
 <br/>
@@ -31,7 +31,7 @@
 > [!IMPORTANT]
 > **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you *see* that it doesn't work.
 
-A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 5776 tests.
+A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 5793 tests.
 
 <div align="center">
 
@@ -589,7 +589,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## 📈 Build History
 
-**20 phases shipped.** Linear history on `main`. 5776 tests green.
+**20 phases shipped.** Linear history on `main`. 5793 tests green.
 
 ```mermaid
 gantt
@@ -663,7 +663,7 @@ Full history: [ROADMAP.md](ROADMAP.md) · [MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHIT
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 5 gestures: confirm, deny, mute, unmute, vision |
-| **Tests** | Built-in `node:test` | 5776 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 5793 tests, zero test framework deps |
 | **Deps** | 9 total | `@huggingface/transformers` · `@mediapipe/tasks-vision` · `exceljs` · `express` · `kokoro-js` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -677,7 +677,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 9 deps, 5776 tests
+│   ├── package.json             # 9 deps, 5793 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -696,7 +696,7 @@ Agent_OS/
 │   │       ├── engagements/     # 10 modules: lifecycle, FSM, interview, spec, plan, store
 │   │       ├── assistant/       # 5 modules: gateway, intent routing, response planning
 │   │       └── voice/           # Voice agent + spoken text
-│   ├── providers/               # 18 providers (openai-compat factory)
+│   ├── providers/               # 19 providers (openai-compat factory)
 │   │   ├── nim.js / nim2.js     # NVIDIA NIM (2-key rotation)
 │   │   ├── groq.js              # Groq LPU
 │   │   ├── mistral.js           # Mistral La Plateforme
@@ -707,7 +707,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 5776 tests (node --test)
+│   ├── test/                    # 5793 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat           # Windows launcher

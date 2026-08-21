@@ -4,438 +4,76 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Weekly Digest - This Week in AI</title>
+    <title>AI News Digest</title>
     <style>
-        :root {
-            --primary: #6c5ce7;
-            --primary-dark: #5649c0;
-            --background: #f8f9fa;
-            --card-bg: #ffffff;
-            --text: #2d3436;
-            --text-light: #636e72;
-            --border: #e0e0e0;
-            --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            --radius: 12px;
-        }
-
-        * {
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
             margin: 0;
             padding: 0;
-            box-sizing: border-box;
+            background-color: #f4f4f4;
+            color: #333;
         }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--background);
-            color: var(--text);
-            line-height: 1.6;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-
         header {
-            padding: 40px 0;
-            text-align: center;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 40px;
-        }
-
-        .logo {
-            font-size: 2.5rem;
-            font-weight: 700;
-            color: var(--primary);
-            margin-bottom: 10px;
-        }
-
-        .tagline {
-            font-size: 1.2rem;
-            color: var(--text-light);
-            margin-bottom: 20px;
-        }
-
-        .date-range {
-            font-size: 1rem;
-            color: var(--text-light);
-        }
-
-        .hero {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: #35424a;
             color: white;
-            padding: 60px 40px;
-            border-radius: var(--radius);
-            margin-bottom: 60px;
+            padding: 1rem 0;
             text-align: center;
-            box-shadow: var(--shadow);
         }
-
-        .hero h1 {
-            font-size: 2.5rem;
-            margin-bottom: 20px;
-        }
-
-        .hero p {
-            font-size: 1.2rem;
-            max-width: 800px;
-            margin: 0 auto;
-        }
-
-        .news-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 30px;
-            margin-bottom: 60px;
-        }
-
-        .news-card {
-            background: var(--card-bg);
-            border-radius: var(--radius);
+        .container {
+            width: 80%;
+            margin: auto;
             overflow: hidden;
-            box-shadow: var(--shadow);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            padding: 2rem 0;
         }
-
-        .news-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        .news-item {
+            background: #fff;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
         }
-
-        .card-image {
-            width: 100%;
-            height: 200px;
-            object-fit: cover;
+        .news-item h2 {
+            margin-top: 0;
         }
-
-        .card-content {
-            padding: 25px;
+        .news-item p {
+            margin-bottom: 0;
         }
-
-        .card-category {
-            display: inline-block;
-            padding: 5px 12px;
-            background-color: var(--primary);
-            color: white;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            margin-bottom: 15px;
-        }
-
-        .card-title {
-            font-size: 1.3rem;
-            font-weight: 600;
-            margin-bottom: 15px;
-            color: var(--text);
-        }
-
-        .card-excerpt {
-            color: var(--text-light);
-            margin-bottom: 20px;
-        }
-
-        .card-meta {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 0.9rem;
-            color: var(--text-light);
-        }
-
-        .read-more {
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 600;
-        }
-
-        .read-more:hover {
-            text-decoration: underline;
-        }
-
-        .section-title {
-            font-size: 2rem;
-            font-weight: 700;
-            margin-bottom: 30px;
-            color: var(--text);
-            position: relative;
-            padding-bottom: 10px;
-        }
-
-        .section-title::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 50px;
-            height: 4px;
-            background-color: var(--primary);
-            border-radius: 2px;
-        }
-
-        .newsletter-signup {
-            background-color: var(--card-bg);
-            padding: 40px;
-            border-radius: var(--radius);
-            box-shadow: var(--shadow);
-            margin-bottom: 60px;
-            text-align: center;
-        }
-
-        .newsletter-signup h2 {
-            margin-bottom: 20px;
-            color: var(--text);
-        }
-
-        .newsletter-signup p {
-            color: var(--text-light);
-            margin-bottom: 30px;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
-        .signup-form {
-            display: flex;
-            max-width: 500px;
-            margin: 0 auto;
-            gap: 10px;
-        }
-
-        .signup-form input {
-            flex: 1;
-            padding: 15px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            font-size: 1rem;
-        }
-
-        .signup-form button {
-            padding: 15px 30px;
-            background-color: var(--primary);
-            color: white;
-            border: none;
-            border-radius: var(--radius);
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-        }
-
-        .signup-form button:hover {
-            background-color: var(--primary-dark);
-        }
-
         footer {
-            background-color: var(--text);
+            background: #35424a;
             color: white;
-            padding: 40px 0;
             text-align: center;
-            margin-top: 60px;
-        }
-
-        .footer-links {
-            display: flex;
-            justify-content: center;
-            gap: 30px;
-            margin-bottom: 20px;
-        }
-
-        .footer-links a {
-            color: white;
-            text-decoration: none;
-        }
-
-        .footer-links a:hover {
-            text-decoration: underline;
-        }
-
-        .copyright {
-            font-size: 0.9rem;
-            color: var(--text-light);
-        }
-
-        @media (max-width: 768px) {
-            .hero h1 {
-                font-size: 2rem;
-            }
-
-            .hero p {
-                font-size: 1rem;
-            }
-
-            .news-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .signup-form {
-                flex-direction: column;
-            }
+            padding: 1rem 0;
+            position: fixed;
+            width: 100%;
+            bottom: 0;
         }
     </style>
 </head>
 <body>
     <header>
-        <div class="container">
-            <div class="logo">AI Weekly Digest</div>
-            <div class="tagline">Your curated summary of the most important AI developments</div>
-            <div class="date-range">June 10 - June 16, 2025</div>
-        </div>
+        <h1>AI News Digest</h1>
     </header>
-
-    <main class="container">
-        <section class="hero">
-            <h1>This Week in AI</h1>
-            <p>From breakthrough research to industry shifts, here's what shaped the AI landscape this week.</p>
-        </section>
-
-        <section>
-            <h2 class="section-title">Top Stories</h2>
-            <div class="news-grid">
-                <article class="news-card">
-                    <img src="https://images.unsplash.com/photo-1677442136019-21780ecad995?w=600&h=400&fit=crop" alt="AI model training" class="card-image">
-                    <div class="card-content">
-                        <span class="card-category">Research</span>
-                        <h3 class="card-title">New Efficiency Breakthrough in Transformer Models</h3>
-                        <p class="card-excerpt">Researchers at Stanford have published a paper demonstrating a 40% reduction in training compute requirements for large language models without sacrificing performance. The technique, called "Adaptive Sparsity," dynamically adjusts model architecture during training.</p>
-                        <div class="card-meta">
-                            <span>6 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <img src="https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=600&h=400&fit=crop" alt="EU AI Act documents" class="card-image">
-                    <div class="card-content">
-                        <span class="card-category">Policy</span>
-                        <h3 class="card-title">EU AI Act Enforcement Begins</h3>
-                        <p class="card-excerpt">The European Union has started enforcing its landmark AI Act, with companies given 6 months to comply with new transparency and safety requirements. Early adopters are already seeing benefits in consumer trust and investor confidence.</p>
-                        <div class="card-meta">
-                            <span>8 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <img src="https://images.unsplash.com/photo-1518709268805-4e9042af2176?w=600&h=400&fit=crop" alt="AI hardware chip" class="card-image">
-                    <div class="card-content">
-                        <span class="card-category">Hardware</span>
-                        <h3 class="card-title">Major Chipmaker Announces AI-Optimized Hardware</h3>
-                        <p class="card-excerpt">NVIDIA has unveiled its next-generation AI acceleration chips, promising 3x performance improvements for inference tasks while reducing power consumption by 50%. The chips are already being adopted by major cloud providers.</p>
-                        <div class="card-meta">
-                            <span>5 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&h=400&fit=crop" alt="AI ethics discussion" class="card-image">
-                    <div class="card-content">
-                        <span class="card-category">Ethics</span>
-                        <h3 class="card-title">New Framework for AI Ethics in Healthcare</h3>
-                        <p class="card-excerpt">The World Health Organization has released updated guidelines for ethical AI use in healthcare, focusing on transparency, patient consent, and bias mitigation. Several countries are already incorporating these guidelines into their regulatory frameworks.</p>
-                        <div class="card-meta">
-                            <span>7 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <img src="https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600&h=400&fit=crop" alt="AI coding tools" class="card-image">
-                    <div class="card-content">
-                        <span class="card-category">Development</span>
-                        <h3 class="card-title">GitHub Releases AI-Powered Code Review Tools</h3>
-                        <p class="card-excerpt">GitHub's new AI-powered code review tools are now available in public beta, offering automated suggestions for security vulnerabilities, performance improvements, and code style consistency. Early users report 30% faster review cycles.</p>
-                        <div class="card-meta">
-                            <span>4 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&h=400&fit=crop" alt="AI education" class="card-image">
-                    <div class="card-content">
-                        <span class="card-category">Education</span>
-                        <h3 class="card-title">AI Literacy Now Mandatory in US K-12 Curriculum</h3>
-                        <p class="card-excerpt">The US Department of Education has announced that AI literacy will be incorporated into K-12 curricula nationwide starting in 2026. The move aims to prepare students for an AI-driven workforce and promote responsible technology use.</p>
-                        <div class="card-meta">
-                            <span>6 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-            </div>
-        </section>
-
-        <section class="newsletter-signup">
-            <h2>Get This Delivered Weekly</h2>
-            <p>Stay ahead of the curve with our curated AI news digest, delivered straight to your inbox every Monday.</p>
-            <form class="signup-form">
-                <input type="email" placeholder="Your email address" required>
-                <button type="submit">Subscribe</button>
-            </form>
-        </section>
-
-        <section>
-            <h2 class="section-title">Market Trends</h2>
-            <div class="news-grid">
-                <article class="news-card">
-                    <div class="card-content">
-                        <span class="card-category">Investment</span>
-                        <h3 class="card-title">AI Startup Funding Reaches Record Highs</h3>
-                        <p class="card-excerpt">Venture capital investment in AI startups has reached $12.4 billion in Q2 2025, a 45% increase from the same period last year. Enterprise AI solutions and healthcare applications are receiving the most funding.</p>
-                        <div class="card-meta">
-                            <span>3 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <div class="card-content">
-                        <span class="card-category">Adoption</span>
-                        <h3 class="card-title">68% of Fortune 500 Now Using AI in Operations</h3>
-                        <p class="card-excerpt">A new survey reveals that 68% of Fortune 500 companies have integrated AI into their operations, with customer service automation and supply chain optimization being the most common use cases.</p>
-                        <div class="card-meta">
-                            <span>4 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-
-                <article class="news-card">
-                    <div class="card-content">
-                        <span class="card-category">Jobs</span>
-                        <h3 class="card-title">AI Skills Dominate Job Market Demand</h3>
-                        <p class="card-excerpt">LinkedIn's latest report shows that AI-related skills are now the most in-demand across all industries, with machine learning engineers and AI ethics specialists seeing the highest salary growth.</p>
-                        <div class="card-meta">
-                            <span>3 min read</span>
-                            <a href="#" class="read-more">Read more →</a>
-                        </div>
-                    </div>
-                </article>
-            </div>
-        </section>
-    </main>
-
-    <footer>
-        <div class="container">
-            <div class="footer-links">
-                <a href="#">About Us</a>
-                <a href="#">Privacy Policy</a>
-                <a href="#">Terms of Service</a>
-                <a href="#">Contact</a>
-            </div>
-            <div class="copyright">
-                © 2025 AI Weekly Digest. All rights reserved.
-            </div>
+    <div class="container">
+        <div class="news-item">
+            <h2>Advancements in Natural Language Processing</h2>
+            <p>Researchers at MIT have developed a new model that significantly improves the accuracy of machine translation and text summarization. The model, named Transformer-X, leverages advanced attention mechanisms to better understand context and nuances in language.</p>
         </div>
+        <div class="news-item">
+            <h2>Breakthrough in Computer Vision</h2>
+            <p>Scientists at Stanford University have announced a new computer vision system that can identify and describe objects in images with unprecedented accuracy. The system, called VisionNet, uses a combination of deep learning and reinforcement learning to achieve these results.</p>
+        </div>
+        <div class="news-item">
+            <h2>AI in Healthcare</h2>
+            <p>Researchers at Johns Hopkins University have developed an AI system that can predict the likelihood of a patient developing a specific disease based on their medical history and lifestyle factors. The system, named HealthPredict, has shown promising results in early trials.</p>
+        </div>
+        <div class="news-item">
+            <h2>Ethical Considerations in AI</h2>
+            <p>Tech ethics experts have released a comprehensive report on the ethical implications of AI, highlighting the need for transparency, accountability, and fairness in AI systems. The report, titled "Ethics in AI: A Comprehensive Guide," provides recommendations for policymakers and industry leaders.</p>
+        </div>
+    </div>
+    <footer>
+        <p>&copy; 2023 AI News Digest. All rights reserved.</p>
     </footer>
 </body>
 </html>

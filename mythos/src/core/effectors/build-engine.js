@@ -58,6 +58,39 @@ var OUTPUT_CONTRACT = [
     + ' game loop that can lose before any input arrives, and never open on a game-over/error screen.',
   '- Draw at a size a person can actually see: game pieces, data points and controls should be'
     + ' obvious at a glance on a 1280x800 screen, not a few pixels on an empty-looking board.',
+  // ADDED 2026-08-22, and it is the only clause here with a measured miss rate
+  // rather than an incident behind it. W6's engine comparison scored 18 generated
+  // artifacts through this repo's own verifier (9 from Hermes-Agent, 9 from dsh,
+  // both on mistral-large-2512) and produced an unusually clean result: 6 of 9
+  // failed on EACH engine, and all 12 rejections named ONE rule —
+  // "no @media queries (not responsive)". Nothing else fired, on either engine.
+  //
+  // The contract above asks for a ready state and a visible scale; it never asked
+  // the model to make the artifact work on a narrow screen. So this was a gap in
+  // the INSTRUCTION, not in either harness — which is why swapping the harness
+  // correctly changed nothing about it, and why fixing it belongs here rather
+  // than in an adapter.
+  //
+  // THEN MEASURED PROPERLY, because the first number was not a controlled one.
+  // The 3/9-vs-8/9 comparison that suggested this change moved the MODEL as well
+  // as the contract (mistral-large-2512 to codestral-latest), so it could not
+  // attribute the gain to either. Re-run on ONE model, codestral-latest, with
+  // this clause as the only difference:
+  //
+  //     without this line   2/9 verifier-pass   (6 rejections, all @media)
+  //     with this line      8/9 verifier-pass   (1 rejection,  @media)
+  //
+  // Same prompts, same oracle, same model, 9 samples each. The surviving failure
+  // is interactive-snake, which suggests a game canvas is the case a general
+  // "make it responsive" instruction reaches least well — worth a separate look,
+  // not worth widening this clause on a guess.
+  //
+  // A PROMPT INSTRUCTION IS STILL NOT A GUARANTEE (see the fence note below,
+  // which exists because a different clause in this same contract was ignored).
+  // 8/9 is an improvement, not a proof, and the verifier remains the gate.
+  '- Make it work on a phone as well as a desktop: include at least one @media query and use'
+    + ' layout that reflows (flex/grid, percentage or clamp() widths) rather than fixed pixel'
+    + ' columns. A page that only works at one window size is not finished.',
 ].join('\n');
 
 // A PROMPT INSTRUCTION IS NOT A GUARANTEE (found 2026-08-14, first real
