@@ -41,7 +41,7 @@ describe('brain/lanes.default', function() {
     ]);
   });
 
-  it('voice lane leads with google, groq demoted below it', function() {
+  it('voice lane leads with google, and groq is gone rather than demoted', function() {
     // Was "groq first" until 2026-08-14. Two independent measurements moved it:
     // groq llama-3.3-70b scored 2/4 (missing BOTH reasoning probes), and Groq's
     // budget is 12,000 TOKENS per window while this lane's prompt is ~10k tokens
@@ -51,16 +51,49 @@ describe('brain/lanes.default', function() {
     // (a chain-of-thought leak here is read out).
     assert.equal(lanes.PREF_VOICE[0].provider, 'google');
     assert.equal(lanes.PREF_VOICE[0].model, 'gemini-flash-lite-latest');
+    // RE-POINTED 2026-08-22. This used to assert `groqIdx > 0` — groq retained
+    // as a fallback rather than leading. Groq is now ABSENT from this lane, and
+    // the assertion changes because the fact changed, not to make a red test
+    // green: Groq's /models advertises 13 ids and not one is a Llama of any
+    // version, so `llama-3.3-70b-versatile` returns 404 and cannot be a fallback
+    // to anything. The invariant that actually mattered — Groq must not LEAD
+    // this lane — is now guaranteed structurally, and pinned as such.
     const groqIdx = lanes.PREF_VOICE.findIndex(function(p) { return p.provider === 'groq'; });
-    assert.ok(groqIdx > 0, 'groq retained as a fallback, not leading');
+    assert.equal(groqIdx, -1, 'groq is 404 on every Llama id; it cannot be a fallback');
+    assert.ok(lanes.KNOWN_DEAD.some(function(d) {
+      return d.provider === 'groq' && d.model === 'llama-3.3-70b-versatile';
+    }), 'a model removed from a lane for being dead must be recorded in KNOWN_DEAD, '
+      + 'or the next session re-adds it from the old measurement notes');
   });
 
-  it('reasoning lane leads with cerebras and falls through to another provider', function() {
-    assert.equal(lanes.PREF_REASONING[0].provider, 'cerebras');
-    assert.equal(lanes.PREF_REASONING[0].model, 'gpt-oss-120b');
-    // Cerebras is capped at 5 req/min and seven roles now share this lane, so a
-    // chain that never leaves Cerebras would 429 as a burst rather than fail
-    // over. At least one non-cerebras cloud entry is load-bearing, not garnish.
+  it('reasoning lane leads with a model that answers, and keeps cerebras as a rung', function() {
+    // REWRITTEN 2026-08-22. This used to assert the head was
+    // cerebras/gpt-oss-120b. Both Cerebras entries were then measured failing —
+    // gpt-oss-120b `402 Payment required` (the account is unbilled) and
+    // zai-glm-4.7 `404 archived and unavailable for the organization` — so the
+    // top TWO rungs of the lane ten roles ride were dead, and every call burned
+    // two attempts before reaching an answer.
+    //
+    // The head is asserted as NOT cerebras rather than as one specific id: what
+    // matters is that the lane starts somewhere that responds, and pinning the
+    // exact model would just have to be rewritten the next time a provider
+    // moves.
+    assert.notEqual(lanes.PREF_REASONING[0].provider, 'cerebras',
+      'the lane must not start on the unbilled provider');
+    // Cerebras is KEPT, not deleted: 402 is a billing state, so funding the
+    // account restores it with no code change. Deleting it would make that
+    // recovery a code change instead.
+    const cerebras = lanes.PREF_REASONING.filter(function(p) { return p.provider === 'cerebras'; });
+    assert.equal(cerebras.length, 1, 'cerebras/gpt-oss-120b stays as a rung; zai-glm-4.7 is archived upstream');
+    assert.equal(cerebras[0].model, 'gpt-oss-120b');
+    // ...and it must sit BELOW every cloud entry that currently answers, so a dry
+    // account costs one attempt at the end of the walk rather than two at the start.
+    const cloud = lanes.PREF_REASONING.filter(function(p) { return p.provider !== 'ollama'; });
+    assert.equal(cloud[cloud.length - 1].provider, 'cerebras',
+      'the unbilled provider must be the LAST cloud rung');
+    // The original point of this test, unchanged: Cerebras is capped at 5 req/min
+    // and ten roles share this lane, so a chain that never leaves Cerebras would
+    // 429 as a burst rather than fail over.
     const offCerebras = lanes.PREF_REASONING.filter(function(p) {
       return p.provider !== 'cerebras' && p.provider !== 'ollama';
     });
@@ -121,7 +154,16 @@ describe('brain/lanes.default', function() {
     assert.equal(lanes.PREF_BUILD[0].provider, 'mistral');
     assert.equal(lanes.PREF_BUILD[0].model, 'codestral-latest');
     assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'mistral' && p.model === 'mistral-large-2512'; }), 'mistral-large-2512 retained as generalist fallback');
-    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'groq' && p.model === 'llama-3.3-70b-versatile'; }), 'Groq 70B present (fastest reachable)');
+    // RE-POINTED 2026-08-22. This used to assert Groq's 70B was present as the
+    // "fastest reachable" rung. It is not reachable at all: Groq advertises 13
+    // model ids and not one is a Llama, so the call is a 404. The assertion is
+    // inverted rather than deleted, so a future session cannot re-add it from
+    // the old note without this test objecting.
+    assert.ok(!lanes.PREF_BUILD.some(function(p) { return p.provider === 'groq'; }),
+      'Groq has no Llama on its API; a 404 rung is not a fallback');
+    assert.ok(lanes.KNOWN_DEAD.some(function(d) {
+      return d.provider === 'groq' && d.model === 'llama-3.3-70b-versatile';
+    }), 'recorded in KNOWN_DEAD so the removal is evidence, not preference');
     // ollama entries (if any) must be at the tail, not leading
     const firstOllama = lanes.PREF_BUILD.findIndex(function(p) { return p.provider === 'ollama'; });
     if (firstOllama !== -1) {
