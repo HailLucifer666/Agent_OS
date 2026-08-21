@@ -72,6 +72,7 @@ function reasonText(res) {
 // Lives in the vault (gitignored) because these are personal phone numbers: they
 // must never be committed, and the open-source portability rule forbids baking
 // anyone's identifiers into tracked files.
+const { levenshtein } = require('../lib/levenshtein');
 const CONTACTS_PATH = 'Contacts/contacts.json';
 const MAX_MESSAGE_CHARS = 2000;
 
@@ -174,6 +175,7 @@ function resolveRecipient(to) {
   }
 
   const needle = wanted.toLowerCase().replace(/^(my|to)\s+/, '').trim();
+  let fuzzyNote = null;
   let hit = names.find((n) => n.toLowerCase() === needle);
   if (!hit) hit = names.find((n) => n.toLowerCase().replace(/^(my|to)\s+/, '') === needle);
   if (!hit) {
@@ -183,6 +185,45 @@ function resolveRecipient(to) {
     if (partial.length === 1) hit = partial[0];
     else if (partial.length > 1) {
       return { error: '"' + wanted + '" matches more than one contact (' + partial.join(', ') + '). Which one?' };
+    }
+  }
+  // Fuzzy rung (2026-08-21 audit) — fires ONLY when exact, prefix-strip and
+  // substring have all found nothing, so it can never override a stronger
+  // match. STT renders the saved contact "Moushumi" as "Mousumi" and "Mausumi
+  // Paul" as "Mousumi Paul" (one edit each); both were refused outright while
+  // the refusal read the correct name aloud in its own "Known contacts" list.
+  // The operator had already written that alias into vault user-facts, so the
+  // system held the answer and still said no.
+  //
+  // Q1 (what ELSE matches this?): the cap is the whole safety story, because
+  // messaging the wrong human is not recoverable. Names of 4 characters or
+  // fewer get distance 1 only — at the general cap of 2, "mom" and "dad" sit
+  // within reach of the same typo and there is no undo on a sent message.
+  // Longer names get max(2, 20% of length), so "Mousumi"->"Moushumi" (1 edit
+  // in 8) resolves while "Mousumi"->"Mausumi Paul" (6 edits) does not.
+  //
+  // Q8 (pin the disposition): a tie at the same distance ASKS rather than
+  // picking, matching the substring rung directly above — this file's existing
+  // rule that an ambiguous recipient is a question, not a guess. Deliberately
+  // unlike semantic.forget()'s fuzzy pass, which DELETES on a single candidate;
+  // the same audit refused to loosen that one for exactly this reason.
+  if (!hit) {
+    const scored = names
+      .map((n) => {
+        const lower = n.toLowerCase();
+        const cap = lower.length <= 4 ? 1 : Math.max(2, Math.floor(lower.length * 0.2));
+        return { name: n, d: levenshtein(needle, lower), cap: cap };
+      })
+      .filter((c) => c.d > 0 && c.d <= c.cap)
+      .sort((a, b) => a.d - b.d);
+    if (scored.length && (scored.length === 1 || scored[0].d < scored[1].d)) {
+      hit = scored[0].name;
+      fuzzyNote = 'closest match to "' + wanted + '" is saved contact "' + hit + '"';
+    } else if (scored.length > 1) {
+      return {
+        error: '"' + wanted + '" is close to more than one contact (' +
+          scored.map((c) => c.name).join(', ') + '). Which one?',
+      };
     }
   }
   if (!hit) {
@@ -199,7 +240,7 @@ function resolveRecipient(to) {
   if (!number) {
     return { error: 'The number saved for "' + hit + '" is not a valid phone number. Fix it in vault/' + CONTACTS_PATH + '.' };
   }
-  return { number, name: hit };
+  return fuzzyNote ? { number, name: hit, fuzzyNote } : { number, name: hit };
 }
 
 // A4: how long the composer is given to appear after focus, and how often it is
@@ -227,7 +268,12 @@ async function whatsapp_send({ to, text, send }) {
   const message = sanitizeMessage(formatOutgoingMessage(text, { itemJoiner: ', ' }));
   if (!message) return fail('What should the message say?');
 
-  const label = recipient.name ? recipient.name + ' (' + recipient.number + ')' : recipient.number;
+  // A fuzzy recipient resolution is never silent: the note rides on the label,
+  // which every success AND failure message below interpolates, so the operator
+  // always hears which saved contact was actually chosen — including when the
+  // send then fails for an unrelated reason.
+  const label = (recipient.name ? recipient.name + ' (' + recipient.number + ')' : recipient.number) +
+    (recipient.fuzzyNote ? ' — ' + recipient.fuzzyNote : '');
 
   // 1. Ask WhatsApp to open this exact conversation. The URI scheme is what makes
   //    contact resolution WhatsApp's problem rather than ours.
@@ -287,9 +333,31 @@ async function whatsapp_send({ to, text, send }) {
     try { listed = await fromPc.list_windows(); } catch (_) { listed = null; }
     const rows = (listed && listed.ok && listed.result && Array.isArray(listed.result.windows))
       ? listed.result.windows : [];
+    // 2026-08-21 audit: this compared against the bare string 'whatsapp', and
+    // the desktop app on Windows reports its process as "WhatsApp.Root" — 23
+    // occurrences in the live vault and server log, zero occurrences of a bare
+    // "WhatsApp" process. So this fallback could never identify the window it
+    // was looking at, and three sends failed with "I could not identify its
+    // window". bug-273-c1's fixture used processName:'WhatsApp', which is the
+    // one spelling that did work — the fixture was more generous than the wire,
+    // which is why a green suite sat on top of a dead code path.
+    //
+    // Q1 — WHAT ELSE MATCHES THIS? Anchored at both ends, and a suffix is
+    // allowed only after a DOT, which is the MSIX sub-process convention that
+    // produced ".Root". "WhatsAppSpoofer" and "whatsapp-web-helper" therefore do
+    // not match: a process that merely STARTS with these letters is not this
+    // app, and prefix matching is how an unrelated binary would inherit a send.
+    // Still matched on processName only, never on title — the browser-tab trap
+    // in the Q1 note above is unchanged.
+    //
+    // Q8 — WHAT DELIBERATELY DOES NOT CHANGE: no retry/settle poll was added
+    // here. All three recorded failures are explained by the name mismatch, and
+    // there is no evidence of a "window not yet enumerable" timing case — an
+    // unexercised retry loop would be a mechanism nobody can prove works.
+    const WHATSAPP_PROCESS_RE = /^whatsapp(\.[a-z0-9._-]+)?$/;
     const matches = rows.filter((row) => {
       const name = String((row && row.processName) || '').trim().toLowerCase();
-      return name === 'whatsapp' && row.visible !== false && typeof row.pid === 'number';
+      return WHATSAPP_PROCESS_RE.test(name) && row.visible !== false && typeof row.pid === 'number';
     });
     // Exactly one, or none. Two visible WhatsApp windows means the desktop app and
     // something else claiming the name, and picking one at random is the guess this

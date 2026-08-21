@@ -199,23 +199,11 @@ const ALIAS_DEFAULT_ARGS = {
     return merged;
   },
 };
-function levenshtein(a, b) {
-  var m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  var prev = [];
-  var curr = [];
-  for (var j = 0; j <= n; j++) prev[j] = j;
-  for (var i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (var j = 1; j <= n; j++) {
-      var cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-    }
-    for (var j = 0; j <= n; j++) prev[j] = curr[j];
-  }
-  return prev[n];
-}
+// Moved to src/core/lib/levenshtein.js on 2026-08-21 so from-whatsapp.js's
+// resolveRecipient can share it. Two copies of a distance function is how two
+// callers quietly end up disagreeing about "close enough", and one of them
+// decides which human receives a WhatsApp message.
+const { levenshtein } = require('../lib/levenshtein');
 function suggestTool(name, catalog) {
   var lower = String(name || '').toLowerCase().trim();
   // Exact alias hit — return both the target name and (if present) a default-args
