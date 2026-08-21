@@ -870,6 +870,28 @@ equivalent per OD's open note), `mythos/src/core/agents/teams.js`; modify
   `phone_whatsapp_send` as an honest deep-link-open reporting `{opened:true,
   sent:false}`; that honest behaviour must not regress into a claimed send when a
   real API path lands beside it.
+
+  **Operator decision 2026-08-21, recorded verbatim so intent is not paraphrased
+  away:** *"we are using PC automations as of now for whatsapp. When selling i
+  will have it wired with Whatsapp api only so it works legit way BYOK for
+  whatsapp business. But now it should able to send messages locally and only
+  for me."*
+
+  So the split is now explicit and dated:
+  - **Now, personal use only** — the existing UI-automation path (deep link +
+    typed composer) is the supported route, and it is worth hardening. Two of
+    its six measured failure clusters were fixed on 2026-08-21: a misheard
+    contact name is now resolved with a reported closest match, and the window
+    matcher accepts the process family Windows actually reports
+    (`WhatsApp.Root`, not the bare `whatsapp` it compared against). The four
+    remaining clusters — submit-with-empty-composer (7), wrong conversation
+    shown (5), typed into the wrong window (3), composer unreadable (2) — are
+    open and belong to this step's "harden the local path" work.
+  - **At productization** — the official Business Cloud API, BYOK against the
+    operator's own WhatsApp Business account, exactly as the row above requires.
+  - **The ban is unchanged.** `whatsapp-web.js` and Baileys stay banned; the
+    operator re-confirmed this on 2026-08-21. Hardening the UI path is not a
+    step toward a protocol client and must never become one.
 - [ ] **Step 4 — live-verify each** against a real account, or do not ship it.
 
 ---
