@@ -23,7 +23,7 @@ const GROUP_RULES = [
   { id: 'voice', label: 'Voice', match: (n) => /^(VOICE_|WAKEWORD_|VAD_|PIPER_|KOKORO_|EDGE_|GEMINI_LIVE|LIVE_|DUCK_)/.test(n) },
   { id: 'autonomy', label: 'Autonomy & safety', match: (n) => /^(AUTONOMOUS_|LEASH_|PIN_|AUTH_|CONFIRM_)/.test(n) },
   { id: 'brain', label: 'Brain & providers', match: (n) => /^(BRAIN_|LLM_|MODEL_|GOAL_|STRIX_)/.test(n) },
-  { id: 'devices', label: 'Devices & integrations', match: (n) => /^(AETHER_|HERMES_|ANDROID_|BROWSER_|CUA_|PC_|SPOTIFY_|GMAIL_|GOOGLE_|MCP_|WHATSAPP_)/.test(n) },
+  { id: 'devices', label: 'Devices & integrations', match: (n) => /^(AETHER_|DSH_|ANDROID_|BROWSER_|CUA_|PC_|SPOTIFY_|GMAIL_|GOOGLE_|MCP_|WHATSAPP_)/.test(n) },
   { id: 'server', label: 'Server & storage', match: (n) => /^(MYTHOS_|LOG_|BUS_|SERVER_|VAULT_)/.test(n) },
 ];
 const OTHER_GROUP = { id: 'other', label: 'Everything else' };

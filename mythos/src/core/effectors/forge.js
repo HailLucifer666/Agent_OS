@@ -2,7 +2,7 @@
 
 // effectors/forge.js — multi-file agentic build pipeline (P22). Phase 3 of the
 // Hermes orchestration change: Forge now drives the Hermes-Agent CLI (via
-// hermes-runner.js) instead of calling brain.think({lane:'build'}) per file.
+// forge-runner.js) instead of calling brain.think({lane:'build'}) per file.
 // Checkpoints (P21 sibling module, connectionId:'system' so a voice-started
 // build stays HUD-approvable) gate the plan and the final review. Pending
 // checkpoints hold live closures and cannot survive a restart — init() re-arms
@@ -143,7 +143,7 @@ function createForge({ config, runner, bus, vault, checkpoints }) {
   // ---- build stage ----
   // Replaces the old per-file generate pump: ONE Hermes run does the whole
   // build (or revision); progress comes from directory polling inside
-  // hermes-runner.js, not from per-file LLM calls.
+  // forge-runner.js, not from per-file LLM calls.
   async function runBuildStage(p, feedback) {
     p.status = feedback ? 'revising' : 'generating'; notify(p);
     const dirRel = projectDirRel(p);

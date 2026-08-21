@@ -1,12 +1,17 @@
 'use strict';
 
-// Phase 2 of the Hermes orchestration change: hermes-runner.js is the only
-// module that knows how to drive the Hermes CLI. These tests mock
-// adapters/hermes-agent's runTask (a singleton module.exports object — the
-// property is read at call time, so monkey-patching it here is observed by
-// hermes-runner.js without any DI seam needing to change) so the runner's
-// own logic (plan parsing, the blocker taxonomy, progress polling) can be
-// exercised without a real Hermes install.
+// forge-runner.js is the only module that knows how to drive a multi-file build.
+// These tests supply a FAKE ENGINE through the runner's constructor so the
+// runner's own logic (plan parsing, the blocker taxonomy, progress polling) can
+// be exercised without a real engine install.
+//
+// RENAMED with the runner by W6 (2026-08-22), and the mocking mechanism changed
+// with it. This file used to monkey-patch adapters/hermes-agent's runTask on the
+// singleton module.exports object, because the runner required that adapter at
+// module scope and there was no DI seam. There is one now — createForgeRunner
+// takes `engine` — so the fake is injected rather than patched onto a shared
+// global. That also removes a real hazard: a patch that leaked (an early return,
+// a throw before the finally) would silently affect every later test in the run.
 
 const fs = require('fs');
 const path = require('path');
@@ -14,28 +19,44 @@ const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { tempVaultDir, cleanupVaultDir } = require('./helpers');
 const { createFsStore } = require('../src/core/memory/fs-store');
-const { createHermesRunner } = require('../src/core/effectors/hermes-runner');
+const { createForgeRunner } = require('../src/core/effectors/forge-runner');
 const validate = require('../src/core/effectors/forge-validate');
-const hermes = require('../adapters/hermes-agent');
+
+// The fake engine the runner under test is constructed with. `current` is
+// swapped per test; the restore function is kept so every existing
+// try/finally in this file goes on reading the same way.
+let currentRunTask = async () => { throw new Error('no runTask installed for this test'); };
+const fakeEngine = {
+  runTask: (prompt, opts) => currentRunTask(prompt, opts),
+  getStatus: () => ({ state: 'ONLINE', hint: 'fake engine' }),
+};
 
 function mockRunTask(fn) {
-  const original = hermes.runTask;
-  hermes.runTask = fn;
-  return () => { hermes.runTask = original; };
+  const original = currentRunTask;
+  currentRunTask = fn;
+  return () => { currentRunTask = original; };
 }
 
-describe('hermes-runner — runPlan', () => {
+describe('forge-runner — runPlan', () => {
   let dir, vault, runner;
   beforeEach(() => {
     dir = tempVaultDir();
     vault = createFsStore(() => dir, { emit() {} });
-    runner = createHermesRunner({ config: {}, vault });
+    runner = createForgeRunner({ config: {}, vault, engine: fakeEngine });
   });
   afterEach(() => cleanupVaultDir(dir));
 
   it('constructor requires a vault fs-store', () => {
-    assert.throws(() => createHermesRunner({ config: {} }));
-    assert.throws(() => createHermesRunner({ config: {}, vault: {} }));
+    assert.throws(() => createForgeRunner({ config: {}, engine: fakeEngine }));
+    assert.throws(() => createForgeRunner({ config: {}, vault: {}, engine: fakeEngine }));
+  });
+
+  it('constructor requires an engine — a runner with no engine must not construct', () => {
+    // The engine used to be a module-scope require, so "no engine" was not a
+    // state this could reach. Now it is a parameter, and a runner built without
+    // one would fail on the first build instead of at wiring time.
+    assert.throws(() => createForgeRunner({ config: {}, vault }), /requires the dsh-agent adapter/);
+    assert.throws(() => createForgeRunner({ config: {}, vault, engine: {} }), /requires the dsh-agent adapter/);
   });
 
   it('happy path: valid JSON plan → ok:true manifest, sandboxed to a scratch dir', async () => {
@@ -49,16 +70,21 @@ describe('hermes-runner — runPlan', () => {
       assert.equal(res.ok, true);
       assert.equal(res.manifest.name, 'Todo');
       assert.deepEqual(res.manifest.files.map((f) => f.path), ['index.html']);
-      // Belt-and-braces: plan run must be sandboxed to a scratch dir, never
-      // the real project dir (Hermes hasn't proposed a slug yet at plan time).
-      assert.equal(seenOpts.requireCli, true);
+      // Belt-and-braces: a plan run must be sandboxed to a scratch dir, never
+      // the real project dir (no slug has been proposed yet at plan time).
       assert.match(seenOpts.cwd, /_plan-scratch/);
-      assert.match(seenOpts.env.HERMES_WRITE_SAFE_ROOT, /_plan-scratch/);
+      // W6: "write nothing" is now the SANDBOX's job, not the prompt's. A falsy
+      // autoApprove selects dsh's read-only preset, so the engine is refused
+      // permission to write rather than merely asked not to. Asserting the
+      // absence matters — passing autoApprove here would silently re-enable
+      // writes on the planning path.
+      assert.ok(!seenOpts.autoApprove, 'a plan run must not request write permission');
+      assert.equal(seenOpts.writeRoot, undefined);
     } finally { restore(); }
   });
 
-  it('parse failure mode 1: hermes.runTask throws → ok:false reason plan-failed', async () => {
-    const restore = mockRunTask(async () => { throw new Error('hermes-agent OFFLINE: not installed'); });
+  it('parse failure mode 1: engine.runTask throws → ok:false reason plan-failed', async () => {
+    const restore = mockRunTask(async () => { throw new Error('dsh-agent OFFLINE: not installed'); });
     try {
       const res = await runner.runPlan('spec', 'app');
       assert.equal(res.ok, false);
@@ -104,19 +130,21 @@ describe('hermes-runner — runPlan', () => {
   });
 });
 
-describe('hermes-runner — runBuild + onProgress', () => {
+describe('forge-runner — runBuild + onProgress', () => {
   let dir, vault, runner;
   beforeEach(() => {
     dir = tempVaultDir();
     vault = createFsStore(() => dir, { emit() {} });
-    runner = createHermesRunner({ config: { HERMES_POLL_MS: 20 }, vault });
+    runner = createForgeRunner({ config: { DSH_POLL_MS: 20 }, vault, engine: fakeEngine });
   });
   afterEach(() => cleanupVaultDir(dir));
 
   it('cwd + write-safe-root are pinned to the project dir, and onProgress observes files written mid-run', async () => {
     const progressSnapshots = [];
+    let seenOpts;
     const restore = mockRunTask(async (prompt, opts) => {
-      // Simulate Hermes writing files while the runner's poll timer is ticking.
+      seenOpts = opts;
+      // Simulate the engine writing files while the runner's poll timer ticks.
       fs.mkdirSync(opts.cwd, { recursive: true });
       fs.writeFileSync(path.join(opts.cwd, 'index.html'), '<html></html>');
       await new Promise((r) => setTimeout(r, 60)); // let at least one poll tick fire
@@ -134,16 +162,23 @@ describe('hermes-runner — runBuild + onProgress', () => {
       assert.equal(res.ok, true);
       assert.deepEqual(res.files, ['app.js', 'index.html']);
       assert.ok(progressSnapshots.some((snap) => snap.includes('index.html')), 'onProgress must have observed the mid-run partial state');
+      // W6: INTENT, not another program's env vars. This used to pass
+      // env: { HERMES_WRITE_SAFE_ROOT, HERMES_YOLO_MODE }. writeRoot must equal
+      // cwd — dsh confines writes to its invoking directory and the adapter
+      // throws rather than silently dropping a root it cannot honour.
+      assert.equal(seenOpts.writeRoot, seenOpts.cwd);
+      assert.equal(seenOpts.autoApprove, true);
+      assert.equal(seenOpts.env && seenOpts.env.HERMES_WRITE_SAFE_ROOT, undefined);
     } finally { restore(); }
   });
 });
 
-describe('hermes-runner — runWidgetBuild (Phase C3, validated WIDGET SPEC build target)', () => {
+describe('forge-runner — runWidgetBuild (Phase C3, validated WIDGET SPEC build target)', () => {
   let dir, vault, runner;
   beforeEach(() => {
     dir = tempVaultDir();
     vault = createFsStore(() => dir, { emit() {} });
-    runner = createHermesRunner({ config: {}, vault });
+    runner = createForgeRunner({ config: {}, vault, engine: fakeEngine });
   });
   afterEach(() => cleanupVaultDir(dir));
 
@@ -157,9 +192,11 @@ describe('hermes-runner — runWidgetBuild (Phase C3, validated WIDGET SPEC buil
       const res = await runner.runWidgetBuild('a stat widget showing uptime');
       assert.equal(res.ok, true);
       assert.deepEqual(res.spec, { kind: 'dynamic', title: 'Deploy Status', layout: 'stat', items: [{ label: 'Uptime', value: '99.9%', tone: 'gold' }] });
-      assert.equal(seenOpts.requireCli, true);
       assert.match(seenOpts.cwd, /_widget-scratch/);
-      assert.match(seenOpts.env.HERMES_WRITE_SAFE_ROOT, /_widget-scratch/);
+      // Read-only, same reasoning as runPlan: a widget spec is DATA and nothing
+      // on this path is supposed to touch disk.
+      assert.ok(!seenOpts.autoApprove, 'a widget-spec run must not request write permission');
+      assert.equal(seenOpts.writeRoot, undefined);
     } finally { restore(); }
   });
 
@@ -210,8 +247,8 @@ describe('hermes-runner — runWidgetBuild (Phase C3, validated WIDGET SPEC buil
     } finally { restore(); }
   });
 
-  it('hermes.runTask throws → ok:false reason widget-build-failed', async () => {
-    const restore = mockRunTask(async () => { throw new Error('hermes-agent OFFLINE: not installed'); });
+  it('engine.runTask throws → ok:false reason widget-build-failed', async () => {
+    const restore = mockRunTask(async () => { throw new Error('dsh-agent OFFLINE: not installed'); });
     try {
       const res = await runner.runWidgetBuild('spec');
       assert.equal(res.ok, false);
@@ -243,12 +280,12 @@ describe('hermes-runner — runWidgetBuild (Phase C3, validated WIDGET SPEC buil
   });
 });
 
-describe('hermes-runner — classify() blocker taxonomy (exit 0 is not success)', () => {
+describe('forge-runner — classify() blocker taxonomy (exit 0 is not success)', () => {
   let dir, vault, runner;
   beforeEach(() => {
     dir = tempVaultDir();
     vault = createFsStore(() => dir, { emit() {} });
-    runner = createHermesRunner({ config: {}, vault });
+    runner = createForgeRunner({ config: {}, vault, engine: fakeEngine });
     fs.mkdirSync(path.join(dir, 'proj'), { recursive: true });
   });
   afterEach(() => cleanupVaultDir(dir));
@@ -261,10 +298,13 @@ describe('hermes-runner — classify() blocker taxonomy (exit 0 is not success)'
     assert.equal(res.reason, 'timeout');
   });
 
-  it('branch 2 — any other error → reason hermes-error', () => {
-    const res = runner._classify({ dirAbs: dirAbs(), before: [], manifest: null, reply: null, error: 'hermes CLI exit 1: traceback...' });
+  it('branch 2 — any other error → reason engine-error', () => {
+    // RENAMED from 'hermes-error' with the engine (W6): the string named a
+    // program, not a condition. forge.js switches on it, so both moved in one
+    // commit rather than one being aliased.
+    const res = runner._classify({ dirAbs: dirAbs(), before: [], manifest: null, reply: null, error: 'dsh exit 1: traceback...' });
     assert.equal(res.ok, false);
-    assert.equal(res.reason, 'hermes-error');
+    assert.equal(res.reason, 'engine-error');
   });
 
   it('branch 3 — clean exit, zero files on disk → reason no-output (exit 0 is NOT success)', () => {

@@ -141,7 +141,7 @@ export function mountFirstRunWizard(root, opts) {
   // second, empty brain: ~140 non-secret keys at their schema defaults (mythos/.env
   // is excluded from package.json build.files, and it was the ONLY place that ever
   // set VOICE_S2S_ENABLED, VOICE_TTS_PROVIDER, WAKEWORD_ENABLED, the AETHER_*/
-  // HERMES_* block and the local tool paths), and a vault with no
+  // DSH_* block and the local tool paths), and a vault with no
   // Identity/boundaries.md, no operator profile or style, no contacts and none of
   // the 8 learned skills. Four incidents in under two minutes followed.
   //

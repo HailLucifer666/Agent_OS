@@ -20,11 +20,13 @@
 //
 // NOTE ON THE ENGINE VALUE: there is no literal 'fallback' engine tag
 // anywhere in this codebase (checked build-engine.js, build-runner.js, and
-// full git history) — the only build-content engines that exist are
-// 'hermes' and, when Hermes is wired but transiently unreachable at runtime,
-// 'brain-fallback' (build-engine.js's brainFallback()). 'fallback' is kept
-// as an accepted alias here only in case an older/external job record used
-// that literal value; it is not otherwise reachable from current code.
+// full git history). The only engine tag current code produces is 'dsh'
+// (W6, 2026-08-22; it was 'hermes' before the harness swap). 'brain-fallback'
+// came from build-engine.js's brainFallback(), which was REMOVED on
+// 2026-08-15 under operator ruling A, and 'fallback' was only ever a
+// defensive alias. All three are kept as accepted historical values because
+// job records on disk still carry them — a stored job predating the swap must
+// keep deriving the same completion status it always did.
 //
 // This module is deliberately tiny and dependency-free (no bus, no vault) so
 // both the shipping path (agent-actions.js, which sets reviewStatus) and the

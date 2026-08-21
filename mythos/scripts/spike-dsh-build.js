@@ -95,12 +95,18 @@ function parseArgs(argv) {
     if (a === '--engines') { out.engines = String(argv[++i] || '').split(',').filter(Boolean); continue; }
     if (a === '--timeout-ms') { out.timeoutMs = Number(argv[++i]); continue; }
     if (a === '--dsh-patch') { out.dshPatch = String(argv[++i] || ''); continue; }
+    if (a === '--dsh-model') { out.dshModel = String(argv[++i] || ''); continue; }
     if (a === '--forge') { out.forge = true; continue; }
     if (a === '--help' || a === '-h') { out.help = true; continue; }
     throw new Error('unknown argument: ' + a + ' (see --help)');
   }
   if (!Number.isInteger(out.samples) || out.samples < 1) {
     throw new Error('--samples must be a positive integer');
+  }
+  if (out.dshPatch && out.dshModel) {
+    throw new Error('--dsh-patch and --dsh-model both select the model; pass one. '
+      + '--dsh-model writes an overlay for you from a MYTHOS lane entry; --dsh-patch '
+      + 'takes an overlay you wrote yourself.');
   }
   // ONE SAMPLE HIDES MODEL FLAKINESS. Recorded on this repo after a generated
   // artifact passed once and failed the next two times on the same prompt.
@@ -124,7 +130,10 @@ function parseArgs(argv) {
 // object and reading it runs nothing.
 function readOutputContract() {
   const { createBuildEngine } = require('../src/core/effectors/build-engine');
-  const engine = createBuildEngine({ hermes: { runTask: function () { throw new Error('spike: stub adapter must never run'); } } });
+  // `engine:`, renamed from `hermes:` by W6 step 3 — createBuildEngine throws
+  // without it, so a stale key here would make the spike fail at the contract
+  // read rather than at anything it measures.
+  const engine = createBuildEngine({ engine: { runTask: function () { throw new Error('spike: stub adapter must never run'); } } });
   const contract = engine && engine.OUTPUT_CONTRACT;
   if (!contract || typeof contract !== 'string' || !contract.trim()) {
     throw new Error('spike: build-engine.js no longer exposes OUTPUT_CONTRACT — '
@@ -262,6 +271,149 @@ function resolveDshEntry() {
       + 'installed package. Reinstall rather than guessing another path.');
   }
   return entry;
+}
+
+// ---------------------------------------------------------------------------
+// --dsh-model: route dsh at a MYTHOS LANE ENTRY, by generating the overlay.
+//
+// WHY THIS EXISTS, and it is the correction that reshaped W6. The two committed
+// overlays both name a model chosen for the *harness* question — a DeepSeek
+// route, then GLM on OpenRouter. Neither is what MYTHOS would ship. The operator
+// settled it on 2026-08-21: W6 swaps the HARNESS, and the MODELS stay the ones
+// `src/core/brain/lanes.default.js` already ranks. So the model a build runs on
+// is `BRAIN_TABLES.build`, not a property of dsh.
+//
+// TWO THINGS THIS MAKES POSSIBLE THAT A HAND-WRITTEN OVERLAY DID NOT.
+//
+//  1. The same-model comparison. `Hermes Agent/config.yaml` pins
+//     `mistral-large-2512`, so the 3/9 Hermes baseline in W6.14 is a measurement
+//     of Hermes *plus that model*. Running dsh on any other model measures two
+//     changed variables and attributes the difference to neither.
+//     `--dsh-model mistral/mistral-large-2512` isolates the harness.
+//
+//  2. A CATALOG route, which is what fixes the 422. pi-ai ships an installed
+//     catalog for `mistral` (and cerebras/groq/nvidia/google/openrouter/
+//     deepseek), and a route key that names one inherits that provider's
+//     endpoint AND WIRE PROTOCOL — verified by reading
+//     dsh-llm-pi-ai/lib/types/config.d.ts, whose `api` field says omission
+//     "keeps each installed catalog model's own protocol, which is why a catalog
+//     route needs no protocol at all". Mistral's catalog entries declare
+//     `api: mistral-conversations`, i.e. Mistral's own protocol. The earlier
+//     overlay hand-declared `api: openai-completions` + `baseURL`, which forced
+//     OpenAI shaping, which sent the system prompt in a `developer` role, which
+//     Mistral rejects with `422 union_tag_invalid` — and
+//     `compat.supportsDeveloperRole: false` was inert against it at both route
+//     and model level. The fix was never a compat switch. It was to stop
+//     declaring a protocol for a provider the catalog already describes.
+const PI_AI_CATALOG_ROUTES = {
+  // MYTHOS lane provider  ->  { pi-ai catalog route key, credential env var }
+  // The route key must name an installed pi-ai provider or the "whole provider
+  // declaration" path is taken instead and the protocol has to be supplied.
+  // `nim` is MYTHOS's name for NVIDIA's hosted endpoint; pi-ai calls it `nvidia`.
+  mistral: { route: 'mistral', apiKeyEnv: 'MISTRAL_API_KEY' },
+  cerebras: { route: 'cerebras', apiKeyEnv: 'CEREBRAS_API_KEY' },
+  groq: { route: 'groq', apiKeyEnv: 'GROQ_API_KEY' },
+  nim: { route: 'nvidia', apiKeyEnv: 'NIM_API_KEY' },
+  google: { route: 'google', apiKeyEnv: 'GOOGLE_API_KEY' },
+  openrouter: { route: 'openrouter', apiKeyEnv: 'OPENROUTER_API_KEY' },
+  deepseek: { route: 'deepseek', apiKeyEnv: 'DEEPSEEK_API_KEY' },
+  // DELIBERATELY ABSENT: ollama. pi-ai ships no catalog for it, and the lane's
+  // ollama entries are a local-model tail that would need a hand-declared
+  // openai-completions route at 127.0.0.1. Left out rather than declared blind,
+  // so a lane walk that reaches them refuses by name instead of guessing a port.
+};
+
+// The installed catalog, read from disk. Asserting the model id against it turns
+// a typo into a named refusal here instead of a provider 404 six minutes into a
+// spike run.
+function readPiAiCatalog(route) {
+  const dshPkgDir = path.dirname(resolveDshEntry());          // .../@deepseek-ai/dsh/lib
+  // .../<install root>/node_modules/@deepseek-ai/dsh/lib -> <install root>
+  const installRoot = path.resolve(dshPkgDir, '..', '..', '..', '..');
+  const file = path.join(installRoot, 'node_modules', '@earendil-works', 'pi-ai',
+    'dist', 'providers', 'data', route + '.json');
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function catalogModelIds(catalogJson) {
+  // The catalog file is keyed by wire protocol, then by model id.
+  const ids = [];
+  for (const api of Object.keys(catalogJson || {})) {
+    for (const id of Object.keys(catalogJson[api] || {})) ids.push(id);
+  }
+  return ids;
+}
+
+// Returns an absolute overlay path. Written under os.tmpdir() rather than into
+// the repo: it is derived state, and AD-7 forbids machine paths in tracked files.
+function writeLaneOverlay(spec) {
+  const slash = spec.indexOf('/');
+  if (slash < 1 || slash === spec.length - 1) {
+    throw new Error('--dsh-model wants provider/model, e.g. mistral/codestral-latest '
+      + '(got ' + JSON.stringify(spec) + ')');
+  }
+  const laneProvider = spec.slice(0, slash);
+  const model = spec.slice(slash + 1);
+  const mapped = PI_AI_CATALOG_ROUTES[laneProvider];
+  if (!mapped) {
+    throw new Error('--dsh-model: no pi-ai catalog route for MYTHOS provider "' + laneProvider
+      + '". Known: ' + Object.keys(PI_AI_CATALOG_ROUTES).join(', ')
+      + '. ollama is deliberately absent — pi-ai ships no catalog for it, so it would '
+      + 'need a hand-declared openai-completions route and a port this script will not guess.');
+  }
+  if (!process.env[mapped.apiKeyEnv]) {
+    throw new Error('--dsh-model ' + spec + ' resolves to pi-ai route "' + mapped.route
+      + '", whose credential reference is ' + mapped.apiKeyEnv + ' — and that is unset. '
+      + 'Checked the inherited environment and ' + ENV_FILES.join(', ') + '.');
+  }
+  const catalog = readPiAiCatalog(mapped.route);
+  if (!catalog) {
+    throw new Error('--dsh-model: pi-ai ships no installed catalog file for route "'
+      + mapped.route + '", so a route key naming it would become a whole-provider '
+      + 'declaration needing an explicit protocol. Read the installed package before '
+      + 'assuming this mapping still holds.');
+  }
+  const ids = catalogModelIds(catalog);
+  if (!ids.includes(model)) {
+    throw new Error('--dsh-model: the installed pi-ai catalog for "' + mapped.route
+      + '" does not describe model "' + model + '". It describes ' + ids.length
+      + ': ' + ids.slice(0, 12).join(', ') + (ids.length > 12 ? ', …' : '')
+      + '. A model the catalog does not describe would be served with guessed '
+      + 'context/max-token sizes, so it is refused here instead.');
+  }
+  const overlay = [
+    '# GENERATED by spike-dsh-build.js --dsh-model ' + spec + '. Do not commit.',
+    '#',
+    '# A CATALOG route: no `api` and no `baseURL`, so every model on it keeps the',
+    '# protocol the installed pi-ai catalog records for it. For mistral that is',
+    '# `mistral-conversations`, Mistral\'s own protocol — which is why this shape',
+    '# does not hit the `developer`-role 422 that a hand-declared',
+    '# openai-completions route does.',
+    '#',
+    '# `models` is omitted ON PURPOSE: config.d.ts says omission "serves the',
+    '# installed catalog for the route unchanged", while an explicit list REPLACES',
+    '# it and every entry then defaults its unset fields. Listing one model would',
+    '# hide the other ' + (ids.length - 1) + ' the same key can reach.',
+    '#',
+    '# apiKeyEnv is a credential REFERENCE resolved per request. No secret here.',
+    '',
+    '- id: agent-default-model',
+    '  config:',
+    '    provider: ' + mapped.route,
+    '    model: ' + model,
+    '',
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      ' + mapped.route + ':',
+    '        apiKeyEnv: ' + mapped.apiKeyEnv,
+    '',
+  ].join('\n');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w6-dsh-overlay-'));
+  const file = path.join(dir, 'lane.patch.yml');
+  fs.writeFileSync(file, overlay, 'utf8');
+  return file;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +594,7 @@ async function attempt(engine, prompt, contract, verifier, opts) {
 //
 // Everything above measures the single-artifact path, where the reply IS the
 // deliverable and writing files is a CONTRACT VIOLATION. Forge is the opposite
-// job: `runBuild` (hermes-runner.js:216) hands the engine a directory and the
+// job: `runBuild` (forge-runner.js) hands the engine a directory and the
 // oracle is files appearing on disk. Porting that path on the strength of a
 // no-write measurement would be measuring the wrong thing, so this variant
 // measures the write path on its own terms:
@@ -691,6 +843,10 @@ async function main() {
     console.log('  --timeout-ms N    per attempt (default 300000)');
     console.log('  --dsh-patch F     cordis.patch.yml declaring a non-DeepSeek provider route,');
     console.log('                    so no DEEPSEEK_API_KEY is needed (measures dsh + that provider)');
+    console.log('  --dsh-model P/M   route dsh at a MYTHOS lane entry (e.g. mistral/codestral-latest)');
+    console.log('                    by generating a pi-ai CATALOG overlay. Use');
+    console.log('                    mistral/mistral-large-2512 to match what Hermes itself runs,');
+    console.log('                    which is the only comparison that isolates the harness.');
     console.log('  --forge           also measure the dsh WRITE path (Forge runBuild): file-appearance');
     console.log('                    oracle, approval-stall detection, and workspace confinement');
     return;
@@ -700,7 +856,24 @@ async function main() {
   // spike that runs half-configured produces a number nobody can trust and
   // everybody quotes.
   if (opts.engines.includes('dsh')) {
-    if (opts.dshPatch) {
+    if (opts.dshModel) {
+      // Generated, so it is absolute by construction and cannot repeat the
+      // relative-path defect below.
+      try {
+        opts.dshPatch = writeLaneOverlay(opts.dshModel);
+      } catch (err) {
+        console.error('spike: ' + String((err && err.message) || err));
+        process.exit(2);
+      }
+      console.warn('NOTE: dsh routed at ' + opts.dshModel + ' via a generated pi-ai catalog '
+        + 'overlay: ' + opts.dshPatch);
+      if (opts.dshModel !== 'mistral/mistral-large-2512') {
+        console.warn('NOTE: Hermes runs mistral-large-2512 (Hermes Agent/config.yaml), so this run '
+          + 'changes BOTH harness and model. Only --dsh-model mistral/mistral-large-2512 '
+          + 'isolates the harness.');
+      }
+    }
+    if (opts.dshPatch && !opts.dshModel) {
       // An explicit provider patch replaces the default DeepSeek route, so a
       // DeepSeek key is not required. Fail loud if the file is missing rather
       // than letting dsh boot on the default route and silently measure the
@@ -724,7 +897,10 @@ async function main() {
       opts.dshPatch = path.resolve(opts.dshPatch);
       console.warn('NOTE: routing dsh through ' + opts.dshPatch + '. This measures dsh AND that '
         + 'provider; W6\'s question is about dsh, so prefer a direct DEEPSEEK_API_KEY run when comparing.');
-    } else if (!process.env.DEEPSEEK_API_KEY) {
+    } else if (!opts.dshPatch && !process.env.DEEPSEEK_API_KEY) {
+      // `!opts.dshPatch` is load-bearing: --dsh-model SETS dshPatch above, so
+      // without it a generated overlay would fall into this branch and be
+      // refused for the absence of a key it does not use.
       console.error('spike: DEEPSEEK_API_KEY is not set, and no --dsh-patch was given.');
       console.error('  Checked: the inherited environment, then ' + ENV_FILES.join(', ') + '.');
       console.error('  dsh itself then resolves from the inherited environment, then');

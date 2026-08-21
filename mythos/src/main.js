@@ -16,7 +16,7 @@ const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
 const { createCheckpointRegistry } = require('./core/leash/checkpoints');
 const { createForge } = require('./core/effectors/forge');
-const { createHermesRunner } = require('./core/effectors/hermes-runner');
+const { createForgeRunner } = require('./core/effectors/forge-runner');
 const { registerFromForge } = require('./core/effectors/from-forge');
 const { createEngagementStore } = require('./core/engagements/store');
 const { createEngagementManager } = require('./core/engagements');
@@ -61,7 +61,7 @@ const { registerFromPersona } = require('./core/effectors/from-persona');
 const { createReflection } = require('./core/identity/reflection');
 const capabilities = require('./core/identity/capabilities');
 const { createExplainer } = require('./core/immune/explainer');
-const { registerFromHermes } = require('./core/effectors/from-hermes');
+const { registerFromDsh } = require('./core/effectors/from-dsh');
 const { registerFromRunner } = require('./core/effectors/from-runner');
 const { registerFromInstaller } = require('./core/effectors/from-installer');
 const { registerFromMcp } = require('./core/effectors/from-mcp');
@@ -439,13 +439,13 @@ async function main() {
       var kanbanEffector = createKanbanEffector({ fs: memory.fs, bus: bus });
       // Integration 3: build verifier (needs brain)
       var verifier = require('./core/design/verify').createVerifier({ brain: brain });
-      // Single build-content engine (Hermes-Agent). Passed to BOTH the build
+      // Single build-content engine (DeepSeek Harness). Passed to BOTH the build
       // runner and the engagement executor so the three formerly-independent
       // generators collapse to one. With buildEngine present, build-runner
       // never calls brain.think for content — there is no fallback by design
       // (see build-engine.js). brain is still passed for the verifier/review
       // machinery that legitimately uses it.
-      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus });
+      buildEngine = createBuildEngine({ engine: require('../adapters/dsh-agent'), vault: memory.fs, bus: bus });
       // Refine loop (2026-08-14): renders the built artifact in real headless
       // Chrome, screenshots it, and critiques it through the vision lane before
       // it can be called done. CONSTRUCTED INSIDE the flag check on purpose —
@@ -469,7 +469,7 @@ async function main() {
         brain: brain,  // P22: for visual verification + reviewer/reality-check
         // Content generation goes through the SAME single engine as build-runner.
         // Without this, the research-grounded regeneration and the review-retry
-        // below silently fell back to brain.think and overwrote Hermes's output
+        // below silently fell back to brain.think and overwrote the engine's output
         // with it — see the comment at those call sites in agent-actions.js.
         buildEngine: buildEngine,
         webSearch: require('./core/effectors/web-search').web_search,  // P22: research gate
@@ -598,7 +598,7 @@ async function main() {
       registerFromSkills(hub);
       registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory, notes: memory.notes });
       registerFromPersona(hub, { identity: identity });
-      registerFromHermes(hub);
+      registerFromDsh(hub);
       // Phase 3 (V7): allow-listed shell runner for engagement/Forge verify-stages.
       // Fail-closed when RUN_COMMAND_ALLOWLIST is empty — honest-inert.
       registerFromRunner(hub, { vault: memory.fs, config: config });
@@ -642,15 +642,15 @@ async function main() {
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
       // registry. checkpoints needs memory.audit + goals (both exist by now).
-      // Phase 3 of the Hermes orchestration change: Forge now drives the
-      // hermes-agent CLI (via hermes-runner.js) instead of brain.think —
-      // hermesRunner is the only thing forge.js knows how to call to build.
+      // Forge drives the build-engine adapter (via forge-runner.js) instead of
+      // brain.think. The engine is INJECTED here rather than required inside the
+      // runner (W6), so both build paths resolve the engine from one place.
       checkpoints = createCheckpointRegistry({ config: config, bus: bus, auditWriter: memory.audit, goals: goals, fs: memory.fs });
       checkpoints.init();
       checkpointSweepTimer = setInterval(function() { checkpoints.sweep(); }, config.CHECKPOINT_SWEEP_MS);
       if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
-      const hermesRunner = createHermesRunner({ config: config, vault: memory.fs });
-      forge = createForge({ config: config, runner: hermesRunner, bus: bus, vault: memory.fs, checkpoints: checkpoints });
+      const forgeRunner = createForgeRunner({ config: config, vault: memory.fs, engine: require('../adapters/dsh-agent') });
+      forge = createForge({ config: config, runner: forgeRunner, bus: bus, vault: memory.fs, checkpoints: checkpoints });
       // A degraded init means the project-state file was unreadable, so Forge
       // loaded no history AND latched persistence off for this whole process —
       // builds still run but nothing is written to disk. That must be visible in
@@ -1002,7 +1002,7 @@ async function main() {
       });
       logger.info('android-child.starting', {});
 
-      // BUG-168: hermes-agent is the ONLY build-content engine (there is no
+      // BUG-168: dsh-agent is the ONLY build-content engine (there is no
       // brain fallback by design), yet it was the one adapter nobody probed at
       // boot — it has no start*() of its own, so its first probe happened
       // inside the first build. A live session on 2026-08-07 therefore
@@ -1011,20 +1011,25 @@ async function main() {
       // claimed nothing was wrong the whole time. Probe once here, announce
       // the result, and let it into adapterStatuses() below. Never fatal and
       // never awaited: a slow probe must not hold boot.
-      require('../adapters/hermes-agent').probe(true).then(function(online) {
-        var s = require('../adapters/hermes-agent').getStatus();
+      require('../adapters/dsh-agent').probe(true).then(function(online) {
+        var s = require('../adapters/dsh-agent').getStatus();
         if (online) {
-          logger.info('hermes-agent.online', { mode: s.mode, slots: (s.slots || []).length });
+          // `evidence` rather than a bare "online": the probe runs dsh --version
+          // and nothing else, so ONLINE from a version banner is not the same
+          // claim as ONLINE from a completed build. A log that cannot tell those
+          // two apart is how BUG-168's predecessor stayed invisible for six
+          // consecutive failed builds.
+          logger.info('dsh-agent.online', { version: s.version, evidence: s.evidence });
         } else {
-          logger.warn('hermes-agent.offline', {
+          logger.warn('dsh-agent.offline', {
             hint: s.hint,
-            cliProbeDiagnostic: s.cliProbeDiagnostic,
+            probeDiagnostic: s.probeDiagnostic,
             impact: 'every build will fail — there is no brain fallback by design',
           });
         }
         if (refreshCapabilities) refreshCapabilities();
       }).catch(function(err) {
-        logger.warn('hermes-agent.probe-failed', { error: err && err.message });
+        logger.warn('dsh-agent.probe-failed', { error: err && err.message });
       });
     }},
 
@@ -1043,7 +1048,7 @@ async function main() {
         // BUG-168: the build engine belongs in the honest capability report
         // like every other adapter. Its probe settles async (above), which is
         // exactly what the 10s re-write below already exists for.
-        try { out.push(Object.assign({ name: 'hermes-agent' }, require('../adapters/hermes-agent').getStatus())); } catch (_) {}
+        try { out.push(Object.assign({ name: 'dsh-agent' }, require('../adapters/dsh-agent').getStatus())); } catch (_) {}
         return out;
       }
       function writeIt() {

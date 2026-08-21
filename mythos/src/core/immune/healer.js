@@ -455,7 +455,7 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
     // that the action's job is to re-probe and report rather than to guarantee
     // recovery. That made it a heal that could never fail — and in the
     // 2026-08-14 session it duly "succeeded" four times while every build failed,
-    // because probe() only runs `hermes --version` and the binary was fine. An
+    // because probe() only ran a version check and the binary was fine. An
     // action whose success is unconditional cannot tell anyone anything.
     //
     // It now answers the question the anomaly actually asks: is the build engine
@@ -463,20 +463,20 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
     // exactly the state that was misreported. lastTaskFailure is the only field
     // in the status derived from a content call.
     'reprobe-build-engine': async function() {
-      var hermesAgent;
+      var engineAdapter;
       try {
-        hermesAgent = require('../../../adapters/hermes-agent');
+        engineAdapter = require('../../../adapters/dsh-agent');
       } catch (err) {
-        return { ok: false, reason: 'missing-dependency:hermes-agent', detail: err.message };
+        return { ok: false, reason: 'missing-dependency:dsh-agent', detail: err.message };
       }
-      const online = await hermesAgent.probe(true);
-      const status = hermesAgent.getStatus();
+      const online = await engineAdapter.probe(true);
+      const status = engineAdapter.getStatus();
       const detail = {
         online: online, state: status.state, hint: status.hint,
-        cliProbeDiagnostic: status.cliProbeDiagnostic,
-        // What the ONLINE verdict is actually based on — a version banner, a
-        // timed-out probe assumed present, or an HTTP health endpoint. None of
-        // the three is evidence that a build will produce content.
+        probeDiagnostic: status.probeDiagnostic,
+        // What the ONLINE verdict is actually based on — a matched version
+        // banner, or a timed-out probe assumed present. Neither is evidence
+        // that a build will produce content.
         evidence: status.evidence,
         lastTaskFailure: status.lastTaskFailure,
       };

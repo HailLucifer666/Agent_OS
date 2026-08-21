@@ -285,9 +285,17 @@ describe('hermes-agent — provider slot rotation', () => {
 
   // ---- one definition of the error shape ---------------------------------
 
-  it('build-engine imports the adapter\'s error regex — exactly one definition', () => {
+  it('the adapter still owns its error regex, and build-engine no longer imports it', () => {
+    // W6 (2026-08-22): build-engine.js used to import this regex, so there was
+    // exactly one definition shared by two consumers. It now has ONE consumer —
+    // the Hermes adapter's own rotation logic, tested throughout this file — and
+    // build-engine deliberately re-exports nothing, because dsh's exit code is
+    // its oracle and a speculative detector there would be a guard that never
+    // fires. See build-engine.test.js for the pinned disposition.
     const buildEngine = require('../src/core/effectors/build-engine');
-    assert.ok(hermes.HERMES_ERROR_REPLY_RE instanceof RegExp);
-    assert.equal(buildEngine.HERMES_ERROR_REPLY_RE, hermes.HERMES_ERROR_REPLY_RE);
+    assert.ok(hermes.HERMES_ERROR_REPLY_RE instanceof RegExp,
+      'the adapter still needs it for rotation while the adapter exists');
+    assert.equal(buildEngine.HERMES_ERROR_REPLY_RE, undefined,
+      'build-engine must not carry a regex for a failure mode dsh does not have');
   });
 });

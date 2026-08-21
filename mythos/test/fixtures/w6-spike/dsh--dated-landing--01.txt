@@ -1,0 +1,496 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Weekly Digest - This Week in AI</title>
+    <style>
+        :root {
+            --primary: #6c5ce7;
+            --primary-dark: #5649c0;
+            --secondary: #a29bfe;
+            --dark: #2d3436;
+            --light: #f5f6fa;
+            --gray: #636e72;
+            --white: #ffffff;
+            --shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --transition: all 0.3s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--dark);
+            background-color: var(--light);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: var(--white);
+            padding: 40px 0;
+            text-align: center;
+            box-shadow: var(--shadow);
+        }
+
+        .header-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            letter-spacing: 2px;
+        }
+
+        .tagline {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            opacity: 0.9;
+        }
+
+        .date-range {
+            font-size: 1rem;
+            font-weight: 500;
+            opacity: 0.8;
+        }
+
+        .hero {
+            padding: 60px 0;
+            text-align: center;
+            background-color: var(--white);
+            margin-bottom: 40px;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+        }
+
+        .hero h1 {
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+            color: var(--primary);
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--gray);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .news-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 30px;
+            margin-bottom: 60px;
+        }
+
+        .news-card {
+            background: var(--white);
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            transition: var(--transition);
+        }
+
+        .news-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-image {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .card-content {
+            padding: 25px;
+        }
+
+        .card-category {
+            display: inline-block;
+            background-color: var(--secondary);
+            color: var(--primary-dark);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+        }
+
+        .card-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: var(--dark);
+        }
+
+        .card-excerpt {
+            color: var(--gray);
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .card-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--gray);
+            font-size: 0.9rem;
+        }
+
+        .read-more {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+            transition: var(--transition);
+        }
+
+        .read-more:hover {
+            color: var(--primary-dark);
+            text-decoration: underline;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 40px;
+            color: var(--primary);
+            position: relative;
+            padding-bottom: 10px;
+        }
+
+        .section-title::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 4px;
+            background: var(--primary);
+            border-radius: 2px;
+        }
+
+        .cta-section {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: var(--white);
+            padding: 60px 0;
+            text-align: center;
+            margin-bottom: 40px;
+            border-radius: 10px;
+        }
+
+        .cta-section h2 {
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+
+        .cta-section p {
+            font-size: 1.1rem;
+            max-width: 700px;
+            margin: 0 auto 30px;
+            opacity: 0.9;
+        }
+
+        .btn {
+            display: inline-block;
+            background-color: var(--white);
+            color: var(--primary);
+            padding: 12px 30px;
+            border-radius: 30px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: var(--transition);
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            background-color: var(--light);
+        }
+
+        .features {
+            padding: 60px 0;
+            background-color: var(--white);
+            margin-bottom: 40px;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+        }
+
+        .feature {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .feature-icon {
+            width: 80px;
+            height: 80px;
+            background-color: var(--secondary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 2rem;
+            color: var(--primary);
+        }
+
+        .feature h3 {
+            font-size: 1.3rem;
+            margin-bottom: 15px;
+            color: var(--dark);
+        }
+
+        .feature p {
+            color: var(--gray);
+            line-height: 1.6;
+        }
+
+        footer {
+            background-color: var(--dark);
+            color: var(--white);
+            padding: 40px 0;
+            text-align: center;
+        }
+
+        .footer-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .footer-logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .footer-links a {
+            color: var(--white);
+            text-decoration: none;
+            opacity: 0.8;
+            transition: var(--transition);
+        }
+
+        .footer-links a:hover {
+            opacity: 1;
+            text-decoration: underline;
+        }
+
+        .copyright {
+            opacity: 0.6;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .news-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            .hero p {
+                font-size: 1rem;
+            }
+
+            .section-title {
+                font-size: 1.5rem;
+            }
+
+            .footer-links {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="header-content">
+                <h1 class="logo">AI WEEKLY</h1>
+                <p class="tagline">Your curated digest of the most important AI news</p>
+                <p class="date-range">June 10 - June 16, 2025</p>
+            </div>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <h1>This Week in AI</h1>
+            <p>Stay ahead with our handpicked selection of the most impactful AI developments, research breakthroughs, and industry moves from the past week.</p>
+        </div>
+    </section>
+
+    <section class="news">
+        <div class="container">
+            <h2 class="section-title">Top Stories</h2>
+            <div class="news-grid">
+                <article class="news-card">
+                    <img src="https://via.placeholder.com/400x200/6c5ce7/ffffff?text=AI+Breakthrough" alt="AI Breakthrough" class="card-image">
+                    <div class="card-content">
+                        <span class="card-category">Research</span>
+                        <h3 class="card-title">Major Advancement in Multimodal AI Models</h3>
+                        <p class="card-excerpt">Researchers at Stanford have published a new architecture that significantly improves the integration of visual and textual data in large language models, achieving state-of-the-art results on benchmark tests.</p>
+                        <div class="card-meta">
+                            <span>June 12, 2025</span>
+                            <a href="#" class="read-more">Read more →</a>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="news-card">
+                    <img src="https://via.placeholder.com/400x200/a29bfe/ffffff?text=Regulation" alt="AI Regulation" class="card-image">
+                    <div class="card-content">
+                        <span class="card-category">Policy</span>
+                        <h3 class="card-title">EU Finalizes AI Act Implementation Guidelines</h3>
+                        <p class="card-excerpt">The European Union has released detailed implementation guidelines for the AI Act, providing clarity on compliance requirements for high-risk AI systems and setting the stage for enforcement beginning in 2026.</p>
+                        <div class="card-meta">
+                            <span>June 14, 2025</span>
+                            <a href="#" class="read-more">Read more →</a>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="news-card">
+                    <img src="https://via.placeholder.com/400x200/00b894/ffffff?text=Open+Source" alt="Open Source AI" class="card-image">
+                    <div class="card-content">
+                        <span class="card-category">Open Source</span>
+                        <h3 class="card-title">New Open-Source Model Challenges Proprietary Leaders</h3>
+                        <p class="card-excerpt">A coalition of universities and tech companies has released an open-source language model that matches the performance of leading proprietary models while being significantly more efficient.</p>
+                        <div class="card-meta">
+                            <span>June 10, 2025</span>
+                            <a href="#" class="read-more">Read more →</a>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="news-card">
+                    <img src="https://via.placeholder.com/400x200/fdcb6e/ffffff?text=Ethics" alt="AI Ethics" class="card-image">
+                    <div class="card-content">
+                        <span class="card-category">Ethics</span>
+                        <h3 class="card-title">Ethics Board Releases Guidelines for AI in Healthcare</h3>
+                        <p class="card-excerpt">A global ethics board has published comprehensive guidelines for the responsible deployment of AI in healthcare settings, addressing bias, transparency, and patient privacy concerns.</p>
+                        <div class="card-meta">
+                            <span>June 13, 2025</span>
+                            <a href="#" class="read-more">Read more →</a>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="news-card">
+                    <img src="https://via.placeholder.com/400x200/0984e3/ffffff?text=Business" alt="AI Business" class="card-image">
+                    <div class="card-content">
+                        <span class="card-category">Business</span>
+                        <h3 class="card-title">Fortune 500 Companies Accelerate AI Adoption</h3>
+                        <p class="card-excerpt">A new survey reveals that 85% of Fortune 500 companies have increased their AI investment in 2025, with a focus on automation and decision support systems.</p>
+                        <div class="card-meta">
+                            <span>June 11, 2025</span>
+                            <a href="#" class="read-more">Read more →</a>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="news-card">
+                    <img src="https://via.placeholder.com/400x200/e17055/ffffff?text=Security" alt="AI Security" class="card-image">
+                    <div class="card-content">
+                        <span class="card-category">Security</span>
+                        <h3 class="card-title">New AI-Powered Threat Detection System Released</h3>
+                        <p class="card-excerpt">Cybersecurity firm Darktrace has launched an advanced AI system capable of detecting and neutralizing cyber threats in real-time with unprecedented accuracy.</p>
+                        <div class="card-meta">
+                            <span>June 15, 2025</span>
+                            <a href="#" class="read-more">Read more →</a>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2>Stay Informed with AI Weekly</h2>
+            <p>Get the most important AI news delivered directly to your inbox every week. Join thousands of professionals who rely on AI Weekly to stay ahead of the curve.</p>
+            <a href="#" class="btn">Subscribe Now</a>
+        </div>
+    </section>
+
+    <section class="features">
+        <div class="container">
+            <h2 class="section-title">Why Choose AI Weekly?</h2>
+            <div class="features-grid">
+                <div class="feature">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Curated Content</h3>
+                    <p>We handpick the most relevant and impactful AI news, so you don't have to sift through the noise.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">⏱️</div>
+                    <h3>Save Time</h3>
+                    <p>Get all the important AI updates in one place, saving you hours of research each week.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">📊</div>
+                    <h3>Expert Analysis</h3>
+                    <p>Our team of AI experts provides context and analysis to help you understand the implications of each development.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">🌍</div>
+                    <h3>Global Coverage</h3>
+                    <p>We cover AI news from around the world, giving you a comprehensive view of the global AI landscape.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-logo">AI WEEKLY</div>
+                <div class="footer-links">
+                    <a href="#">About Us</a>
+                    <a href="#">Contact</a>
+                    <a href="#">Privacy Policy</a>
+                    <a href="#">Terms of Service</a>
+                </div>
+                <p class="copyright">© 2025 AI Weekly. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
+```

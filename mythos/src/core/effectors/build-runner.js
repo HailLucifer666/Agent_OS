@@ -195,11 +195,11 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
       // production, completion-status.js's deriveCompletionPayload() must gain
       // an explicit branch for it — do not assume it is covered by the existing
       // 'brain-fallback'/'fallback' check.
-      job.engine = (result && result.engine) || (hasEngine ? 'hermes' : 'brain');
+      job.engine = (result && result.engine) || (hasEngine ? 'dsh' : 'brain');
 
       if (!result || result.offline) {
-        // Carry the engine's real reason (usually the Hermes install hint) —
-        // "brain offline" would be a lie once the engine is Hermes.
+        // Carry the engine's real reason (usually the install hint) — "brain
+        // offline" would be a lie once content comes from the build engine.
         throw new Error((result && result.error) || 'brain offline — chain exhausted for lane "build"');
       }
       if (result.aborted) {

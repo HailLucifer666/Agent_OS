@@ -197,7 +197,7 @@ const TIER_TABLE = {
   // outward-facing risk, so a confirm popup on every "play a song"/"build me
   // a landing page" was pure friction, not safety. See BUGS.md for the audit
   // that identified them; the T3/T4 security-invariant tools below (compose_email,
-  // gmail_send, delete_goal, close_window, hermes_task, ui_click, ui_type,
+  // gmail_send, delete_goal, close_window, dsh_task, ui_click, ui_type,
   // click_at, browser_click, browser_type, kill_session, browser_evaluate) are
   // deliberately untouched.
   //
@@ -300,7 +300,7 @@ const TIER_TABLE = {
   'browser_press_key':     3,  // Enter submits forms; allowlisted keys only, no free text
   'browser_hover':         1,  // reveals a menu, changes nothing — read-shaped, same class
                                // as browser_scroll
-  'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
+  'dsh_task':              3,  // delegates to the build engine (DeepSeek Harness), which runs real commands
   'run_command':           3,  // Phase 3 (V7) — allow-listed shell command; confirm-once-per-goal. v1 is allowlist+timeout, NOT a full sandbox
   'install_from_github':   3,  // clones + installs a GitHub repo; shares run_command's allowlist gate. Runs the
                                // repo's own build hooks (npm postinstall, setup.py), so it is at least as

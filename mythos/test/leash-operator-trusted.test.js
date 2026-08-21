@@ -180,7 +180,7 @@ describe('leash operator-present trust — the hard line', function() {
     const mustStillConfirm = [
       'gmail_send', 'compose_email', 'whatsapp_send',
       'phone_call', 'phone_sms_send', 'phone_whatsapp_send', 'phone_file_push',
-      'run_command', 'install_from_github', 'mcp_call_tool', 'hermes_task', 'security_scan',
+      'run_command', 'install_from_github', 'mcp_call_tool', 'dsh_task', 'security_scan',
       'build_project', 'revise_project', 'pipeline_execute', 'kanban_assemble',
       'kanban_build_card', 'start_project', 'run_mission',
       'delete_file', 'delete_goal', 'delete_artifact', 'reminder_approve_action'

@@ -106,25 +106,25 @@ describe('BUG-168 — an OFFLINE build engine must fail with evidence, not a bar
 describe('BUG-168 — boot must probe the build engine and report it like every other adapter', () => {
   const MAIN = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
 
-  it('the adapters boot step probes hermes-agent', () => {
+  it('the adapters boot step probes the build-engine adapter', () => {
     assert.match(
       MAIN,
-      /require\('\.\.\/adapters\/hermes-agent'\)\.probe\(true\)/,
-      'src/main.js must probe hermes-agent at boot — otherwise the first evidence of an offline build engine is a failed build'
+      /require\('\.\.\/adapters\/dsh-agent'\)\.probe\(true\)/,
+      'src/main.js must probe the build engine at boot — otherwise the first evidence of an offline build engine is a failed build'
     );
   });
 
   it('an offline build engine is announced once, with its impact', () => {
-    assert.match(MAIN, /hermes-agent\.offline/, 'the offline case must be logged under its own event name');
+    assert.match(MAIN, /dsh-agent\.offline/, 'the offline case must be logged under its own event name');
     assert.match(MAIN, /no brain fallback by design/, 'the log must state that this means NO builds, not degraded builds');
   });
 
-  it('hermes-agent appears in the capability manifest alongside the other adapters', () => {
+  it('the build-engine adapter appears in the capability manifest alongside the others', () => {
     const block = /function adapterStatuses\(\)[\s\S]*?return out;/.exec(MAIN);
     assert.ok(block, 'adapterStatuses() must still exist');
-    assert.match(block[0], /name: 'hermes-agent'/, 'the build engine belongs in the honest capability report');
+    assert.match(block[0], /name: 'dsh-agent'/, 'the build engine belongs in the honest capability report');
     // Guard the whole set, so a future edit cannot quietly drop one.
-    for (const name of ['pc-child', 'cua-driver', 'android-child', 'browser-agent', 'hermes-agent']) {
+    for (const name of ['pc-child', 'cua-driver', 'android-child', 'browser-agent', 'dsh-agent']) {
       assert.ok(block[0].includes("name: '" + name + "'"), 'adapterStatuses() must report ' + name);
     }
   });

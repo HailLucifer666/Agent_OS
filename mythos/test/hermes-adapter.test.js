@@ -1,13 +1,23 @@
 'use strict';
 
-// Phase-7 Jarvis upgrade: optional hermes-agent sidecar — honest degradation.
-// Environment-aware (same convention as cua-driver-adapter.test.js): asserts
-// the adapter reaches a definite state and that hermes_task never lies.
+// Phase-7 Jarvis upgrade: the hermes-agent sidecar — honest degradation.
+// Environment-aware (same convention as cua-driver-adapter.test.js): asserts the
+// adapter reaches a definite state.
+//
+// W6 (2026-08-22): the hermes_task TOOL test that used to live here has moved.
+// Hermes is no longer wired to anything — build-engine.js, forge-runner.js and
+// the effector hub all route through adapters/dsh-agent now, and
+// from-hermes.js/hermes_task were renamed to from-dsh.js/dsh_task. The
+// equivalent coverage is test/dsh-agent.test.js. What remains below tests the
+// Hermes ADAPTER itself, which is still on disk until W6 step 6 deletes it; this
+// whole file goes with it. It is kept rather than deleted early on purpose
+// (W6-AD-4: land the replacement, prove it green, THEN remove) so a bisect can
+// tell "the swap broke it" from "the deletion broke it".
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const hermes = require('../adapters/hermes-agent');
-const { buildTools } = require('../src/core/effectors/from-hermes');
 
 describe('hermes-agent adapter', () => {
   it('require() is side-effect-free: OFFLINE until probed', () => {
@@ -26,15 +36,28 @@ describe('hermes-agent adapter', () => {
     }
   });
 
-  it('hermes_task fails honestly (with hint) when the sidecar is offline', async () => {
-    const tool = buildTools().find((t) => t.name === 'hermes_task');
-    assert.equal(tool.danger, true);
-    const empty = await tool.fn({});
-    assert.equal(empty.ok, false);
-    if (!(await hermes.probe(false))) {
-      const res = await tool.fn({ task: 'say hello' });
-      assert.equal(res.ok, false);
-      assert.match(String(res.result.error), /OFFLINE/);
+  it('runTask fails honestly (with hint) when the sidecar is offline', async () => {
+    // Was a hermes_task TOOL test. The tool is gone (renamed dsh_task, pointed at
+    // the other adapter), so this asserts the same honest-degradation property
+    // directly against the adapter that is still here: OFFLINE must throw with
+    // the install hint rather than return something a caller could ship.
+    if (await hermes.probe(false)) return;   // installed on this machine
+    await assert.rejects(
+      () => hermes.runTask('say hello', { requireCli: true, cwd: require('os').tmpdir() }),
+      /OFFLINE/
+    );
+  });
+
+  it('no live wiring reaches this adapter any more (W6)', () => {
+    // The point of AD-4 is that Hermes sits here UNUSED between the swap and the
+    // deletion. If something re-wires it, that is a regression to catch now
+    // rather than a surprise during step 6.
+    const path = require('path');
+    for (const rel of ['src/core/effectors/build-engine.js',
+      'src/core/effectors/forge-runner.js', 'src/core/effectors/from-dsh.js', 'src/main.js']) {
+      const src = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+      assert.equal(/require\(['"][^'"]*adapters\/hermes-agent['"]\)/.test(src), false,
+        rel + ' must not require adapters/hermes-agent — the build engine is dsh-agent');
     }
   });
 });

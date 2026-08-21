@@ -124,11 +124,11 @@ function createLiveToolAdapter(deps) {
   // WAVE 3 — tools whose wall-clock exceeds a Live turn, so awaiting them inside
   // the turn guarantees the model narrates before the answer exists. Membership is
   // about DURATION, not risk: spotify_play drives cua-driver (5-10s per click
-  // sequence), hermes_task runs an agent (minutes), and the cua_* tools each do a
+  // sequence), dsh_task runs an agent (minutes), and the cua_* tools each do a
   // full UIA hit-test round trip. Everything else is fast enough to await.
   const SLOW_TOOLS = {
     spotify_play: true,
-    hermes_task: true,
+    dsh_task: true,
     cua_click: true,
     cua_get_window_state: true,
     // BUG-120 — 2026-08-05: browser_switch was awaited inside the turn, and it
@@ -532,7 +532,7 @@ function createLiveToolAdapter(deps) {
   // those three paths and onto the weakest. The tool did not get less honest; the
   // sentence carrying its honesty did. Everything else in SLOW_TOOLS that can
   // return unverified had the same hole: spotify_play, cua_click, screen_look,
-  // camera_look, browser_switch, hermes_task.
+  // camera_look, browser_switch, dsh_task.
   //
   // Q6 — WHAT CLASS IS THIS AN INSTANCE OF? The third occurrence of one invariant.
   // BUG-068: only the late path honored `unverified`, so the awaited path reported
@@ -847,7 +847,7 @@ function createLiveToolAdapter(deps) {
       // started/done split instead of being awaited inside the turn.
       //
       // The Live turn completes while a cua-driven Spotify click (5-10s) or a
-      // hermes task (minutes) is still running, so the model reached turnComplete
+      // dsh task (minutes) is still running, so the model reached turnComplete
       // with no outcome and narrated a guess. That is what the 9+
       // live-tool-outcome-late-for-turn anomalies on 2026-07-31 were: not a bug in
       // the anomaly detector, but the model being asked to speak before the answer

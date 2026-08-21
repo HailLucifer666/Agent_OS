@@ -28,17 +28,27 @@ describe('config', () => {
     assert.equal(result.config.SHUTDOWN_MS, 10000);
   });
 
-  it('Hermes build-driver knobs (hermes-runner.js) default sensibly and accept overrides', () => {
+  it('build-driver knobs (forge-runner.js) default sensibly and accept overrides', () => {
+    // RENAMED HERMES_* -> DSH_* by W6 (2026-08-22).
     const defaults = validate({}, SCHEMA);
-    assert.equal(defaults.config.HERMES_PLAN_TIMEOUT_MS, 300000);
-    assert.equal(defaults.config.HERMES_BUILD_TIMEOUT_MS, 1800000);
-    assert.equal(defaults.config.HERMES_POLL_MS, 2000);
-    assert.equal(defaults.config.HERMES_BUILD_TERMINAL_ENV, 'local');
+    assert.equal(defaults.config.DSH_PLAN_TIMEOUT_MS, 300000);
+    assert.equal(defaults.config.DSH_BUILD_TIMEOUT_MS, 1800000);
+    assert.equal(defaults.config.DSH_POLL_MS, 2000);
+    assert.equal(defaults.config.DSH_BUILD_TERMINAL_ENV, 'local');
 
-    const overridden = validate({ HERMES_BUILD_TIMEOUT_MS: '600000', HERMES_POLL_MS: '500' }, SCHEMA);
+    const overridden = validate({ DSH_BUILD_TIMEOUT_MS: '600000', DSH_POLL_MS: '500' }, SCHEMA);
     assert.equal(overridden.ok, true);
-    assert.equal(overridden.config.HERMES_BUILD_TIMEOUT_MS, 600000);
-    assert.equal(overridden.config.HERMES_POLL_MS, 500);
+    assert.equal(overridden.config.DSH_BUILD_TIMEOUT_MS, 600000);
+    assert.equal(overridden.config.DSH_POLL_MS, 500);
+  });
+
+  it('the old HERMES_* build-driver keys are NOT accepted as aliases', () => {
+    // Deliberate, and the reason it is pinned: a silently-accepted
+    // HERMES_BUILD_TIMEOUT_MS would look like it was working while forge-runner
+    // read the DSH_ default instead. An unknown key must not become a live one.
+    const res = validate({ HERMES_BUILD_TIMEOUT_MS: '600000' }, SCHEMA);
+    assert.equal(res.config.HERMES_BUILD_TIMEOUT_MS, undefined);
+    assert.equal(res.config.DSH_BUILD_TIMEOUT_MS, 1800000, 'the DSH_ default must still apply');
   });
 
   it('overrides defaults with env values', () => {

@@ -4,7 +4,7 @@
 // runner (runPlan/runBuild) instead of brain.think per file. These tests use
 // a fake runner test double — the runner's own logic (plan parsing, the
 // blocker taxonomy, directory polling) is covered separately in
-// test/hermes-runner.test.js; this file covers forge.js's state machine,
+// test/forge-runner.test.js; this file covers forge.js's state machine,
 // checkpoint wiring, and persistence/recovery, which are unchanged in shape
 // even though the underlying build mechanism changed.
 

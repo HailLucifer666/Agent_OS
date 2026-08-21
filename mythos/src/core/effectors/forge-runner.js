@@ -1,9 +1,17 @@
 'use strict';
 
-// effectors/hermes-runner.js — drives the Hermes-Agent CLI as MYTHOS's build
-// worker (Phase 2 of the Hermes orchestration change). The ONLY module that
-// knows how to run Hermes; forge.js (multi-file builds) is its sole consumer
-// for now. Three verbs:
+// effectors/forge-runner.js — drives the build-engine adapter as MYTHOS's build
+// worker. The ONLY module that knows how to run a multi-file build; forge.js is
+// its sole consumer for now.
+//
+// RENAMED from hermes-runner.js by W6 (2026-08-22). It was never "the Hermes
+// runner" in any sense that survived the engine swap — it is FORGE's runner, and
+// keeping "hermes" in the filename after deleting Hermes is exactly the
+// contradiction this repo treats as a defect. The engine now arrives as an
+// INJECTED dependency rather than a module-scope require, so the runner names a
+// role instead of a vendor and a test can drive it without the real CLI.
+//
+// Three verbs:
 //   runPlan()  — plan mode: propose a file plan, write nothing (sandboxed to
 //                a throwaway scratch dir — belt-and-braces on top of the
 //                "don't write" instruction, since the instruction alone is
@@ -12,7 +20,7 @@
 //                project dir. Polls the directory (readdir, never fs.watch —
 //                Invariant 5) so the caller can stream forge.update progress
 //                without this module knowing about the bus.
-//   classify() — the blocker taxonomy. Hermes exiting 0 is NOT success: it
+//   classify() — the blocker taxonomy. The engine exiting 0 is NOT success: it
 //                can exit clean having written nothing, or only part of the
 //                plan. Never throws for a build failure — returns a
 //                classified {ok:false, reason, ...} instead (Invariant 9,
@@ -20,7 +28,6 @@
 //                failure is not the same as silently fabricating success).
 
 const path = require('path');
-const hermes = require('../../../adapters/hermes-agent');
 const prompts = require('./forge-prompts');       // Invariant 7 — reuse extractJsonObject/sanitizeManifestFiles
 const validate = require('./forge-validate');
 const buildPack = require('../skills/build-pack');
@@ -31,15 +38,21 @@ const PLAN_SCHEMA_HINT =
   '"files":[{"path":"relative/forward-slash/path","purpose":"what it does"}],' +
   '"techNotes":"shared conventions every file must follow"}';
 
-function createHermesRunner({ config, vault }) {
+function createForgeRunner({ config, vault, engine }) {
   if (!vault || typeof vault.vaultPath !== 'function' || typeof vault.ensureDir !== 'function') {
-    throw new Error('createHermesRunner requires a vault fs-store');
+    throw new Error('createForgeRunner requires a vault fs-store');
+  }
+  // Injected, not required at module scope (W6). build-engine.js already takes
+  // its engine this way, so the two build paths now resolve the engine
+  // identically instead of one hardcoding an adapter path.
+  if (!engine || typeof engine.runTask !== 'function') {
+    throw new Error('createForgeRunner requires the dsh-agent adapter (engine)');
   }
 
-  function planTimeoutMs()  { return Number(config && config.HERMES_PLAN_TIMEOUT_MS)  || 300000; }
-  function buildTimeoutMs() { return Number(config && config.HERMES_BUILD_TIMEOUT_MS) || 1800000; }
-  function pollMs()         { return Number(config && config.HERMES_POLL_MS)          || 2000; }
-  function terminalEnv()    { return (config && config.HERMES_BUILD_TERMINAL_ENV) || 'local'; }
+  function planTimeoutMs()  { return Number(config && config.DSH_PLAN_TIMEOUT_MS)  || 300000; }
+  function buildTimeoutMs() { return Number(config && config.DSH_BUILD_TIMEOUT_MS) || 1800000; }
+  function pollMs()         { return Number(config && config.DSH_POLL_MS)          || 2000; }
+  function terminalEnv()    { return (config && config.DSH_BUILD_TERMINAL_ENV) || 'local'; }
 
   // ---- plan mode -----------------------------------------------------------
   async function runPlan(spec, kind) {
@@ -61,12 +74,15 @@ function createHermesRunner({ config, vault }) {
 
     let reply;
     try {
-      reply = await hermes.runTask(prompt, {
-        requireCli: true,
+      reply = await engine.runTask(prompt, {
         cwd: scratchAbs,
         timeoutMs: planTimeoutMs(),
         maxPromptChars: 24000,
-        env: { HERMES_WRITE_SAFE_ROOT: scratchAbs, HERMES_YOLO_MODE: '1' },
+        // NO autoApprove, which selects dsh's read-only sandbox. Planning must
+        // write nothing, and under Hermes that was a sentence in the prompt plus
+        // this throwaway scratch dir to contain the damage when it disobeyed.
+        // The sandbox now refuses outright; the scratch dir stays as a second
+        // line of defence rather than the only one.
       });
     } catch (err) {
       return { ok: false, reason: 'plan-failed', error: String((err && err.message) || err) };
@@ -77,7 +93,7 @@ function createHermesRunner({ config, vault }) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
       return {
         ok: false, reason: 'plan-unparseable',
-        error: 'Hermes did not return a JSON file plan',
+        error: 'the build engine did not return a JSON file plan',
         reply: String(reply || '').slice(0, 1000),
       };
     }
@@ -97,7 +113,7 @@ function createHermesRunner({ config, vault }) {
 
   // ---- widget-spec mode (Phase C3 — generative UI) --------------------------
   // A THIRD build target, alongside plan/build: for a "build me a widget"
-  // request Hermes must reply with a validated WIDGET SPEC (see widget-spec.js)
+  // request the engine must reply with a validated WIDGET SPEC (see widget-spec.js)
   // instead of free HTML or a file tree. No files are written — same
   // throwaway-scratch-dir belt-and-braces as runPlan, since nothing here is
   // supposed to touch disk. Server-side validation is the real gate: a spec
@@ -120,12 +136,12 @@ function createHermesRunner({ config, vault }) {
 
     let reply;
     try {
-      reply = await hermes.runTask(prompt, {
-        requireCli: true,
+      reply = await engine.runTask(prompt, {
         cwd: scratchAbs,
         timeoutMs: planTimeoutMs(),
         maxPromptChars: 24000,
-        env: { HERMES_WRITE_SAFE_ROOT: scratchAbs, HERMES_YOLO_MODE: '1' },
+        // Read-only, same reasoning as runPlan: a widget spec is DATA and nothing
+        // here is supposed to touch disk.
       });
     } catch (err) {
       return { ok: false, reason: 'widget-build-failed', error: String((err && err.message) || err) };
@@ -137,7 +153,7 @@ function createHermesRunner({ config, vault }) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
       return {
         ok: false, reason: 'widget-unparseable',
-        error: 'Hermes did not return a JSON widget spec',
+        error: 'the build engine did not return a JSON widget spec',
         reply: String(reply || '').slice(0, 1000),
       };
     }
@@ -150,7 +166,7 @@ function createHermesRunner({ config, vault }) {
   }
 
   // ---- auto mode -----------------------------------------------------------
-  // One Hermes run that actually builds, cwd-pinned. onProgress(paths[])
+  // One engine run that actually builds, cwd-pinned. onProgress(paths[])
   // fires on each poll tick with the files seen so far, so the caller can
   // emit forge.update without this module knowing about the bus.
   async function runBuild({ dirRel, manifest, spec, feedback, onProgress }) {
@@ -170,7 +186,7 @@ function createHermesRunner({ config, vault }) {
     // ui-ux-pro-max's search.py into the old per-file generate pump, which this
     // module replaced — so the feature is ported here rather than lost. One
     // resolve per BUILD (not per file, as the pump did) is strictly better:
-    // Hermes writes the whole project in a single run, so one system keeps it
+    // The engine writes the whole project in a single run, so one system keeps it
     // coherent by construction. resolveSkillTool returns null whenever the
     // skill, its script, or Python is absent, so this can never block a build.
     //
@@ -213,16 +229,20 @@ function createHermesRunner({ config, vault }) {
 
     let reply = null, error = null;
     try {
-      reply = await hermes.runTask(prompt, {
-        requireCli: true,
+      reply = await engine.runTask(prompt, {
         cwd: dirAbs,
         timeoutMs: buildTimeoutMs(),
         maxPromptChars: 24000,
-        env: {
-          HERMES_WRITE_SAFE_ROOT: dirAbs,
-          HERMES_YOLO_MODE: '1',
-          TERMINAL_ENV: terminalEnv(),
-        },
+        // INTENT, not another program's environment variables. This used to pass
+        // env: { HERMES_WRITE_SAFE_ROOT, HERMES_YOLO_MODE } — a generic caller
+        // naming Hermes's own env names, which would have been a lie in the code
+        // the moment Hermes was deleted. dsh expresses both ideas structurally:
+        // the invoking directory IS the workspace root, and the permission preset
+        // decides whether writing is possible at all. The adapter asserts
+        // writeRoot === cwd rather than silently dropping a root it cannot honour.
+        writeRoot: dirAbs,
+        autoApprove: true,
+        env: { TERMINAL_ENV: terminalEnv() },
       });
     } catch (err) {
       error = String((err && err.message) || err);
@@ -243,14 +263,17 @@ function createHermesRunner({ config, vault }) {
 
     if (error) {
       return {
-        ok: false, reason: /timed out/i.test(error) ? 'timeout' : 'hermes-error',
+        // RENAMED with the engine (W6). 'hermes-error' named a program, not a
+        // condition; callers switch on this string, so it is renamed here and at
+        // every consumer in the same commit rather than aliased.
+        ok: false, reason: /timed out/i.test(error) ? 'timeout' : 'engine-error',
         error, files: after, added,
       };
     }
     if (!after.length) {
       return {
         ok: false, reason: 'no-output',
-        error: 'Hermes finished without writing any files', reply, files: [], added: [],
+        error: 'the build engine finished without writing any files', reply, files: [], added: [],
       };
     }
     const planned = (manifest && manifest.files || []).map((f) => f.path);
@@ -268,4 +291,4 @@ function createHermesRunner({ config, vault }) {
   return { runPlan, runBuild, runWidgetBuild, _classify: classify };
 }
 
-module.exports = { createHermesRunner, PLAN_SCHEMA_HINT };
+module.exports = { createForgeRunner, PLAN_SCHEMA_HINT };

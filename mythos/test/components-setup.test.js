@@ -78,11 +78,26 @@ describe('resolveComponentIds', () => {
     assert.equal(components.resolveComponentIds('silero', {}).ok, false);
   });
 
-  it('refuses Hermes when WSL is absent, and names the reason', () => {
-    const res = components.resolveComponentIds(['hermes'], { wslPresent: false });
+  it('refuses a WSL-gated component when WSL is absent, and names the reason', () => {
+    // Re-pointed by W6 from the build engine to whichever component still
+    // carries requiresWsl. The build engine used to be the example here; dsh is
+    // an npm package, so it is no longer gated — see the next test.
+    const gated = components.COMPONENTS.filter((c) => c.requiresWsl).map((c) => c.id);
+    if (!gated.length) return;   // nothing WSL-gated left to assert against
+    const res = components.resolveComponentIds([gated[0]], { wslPresent: false });
     assert.equal(res.ok, false);
     assert.match(res.error, /WSL/);
-    assert.equal(components.resolveComponentIds(['hermes'], { wslPresent: true }).ok, true);
+    assert.equal(components.resolveComponentIds([gated[0]], { wslPresent: true }).ok, true);
+  });
+
+  it('the build engine is NOT WSL-gated — dsh is an npm package (W6)', () => {
+    // Leaving the gate up would refuse the install on every Windows machine
+    // without WSL, for a dependency that does not need it — and the build engine
+    // is the one component whose absence fails every build.
+    const engine = components.COMPONENTS.find((c) => c.id === 'dsh');
+    assert.ok(engine, 'the dsh component must exist');
+    assert.equal(engine.requiresWsl, false);
+    assert.equal(components.resolveComponentIds(['dsh'], { wslPresent: false }).ok, true);
   });
 });
 
@@ -111,11 +126,19 @@ describe('mergeComponentState', () => {
       're-running a downloader that already succeeded is a confusing default');
   });
 
-  it('marks Hermes unavailable with the fix when WSL is missing', () => {
+  it('marks a WSL-gated component unavailable with the fix when WSL is missing', () => {
+    const gated = components.COMPONENTS.find((c) => c.requiresWsl);
+    if (!gated) return;
     const row = components.mergeComponentState({ assets, selection: null, wslPresent: false })
-      .find((r) => r.id === 'hermes');
+      .find((r) => r.id === gated.id);
     assert.equal(row.available, false);
     assert.match(row.unavailableReason, /wsl --install/);
+  });
+
+  it('the build engine stays available with no WSL (W6)', () => {
+    const row = components.mergeComponentState({ assets, selection: null, wslPresent: false })
+      .find((r) => r.id === 'dsh');
+    assert.equal(row.available, true);
   });
 
   it('reports installed:null for a component doctor cannot observe (autostart)', () => {
@@ -150,9 +173,9 @@ describe('readInstallSelection', () => {
   it('counts only real booleans, never a guessed "yes"', () => {
     const res = readInstallSelection({
       env: { APPDATA },
-      fs: fakeFs({ [file]: JSON.stringify({ selected: { silero: 'yes', adb: 1, hermes: true } }) }),
+      fs: fakeFs({ [file]: JSON.stringify({ selected: { silero: 'yes', adb: 1, dsh: true } }) }),
     });
-    assert.deepEqual(res.selected, { hermes: true });
+    assert.deepEqual(res.selected, { dsh: true });
   });
 
   it('treats corrupt or absent as NO selection, not an empty one', () => {
@@ -235,7 +258,10 @@ describe('GET /api/setup/components', () => {
       const silero = res.body.components.find((c) => c.id === 'silero');
       assert.equal(silero.installed, false);
       assert.equal(silero.selected, true);
-      assert.equal(res.body.components.find((c) => c.id === 'hermes').available, false);
+      // The engine is no longer WSL-gated, so pick whatever still is; if nothing
+      // is, there is no unavailable row to assert on.
+      const gatedRow = res.body.components.find((c) => c.available === false);
+      if (gatedRow) assert.match(String(gatedRow.unavailableReason || ''), /wsl --install/i);
     } finally { await s.close(); }
   });
 
@@ -376,7 +402,12 @@ describe('POST /api/setup/components/install', () => {
       spawn: fakeSpawn([], 0),
     });
     try {
-      const res = await request(s.port, 'POST', '/api/setup/components/install', { ids: ['hermes'] });
+      // A WSL-gated id must still 400 with the reason. dsh is not one any more,
+      // so this asks the registry which ids are gated instead of naming one.
+      const componentsModule = require('../src/core/setup/components');
+      const gated = componentsModule.COMPONENTS.filter((c) => c.requiresWsl).map((c) => c.id);
+      if (!gated.length) return;
+      const res = await request(s.port, 'POST', '/api/setup/components/install', { ids: [gated[0]] });
       assert.equal(res.status, 400);
       assert.match(res.body.error, /WSL/);
     } finally { await s.close(); }

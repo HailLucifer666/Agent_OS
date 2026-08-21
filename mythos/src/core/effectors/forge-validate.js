@@ -7,7 +7,7 @@
 // its own HERMES_WRITE_SAFE_ROOT-enforced sandbox now, so the per-file
 // content-validate-then-write path (and its path-traversal guard, which
 // HERMES_WRITE_SAFE_ROOT replaces) is dead. What's left is slug/URL bookkeeping
-// plus walkProjectFiles, which hermes-runner.js uses to poll a build's output
+// plus walkProjectFiles, which forge-runner.js uses to poll a build's output
 // directory.
 
 const fs = require('fs');
@@ -42,7 +42,7 @@ function computePreviewUrl(slug, files) {
 }
 
 // Recursive walk returning dirAbs-relative, forward-slash, sorted paths.
-// Used by hermes-runner.js to poll a Hermes build's output directory
+// Used by forge-runner.js to poll a build's output directory
 // (Invariant 5 — readdir polling, never fs.watch, which has a documented
 // crash on this Node/Windows build; see test/sensors-file.test.js). Skips
 // WALK_SKIP noise dirs. Never throws — a missing/unreadable directory is

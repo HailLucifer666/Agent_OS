@@ -3760,192 +3760,121 @@ install hint: all still true. The engine is now `dsh`.
 Harness, no Hermes code or config remains, and the suite still reports
 **0 failures and 0 skips**.
 
-**W6 RESUME HERE — position: step 0 COMPLETE. Step 1 RUN, and dsh works: it wrote files 3/3, stayed confined 3/3, did not stall, and obeyed the no-write contract 1/1. Hermes baseline measured at 3/9. The ONE thing still missing is dsh build quality on a DeepSeek model, and that now costs about a cent.**
+**W6 RESUME HERE — position: steps 0–4 COMPLETE and live-verified. dsh is the wired build engine. Next action: step 5's two LIVE builds (a single-artifact build and a Forge multi-file build through the running app), then step 6's deletion. The harness comparison is settled: on the SAME model, dsh and Hermes score identically — 3/9 each, prompt for prompt, same failing rule.**
 
-Step 0 was copying the operator's 2026-08-21 removal plan into this tracked
-section. Done in the commit that carries this block. The earlier staging copy
-lived in a Claude Code plan-mode file and would have been lost — root
-`CLAUDE.md` records the V2 spine nearly dying that way.
+### The correction that reshaped this section
 
-`mythos/scripts/spike-dsh-build.js` and its provider overlay
-`mythos/scripts/fixtures/dsh-openai-compatible.patch.yml` are committed
-(`f3500a4`, `17ec6e6`). Its four refusal branches are verified. It has **never
-executed a single `dsh` invocation.**
+The operator settled it on 2026-08-21: **W6 swaps the HARNESS. The models do
+not change.** "DeepSeek Harness" is the name of a program, not an instruction to
+run DeepSeek's models through it. Hours went into chasing a `DEEPSEEK_API_KEY`
+for a model nobody asked for. W6.4 was rewritten around
+`BRAIN_TABLES.build` — today `mistral/codestral-latest` — and there is **no
+`DEEPSEEK_API_KEY` requirement anywhere in W6.**
 
-**Step 1 is now half done, and the half that is done is the code.** In the same
-session as step 0 the spike was extended and its new refusal branches were
-exercised:
+### What is done
 
-- **The Forge variant exists** (`--forge`). It measures the *write* path on its
-  own terms — file-appearance oracle with workspace-relative paths, W6.11 risk 2
-  approval-stall detection (a timeout kill is now reported as its own class, not
-  as `dsh exit ?`), and a confinement check for anything landing beside the
-  workspace root. dsh only, on purpose: Hermes is being deleted, so a Hermes
-  column there would cost money and change no decision.
-- **`npx --yes @deepseek-ai/dsh` was replaced with a pinned, project-local
-  entry** resolved through `resolveDshEntry()`. Three reasons, in the code:
-  root `CLAUDE.md` binds caches to the project directory and `npx` writes
-  outside it; `--yes` floats the version under measurement against a preview
-  that promises breaking changes; and it removes npx resolution from the latency
-  figure W6.0 lists as unmeasured. **There is no `npx` fallback** — a missing
-  install fails with the install command.
-- **The scoring oracle is real, verified this session.** `makeVerifier()` did not
-  throw, so `verify()` is not the degenerate always-pass stub.
+**Step 0** — this section is the tracked copy of the operator's removal plan.
 
-**dsh is INSTALLED and the wiring is PROVEN, in commit `0394cd2`.** dsh
-0.1.1-rc.2 lives at `/DeepSeek Harness/` (452 packages, 250 MB, 26 minutes to
-install, gitignored, version pinned and asserted at run time). Verified by
-running it rather than by reading about it: dsh boots, loads the overlay,
-selects the declared route, authenticates, and issues a real request to the
-gateway. Suite green with all of it — **5755 tests, 0 fail, 0 skipped**.
-Everything in the spike below the model now works.
+**Step 1 — the spike ran, and the comparison is finally apples to apples.**
+`Hermes Agent/config.yaml` pins `mistral-large-2512`, so the 3/9 Hermes baseline
+was always "Hermes plus that model". Every earlier dsh number used a different
+model, so two variables moved at once. `spike-dsh-build.js` gained
+`--dsh-model provider/model`, which generates a pi-ai **catalog** overlay from a
+MYTHOS lane entry and validates the model id against the installed catalog.
+Running dsh on `mistral/mistral-large-2512` gives **dsh 3/9, Hermes 3/9** — the
+same three passes (`dated-landing` 3/3) and the same six failures
+(`interactive-snake` 0/3, `data-dashboard` 0/3), every one of them the single
+rule `no @media queries (not responsive)`. **The swap is quality-neutral, and the
+failing rule belongs to the model and the prompt, not to either harness.** dsh
+also produced 9/9 (no lost attempts) and obeyed the no-write contract 9/9, at a
+25.9 s median.
 
-**THE HERMES BASELINE IS MEASURED: 3 of 9.** Re-scored from the committed
-fixtures with the spec passed correctly:
+**The 422 is solved, and it was never a compat switch.** pi-ai ships installed
+catalogs for `mistral/cerebras/groq/nvidia/google/openrouter/deepseek`. A route
+key naming one inherits that provider's endpoint **and its wire protocol** —
+`config.d.ts` says omitting `api` "keeps each installed catalog model's own
+protocol, which is why a catalog route needs no protocol at all". Mistral's
+entries declare `mistral-conversations`. The old overlay hand-declared
+`api: openai-completions` + `baseURL`, which forced OpenAI shaping, which sent
+the system prompt in a `developer` role, which Mistral rejects with
+`422 union_tag_invalid` — and `compat.supportsDeveloperRole: false` was **inert
+at both route and model level**. The fix was to stop declaring a protocol for a
+provider the catalog already describes.
 
-```bash
-node mythos/scripts/rescore-w6-fixtures.js
-```
+**Step 2 — `mythos/adapters/dsh-agent/index.js`.** `probe · runTask ·
+getStatus · scrubbedEnv`, and **none** of Hermes's four extra exports (AD-8).
+Live-verified against the running engine: read-only path answered in 4.3 s and
+wrote 0 files; write path wrote exactly `hello.txt` with the right content in
+5.1 s; both `writeRoot` guards refused as designed. `test/dsh-agent.test.js` is
+39 tests, and **14 mutations of the adapter were each caught** — the permission
+mode, every overlay-shape invariant, the cwd requirement, a re-added Hermes-only
+stub, a silently-forwarded unset credential, and an ollama route guessed into
+existence.
 
-`dated-landing` passes 3/3. `interactive-snake` and `data-dashboard` fail 3/3
-each, and the **only** rule that fires across all six failures is
-`no @media queries (not responsive)`. So the bar dsh has to clear is not a vague
-notion of quality — it is one concrete unconditional structural rule
-(`verify.js:106`, which fires on any `<!DOCTYPE html>` output). Read dsh's
-eventual number against that: 6 of Hermes's 9 artifacts are complete, working
-single-file pages that fail on responsive CSS alone.
+**Step 3 — the four call sites are ported**, plus everything the plan's step-3
+list did not mention:
 
-**WHAT BLOCKS — a decision only the operator can take.** Not the install, not
-the code. **No credential on this machine can reach a DeepSeek model.**
+- `build-engine.js`: `deps.hermes` → `deps.engine`, `engine: 'dsh'`,
+  `hermesFailed` → `engineFailed`. **`HERMES_ERROR_REPLY_RE` is deleted, not
+  renamed** — dsh's exit code is its oracle and the adapter rejects the failure
+  upstream, so a detector here would be a guard that never fires over a model's
+  own output. Pinned as a disposition with a test. An absent scratch directory is
+  now a **hard failure**, not cwd inheritance (AD-3).
+- `hermes-runner.js` → `forge-runner.js` via `git mv`, `createHermesRunner` →
+  `createForgeRunner`, and the engine is now **injected** rather than required at
+  module scope. `env: { HERMES_WRITE_SAFE_ROOT, HERMES_YOLO_MODE }` became
+  `writeRoot` / `autoApprove` at all three call sites. Reason
+  `'hermes-error'` → `'engine-error'`.
+- `from-hermes.js` → `from-dsh.js`, `hermes_task` → `dsh_task`. **The old tool
+  called `runTask()` with no cwd**, so the agent inherited MYTHOS's own working
+  directory; `dsh_task` now creates its own sandboxed workspace under a
+  MYTHOS-owned root and returns the path plus the files written.
+- **Three leash sites the plan's step list missed**: `hermes_task` was in
+  `leash/index.js:191`'s `NEVER_TRUSTABLE` map plus comments at
+  `leash/index.js:362` and `tiers.js:200`, and the tier entry at `tiers.js:303`.
+  A rename that stopped at the effector would have dropped the tool out of
+  NEVER_TRUSTABLE silently. Also `live-tool-adapter.js`'s `SLOW_TOOLS`.
+- `main.js` (requires, construction, boot probe, capability manifest),
+  `healer.js`'s `missing-dependency:dsh-agent`, `build-runner.js`'s engine tag,
+  `executor.js`'s no-engine message, `completion-status.js`'s engine-value note.
 
-- `DEEPSEEK_API_KEY` — **unset**. This is the clean measurement W6.4 prefers,
-  because a gateway measures dsh *and* that gateway.
-- `OPENROUTER_API_KEY` — present (73 chars) and now correctly wired, but
-  OpenRouter refuses every request on this account:
-  `404 No endpoints available matching your guardrail restrictions and data
-  policy. Configure: https://openrouter.ai/settings/privacy`.
-  **Verified account-wide, not DeepSeek-specific:** `deepseek/deepseek-v4-pro`,
-  `deepseek/deepseek-v4-flash`, `deepseek/deepseek-chat` *and*
-  `mistralai/mistral-small-3.2-24b-instruct` all return that identical message
-  on that key, and `/api/v1/key` reports `is_free_tier: true`, `usage: 0`. So it
-  is an account privacy setting plus credits — none of the 15 DeepSeek routes on
-  OpenRouter carries a `:free` tier. Changing an account setting is not a
-  session's call to make.
+**Step 4 — install, config, UI.** `scripts/setup-dsh.js` with
+`--check`/`--install`; it `npm install --save-exact`s the pin into a vendor root
+and **never pipes a remote script into a shell**. `--check` also reports whether
+the build lane can actually be reached, because "installed" is only half of
+"builds will work". The four schema keys are `DSH_*` with **no aliases** for the
+old names, and a test pins that. `.env.example`'s 205-line Hermes block became a
+130-line dsh block that keeps the measured facts which describe the PROVIDER
+(the 429-at-call-3 endurance numbers) and adds dsh's own measured ~10.7k-token
+per-request overhead. `settings-panel-model.js`'s devices regex now matches
+`DSH_`. The setup component dropped `requiresWsl` — dsh is an npm package, and
+leaving the gate up would refuse the install on every Windows machine without
+WSL, for the one component whose absence fails every build.
 
-**Next action, an imperative, and the operator picks which:**
+### What is left
 
-1. **Set `DEEPSEEK_API_KEY` in `mythos/.env`**, then run the command below with
-   no `--dsh-patch`. Preferred — it measures dsh, not dsh-plus-a-gateway.
-2. **Or fix the OpenRouter account** (allow the data policy at
-   `https://openrouter.ai/settings/privacy`, add credits), then run it with
-   `--dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml`.
+- **Step 5's live half.** The suite is green, but a green suite cannot tell you
+  the engine ran — proven on this repo 2026-08-04, when a slice shipped with
+  2598 green tests and the app would not start. Needed: one live single-artifact
+  build and one live Forge multi-file build through the running app.
+- **Step 6 — delete Hermes**, in its own commit (AD-4). Adapter (733 LOC),
+  `setup-hermes.js` (444), **three** Hermes verification scripts
+  (`verify-hermes-build-endurance.js`, `verify-hermes-slot-bakeoff.js`,
+  `verify-phase-b-hermes.js` — the last does not match the `verify-hermes-*`
+  glob, which is why earlier counts said two), the Hermes-named test files, the
+  `Hermes Agent/` directory, and the remaining `HERMES_*` names. **Known
+  transient state: those three verify scripts call `createBuildEngine({ hermes })`
+  and are therefore broken between step 3 and step 6.** They are Hermes-only
+  measurement tools being deleted, so they were not patched.
+- **Step 7 — root `CLAUDE.md`**, in the SAME commit as the deletion.
+- **Step 8 — `node mythos/scripts/audit-licences.js --check`**, blocking.
 
-```bash
-node mythos/scripts/spike-dsh-build.js --samples 3 --forge
-```
+### Operator decisions, unchanged by W6
 
-Then record both tables in the progress log, commit the new fixtures, and only
-then write adapter code (**W6-AD-2**).
-
-**THREE OF THE FOUR OPEN QUESTIONS ARE NOW ANSWERED — dsh ran end to end.**
-The operator added **GLM 5.2 (free)** to their OpenRouter allow-list, which was
-the whole blocker: that guardrail is a strict allow-list, and being on it is
-exactly what removes the data-policy 404. Measured on one key:
-
-| Model | On the allow-list? | Result |
-|---|---|---|
-| `z-ai/glm-5.2:free` | **yes** | `429` from upstream — **through the guardrail** |
-| `nvidia/nemotron-3-ultra-550b-a55b:free` | no | `404` data policy |
-| `google/gemma-4-31b-it:free` | no | `404` data policy |
-| `cohere/north-mini-code:free` | no | `404` data policy |
-| `deepseek/deepseek-v4-flash` | no | `404` data policy |
-
-The allow-list is **account-level**, so the `OPENROUTER_API_KEY` already in the
-repo-root `.env.local` reaches GLM too — nothing here depends on a temporary key.
-
-### Forge write path — ANSWERED, 3 of 3 runs
-
-```
-sample  exit      files-written  strays  ms      names
-1       failed    3              0       75641   app.js,index.html,styles.css
-2       failed    3              0       97803   app.js,index.html,styles.css
-3       ok        3              0       18437   app.js,index.html,styles.css
-```
-
-- **Does dsh write files when told? YES.** 3/3 runs wrote exactly the three
-  requested files, no more and no fewer.
-- **W6.11 risk 2 — does it stall on an approval it cannot answer? It did NOT
-  reproduce**, on 3/3 runs that reached the agent. That is evidence about this
-  prompt under this profile, not a general guarantee: a build touching something
-  outside the workspace can still hit an approval with nowhere to answer.
-- **Confinement HELD.** Zero strays beside the workspace root in 3/3 runs.
-- The two "failed" exits are **not** write-path failures. Both wrote all three
-  files and then died on a provider `429` on a *later* turn — 75 s and 98 s in.
-  Which exposed a defect in this spike's own reporting, now fixed: the
-  reached-the-agent test was `ok || timedOut`, so it counted those two as
-  "never started" and printed **1 of 3** where the truth was **3 of 3**. Files on
-  disk are the strongest available proof the agent ran — nothing upstream of it
-  can create them — so the predicate is now `ok || timedOut || wrote > 0`.
-  Replaying the observed records through both: old → 1/3, fixed → 3/3.
-
-### Single-artifact path — dsh obeys the contract, and fails the same rule Hermes does
-
-```
-engine  attempts  produced  verifier-pass  obeyed-no-write  median-ms
-dsh     9         1         0              1                14677
-```
-
-Eight of nine attempts were lost to the free pool's upstream `429`
-(`provider_name: "Decart"`, `limit_source: "upstream_provider_shared_pool"`).
-The one that produced is committed as
-`test/fixtures/w6-spike/dsh--data-dashboard--03.txt`: a **6,680-byte** dark-themed
-single-file CPU-temperature chart titled `CPU Temperature — 7 Day Chart`, i.e.
-derived from the spec rather than an invented brand name.
-
-Two findings from that single sample, and the second is why it is only
-suggestive:
-
-- **dsh obeyed `OUTPUT_CONTRACT`: 1 of 1 produced runs wrote nothing** while
-  being told the reply is the deliverable. Combined with 3/3 writing files when
-  told to, dsh honours both directions of the instruction.
-- It failed on **`no @media queries (not responsive)`** — *the same single rule*
-  that fails 6 of Hermes's 9. **n=1. Do not read a comparison into it.**
-
-### STILL UNMEASURED: dsh build quality on DeepSeek
-
-That is the one question W6 turns on, and GLM cannot answer it — GLM is not
-DeepSeek. Re-verified 2026-08-21: **14 DeepSeek routes on OpenRouter, 0 with a
-`:free` variant.** But it is cheap, and the cost is now measured rather than
-guessed:
-
-| Route | $/M prompt | Est. prompt cost, 12-turn spike |
-|---|---|---|
-| `deepseek/deepseek-v4-flash` | **$0.080** | **≈ $0.01** |
-| `deepseek/deepseek-v4-flash-0731` | $0.080 | ≈ $0.01 |
-| `deepseek/deepseek-chat-v3.1` | $0.250 | ≈ $0.03 |
-| `deepseek/deepseek-v4-pro` | ~$1.60 | ≈ $0.21 |
-
-**Next action:** allow-list `deepseek/deepseek-v4-flash` (and `-v4-pro` for the
-quality-critical call sites W6.4 assigns it), add credit, then run
-
-```bash
-node mythos/scripts/spike-dsh-build.js --samples 3 --forge --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml
-```
-
-Setting `DEEPSEEK_API_KEY` in `mythos/.env` and dropping `--dsh-patch` remains
-the cleaner measurement — it uses dsh's native DeepSeek adapter and sidesteps
-pi-ai entirely, including the `supportsDeveloperRole` defect below.
-
-### Recorded for whoever writes the adapter
-
-`compat.supportsDeveloperRole: false` **does not work** in dsh 0.1.1-rc.2's
-pi-ai adapter. Mistral rejected the request with
-`422 union_tag_invalid: Input tag 'developer' found using 'role' does not match
-any of the expected tags`, with the switch set — tried at **route** level and at
-**model** level, the two positions its README documents. Production will not
-route through pi-ai once `DEEPSEEK_API_KEY` exists (the base bundle mounts the
-native DeepSeek adapter), so this is a note rather than a blocker. It is also a
-preview-quality signal about the engine W6 is about to make the only one.
+Cerebras is unbilled (four lane entries return 402, which is why they were
+demoted rather than deleted), and the OpenRouter guardrail allow-list holds only
+GLM 5.2 free plus two TTS models. Neither blocks W6: the build lane's top three
+entries are all Mistral and all reachable.
 
 ---
 
@@ -4205,43 +4134,107 @@ two**, and there is no phase split.
 
 ---
 
-## W6.4 — Model selection, and the credential that reaches it
+## W6.4 — Model selection: the build lane, not a DeepSeek model
 
-The repo-root `.env.local` (gitignored) holds `CEREBRAS · GOOGLE · GROQ ·
-MISTRAL · NIM · NVIDIA · OPENROUTER`. Of those, **only `OPENROUTER_API_KEY`
-reaches a DeepSeek model.** Cerebras, Groq, Google and Mistral do not serve
-DeepSeek at all — routing through them would not be measuring DeepSeek.
-`NIM_API_KEY` is a trap: `lanes.default.js:294` already records the NIM DeepSeek
-route **dead** (404/timeout), and NIM's free tier is flagged non-production in
-the licence notes.
+**CORRECTED 2026-08-21 by operator ruling, and the correction is the point of
+this section.** Everything this section previously said was wrong at the premise.
+It opened "only `OPENROUTER_API_KEY` reaches a DeepSeek model", tabled
+`deepseek-v4-pro` against `deepseek-v4-flash`, and assigned one of them to each
+of the five call sites. Nobody asked for that. The operator's words, verbatim:
 
-Read live from `https://openrouter.ai/api/v1/models` on 2026-08-21 — 15 DeepSeek
-routes, **none with a `:free` tier**:
+> "Did I ask for a deep seek model? I never asked for a deep seek model. The
+> model which we are currently using, I need those models because we have
+> brainstormed those model and found out the best use case for those model. …
+> Check the brain map."
 
-| Model | Context | Prompt price |
+**W6 swaps the HARNESS. The models do not change.** "DeepSeek Harness" is the
+name of a program, not an instruction to run DeepSeek's models through it — dsh
+is a provider-agnostic agent runner and its own base bundle ships a
+multi-provider LLM adapter for exactly this reason. Hours went into chasing a
+`DEEPSEEK_API_KEY` for a model that was never in scope. Recorded here rather than
+quietly fixed, because the same inference is available to the next reader.
+
+### The model is whatever `BRAIN_TABLES.build` ranks first
+
+`src/core/brain/lanes.default.js` is the single source of truth, and the `build`
+lane is already the one MYTHOS uses for build content:
+
+| Rank | Lane entry | Note |
 |---|---|---|
-| `deepseek/deepseek-v4-pro` | 1,048,576 | ~$1.60 / M |
-| `deepseek/deepseek-v4-flash` | 1,048,576 | ~$0.08 / M |
+| 1 | `mistral/codestral-latest` | code-specialised; the production head |
+| 2 | `mistral/mistral-medium-2604` | |
+| 3 | `mistral/mistral-large-2512` | **what Hermes itself runs** — see below |
+| 4 | `nim/meta/llama-3.1-8b-instruct` | |
+| 5 | `cerebras/gpt-oss-120b` | 402 while the account is unbilled |
+| 6–7 | `ollama/hermes3:8b`, `ollama/ornith:9b` | local tail |
 
-**Per-call-site assignment** — a build that writes a project tree and a call that
-extracts a JSON manifest are not the same job and should not pay the same price:
+So there is **no per-call-site model table** any more. `runBuild`, `runPlan`,
+`runWidget`, `build-engine.generate` and `dsh_task` all resolve their model the
+way every other MYTHOS lane consumer does: walk the lane. A call site that wants
+something cheaper asks for a different *lane*, not a different vendor.
 
-| Call site | Model | Why |
-|---|---|---|
-| `runBuild` — Forge project tree | `v4-pro` | long, agentic, tool-heavy; quality is the deliverable |
-| `build-engine.generate` — single artifact | `v4-pro` | the artifact IS the reply |
-| `runPlan` — JSON file manifest | `v4-flash` | structured extraction, 20× cheaper |
-| `runWidget` — JSON widget spec | `v4-flash` | same |
-| `dsh_task` — operator delegation | `v4-pro` | open-ended |
+### How dsh is pointed at a lane entry
 
-**Two credential routes, and production should use the first.** Native
-`DEEPSEEK_API_KEY` (dsh's base bundle mounts the native DeepSeek adapter) is the
-clean path. `OPENROUTER_API_KEY` works today with **no new account** because the
-base bundle already ships `@deepseek-ai/dsh-llm-pi-ai`, a generic multi-provider
-adapter where a route is declared in a `cordis.patch.yml` layer with `apiKeyEnv`
-naming any variable — no plugin install. That overlay is already committed at
-`mythos/scripts/fixtures/dsh-openai-compatible.patch.yml`. `apiKeyEnv` is a
-*reference* resolved per request, so **no secret enters that file**.
+Two configuration entries, and the shape matters more than the values:
+
+```yaml
+- id: agent-default-model          # the headless runner reads ctx.agentDefaultModel
+  config:
+    provider: mistral
+    model: codestral-latest
+
+- id: llm-pi-ai                    # matched by plugin id; dsh-base calls it llm-pi-ai
+  config:
+    providers:
+      mistral:                     # a CATALOG route: no `api`, no `baseURL`
+        apiKeyEnv: MISTRAL_API_KEY  # a reference resolved per request; no secret
+```
+
+**A catalog route is what fixes the 422**, and this is the single most expensive
+thing learned in step 1. pi-ai ships installed catalogs for `mistral`, `cerebras`,
+`groq`, `nvidia`, `google`, `openrouter` and `deepseek`
+(`@earendil-works/pi-ai/dist/providers/data/*.json`). Per
+`dsh-llm-pi-ai/lib/types/config.d.ts`, the `api` field's omission "keeps each
+installed catalog model's own protocol, which is why a catalog route needs no
+protocol at all". Mistral's catalog entries declare `api: mistral-conversations`
+— Mistral's own protocol. The earlier overlay hand-declared
+`api: openai-completions` + `baseURL`, which forced OpenAI shaping, which sent
+the system prompt in a `developer` role, which Mistral rejects:
+
+```
+422 {"detail":[{"type":"union_tag_invalid","loc":["body","messages",0],
+     "msg":"Input tag 'developer' found using 'role' does not match any of the
+     expected tags: <Roles.system: ..."}]}
+```
+
+`compat.supportsDeveloperRole: false` was tried at route level and at model
+level and was **inert both times**. It was never a compat switch. The fix was to
+stop declaring a protocol for a provider the catalog already describes.
+**Verified end to end 2026-08-21**: catalog route + `mistral-large-2512` +
+`--profile headless` → exit 0, stdout `PONG`, stderr empty, 88.8 s.
+
+`nim` maps to pi-ai's `nvidia` route. **`ollama` has no catalog and is
+deliberately unmapped** — it would need a hand-declared `openai-completions`
+route at a loopback port, and a guessed port that half-works is worse than a
+named refusal. A lane walk that reaches the ollama tail must say so.
+
+### Why this makes the Hermes comparison possible for the first time
+
+`Hermes Agent/config.yaml` pins `model.default: mistral-large-2512`. The 3/9
+Hermes baseline in W6.14 is therefore a measurement of **Hermes plus that
+model**. Every dsh number taken before this correction used a different model
+(`deepseek-v4-pro`, then `z-ai/glm-5.2:free`, then `codestral-latest`), so two
+variables moved and the difference is attributable to neither. `--dsh-model
+mistral/mistral-large-2512` on the spike holds the model fixed and isolates the
+harness. That is the number the swap decision rests on, and it costs cents.
+
+### Credentials
+
+`MISTRAL_API_KEY` — already present, already what Hermes uses, already what the
+build lane's top three entries need. No new account, no new key, and
+`DEEPSEEK_API_KEY` is **not required by W6 at all**. It stays supported because
+pi-ai ships a `deepseek` catalog route like any other, not because anything here
+depends on it.
 
 ---
 
@@ -4258,7 +4251,7 @@ naming any variable — no plugin install. That overlay is already committed at
      runBuild        │    ├ probe        CLI      runBuild       │    ├ probe        headless "…"
                      │    ├ getStatus    │                       │    ├ getStatus       │
    from-hermes.js ───┤    └ scrubbedEnv  ▼       from-dsh.js ────┤    └ scrubbedEnv      ▼
-     hermes_task     │                  Mistral    dsh_task      │                   DeepSeek
+     hermes_task     │                  Mistral    dsh_task      │                   build lane
                      │                                           │
    healer / main.js ─┘                         healer / main.js ─┘
 ```
@@ -4343,21 +4336,21 @@ deleted before dsh is green** (W6-AD-4).
 
 ### 1 · Spike — already written, never run
 
-- [ ] `mythos/scripts/spike-dsh-build.js` is committed (`f3500a4`, `17ec6e6`) and
+- [x] `mythos/scripts/spike-dsh-build.js` is committed (`f3500a4`, `17ec6e6`) and
   runnable today:
 
 ```bash
 node mythos/scripts/spike-dsh-build.js --samples 3 --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml
 ```
 
-- [ ] Extend it with a **Forge variant** before trusting the e2e port: `runBuild`
+- [x] Extend it with a **Forge variant** before trusting the e2e port: `runBuild`
   needs dsh to *write files*, which the current spike explicitly forbids. Measure
   the file-appearance oracle **and** the approval behaviour (W6.11 risk 2) in the
   same pass.
 
 ### 2 · `mythos/adapters/dsh-agent/index.js`
 
-- [ ] Mirror the hermes adapter's exported shape: `probe · runTask · getStatus ·
+- [x] Mirror the hermes adapter's exported shape: `probe · runTask · getStatus ·
   scrubbedEnv`. **Do not stub** the four Hermes-only exports (W6-AD-8).
 
 ```js
@@ -4417,7 +4410,7 @@ async function runTask(prompt, opts) {
 }
 ```
 
-- [ ] `scrubbedEnv(opts)` — read the hermes adapter's version and match its
+- [x] `scrubbedEnv(opts)` — read the hermes adapter's version and match its
   approach:
   - `DSH_TELEMETRY_DISABLED = '1'`, and **delete** `DSH_TELEMETRY_MODE` /
     `DSH_TELEMETRY_OTLP_URL`. The shipped base bundle has **no redaction rule**,
@@ -4432,31 +4425,31 @@ async function runTask(prompt, opts) {
 
 ### 3 · Port the four call sites
 
-- [ ] `build-engine.js`: rename `deps.hermes` → `deps.engine` (the old name
+- [x] `build-engine.js`: rename `deps.hermes` → `deps.engine` (the old name
   becomes a lie), swap the `engine:` result tag to `'dsh'`, and replace the
   `HERMES_ERROR_REPLY_RE` import. **Check in the spike whether dsh has an
   exit-0-but-failed mode** — Hermes has one (provider errors on stdout with exit
   0, BUG-058/245) and that regex exists because of it. If dsh has none, pin that
   as a disposition so nobody adds a speculative detector.
-- [ ] `hermes-runner.js` → rename to `forge-runner.js` (it is Forge's runner;
+- [x] `hermes-runner.js` → rename to `forge-runner.js` (it is Forge's runner;
   keeping "hermes" in the filename after deleting Hermes is exactly the
   contradiction this repo treats as a defect). Add an `engine` parameter to
   `createHermesRunner`→`createForgeRunner`, injected at `main.js:652`. Replace
   the three `env: { HERMES_* }` blocks with `writeRoot` / `autoApprove`.
-- [ ] `from-hermes.js` → `from-dsh.js`, `hermes_task` → `dsh_task`. Keep
+- [x] `from-hermes.js` → `from-dsh.js`, `hermes_task` → `dsh_task`. Keep
   tier-3/`danger` — dsh executes real commands. Not voice-allowlisted, so no
   spoken flow changes.
-- [ ] `main.js:1014-1046` and `healer.js:468` → point at the new adapter; the
+- [x] `main.js:1014-1046` and `healer.js:468` → point at the new adapter; the
   healer's `missing-dependency:hermes-agent` string becomes
   `missing-dependency:dsh-agent`.
 
 ### 4 · Install, config, UI
 
-- [ ] `scripts/setup-dsh.js` with `--check`/`--install`, modelled on
+- [x] `scripts/setup-dsh.js` with `--check`/`--install`, modelled on
   `setup-hermes.js`. **Never `curl | sh`** — root `CLAUDE.md` forbids it and dsh
   needs no such thing (`npx @deepseek-ai/dsh`, or a pinned local install). Pin
   the **exact version**; do not float on `latest` against a developer preview.
-- [ ] Rename the four *schema-validated* keys `HERMES_*` → `DSH_*` **and account
+- [x] Rename the four *schema-validated* keys `HERMES_*` → `DSH_*` **and account
   for the other 14 unvalidated `HERMES_` env names W6.3 enumerates** — a rename
   that stops at the schema leaves 14 live names pointing at a deleted program.
   Rewrite the 36
@@ -4631,3 +4624,13 @@ Copy this to a fresh agent. It should need nothing else but this document and
 | 2026-08-21 | Step 1 — the spike's reached-the-agent test UNDERSTATED its own evidence; fixed | *(this commit)* | The predicate was `ok \|\| timedOut`, so two Forge runs that drove tools for 75-98 s and **wrote all three files** before dying on a later-turn provider `429` were counted as "never started" — the report printed **1 of 3** where the truth was **3 of 3**. Files on disk are the strongest proof the agent ran, since nothing upstream of it can create them, so the predicate is now `ok \|\| timedOut \|\| wrote > 0`. Verified by replaying the observed records: old → `1/3`, fixed → `3/3`. Note the direction: the earlier fix stopped the report OVERstating; this one stopped it UNDERstating |
 | 2026-08-21 | Step 1 — DeepSeek cost measured, so the last gap is priced rather than guessed | *(this commit)* | Re-verified **14 DeepSeek routes on OpenRouter, 0 with a `:free` variant**. Against dsh's measured ~10,760-token request over the spike's 12 turns, prompt side: `deepseek-v4-flash` **$0.080/M → ≈ $0.01**; `deepseek-chat-v3.1` $0.250/M → ≈ $0.03; `deepseek-v4-pro` ~$1.60/M → ≈ $0.21. The remaining blocker is a one-cent purchase, not an architectural unknown |
 | 2026-08-21 | Step 1 — `compat.supportsDeveloperRole: false` is INERT in dsh 0.1.1-rc.2's pi-ai adapter | *(this commit)* | Mistral returned `422 union_tag_invalid: Input tag 'developer' found using 'role' does not match any of the expected tags` **with the switch set**, at both documented positions (route level and model level). Not a blocker — production uses the native DeepSeek adapter once `DEEPSEEK_API_KEY` exists — but a preview-quality signal about the engine W6 is making the only one, and a trap for whoever writes the adapter |
+| 2026-08-22 | **W6.4 REWRITTEN — the DeepSeek-model premise was wrong at the root** | *(this commit)* | Operator ruling: "Did I ask for a deep seek model? I never asked for a deep seek model… Check the brain map." W6.4 had tabled `deepseek-v4-pro` vs `-flash` and assigned one to each of the five call sites. Replaced with `BRAIN_TABLES.build` — today `mistral/codestral-latest`. **No `DEEPSEEK_API_KEY` is required by W6 at all.** The old per-call-site table is recorded as withdrawn rather than deleted, because the same inference is available to the next reader |
+| 2026-08-22 | **The 422 is solved, and it was never a compat switch** | *(this commit)* | pi-ai ships installed catalogs for `mistral/cerebras/groq/nvidia/google/openrouter/deepseek`. Per `dsh-llm-pi-ai/lib/types/config.d.ts`, omitting `api` "keeps each installed catalog model's own protocol, which is why a catalog route needs no protocol at all"; Mistral's entries declare `mistral-conversations`. The old overlay hand-declared `api: openai-completions` + `baseURL` → OpenAI shaping → system prompt in a `developer` role → `422 union_tag_invalid`, with `compat.supportsDeveloperRole: false` inert at BOTH route and model level. **Verified end to end**: catalog route + `mistral-large-2512` + `--profile headless` → exit 0, stdout `PONG`, stderr empty, 88.8 s |
+| 2026-08-22 | **Step 1 CLOSED — the same-model comparison, which is the number the swap rests on** | *(this commit)* | `spike-dsh-build.js` gained `--dsh-model provider/model`: it generates a catalog overlay from a MYTHOS lane entry and validates the model id against the installed catalog (a typo becomes a named refusal instead of a provider 404 six minutes in). `Hermes Agent/config.yaml` pins `mistral-large-2512`, so every earlier dsh number moved two variables at once. Run on that model: `node mythos/scripts/spike-dsh-build.js --engines dsh --samples 3 --dsh-model mistral/mistral-large-2512` → **dsh 9 attempts, 9 produced, 3 verifier-pass, 9/9 obeyed-no-write, median 25,914 ms.** `rescore-w6-fixtures.js` side by side: **dsh 3/9, hermes 3/9** — identical prompt for prompt (`dated-landing` 3/3 PASS both; `interactive-snake` and `data-dashboard` 0/3 both), all 12 rejections the single rule `no @media queries (not responsive)`. **The swap is quality-neutral; that rule belongs to the model and the prompt, not to either harness** |
+| 2026-08-22 | Step 2 — `adapters/dsh-agent/index.js`, live-verified, and 14 mutations caught | *(this commit)* | Exports exactly `probe · runTask · getStatus · scrubbedEnv`; **none** of Hermes's four extras (AD-8), and a test asserts their ABSENCE. Live against the running engine: read-only path → `ALPHA` in 4,306 ms with **0 files written**; write path → `hello.txt` containing `hi from dsh` in 5,141 ms; both `writeRoot` guards refused. `test/dsh-agent.test.js` 39/39. Mutation-tested with file-copy restore verified by sha256: **14/14 caught** — permission mode set to `danger-full-access`, an `api:`/`baseURL:`/`models:` added to the overlay, the overlay keyed `llm` instead of `llm-pi-ai`, `agent-default-model` dropped, cwd defaulting to `process.cwd()`, a Hermes-only stub re-added, selection no longer recording why it skipped an entry, an unset credential forwarded silently, telemetry companions left in place, `DSH_HOME` left on the operator profile, a `writeRoot` mismatch ignored, and an ollama route guessed into existence |
+| 2026-08-22 | Step 2 — the permission preset makes OUTPUT_CONTRACT enforceable rather than requested | *(this commit)* | dsh's presets (read from `dsh-base/cordis.patch.yml:193-205`) are `read-only` / `workspace-write` / `danger-full-access`. `opts.autoApprove` maps to the first two and **never the third**. So a reply-only call — `build-engine.generate`, `runPlan`, `runWidgetBuild` — runs where the sandbox physically refuses a write, replacing "do not write any files" as a sentence in a prompt plus a scratch dir to contain the damage when it was ignored. An inherited `DSH_PERMISSION_MODE` cannot override MYTHOS's choice, and a test pins that |
+| 2026-08-22 | Step 3 — four call sites ported, plus **three leash sites the plan's step list missed** | *(this commit)* | `hermes_task` was in `leash/index.js:191`'s `NEVER_TRUSTABLE` map, at `tiers.js:303` in the tier table, and named in comments at `leash/index.js:362` and `tiers.js:200`. A rename that stopped at the effector would have dropped the tool out of NEVER_TRUSTABLE **silently** — the un-overridable set that covers running and installing. Also `live-tool-adapter.js`'s `SLOW_TOOLS` and `action-outcome-summary.js`. Renames: `hermes-runner.js`→`forge-runner.js` and `from-hermes.js`→`from-dsh.js` via `git mv`; `createHermesRunner`→`createForgeRunner` with the engine **injected** rather than required at module scope; `env: { HERMES_WRITE_SAFE_ROOT, HERMES_YOLO_MODE }` → `writeRoot`/`autoApprove` at all three sites; reason `'hermes-error'`→`'engine-error'` |
+| 2026-08-22 | Step 3 — `HERMES_ERROR_REPLY_RE` DELETED, not renamed, and pinned as a disposition | *(this commit)* | It existed because Hermes reported provider failures on stdout with exit 0 (BUG-058/245). dsh's exit code IS its oracle and the adapter asserts both halves (non-zero exit throws; exit 0 with non-empty stderr throws, on the grounds that the documented contract moved). A detector here would scan a MODEL'S OWN OUTPUT for a pattern nothing has matched under dsh, and would reject a legitimate artifact whose first line reads like an HTTP error. `build-engine.test.js` now asserts such a reply passes through as content, that no `ERROR_REPLY_RE` is defined in the file, and that `build-engine` re-exports none — so re-adding one requires a measurement, not a hunch |
+| 2026-08-22 | Step 3 — AD-3 closed at both ends: an absent scratch dir now FAILS the build | *(this commit)* | `build-engine.js`'s `scratchDir()` returned `undefined` with the comment "adapter falls back to cwd inheritance". Under dsh that inherits MYTHOS's own directory as a **writable workspace** and loads this repo's `CLAUDE.md` (41,412 bytes across two files, both loading in full) as agent instructions. `generate` now refuses by name — the message points at the VAULT, which is the thing actually broken — and `dsh-agent.requireCwd()` throws as an independent second line. The old `from-hermes.js` had the same hole: `hermes_task` called `runTask(task)` with **no cwd at all**; `dsh_task` creates its own sandboxed workspace and returns its path plus the files written |
+| 2026-08-22 | Step 4 — `setup-dsh.js`, and it reports the LANE, not just the install | *(this commit)* | `npm install --save-exact @deepseek-ai/dsh@0.1.1-rc.2` into a vendor root; never `curl \| bash`. `--check` verifies the pin in **three** places (this script's literal, the installed `package.json`, and the CLI's own `--version` — a half-finished reinstall makes the last two disagree, and that is the state that produces inexplicable results rather than a clean failure), then asks the adapter which lane entry is reachable, because "installed" is only half of "builds will work" — the other half is what BUG-168 was. Live: `dsh: OK / version 0.1.1-rc.2 (pinned) / build lane resolves to mistral/codestral-latest (pi-ai route "mistral", credential MISTRAL_API_KEY)`, exit 0. `doctor.js` reports it and treats a **wrong version as not-ok**, since the adapter refuses one |
+| 2026-08-22 | Step 4 — schema keys renamed with **no aliases**, and the WSL gate dropped | *(this commit)* | `HERMES_PLAN/BUILD_TIMEOUT_MS`, `_POLL_MS`, `_BUILD_TERMINAL_ENV` → `DSH_*`. A test pins that the old names are NOT accepted: a silently-honoured `HERMES_BUILD_TIMEOUT_MS` would look like it was working while forge-runner read the `DSH_` default. `.env.example`'s 205-line Hermes block → a 130-line dsh block that KEEPS the measured facts describing the PROVIDER (429 at call 3 of 60 unpaced; 45 s pacing clean) and adds dsh's own measured ~10,700–10,820-token per-request overhead. The setup component lost `requiresWsl` — dsh is an npm package where Hermes was a Python venv inside WSL, and leaving the gate up would refuse the install on every Windows machine without WSL, for the one component whose absence fails every build |

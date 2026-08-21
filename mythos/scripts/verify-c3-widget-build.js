@@ -24,14 +24,14 @@ const os = require('os');
 const ROOT = path.join(__dirname, '..');
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch (_) {}
 
-const { createHermesRunner } = require(path.join(ROOT, 'src/core/effectors/hermes-runner.js'));
+const { createForgeRunner } = require(path.join(ROOT, 'src/core/effectors/forge-runner.js'));
 const widgetSpec = require(path.join(ROOT, 'src/core/effectors/widget-spec.js'));
 
 let tmpBase = os.tmpdir();
 try { tmpBase = fs.realpathSync.native(tmpBase); } catch (_) {}
 const vaultRoot = fs.mkdtempSync(path.join(tmpBase, 'mythos-c3-'));
 
-// Minimal vault: runWidgetBuild only needs a scratch dir it can point Hermes at.
+// Minimal vault: runWidgetBuild only needs a scratch dir it can point the engine at.
 const vault = {
   vaultPath: (rel) => path.join(vaultRoot, rel || ''),
   ensureDir: (abs) => { fs.mkdirSync(abs, { recursive: true }); },
@@ -117,7 +117,9 @@ const ACCEPTED_ESCAPED_DOWNSTREAM = [
   // report the rate — a build that fails half the time on a reasonable request
   // is a real weakness even though each individual rejection is correct.
   const ATTEMPTS = 3;
-  const runner = createHermesRunner({ config: {}, vault });
+  // W6: the engine is injected now, so this drives the real adapter explicitly
+  // rather than relying on the runner to require one.
+  const runner = createForgeRunner({ config: {}, vault, engine: require(path.join(ROOT, 'adapters/dsh-agent')) });
   const outcomes = [];
   let built = null;
   for (let i = 0; i < ATTEMPTS; i++) {

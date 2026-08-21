@@ -198,10 +198,14 @@ describe('2. Hermes is delivered where an update cannot erase it', () => {
     assert.equal(hermes.findInstalledBinary({}, [tmpDir(), tmpDir()]), null);
   });
 
-  it('doctor asks setup-hermes rather than restating a path', () => {
+  it('doctor asks setup-dsh rather than restating a path', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'doctor.js'), 'utf8');
-    assert.match(src, /require\('\.\/setup-hermes\.js'\)/);
-    assert.match(src, /hermes\.binaryPath\(\)/);
+    // W6: the build engine moved from Hermes-Agent to DeepSeek Harness, and
+    // doctor.js must keep ASKING the installer where it lives rather than
+    // restating a path — that restatement is the original defect this file
+    // exists to prevent.
+    assert.match(src, /require\('\.\/setup-dsh\.js'\)/);
+    assert.match(src, /dsh\.findInstalled\(\)/);
     assert.doesNotMatch(src, /path\.join\(REPO_ROOT, 'Hermes Agent'/,
       'the hand-restated path is what let doctor and the installer disagree');
   });
