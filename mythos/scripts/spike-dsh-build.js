@@ -44,6 +44,20 @@ const { execFile } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const FIXTURE_DIR = path.join(REPO_ROOT, 'test', 'fixtures', 'w6-spike');
 
+// Standalone scripts do not get main.js's env loading — main.js loads ONLY
+// mythos/.env (src/main.js:118) and never the repo-root .env.local, which is
+// where this machine's real provider keys live. Follow the convention the other
+// verify-* scripts already use (process.loadEnvFile, no dotenv dependency).
+// Without this the preflight refuses on a key that is sitting right there on
+// disk, which reads as "unsupported" rather than "not loaded".
+const ENV_FILES = [
+  path.join(REPO_ROOT, '.env'),                  // mythos/.env — what the app reads
+  path.join(REPO_ROOT, '..', '.env.local'),      // repo root — this machine's real keys
+];
+for (const rel of ENV_FILES) {
+  try { process.loadEnvFile(rel); } catch { /* optional */ }
+}
+
 // ---------------------------------------------------------------------------
 // The prompts. Deliberately the three shapes that have actually broken builds
 // in this repo's history rather than three pleasant ones: an interactive
@@ -409,10 +423,19 @@ async function main() {
         + 'provider; W6\'s question is about dsh, so prefer a direct DEEPSEEK_API_KEY run when comparing.');
     } else if (!process.env.DEEPSEEK_API_KEY) {
       console.error('spike: DEEPSEEK_API_KEY is not set, and no --dsh-patch was given.');
-      console.error('  dsh resolves credentials from the inherited environment, then');
+      console.error('  Checked: the inherited environment, then ' + ENV_FILES.join(', ') + '.');
+      console.error('  dsh itself then resolves from the inherited environment, then');
       console.error('  $DSH_HOME/.credentials.yaml, then the invoking directory\'s .env, then $DSH_HOME/.env.');
-      console.error('  Either set DEEPSEEK_API_KEY in mythos/.env, or pass --dsh-patch with a');
-      console.error('  pi-ai provider route (see scripts/fixtures/dsh-openai-compatible.patch.yml).');
+      console.error('');
+      console.error('  Two ways forward:');
+      console.error('    1. Set DEEPSEEK_API_KEY in mythos/.env  (the clean measurement).');
+      console.error('    2. Route through a key you already hold:');
+      console.error('       --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml');
+      if (process.env.OPENROUTER_API_KEY) {
+        console.error('       OPENROUTER_API_KEY is present, so route 2 will work as shipped.');
+      } else {
+        console.error('       That overlay wants OPENROUTER_API_KEY, which is also unset.');
+      }
       console.error('  Nothing is measured without one of the two.');
       process.exit(2);
     }

@@ -24,10 +24,22 @@
 # nothing fails the request with MISSING_CREDENTIAL rather than falling through
 # to whatever unrelated key the environment happens to hold.
 #
-# The values below are a WORKED EXAMPLE against OpenRouter, chosen because this
-# repo already carries an OPENROUTER_API_KEY. Change the route, baseURL and
-# model to whatever you actually hold. UNVERIFIED: no run has been made through
-# this file — see W6.0's not-verified list.
+# The values below target OpenRouter, chosen because this repo already carries
+# an OPENROUTER_API_KEY (repo-root .env.local). The model id and its context
+# window are NOT guesses — read from https://openrouter.ai/api/v1/models on
+# 2026-08-21, which listed 15 DeepSeek models. Two worth knowing:
+#
+#   deepseek/deepseek-v4-pro     ctx 1048576   ~$1.60 / M prompt tokens
+#   deepseek/deepseek-v4-flash   ctx 1048576   ~$0.08 / M prompt tokens
+#
+# v4-pro is set below because a build-quality spike should measure the model you
+# would actually ship; swap to v4-flash if you only want to prove the wiring.
+# None of the DeepSeek routes on OpenRouter carry a `:free` tier, so this costs
+# real money — a handful of cents at --samples 3.
+#
+# UNVERIFIED: no run has been made through this file. The model id, context
+# window and price are measured; the end-to-end path is not — see W6.0's
+# not-verified list.
 
 - id: llm
   name: '@deepseek-ai/dsh-llm-pi-ai'
@@ -45,8 +57,8 @@
         compat:
           thinkingFormat: deepseek
         models:
-          - id: deepseek/deepseek-chat
-            contextWindow: 65536
+          - id: deepseek/deepseek-v4-pro
+            contextWindow: 1048576
         retryPolicy:
           mode: normal
           maxRetries: 3
