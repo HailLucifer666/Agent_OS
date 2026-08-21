@@ -83,8 +83,14 @@ describe('open_file', () => {
     assert.equal(out.ok, true, JSON.stringify(out));
     assert.equal(out.unverified, true,
       'the OS accepting a request is not the app rendering the file — must not claim verified');
-    assert.ok(out.confirmedStep, 'must say which step WAS confirmed');
-    assert.match(out.confirmedStep, /notes\.txt/);
+    // 2026-08-21: the unverified path no longer carries confirmedStep. Once
+    // open_file gained a real window oracle, "the OS accepted the command" as a
+    // consolation line was exactly the verbosity the operator objected to; an
+    // unconfirmed open now says plainly what it could not see. The VERIFIED
+    // path is covered by open-file-verifies-and-focuses.test.js. (No pc-child
+    // is stubbed here, so the oracle finds nothing and this stays unverified.)
+    assert.match(String(out.reason), /no window with that name|pc-child is not running/,
+      'an unconfirmed open must say what it could not see: ' + JSON.stringify(out));
     assert.equal(out.result.opened, path.join(sandbox, 'notes.txt'));
   });
 

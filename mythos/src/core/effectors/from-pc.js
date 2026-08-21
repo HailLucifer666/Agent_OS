@@ -392,6 +392,38 @@ async function findExplorerWindow(leafName) {
   return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
 }
 
+// findWindowByTitle — the open_file oracle (2026-08-21). Same shape as
+// findExplorerWindow above but across EVERY process, because the window that
+// appears after shell.openPath belongs to whichever app owns the file type.
+//
+// Q1 — a title match is used here as an OBSERVATION oracle only, never to pick
+// a window to type into; that distinction is what makes it acceptable, and
+// open_folder already depends on exactly this. MYTHOS's own HUD is not a false
+// positive: list_windows reports window TITLES, and MYTHOS's title is its own,
+// not the transcript it happens to be showing on screen.
+//
+// Exact title first, then contains, so "notes.txt" cannot lose to
+// "notes.txt.bak - Notepad" when both are open.
+async function findWindowByTitle(leafName) {
+  const leaf = String(leafName || '').trim().toLowerCase();
+  if (!leaf) return { online: false, window: null, matchedBy: null };
+  const wins = await delegate({ cmd: 'list_windows' });
+  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) {
+    return { online: false, window: null, matchedBy: null };
+  }
+  const visible = wins.result.windows.filter(function (w) {
+    return w && w.visible !== false && typeof w.pid === 'number';
+  });
+  const exact = visible.find(function (w) {
+    return String(w.title || '').trim().toLowerCase() === leaf;
+  }) || null;
+  if (exact) return { online: true, window: exact, matchedBy: 'exact' };
+  const contains = visible.find(function (w) {
+    return String(w.title || '').toLowerCase().indexOf(leaf) !== -1;
+  }) || null;
+  return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
+}
+
 async function focus_window({ pid }) {
   // A non-numeric placeholder pid (e.g. "Notepad PID") must not be forwarded
   // toward PS's Get-Process -Id (Int32) — coerce it away so it degrades to the
@@ -1514,7 +1546,7 @@ module.exports = {
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
   // pure, no I/O — exported so the matcher can be tested without a screen
   _seeAndClickInternal: { matchRegions, centreOf },
-  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,
+  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, findWindowByTitle, readComposeBox, submitMessage,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,
 };

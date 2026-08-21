@@ -844,12 +844,60 @@ async function open_file({ path: raw }) {
   if (!verdict || !verdict.opened) {
     return fail('Could not open ' + resolved + ': ' + ((verdict && verdict.reason) || 'unknown'));
   }
-  // shell.openPath resolves when the OS ACCEPTS the request, not when an
-  // application renders anything — there is no oracle for the latter. Reported
-  // as unverified with the step that WAS confirmed, never as a bare ok.
-  return evidence.unverified(ok({ opened: resolved, name: path.basename(resolved) }),
-    'whether the associated application actually rendered it',
-    { confirmedStep: 'the OS accepted the open request for ' + path.basename(resolved) });
+  // 2026-08-21, operator ticket, their words: "why can't you confirm? ... Just
+  // tell me in short that I have opened it." The first version of this said
+  // there was no oracle for whether the app rendered anything. That was wrong:
+  // open_folder, forty lines up, has polled findExplorerWindow for exactly this
+  // since it was written. The window that appears here belongs to the
+  // ASSOCIATED app rather than Explorer, so this uses findWindowByTitle — but
+  // it is the same oracle, and not looking for it was a sibling-parity miss.
+  //
+  // The verbosity the operator objected to is downstream of the same defect:
+  // the paragraph about Windows accepting a command is what
+  // evidence.unverified() emits. Confirm the open and those fields disappear on
+  // their own. Shortening the text WITHOUT the oracle would have meant claiming
+  // an open nobody had checked, which is the one thing the contract forbids.
+  //
+  // Bounded poll, four tries 400ms apart, mirroring open_folder: an app needs a
+  // moment to create and title its window, and a single fixed-delay check is a
+  // coin flip on a busy machine that reports real successes as unverified.
+  // from-pc is required lazily (circular dep) and its absence costs only the
+  // oracle, never the open.
+  const leaf = path.basename(resolved);
+  const base = ok({ opened: resolved, name: leaf });
+  let locate = null;
+  try { locate = require('./from-pc').findWindowByTitle; } catch (_) { /* offline costs only the oracle */ }
+  let located = null;
+  if (typeof locate === 'function') {
+    for (let attempt = 0; attempt < 4 && !(located && located.window); attempt++) {
+      await new Promise((r) => setTimeout(r, 400));
+      try { located = await locate(leaf); } catch (_) { located = null; }
+    }
+  }
+
+  if (located && located.window) {
+    // "and focus it on front" was part of the same request. Advisory: Windows
+    // can refuse the foreground change (BUG-272 T3, ladder documented as
+    // exhausted), and a refused focus must not turn a confirmed open into a
+    // failure — the file IS open either way.
+    try {
+      const pcFocus = require('./from-pc').focus_window;
+      if (typeof pcFocus === 'function') await pcFocus({ pid: located.window.pid });
+    } catch (_) { /* the window is open regardless of whether it came forward */ }
+    return evidence.verifiedOk(base, {
+      oracle: 'window-title',
+      expected: leaf,
+      observed: String(located.window.title) + ' (pid ' + located.window.pid + ')'
+        + (located.matchedBy === 'contains' ? ' [title-match: contains]' : ''),
+    });
+  }
+  if (located && !located.online) {
+    return evidence.unverified(base,
+      'asked Windows to open ' + leaf + ', but pc-child is not running, so I could not verify the window');
+  }
+  return evidence.unverified(base,
+    'asked Windows to open ' + leaf + ', but no window with that name showed up — the app may still ' +
+    'be starting, or it may have opened the file in a window that is titled differently');
 }
 
 const TOOLS = [
