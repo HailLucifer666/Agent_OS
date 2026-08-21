@@ -25,7 +25,10 @@
 const { effectorFromTool } = require('./adapter');
 const { reasonText } = require('../util/reason-text');
 
-const VALID_LAYOUTS = ['stat', 'list', 'table', 'text'];
+// 'countdown' (2026-08-21, operator request): a live-ticking timer face.
+// Unlike the other four it carries a DEADLINE rather than only items — still
+// data, never markup; the HUD owns every pixel derived from it.
+const VALID_LAYOUTS = ['stat', 'list', 'table', 'text', 'countdown'];
 const MAX_ITEMS = 8;
 const MAX_TITLE_LEN = 60;
 const VALID_TONES = ['gold', 'dim', 'warn'];
@@ -126,6 +129,23 @@ function buildTools(ctx) {
         }
       }
 
+      // A countdown with no deadline is a widget that can only ever read
+      // "Time's up" — refuse it rather than render something dead. Accepts
+      // epoch ms or an ISO string; anything else fails loudly and names the
+      // field, because a silently-dropped deadline looks like a HUD bug.
+      let endsAtMs = null;
+      if (layout === 'countdown') {
+        const rawEnds = spec.endsAt;
+        if (typeof rawEnds === 'number' && isFinite(rawEnds)) endsAtMs = rawEnds;
+        else if (typeof rawEnds === 'string' && rawEnds.trim()) {
+          const parsed = Date.parse(rawEnds);
+          if (!isNaN(parsed)) endsAtMs = parsed;
+        }
+        if (endsAtMs === null) {
+          return fail('a countdown needs endsAt: epoch milliseconds, or an ISO date string.');
+        }
+      }
+
       if (spec.footer !== undefined && typeof spec.footer !== 'string') {
         return fail('footer must be a string.');
       }
@@ -139,6 +159,7 @@ function buildTools(ctx) {
         items: items,
       };
       if (spec.footer !== undefined) payload.footer = spec.footer;
+      if (endsAtMs !== null) payload.endsAt = endsAtMs;
 
       if (bus && typeof bus.emit === 'function') {
         bus.emit('ui.open-web', payload);
