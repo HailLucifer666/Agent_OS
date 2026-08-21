@@ -4251,6 +4251,7 @@ function createServer(deps) {
   // keyed by reqId, unlike requestClosePanel/requestCameraFrame) is enough.
   let pendingCloseMediaWindow = null; // { resolve, timer }
   let pendingOpenExternal = null;     // { resolve, timer } — BUG-272 T2
+  let pendingOpenPath = null;
   if (typeof process.on === 'function') {
     process.on('message', (msg) => {
       if (msg && msg.channel === 'mythos:close-media-window-ack' && pendingCloseMediaWindow) {
@@ -4267,6 +4268,17 @@ function createServer(deps) {
         clearTimeout(pendingOpenExternal.timer);
         const pending = pendingOpenExternal;
         pendingOpenExternal = null;
+        pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
+        return;
+      }
+      // The ack for mythos:open-path (open_file, 2026-08-21). Its own pending
+      // slot, deliberately NOT shared with open-external: a file open and a
+      // browser hand-off are different requests, and one superseding the other
+      // would resolve the wrong promise.
+      if (msg && msg.channel === 'mythos:open-path-ack' && pendingOpenPath) {
+        clearTimeout(pendingOpenPath.timer);
+        const pending = pendingOpenPath;
+        pendingOpenPath = null;
         pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
         return;
       }
@@ -4338,6 +4350,33 @@ function createServer(deps) {
   // or pretending. The scheme allowlist lives in the main process, next to the
   // shell.openExternal call it protects — validating here as well would be a
   // second copy to drift.
+  // open_file's side of the shell hop (2026-08-21 audit). Mirrors
+  // requestOpenExternal below, including the honest answer when MYTHOS is not
+  // running under Electron at all — a batch/dev boot has no shell to ask.
+  function requestOpenPath(filePath) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') {
+        resolve({ opened: false, reason: 'not running under the Electron shell, so there is nothing to open this with' });
+        return;
+      }
+      if (pendingOpenPath) {
+        clearTimeout(pendingOpenPath.timer);
+        pendingOpenPath.resolve({ opened: false, reason: 'superseded by a newer request' });
+      }
+      const timer = setTimeout(() => {
+        pendingOpenPath = null;
+        resolve({ opened: false, reason: 'the Electron shell did not acknowledge the request' });
+      }, 3000);
+      pendingOpenPath = { resolve, timer };
+      try { process.send({ channel: 'mythos:open-path', path: String(filePath || '') }); }
+      catch (err) {
+        pendingOpenPath = null;
+        clearTimeout(timer);
+        resolve({ opened: false, reason: err.message });
+      }
+    });
+  }
+
   function requestOpenExternal(url) {
     return new Promise((resolve) => {
       if (typeof process.send !== 'function') {
@@ -4582,7 +4621,7 @@ function createServer(deps) {
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestCameraPower, requestClosePanel,
     requestWidgetRender,
-    requestCloseMediaWindow, requestOpenExternal, setGmailPollCountGetter,
+    requestCloseMediaWindow, requestOpenExternal, requestOpenPath, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: {
       voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY,

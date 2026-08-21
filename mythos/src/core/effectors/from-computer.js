@@ -798,8 +798,63 @@ async function think_deeply({ question, context }) {
   }
 }
 
+// open_file needs the Electron shell to ask the OS to open a document, and
+// the effector layer has no way to reach it directly. src/main.js injects
+// serverHandle.requestOpenPath here once the server exists. Left null under a
+// batch/dev boot on purpose: open_file then says the shell is absent instead
+// of reporting an open that nothing performed.
+let openPathProvider = null;
+function setOpenPathProvider(fn) { openPathProvider = typeof fn === 'function' ? fn : null; }
+
+// Extensions where the shell EXECUTES rather than displays. Refused by NAME,
+// matching the posture of isUncPath/hasReservedDeviceName above: name the
+// risk shape rather than trusting one layer to have caught it.
+//
+// Q1 — WHAT ELSE MATCHES THIS? This is a denylist, and a denylist over
+// attacker-chosen extensions is not a security boundary; the real boundary is
+// resolveSandboxed(), which runs first and confines every path to the allowed
+// roots. This list exists so that a file the OPERATOR names by voice inside
+// their own sandbox cannot turn "show me that" into "run that" by accident —
+// a different and much narrower job. .lnk is here because a shortcut executes
+// whatever it points at, and .js because Windows hands it to wscript.
+const OPEN_FILE_BLOCKED_EXT = new Set([
+  '.exe', '.bat', '.cmd', '.ps1', '.msi', '.scr', '.com', '.vbs', '.js',
+  '.jar', '.wsf', '.hta', '.lnk', '.reg',
+]);
+
+async function open_file({ path: raw }) {
+  const sandboxed = resolveSandboxed(raw);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  const resolved = sandboxed.resolved;
+  let st;
+  try { st = fs.statSync(resolved); }
+  catch { return fail('File not found: ' + resolved); }
+  if (st.isDirectory()) {
+    return fail('That is a folder, not a file — use open_folder for folders: ' + resolved);
+  }
+  const ext = path.extname(resolved).toLowerCase();
+  if (OPEN_FILE_BLOCKED_EXT.has(ext)) {
+    return fail('Refusing to open "' + ext + '" — Windows would EXECUTE it, not display it. ' +
+      'If running it is genuinely what you want, that is run_command, which asks first.');
+  }
+  if (!openPathProvider) {
+    return fail('open_file needs the MYTHOS desktop shell, and it is not running.');
+  }
+  const verdict = await openPathProvider(resolved);
+  if (!verdict || !verdict.opened) {
+    return fail('Could not open ' + resolved + ': ' + ((verdict && verdict.reason) || 'unknown'));
+  }
+  // shell.openPath resolves when the OS ACCEPTS the request, not when an
+  // application renders anything — there is no oracle for the latter. Reported
+  // as unverified with the step that WAS confirmed, never as a bare ok.
+  return evidence.unverified(ok({ opened: resolved, name: path.basename(resolved) }),
+    'whether the associated application actually rendered it',
+    { confirmedStep: 'the OS accepted the open request for ' + path.basename(resolved) });
+}
+
 const TOOLS = [
-  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. Given a FILE path it opens that file\'s folder with the file selected — to open the file itself in its app, call open_artifact instead. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - a folder path, or a file path to reveal in its folder' }, danger: false, fn: open_folder },
+  { name: 'open_file', description: 'Open a FILE in whatever application Windows associates with it — a .txt in Notepad, a .pdf in the PDF viewer, a .png in Photos. Use for "open that file", "open the report on my desktop", "open notes.txt". Takes a full file PATH. For a FOLDER use open_folder; for a build MYTHOS itself produced in the vault use open_artifact. Refuses executables (.exe/.bat/.ps1 and similar) because Windows would run them rather than show them.', params: { path: 'string - the full path of the file to open' }, danger: false, fn: open_file },
+  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. Given a FILE path it opens that file\'s folder with the file selected — to open the file itself in its app, call open_file instead (until 2026-08-21 this said open_artifact, which only serves builds out of the vault over HTTP and could not open a file on disk at all). This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - a folder path, or a file path to reveal in its folder' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
   // 2026-08-14 (BUG-219): the description now names the phrasing that should reach
@@ -865,6 +920,8 @@ function registerFromComputer(hub, ctx) {
 
 module.exports = {
   registerFromComputer,
+  open_file,
+  setOpenPathProvider,
   // BUG-287 test seam: lets the suite assert the schema default and the code
   // default are the same number, since the reasoning for 60s lives in both.
   _deepThinkMinIntervalDefaultMs: () => DEEP_THINK_MIN_INTERVAL_DEFAULT_MS,

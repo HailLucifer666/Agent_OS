@@ -972,6 +972,42 @@ function startChild() {
       log('open-external ->', JSON.stringify(verdict));
       try { child.send({ channel: 'mythos:open-external-ack', opened: verdict.opened, reason: verdict.reason }); }
       catch (err) { log('open-external: ack send failed:', err.message); }
+    } else if (msg.channel === 'mythos:open-path') {
+      // open_file's shell hop (2026-08-21 audit). Same shape as open-external
+      // directly above: MYTHOS could reveal a folder and serve a vault build
+      // over HTTP, but had no way to open an ordinary file in its associated
+      // app — open_folder refused files and pointed at open_artifact, which
+      // only serves builds out of the vault.
+      //
+      // shell is required lazily at the use site, like open-external above:
+      // several Electron exports are lazy getters that throw when touched
+      // before app.ready, and a module-scope destructure of one is what once
+      // stopped this app booting at all.
+      //
+      // NO path validation here beyond string coercion. The sandbox is
+      // server-side in resolveSandboxed(), which is the single source of that
+      // truth; duplicating a weaker copy here is how two checks drift and the
+      // weaker one wins. The http/https allowlist next door is a DIFFERENT
+      // boundary for a different threat and is deliberately not reused.
+      (async () => {
+        let opened = false;
+        let reason = null;
+        try {
+          const { shell } = require('electron');
+          // Resolves with '' on success, or an error STRING on failure — it
+          // does not reject. Either way this is the OS accepting or refusing
+          // the request; whether an app rendered anything is not observable
+          // from here, which is why the effector reports it unverified.
+          const errStr = await shell.openPath(String(msg.path || ''));
+          opened = !errStr;
+          reason = errStr || null;
+        } catch (err) {
+          reason = err.message;
+        }
+        log('open-path ->', JSON.stringify({ opened, reason }));
+        try { child.send({ channel: 'mythos:open-path-ack', opened, reason }); }
+        catch (err) { log('open-path: ack send failed:', err.message); }
+      })();
     } else if (msg.channel === 'mythos:close-media-window') {
       const closed = mediaWindowController.closeMediaWindow();
       try { child.send({ channel: 'mythos:close-media-window-ack', closed }); }

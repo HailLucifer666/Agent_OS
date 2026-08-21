@@ -208,6 +208,41 @@ const DEFAULT_ALLOWLIST = [
   // fixed for browser_launch_debug.
   'browser_switch',
   'set_persona_level','ask_agent',
+  // 2026-08-21 capability audit — operator decision: "promote everything
+  // usable"; machinery-absent and never-exercised tools stay withheld.
+  //
+  // Measured demand from Audit/*.jsonl, not assumed: use_skill 14 calls,
+  // list_folder 4, create_folder 2 — and user-facts records the operator
+  // being told "the planned file management capability to create folders
+  // also failed". The rest of the family had 0 calls and is promoted on the
+  // symmetry rule this file already states below: "promoting one alone is
+  // what creates the gaps this file documents". A session that can create a
+  // folder but cannot rename it is the same read/act asymmetry read_file vs
+  // write_file already cost us.
+  //
+  // NOT a drift repair. create_folder/move_file/copy_file/rename_file are T3,
+  // and allowlist-reachability.test.js deliberately stops at T2 — absence
+  // from both lists is the NORMAL state for a confirm-gated tool, so the
+  // "in neither list" observation is curation working, not BUG-110 drift.
+  // Reachability is not permission: the leash still confirm-gates every T3
+  // call, exactly as it already does for the allowlisted write_file,
+  // gmail_send and whatsapp_send.
+  'list_folder','search_files','create_folder','move_file','copy_file','rename_file',
+  'clipboard_read','clipboard_write',
+  // calendar_upcoming: 0 calls, but tool-capability.js already gates every
+  // calendar_* name on googleOAuth, so while the refresh token is dead it is
+  // withheld as UNAVAILABLE with a named reason rather than answering wrongly.
+  // Promoting it now means it appears the moment the OAuth app is published,
+  // instead of needing a second edit nobody remembers to make.
+  'calendar_upcoming',
+  // use_skill: 14 calls all-time. The exemption called it "internal/debugging
+  // surface", which the call log contradicts outright.
+  'use_skill',
+  // open_file (2026-08-21): the demand evidence is the 2026-08-20 transcript —
+  // "open the file you were just discussing" — answered with "I can't access
+  // the...", because no verb existed. A new verb is useless if the model cannot
+  // see it, so it is declared in the same change that adds it.
+  'open_file',
 ];
 
 // BUG-110/BUG-177: a T0/T1/T2 (auto-allow) effector missing
@@ -227,7 +262,10 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // see its comment in DEFAULT_ALLOWLIST.)
   // (read_file left this group on 2026-08-14: write_file became reachable, and a
   // write with no read-back is the asymmetry this whole file is a monument to.)
-  'list_folder','search_files','clipboard_read','clipboard_write',
+  // (this group LEFT on 2026-08-21 — list_folder/search_files/clipboard_read/
+  // clipboard_write are now in DEFAULT_ALLOWLIST with the file-management
+  // writes, see that entry. The group is empty rather than deleted so the
+  // reasoning above stays readable next to what overturned it.)
   // Status/introspection singletons -- read_status-style summaries cover these;
   // not a distinct spoken verb of their own.
   // (get_volume left this group on 2026-08-09: it is set_volume's read oracle,
@@ -248,8 +286,9 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // read/act asymmetry, and "turn Spotify down" reaches this machinery through
   // spotify_volume today. System-wide volume is set_volume, which IS reachable.
   'get_app_volume','set_app_volume','set_app_mute',
-  // Loads a skill's guidance text from disk -- internal/debugging surface.
-  'use_skill',
+  // (use_skill LEFT on 2026-08-21. It was exempted as "internal/debugging
+  // surface"; the audit counted 14 real calls, so that framing was simply
+  // wrong. See its DEFAULT_ALLOWLIST entry.)
   // (timer_add/timer_cancel LEFT this group on 2026-08-13 — not because usage
   // showed up, but because reminder_add's description now redirects the model to
   // timer_add by name, and it was not reachable. See their DEFAULT_ALLOWLIST
@@ -290,9 +329,10 @@ const VOICE_ALLOWLIST_EXEMPT = [
   'write_note','spawn_widget','manage_widget','ambient_awareness','daily_plan',
   // Browser helper reads not curated alongside the browser_* set above.
   'browser_screenshot','browser_scroll','browser_go_back','browser_wait_for',
-  // §7.6 calendar read -- gated behind the same missing-write gap BUG-104
-  // documents; exempted rather than exposing a read with no companion action.
-  'calendar_upcoming',
+  // (calendar_upcoming LEFT on 2026-08-21 — see DEFAULT_ALLOWLIST. The BUG-104
+  // "read with no companion action" worry is now handled one layer down:
+  // tool-capability.js withholds every calendar_* name with a named reason
+  // whenever the Google OAuth triple is absent.)
   // create_goal already covers the voice-reachable case; propose_goal's inert
   // 'proposed' status is an internal/autonomous-arbiter path (see goals.create
   // usage elsewhere in this batch).

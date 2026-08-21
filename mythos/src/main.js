@@ -50,7 +50,7 @@ const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { createPiperChild } = require('./core/effectors/piper-child');
 const { createWebSearchChild } = require('./core/effectors/websearch-child');
-const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
+const { registerFromComputer, allowedRoots, setOpenPathProvider } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
 const { registerFromCua } = require('./core/effectors/from-cua');
 const { registerFromAndroid } = require('./core/effectors/from-android');
@@ -907,6 +907,15 @@ async function main() {
       // success nothing performed.
       if (dashboardWiring && typeof dashboardWiring.setExternalOpener === 'function' && typeof serverHandle.requestOpenExternal === 'function') {
         dashboardWiring.setExternalOpener(serverHandle.requestOpenExternal);
+      }
+      // 2026-08-21 — the same wiring shape for open_file. Wired HERE rather than
+      // beside registerFromComputer() because serverHandle does not exist yet at
+      // that point (it is created ~340 lines later); wiring it there would be a
+      // call that silently never fires. Left unset outside the Electron shell on
+      // purpose, so open_file reports the shell as absent instead of an open that
+      // nothing performed.
+      if (typeof setOpenPathProvider === 'function' && typeof serverHandle.requestOpenPath === 'function') {
+        setOpenPathProvider(serverHandle.requestOpenPath);
       }
       // BUG-273 B3 — the same wiring shape once more, for the DASHBOARD half of
       // open_web. With this set, a widget that never mounts is a FAILURE instead of

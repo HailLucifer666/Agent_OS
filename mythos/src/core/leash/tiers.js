@@ -141,6 +141,10 @@ const TIER_TABLE = {
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
+  // open_file (2026-08-21): same class as open_folder — hands a path to the
+  // shell and shows the operator something. Explicit because an unlisted name
+  // falls to the T3 fail-safe, which would confirm-gate every document open.
+  'open_file':             2,
   'launch_app':            2,
   'open_artifact':         2,  // BUG-008 — opens a file/URL via the OS (cmd start/open/xdg-open),
                                // read-only w.r.t. destructive risk; same category as open_folder/
