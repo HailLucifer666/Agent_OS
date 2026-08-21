@@ -209,6 +209,26 @@ const PREF_SIMPLE = [
   { provider: 'mistral',  model: 'ministral-3b-latest' },         // 315ms
   { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms
   { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 643ms
+  // ADDED 2026-08-22 on the operator's instruction, restoring a Groq rung to
+  // this lane after llama-3.1-8b-instant was deleted as a 404. Placed HERE and
+  // not at the head, because the measurement disagreed with the assumption:
+  // 776ms median over 4 samples in the shape MYTHOS actually sends, which is
+  // slower than every entry above it. gpt-oss-20b is a reasoning model, and the
+  // hidden reasoning is the latency — the deleted Llama was 224ms. It still
+  // earns a place: Groq's window is what this lane's tiny prompts genuinely
+  // suit, and it ranks above the unbilled Cerebras rung because it answers.
+  //
+  // NON-OBVIOUS, AND LOAD-BEARING: this model returns EMPTY `content` when the
+  // output budget is small. Measured, 4 samples each — max_tokens 120: 2/4 empty
+  // with finish_reason `length`, the whole budget consumed by the separate
+  // `reasoning` field; max_tokens 512: 0/4; NO max_tokens: 0/4. MYTHOS is in the
+  // last case, because providers/openai-compat.js only injects max_tokens when
+  // `alwaysMaxTokens` is set and providers/groq.js does not set it. So this is
+  // safe as wired — and it breaks silently, into empty replies rather than
+  // errors, if that ever changes. test/brain.test.js pins it.
+  // Not a chain-of-thought risk: reasoning arrives in its own `reasoning` field,
+  // `content` is a clean string, 0/7 leaks across both probes.
+  { provider: 'groq',     model: 'openai/gpt-oss-20b' },          // 776ms median, no max_tokens sent (2026-08-22)
   // Demoted below Google, not deleted: 402 unbilled, returns when funded.
   { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },

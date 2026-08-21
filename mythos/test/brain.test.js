@@ -2,6 +2,8 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // ---------------------------------------------------------------------------
 // Lanes default
@@ -169,6 +171,39 @@ describe('brain/lanes.default', function() {
     if (firstOllama !== -1) {
       assert.ok(firstOllama > 0, 'ollama entry not leading the build lane');
     }
+  });
+
+  it('groq gpt-oss-20b is only safe while MYTHOS sends it no max_tokens', function() {
+    // Added 2026-08-22 with the model itself. This is not a style guard — it
+    // pins the one condition under which the model answers at all.
+    //
+    // Measured, 4 samples per setting: at max_tokens 120 it returns EMPTY
+    // `content` 2 of 4 times with finish_reason `length`, because its separate
+    // `reasoning` field consumes the whole output budget. At 512 and with no
+    // max_tokens it is 0 of 4. MYTHOS is in the no-max_tokens case only because
+    // providers/openai-compat.js injects max_tokens ONLY when `alwaysMaxTokens`
+    // is set, and providers/groq.js does not set it.
+    //
+    // If someone flips that flag for Groq, this lane starts returning empty
+    // strings rather than errors — silent, and shaped exactly like a model that
+    // "sometimes says nothing". So the flag is asserted, not assumed.
+    const groqSrc = fs.readFileSync(
+      path.join(__dirname, '..', 'providers', 'groq.js'), 'utf8');
+    const inSimple = lanes.PREF_SIMPLE.some(function(p) {
+      return p.provider === 'groq' && p.model === 'openai/gpt-oss-20b';
+    });
+    if (inSimple) {
+      assert.ok(!/alwaysMaxTokens\s*:\s*true/.test(groqSrc),
+        'providers/groq.js sets alwaysMaxTokens, which injects max_tokens=4096 — '
+        + 'that particular value is fine, but any SMALL injected budget makes '
+        + 'openai/gpt-oss-20b return empty content. Re-measure before enabling it.');
+    }
+    // And the shared helper must keep defaulting to off, since that default is
+    // what makes every provider that does not opt in safe here.
+    const compatSrc = fs.readFileSync(
+      path.join(__dirname, '..', 'providers', 'openai-compat.js'), 'utf8');
+    assert.ok(/alwaysMaxTokens\s*=\s*false/.test(compatSrc),
+      'openai-compat must default alwaysMaxTokens to false');
   });
 
   it('references no retired OpenRouter :free slug', function() {
