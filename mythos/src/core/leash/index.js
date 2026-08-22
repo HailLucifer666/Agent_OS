@@ -90,9 +90,31 @@ function createLeash(deps) {
           decision: 'deny', reason: 'confirm-ttl-expired', confirmId: confirmId,
         });
       } catch (_) { /* audit failure must not block the rest of expiry handling */ }
+      // BUG-324: the audit row three lines above already records WHY this
+      // expired. The anomaly — the only one of the two the operator ever hears
+      // about — did not carry it, so immune/explainer.js reached its honest
+      // fallback and said "I do not yet know the cause" about a timeout this
+      // very function had just written down. Measured on the wired chain
+      // 2026-08-23. Same class as BUG-278: the field exists one line away.
+      //
+      // needsOperator is the truthful flag here, not a convenience. The remedy
+      // is a person answering the prompt (or re-issuing the command); every
+      // mechanical remedy in the explainer's menu is a wrong answer that also
+      // sounds like a right one, which is precisely what BUG-273 C2 added the
+      // flag to prevent. It also spares a brain round-trip mid-conversation.
       try {
         bus.emit('health.anomaly', {
           kind: 'confirm-expired-silently', tool: expiredTool, target: expiredTool,
+          needsOperator: true,
+          // The TTL is read from config, not from confirmRegistry.stats(): this
+          // callback is constructed as an argument to createConfirmRegistry, so
+          // reaching back through the variable being assigned would work only
+          // because a timer cannot fire before the assignment completes. Same
+          // number, no temporal coupling.
+          reason: 'A confirmation prompt' + (expiredTool ? ' for ' + expiredTool : '')
+            + ' timed out' + (config.LEASH_CONFIRM_TTL_MS ? ' after ' + config.LEASH_CONFIRM_TTL_MS + 'ms' : '')
+            + ' with no answer, so the action was denied and nothing ran.'
+            + ' Re-issue it if you still want it.',
         });
       } catch (_) {}
       try {
