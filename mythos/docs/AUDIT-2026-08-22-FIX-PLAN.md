@@ -339,6 +339,40 @@ succeeded.
 *Two items. Both follow the same principle: if nothing uses a risky option,
 delete the option rather than defend it.*
 
+**STATUS: DONE — audit item 3, and BUG-307.** Both premises were measured before
+anything was changed, and both held exactly as written.
+
+Item 3 was worse than the plan describes in one respect: `opts.extra` could
+override **three** decided settings, not two. Alongside the write permission and
+the start-up flag it also blanked `DSH_TELEMETRY_DISABLED`, which is the
+privacy opt-out — and dsh's shipped bundle has no redaction rule, so an enabled
+export can carry message text, tool arguments and workspace paths. The search
+the plan asked for confirmed no caller, so the option was deleted rather than
+reordered.
+
+BUG-307 came out as planned. The thing worth recording is the regression risk in
+the other direction, because the plan flags it and it is the reason this item
+could have gone badly: a containment check inside the function every read and
+write calls could easily break the vault. **Full suite after the change: one
+failure across 5,879 tests, and it was the AD-7 portability gate objecting to a
+Windows absolute path in my own explanatory comment — not a caller relying on
+loose behaviour.** Nothing in the codebase depended on `vaultPath` letting a
+path escape.
+
+Two smaller notes for whoever reads this next:
+
+- A mutation **survived** and was right to: removing the
+  `if (!segments.length) return rootAbs` fast path changed nothing, because
+  `path.resolve(rootAbs)` already returns `rootAbs`. The branch was dead. It
+  was deleted rather than left looking load-bearing, and the mutation was
+  retargeted at the clause that actually carries the no-arguments contract.
+- The plan says to remove the hand-rolled checks in `from-runner.js` and
+  `from-docs.js`. Only their **prefix comparisons** came out. `from-runner`'s
+  slug regex stays, for the same reason `from-okf`'s `badSegment()` stays:
+  rejecting a bad name at the edge with an actionable message is a different job
+  from containment, and trading it for a throw out of the path helper would be a
+  worse error, not a tidier one. Both non-fixes are pinned by tests.
+
 ### Item 3 — a caller can switch off the build engine's safety settings
 
 **Plain English.** Before running a build, MYTHOS builds a clean set of

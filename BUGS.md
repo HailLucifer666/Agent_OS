@@ -41,6 +41,56 @@ it is committed.
 
 ---
 
+## BUG-307 — the vault path helper kept nothing inside the vault (✅ RESOLVED 2026-08-22)
+
+Audit item 7, Phase 3 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. `vaultPath()` in
+`src/core/memory/fs-store.js` is the one function that turns a short name into a full path inside
+MYTHOS's data folder — every read and every write goes through it — and it was:
+
+    function vaultPath(...segments) { return path.resolve(root(), ...segments); }
+
+`path.resolve` does not contain anything. It walks out of the vault on `..`, and an **absolute
+segment discards the root entirely** rather than being appended to it. Measured at HEAD against a
+temp vault:
+
+| input | resolved to |
+| --- | --- |
+| `..` | the vault's parent |
+| `../../etc/passwd` | two levels up, then `etc/passwd` |
+| `/etc/passwd` | the drive root — the vault was gone |
+| `a/../../..` | two levels up |
+
+**Honest bounding, both halves.** Nothing could exploit this: no model tool and no web route reached
+the two unguarded call sites with a name it controlled. What made it worth fixing is the shape rather
+than the exposure — **four callers had each hand-rolled this same check, in three different styles,
+and two had written none.** One invariant with five implementations is this repo's most-repeated
+defect class, and the two that were missing were one careless parameter away from mattering.
+
+The rule now lives once, at the door every path goes through. The comparison is against the root
+**plus a separator**, because `startsWith(root)` alone accepts a sibling directory whose name merely
+begins with the root's — the classic off-by-one in this check, and now its own test. The redundant
+copies in `from-runner.js` and `from-docs.js` were deleted in the same commit; leaving them is how
+five implementations drift apart.
+
+**Two deliberate non-fixes, both pinned by tests.** `from-okf.js`'s `badSegment()` stays: it rejects
+a bad name with an actionable message *before* the filesystem is involved, which is a different job
+from containment — reject at the edge, contain at the door. And `from-runner.js`'s slug regex stays
+for the same reason; only its prefix re-derivation came out.
+
+**The regression risk was the other direction, and it was measured.** A containment check in the
+function every vault operation calls could easily break the vault. Full suite after the change: one
+failure across 5,879 tests, and it was the AD-7 portability gate objecting to a Windows absolute path
+I had written **in my own explanatory comment**, not a caller relying on loose behaviour. Nothing in
+the codebase depended on `vaultPath` letting a path escape.
+
+Regression test `mythos/test/bug-307-vault-path-containment.test.js` (10 tests). Mutation-tested
+6/6 after one correction: the first M4 removed a `if (!segments.length) return rootAbs` fast path and
+**survived**, because `path.resolve(rootAbs)` already returns `rootAbs` — the branch was dead. It was
+deleted rather than left looking load-bearing, and the mutation retargeted at the clause that really
+carries the no-arguments contract.
+
+---
+
 ## BUG-306 — a failed save of your conversation history was completely silent (✅ RESOLVED 2026-08-22)
 
 Audit item 4, Phase 2 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. One line in
@@ -297,6 +347,20 @@ takes two, so `taskkill /PID undefined` ran instead):
 
 Regression test `test/bug-301-build-engine-under-electron.test.js`. Mutation-tested 3/3: dropping
 `ELECTRON_RUN_AS_NODE` fails two tests, dropping `--expose-internals` fails a third.
+
+**Follow-up 2026-08-22 (audit item 3, Phase 3): the fix above was overridable by its own caller.**
+`scrubbedEnv` ended with `return Object.assign(env, opts.extra || {})`, and later keys win — so
+anything a caller passed overwrote every setting the function had just decided. Measured with
+`autoApprove:false` and a hostile `extra`: `DSH_PERMISSION_MODE` came back `workspace-write`
+(the sandbox, off), `ELECTRON_RUN_AS_NODE` came back `""` (**this bug, reintroduced**), and
+`DSH_TELEMETRY_DISABLED` came back `""` (the privacy opt-out, off).
+
+Deleted rather than defended: the option had no callers. The only mention anywhere in `src/` or
+`adapters/` was the forwarding line in `runTask` that fed it, and no `runTask` caller passed
+`env` — build-engine, forge-runner and from-dsh all express intent structurally (`cwd`,
+`writeRoot`, `autoApprove`) instead, which forge-runner's own comment records as the lesson from
+Hermes being deleted out from under a set of `HERMES_`-prefixed variables. Two tests added to this
+file, both mutation-checked.
 
 ---
 

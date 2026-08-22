@@ -152,13 +152,12 @@ function resolveCwd(vault, scope) {
   if (base && /[\\\/]|\.\./.test(String(base))) {
     throw new Error('illegal path segment in scope: ' + base);
   }
-  var abs = vault.vaultPath(rel);
-  // Re-derive the expected prefix and confirm abs is under it.
-  var rootAbs = vault.vaultPath();
-  if (abs.indexOf(rootAbs) !== 0) {
-    throw new Error('cwd escapes vault: ' + abs);
-  }
-  return abs;
+  // Containment moved into vaultPath() on 2026-08-22 (BUG-307). This used to
+  // re-derive the vault root and compare prefixes by hand — one of four such
+  // copies, in three different styles. The slug check above STAYS: it rejects a
+  // bad name at the edge with a message naming it, which is a different job from
+  // containment and a better error than a throw from the path helper.
+  return vault.vaultPath(rel);
 }
 
 function buildTools(ctx) {

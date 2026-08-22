@@ -115,8 +115,42 @@ function createFsStore(vaultRootFn, bus) {
   const root = typeof vaultRootFn === 'function' ? vaultRootFn : () => vaultRootFn;
   const pathLocks = new Map(); // relPath -> tail promise (D-21)
 
+  // BUG-307. Every read and write in MYTHOS goes through this function, and
+  // until 2026-08-22 it was `path.resolve(root(), ...segments)` and nothing
+  // else. path.resolve does not contain anything: it walks out on '..', and an
+  // absolute segment DISCARDS the root entirely rather than being appended to
+  // it. Measured at HEAD against a temp vault:
+  //
+  //     '..'               -> the vault's parent
+  //     '../../etc/passwd' -> two levels up, then etc/passwd
+  //     '/etc/passwd'      -> the drive root, then etc/passwd; the vault is gone
+  //
+  // HONEST BOUNDING, both halves. Nothing could exploit it: no model tool and no
+  // web route reached the unguarded call sites with a name it controlled. What
+  // made it worth fixing is that four callers had each hand-rolled this same
+  // check, in three different styles, and two had written none — one invariant
+  // with five implementations, which is this repo's most-repeated defect. The
+  // rule now lives once, at the door every path goes through, and two of the
+  // hand-rolled copies came out in the same commit.
+  //
+  // Two details that are easy to get wrong:
+  //   - No arguments legitimately means "the vault root" and must keep working;
+  //     from-runner.js derives its expected prefix that way.
+  //   - The comparison is against root + separator. startsWith(root) alone
+  //     accepts a SIBLING directory whose name merely begins with the root's,
+  //     which is the classic off-by-one in this check.
   function vaultPath(...segments) {
-    return path.resolve(root(), ...segments);
+    const rootAbs = path.resolve(root());
+    // No early return for the no-argument case: path.resolve(rootAbs) IS rootAbs,
+    // and the allowance below lets it through. A mutation run proved that branch
+    // was dead — deleting it changed no behaviour and failed no test — so it is
+    // gone rather than left as a line that looks load-bearing and is not.
+    const full = path.resolve(rootAbs, ...segments);
+    if (full !== rootAbs && !full.startsWith(rootAbs + path.sep)) {
+      throw new Error('vault path escapes the vault root: ' + JSON.stringify(segments.join(path.sep))
+        + ' resolved to ' + full + ', which is outside ' + rootAbs);
+    }
+    return full;
   }
 
   function ensureDir(dir) {

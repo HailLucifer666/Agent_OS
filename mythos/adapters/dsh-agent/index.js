@@ -438,7 +438,30 @@ function scrubbedEnv(opts) {
     }
     env[opts.apiKeyEnv] = process.env[opts.apiKeyEnv];
   }
-  return Object.assign(env, opts.extra || {});
+  // NO CALLER-SUPPLIED MERGE HERE, deliberately.
+  //
+  // Audit item 3, 2026-08-22. This line was
+  //
+  //     return Object.assign(env, opts.extra || {});
+  //
+  // and later keys win in Object.assign, so whatever the caller passed
+  // overwrote every setting decided above. Measured with autoApprove:false
+  // and a hostile extra: DSH_PERMISSION_MODE came back "workspace-write",
+  // ELECTRON_RUN_AS_NODE came back "" (BUG-301, reintroduced), and
+  // DSH_TELEMETRY_DISABLED came back "" (the privacy opt-out, off). Three
+  // settings this function exists to decide, all overridable by its caller.
+  //
+  // DELETED RATHER THAN DEFENDED, because it had no callers: the only
+  // mention anywhere in src/ or adapters/ was the forwarding line in runTask
+  // that fed it, and no runTask caller passed env. build-engine,
+  // forge-runner and from-dsh all express intent structurally instead —
+  // cwd, writeRoot, autoApprove — which is what forge-runner's own comment
+  // already says it learned when Hermes was deleted out from under a set of
+  // HERMES_-prefixed variables.
+  //
+  // If a real need appears: put the merge ABOVE the decided settings so they
+  // still win, and say why here. It does not come back below them.
+  return env;
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +821,6 @@ async function runTask(prompt, opts) {
       env: scrubbedEnv({
         apiKeyEnv: selected.apiKeyEnv,
         autoApprove: Boolean(opts.autoApprove),
-        extra: opts.env || null,
       }),
       timeoutMs: timeoutMs,
     });
