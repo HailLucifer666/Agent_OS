@@ -41,6 +41,75 @@ it is committed.
 
 ---
 
+## BUG-322 — the operator shouted and MYTHOS kept talking (✅ FIXED 2026-08-22, not yet live-verified)
+
+Operator report from the live session of 2026-08-22: *"I had to shout and still it did not stop
+telling."* Root-caused from `%APPDATA%/MYTHOS/mythos-server.log`, scoped to that day only —
+74 own-voice holds across 101 live turns.
+
+**What the log said.** Thirteen barge-in attempts were refused, and **not one of them was refused
+for being too quiet**: there is no `below-bleed-floor` veto anywhere in the day. Seven were refused
+as `pending-sustaining`, at these levels — `0.3942 0.3655 0.1900 0.1671 0.1260 0.0824 0.0713` —
+against a floor of `0.035` and a room whose loudest measured speaker bleed all day was `0.1641`.
+The top two are more than double the loudest sound MYTHOS's own speaker produced in that room and
+ten times the floor. They cannot be bleed. They were the operator, refused for *not lasting long
+enough*.
+
+**The mechanism.** Two counters that measure different things and were required to agree.
+`barge-in-policy.js` measured its 200ms sustain in wall-clock time (`t - pendingSince`), while the
+audio reaches it in frames: `pcm-capture-worklet.js` fills a 100ms buffer on the audio thread and
+`postMessage()`s it, and the main thread runs the handler when it next gets a turn. Those agree
+only while the main thread keeps up — and while MYTHOS is speaking, that same thread is decoding
+and playing audio. A backlog arrives as a burst: every frame carries a real 100ms of the operator's
+voice while `now()` barely moves. The candidacy sits in PENDING while the speech runs past it, and
+the frame-counting backstop fires on its 3rd, 6th and 9th frame into a policy still answering
+`pending-sustaining`. The log's veto counts of 2, 3 and 4 within a single hold are that shape.
+
+**The fix.** `PENDING_HOLD_MS` is unchanged and still means 200ms. The clock is simply no longer the
+only witness to it — each PENDING frame is a known quantity of captured audio, so the frames measure
+the same span and whichever has seen more of the utterance wins. Under healthy real-time delivery
+the two are arithmetically identical, which is pinned frame-for-frame. Nothing else moved: not the
+floor, not the protected window, not either backstop tier, not the dormant learned floor.
+`s2s-bridge.js` is deliberately **untouched** — see the drift guard below.
+
+**Same class as BUG-274, from the other end** — two counters required to coincide, one in frames and
+one in milliseconds. BUG-274 fixed delivery; this fixes measurement. It was predicted at the time:
+`test/bug-274-barge-in-authorisation-is-deliverable.test.js` records the shape as known-failing and
+defers it with an explicit instruction to bring a measurement instead of a guess.
+
+**Why FRAME_MS is duplicated rather than shared, since that looks like the obvious cleanup.** The
+sustain is now measured in frames, so `FRAME_MS` is load-bearing and must match the value the
+capture worklet is built with. Exporting it from the policy and importing it into `s2s-bridge.js`
+was tried and **reverted**: it breaks `s2s-preroll-ring.test.js`, which reads the bridge as *text*
+and matches `FRAME_MS = <digits>` to prove the preroll ring is derived from the frame size rather
+than hand-tuned. The bridge is a browser ES module with no Node double (`mythos/ui/CLAUDE.md`), so
+source-shape assertions are the only tool available against it, and moving a constant out of the
+file blinds them. That invariant is worth more than removing a duplicated literal, so the duplicate
+stays and a guard test asserts the two values are equal.
+
+**Tests.** `test/bug-322-barge-in-sustain-counts-frames.test.js`, 6 tests, red before / green after —
+the failing run reproduced the live signature exactly (`pending-opened` followed by nine
+`pending-sustaining`). Five mutations run, file restored byte-identical and hash-verified: four were
+caught, and the fifth is documented as an equivalent mutant with the reason.
+
+**What this does NOT fix, stated so it is not read as closed.** Three findings from the same session
+remain open. Mic frames are buffered locally and replayed only when the hold ends, so Gemini hears
+nothing from the operator during a hold (median 6.0s, max 15.0s) and cannot cut the turn itself —
+87% of the replayed audio was zeroed by the noise gate (628 raw frames against 4,346 zeroed). The
+echo detector returned `no-reference` on the large majority of turns, so `echoRatio` was almost
+never available as a discriminator. And the ceiling fail-open fired 14 times, meaning the hold ran
+to its cap rather than being resolved. **Above all, this fix is verified by test only — a green
+suite has never once been able to tell anyone that this path works in the running application, and
+the operator's ear is the oracle here.**
+
+**A correction to an earlier claim in this session, recorded so it is not repeated.** The first
+report of this bug said the adaptive bleed floor was "learning the operator's shout, so shouting
+raises the bar". That was wrong. `LEARNED_FLOOR_ENABLED` is `false`, and every `bleedFloor` value in
+the day's log reads `0.035` — the learned figure is dormant telemetry and applied to nothing. The
+rising `learnedFloor` numbers were real but inert.
+
+---
+
 ## BUG-308 — an escaped error killed MYTHOS and wrote nothing anywhere (✅ RESOLVED 2026-08-22)
 
 Audit item 8, Phase 4 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. MYTHOS's brain runs as a

@@ -87,6 +87,47 @@ export const PROTECTED_MS = 500;
 // is BUG-274 T4. Every number here is a compensation for that.
 export const PENDING_HOLD_MS = 200;
 
+// How much captured audio one mic frame carries. NOT a tuning knob: it must match
+// the frameMs the capture worklet is constructed with, which is s2s-bridge.js's own
+// FRAME_MS. The two are separate declarations and a guard test asserts they are
+// equal — test/bug-322 'the frame size the policy counts with matches the frame size
+// the microphone is chopped into'. Drift between them mis-counts the sustain below,
+// so it fails a test rather than passing silently.
+//
+// WHY A GUARD RATHER THAN ONE SHARED CONSTANT, since one definition is normally
+// better than two agreeing. It was tried: importing FRAME_MS from here into
+// s2s-bridge.js and deleting its local copy. That breaks s2s-preroll-ring.test.js,
+// which reads the bridge as TEXT and matches `FRAME_MS = <digits>` to prove the
+// preroll ring is derived from the frame size rather than hand-tuned — a real
+// invariant, and a more valuable one than removing a duplicated literal. The bridge
+// is a browser ES module with no Node double, so source-shape assertions are the
+// only tool available there and moving a constant out of the file blinds them.
+// The guard keeps both invariants and leaves s2s-bridge.js untouched.
+//
+// BUG-322, 2026-08-22 — WHY THE SUSTAIN NEEDS THIS AT ALL. The check below used to
+// be wall-clock only: `t - pendingSince >= pendingHoldMs`. That is correct exactly
+// while frames reach this module as fast as the microphone produces them, and
+// nothing guarantees they do. pcm-capture-worklet.js fills a 100ms buffer on the
+// audio thread and postMessage()s it; the main thread runs the handler when it next
+// gets a turn, and while MYTHOS is speaking that thread is also decoding and playing
+// audio. A backlog is delivered as a burst — every frame carrying a real 100ms of
+// the operator's voice, and now() barely moving between them.
+//
+// The candidacy then sits in PENDING while the speech runs past it, and the
+// frame-counting backstop fires on its 3rd, 6th and 9th frame into a policy that
+// keeps answering 'pending-sustaining'. Measured in the operator's own session
+// (2026-08-22): thirteen refusals, not one of them 'below-bleed-floor', seven of
+// them 'pending-sustaining' at levels up to 0.3942 — ten times the floor, and more
+// than double the loudest bleed the room produced all day (0.1641). Those were the
+// operator shouting.
+//
+// Q6 — WHAT CLASS IS THIS? The same as BUG-274, from the other end: two counters
+// required to agree, one in frames and one in milliseconds. BUG-274 fixed delivery;
+// this fixes measurement. It was predicted at the time — see the known-failing shape
+// recorded in bug-274-barge-in-authorisation-is-deliverable.test.js, deferred with an
+// instruction to bring a measurement instead of a guess. The measurement is above.
+export const FRAME_MS = 100;
+
 // Learned floor = observed bleed peak x this.
 //
 // BUG-273 A1 — was 1.45, chosen from BUG-272's 1.4-1.5 band on the assumption
@@ -214,6 +255,8 @@ export function createBargeInPolicy(opts) {
   const bleedMargin = numberOr(o.bleedMargin, BLEED_MARGIN);
   const maxBleedFloor = numberOr(o.maxBleedFloor, MAX_BLEED_FLOOR);
   const initialFloor = numberOr(o.initialBleedFloor, INITIAL_BLEED_FLOOR);
+  // BUG-322: how much audio one frame carries. See FRAME_MS.
+  const frameMs = numberOr(o.frameMs, FRAME_MS);
   // BUG-273 A1: opt-in, default off. See LEARNED_FLOOR_ENABLED.
   const learnedFloorEnabled = typeof o.learnedFloorEnabled === 'boolean'
     ? o.learnedFloorEnabled : LEARNED_FLOOR_ENABLED;
@@ -336,7 +379,31 @@ export function createBargeInPolicy(opts) {
         return decision(false, 'pending-decayed');
       }
       pendingFrames += 1;
-      if (t - pendingSince >= pendingHoldMs) {
+      // BUG-322: 200ms of SPEECH, measured the way the audio actually arrives.
+      //
+      // pendingHoldMs is unchanged and still means 200ms. What changed is that the
+      // clock is no longer the only witness to it: each frame in PENDING is a known
+      // quantity of captured audio, so the frames themselves measure the same span.
+      // Whichever has seen more of the utterance wins. Under healthy real-time
+      // delivery the two are arithmetically identical — frame N lands at
+      // pendingSince + (N-1)*frameMs — so this changes nothing about a normal turn,
+      // which test 2 of bug-322 pins frame-for-frame.
+      //
+      // The candidacy opens on frame 1 having sustained nothing yet, so elapsed
+      // audio is (pendingFrames - 1) * frameMs: the third frame is the one carrying
+      // the 200th millisecond, exactly as the clock version confirmed on it.
+      //
+      // Q1 — WHAT ELSE MATCHES THIS? Only frames already in PENDING, which means
+      // already past the protected window and already above the floor on every frame
+      // since the candidacy opened. Nothing here widens what gets in; the decay rule
+      // above is untouched, so a single below-floor frame still resets the count to
+      // zero and bleed cannot accumulate across its own syllable gaps.
+      // Q5 — IS THIS CONSTANT CORRECT? frameMs is not a chosen threshold. It is a
+      // property of the capture worklet, passed in from the one place that builds it.
+      // If they ever disagree this under- or over-counts, which is why it is wired
+      // through rather than duplicated as a literal.
+      const sustainedMs = Math.max(t - pendingSince, (pendingFrames - 1) * frameMs);
+      if (sustainedMs >= pendingHoldMs) {
         state = STATES.CONFIRMED;
         return decision(true, 'confirmed-sustained');
       }
