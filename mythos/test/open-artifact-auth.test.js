@@ -11,6 +11,17 @@
 // pins that open_artifact's pre-flight sends that header when a token is
 // configured, and sends none when it isn't (loopback installs must be
 // unaffected).
+//
+// SUPERSEDED IN PART BY BUG-317 (2026-08-22) — read this paragraph before
+// trusting the one above. "the OS-opened browser tab would have authenticated
+// fine via the mythos_token cookie" is FALSE: that cookie is issued by POST
+// /api/pin/verify, so a freshly opened tab carries neither cookie nor header and
+// 401s. C4 therefore fixed the pre-flight and left the actual open broken, and
+// the operator hit it on 2026-08-22 while open_artifact reported ok:true twice.
+// The first test below has been rewritten to the new contract: a short-lived
+// signed URL the browser can load, pre-flighted with no header at all. The
+// second test (no token configured) is unchanged and still pins the loopback
+// case.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -97,8 +108,37 @@ describe('open_artifact: authenticates its own pre-flight (C4)', () => {
     });
   }
 
-  it('sends the configured token as a Bearer header and succeeds where an unauthenticated HEAD would 401', () => withoutAmbientPort(async () => {
-    const { server, port, requests } = await startAuthedServer(TOKEN);
+  // REWRITTEN BY BUG-317, AND THE OLD ASSERTION WAS PINNING THE DEFECT.
+  //
+  // C4 made the pre-flight send `Authorization: Bearer <token>` and this test
+  // pinned that it did. The reasoning is in the header above: the pre-flight was
+  // 401ing, "even though the OS-opened browser tab would have authenticated fine
+  // via the mythos_token cookie". That premise is wrong. The cookie is issued by
+  // POST /api/pin/verify, so a freshly opened browser tab has no cookie and no
+  // header, and it 401s — which is exactly what the operator read out loud on
+  // 2026-08-22 ("It says error unauthorized set mythos auth token via authorized
+  // bearer token") while open_artifact had already reported ok:true, twice.
+  //
+  // So C4 fixed the CHECK and left the OPEN broken, and this test locked that in.
+  // The contract now is: the URL carries a short-lived signature the browser can
+  // use, and the pre-flight asks EXACTLY what the browser will ask — no header.
+  // The stub server therefore verifies the signature the way the real
+  // /vault/builds middleware does, rather than demanding a Bearer token.
+  it('hands the browser a signed URL and pre-flights it with no header', () => withoutAmbientPort(async () => {
+    const { verifyArtifactSignature } = require('../src/core/effectors/artifact-token');
+    const requests = [];
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url, 'http://127.0.0.1');
+      requests.push({ method: req.method, authorization: req.headers.authorization });
+      const rel = u.pathname.replace(/^\/vault\//, '');
+      const v = verifyArtifactSignature(rel, u.searchParams.get('exp'), u.searchParams.get('sig'), TOKEN);
+      res.statusCode = v.ok ? 200 : 401;
+      res.end(v.ok ? 'ok' : 'Unauthorized: ' + v.reason);
+    });
+    const port = await new Promise((resolve, reject) => {
+      server.on('error', reject);
+      server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+    });
     try {
       await withStubbedOpener(async (spawnCalls) => {
         const built = buildTools({ fs, bus: fakeBus(), config: { MYTHOS_PORT: port, MYTHOS_AUTH_TOKEN: TOKEN } });
@@ -109,16 +149,42 @@ describe('open_artifact: authenticates its own pre-flight (C4)', () => {
         assert.equal(result.ok, true, 'expected success, got: ' + JSON.stringify(result));
         assert.equal(result.result.opened, true);
         assert.equal(requests.length, 1, 'pre-flight must hit the server exactly once');
-        assert.equal(requests[0].authorization, 'Bearer ' + TOKEN, 'server must have seen the Bearer token');
+        assert.equal(requests[0].authorization, undefined,
+          'the pre-flight must send no header — asking a question the browser will not ask is the whole defect');
         assert.equal(spawnCalls.length, 1, 'the OS opener still runs after a successful pre-flight');
-        // Security: the token must never appear in the URL handed to the opener.
-        const openedUrl = spawnCalls[0].args[spawnCalls[0].args.length - 1];
-        assert.ok(!String(openedUrl).includes(TOKEN), 'the opener URL must be credential-free: ' + openedUrl);
-        assert.ok(!String(openedUrl).includes('token='), 'the opener URL must not carry a ?token= query param: ' + openedUrl);
+
+        const openedUrl = String(spawnCalls[0].args[spawnCalls[0].args.length - 1]);
+        // The URL the browser gets must actually be loadable — that is the point.
+        assert.match(openedUrl, /[?&]sig=/, 'the opener URL must carry a signature: ' + openedUrl);
+        // ...and C4's security assertions still hold: a signature is an HMAC, not
+        // the credential, so the token itself never rides in the URL.
+        assert.ok(!openedUrl.includes(TOKEN), 'the opener URL must be credential-free: ' + openedUrl);
+        assert.ok(!openedUrl.includes('token='), 'the opener URL must not carry a ?token= query param: ' + openedUrl);
       });
     } finally {
       server.close();
     }
+  }));
+
+  it('an unsigned request to the same server is refused — the stub is not a rubber stamp', () => withoutAmbientPort(async () => {
+    // Guards the test above from passing vacuously: if the stub admitted
+    // everything, the signature assertion would prove nothing.
+    const { signArtifactPath } = require('../src/core/effectors/artifact-token');
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url, 'http://127.0.0.1');
+      const { verifyArtifactSignature } = require('../src/core/effectors/artifact-token');
+      const v = verifyArtifactSignature(u.pathname.replace(/^\/vault\//, ''),
+        u.searchParams.get('exp'), u.searchParams.get('sig'), TOKEN);
+      res.statusCode = v.ok ? 200 : 401;
+      res.end('');
+    });
+    const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+    try {
+      const base = 'http://127.0.0.1:' + port + '/vault/builds/pipeline/real.html';
+      assert.equal((await fetch(base)).status, 401, 'unsigned must 401');
+      const t = signArtifactPath('builds/pipeline/real.html', TOKEN);
+      assert.equal((await fetch(base + '?exp=' + t.exp + '&sig=' + t.sig)).status, 200, 'signed must pass');
+    } finally { server.close(); }
   }));
 
   it('without a configured token, sends no Authorization header and behavior is unchanged', () => withoutAmbientPort(async () => {

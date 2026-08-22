@@ -979,7 +979,7 @@ function createServer(deps) {
     if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
   });
-  app.use('/vault/builds', requireToken);
+  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValid(extractCookieToken(r)) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session
 
   // ---- static asset delivery: compression + caching -----------------------
   //

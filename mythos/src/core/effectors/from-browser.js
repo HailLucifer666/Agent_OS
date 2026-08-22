@@ -403,7 +403,7 @@ async function browser_navigate({ url, newTab, browser }) {
     if (!vaultFs || typeof vaultFs.exists !== 'function' || !vaultFs.exists(relPath)) {
       return fail(`Artifact does not exist: ${url}. Call pipeline_status or job_status to get a real artifact path before navigating to one.`);
     }
-    target = vaultUrl(relPath, config);
+    target = vaultUrl(relPath, config, { sign: true }); // BUG-317: a real browser sends no auth header
   }
   try { new URL(target); } catch { return fail(`Invalid URL: "${target}"`); }
   const guard = await requireOnline();

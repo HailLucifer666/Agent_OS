@@ -674,7 +674,9 @@ function buildTools(ctx) {
         if (!fs || typeof fs.exists !== 'function' || !fs.exists(vaultRelPath)) {
           return fail(unknownPathMessage(rawPath));
         }
-        targetUrl = vaultUrl(vaultRelPath, config);
+        // BUG-317: signed, because this URL is about to be handed to a browser
+        // that sends no Authorization header.
+        targetUrl = vaultUrl(vaultRelPath, config, { sign: true });
         // REMEDIATION P1-6 (incident 2026-07-29, live smoke-test): the file
         // existing on disk is not sufficient — this URL is only real if
         // THIS process's own HTTP server is actually listening and serving
@@ -685,14 +687,14 @@ function buildTools(ctx) {
         // before ever spawning anything, so a server that isn't up gets an
         // honest failure instead of a fabricated opened:true.
         try {
-          // /vault/builds is behind requireToken (server/index.js:856). This
-          // pre-flight exists to prove the URL will load, so it must ask the
-          // same question the browser will — credential included. Without it,
-          // configuring a token silently made every artifact unopenable.
-          const headers = config && config.MYTHOS_AUTH_TOKEN
-            ? { Authorization: `Bearer ${config.MYTHOS_AUTH_TOKEN}` }
-            : undefined;
-          const head = await fetch(targetUrl, { method: 'HEAD', headers, signal: AbortSignal.timeout(2000) });
+          // BUG-317: preflight EXACTLY what the browser will send — no headers.
+          // This used to attach `Authorization: Bearer <token>`, which made the
+          // CHECK pass while the browser's own header-less request 401'd, so
+          // open_artifact reported opened:true for a page the operator could not
+          // open. The URL is signed above; if the signature is what admits it,
+          // this request proves that, and if nothing admits it we find out here
+          // instead of the operator finding out in the browser.
+          const head = await fetch(targetUrl, { method: 'HEAD', signal: AbortSignal.timeout(2000) });
           if (!head.ok) {
             return fail(`Artifact exists but the dashboard server returned ${head.status} for ${targetUrl}.`);
           }

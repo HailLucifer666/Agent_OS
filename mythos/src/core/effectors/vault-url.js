@@ -21,9 +21,22 @@ function vaultRelativePath(raw) {
 }
 
 // Builds the URL the dashboard's HTTP server serves a vault-relative path at.
-function vaultUrl(relPath, config) {
+//
+// BUG-317: pass { sign: true } for a URL that will be handed to a BROWSER. The
+// browser sends no Authorization header, and /vault/builds is behind
+// requireToken, so an unsigned URL 401s — which is exactly how open_artifact
+// came to report opened:true for a page the operator could not open. Signing is
+// best-effort: with no MYTHOS_AUTH_TOKEN configured there is nothing to sign
+// with and nothing to authorise against, so the plain URL is already correct.
+function vaultUrl(relPath, config, opts) {
   var port = process.env.PORT || (config && config.MYTHOS_PORT) || 4478;
-  return 'http://localhost:' + port + '/vault/' + relPath;
+  var base = 'http://localhost:' + port + '/vault/' + relPath;
+  if (!opts || !opts.sign) return base;
+  var secret = config && config.MYTHOS_AUTH_TOKEN;
+  if (!secret) return base;
+  var token = require('./artifact-token').signArtifactPath(relPath, secret);
+  if (!token) return base;
+  return base + '?exp=' + encodeURIComponent(token.exp) + '&sig=' + encodeURIComponent(token.sig);
 }
 
 module.exports = { vaultRelativePath: vaultRelativePath, vaultUrl: vaultUrl };
