@@ -546,6 +546,36 @@ each branch, so the next person doesn't have to rediscover it.
 
 *Four items. Small, but each is a thing that would otherwise quietly rot.*
 
+**STATUS: DONE — all four items.** Three commits: `baf42e6` (item 12),
+`53c7f6b` (item 14), `a46291b` (item 11). Item 6b needed no commit; see below.
+
+- **Item 12** was worse than this plan describes. The plan says the score "never
+  quite reaches zero once measuring starts, so only the very first use is
+  affected". Measured on the real store, an all-failure history sits at EXACTLY
+  zero and stays there — the same branch keeps re-setting it rather than decaying
+  toward it — so fail, fail, succeed ended at a flawless `successRate: 1`, above
+  the 0.5 threshold `goals/index.js:407` gates replay on. Three tests (one red
+  before the fix), four mutations, all caught.
+- **Item 14's number was also wrong, and in the more misleading direction.** The
+  audit says 94, sampled. Counted at the audit's own commit over the audit's own
+  scope: 89 with an empty body plus **204 whose body is only a comment**, 293 in
+  total. The comment-only half is invisible to the obvious grep and is the larger
+  half. The standing decision (don't sweep) stands, but it is now recorded against
+  a real number, with the three questions that make one load-bearing.
+- **Item 6b was already closed in Phase 4** and is not re-done here. BUGS.md's
+  BUG-301 entry reads "Two secondary faults this exposed. BOTH CLOSED 2026-08-22
+  as BUG-305", which also records the third fault BUG-305 turned up — the timeout
+  never killed the engine, because `treeKill` was called with one argument and
+  takes two.
+- **Item 11** acted on the operator's answer below. The explainer's deletion is
+  committed and the explainer is NOT restored; the map is tracked as
+  `MYTHOS-CAPABILITY-MAP.html`. It was checked before being tracked — no
+  drive-rooted or home paths, no personal identifiers, no key-shaped strings, no
+  external requests — because the anti-drift gate scans every tracked text file
+  and a commit is permanent.
+
+Suite after each commit: `tests=5899 pass=5899 fail=0 skipped=0`.
+
 ### Item 6b — the two loose ends from BUG-301 have no ticket
 
 Once Phase 2 lands, items 5 and 6 above *are* those loose ends. Update the
