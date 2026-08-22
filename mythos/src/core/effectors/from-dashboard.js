@@ -23,7 +23,7 @@ const { effectorFromTool } = require('./adapter');
 const { reasonText } = require('../util/reason-text');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
-const { vaultRelativePath, vaultUrl } = require('./vault-url');
+const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
 const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
 // BUG-113: surface open spoken commitments in read_status so "where are we
@@ -731,7 +731,7 @@ function buildTools(ctx) {
       });
       child.unref();
       const display = title || rawPath;
-      return ok({ opened: true, url: targetUrl, display });
+      return ok({ opened: true, url: targetUrl, display, ageHours: vaultRelPath === null ? null : vaultAgeHours(vaultRelPath, fs) }); // BUG-319
     } catch (err) {
       return fail(`Could not open artifact: ${err.message}`);
     }
