@@ -168,7 +168,19 @@ describe('WAVE 6 — open_folder proves a window opened', () => {
     });
   });
 
-  it('a file rather than a folder is refused with a usable alternative', async () => {
+  // CHANGED by BUG-283 (2026-08-20), deliberately, and the old assertion is
+  // recorded here rather than deleted quietly. This used to require
+  // `res.ok === false` — a file path was refused with a message naming
+  // open_artifact. That refusal was measured failing in production: the model
+  // received it, ignored the named remedy, and later told the operator that
+  // opening a saved file was a "system limitation" while open_artifact sat
+  // declared and unused for the whole session. Prose remediation had already
+  // lost once on this tool (the launch_app history at the top of this file), so
+  // the dead end was removed instead of re-worded a third time.
+  //
+  // The invariant that survives unchanged: the result must still name
+  // open_artifact. Opening the folder is not opening the file.
+  it('a file rather than a folder is revealed in its folder, still naming open_artifact', async () => {
     const tmpFile = path.join(REAL_DIR, 'wave6-open-folder-probe.tmp');
     let made = false;
     try { fs.writeFileSync(tmpFile, 'x'); made = true; } catch (_) { /* read-only env */ }
@@ -176,10 +188,10 @@ describe('WAVE 6 — open_folder proves a window opened', () => {
     try {
       await withPc(pcWithWindows([]), async (m) => {
         const res = await m.open_folder({ path: tmpFile });
-        assert.equal(res.ok, false);
-        if (/not a folder/i.test(String(res.result))) {
-          assert.match(String(res.result), /open_artifact/, 'name the tool that does handle files');
-        }
+        if (!res.ok && /outside|sandbox|not allowed/i.test(String(res.result))) return;
+        assert.equal(res.ok, true, 'a file path is no longer a dead end');
+        assert.match(JSON.stringify(res.result), /open_artifact/,
+          'name the tool that does handle files');
       });
     } finally {
       try { fs.unlinkSync(tmpFile); } catch (_) {}

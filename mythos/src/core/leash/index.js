@@ -188,7 +188,7 @@ function createLeash(deps) {
   var NEVER_TRUSTABLE = {
     gmail_send: 1, compose_email: 1, whatsapp_send: 1,
     phone_call: 1, phone_sms_send: 1, phone_whatsapp_send: 1, phone_file_push: 1,
-    run_command: 1, install_from_github: 1, mcp_call_tool: 1, hermes_task: 1,
+    run_command: 1, install_from_github: 1, mcp_call_tool: 1, dsh_task: 1,
     security_scan: 1,
     build_project: 1, revise_project: 1, pipeline_execute: 1,
     kanban_assemble: 1, kanban_build_card: 1, start_project: 1, run_mission: 1,
@@ -359,7 +359,7 @@ function createLeash(deps) {
     // the whole tier, which meant approving a single Forge build plan gave the
     // goal a standing pass for every T3 tool that later carried the same
     // goalId — gmail_send, delete_file, run_command, phone_call, phone_sms_send,
-    // browser_click, install_from_github, hermes_task. Two live consumers made
+    // browser_click, install_from_github, dsh_task. Two live consumers made
     // that reachable with no external attacker: engagements/executor.js checks
     // LLM-authored {tool,args} stages against this gate with goalId set (so any
     // untrusted text reaching the spec could steer it), and cortex/index.js

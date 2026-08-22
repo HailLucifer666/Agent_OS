@@ -9,7 +9,7 @@ function createInterview({ config, brain, buildEngine }) {
   var maxQuestions = (config.ENGAGEMENT_INTERVIEW_MAX_Q || 5);
   // V6 (Phase 4): brain is optional. When absent or offline, every method
   // falls back to the canned DEFAULT_QUESTIONS template (honest-inert).
-  // Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+  // Phase B: buildEngine (DeepSeek Harness) is now the preferred generator for
   // generateQuestionsBrain() below, same single-engine reasoning as
   // executor.js's build stage. Unlike brain.think (schemaHint pre-parses the
   // reply into result.parsed), buildEngine.generate() only returns raw

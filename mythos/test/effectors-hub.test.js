@@ -214,8 +214,14 @@ describe('gate: 100 registered count', () => {
     // conversation to a strong reasoning model. The Live voice path makes zero
     // brain.think calls and its own model is capped at Flash tier on a free key,
     // so re-ranking lanes could not change a spoken answer by one word; a tool
-    // is the only mechanism) = 105.
-    assert.equal(hub.count(), 105);
+    // is the only mechanism) = 105,
+    // + open_file (from-computer, 2026-08-21 — MYTHOS could reveal a folder and
+    // serve a vault build over HTTP, but had no way to open an ordinary file in
+    // its associated app. open_folder refused files and pointed at
+    // open_artifact, which only serves builds out of the vault, and launch_app
+    // takes an app name and refuses paths. The operator asked twice in the
+    // 2026-08-20 transcript and got "I can't access the...") = 106.
+    assert.equal(hub.count(), 106);
   });
 });
 

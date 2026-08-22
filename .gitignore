@@ -10,13 +10,26 @@ _devtools/
 # Never committed — contributors create their own with `python -m venv .venv`.
 .venv/
 
-# Hermes-Agent (NousResearch, MIT) — the build engine, installed project-local
-# via mythos/scripts/setup-hermes.js. This is HERMES_HOME: it holds a full
-# third-party git checkout, its own CPython + uv + PortableGit, AND Hermes's own
-# config.yaml/auth.json with provider credentials. Never commit it — contributors
-# run the setup script to pull their own copy from git.
+# Hermes-Agent (NousResearch, MIT) — the FORMER build engine. Removed from the
+# codebase by W6 on 2026-08-22; see /DeepSeek Harness/ below for what replaced it.
+# THIS RULE STAYS. Any machine that installed before that date still has the
+# directory on disk, and it holds a full third-party checkout, its own CPython +
+# uv + PortableGit, AND Hermes's own config.yaml/auth.json with provider
+# credentials. Dropping the rule would surface all of that as untracked files and
+# invite committing a credential. Nothing in MYTHOS reads it any more, so it is
+# safe to delete by hand once you are sure you want the disk space back.
 # Leading slash pins this to the repo root (see the /design/ note above for why).
 /Hermes Agent/
+
+# DeepSeek Harness (deepseek-ai/deepseek-harness, MIT) — the build engine that
+# REPLACES Hermes-Agent above, per W6 in mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md.
+# Same convention as /Hermes Agent/: a third-party npm tree never belongs in git,
+# and contributors install their own copy. dsh pulls 30+ @deepseek-ai/* packages,
+# so this is deliberately its OWN install root rather than a dependency of
+# mythos/package.json — adding it there forced npm to re-resolve mythos's whole
+# 191-package tree, which ran >25 minutes without extracting a single file.
+# Created and maintained by mythos/scripts/setup-dsh.js --install.
+/DeepSeek Harness/
 
 # Android platform-tools (Google, Apache 2.0) — the ADB bridge's `adb`
 # binary, installed project-local via mythos/scripts/setup-android.js
@@ -178,3 +191,10 @@ nodes/.kotlin/
 # builds run — runtime-local state, never publish; see mythos/skills/hallmark/)
 .hallmark/
 .superpowers/
+
+# open-webSearch (Aas-ee/open-webSearch, Apache-2.0) — the local search daemon,
+# installed project-local by mythos/scripts/setup-websearch.js --install. Same
+# convention as /Hermes Agent/ above: a third-party npm tree plus the small
+# package.json host that keeps npm from installing it into the repo root.
+# Pulled on demand, never committed.
+/open-websearch/

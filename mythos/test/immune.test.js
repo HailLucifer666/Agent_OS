@@ -575,7 +575,7 @@ describe('immune/healer — cooldown + actions', function() {
     healer.stop();
   });
 
-  it('build-engine-reprobe forces a fresh Hermes probe and surfaces the item-6 CLI diagnostic', async function() {
+  it('build-engine-reprobe re-probes the real dsh engine and reports a definite state on BOTH branches', async function() {
     var bus = fakeBus();
     var memory = fakeMemory();
     var { createHealer } = require('../src/core/immune/healer');
@@ -583,27 +583,29 @@ describe('immune/healer — cooldown + actions', function() {
     healer.start();
 
     // BUG-258 (2026-08-16): this test used to run its "genuine live re-probe"
-    // against whatever `hermes` resolution happened to be available to the
-    // test process — PATH, an exported HERMES_CLI, or a running gateway. That
-    // is machine state, not a fixture: it passed on the operator's shell and
-    // failed with `spawn hermes ENOENT` → honest OFFLINE → outcome 'error'
-    // everywhere else, including CI (test job red on every push since
-    // 2026-08-13; e2e green, so it read as a suite regression). Pinning
-    // HERMES_CLI at process.execPath keeps everything this test exists to
-    // exercise real — the actual adapter probe(), an actual child spawn, the
-    // exit-code → ONLINE transition — with a target binary that exists on any
-    // machine that can run the suite at all. Same save/restore convention as
-    // hermes-adapter.test.js.
-    var savedCli = process.env.HERMES_CLI;
-    process.env.HERMES_CLI = process.execPath; // `node --version` exits 0
+    // against whatever `hermes` resolution happened to be available to the test
+    // process — PATH, an exported HERMES_CLI, or a running gateway. That is
+    // machine state, not a fixture: it passed on the operator's shell and failed
+    // with `spawn hermes ENOENT` everywhere else, including CI. The fix was to
+    // pin the binary at process.execPath.
+    //
+    // W6 (2026-08-22): there is no env override to pin any more, and that is
+    // deliberate — dsh-agent resolves a PINNED, project-local install and
+    // refuses to reach for a global one. So this test asserts the property
+    // BUG-258 was really about (the healer reports a DEFINITE state and holds
+    // the claim for verification rather than announcing a heal on the spot),
+    // against whichever state this machine is genuinely in. Both branches are
+    // real; neither is faked by moving an install aside, which is the
+    // destructive-test pattern that once stranded real ONNX weights in a
+    // gitignored backup directory.
     try {
       bus.emit('health.diagnosed', {
         kind: 'build-engine-failed', target: undefined,
-        evidence: { kind: 'build-engine-failed', engine: 'hermes', error: 'hermes-agent OFFLINE: ...' }
+        evidence: { kind: 'build-engine-failed', engine: 'dsh', error: 'dsh-agent OFFLINE: ...' }
       });
-      // Real probe() against the real hermes-agent adapter — a genuine live
-      // re-probe, not a mock. Poll instead of a fixed sleep: the CLI spawn this
-      // triggers is a real child process (~1.5s measured idle, far more under load).
+      // Real probe() against the real dsh-agent adapter — a genuine live
+      // re-probe, not a mock. Poll instead of a fixed sleep: the probe spawns a
+      // real child process (~1s measured idle, far more under load).
       //
       // The budget must exceed the adapter's OWN probe timeout, otherwise this
       // test races it and fails on a busy machine while the code is fine: with a
@@ -617,21 +619,54 @@ describe('immune/healer — cooldown + actions', function() {
       }
       assert.equal(healed.length, 1);
       assert.equal(healed[0].payload.playbookId, 'build-engine-reprobe');
-      // Task C2: reprobe-build-engine's own ok:true is not proof Hermes is
-      // actually back — it reports ONLINE/OFFLINE, it does not guarantee
-      // ONLINE. The healer now holds this claim open as 'verifying' rather
-      // than announcing 'applied' the instant the probe returns, so a heal
-      // cannot be reported before it has held for verifyMs with no recurrence
-      // (see heal-verification.test.js for the full hold/confirm/fail cycle).
-      assert.equal(healed[0].payload.outcome, 'verifying', 'a reprobe result is held for verification, not announced healed on the spot');
-      assert.ok(healed[0].payload.detail && (healed[0].payload.detail.state === 'ONLINE' || healed[0].payload.detail.state === 'OFFLINE'),
-        'must report a definite re-probed state, not silence');
+
+      // W6 FOLLOW-UP (2026-08-22). This block used to assert outcome
+      // 'verifying' unconditionally, while the comment above claimed both
+      // branches were real and neither was faked. Both ARE real — and only one
+      // of them was accepted, so the test passed on a machine with a
+      // project-local dsh install and failed on CI, which has none, with
+      // outcome 'error'. CI was right; the assertion was wrong.
+      //
+      // Task C2's actual property, now pinned on both branches: a probe result
+      // is never announced as an applied heal, and the healer never reports
+      // silence about the engine's state.
+      var payload = healed[0].payload;
+      assert.notEqual(payload.outcome, 'applied',
+        'a reprobe result must never be announced as an applied heal — a probe reports ONLINE/OFFLINE, it does not prove a build produces content');
+      assert.ok(payload.outcome === 'verifying' || payload.outcome === 'error',
+        'expected the engine-present (verifying) or engine-absent (error) branch, got ' + payload.outcome);
+
+      // The two branches nest the diagnostic at DIFFERENT depths, and that is
+      // the healer's generic mapping rather than a defect here: applyPlaybook
+      // assigns `detail = result.result` when the action returns ok:true and
+      // `detail = result` when it returns ok:false. Read whichever shape this
+      // machine actually produced instead of assuming one — asserting the
+      // ONLINE shape is what made this test machine-dependent in the first
+      // place.
+      var d = payload.detail || {};
+      var probed = d.state ? d : (d.result || {});
+      assert.ok(probed.state === 'ONLINE' || probed.state === 'OFFLINE',
+        'must report a definite re-probed state, not silence (outcome=' + payload.outcome
+        + ', detail=' + JSON.stringify(payload.detail) + ')');
+
+      if (payload.outcome === 'error') {
+        // Engine genuinely absent — the state every fresh clone of this repo is
+        // in until `node mythos/scripts/setup-dsh.js --install` has run, and
+        // the state CI is permanently in. An 'error' with no cause attached is
+        // indistinguishable from a broken healer, so the reason and the probe
+        // diagnostic are required, not optional.
+        assert.equal(probed.state, 'OFFLINE',
+          'the error branch is only correct when the engine really is offline');
+        assert.ok(/offline|missing-dependency/.test(String(d.reason || '')),
+          'the offline branch must NAME its reason, got ' + JSON.stringify(d.reason));
+        assert.ok(probed.probeDiagnostic && probed.probeDiagnostic.kind,
+          'the offline branch must carry the probe diagnostic saying WHY (not-installed, spawn-error, version-mismatch, ...)');
+      }
     } finally {
       healer.stop();
-      if (savedCli === undefined) delete process.env.HERMES_CLI; else process.env.HERMES_CLI = savedCli;
-      // Don't leak the stub-CLI-bound adapter instance to anything later in
-      // this process (same rationale as hermes-adapter.test.js).
-      delete require.cache[require.resolve('../adapters/hermes-agent')];
+      // Don't leak this test's probe state (a cached probe result and a
+      // lastTaskFailure) to anything later in the same process.
+      delete require.cache[require.resolve('../adapters/dsh-agent')];
     }
   });
 });

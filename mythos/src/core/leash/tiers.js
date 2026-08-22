@@ -141,6 +141,10 @@ const TIER_TABLE = {
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
+  // open_file (2026-08-21): same class as open_folder — hands a path to the
+  // shell and shows the operator something. Explicit because an unlisted name
+  // falls to the T3 fail-safe, which would confirm-gate every document open.
+  'open_file':             2,
   'launch_app':            2,
   'open_artifact':         2,  // BUG-008 — opens a file/URL via the OS (cmd start/open/xdg-open),
                                // read-only w.r.t. destructive risk; same category as open_folder/
@@ -193,7 +197,7 @@ const TIER_TABLE = {
   // outward-facing risk, so a confirm popup on every "play a song"/"build me
   // a landing page" was pure friction, not safety. See BUGS.md for the audit
   // that identified them; the T3/T4 security-invariant tools below (compose_email,
-  // gmail_send, delete_goal, close_window, hermes_task, ui_click, ui_type,
+  // gmail_send, delete_goal, close_window, dsh_task, ui_click, ui_type,
   // click_at, browser_click, browser_type, kill_session, browser_evaluate) are
   // deliberately untouched.
   //
@@ -207,15 +211,22 @@ const TIER_TABLE = {
   'spotify_play':          2,
   'spotify_search':        2,
   // RE-TIERED BACK TO T3 (2026-07-29). The T3->T2 reasoning above no longer
-  // holds for the build tools: as of the Hermes engine change every one of
-  // these drives an external coding agent that runs real commands (Forge sets
-  // HERMES_YOLO_MODE=1, which bypasses Hermes's own dangerous-command
-  // approval), so "sandboxed to vault/builds/" is no longer a true description
-  // of the blast radius. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
+  // holds for the build tools: every one of these drives an external coding
+  // agent that runs real commands, so "sandboxed to vault/builds/" is no longer
+  // a true description of the blast radius.
+  //
+  // MECHANISM UPDATED BY W6 (2026-08-22), TIER DELIBERATELY NOT CHANGED. This
+  // used to say Forge sets `HERMES_YOLO_MODE=1`, bypassing Hermes's own
+  // dangerous-command approval. Under `dsh` the equivalent is
+  // `autoApprove: true` -> `DSH_PERMISSION_MODE=workspace-write`, which is a
+  // NARROWER grant: writes are confined to the cwd the runner hands it, and
+  // `danger-full-access` is never passed. A narrower grant is NOT a reason to
+  // re-tier, and the tier is staying at 3 — because the second reason below
+  // never depended on the write radius at all. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
   // which is how a build launched itself unasked mid-conversation on
   // 2026-07-29 while the user was reporting an unrelated bug. Spotify and the
   // docs-gen tools keep T2; they genuinely are local and bounded.
-  'build_project':         3,  // P22 Forge — multi-file build; drives the Hermes CLI
+  'build_project':         3,  // P22 Forge — multi-file build; drives the build-engine CLI
   'revise_project':        3,  // P22 Forge — targeted regen; drives the Hermes CLI
   'pipeline_execute':      3,
   'kanban_assemble':       3,
@@ -296,7 +307,7 @@ const TIER_TABLE = {
   'browser_press_key':     3,  // Enter submits forms; allowlisted keys only, no free text
   'browser_hover':         1,  // reveals a menu, changes nothing — read-shaped, same class
                                // as browser_scroll
-  'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
+  'dsh_task':              3,  // delegates to the build engine (DeepSeek Harness), which runs real commands
   'run_command':           3,  // Phase 3 (V7) — allow-listed shell command; confirm-once-per-goal. v1 is allowlist+timeout, NOT a full sandbox
   'install_from_github':   3,  // clones + installs a GitHub repo; shares run_command's allowlist gate. Runs the
                                // repo's own build hooks (npm postinstall, setup.py), so it is at least as

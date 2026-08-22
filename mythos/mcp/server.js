@@ -301,7 +301,16 @@ if (require.main === module) {
 
     const hub = createEffectorHub({ bus: bus, config: config });
     registerFromSystem(hub, { config: config });
-    registerFromComputer(hub);
+    // ctx parity with src/main.js:508 (2026-08-21 capability audit). Passing
+    // no ctx here left vaultRootConfig null, so resolveSandboxed()s vault
+    // branch refused every read_file("vault/...") on this surface with
+    // "registerFromComputer was never given ctx.config", and think_deeply had
+    // no brain. All three values are already built above. Latent only: this
+    // bootstrap is opt-in (MCP_SERVER_ENABLED defaults false) and has never
+    // run, so no observed failure is explained by it.
+    // Guarded by test/mcp-effector-ctx-parity.test.js, which also pins the
+    // five OTHER effectors still drifting from main.js on this surface.
+    registerFromComputer(hub, { brain: brain, config: config, logger: logger });
     registerFromPc(hub, { brain: brain, fs: memory.fs });
     registerFromBrowser(hub, { config: config });
     registerFromSkills(hub);

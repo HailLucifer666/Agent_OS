@@ -1,0 +1,139 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Game</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 400px;
+            height: 400px;
+            border: 2px solid #000;
+            background-color: #fff;
+        }
+        #snake {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: #00f;
+        }
+        #food {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: #f00;
+        }
+        #score {
+            position: absolute;
+            top: -30px;
+            left: 0;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="score">Score: 0</div>
+        <div id="snake"></div>
+        <div id="food"></div>
+    </div>
+    <script>
+        const gameContainer = document.getElementById('game-container');
+        const snake = document.getElementById('snake');
+        const food = document.getElementById('food');
+        const scoreElement = document.getElementById('score');
+
+        let snakeX = 200;
+        let snakeY = 200;
+        let foodX = Math.floor(Math.random() * 38) * 10;
+        let foodY = Math.floor(Math.random() * 38) * 10;
+        let score = 0;
+        let direction = 'right';
+        let snakeBody = [];
+
+        function updateFoodPosition() {
+            foodX = Math.floor(Math.random() * 38) * 10;
+            foodY = Math.floor(Math.random() * 38) * 10;
+            food.style.left = foodX + 'px';
+            food.style.top = foodY + 'px';
+        }
+
+        function updateScore() {
+            scoreElement.textContent = 'Score: ' + score;
+        }
+
+        function checkCollision() {
+            if (snakeX < 0 || snakeX >= 400 || snakeY < 0 || snakeY >= 400) {
+                return true;
+            }
+            for (let i = 0; i < snakeBody.length; i++) {
+                if (snakeX === snakeBody[i].x && snakeY === snakeBody[i].y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function gameLoop() {
+            if (direction === 'right') snakeX += 10;
+            if (direction === 'left') snakeX -= 10;
+            if (direction === 'up') snakeY -= 10;
+            if (direction === 'down') snakeY += 10;
+
+            if (checkCollision()) {
+                alert('Game Over! Your score: ' + score);
+                snakeX = 200;
+                snakeY = 200;
+                snakeBody = [];
+                score = 0;
+                updateScore();
+                direction = 'right';
+            }
+
+            if (snakeX === foodX && snakeY === foodY) {
+                score++;
+                updateScore();
+                updateFoodPosition();
+                snakeBody.push({ x: snakeX, y: snakeY });
+            }
+
+            snake.style.left = snakeX + 'px';
+            snake.style.top = snakeY + 'px';
+
+            for (let i = snakeBody.length - 1; i > 0; i--) {
+                snakeBody[i].x = snakeBody[i - 1].x;
+                snakeBody[i].y = snakeBody[i - 1].y;
+            }
+
+            if (snakeBody.length > 0) {
+                snakeBody[0].x = snakeX;
+                snakeBody[0].y = snakeY;
+            }
+
+            setTimeout(gameLoop, 100);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' && direction !== 'left') direction = 'right';
+            if (e.key === 'ArrowLeft' && direction !== 'right') direction = 'left';
+            if (e.key === 'ArrowUp' && direction !== 'down') direction = 'up';
+            if (e.key === 'ArrowDown' && direction !== 'up') direction = 'down';
+        });
+
+        updateFoodPosition();
+        gameLoop();
+    </script>
+</body>
+</html>
+```

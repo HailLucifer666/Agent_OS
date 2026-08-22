@@ -336,7 +336,11 @@ export function mountWidgets(root, ctx) {
     // Stop pointerdown propagation so makeDraggable's setPointerCapture
     // doesn't hijack the click away from the button.
     const closeBtn = card.querySelector('.web-widget-close');
+    // Per-card mount cleanups (currently only the countdown's interval).
+    const spawnedMountCleanups = [];
     const teardown = () => {
+      spawnedMountCleanups.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+      spawnedMountCleanups.length = 0;
       let idx = spawnedCleanups.indexOf(teardown);
       if (idx !== -1) spawnedCleanups.splice(idx, 1);
       if (dedupeKey && spawnedByType.get(dedupeKey) === teardown) spawnedByType.delete(dedupeKey);
@@ -352,7 +356,13 @@ export function mountWidgets(root, ctx) {
     var mountError = null;
     try {
       if (payload.widgetType === 'dynamic') {
-        mountDynamicWidget(card.querySelector('.web-result-body'), payload);
+        // The return value used to be discarded, which was harmless while every
+        // dynamic layout rendered synchronously. The countdown layout starts a
+        // 1s interval, so its cleanup must reach teardown — an interval that
+        // outlives its card ticks forever. This file's own header already
+        // states the contract: "Every mount returns a cleanup".
+        const dynamicCleanup = mountDynamicWidget(card.querySelector('.web-result-body'), payload);
+        if (typeof dynamicCleanup === 'function') spawnedMountCleanups.push(dynamicCleanup);
       } else {
         mountWebResult(card.querySelector('.web-result-body'), payload);
       }

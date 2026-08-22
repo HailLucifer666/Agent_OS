@@ -3,7 +3,7 @@
 
 // scripts/setup-android.js — Task 9 (Wave 2, ADB phone bridge): install,
 // pair, and connect Android devices for android-child's ADB bridge.
-// Modeled on setup-hermes.js's --check/--install shape.
+// Modeled on setup-dsh.js's --check/--install shape.
 //
 // WHAT IT DOES
 //   --check (default)   resolve adb (ANDROID_ADB_BIN, the project-local
@@ -24,8 +24,8 @@
 //                        than .env.
 //
 // EVERYTHING STAYS INSIDE THE PROJECT. Downloads land in
-// <repo>/Android Platform Tools/ (gitignored — mirrors Hermes-Agent's own
-// /Hermes Agent/ convention: a full third-party tool checkout never belongs
+// <repo>/Android Platform Tools/ (gitignored — mirrors the build engine's own
+// /DeepSeek Harness/ convention: a full third-party tool tree never belongs
 // in git, contributors fetch their own copy).
 
 const { spawnSync } = require('child_process');

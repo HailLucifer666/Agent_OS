@@ -1585,18 +1585,57 @@ function createServer(deps) {
   // unconditional tokenOk() check, so a configured token is required on every
   // branch; tokenOk() itself is a no-op when no MYTHOS_AUTH_TOKEN is set, so
   // the loopback-no-token back-compat path is unaffected either way.
+  // BUG-292 — 2026-08-20. 147 `ws-upgrade-rejected` lines in one session, every
+  // one of them reading exactly "bad or missing token" and nothing else. That is
+  // a client retrying forever, and 147 identical lines cannot tell you which
+  // client, so there was no action available: you cannot hand the right client a
+  // token, or stop the wrong one retrying, until you can name it.
+  //
+  // Q2 — and this is the whole risk of the change. A fix for an auth problem must
+  // not become a credential leak in a log file. So: `credential` is PRESENCE and
+  // CHANNEL only, never the value; `path` is truncated at '?' so a `?token=`
+  // cannot ride in on the URL; and the Authorization header is never copied. The
+  // fields that identify a client (peer address, user-agent) are not secrets, and
+  // are already visible to anyone who can read this log.
+  //
+  // Q3 — WHO READS THIS? A human triaging a retry storm, which is why it goes in
+  // the existing warn rather than a new event: a second event name would split
+  // one storm across two greps.
+  function upgradeCallerFingerprint(req) {
+    const headers = (req && req.headers) || {};
+    const socket = (req && req.socket) || {};
+    const rawUrl = typeof (req && req.url) === 'string' ? req.url : '';
+    const queryIndex = rawUrl.indexOf('?');
+    const query = queryIndex >= 0 ? rawUrl.slice(queryIndex + 1) : '';
+    let credential = 'none';
+    if (typeof headers.authorization === 'string' && headers.authorization.length) credential = 'header';
+    // Deliberately a substring test rather than URLSearchParams: this must not be
+    // able to throw on a malformed upgrade URL, because the only thing worse than
+    // an unattributable rejection is an unattributable crash inside verifyClient.
+    else if (/(^|&)token=/.test(query)) credential = 'query';
+    const ua = typeof headers['user-agent'] === 'string' ? headers['user-agent'] : null;
+    return {
+      remote: socket.remoteAddress
+        ? String(socket.remoteAddress) + ':' + String(socket.remotePort == null ? '?' : socket.remotePort)
+        : null,
+      userAgent: ua ? ua.slice(0, 120) : null,
+      path: queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : (rawUrl || null),
+      credential,
+    };
+  }
+
   function verifyClient(info, callback) {
     // H3(a) — checked before any origin/token logic, so a brute-force run
     // against the token check itself (not just successful connections) is
     // capped regardless of which branch below would otherwise accept or
     // reject it.
     if (wsUpgradeRateLimited(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'rate limit exceeded' });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'rate limit exceeded' }, upgradeCallerFingerprint(info.req)));
       return callback(false, 429, 'Too Many Requests');
     }
     const origin = info.origin;
     if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'foreign origin', origin }, upgradeCallerFingerprint(info.req)));
       return callback(false, 403, 'Forbidden');
     }
     if (!origin && !isLoopback(info.req)) {
@@ -1617,7 +1656,7 @@ function createServer(deps) {
       // Reject stays the default: any of those three failing lands on the 403.
       const nodeTrusted = config.AETHER_NODE_TRUST === true && !!AUTH_TOKEN;
       if (!nodeTrusted) {
-        logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
+        logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'no origin, non-loopback' }, upgradeCallerFingerprint(info.req)));
         return callback(false, 403, 'Forbidden');
       }
       // ...and the credential really is MYTHOS_AUTH_TOKEN and nothing else.
@@ -1629,12 +1668,12 @@ function createServer(deps) {
       // remote socket, which is exactly the widening this branch is supposed not
       // to be. So the node path checks the shared secret directly.
       if (!authTokenMatches(extractToken(info.req))) {
-        logger.warn('ws-upgrade-rejected', { reason: 'node trust: not the auth token' });
+        logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'node trust: not the auth token' }, upgradeCallerFingerprint(info.req)));
         return callback(false, 401, 'Unauthorized');
       }
     }
     if (!tokenOk(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'bad or missing token' });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'bad or missing token' }, upgradeCallerFingerprint(info.req)));
       return callback(false, 401, 'Unauthorized');
     }
     return callback(true);
@@ -2402,15 +2441,20 @@ function createServer(deps) {
     } catch (_) { /* memory must never block boot */ }
   }
 
-  // Two-brain key separation (.env.example's HERMES_PROVIDER_KEY block): the
-  // Hermes build engine and the Mythos brain must not share one Mistral
-  // workspace key — a 20-60-call build then eats the same rate limit as voice,
-  // vision and memory consolidation, and voice turns fall back to the weakest
-  // model in the chain mid-conversation. Logs a BOOLEAN only; never a key value.
-  if (config.MISTRAL_API_KEY && process.env.HERMES_PROVIDER_KEY &&
-      config.MISTRAL_API_KEY === process.env.HERMES_PROVIDER_KEY) {
-    logger.warn('hermes.shared-provider-key', { sameAsMistral: true });
-  }
+  // TWO-BRAIN KEY SEPARATION — REMOVED AS A CHECK, KEPT AS A NOTE (W6,
+  // 2026-08-22). This compared config.MISTRAL_API_KEY against
+  // HERMES_PROVIDER_KEY and warned when they matched, because Hermes held its
+  // OWN provider key and sharing one Mistral workspace key meant a 20-60-call
+  // build ate the same rate limit as voice, vision and memory consolidation —
+  // voice turns then fell back to the weakest model in the chain mid-conversation.
+  //
+  // Under dsh there is no separate key to compare. The engine authenticates with
+  // whatever credential the BUILD LANE names, which is MISTRAL_API_KEY, so the
+  // two are the same key BY CONSTRUCTION and this check would fire on every
+  // boot — a warning that always fires is noise, and one that can never fire is
+  // worse. The rate-limit arithmetic has NOT changed and is documented in
+  // .env.example: if you hold a second Mistral workspace key, express that by
+  // putting it first in the build lane, not by setting an env var nothing reads.
 
   // BUG-112: one greeting-shaped announcement per session, shared across every
   // source (boot greeting here, the daily planner's morning brief below) via
@@ -4212,6 +4256,7 @@ function createServer(deps) {
   // keyed by reqId, unlike requestClosePanel/requestCameraFrame) is enough.
   let pendingCloseMediaWindow = null; // { resolve, timer }
   let pendingOpenExternal = null;     // { resolve, timer } — BUG-272 T2
+  let pendingOpenPath = null;
   if (typeof process.on === 'function') {
     process.on('message', (msg) => {
       if (msg && msg.channel === 'mythos:close-media-window-ack' && pendingCloseMediaWindow) {
@@ -4228,6 +4273,17 @@ function createServer(deps) {
         clearTimeout(pendingOpenExternal.timer);
         const pending = pendingOpenExternal;
         pendingOpenExternal = null;
+        pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
+        return;
+      }
+      // The ack for mythos:open-path (open_file, 2026-08-21). Its own pending
+      // slot, deliberately NOT shared with open-external: a file open and a
+      // browser hand-off are different requests, and one superseding the other
+      // would resolve the wrong promise.
+      if (msg && msg.channel === 'mythos:open-path-ack' && pendingOpenPath) {
+        clearTimeout(pendingOpenPath.timer);
+        const pending = pendingOpenPath;
+        pendingOpenPath = null;
         pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
         return;
       }
@@ -4299,6 +4355,33 @@ function createServer(deps) {
   // or pretending. The scheme allowlist lives in the main process, next to the
   // shell.openExternal call it protects — validating here as well would be a
   // second copy to drift.
+  // open_file's side of the shell hop (2026-08-21 audit). Mirrors
+  // requestOpenExternal below, including the honest answer when MYTHOS is not
+  // running under Electron at all — a batch/dev boot has no shell to ask.
+  function requestOpenPath(filePath) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') {
+        resolve({ opened: false, reason: 'not running under the Electron shell, so there is nothing to open this with' });
+        return;
+      }
+      if (pendingOpenPath) {
+        clearTimeout(pendingOpenPath.timer);
+        pendingOpenPath.resolve({ opened: false, reason: 'superseded by a newer request' });
+      }
+      const timer = setTimeout(() => {
+        pendingOpenPath = null;
+        resolve({ opened: false, reason: 'the Electron shell did not acknowledge the request' });
+      }, 3000);
+      pendingOpenPath = { resolve, timer };
+      try { process.send({ channel: 'mythos:open-path', path: String(filePath || '') }); }
+      catch (err) {
+        pendingOpenPath = null;
+        clearTimeout(timer);
+        resolve({ opened: false, reason: err.message });
+      }
+    });
+  }
+
   function requestOpenExternal(url) {
     return new Promise((resolve) => {
       if (typeof process.send !== 'function') {
@@ -4543,7 +4626,7 @@ function createServer(deps) {
   return {
     app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestCameraPower, requestClosePanel,
     requestWidgetRender,
-    requestCloseMediaWindow, requestOpenExternal, setGmailPollCountGetter,
+    requestCloseMediaWindow, requestOpenExternal, requestOpenPath, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: {
       voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY,

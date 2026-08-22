@@ -619,7 +619,7 @@ ipcMain.handle('mythos:restart-server', async (event) => {
 // the bridge. config.json holds the ~140 non-secret schema keys the packaged
 // build previously had no way to set at all — VOICE_S2S_ENABLED,
 // VOICE_TTS_PROVIDER, WAKEWORD_ENABLED, AUTONOMOUS_MAX_TIER, the AETHER_*/
-// HERMES_* block, the local tool paths. Plain text on purpose: it is read by the
+// DSH_* block, the local tool paths. Plain text on purpose: it is read by the
 // forked server through MYTHOS_SETTINGS_PATH, and settings-store.js refuses to
 // write a secret-shaped key into it.
 //
@@ -972,6 +972,42 @@ function startChild() {
       log('open-external ->', JSON.stringify(verdict));
       try { child.send({ channel: 'mythos:open-external-ack', opened: verdict.opened, reason: verdict.reason }); }
       catch (err) { log('open-external: ack send failed:', err.message); }
+    } else if (msg.channel === 'mythos:open-path') {
+      // open_file's shell hop (2026-08-21 audit). Same shape as open-external
+      // directly above: MYTHOS could reveal a folder and serve a vault build
+      // over HTTP, but had no way to open an ordinary file in its associated
+      // app — open_folder refused files and pointed at open_artifact, which
+      // only serves builds out of the vault.
+      //
+      // shell is required lazily at the use site, like open-external above:
+      // several Electron exports are lazy getters that throw when touched
+      // before app.ready, and a module-scope destructure of one is what once
+      // stopped this app booting at all.
+      //
+      // NO path validation here beyond string coercion. The sandbox is
+      // server-side in resolveSandboxed(), which is the single source of that
+      // truth; duplicating a weaker copy here is how two checks drift and the
+      // weaker one wins. The http/https allowlist next door is a DIFFERENT
+      // boundary for a different threat and is deliberately not reused.
+      (async () => {
+        let opened = false;
+        let reason = null;
+        try {
+          const { shell } = require('electron');
+          // Resolves with '' on success, or an error STRING on failure — it
+          // does not reject. Either way this is the OS accepting or refusing
+          // the request; whether an app rendered anything is not observable
+          // from here, which is why the effector reports it unverified.
+          const errStr = await shell.openPath(String(msg.path || ''));
+          opened = !errStr;
+          reason = errStr || null;
+        } catch (err) {
+          reason = err.message;
+        }
+        log('open-path ->', JSON.stringify({ opened, reason }));
+        try { child.send({ channel: 'mythos:open-path-ack', opened, reason }); }
+        catch (err) { log('open-path: ack send failed:', err.message); }
+      })();
     } else if (msg.channel === 'mythos:close-media-window') {
       const closed = mediaWindowController.closeMediaWindow();
       try { child.send({ channel: 'mythos:close-media-window-ack', closed }); }
@@ -1462,7 +1498,7 @@ function checkForUpdates() {
 // Blocking an update is not an option, so every failure logs and installs anyway.
 const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
 
-// An operator HERMES_HOME pointing INSIDE the install tree defeats all of this,
+// An operator MYTHOS_DSH_INSTALL_DIR pointing INSIDE the install tree defeats all of this,
 // and did on the machine this was written on (2026-08-13): it outranks
 // MYTHOS_TOOLS_DIR in mythos/scripts/setup-hermes.js, so every reinstall puts
 // ~17.6k files back into the tree, every update then deletes them, and the slow
@@ -1470,16 +1506,16 @@ const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
 // operator's, and the next reinstall would undo any move — so say so in the log
 // rather than silently rescuing a directory that is about to be recreated.
 function warnIfHermesHomeIsInTheInstallTree(installRoot) {
-  const home = process.env.HERMES_HOME;
+  const home = process.env.MYTHOS_DSH_INSTALL_DIR;
   if (!home || !installRoot) return;
   try {
     const inTree = path.resolve(home).toLowerCase().startsWith(path.resolve(installRoot).toLowerCase());
     if (!inTree) return;
-    log('auto-update: HERMES_HOME points inside the install tree —', home);
+    log('auto-update: MYTHOS_DSH_INSTALL_DIR points inside the install tree —', home);
     log('auto-update: every update will delete that Hermes install. Repoint it at',
       path.join(app.getPath('userData'), 'tools', 'Hermes Agent'), 'and reinstall there.');
   } catch (err) {
-    log('auto-update: could not check HERMES_HOME —', err && err.message);
+    log('auto-update: could not check MYTHOS_DSH_INSTALL_DIR —', err && err.message);
   }
 }
 

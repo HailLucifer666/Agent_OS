@@ -505,14 +505,22 @@ const SCHEMA = {
   // build run for the whole project rather than per-file brain.think calls,
   // so neither knob has anything left to read it.
   FORGE_MAX_FILES:             { type: 'number', default: 12,      min: 1,     max: 40 },
-  // Hermes build driver (hermes-runner.js) — Forge now drives the hermes-agent
-  // CLI instead of brain.think(). Plan runs are sandboxed/short; builds run a
-  // real agent loop and need real headroom (30 min default, per THE DECISION's
-  // Mistral-primary arithmetic — see the Hermes orchestration handoff).
-  HERMES_PLAN_TIMEOUT_MS:      { type: 'number', default: 300000,   min: 10000,  max: 900000 },
-  HERMES_BUILD_TIMEOUT_MS:     { type: 'number', default: 1800000,  min: 60000,  max: 3600000 },
-  HERMES_POLL_MS:              { type: 'number', default: 2000,     min: 500,    max: 30000 },
-  HERMES_BUILD_TERMINAL_ENV:   { type: 'string', default: 'local' },
+  // Build driver (forge-runner.js) — Forge drives the build-engine adapter
+  // instead of brain.think(). Plan runs are sandboxed/short; builds run a real
+  // agent loop and need real headroom (30 min default).
+  //
+  // RENAMED HERMES_* -> DSH_* by W6 (2026-08-22) when the engine became DeepSeek
+  // Harness. There is NO alias for the old names, deliberately: a config key
+  // named after a deleted program is exactly the contradiction this repo treats
+  // as a defect, and a silently-accepted HERMES_BUILD_TIMEOUT_MS would look like
+  // it was working while the runner read the DSH_ default instead. An operator
+  // with the old names in .env gets the documented defaults and a settings panel
+  // that no longer lists them — see .env.example, where the whole block moved in
+  // the same commit.
+  DSH_PLAN_TIMEOUT_MS:         { type: 'number', default: 300000,   min: 10000,  max: 900000 },
+  DSH_BUILD_TIMEOUT_MS:        { type: 'number', default: 1800000,  min: 60000,  max: 3600000 },
+  DSH_POLL_MS:                 { type: 'number', default: 2000,     min: 500,    max: 30000 },
+  DSH_BUILD_TERMINAL_ENV:      { type: 'string', default: 'local' },
   // Checkpoints (P22 — workflow approval gates, distinct from LEASH_CONFIRM_TTL_MS)
   CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
   CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },
@@ -583,6 +591,12 @@ const SCHEMA = {
   // late answer. deep-think.js clamps the per-attempt bound below the total.
   DEEP_THINK_TIMEOUT_MS:       { type: 'number', default: 20000, min: 1000 },
   DEEP_THINK_ATTEMPT_TIMEOUT_MS: { type: 'number', default: 7000, min: 500 },
+  // BUG-287: minimum gap between think_deeply calls. The 2026-08-20 session made
+  // four inside 91 seconds, each restating the same diagnosis, and the operator
+  // asked "why are you thinking deeply for everything?". 60s is the cut that
+  // blocks the three rapid calls measured (12s, 17s, 22s) and allows the four
+  // spaced ones (61s, 153s, 416s). 0 disables it — the deliberate opt-out.
+  DEEP_THINK_MIN_INTERVAL_MS:  { type: 'number', default: 60000, min: 0 },
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply

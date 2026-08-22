@@ -22,9 +22,69 @@ const activeSubscriptions = [];
 // exported nothing, and just kept retrying at up to 8s backoff forever. Every
 // WS-fed widget, the core orb, agent actions and token usage simply stopped
 // updating, which reads as "the dashboard is frozen", not "it is unauthorized".
-let wsState = 'idle'; // 'idle' | 'connecting' | 'open' | 'closed'
+let wsState = 'idle'; // 'idle' | 'connecting' | 'open' | 'closed' | 'unauthorized'
 let consecutiveFailures = 0;
 const stateHandlers = new Set();
+
+// BUG-298 — the second half of the comment above, which said reconnect behaviour
+// was deliberately left untouched. It was, and it kept retrying forever.
+//
+// MEASURED, %APPDATA%/MYTHOS/mythos-server.log: 147 ws-upgrade-rejected lines,
+// all of them between 2026-08-19T15:23:04.462Z and 15:44:33.465Z — 1289 seconds
+// over 147 attempts, one every ~8.8s, with `server.listening` immediately before
+// the first. BACKOFF_MAX_MS is 8000. That arithmetic names the client: it is
+// THIS file, hammering from the moment the server comes up.
+//
+// A rejected upgrade reaches the browser as a bare close (code 1006 at best),
+// carrying no status — so the socket alone genuinely cannot tell "the server is
+// down" from "the server is up and refusing me". It has to ask over HTTP, and
+// /api/config/vad is token-gated (server/index.js mounts requireToken on /api,
+// exempting only /pin/status, /pin/verify and /auth/session), so its status code
+// answers the question directly.
+//
+// WHAT THIS DELIBERATELY DOES NOT DO: it does not loosen the server's
+// verifyClient, which is refusing correctly — MYTHOS_AUTH_TOKEN is mandatory for
+// the phone node. And it does not invent an auth channel for the HUD; the PIN
+// session that tokenOk() already accepts is the intended one, and wiring it is a
+// feature, not something to improvise inside a retry loop. This fixes only what
+// is unambiguously the client's own defect: hammering, and looking frozen while
+// doing it.
+const UNAUTHORIZED_RETRY_MS = 60000;
+// One dropped socket is ordinary — a probe on every close would add an HTTP
+// request per reconnect to the exact path that is already too noisy.
+const PROBE_AFTER_FAILURES = 3;
+const AUTH_PROBE_PATH = '/api/config/vad';
+let unauthorized = false;
+let probeInFlight = false;
+
+// Resolves to 'unauthorized' | 'ok' | 'unreachable'. Never throws: a client-side
+// diagnostic that can itself fail is not a diagnostic.
+async function probeAuth() {
+  try {
+    const res = await fetch(AUTH_PROBE_PATH, { method: 'GET' });
+    return (res.status === 401 || res.status === 403) ? 'unauthorized' : 'ok';
+  } catch (_) {
+    return 'unreachable';
+  }
+}
+
+// Only 'unauthorized' changes behaviour. 'ok' and 'unreachable' both leave the
+// fast backoff alone — reporting a cause that was not established is the same
+// dishonesty the effector evidence contract exists to prevent, and a developer
+// restarting the server must still get a reconnect in seconds.
+async function diagnoseIfRefused() {
+  if (unauthorized || probeInFlight || consecutiveFailures < PROBE_AFTER_FAILURES) return;
+  probeInFlight = true;
+  try {
+    if (await probeAuth() === 'unauthorized') {
+      unauthorized = true;
+      backoffMs = UNAUTHORIZED_RETRY_MS;
+      setState('unauthorized');
+    }
+  } finally {
+    probeInFlight = false;
+  }
+}
 
 function setState(next) {
   wsState = next;
@@ -67,7 +127,9 @@ function flushQueue() {
 function scheduleReconnect() {
   if (connecting) return;
   setTimeout(connect, backoffMs);
-  backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
+  // BUG-298: once a 401 is established the interval is already a minute, and
+  // doubling toward BACKOFF_MAX_MS would walk it straight back down to 8s.
+  backoffMs = unauthorized ? UNAUTHORIZED_RETRY_MS : Math.min(backoffMs * 2, BACKOFF_MAX_MS);
 }
 
 function connect() {
@@ -80,6 +142,11 @@ function connect() {
     connecting = false;
     backoffMs = 500;
     consecutiveFailures = 0;
+    // BUG-298: a successful connection is the only proof the refusal is over.
+    // Without this the fix degenerates into "the HUD never reconnects again",
+    // which is worse than the bug — the operator may start a PIN session at any
+    // moment and the socket has to notice.
+    unauthorized = false;
     setState('open');
     flushQueue();
     // FIX I: resubscribe every live subscription so a reconnect doesn't leave
@@ -102,8 +169,12 @@ function connect() {
     connecting = false;
     socket = null;
     consecutiveFailures += 1;
-    setState('closed');
+    setState(unauthorized ? 'unauthorized' : 'closed');
     scheduleReconnect();
+    // BUG-298, fire-and-forget: the reconnect above is already scheduled and a
+    // slow probe must not delay it. If the probe comes back 401 the NEXT
+    // schedule uses the long interval, which is the whole point.
+    diagnoseIfRefused();
   });
 
   socket.addEventListener('error', () => { if (socket) socket.close(); });

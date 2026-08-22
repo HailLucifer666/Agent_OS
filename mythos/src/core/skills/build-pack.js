@@ -275,7 +275,7 @@ async function resolveSkillTool(brief) {
   return resolveSkillToolFor(classifyDeliverable(brief), brief);
 }
 
-// Same contract, but for a caller that already knows the kind (hermes-runner
+// Same contract, but for a caller that already knows the kind (forge-runner
 // derives it from the Forge manifest, not from the brief text alone).
 async function resolveSkillToolFor(kind, brief) {
   var route = ROUTES[kind];

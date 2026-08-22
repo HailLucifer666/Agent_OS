@@ -2,9 +2,14 @@
 
 // F5 (2026-08-15) — a build must fail rather than ship fabricated content.
 //
-// Root CLAUDE.md is binding: Hermes-Agent is the only build-content engine and
-// there is no brain.think fallback BY DESIGN, so a build with no engine fails
-// with an install hint instead of shipping a plausible-but-wrong artifact.
+// Root CLAUDE.md is binding: there is exactly ONE build-content engine and no
+// brain.think fallback BY DESIGN, so a build with no engine fails with an install
+// hint instead of shipping a plausible-but-wrong artifact.
+//
+// W6 (2026-08-22) RE-POINTED THIS FILE, IT DID NOT RELAX IT. The engine changed
+// from Hermes-Agent to DeepSeek Harness; ruling A survives the change verbatim.
+// Anyone reading this after the Hermes deletion should not conclude the ruling
+// was dropped along with the program it originally named.
 // build-engine.js carried a brainFallback() that did exactly the forbidden
 // thing, behind a 2026-07-31 comment arguing the downstream verifier made it
 // safe.
@@ -20,8 +25,9 @@
 // operator ruled on 2026-08-15 to honour the documented rule.
 //
 // PINNED DISPOSITION: this is a deliberate refusal to degrade. If builds ever
-// need to work without Hermes, that is a change to the documented architecture,
-// argued on its own terms — not a fallback re-added inside a catch block.
+// need to work without the engine, that is a change to the documented
+// architecture, argued on its own terms — not a fallback re-added inside a catch
+// block.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -30,12 +36,16 @@ const path = require('node:path');
 
 const { createBuildEngine } = require('../src/core/effectors/build-engine');
 
-function engineWith(hermesBehaviour, extra) {
+function engineWith(engineBehaviour, extra) {
   const emitted = [];
   return {
     emitted,
     engine: createBuildEngine(Object.assign({
-      hermes: { runTask: hermesBehaviour },
+      engine: { runTask: engineBehaviour },
+      // A vault is required now: W6-AD-3 makes an absent scratch directory a
+      // hard failure rather than something the adapter inherits a cwd for, so a
+      // vault-less construction would fail every test below for the wrong reason.
+      vault: { vaultPath: (p) => require('path').join(require('os').tmpdir(), 'w6-nofallback', String(p)), ensureDir: () => {} },
       bus: { emit: (type, payload) => emitted.push({ type, payload }) },
     }, extra || {})),
   };
@@ -46,11 +56,11 @@ const EAGER_BRAIN = {
   think: async () => ({ content: '<html>a confident, generic, wrong artifact</html>' }),
 };
 
-describe('F5 — Hermes failing means the build fails', () => {
-  it('a thrown Hermes error does not fall back to the brain', async () => {
+describe('F5 — the engine failing means the build fails', () => {
+  it('a thrown engine error does not fall back to the brain', async () => {
     let brainCalled = false;
     const { engine } = engineWith(
-      async () => { throw new Error('spawn hermes ENOENT'); },
+      async () => { throw new Error('spawn dsh ENOENT'); },
       { brain: { think: async () => { brainCalled = true; return { content: 'fabricated' }; } } },
     );
     const res = await engine.generate({ prompt: 'build a landing page', source: 'test' });
@@ -60,40 +70,48 @@ describe('F5 — Hermes failing means the build fails', () => {
     assert.ok(!res.content, 'a failed build must produce NO content at all');
   });
 
-  it('an empty Hermes reply fails too, rather than being regenerated', async () => {
+  it('an empty engine reply fails too, rather than being regenerated', async () => {
     const { engine } = engineWith(async () => '   ', { brain: EAGER_BRAIN });
     const res = await engine.generate({ prompt: 'build a landing page', source: 'test' });
     assert.equal(res.offline, true);
     assert.ok(!res.content);
   });
 
-  it('a provider error on stdout with exit 0 fails too', async () => {
-    // Hermes reports provider failures on STDOUT with exit code 0, so this shape
-    // looks like a successful run and was the original reason for the guard.
-    const { engine, emitted } = engineWith(
-      async () => 'HTTP 401: Missing Authentication header',
-      { brain: EAGER_BRAIN },
+  it('an engine failure is refused at the ADAPTER boundary, not by pattern-matching its reply', async () => {
+    // This test used to feed 'HTTP 401: Missing Authentication header' as a
+    // successful reply, because HERMES reported provider failures on stdout with
+    // exit code 0 and that shape looked like a successful run.
+    //
+    // dsh has no such mode: exit 0 iff the final turn/end reason is 'completed',
+    // stderr empty on success, and adapters/dsh-agent asserts both. So the SAME
+    // condition now arrives as a throw, and what must be pinned is that the
+    // throw still refuses to degrade — with an eager brain sitting right there.
+    // The removed regex's disposition is pinned in build-engine.test.js.
+    let brainCalled = false;
+    const { engine } = engineWith(
+      async () => { throw new Error('dsh exit 1 on mistral/codestral-latest: 401 Unauthorized'); },
+      { brain: { think: async () => { brainCalled = true; return { content: 'fabricated' }; } } },
     );
     const res = await engine.generate({ prompt: 'build a landing page', source: 'test' });
     assert.equal(res.offline, true);
     assert.ok(!res.content, 'the error text must never become the artifact');
-    assert.ok(emitted.some((e) => e.payload && e.payload.kind === 'build-engine-provider-error'),
-      'and the provider error must still be announced');
+    assert.equal(brainCalled, false);
+    assert.match(res.error, /401 Unauthorized/, 'the real underlying error must survive');
   });
 
   it('the failure names the remedy, so it is actionable rather than just a refusal', async () => {
-    const { engine } = engineWith(async () => { throw new Error('spawn hermes ENOENT'); });
+    const { engine } = engineWith(async () => { throw new Error('spawn dsh ENOENT'); });
     const res = await engine.generate({ prompt: 'x', source: 'test' });
-    assert.match(res.error, /setup-hermes/,
+    assert.match(res.error, /setup-dsh/,
       'the operator needs the install command, per the documented behaviour');
     assert.match(res.error, /ENOENT/, 'and the real underlying error must survive');
   });
 
-  it('a working Hermes is completely unaffected', async () => {
+  it('a working engine is completely unaffected', async () => {
     const { engine } = engineWith(async () => '<html>the real artifact</html>');
     const res = await engine.generate({ prompt: 'x', source: 'test' });
     assert.equal(res.offline, false);
-    assert.equal(res.engine, 'hermes');
+    assert.equal(res.engine, 'dsh');
     assert.match(res.content, /the real artifact/);
   });
 });

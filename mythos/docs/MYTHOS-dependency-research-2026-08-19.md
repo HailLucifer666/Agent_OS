@@ -70,18 +70,36 @@ in-process, never touches the Windows input queue, and needs no foreground windo
 **You already built this.** `adapters/pc-child/ps-automation.ps1` has a `uia-setvalue`
 route — one of only two measured-working routes on MSIX apps, and it needs no focus.
 
-**So the bottleneck is not a missing library. It is the per-command spawn.** The repo's
-own note (`uia-invoke-noop-under-pc-child-spawn.md`) records that `InvokePattern.Invoke()`
-works standalone and **silently no-ops** — no exception, false success — when run through
-`pc-child`'s per-command `child_process.spawn`. That is a property of how the automation
-client is hosted, not of which library issues the COM call. FlaUI or pywinauto, spawned
-the same way, would very plausibly no-op identically.
+**So the bottleneck is not a missing library.** The repo's own note
+(`uia-invoke-noop-under-pc-child-spawn.md`) records that `InvokePattern.Invoke()` works
+standalone and **silently no-ops** — no exception, false success — when run through
+`pc-child`. That is a property of how the automation client is hosted, not of which
+library issues the COM call. FlaUI or pywinauto, hosted the same way, would very
+plausibly no-op identically.
 
-> **Recommendation: do not adopt a library. Change the architecture.** Host the
-> UIA-invoking side as a **persistent interactive daemon** — one long-lived automation
-> host MYTHOS talks to over a pipe — instead of spawning `powershell.exe` per command.
-> If a richer UIA client is wanted afterwards, FlaUI (MIT, active) over pywinauto. But it
-> only pays off after the daemon fix; before that it inherits the same no-op.
+> **CORRECTION, 2026-08-20.** The paragraph above originally read "It is the per-command
+> spawn", and recommended replacing it with a persistent daemon. **That recommendation
+> described work already done, and its diagnosis was therefore wrong.** Verified against
+> the source: `adapters/pc-child/index.js` contains exactly ONE
+> `spawn('powershell.exe', …)`, inside `spawnChild()`, which is state-guarded and runs
+> once; `ps-automation.ps1:4381` describes itself as a "persistent daemon (one
+> long-lived process, `while ($true)` over stdin)" and `:4860` is that loop. pc-child has
+> been a persistent daemon all along, and commands are written to its stdin.
+>
+> A refuted premise left standing in a research document is how the same work gets
+> funded twice, which is the only reason this correction is this loud.
+>
+> **What is still open, stated as open:** the no-op is real and its cause is NOT
+> identified. The daemon runs `-NoProfile -NonInteractive` with `windowsHide: true`, so
+> a non-interactive, hidden-window host is a plausible next hypothesis (window station /
+> desktop or COM apartment state rather than process lifetime) — but it is a hypothesis,
+> untested, and it should not be written up as a cause until something measures it.
+>
+> **Recommendation, revised: do not adopt a library, and do not rebuild the daemon.**
+> Measure what the existing five-rung UIA ladder actually passes and fails on first
+> (`scripts/verify-desktop-automation.js`). Only the specific control classes it fails
+> on are an adoption scope. If a richer UIA client is ever wanted, FlaUI (MIT, active)
+> over pywinauto — but it inherits whatever this no-op turns out to be.
 
 ---
 

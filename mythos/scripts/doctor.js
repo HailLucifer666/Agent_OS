@@ -42,7 +42,7 @@ const REPO_ROOT = path.resolve(MYTHOS_DIR, '..');
 const silero = require('./setup-silero.js');
 const wakeword = require('./setup-wakeword.js');
 const android = require('./setup-android.js');
-const hermes = require('./setup-hermes.js');
+const dsh = require('./setup-dsh.js');
 const { findModelFile, userDataModelsDir } = require('../src/core/setup/model-paths');
 
 // Does this directory hold at least one .onnx voice? Mirrors piper-child.js's own
@@ -188,15 +188,16 @@ function assetChecks() {
     piperVoices = fs.readdirSync(piperDir).filter((f) => f.endsWith('.onnx'));
   } catch { /* absent dir — reported as a gap below */ }
 
-  // setup-hermes.js now has a require.main guard and exports its own path
-  // resolution, so this asks it rather than restating one hardcoded path.
+  // setup-dsh.js has a require.main guard and exports its own path resolution,
+  // so this asks it rather than restating one hardcoded path.
   //
-  // That restatement was a real defect, not just duplication: it named ONLY
-  // <repo>/Hermes Agent, so on a packaged install — where the repo is inside the
-  // install tree an update deletes — Hermes read as missing after every update
-  // and the wizard re-offered an install the operator had already done. Both
-  // sides now search userData/tools (MYTHOS_TOOLS_DIR) first and the repo second.
-  const hermesBin = hermes.binaryPath();
+  // That restatement was a real defect under Hermes, not just duplication: it
+  // named ONLY <repo>/Hermes Agent, so on a packaged install — where the repo is
+  // inside the install tree an update deletes — the engine read as missing after
+  // every update and the wizard re-offered an install the operator had already
+  // done. Both sides search userData/tools (MYTHOS_TOOLS_DIR) first and the repo
+  // second, and setup-dsh.js keeps that rule.
+  const dshFound = dsh.findInstalled();
 
   return [
     {
@@ -229,13 +230,20 @@ function assetChecks() {
       fix: 'node scripts/setup-piper.js --install   (installs into ' + piperDir + ')',
     },
     {
-      id: 'hermes',
-      label: 'Hermes-Agent (build engine)',
+      id: 'dsh',
+      label: 'DeepSeek Harness (build engine)',
       required: false,
-      ok: fileAtLeast(hermesBin, 1),
-      detail: hermesBin,
+      // A present-but-wrong-version install is NOT ok. The adapter asserts the
+      // pin before every task, so reporting "installed" for a version it refuses
+      // would be the same half-truth that let six consecutive builds fail
+      // silently (BUG-168).
+      ok: Boolean(dshFound && dshFound.entry && dshFound.version === dsh.DSH_VERSION),
+      detail: dshFound
+        ? (dshFound.entry || dshFound.pkgDir) + ' (version ' + dshFound.version
+          + (dshFound.version === dsh.DSH_VERSION ? ', pinned)' : ', PINNED IS ' + dsh.DSH_VERSION + ')')
+        : 'not found in ' + dsh.dshSearchHomes().map(dsh.packageDirFor).join(' | '),
       why: 'the only build-content engine — builds FAIL without it (boot still succeeds)',
-      fix: 'node scripts/setup-hermes.js --install',
+      fix: 'node scripts/setup-dsh.js --install',
     },
     {
       id: 'adb',

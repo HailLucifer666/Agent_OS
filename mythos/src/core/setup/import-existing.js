@@ -10,7 +10,7 @@
 //
 //   1. mythos/.env is excluded from package.json build.files, and it was the ONLY
 //      place that ever set VOICE_S2S_ENABLED, VOICE_TTS_PROVIDER,
-//      WAKEWORD_ENABLED, the AETHER_*/HERMES_* block and the local tool paths.
+//      WAKEWORD_ENABLED, the AETHER_*/DSH_* block and the local tool paths.
 //   2. electron/main.js had no app.setName, so the dev run wrote
 //      %APPDATA%\Electron, the installed .exe wrote %APPDATA%\agent-os, and the
 //      NSIS installer wrote %APPDATA%\MYTHOS — three vaults, no migration. The

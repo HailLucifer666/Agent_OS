@@ -392,6 +392,38 @@ async function findExplorerWindow(leafName) {
   return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
 }
 
+// findWindowByTitle — the open_file oracle (2026-08-21). Same shape as
+// findExplorerWindow above but across EVERY process, because the window that
+// appears after shell.openPath belongs to whichever app owns the file type.
+//
+// Q1 — a title match is used here as an OBSERVATION oracle only, never to pick
+// a window to type into; that distinction is what makes it acceptable, and
+// open_folder already depends on exactly this. MYTHOS's own HUD is not a false
+// positive: list_windows reports window TITLES, and MYTHOS's title is its own,
+// not the transcript it happens to be showing on screen.
+//
+// Exact title first, then contains, so "notes.txt" cannot lose to
+// "notes.txt.bak - Notepad" when both are open.
+async function findWindowByTitle(leafName) {
+  const leaf = String(leafName || '').trim().toLowerCase();
+  if (!leaf) return { online: false, window: null, matchedBy: null };
+  const wins = await delegate({ cmd: 'list_windows' });
+  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) {
+    return { online: false, window: null, matchedBy: null };
+  }
+  const visible = wins.result.windows.filter(function (w) {
+    return w && w.visible !== false && typeof w.pid === 'number';
+  });
+  const exact = visible.find(function (w) {
+    return String(w.title || '').trim().toLowerCase() === leaf;
+  }) || null;
+  if (exact) return { online: true, window: exact, matchedBy: 'exact' };
+  const contains = visible.find(function (w) {
+    return String(w.title || '').toLowerCase().indexOf(leaf) !== -1;
+  }) || null;
+  return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
+}
+
 async function focus_window({ pid }) {
   // A non-numeric placeholder pid (e.g. "Notepad PID") must not be forwarded
   // toward PS's Get-Process -Id (Int32) — coerce it away so it degrades to the
@@ -1264,6 +1296,42 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   // hand a region to the second read, quietly widening it back to the full desktop.
   const scope = { pid: pid };
 
+  // 2026-08-21 audit — FOCUS BEFORE READ. see_and_click is 3 ok / 8 fail and
+  // every failure is grounding, never the click (click_at is 1 ok / 0 fail
+  // all-time). Five of the eight read back MYTHOS's OWN HUD — "What I can
+  // read: MYTHOS | File Edit View | Window | Help | Voice: see_an…" — MYTHOS
+  // reading its own window, including its rendering of the request it was
+  // being asked to carry out.
+  //
+  // ps-automation.ps1's capture comment already names the mechanism: PrintWindow
+  // "returns black for the DirectComposition/Chromium windows this is most
+  // needed for", so the capture is CopyFromScreen — a crop of the VISIBLE
+  // desktop. "A target sitting behind another window therefore reads whatever
+  // is on top of it. Scoping is what stops a match in an unrelated window;
+  // focus_window first is what makes the target the thing being read." BUG-108
+  // threaded the pid through and did the first half only. The operator had
+  // already written the second half into the vault, twice, as a fact starting
+  // "IMPERATIVE: ... ALWAYS explicitly focus the target application's window
+  // FIRST" — the system was told and still did not do it.
+  //
+  // ADVISORY ON PURPOSE. focus_window's foreground-lock refusal is real and
+  // documented (BUG-272 T3; adapters/CLAUDE.md records that the ladder is
+  // exhausted and no fourth rung is coming). An unguarded advisory call that
+  // aborts on failure is strictly worse than not calling it: this repo has
+  // already had an unguarded SetFocus kill ui_type's focus-free recovery
+  // routes. So the outcome is recorded and the read happens either way.
+  //
+  // Only when a pid was given. Unscoped there is nothing to focus, and picking
+  // a window to bring forward would be the guess this whole path avoids.
+  let focusNote = '';
+  if (coercePid(pid)) {
+    const focused = await delegate({ cmd: 'focus_window', pid: coercePid(pid) });
+    if (!focused.ok) {
+      focusNote = ' I could not bring that window to the front first (' +
+        reasonOf(focused) + '), so this read may be of whatever is covering it.';
+    }
+  }
+
   const before = await readScreenRegions(scope);
   if (!before.ok) return fail('I could not read the screen, so I will not guess where to click: ' + before.error);
 
@@ -1273,7 +1341,16 @@ async function see_and_click({ text, occurrence, expect, pid }) {
     // wrong bug — the label may be present but spelled differently, or OCR may have
     // returned nothing at all, and those need opposite responses.
     const sample = before.regions.slice(0, 12).map((r) => r.text).join(' | ');
-    return fail('I cannot see "' + want + '" on screen. ' + (before.regions.length
+    // BUG-099 class: a refusal naming no reachable next step is where the model
+    // improvises. All five HUD-reading failures dead-ended here. The remedy is
+    // only offered when it has NOT already been taken — telling a caller that
+    // already passed a pid to go and get a pid trains it to ignore refusals.
+    const remedy = coercePid(pid)
+      ? focusNote
+      : ' This was a whole-screen read, which includes my own window — if the app you ' +
+        'mean is behind mine, call list_windows and pass its pid so I read (and focus) ' +
+        'that window instead.';
+    return fail('I cannot see "' + want + '" on screen. ' + remedy + ' ' + (before.regions.length
       ? 'What I can read: ' + sample + (before.regions.length > 12 ? ' …' : '')
       : 'OCR returned no text regions at all — the screen may be blank, or this text may be an image or an icon rather than rendered text.'));
   }
@@ -1469,7 +1546,7 @@ module.exports = {
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
   // pure, no I/O — exported so the matcher can be tested without a screen
   _seeAndClickInternal: { matchRegions, centreOf },
-  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,
+  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, findWindowByTitle, readComposeBox, submitMessage,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,
 };

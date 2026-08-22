@@ -10,6 +10,11 @@
 const https = require('https');
 
 const FEED_URL = 'https://news.google.com/rss';
+// BUG-294: the same host answers a QUERY, and it always has — this module simply
+// never sent one. Measured 2026-08-21: /rss/search?q=Mohun+Bagan+Durand+Cup
+// returned 92 items whose first title was the entire answer to the operator's
+// question. That is why the voice search chain now reaches this module too.
+const SEARCH_URL = 'https://news.google.com/rss/search?q=';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ITEMS = 12;
 const FETCH_TIMEOUT_MS = 8000;
@@ -55,6 +60,24 @@ function parseRss(xml, now) {
     });
   }
   return items;
+}
+
+// BUG-294 — the one change this module needed: a URL builder instead of a
+// constant. No query means the bare front page, byte-for-byte what the HUD news
+// card has always requested, so that card is unaffected by construction.
+//
+// NO LOCALE, DELIBERATELY. Measured 2026-08-21 on one query, three ways: with no
+// locale params, 92 items; with hl=en-IN&gl=IN, 92 items and an identical top
+// result; with hl=en-US&gl=US, 100 items and a different ranking. So the params
+// change nothing for the operator who reported this, and the en-US row proves
+// they are a real knob — which is exactly why baking one in would violate the
+// root CLAUDE.md portability rule and quietly degrade results for every other
+// clone of this repo. If it is ever wanted, it is ONE optional config key
+// defaulting to empty, and empty must omit the parameters entirely rather than
+// send blank ones.
+function feedUrl(query) {
+  const q = String(query == null ? '' : query).trim();
+  return q ? SEARCH_URL + encodeURIComponent(q) : FEED_URL;
 }
 
 // Minimal GET with redirect-follow and timeout; resolves to the body string.
@@ -106,4 +129,4 @@ function createNewsFeed(deps) {
   return { fetchNews };
 }
 
-module.exports = { parseRss, createNewsFeed, agoLabel };
+module.exports = { parseRss, createNewsFeed, agoLabel, feedUrl };

@@ -14,6 +14,31 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
+// BUG-282 (2026-08-20): a stable identity for "this exact action", used to stop
+// the cortex re-asking for a confirmation it is already waiting on.
+//
+// Pure and exported so the keying rule can be tested without building a cortex.
+// Keys are SORTED: two arg objects with the same content in a different
+// insertion order are the same action, and a raw JSON.stringify of the object
+// would call them two.
+//
+// Every value goes through JSON.stringify, including strings. The first version
+// passed strings through unquoted, which made the string "12" and the number 12
+// produce an identical key — two different actions collapsing into one, i.e. a
+// real confirmation silently dropped. A direct test for that pair now exists.
+//
+// Deliberately keyed on the FULL arg set, not the tool alone. browser_click
+// {ref:"e12"} and browser_click{ref:"e13"} are different actions and each needs
+// its own confirmation.
+function confirmSuppressionKey(decision) {
+  const tool = (decision && decision.tool) || '';
+  const args = (decision && decision.args) || {};
+  const canon = Object.keys(args).sort().map(function (k) {
+    return k + '=' + JSON.stringify(args[k]);
+  }).join('&');
+  return tool + '|' + canon;
+}
+
 // F4: iterative two-row Levenshtein — no recursion, no per-character
 // allocation. Mirrors effectors/hub.js's own editDistance(), but duplicated
 // here (rather than imported) because this check runs BEFORE the hub's
@@ -68,6 +93,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   let timer = null;
   let running = false;
   let generation = 0;
+  // BUG-282: confirmSuppressionKey(decision) -> { confirmId, suppressedCount }.
+  // Per-cortex-instance, so two cortexes (or two tests) never share it.
+  // There is no expiry timer here on purpose: leash.confirm owns the TTL, and
+  // peek() returning null (consumed) or expired:true is the single source of
+  // truth for whether this key is still blocked. A second timer would be a
+  // second thing that can disagree with the first.
+  const pendingConfirmsByKey = new Map();
   const lastTickAt = { value: 0 };
   // BUG-273: WHETHER A TICK IS ACTUALLY RUNNING, which lastTickAt cannot say.
   // lastTickAt is stamped once at the top of the body and the reentrancy guard
@@ -372,6 +404,59 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // connectionId is the sentinel 'system': cortex-initiated actions have no
       // single waiting client, so the server accepts 'system'-scoped confirms
       // from any connected client (open question resolved in ROADMAP.md P9).
+      // BUG-282 (2026-08-20): this branch used to create a confirm, emit, and
+      // return recording NOTHING — so the next tick re-proposed the same action,
+      // minted a FRESH confirmId, and emitted again. Measured in the audited
+      // session: 42 browser_click records, all actor:"cortex", all
+      // reason:"tier-3-requires-confirm", all args {"ref":"e12"}, one per second
+      // for 41.6 seconds. 42 of that session's 45 confirms were that one action.
+      //
+      // The leash was right to refuse; the cortex had no memory of the refusal.
+      // This is the third instance of "retry something that cannot succeed until
+      // a human acts" — see the unknown-effector pre-flight above (whose comment
+      // describes this same stall) and mull's _consecutiveFailures below.
+      //
+      // Suppression is keyed off the registry's own lifecycle rather than a
+      // timer: peek() is null once the confirm is consumed by accept or reject,
+      // and reports expired:true once its TTL passes. Either way the key frees
+      // itself and the action can be proposed again — the fix must not turn into
+      // "the cortex can never ask twice".
+      var suppressKey = confirmSuppressionKey(decision);
+      var priorConfirm = pendingConfirmsByKey.get(suppressKey);
+      if (priorConfirm) {
+        var stillPending = leash.confirm.peek(priorConfirm.confirmId);
+        if (stillPending && !stillPending.expired) {
+          priorConfirm.suppressedCount += 1;
+          // Q2: suppressing 41 of 42 emissions deletes 41 log lines. Silence
+          // would turn a visible spin into an invisible stall, which is strictly
+          // worse than the bug being fixed — so the suppression reports itself,
+          // with a running count, and stays measurable.
+          bus.emit('cortex.confirm-suppressed', {
+            tool: decision.tool,
+            args: decision.args,
+            confirmId: priorConfirm.confirmId,
+            suppressedCount: priorConfirm.suppressedCount,
+            reason: 'already-awaiting-confirmation'
+          });
+          return;
+        }
+        // Falls through to create a fresh confirm: peek() said this one is
+        // consumed (accepted or rejected) or expired. No delete here — the
+        // set() below overwrites this key unconditionally, and mutation testing
+        // proved a delete on this line was dead: removing it changed no
+        // behaviour and failed no test.
+      }
+      // Drop every key whose confirm is no longer pending. Without this the map
+      // keeps one entry per distinct (tool, args) forever — the single-key
+      // delete this replaced only ever tidied the key being re-proposed, so a
+      // long session accumulated an entry per unique action that was confirmed
+      // once and never proposed again. Same peek() truth source, no timer, and
+      // the cost is one pass over a map whose size is the number of
+      // confirm-requiring actions seen, not the number of ticks.
+      pendingConfirmsByKey.forEach(function (entry, key) {
+        var live = leash.confirm.peek(entry.confirmId);
+        if (!live || live.expired) pendingConfirmsByKey.delete(key);
+      });
       var argsText = humanizeArgs(decision.args).slice(0, 120);
       var summary = decision.tool + (argsText ? ' (' + argsText + ')' : '');
       var confirmId = leash.confirm.create(
@@ -379,6 +464,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier },
         'system'
       );
+      pendingConfirmsByKey.set(suppressKey, { confirmId: confirmId, suppressedCount: 0 });
       bus.emit('confirm-request', Object.assign({}, decision, {
         confirmId: confirmId, summary: summary, tier: leashResult.tier
       }));
@@ -609,8 +695,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     get lastTickAt() { return lastTickAt; },
     // BUG-273: read by immune/watchdog.js to tell BUSY from DEAD.
     get inFlightSince() { return inFlightSince; },
+    // BUG-282: how many actions this cortex currently believes are awaiting the
+    // operator. Read-only, and a test seam rather than a feature — the
+    // suppression map is otherwise unobservable, and an unobservable cache is
+    // one whose pruning cannot be proven. Mutation testing needed this.
+    get pendingConfirmKeyCount() { return pendingConfirmsByKey.size; },
     get generation() { return generation; }
   };
 }
 
-module.exports = { createCortex };
+module.exports = { createCortex, confirmSuppressionKey };

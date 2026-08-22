@@ -82,15 +82,21 @@ const PREF_VOICE = [
   // demote/promote entries with a real completion call behind the claim.
   { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 961-1030ms, 4/4, no flags (2026-08-14)
   { provider: 'mistral',  model: 'mistral-medium-latest' },       // 783ms, 4/4 (2026-08-14); 414ms measured 2026-07-29
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4 (2026-08-14)
-  // DEMOTED 2026-08-14 from rank 1 to rank 4, for two independent reasons and
-  // not for latency (it is still the fastest thing here at 258ms): it scored
-  // 2/4, missing BOTH reasoning probes, and Groq's budget is 12,000 tokens per
-  // window — this lane's ~40k-char prompt is ~10k tokens, so a single voice turn
-  // nearly exhausts it and the repeated Groq 429s in production are the
-  // predictable result. Fast and wrong, in the lane the operator actually hears.
-  { provider: 'groq',     model: 'llama-3.3-70b-versatile' },     // 258ms, 2/4 (2026-08-14); 12k-token window
   { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms — fast but flat; last cloud resort
+  // DEMOTED 2026-08-22 from rank 3 to last cloud, NOT deleted. `402 Payment
+  // required` — the Cerebras account is unbilled, so this is a billing state and
+  // not a dead model: it returns the moment the account is funded, and its
+  // 336ms/3-of-4 measurement below still stands. Kept last so a lane call stops
+  // paying an attempt for it while the account is dry.
+  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4 (2026-08-14); 402 unbilled 2026-08-22
+  // REMOVED 2026-08-22: groq/llama-3.3-70b-versatile. It is not a renamed id —
+  // Groq's /models advertises 13 ids and NONE of them is any Llama 3.3, so a
+  // call returns `404 does not exist or you do not have access`. Its 2026-08-14
+  // demotion note is preserved here because the reasoning is still instructive:
+  // it was moved off rank 1 for scoring 2/4 (missing both reasoning probes) and
+  // for Groq's 12,000-token window, which this lane's ~40k-char (~10k token)
+  // prompt nearly exhausts in a single turn — fast and wrong, in the lane the
+  // operator actually hears. See KNOWN_DEAD.
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
@@ -113,13 +119,28 @@ const PREF_VOICE = [
 // fallbacks below are what absorbs a burst. Watch brain-spend for Cerebras 429s
 // if a burst ever becomes routine.
 const PREF_REASONING = [
-  { provider: 'cerebras', model: 'gpt-oss-120b' },                            // 778ms, 4/4 — reasoning in a separate field
-  { provider: 'cerebras', model: 'zai-glm-4.7' },                             // 1306ms, 4/4 — reasoning separated
+  // REORDERED 2026-08-22, and this is the lane the change matters most for: ten
+  // roles ride it (mull, think_deeply, self-reflection x2, reviewer,
+  // reality-checker, design verify, orchestrator synthesize, ask_agent,
+  // engagement interview) and its top TWO entries were both failing, so every one
+  // of them burned two attempts before reaching a model that answers.
+  //   * cerebras/gpt-oss-120b -> demoted to last cloud. `402 Payment required`,
+  //     an unbilled account rather than a dead model; it returns when funded.
+  //   * cerebras/zai-glm-4.7 -> REMOVED. `404 Model zai-glm-4.7 is archived and
+  //     unavailable for the organization` — gone upstream, billing cannot revive
+  //     it. See KNOWN_DEAD.
+  // The new head was already rank 3 and is measured healthy, so this promotes
+  // what the lane was reaching anyway rather than introducing anything new.
   { provider: 'nim',      model: 'nvidia/nemotron-3.5-lightning-30b-a3b' },   // 4123ms, 4/4 — different provider, absorbs a Cerebras burst
   // COT-LEAK flagged by the benchmark heuristic, which is why it sits here and
   // NOT in PREF_VOICE: nothing on this lane is spoken aloud, so a stray
   // reasoning preamble costs tokens rather than trust.
   { provider: 'mistral',  model: 'mistral-medium-2604' },                     // 461ms, 4/4 — fastest 4/4 measured; COT-LEAK flag
+  // The demoted Cerebras head, kept as the last cloud rung rather than deleted:
+  // 778ms/4-of-4 when it answers, and it answers again the moment the account is
+  // billed. Last means a dry account costs one attempt at the END of the walk
+  // instead of two at the start.
+  { provider: 'cerebras', model: 'gpt-oss-120b' },                            // 778ms, 4/4; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:14b' },
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
@@ -136,7 +157,10 @@ const PREF_REASONING = [
 const PREF_MEMORY = [
   { provider: 'google',   model: 'gemini-3-flash-preview' },      // 3090ms, 4/4 — its own per-model quota bucket
   { provider: 'mistral',  model: 'mistral-medium-2604' },         // 461ms, 4/4
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4
+  // Unchanged position — it was already last cloud. Noting only that it is
+  // currently `402` (unbilled Cerebras account), so this lane is effectively
+  // two-deep in the cloud until the account is funded.
+  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
@@ -145,21 +169,36 @@ const PREF_BUILD = [
   // `ollama pull`ed — silently filtered out, so every build fell through anyway.
   // Optional local models sit last so their absence never costs a build attempt.
   //
-  // NOTE: since 2026-07-29 Hermes-Agent is the only build-CONTENT engine (see
+  // NOTE: since 2026-07-29 there has been exactly one build-CONTENT engine (see
   // CLAUDE.md / build-engine.js), so this lane no longer carries real build
   // traffic — it serves whatever still requests brain lane 'build'.
+  //
+  // W6 (2026-08-22) made that engine DeepSeek Harness (`dsh`) instead of
+  // Hermes-Agent, and the entries BELOW are why the swap needed no key change:
+  // dsh runs whatever this table ranks first that the machine can reach, so the
+  // harness changed and the models did not. "DeepSeek Harness" is a program
+  // name, not an instruction to run DeepSeek's models — there is no
+  // DEEPSEEK_API_KEY anywhere in MYTHOS. Reorder this list and you have
+  // reconfigured the build engine; that is deliberate.
   { provider: 'mistral',    model: 'codestral-latest' },                     // 344ms — code-specialist AND faster than -large
   // mistral-medium-2604 inserted ABOVE -large on 2026-08-14: 4/4 vs 3/4 (-large
   // missed a reasoning probe) and 461ms vs 701ms. Same key, same lane, strictly
   // better on both axes measured — the previous ranking predates this model.
   { provider: 'mistral',    model: 'mistral-medium-2604' },                  // 461ms, 4/4
   { provider: 'mistral',    model: 'mistral-large-2512' },                   // 701ms, 3/4 — generalist fallback
-  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 778ms, 4/4
-  { provider: 'groq',       model: 'llama-3.3-70b-versatile' },              // 258ms, 2/4 — 12k-token window
-  { provider: 'cerebras',   model: 'zai-glm-4.7' },                          // 1306ms, 4/4
   // openrouter:inclusionai/ling-3.0-flash:free DELETED 2026-08-14 — 404
   // "unavailable for free". See this file's header note 1.
   { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },           // 271ms
+  // 2026-08-22, ranks 4-6 resolved. Two deletions and one demotion, and the
+  // three Mistral heads above are untouched because all three are measured
+  // healthy — this lane's ordering is not being second-guessed, only its dead
+  // rungs removed:
+  //   * groq/llama-3.3-70b-versatile REMOVED — Groq advertises no Llama 3.3 at
+  //     all, so `404`, and its 12k window never suited a build prompt anyway.
+  //   * cerebras/zai-glm-4.7 REMOVED — archived upstream.
+  //   * cerebras/gpt-oss-120b demoted below the NIM rung: `402`, unbilled
+  //     account, returns when funded.
+  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 778ms, 4/4; 402 unbilled 2026-08-22
   { provider: 'ollama',     model: 'hermes3:8b' },                           // local, free, unlimited (ollama pull to activate; filtered if absent)
   { provider: 'ollama',     model: 'ornith:9b' },
 ];
@@ -167,11 +206,39 @@ const PREF_BUILD = [
 const PREF_SIMPLE = [
   // Cheapest/fastest lane. Previously led with mistral-large-2512 — the most
   // expensive model available, in the lane that least needs it.
-  { provider: 'groq',     model: 'llama-3.1-8b-instant' },        // 224ms — fastest measured anywhere
+  // 2026-08-22: groq/llama-3.1-8b-instant REMOVED from the HEAD of this lane.
+  // `404 does not exist or you do not have access` — and Groq's /models lists no
+  // Llama of any version, so it is gone rather than renamed. Its "224ms, fastest
+  // measured anywhere" note is why it led, and that is exactly why losing it
+  // silently mattered: this lane exists for speed on tiny prompts, and every
+  // call was paying a failed attempt first. Groq is NOT replaced here with
+  // openai/gpt-oss-20b — that would be a new model in a lane the operator asked
+  // to leave as wired; ministral-3b-latest below was already rank 2 and answers.
   { provider: 'mistral',  model: 'ministral-3b-latest' },         // 315ms
   { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms
   { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 643ms
+  // ADDED 2026-08-22 on the operator's instruction, restoring a Groq rung to
+  // this lane after llama-3.1-8b-instant was deleted as a 404. Placed HERE and
+  // not at the head, because the measurement disagreed with the assumption:
+  // 776ms median over 4 samples in the shape MYTHOS actually sends, which is
+  // slower than every entry above it. gpt-oss-20b is a reasoning model, and the
+  // hidden reasoning is the latency — the deleted Llama was 224ms. It still
+  // earns a place: Groq's window is what this lane's tiny prompts genuinely
+  // suit, and it ranks above the unbilled Cerebras rung because it answers.
+  //
+  // NON-OBVIOUS, AND LOAD-BEARING: this model returns EMPTY `content` when the
+  // output budget is small. Measured, 4 samples each — max_tokens 120: 2/4 empty
+  // with finish_reason `length`, the whole budget consumed by the separate
+  // `reasoning` field; max_tokens 512: 0/4; NO max_tokens: 0/4. MYTHOS is in the
+  // last case, because providers/openai-compat.js only injects max_tokens when
+  // `alwaysMaxTokens` is set and providers/groq.js does not set it. So this is
+  // safe as wired — and it breaks silently, into empty replies rather than
+  // errors, if that ever changes. test/brain.test.js pins it.
+  // Not a chain-of-thought risk: reasoning arrives in its own `reasoning` field,
+  // `content` is a clean string, 0/7 leaks across both probes.
+  { provider: 'groq',     model: 'openai/gpt-oss-20b' },          // 776ms median, no max_tokens sent (2026-08-22)
+  // Demoted below Google, not deleted: 402 unbilled, returns when funded.
+  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
@@ -182,14 +249,21 @@ const PREF_SIMPLE = [
 // 27.9-second model. registry.js now emits health.anomaly on that path as well,
 // so the substitution is audible rather than merely slower.
 const PREF_TEXT = [
-  { provider: 'cerebras',   model: 'zai-glm-4.7' },                          // 1306ms, 4/4 — best Cerebras quality
   // DELETED 2026-08-14: openrouter:inclusionai/ling-3.0-flash:free (404,
   // "unavailable for free") and nim:nvidia/nemotron-3-super-120b-a12b (27.9s —
   // unusable interactively, and past CHAIN_ATTEMPT_TIMEOUT_MS on any tightened
   // per-attempt budget). Both burned a real chain attempt every walk.
-  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 778ms, 4/4
+  //
+  // 2026-08-22, and the comment above turned out to be describing the present
+  // rather than the past: the top two entries were dead AGAIN, this time
+  // cerebras/zai-glm-4.7 (`404`, archived upstream — REMOVED) and
+  // cerebras/gpt-oss-120b (`402`, unbilled — demoted below). This lane is
+  // registry.js's fallback for an UNRECOGNISED lane name, so a typo'd `lane:`
+  // string was walking two failures before answering. That is the exact
+  // condition the 2026-08-14 deletions were made to end.
   { provider: 'google',     model: 'gemini-3.6-flash' },                     // 4975ms, 4/4 on 2026-08-14 (1382ms on 2026-07-29) — see note below
   { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },           // 271ms
+  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 778ms, 4/4; 402 unbilled 2026-08-22
   { provider: 'ollama',     model: 'kimi-k2.5:cloud' },
   { provider: 'ollama',     model: 'qwen3:14b' },
   { provider: 'ollama',     model: 'qwen3:8b' },
@@ -245,9 +319,19 @@ const PREF_VISION = [
   { provider: 'google',  model: 'gemini-3.5-flash-lite' },               // 1473ms on a real 320KB screenshot, 3/3 correct (2026-08-14)
   { provider: 'mistral', model: 'mistral-small-latest' },                // 433ms measured ~2026-07-29; 1.8-2.0s and 100% success on 2026-08-14
   { provider: 'mistral', model: 'mistral-large-2512' },                  // 771ms — natively multimodal, same key as text
-  { provider: 'google',  model: 'gemini-flash-latest' },                 // 1715ms on 2026-07-29; HTTP 503 during the 2026-08-14 run
-  { provider: 'nim',     model: 'meta/llama-3.2-11b-vision-instruct' },  // 1599ms
-  { provider: 'nim',     model: 'nvidia/nemotron-nano-12b-v2-vl' },      // 386ms measured ~2026-07-29; 7.5-15s + hallucinated content on 2026-08-14
+  // SWAPPED with the NIM entry below, 2026-08-22. Not deleted, because a
+  // non-response is not a 404 and this repo has already written off a working
+  // model twice on an abort that was really a cold start. But it has now failed
+  // to answer on two separate runs (60s abort each), on top of the HTTP 503
+  // recorded on 2026-08-14, so it should not sit above a model that answers.
+  { provider: 'nim',     model: 'meta/llama-3.2-11b-vision-instruct' },  // 1599ms; ALIVE 2026-08-22
+  { provider: 'google',  model: 'gemini-flash-latest' },                 // 1715ms on 2026-07-29; HTTP 503 on 2026-08-14; no response x2 on 2026-08-22
+  // Kept last-cloud and flagged rather than deleted, but this one is DEGRADING
+  // rather than flapping, and the trend is the point: 386ms ~2026-07-29 →
+  // 7.5-15s with hallucinated content 2026-08-14 → `500 EngineCore encountered
+  // an issue` after 100s on 2026-08-22. If it is still 500ing next check, delete
+  // it; three consecutive measurements in one direction is not noise.
+  { provider: 'nim',     model: 'nvidia/nemotron-nano-12b-v2-vl' },      // 500 after 100s (2026-08-22)
   { provider: 'ollama',  model: 'qwen3.5:latest' },
   { provider: 'ollama',  model: 'qwen2.5vl:7b' },
 ];
@@ -291,11 +375,36 @@ const KNOWN_DEAD = [
   { provider: 'google',     model: 'gemini-pro-latest',               reason: '429 free tier has zero Pro quota' },
   { provider: 'google',     model: 'gemini-3.1-pro-preview',          reason: '429 free tier has zero Pro quota' },
   { provider: 'mistral',    model: 'pixtral-large-latest',            reason: '404 absent from this account' },
-  { provider: 'nim',        model: 'deepseek-ai/deepseek-v4-flash',   reason: '404/timeout' },
+  // KEPT, but the reason was wrong and the wrongness cost real time. This id
+  // does not exist; the served one is `deepseek-ai/deepseek-v4-flash-0731`, and
+  // THAT model is healthy — it answers, emits tool calls, and accepts a
+  // 10.7k-token request. It was also written off a second time on 2026-08-22 by
+  // a 45s abort that was a cold start; it needs ~100-150s on a first call. Do
+  // not use this row as evidence that NVIDIA cannot serve DeepSeek.
+  { provider: 'nim',        model: 'deepseek-ai/deepseek-v4-flash',   reason: '404 — WRONG ID, the real one is deepseek-v4-flash-0731 and it works' },
+  // Added 2026-08-22, all three by a real call. The first two are the important
+  // kind: Groq advertises 13 model ids and NOT ONE is a Llama of any version, so
+  // these are absent rather than renamed and no id-guessing will recover them.
+  { provider: 'groq',       model: 'llama-3.3-70b-versatile',         reason: '404 — Groq advertises no Llama 3.3 at all (was rank 4 of voice, rank 5 of build)' },
+  { provider: 'groq',       model: 'llama-3.1-8b-instant',            reason: '404 — Groq advertises no Llama 3.1 at all (was the HEAD of simple)' },
+  { provider: 'cerebras',   model: 'zai-glm-4.7',                     reason: '404 archived and unavailable for the organization (was rank 2 of reasoning, head of text)' },
+];
+
+// NOT in KNOWN_DEAD on purpose, because they are not dead: every `cerebras/*`
+// entry currently returns `402 Payment required` because that ACCOUNT is
+// unbilled, and Cerebras advertises only `gpt-oss-120b` and `gemma-4-31b` at
+// all. Billing the account restores both. They were demoted to last-cloud in
+// their lanes on 2026-08-22 rather than deleted, so a dry account costs one
+// attempt at the end of a walk instead of two at the start — and funding it
+// needs no code change. A test asserting no PREF_* lists a KNOWN_DEAD entry
+// would delete them permanently, which is the wrong call for a billing state.
+const UNBILLED_NOT_DEAD = [
+  { provider: 'cerebras', model: 'gpt-oss-120b', reason: '402 Payment required — unbilled account, not a dead model' },
+  { provider: 'cerebras', model: 'gemma-4-31b',  reason: '402 Payment required — unbilled account, not a dead model' },
 ];
 
 module.exports = {
-  BRAIN_TABLES, KNOWN_DEAD,
+  BRAIN_TABLES, KNOWN_DEAD, UNBILLED_NOT_DEAD,
   PREF_VOICE, PREF_BUILD, PREF_SIMPLE, PREF_REASONING, PREF_MEMORY,
   PREF_TEXT, PREF_VISION, PREF_EMBED,
 };

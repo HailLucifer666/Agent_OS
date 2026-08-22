@@ -1,0 +1,84 @@
+# W6 step 1 — optional provider overlay for the dsh spike.
+#
+# Lets the spike run WITHOUT a DeepSeek account, by pointing dsh's LLM seam at
+# an OpenAI-compatible gateway you already hold a key for. Pass it with:
+#
+#   node mythos/scripts/spike-dsh-build.js --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml
+#
+# WHY THIS WORKS. dsh's base bundle — which the `headless` profile rides on —
+# already ships @deepseek-ai/dsh-llm-pi-ai, a generic multi-provider adapter,
+# mounted DORMANT (zero routes until a profile supplies them). A route pi-ai
+# does not ship in its catalog is declared outright, so an OpenAI-compatible
+# endpoint is configuration rather than a code change. No plugin install is
+# required.
+#
+# CAVEAT, and it is the reason this file is optional rather than the default:
+# routing through a gateway measures dsh AND that gateway's model. W6's question
+# is whether *dsh* builds better artifacts than Hermes. Use a direct
+# DEEPSEEK_API_KEY run for the comparison that goes in the progress log, and
+# treat a gateway run as a smoke test that the wiring works at all.
+#
+# `apiKeyEnv` is a credential REFERENCE resolved per request — no secret goes in
+# this file, and this file is safe to commit. A reference that resolves to
+# nothing fails the request with MISSING_CREDENTIAL rather than falling through
+# to whatever unrelated key the environment happens to hold.
+#
+# The values below target OpenRouter, chosen because this repo already carries
+# an OPENROUTER_API_KEY (repo-root .env.local). The model id and its context
+# window are NOT guesses — read from https://openrouter.ai/api/v1/models on
+# 2026-08-21, which listed 15 DeepSeek models. Two worth knowing:
+#
+#   deepseek/deepseek-v4-pro     ctx 1048576   ~$1.60 / M prompt tokens
+#   deepseek/deepseek-v4-flash   ctx 1048576   ~$0.08 / M prompt tokens
+#
+# v4-pro is set below because a build-quality spike should measure the model you
+# would actually ship; swap to v4-flash if you only want to prove the wiring.
+# None of the DeepSeek routes on OpenRouter carry a `:free` tier, so this costs
+# real money — a handful of cents at --samples 3.
+#
+# ---------------------------------------------------------------------------
+# CORRECTED 2026-08-21 after the first real run. Two defects, both of which made
+# this file load cleanly and change nothing that mattered:
+#
+#  1. The patch entry was keyed `id: llm`. Patch entries match the base
+#     composition BY ID, and dsh-base/cordis.patch.yml:95 calls this plugin
+#     `llm-pi-ai`. Verified by reading the installed bundle, not from memory.
+#
+#  2. Declaring a route does not SELECT it. dsh's headless runner reads
+#     `ctx.agentDefaultModel` (dsh-headless/README.md), whose base config is
+#     `provider: deepseek-official, model: deepseek-v4-flash`
+#     (dsh-base/cordis.patch.yml:63-67). So every request still went to the
+#     native DeepSeek adapter and failed with
+#     `MISSING_CREDENTIAL: llm-deepseek: no API key for provider route
+#     "deepseek-official"` — while this overlay's perfectly good OpenRouter
+#     route sat there unused. The `agent-default-model` entry below is the half
+#     that was missing.
+# ---------------------------------------------------------------------------
+
+# Point the deployment's default model at the route declared below. Without
+# this, the route exists and nothing asks for it.
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: deepseek/deepseek-v4-pro
+
+- id: llm-pi-ai
+  config:
+    providers:
+      # A hand-declared route: pi-ai ships nothing under this key, so the
+      # profile supplies the whole provider.
+      openrouter:
+        displayName: OpenRouter
+        apiKeyEnv: OPENROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://openrouter.ai/api/v1
+        # Needed for an endpoint whose URL pi-ai cannot recognize; without it
+        # the request is shaped as though the host were OpenAI itself.
+        compat:
+          thinkingFormat: deepseek
+        models:
+          - id: deepseek/deepseek-v4-pro
+            contextWindow: 1048576
+        retryPolicy:
+          mode: normal
+          maxRetries: 3

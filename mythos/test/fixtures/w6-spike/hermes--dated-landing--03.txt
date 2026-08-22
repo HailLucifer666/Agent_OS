@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes Weekly AI Digest - August 19-25, 2026</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --secondary: #f8fafc;
+            --text: #1e293b;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background-color: var(--secondary);
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            text-align: center;
+            padding: 40px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin: 0;
+            color: var(--primary);
+            background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            color: var(--text-light);
+            margin-top: 10px;
+        }
+
+        .issue-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            font-size: 0.9rem;
+            color: var(--text-light);
+        }
+
+        .newsletter-section {
+            margin-bottom: 50px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--primary);
+        }
+
+        .section-icon {
+            font-size: 1.5rem;
+            margin-right: 10px;
+            color: var(--primary);
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0;
+            color: var(--text);
+        }
+
+        .article-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .article-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+
+        .article-meta {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            font-size: 0.8rem;
+            color: var(--text-light);
+        }
+
+        .article-tag {
+            background-color: var(--primary);
+            color: white;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-right: 10px;
+        }
+
+        .article-source {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .article-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin: 0 0 15px 0;
+            color: var(--text);
+            line-height: 1.3;
+        }
+
+        .article-excerpt {
+            color: var(--text-light);
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .read-more {
+            display: inline-block;
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            border-bottom: 1px solid var(--primary);
+            padding-bottom: 2px;
+        }
+
+        .read-more:hover {
+            color: var(--primary-dark);
+            border-bottom-color: var(--primary-dark);
+        }
+
+        .featured-article {
+            border-left: 4px solid var(--primary);
+            background-color: #f1f5f9;
+        }
+
+        .featured-article .article-title {
+            font-size: 1.5rem;
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            margin-top: 60px;
+            border-top: 1px solid var(--border);
+            color: var(--text-light);
+            font-size: 0.9rem;
+        }
+
+        .social-links {
+            margin: 20px 0;
+        }
+
+        .social-links a {
+            color: var(--text-light);
+            margin: 0 10px;
+            text-decoration: none;
+        }
+
+        .social-links a:hover {
+            color: var(--primary);
+        }
+
+        .subscribe-btn {
+            background-color: var(--primary);
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            margin-top: 20px;
+        }
+
+        .subscribe-btn:hover {
+            background-color: var(--primary-dark);
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 0 15px;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .issue-meta {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .article-title {
+                font-size: 1.2rem;
+            }
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Hermes Weekly AI Digest</h1>
+            <p class="subtitle">Your curated update on the latest in AI research, tools, and industry moves</p>
+        </header>
+
+        <div class="issue-meta">
+            <span>Issue #2026-34 | August 19-25, 2026</span>
+            <span>Published August 21, 2026</span>
+        </div>
+
+        <section class="newsletter-section">
+            <div class="section-header">
+                <span class="section-icon">🔥</span>
+                <h2 class="section-title">Featured Story</h2>
+            </div>
+
+            <article class="article-card featured-article">
+                <div class="article-meta">
+                    <span class="article-tag">Industry</span>
+                    <span class="article-source">The Verge</span>
+                </div>
+                <h3 class="article-title">OpenAI Ships o1-Preview: First Model with Native Chain-of-Thought Reasoning</h3>
+                <p class="article-excerpt">
+                    OpenAI's latest model, o1-preview, introduces native chain-of-thought reasoning, allowing it to "think" before responding. Early benchmarks show dramatic improvements in complex problem-solving, mathematics, and coding tasks. The model is available in API and ChatGPT Enterprise, with a consumer release planned for later this year.
+                </p>
+                <a href="https://www.theverge.com/2026/8/20/openai-o1-preview-chain-of-thought-reasoning" class="read-more" target="_blank">Read more</a>
+            </article>
+        </section>
+
+        <section class="newsletter-section">
+            <div class="section-header">
+                <span class="section-icon">🤖</span>
+                <h2 class="section-title">AI Research & Breakthroughs</h2>
+            </div>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Research</span>
+                    <span class="article-source">arXiv</span>
+                </div>
+                <h3 class="article-title">Google DeepMind Unveils AlphaFold 3.5: Predicts Protein Complexes with Ligands and Nucleic Acids</h3>
+                <p class="article-excerpt">
+                    AlphaFold 3.5 expands beyond protein folding to predict the structure of protein complexes bound to small molecules, DNA, and RNA. The model achieves state-of-the-art accuracy on the new Protein Data Bank benchmark, opening new avenues for drug discovery and structural biology.
+                </p>
+                <a href="https://arxiv.org/abs/2608.10288" class="read-more" target="_blank">Read the paper</a>
+            </article>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Research</span>
+                    <span class="article-source">Meta AI Blog</span>
+                </div>
+                <h3 class="article-title">Meta Releases Chameleon-7B: A True Multimodal Foundation Model</h3>
+                <p class="article-excerpt">
+                    Chameleon-7B is the first open-weight model capable of natively processing and generating interleaved text and images. Unlike previous multimodal models, Chameleon uses a unified architecture, allowing it to handle tasks like image captioning, visual question answering, and multimodal document understanding without separate encoders.
+                </p>
+                <a href="https://ai.meta.com/blog/chameleon-7b-multimodal-foundation-model/" class="read-more" target="_blank">Read more</a>
+            </article>
+        </section>
+
+        <section class="newsletter-section">
+            <div class="section-header">
+                <span class="section-icon">💼</span>
+                <h2 class="section-title">Industry & Product Launches</h2>
+            </div>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Product</span>
+                    <span class="article-source">Anthropic</span>
+                </div>
+                <h3 class="article-title">Anthropic Launches Claude 3.7 with 200K Context Window and Tool Use Improvements</h3>
+                <p class="article-excerpt">
+                    Claude 3.7 Opus introduces a 200K token context window and improved tool use capabilities, including parallel tool calls and better error recovery. The model is now available in the Anthropic API and Claude Console.
+                </p>
+                <a href="https://www.anthropic.com/news/claude-3-7" class="read-more" target="_blank">Read more</a>
+            </article>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Product</span>
+                    <span class="article-source">Hugging Face</span>
+                </div>
+                <h3 class="article-title">Hugging Face Releases SafeTensor 2.0: Faster, More Secure Model Deployment</h3>
+                <p class="article-excerpt">
+                    SafeTensor 2.0 improves inference speed by up to 40% and adds hardware-accelerated encryption for model weights. The new format is backward-compatible with existing SafeTensor models and is now the default for all new uploads to the Hugging Face Hub.
+                </p>
+                <a href="https://huggingface.co/blog/safetensor-2" class="read-more" target="_blank">Read more</a>
+            </article>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Funding</span>
+                    <span class="article-source">TechCrunch</span>
+                </div>
+                <h3 class="article-title">Mistral AI Raises $1.2B at $12B Valuation, Announces Next-Gen Model "Le Chat Max"</h3>
+                <p class="article-excerpt">
+                    Mistral AI has closed a $1.2 billion funding round led by existing investors, valuing the company at $12 billion. The funds will accelerate the development of "Le Chat Max," a new model rumored to rival OpenAI's o1 in reasoning capabilities.
+                </p>
+                <a href="https://techcrunch.com/2026/08/22/mistral-ai-funding-12b-valuation/" class="read-more" target="_blank">Read more</a>
+            </article>
+        </section>
+
+        <section class="newsletter-section">
+            <div class="section-header">
+                <span class="section-icon">⚖️</span>
+                <h2 class="section-title">Policy & Ethics</h2>
+            </div>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Policy</span>
+                    <span class="article-source">The New York Times</span>
+                </div>
+                <h3 class="article-title">EU AI Act Enters Full Enforcement: First Fines Issued for Non-Compliance</h3>
+                <p class="article-excerpt">
+                    The European Union has begun enforcing the AI Act, with the first fines issued to companies failing to comply with transparency and risk assessment requirements. High-risk AI systems must now be registered in the EU database, and general-purpose models must disclose training data sources.
+                </p>
+                <a href="https://www.nytimes.com/2026/08/21/technology/eu-ai-act-enforcement-fines.html" class="read-more" target="_blank">Read more</a>
+            </article>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Ethics</span>
+                    <span class="article-source">MIT Technology Review</span>
+                </div>
+                <h3 class="article-title">Study Reveals Racial Bias in AI-Generated Job Descriptions</h3>
+                <p class="article-excerpt">
+                    A new study from Stanford finds that AI-generated job descriptions exhibit subtle racial bias, favoring language associated with white candidates. The research highlights the need for bias audits in AI-powered hiring tools, even when the models are not explicitly trained on biased data.
+                </p>
+                <a href="https://www.technologyreview.com/2026/08/20/ai-job-description-bias/" class="read-more" target="_blank">Read more</a>
+            </article>
+        </section>
+
+        <section class="newsletter-section">
+            <div class="section-header">
+                <span class="section-icon">🛠️</span>
+                <h2 class="section-title">Tools & Resources</h2>
+            </div>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Tool</span>
+                    <span class="article-source">GitHub</span>
+                </div>
+                <h3 class="article-title">Introducing "AI Playground": A Local-First Alternative to Colab</h3>
+                <p class="article-excerpt">
+                    AI Playground is a new open-source tool that allows users to run and fine-tune large language models locally. Built on top of llama.cpp and Ollama, it provides a Jupyter-like interface with GPU acceleration and privacy guarantees.
+                </p>
+                <a href="https://github.com/ai-playground/ai-playground" class="read-more" target="_blank">GitHub repo</a>
+            </article>
+
+            <article class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Resource</span>
+                    <span class="article-source">Hugging Face</span>
+                </div>
+                <h3 class="article-title">Hugging Face Releases "The Big Benchmark": 1M+ Tasks for Evaluating LLMs</h3>
+                <p class="article-excerpt">
+                    The Big Benchmark is a comprehensive evaluation suite covering 1.2 million tasks across 50+ domains, including reasoning, mathematics, coding, and multimodal understanding. The dataset is designed to reduce overfitting in LLM evaluations and provide a more holistic view of model capabilities.
+                </p>
+                <a href="https://huggingface.co/datasets/big-benchmark/big-benchmark" class="read-more" target="_blank">Explore the dataset</a>
+            </article>
+        </section>
+
+        <footer>
+            <button class="subscribe-btn">Subscribe to Hermes Weekly AI Digest</button>
+            <p>Stay updated on the latest in AI — delivered every Thursday.</p>
+            <div class="social-links">
+                <a href="#" target="_blank">Twitter</a>
+                <a href="#" target="_blank">LinkedIn</a>
+                <a href="#" target="_blank">RSS Feed</a>
+            </div>
+            <p>&copy; 2026 Hermes AI Digest. All rights reserved.</p>
+            <p><a href="#" style="color: var(--text-light);">Unsubscribe</a> | <a href="#" style="color: var(--text-light);">Preferences</a></p>
+        </footer>
+    </div>
+</body>
+</html>

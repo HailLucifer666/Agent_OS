@@ -103,20 +103,37 @@ describe('pin session: expiry', () => {
 
   it('slides the window forward on each successful check', async () => {
     // An operator actively using the HUD must never be kicked out mid-session.
-    // Three checks at half the TTL each span 1.5x the TTL in total, so this
-    // passes only if the window actually moves.
-    const store = createPinSessionStore({ ttlMs: 100 });
+    // Three checks, each well inside the TTL, spanning MORE than the TTL in
+    // total — so this passes only if the window actually moves.
+    //
+    // TIMING MARGIN WIDENED 2026-08-22 after a real CI failure ("still valid at
+    // check 1", false !== true, whole test 112ms). The old numbers were
+    // ttlMs 100 with sleep(50): a 50ms slack against `setTimeout` on a shared
+    // runner, where a 50ms sleep routinely lands past 100ms. The session had
+    // genuinely expired, so the CODE was right and the test's margin was wrong.
+    //
+    // The invariant is UNCHANGED and must stay that way: the total elapsed time
+    // across the loop (3 x GAP) has to exceed TTL, or the test would pass on a
+    // store that never slides at all. 3 x 600 = 1800ms against a 1000ms TTL
+    // keeps that true while giving each individual check 400ms of jitter
+    // headroom instead of 50ms.
+    const TTL = 1000;
+    const GAP = 600;
+    assert.ok(GAP * 3 > TTL, 'the loop must outlast the TTL or this test proves nothing');
+    assert.ok(GAP < TTL, 'each gap must sit inside the TTL or a non-sliding store would also pass');
+
+    const store = createPinSessionStore({ ttlMs: TTL });
     const token = store.issue();
     for (let i = 0; i < 3; i++) {
-      await sleep(50);
+      await sleep(GAP);
       assert.equal(store.isValid(token), true, 'still valid at check ' + (i + 1));
     }
     // And the slide is driven by SUCCESS, not by being asked: a rejected check
     // must not keep a session alive.
-    const other = createPinSessionStore({ ttlMs: 100 });
+    const other = createPinSessionStore({ ttlMs: TTL });
     other.issue();
     for (let i = 0; i < 3; i++) {
-      await sleep(50);
+      await sleep(GAP);
       other.isValid('wrong-token');
     }
     assert.equal(other.isValid('wrong-token'), false);

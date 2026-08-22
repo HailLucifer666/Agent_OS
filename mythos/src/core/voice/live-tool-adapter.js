@@ -124,11 +124,11 @@ function createLiveToolAdapter(deps) {
   // WAVE 3 — tools whose wall-clock exceeds a Live turn, so awaiting them inside
   // the turn guarantees the model narrates before the answer exists. Membership is
   // about DURATION, not risk: spotify_play drives cua-driver (5-10s per click
-  // sequence), hermes_task runs an agent (minutes), and the cua_* tools each do a
+  // sequence), dsh_task runs an agent (minutes), and the cua_* tools each do a
   // full UIA hit-test round trip. Everything else is fast enough to await.
   const SLOW_TOOLS = {
     spotify_play: true,
-    hermes_task: true,
+    dsh_task: true,
     cua_click: true,
     cua_get_window_state: true,
     // BUG-120 — 2026-08-05: browser_switch was awaited inside the turn, and it
@@ -532,7 +532,7 @@ function createLiveToolAdapter(deps) {
   // those three paths and onto the weakest. The tool did not get less honest; the
   // sentence carrying its honesty did. Everything else in SLOW_TOOLS that can
   // return unverified had the same hole: spotify_play, cua_click, screen_look,
-  // camera_look, browser_switch, hermes_task.
+  // camera_look, browser_switch, dsh_task.
   //
   // Q6 — WHAT CLASS IS THIS AN INSTANCE OF? The third occurrence of one invariant.
   // BUG-068: only the late path honored `unverified`, so the awaited path reported
@@ -568,6 +568,55 @@ function createLiveToolAdapter(deps) {
   const UNVERIFIED_PARTIAL_CLAIM = 'State the confirmed part plainly — it happened. Then say the rest is ' +
     'not confirmed, and do not claim the rest: not now, and not later in this conversation. Do NOT report ' +
     'the whole action as done, and do NOT report it as FAILED either.';
+
+  // BUG-295 — 2026-08-20. THE MISSING THIRD CASE. The two claims above cover an
+  // outcome that FAILED and an outcome that is UNVERIFIED. Neither covers a tool
+  // that SUCCEEDS and hands back no readable body, and that is the shape that
+  // produced the worst narration this project has logged.
+  //
+  // browser_navigate returned, verbatim from the session log:
+  //   {"url":"https://www.google.com/search?q=weather+in+Kolkata+current",
+  //    "title":"weather in Kolkata current - Google Search","newTab":true,"browser":"chrome"}
+  // ok:true, no error, nothing unverified — a truthful report of a NAVIGATION.
+  // MYTHOS then told the operator it was 28C with thunderstorms and high
+  // humidity. Every number and every condition was invented. Nothing in that
+  // payload says "you have not read this page", so a successful navigate reads
+  // to the model as having SEEN the page, and it supplies the rest from weights.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? Every tool that can succeed while returning no
+  // readable body. The population is larger than this list: browser_click and
+  // browser_type change a page and return no body; cua_click and focus_window do
+  // the same to a window. THE NARROWNESS IS DELIBERATE — these two are the only
+  // two with a LOGGED fabrication behind them, and a guard that quietly
+  // generalises is a guard nobody can reason about. Those others are known-blind;
+  // widening this list needs its own evidence, and the bug-291 path matrix is
+  // where the widening gets asserted.
+  //
+  // Q2 — DOES THIS HIDE EVIDENCE? No. It appends an instruction and leaves the
+  // payload whole: the URL, the title and the browser still reach the model, so
+  // the diagnostic trail is unchanged. And it is the LAST branch on every path,
+  // so a failure or an unverified outcome keeps its stronger prohibition — two
+  // prohibitions on one outcome would disagree with each other.
+  //
+  // Q8 — get_weather is DELIBERATELY NOT TOUCHED. It returned ok ten times that
+  // same day; the model bypassed a working tool. The defect is narration, not the
+  // effector, and nobody should "fix" from-system.js on the strength of this bug.
+  const NO_CONTENT_CLAIM = 'This returned NO page content — you have NOT read this page, only opened it. ' +
+    'Report only that it is open, and call a read tool if you need what it says. Do NOT state, summarise ' +
+    'or answer from anything on the page: not now, and not later in this conversation either.';
+
+  // Keyed on tool NAME, not on payload shape. A shape probe would have to decide
+  // what counts as "readable", and every one of these payloads is a legitimate
+  // success object — the thing that makes them content-free is what the tool
+  // does, which only its name knows. See Q1 above for why the list is this short.
+  const NO_CONTENT_TOOLS = {
+    browser_navigate: true,
+    open_web: true,
+  };
+
+  function returnsNoReadableContent(toolName) {
+    return NO_CONTENT_TOOLS[toolName] === true;
+  }
 
   // BUG-273 B1, second half. Q4 — WHAT IS STANDING NEXT TO IT? On the awaited
   // branch the hedge lived in `message` while the effector's raw, success-shaped
@@ -650,8 +699,48 @@ function createLiveToolAdapter(deps) {
         // announcing, so sending "outcome pending" here would be noise ahead
         // of the answer.
         if (!entry.started) {
-          sendSystemNotice(entry.summary, entry.ok ? 'Report this to the operator accurately.' : NO_SUCCESS_CLAIM,
-            { site: 'late-for-turn', tool: entry.tool || null, claim: entry.ok ? 'ok' : 'failed' });
+          // BUG-295: the fourth narration site, and it is a RE-narration — the
+          // instruction is recomputed here from {tool, ok} because the outcome
+          // object is long gone by now. Tool name is all this branch has, which
+          // is the other reason NO_CONTENT_TOOLS is keyed on the name.
+          //
+          // BUG-297 — the fourth narration site, and BUG-273 B1's "all three
+          // narration paths" never knew it existed. It used to read
+          // `entry.ok ? neutral : NO_SUCCESS_CLAIM`, and `evaluateOutcome`
+          // computes `ok: dispatchOk && !isUnverified` — so `entry.ok` is FALSE
+          // for an UNVERIFIED outcome and this branch told the model the action
+          // DID NOT SUCCEED.
+          //
+          // That is the collapse BUG-273 B2's Q8 forbids in writing: "reporting
+          // that as a failure would make MYTHOS deny things it actually did — its
+          // own kind of lying." ui_type's unverified outcome means the text may
+          // well be sitting in the document; here MYTHOS was told to announce
+          // that it is not. BUG-295's comment on this same block described it as
+          // a fall-through to the neutral default, which was wrong — the red run
+          // of bug-297-late-for-turn-unverified.test.js printed the real notice.
+          //
+          // `unverified` and `confirmedStep` now ride on the entry so this site
+          // can make the same three-way distinction as the other three paths,
+          // rather than inferring it from a flag that cannot carry it.
+          const noContent = returnsNoReadableContent(entry.tool);
+          let instruction;
+          let claim;
+          if (entry.unverified) {
+            instruction = entry.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
+            claim = entry.confirmedStep ? 'unverified-partial' : 'unverified';
+          } else if (!entry.ok) {
+            instruction = NO_SUCCESS_CLAIM;
+            claim = 'failed';
+          } else if (noContent) {
+            instruction = NO_CONTENT_CLAIM;
+            claim = 'ok-no-content';
+          } else {
+            instruction = 'Report this to the operator accurately.';
+            claim = 'ok';
+          }
+          sendSystemNotice(entry.summary, instruction, {
+            site: 'late-for-turn', tool: entry.tool || null, claim,
+          });
         }
         return;
       }
@@ -758,13 +847,17 @@ function createLiveToolAdapter(deps) {
       // started/done split instead of being awaited inside the turn.
       //
       // The Live turn completes while a cua-driven Spotify click (5-10s) or a
-      // hermes task (minutes) is still running, so the model reached turnComplete
+      // dsh task (minutes) is still running, so the model reached turnComplete
       // with no outcome and narrated a guess. That is what the 9+
       // live-tool-outcome-late-for-turn anomalies on 2026-07-31 were: not a bug in
       // the anomaly detector, but the model being asked to speak before the answer
       // existed. Awaiting harder cannot fix it — the turn boundary is the model's,
       // not ours. So say "started", and deliver the real outcome afterwards through
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
+      // BUG-300: one call site, ahead of both dispatch paths below, so a note can
+      // never reach the effector unstamped by going down the slow branch.
+      stampProvenanceIfUnbacked(decision);
+
       if (SLOW_TOOLS[call.name]) {
         commitAction(pendingAck(call.name));
         responses.push({ id: call.id, name: call.name, response: {
@@ -829,6 +922,11 @@ function createLiveToolAdapter(deps) {
         } else {
           summary = `${call.name} done.`;
           response = { status: 'ok', result: truncateForModel(ev.result) };
+          // BUG-295: the success branch, and the one instance A came through.
+          // `message` is the instruction on every other branch here, so it is
+          // the instruction on this one too rather than a fourth field the model
+          // has to learn. status stays 'ok' — the navigation really did happen.
+          if (returnsNoReadableContent(call.name)) response.message = NO_CONTENT_CLAIM;
         }
         // BUG-272 T2: remember a failed/unproven outcome so the identical call
         // re-issued on the NEXT turn is suppressed for a few seconds. This is the
@@ -836,7 +934,11 @@ function createLiveToolAdapter(deps) {
         // `call.args || {}` exactly as isDuplicateSignature computes it — the two
         // must produce the same signature string or the memory never matches.
         noteToolOutcome(call.name, call.args || {}, ev);
-        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, summary });
+        // BUG-297: confirmedStep travels too, so the late-for-turn re-narration can
+        // tell a partial hand-off from a wholly unproven outcome exactly as the other
+        // three paths do.
+        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified,
+          confirmedStep: ev.confirmedStep, summary });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         const reason = sanitize(err);
@@ -878,6 +980,12 @@ function createLiveToolAdapter(deps) {
       instruction = ev.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
+      // BUG-295: open_web breached the 1500ms ack deadline 44 times in the
+      // 2026-08-20 session — more breaches than calls — so a content-free tool
+      // reaches the operator through THIS path routinely, not exceptionally.
+      // Same split as the failure branch above: the record keeps the plain
+      // statement, the instruction carries the prohibition.
+      if (returnsNoReadableContent(toolName)) instruction = NO_CONTENT_CLAIM;
     }
     liveTurnActions.push({ tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict });
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
@@ -992,6 +1100,10 @@ function createLiveToolAdapter(deps) {
       instruction = step ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
       verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`;
+      // BUG-295: a confirmation gates INTENT. It says nothing about whether the
+      // page was read, so an approved navigate needs the same prohibition as an
+      // unapproved one.
+      if (returnsNoReadableContent(pending.name)) instruction = NO_CONTENT_CLAIM;
     }
 
     // Record BEFORE the session check: this entry feeds AD-4 reconciliation and
@@ -1066,6 +1178,84 @@ function createLiveToolAdapter(deps) {
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
   // shape handleUtterance already uses, so recall/audit stay consistent
   // whether a turn came through the batch or Live path.
+  // BUG-299's classifier, kept separate and thresholds named, because every number
+  // in it is a judgement call that a later reader will want to argue with.
+  //
+  // FRAGMENT: a single token, no internal whitespace, short. "आदिए" is four
+  // characters. Deliberately measured in code points rather than words — the
+  // operator speaks Bengali, Hindi and English, and a word count is meaningless
+  // for scripts this STT segments badly.
+  //
+  // SUBSTANTIVE: long enough that it cannot be an acknowledgement. "Okay, Sir."
+  // and "ঠিক আছে।" are 10 and 9; the fabricated match report was 63. 40 sits well
+  // clear of both, and erring high is the safe direction — a missed correction
+  // leaves the existing behaviour, a false one interrupts a working turn.
+  const FRAGMENT_MAX_CHARS = 8;
+  const SUBSTANTIVE_MIN_CHARS = 40;
+
+  // BUG-300 — the DURABLE half of the same fabrication. MYTHOS did not only say
+  // "মোহনবাগান জিতে গেছে"; it said "আমি নোট করে রাখলাম" and wrote it down. A spoken
+  // wrong answer decays with the conversation. A written one is read back later as
+  // something the operator once confirmed.
+  //
+  // WHAT THIS DELIBERATELY IS NOT. The ask was a volatile-facts-need-a-tool-call
+  // rule that REFUSES the claim, and the same ask called it "the most likely to
+  // over-fire" and said not to attempt it until the earlier fixes were
+  // live-verified and the residual measured. That gate has not been met. Refusing
+  // to write a note, on a text classifier nobody has measured, is exactly the
+  // change that makes MYTHOS unusable in conversation — and its failure mode is
+  // silent: the operator asks for a note and simply does not get one.
+  //
+  // So this ships the half that cannot over-fire. It never refuses, never blocks,
+  // never edits what the model wrote. It appends one sentence recording what was
+  // true at the time of writing. The note is still saved and still readable; it
+  // just cannot later be mistaken for something that was checked.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? capture_idea, create_goal and kanban_add_card
+  // also persist model-authored text. They are deliberately NOT stamped:
+  // write_note is the one with a logged incident behind it, and appending a
+  // footer to a goal title or a kanban card would corrupt fields the HUD renders
+  // verbatim in a small space. Known-blind, and widening needs its own evidence.
+  //
+  // Q5 — the rule keys on the turn's own action log, never on the note's text.
+  // No classifier, nothing language-specific, no threshold to tune. That is the
+  // whole reason it is safe to ship ahead of the measurement.
+  const PROVENANCE_STAMPED_TOOLS = { write_note: true };
+  const UNBACKED_NOTE_STAMP = '\n\n[Recorded from conversation — not verified by any tool '
+    + 'during this exchange.]';
+
+  // A persistence call is not evidence for the next persistence call: without the
+  // exclusion, two notes in one turn would leave the second looking checked purely
+  // because the first was written. And `unverified` is excluded because Wave 0's
+  // evidence contract is explicit that it means "cannot be proven", which is not a
+  // basis for writing something down as established.
+  function establishedSomethingThisTurn() {
+    return liveTurnActions.some((a) => a && a.ok === true && a.unverified !== true
+      && !PROVENANCE_STAMPED_TOOLS[a.tool]);
+  }
+
+  function stampProvenanceIfUnbacked(decision) {
+    if (!PROVENANCE_STAMPED_TOOLS[decision.tool]) return;
+    const text = decision.args && decision.args.text;
+    // An absent or blank note is left exactly as it is: from-pc.js's write_note
+    // fails on missing text, and stamping it would turn a clean rejection into a
+    // note containing nothing but a disclaimer.
+    if (typeof text !== 'string' || !text.trim()) return;
+    if (establishedSomethingThisTurn()) return;
+    decision.args = Object.assign({}, decision.args, { text: text + UNBACKED_NOTE_STAMP });
+  }
+
+  function isAssertionOnUnintelligibleInput(userText, assistantText) {
+    const heard = String(userText || '').trim();
+    // An EMPTY transcript is not a fragment. MYTHOS speaks unprompted on
+    // proactive and entity-initiated turns, and treating those as garbled would
+    // fire this correction on every one of them.
+    if (!heard) return false;
+    if (heard.length > FRAGMENT_MAX_CHARS) return false;
+    if (/\s/.test(heard)) return false;
+    return String(assistantText).trim().length >= SUBSTANTIVE_MIN_CHARS;
+  }
+
   function onLiveTurnComplete({ userText, assistantText, turnId }) {
     // B3 — before any of this turn's ORDINARY handling (history append,
     // episodic write, reflection), a spoken "no" cancels whatever is pending.
@@ -1079,6 +1269,53 @@ function createLiveToolAdapter(deps) {
     // routes itself to health.anomaly instead of the array below.
     turnGeneration += 1;
     const actionsThisTurn = liveTurnActions.splice(0, liveTurnActions.length);
+
+    // BUG-299 — a fragment transcript cannot license a factual assertion.
+    //
+    // 2026-08-20, verbatim order from the log: web_search returned real Wikipedia
+    // results; MYTHOS described them CORRECTLY ("previous years, not today's
+    // result… I don't have live scores"); the STT then produced the transcript
+    // "आदिए"; and MYTHOS announced that Mohun Bagan had won and wrote it to a
+    // note. No tool call backs that last step, and the fact was not merely wrong —
+    // the two clubs had not played each other at all.
+    //
+    // This is the half of BUG-280 that no payload guard can reach. BUG-295's
+    // NO_CONTENT_CLAIM and the stale-source caution both ride on a tool result;
+    // there is no result here to ride on.
+    //
+    // BOTH HALVES ARE REQUIRED TO FIRE, and that is the safety property rather
+    // than a convenience. A four-character single-token transcript is also what
+    // "no", "stop", "yes" and their Bengali and Hindi equivalents look like, and
+    // NEGATIVE_RE is English-only, so no exemption list covers a trilingual
+    // speaker. Firing at transcript time would make MYTHOS answer "I didn't catch
+    // that" to an operator who said no — and BUG-273 D3 measured what injections
+    // cost: 26 of 61 turns in one session were MYTHOS answering MYTHOS. A control
+    // word draws a short acknowledgement and never trips this; a fabricated match
+    // report does.
+    //
+    // Q2 — PRIVACY. The fragment itself is never logged and never read back to the
+    // model: live-session.js's invariant that a log line carries no transcript
+    // text is binding here too, and quoting the garbage at the model only invites
+    // it to interpret the garbage.
+    if (assistantText && isAssertionOnUnintelligibleInput(userText, assistantText)) {
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('health.anomaly', {
+          kind: 'assertion-on-unintelligible-input',
+          tool: 'transcript', target: 'transcript',
+          userTextLength: String(userText || '').trim().length,
+          assistantTextLength: String(assistantText).trim().length,
+        });
+      }
+      sendSystemNotice(
+        'CORRECTION of your own prior statement — what the operator said this turn did not '
+        + 'transcribe as anything intelligible, so no question was actually asked, and you answered '
+        + 'as though one had been.',
+        'Say so now: tell the operator you did not catch that and ask them to repeat it. Do NOT '
+        + 'restate the claim you just made, do NOT treat it as established later in this '
+        + 'conversation, and if you wrote it down, say that it needs checking.',
+        { site: 'ad4-correction-unheard', tool: 'transcript', claim: 'assertion-on-fragment' },
+      );
+    }
 
     // F3 — a promised action is either performed or retracted. Detect-only:
     // this reports a mismatch on the health.anomaly stream, it never rewrites

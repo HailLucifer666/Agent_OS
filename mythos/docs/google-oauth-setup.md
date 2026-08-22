@@ -129,7 +129,7 @@ Restart MYTHOS. On boot you should see:
   by the Phase 3 effector's env-scrub layer (`from-runner.js:scrubEnv`).
 - The leash's credential scanner denies any T3+ tool call whose args contain
   the token shape, so the entity can't exfiltrate it via `run_command` /
-  `hermes_task` / `compose_email`.
+  `dsh_task` / `compose_email`.
 - To revoke: <https://myaccount.google.com/permissions> → find the app →
   *Remove access*. The next Gmail/Calendar call will return 401 and degrade
   honestly.

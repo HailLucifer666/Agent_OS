@@ -14,15 +14,34 @@ it on their machine. Therefore:
 - **External binaries are optional** — with one deliberate exception. cua-driver
   (and anything similar) must degrade gracefully when absent: spawn ENOENT →
   adapter stays OFFLINE → fallback paths take over.
-  **Hermes-Agent is the exception**: since 2026-07-29 it is the only
-  build-content engine (build-runner, the engagement build stage, and Forge all
-  route through `src/core/effectors/build-engine.js`), and there is no
-  brain.think fallback by design — a build with no engine FAILS with an install
-  hint instead of shipping a plausible-but-wrong artifact. Boot still succeeds
-  without it; only builds stop. It installs project-local into
-  `<repo>/Hermes Agent/` (gitignored) via
-  `node mythos/scripts/setup-hermes.js --install`, which clones from git and
-  runs that clone's own installer — never `curl | bash` / `iex (irm …)`.
+  **The build engine is the exception, and the RULE SURVIVED A CHANGE OF ENGINE.**
+  Since 2026-07-29 there has been exactly one build-content engine
+  (build-runner, the engagement build stage, Forge and the `dsh_task` tool all
+  route through `src/core/effectors/build-engine.js` or
+  `forge-runner.js`), and there is no brain.think fallback by design — a build
+  with no engine FAILS with an install hint instead of shipping a
+  plausible-but-wrong artifact. Boot still succeeds without it; only builds stop.
+
+  **That engine is DeepSeek Harness (`dsh`) as of 2026-08-22 (W6). It was
+  Hermes-Agent until then, and Hermes is now deleted.** Ruling A was NOT dropped
+  along with the program it originally named — one engine, no fallback, still
+  binding. It installs project-local into `<repo>/DeepSeek Harness/`
+  (gitignored) via `node mythos/scripts/setup-dsh.js --install`, which runs
+  `npm install --save-exact` against a pinned version — never `curl | bash` /
+  `iex (irm …)`. Two things about it that are easy to get wrong:
+
+  - **The HARNESS changed; the MODELS did not.** "DeepSeek Harness" is the name
+    of a program, not an instruction to run DeepSeek's models. dsh runs whatever
+    `BRAIN_TABLES.build` in `src/core/brain/lanes.default.js` ranks first that
+    the machine can reach — today `mistral/codestral-latest`, on the
+    `MISTRAL_API_KEY` the lane already needs. **No `DEEPSEEK_API_KEY` is
+    required anywhere.** Measured 2026-08-22 on the same model Hermes itself ran:
+    the two harnesses score identically (3/9 each, prompt for prompt), so the
+    swap is quality-neutral.
+  - **The version is PINNED and asserted before every task.** dsh is a developer
+    preview whose own README promises compatibility-breaking changes, so
+    `adapters/dsh-agent` checks the installed `package.json` AND the CLI's own
+    `--version` output and refuses a mismatch. Do not float it on `latest`.
 - **All secrets and provider keys live in `mythos/.env`** (gitignored), with
   every supported key documented in `mythos/.env.example`. No key, no
   hardcoded default — features degrade honestly instead.
@@ -124,9 +143,12 @@ everything" is a known trap.
 (1) TTS stays **BYO** like the API keys — removes the LGPL exposure *without* a
 Piper swap, so the planned swap is no longer required for TTS; the constraint
 becomes "step-7 installer never bundles the LGPL package" + BYO docs, not a 6.5
-code task; (2) free demo deferred; (3) the wider licence audit (Hermes-Agent,
+code task; (2) free demo deferred; (3) the wider licence audit (the build engine,
 cua-driver, MediaPipe assets, provider ToS for resale) split into its own tracked
-**step 6.6**. One decision still deferred: how the paid product handles the NC
+**step 6.6**. Note that the build engine's licence question MOVED rather than
+closed on 2026-08-22: Hermes-Agent (MIT, plus a Python dependency tree) was
+replaced by DeepSeek Harness (MIT, plus a ~450-package npm tree), so the audit
+now has a different closure to enumerate. One decision still deferred: how the paid product handles the NC
 wake-word weights. This gate blocks **shipping, not building** — step 7 is
 buildable in parallel. This never surfaces in testing. Do not write a confident
 legal conclusion into any tracked file — that is a lawyer's call, not a session's.

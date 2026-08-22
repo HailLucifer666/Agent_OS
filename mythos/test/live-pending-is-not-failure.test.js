@@ -95,11 +95,11 @@ describe('A3 a pending ack is recorded as pending, not as a failure', () => {
   });
 
   test('a SLOW_TOOLS call records the same pending shape', async () => {
-    // hermes_task is on the SLOW_TOOLS list, so it never awaits at all.
+    // dsh_task is on the SLOW_TOOLS list, so it never awaits at all.
     const { adapter } = harness({ deadlineMs: 5000 });
-    await call(adapter, 'c2', 'hermes_task', { prompt: 'x' });
+    await call(adapter, 'c2', 'dsh_task', { prompt: 'x' });
     const actions = adapter._internal.liveTurnActions;
-    const entry = actions.find((a) => a.tool === 'hermes_task');
+    const entry = actions.find((a) => a.tool === 'dsh_task');
     assert.ok(entry, 'the slow path must still record something for the turn');
     assert.equal(entry.status, 'pending');
     assert.notEqual(entry.ok, false);

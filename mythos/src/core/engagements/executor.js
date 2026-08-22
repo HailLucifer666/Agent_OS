@@ -306,8 +306,8 @@ function createEngagementExecutor(deps) {
     var artifacts = [];
     var generator = buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null;
     if (!generator) {
-      var noEngineError = 'Hermes is unavailable — Hermes-Agent is the only build-content engine and there is no fallback. '
-        + 'Install it with `node mythos/scripts/setup-hermes.js --install`.';
+      var noEngineError = 'the build engine is unavailable — DeepSeek Harness is the only build-content engine and there is no fallback. '
+        + 'Install it with `node mythos/scripts/setup-dsh.js --install`.';
       // Distinct kind from the offline case below, deliberately: "no engine was
       // ever wired" and "the engine is wired but failed this call" have
       // different remedies (install it vs diagnose it) and one of them is not

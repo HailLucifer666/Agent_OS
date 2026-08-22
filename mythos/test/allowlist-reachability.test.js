@@ -54,7 +54,7 @@ const { registerFromGmail } = require('../src/core/effectors/from-gmail');
 const { registerFromSkills } = require('../src/core/effectors/from-skills');
 const { registerFromMemory } = require('../src/core/effectors/from-memory');
 const { registerFromPersona } = require('../src/core/effectors/from-persona');
-const { registerFromHermes } = require('../src/core/effectors/from-hermes');
+const { registerFromDsh } = require('../src/core/effectors/from-dsh');
 const { registerFromRunner } = require('../src/core/effectors/from-runner');
 const { registerFromInstaller } = require('../src/core/effectors/from-installer');
 const { registerFromMcp } = require('../src/core/effectors/from-mcp');
@@ -120,7 +120,7 @@ describe('every auto-allow (T0/T1/T2) hub effector is voice-reachable or explici
     registerFromSkills(hub);
     registerFromMemory(hub, { semantic: {}, fs: vault, identity: {}, memory: {} });
     registerFromPersona(hub, { identity: {} });
-    registerFromHermes(hub);
+    registerFromDsh(hub);
     registerFromRunner(hub, { vault, config });
     registerFromInstaller(hub, { vault, config });
     registerFromMcp(hub, { config, logger: { debug() {}, info() {}, warn() {} } });

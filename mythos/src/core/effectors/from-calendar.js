@@ -14,6 +14,11 @@
 // as from-gmail.js. Write-side (creating/editing events) is still not built
 // — calendar_upcoming only reads.
 
+// BUG-296: shared with from-gmail.js. Gmail and Calendar authenticate with the
+// SAME refresh token, so a dead grant breaks both at once — one classifier and
+// one remedy, not two, and not one-plus-a-gap.
+var { googleAuthFailure } = require('./google-auth-failure');
+
 var FILE = 'Calendar/reminders.json';
 var READ_FAILED = 'Could not read the reminder store (it may be locked by another process) — refusing to overwrite it. Try again in a moment.';
 
@@ -66,7 +71,12 @@ function createCalendarEffector({ fs, bus, goals }) {
     if (!text.trim()) return { ok: false, error: 'text required' };
 
     var when = parseWhen(opts.when || opts.due || '');
-    if (!when) return { ok: false, error: 'Could not parse that time. Try ISO date, "in 20 minutes", "tomorrow 9am", or "HH:MM".' };
+    // BUG-289: this used to name four formats and not one of them could express
+    // seconds, so a caller that had just been refused "in 30 seconds" read it as
+    // "you phrased it wrong" rather than "that unit does not exist" — and went
+    // looking for a workaround instead of reporting the limit. Seconds are named
+    // first now because they are the case that used to be impossible.
+    if (!when) return { ok: false, error: 'Could not parse that time. Try "in 30 seconds", "in 20 minutes", "tomorrow 9am", "HH:MM", or an ISO date.' };
 
     // Track B5 — fire-action field. `action` is optional: {tool, args} to run
     // when the reminder fires (e.g. phone_whatsapp_send/whatsapp_send at 9am).
@@ -272,14 +282,38 @@ function createCalendarEffector({ fs, bus, goals }) {
       if (d.getTime() > now) return d.getTime();
     }
 
-    // "in N minutes/hours/days"
-    var rel = str.match(/^in\s+(\d+)\s+(minute|minutes|hour|hours|day|days)$/);
+    // "in N seconds/minutes/hours/days", N optionally fractional.
+    //
+    // BUG-289 (2026-08-21): this was `(\d+)` over (minute|hour|day), and BOTH
+    // halves of that cost the operator a working timer on 2026-08-20.
+    //
+    //   timer_add {minutes: 0.5}  builds "in 0.5 minutes" -> \d+ cannot match it,
+    //                             so the tool could not read its own output and
+    //                             every sub-minute timer was unsettable.
+    //   reminder_add "in 30 seconds"  no seconds unit existed at all.
+    //
+    // Both failed within 20 seconds of each other and the model, out of routes,
+    // claimed it had counted the half-minute internally. The hallucination is
+    // downstream of this regex.
+    //
+    // The decimal is `\d+(?:\.\d+)?` and not `[\d.]+` on purpose: ".5", "5." and
+    // "0..5" stay refused rather than being coerced into a number nobody asked
+    // for. Widening a parser is how "in a few minutes" becomes a silent guess,
+    // so this widens the NUMBER and the UNIT LIST and nothing else.
+    //
+    // Sub-minute is honoured end to end, not just accepted: reminder-sensor.js
+    // arms a precise setTimeout against the next due time and re-arms on
+    // calendar.reminder-added, so a 30s reminder fires at 30s and not on its 30s
+    // safety-poll boundary. Verified before this was widened — a parser that
+    // accepts a duration the scheduler rounds up just moves the lie.
+    var rel = str.match(/^in\s+(\d+(?:\.\d+)?)\s+(second|seconds|minute|minutes|hour|hours|day|days)$/);
     if (rel) {
       var n = +rel[1];
       var unit = rel[2];
-      if (unit.indexOf('minute') === 0) return now + n * 60000;
-      if (unit.indexOf('hour') === 0) return now + n * 3600000;
-      if (unit.indexOf('day') === 0) return now + n * 86400000;
+      if (unit.indexOf('second') === 0) return Math.round(now + n * 1000);
+      if (unit.indexOf('minute') === 0) return Math.round(now + n * 60000);
+      if (unit.indexOf('hour') === 0) return Math.round(now + n * 3600000);
+      if (unit.indexOf('day') === 0) return Math.round(now + n * 86400000);
     }
 
     // Wave 7 (2026-08-13): "in an hour" / "in half an hour" — ordinary
@@ -369,9 +403,26 @@ function ensureGoogleAdapter(logger) {
   return _googleAdapter;
 }
 
+// BUG-296 (2026-08-21): Calendar had none of the dead-token handling Gmail has
+// had since BUG-273 C2, despite sharing the token with it. The catch below
+// returned a bare 'Calendar fetch failed: invalid_grant: Token has been expired
+// or revoked.' — no remedy for the operator, and no `terminal` flag, so hub.js's
+// isTerminalResult never fired and the breaker retried a token that could never
+// succeed. It read like a network blip and was nothing of the sort.
+//
+// `err.message` is also the wrong reader: some adapter failures carry the reason
+// in an object, which stringifies to '[object Object]'. googleAuthFailure goes
+// through reasonText, the same normalisation dispatch-action.js uses.
 async function calendarUpcoming(args, ctx) {
   var logger = (ctx && ctx.logger) || { warn: function() {} };
-  var a = ensureGoogleAdapter(logger);
+  // Injectable adapter. Without this seam a test either reaches the operator's
+  // REAL Google account (the module caches _googleAdapter from live env
+  // credentials) or cannot exercise this path at all — and a test that calls a
+  // third party turns someone else's rate limit into a blocked commit. `null`
+  // passed explicitly means 'no adapter', which is a different case from absent.
+  var a = (ctx && Object.prototype.hasOwnProperty.call(ctx, 'googleAdapter'))
+    ? ctx.googleAdapter
+    : ensureGoogleAdapter(logger);
   if (!a) {
     return { ok: false, result: { error: 'Google Calendar is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.' } };
   }
@@ -380,18 +431,54 @@ async function calendarUpcoming(args, ctx) {
     var events = await a.listUpcomingEvents(max);
     return { ok: true, result: { events: events } };
   } catch (err) {
-    return { ok: false, result: { error: 'Calendar fetch failed: ' + err.message } };
+    return googleAuthFailure('Calendar fetch failed', err);
   }
 }
 
 function buildCalendarTools(ctx) {
   var cal = createCalendarEffector(ctx);
+  var toolBus = ctx && ctx.bus;
+
+  // 2026-08-21, operator request: "add a timer widget when asked for a
+  // countdown / timer". timer_add rang and spoke but put nothing on screen.
+  // The HUD already renders a declarative 'dynamic' widget off ui.open-web, so
+  // this sends the same DATA-ONLY payload the spawn_widget effector does, with
+  // layout 'countdown' and the deadline the reminder was actually given — the
+  // reminder record is the source of truth, so the face on screen and the bell
+  // cannot disagree.
+  //
+  // Emitted from the TIMER only, never from reminder_add: a reminder is silent
+  // by contract, and throwing a ticking face on screen for one would be a new
+  // behaviour nobody asked for. Best-effort and fully guarded — a HUD that is
+  // not listening must never turn a successfully-set timer into a failure.
+  function emitCountdownWidget(res, label) {
+    try {
+      if (!toolBus || typeof toolBus.emit !== 'function') return;
+      var record = res && res.ok && res.result && res.result.reminder;
+      var dueAt = record && record.dueAt;
+      var endsAt = typeof dueAt === 'number' ? dueAt : Date.parse(dueAt);
+      if (!isFinite(endsAt)) return;
+      toolBus.emit('ui.open-web', {
+        widgetType: 'dynamic',
+        title: label || 'Timer',
+        layout: 'countdown',
+        endsAt: endsAt,
+        items: [{ label: label || 'Timer', value: '' }],
+      });
+    } catch (err) { /* the timer is set; the widget is a courtesy, never a failure */ }
+  }
+
   return [
     { name: 'reminder_add', description: 'Set a reminder to be told about a note or task at a later time — silent, no audible alert. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Do NOT use this for a timer/countdown/alarm ("set a timer for N minutes", "wake me in an hour") — use timer_add for those instead; it rings, this tool never does. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires. OMIT this entirely for a plain reminder; do not pass an empty object' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
     { name: 'reminder_list', description: 'List upcoming reminders. Shows all pending reminders with their scheduled times and text.', params: {}, danger: false, fn: async function(args) { return cal.listReminders(args); }, needs_result: true },
     { name: 'reminder_cancel', description: 'Cancel a pending reminder by its ID or text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'reminder_approve_action', description: 'Approve, once, the outward-facing action attached to a reminder (e.g. a scheduled WhatsApp send) so it can fire later without asking again. Match by reminder ID or text.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.approveReminderAction(args); } },
-    { name: 'timer_add', description: 'Set a TIMER: it rings an audible alert AND speaks when it goes off. Use this — never reminder_add — for ANY "set a timer for N minutes", "countdown", or "alarm" request; those are timers, not date-based reminders, and only this tool rings.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) { return cal.addReminder({ text: (args && args.label) || 'Timer', when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true }); } },
+    { name: 'timer_add', description: 'Set a TIMER: it rings an audible alert AND speaks when it goes off. Use this — never reminder_add — for ANY "set a timer for N minutes", "countdown", or "alarm" request; those are timers, not date-based reminders, and only this tool rings.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) {
+      var label = (args && args.label) || 'Timer';
+      var res = await cal.addReminder({ text: label, when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true });
+      emitCountdownWidget(res, label);
+      return res;
+    } },
     { name: 'timer_cancel', description: 'Cancel a pending timer by its label/text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'calendar_upcoming', description: 'List upcoming events from the connected Google Calendar (read-only). Requires GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN to be configured — degrades honestly with a clear setup message otherwise.', params: { max: 'number (optional) - max events to return, default 10' }, danger: false, fn: async function(args) { return calendarUpcoming(args, ctx); }, needs_result: true },
   ];

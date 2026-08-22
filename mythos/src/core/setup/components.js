@@ -55,13 +55,17 @@ const COMPONENTS = [
     requiresWsl: false,
   },
   {
-    id: 'hermes',
-    label: 'Hermes build agent',
-    note: 'installs into WSL — the only build-content engine; builds fail without it',
-    doctorId: 'hermes',
-    script: 'scripts/setup-hermes.js',
+    id: 'dsh',
+    label: 'DeepSeek Harness (build engine)',
+    // requiresWsl drops to false with the engine swap (W6): dsh is an npm
+    // package, where Hermes-Agent was a Python venv installed inside WSL. Leaving
+    // the gate up would refuse the install on every Windows machine without WSL,
+    // for a dependency that does not need it.
+    note: 'npm install, ~450 packages — the only build-content engine; builds fail without it',
+    doctorId: 'dsh',
+    script: 'scripts/setup-dsh.js',
     args: ['--install'],
-    requiresWsl: true,
+    requiresWsl: false,
   },
   {
     id: 'adb',
