@@ -8,7 +8,7 @@
 // honestly flagged as "with-issues" rather than silently passing garbage.
 
 var path = require('path');
-var designSystemEngine = require('../design/system');
+var designSystemPrompt = require('./design-system-prompt');
 var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
 var { reasonText } = require('../util/reason-text');
@@ -516,6 +516,14 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       kind: 'pipeline-execute',
       goalId: goalId,
       prompt: basePrompt,
+      // BUG-310: awaited by build-runner BEFORE the first generation, so every
+      // generation in the job — first draft, verification retry, refine
+      // regenerations, grounded rebuild — works from the real design system.
+      // `card.text` and not basePrompt: the resolver keyword-matches its whole
+      // argument, so prompt boilerplate would choose the design.
+      preparePrompt: designSystem
+        ? function(p) { return designSystemPrompt.prependDesignSystem(p, card.text); }
+        : undefined,
       // REMEDIATION P0-2: a job that fails before run() ever executes (e.g.
       // the build engine itself is offline) previously left the card at
       // execute/progress:25 forever with no trace of failure —
@@ -533,31 +541,24 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           });
         } catch (_) { /* best-effort */ }
       },
-      run: async function(raw, j) {
+      run: async function(raw, j, preparedPrompt) {
+        // BUG-310: adopt the prompt build-runner actually generated from, so the
+        // grounded rebuild and the review retry below regenerate from the SAME
+        // prompt as the first draft (design system included) rather than from
+        // the unprepared string this closure captured.
+        if (preparedPrompt) basePrompt = preparedPrompt;
+
         // P23: Risk-classified gate path — scale rigor to the change type
         var risk = card.risk || 'feature';
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
         var needsVisual = riskClassifierLib.requiresVisual(risk);
 
-        // Auto-use the real skill tool: for UI/frontend builds, run
-        // ui-ux-pro-max's search.py to resolve a genuine design system from
-        // its CSV database, and prepend it to the prompt so the build model
-        // works from real colors/styles/typography instead of improvising.
-        // Falls back to the home-grown designSystemEngine substitute only if
-        // the skill or Python is absent. Best-effort: never blocks a build.
-        // (Resolved here in run() because the skill-tool call is async and
-        // executePipelineCard must stay sync for its callers.)
-        if (designSystem) {
-          try {
-            var dsBlock = await buildPack.resolveDesignSystemTool(card.text);
-            if (!dsBlock) {
-              var ds = designSystemEngine.generateDesignSystem(card.text);
-              dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-            }
-            if (dsBlock) basePrompt = dsBlock + '\n\n' + basePrompt;
-          } catch (_) { /* design system lookup is best-effort */ }
-        }
+        // BUG-310: the design system used to be resolved HERE, which was too
+        // late — build-runner calls run() after the first generation, after
+        // verification and after the whole refine loop, so the only generation
+        // that read it was the grounded rebuild below, and a build that skipped
+        // research read it nowhere. It now rides the preparePrompt hook.
 
         // P22: Research gate — gather real web data before committing to the build.
         // The initial `raw` was generated without grounding; if research returns
@@ -723,6 +724,13 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       goalId: goalId,
       prompt: basePrompt,
       persona: builderPersona,
+      // BUG-310: see executePipelineCard's preparePrompt. Same hook, same
+      // reason; the topic here is title + detail, as it always was.
+      preparePrompt: designSystem
+        ? function(p) {
+          return designSystemPrompt.prependDesignSystem(p, card.title + ' ' + (card.detail || ''));
+        }
+        : undefined,
       // REMEDIATION P0-2: same fix as executePipelineCard's onFailed above —
       // a job that fails before run() ever executes otherwise leaves the
       // card with no trace of failure at all.
@@ -735,28 +743,17 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           });
         } catch (_) { /* best-effort */ }
       },
-      run: async function(raw, j) {
+      run: async function(raw, j, preparedPrompt) {
+        // BUG-310, same as executePipelineCard: adopt the prompt build-runner
+        // generated from, so the rebuild paths below match the first draft.
+        if (preparedPrompt) basePrompt = preparedPrompt;
+
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
 
         // P23: Risk-classified gate path for kanban cards
         var risk = riskClassifierLib.classify((card.title || '') + ' ' + (card.detail || ''));
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
-
-        // Auto-use the real skill tool: for UI/frontend cards, run
-        // ui-ux-pro-max's search.py for a genuine design system. Mirrors
-        // executePipelineCard's resolution. Falls back to designSystemEngine.
-        if (designSystem) {
-          try {
-            var dsTopic = card.title + ' ' + (card.detail || '');
-            var dsBlock = await buildPack.resolveDesignSystemTool(dsTopic);
-            if (!dsBlock) {
-              var ds = designSystemEngine.generateDesignSystem(dsTopic);
-              dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-            }
-            if (dsBlock) basePrompt = dsBlock + '\n\n' + basePrompt;
-          } catch (_) { /* design system lookup is best-effort */ }
-        }
 
         // P22: Research gate — gather real web data before committing to the build.
         // A4: track researchStatus for observability (never fail silently).
