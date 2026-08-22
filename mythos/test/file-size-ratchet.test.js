@@ -93,7 +93,7 @@ const BASELINE = {
   'mythos/src/core/effectors/from-computer.js': 997,
   'mythos/scripts/spike-dsh-build.js': 967,
   'mythos/adapters/dsh-agent/index.js': 929,
-  'mythos/src/core/effectors/web-search.js': 928,
+  'mythos/src/core/effectors/web-search.js': 862,
   'mythos/scripts/verify-voice-session.js': 918,
   'mythos/src/core/voice/voice-agent.js': 906,
   'mythos/src/core/effectors/from-spotify.js': 900,

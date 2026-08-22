@@ -89,90 +89,6 @@ var STALE_SOURCE_CAUTION = 'These results carry NO publication date, so none of 
   + 'find dated, current information, and do NOT state, guess or infer an answer that is not '
   + 'written in these results — not now, and not later in this conversation either.'
 
-// BUG-294 — the Google News RSS rung. We already own this code: server/
-// news-feed.js has fetched news.google.com/rss for the HUD news card since it
-// shipped, with a PURE parseRss(), an agoLabel(), MAX_ITEMS 12 and an 8s timeout
-// that already fits inside this chain's provider budget. Exactly two things were
-// missing — the module never sent a QUERY, and the voice path could not reach it.
-//
-// parseRss IS NOT TOUCHED. It already returns everything this rung needs, the HUD
-// card depends on it, and leaving it alone keeps that card safe by construction
-// rather than by test. bug-294-news-rss-rung.test.js pins that it was not edited.
-var newsFeed = require('../../../server/news-feed')
-
-// THE HEADLINE IS THE ENTIRE ANSWER, so no article is ever fetched. Real first
-// item for q=Mohun+Bagan+Durand+Cup, captured 2026-08-21:
-//   "Durand Cup 2026 semifinal Highlights: Mohun Bagan beats NorthEast United on
-//    penalties to reach final - Sportstar"
-// Who played, what happened, how, and the publisher — all in one string. That
-// deletes the hardest half of this rung, and it deletes a security problem with it.
-//
-// Q1/Q4 — WHAT IS STANDING NEXT TO IT? The <link>. It is NOT the publisher URL:
-// Google News RSS hands back an opaque redirector
-// (https://news.google.com/rss/articles/CBMiigJBVV95cUxPc3J1…) which passes
-// parseRss's ^https?:// guard and therefore flows through looking exactly like a
-// normal citation. news-feed.js's httpGet follows up to 3 redirects, so fetching
-// one would walk an attacker-influenced redirect chain — the same shape as the two
-// SSRF bypasses already recorded in web-fetch.js (IPv4-mapped loopback at :30, a
-// 302 to cloud metadata at :116). It is display/attribution ONLY, and the publisher
-// name is already in the title suffix, so attribution costs no request at all.
-//
-// `ago` rides in `snippet` on purpose: it is the freshness signal, it is the one
-// thing that lets the model tell today from last year, and snippet is the field
-// both the model and the HUD result card already read.
-// THE RECENCY WINDOW, and it belongs to the rung rather than to feedUrl() — the
-// HUD news card must keep asking for exactly what it always asked for.
-//
-// Google ranks by relevance, not recency, and the word "today" inside the query
-// text carries no weight with it: the first version of this rung answered
-// "Kolkata local news today" with items 85, 52 and 107 days old. Measured
-// 2026-08-21 across three real queries — 'when:1d' turned that 85d top hit into
-// 1h, while 'when:7d' re-admitted 2-4 day old items into a question that said
-// today. But a tight window starves a slower topic ("Bengal panchayat election
-// news": 12 items unwindowed, 2 at one day, 5 at seven). One constant cannot
-// serve both, so this asks for a day and widens to a week only on an empty day.
-//
-// AND IT REPAIRS THE SAFETY PROPERTY RATHER THAN WEAKENING IT. The UNWINDOWED
-// endpoint never returns zero, which is the entire reason for the freshness gate
-// on this rung. A windowed one can, and does — so the rung is now able to have no
-// answer and let the chain continue, instead of always producing something
-// plausible for a model that fabricates.
-var NEWS_WINDOWS = ['when:1d', 'when:7d']
-
-async function newsRssSearch(q, max, traceBus) {
-  var items = []
-  for (var w = 0; w < NEWS_WINDOWS.length; w++) {
-    var res = await fetch(newsFeed.feedUrl(q + ' ' + NEWS_WINDOWS[w]), {
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT),
-      headers: { 'user-agent': BROWSER_UA },
-    })
-    if (!res.ok) {
-      traceBus.emit('health.anomaly', {
-        kind: 'search-provider-failed', provider: 'google-news-rss', error: 'HTTP ' + res.status,
-      })
-      return []
-    }
-    items = newsFeed.parseRss(await res.text(), Date.now())
-    // Stop at the first window that answers: widening after a productive day is a
-    // wasted round-trip on the voice path's critical latency, and a strictly worse
-    // answer besides.
-    if (items.length) break
-  }
-  return items.slice(0, max).map(function(item) {
-    // agoLabel() returns '' for a missing or unparseable pubDate. For a rung whose
-    // ENTIRE safety property is freshness, an item that silently loses its age is
-    // the one result the model must not read as current — an empty snippet next to
-    // a confident headline is exactly the raw material this whole ticket exists to
-    // deny it. So a dateless item says so, and `published` stays null, which is
-    // what the caution keys on.
-    return {
-      title: item.title,
-      url: item.link,
-      published: item.ago || null,
-      snippet: item.ago ? 'Published ' + item.ago + '.' : 'Publication date unknown.',
-    }
-  })
-}
 
 // The one success door for every rung. Seven rungs used to build this object
 // themselves, which is exactly why a signal like the caution below could be
@@ -206,6 +122,7 @@ var WEB_SEARCH_ENGINES_DEFAULT = 'startpage'
 // strictly larger than 'loopback' — so they share the classification and keep
 // their own policies. See net-address.js.
 var isLoopbackHost = require('./net-address').isLoopbackHost
+var newsRung = require('./news-rung')
 
 function localSearchBase() {
   return String(process.env.WEB_SEARCH_LOCAL_URL || WEB_SEARCH_LOCAL_URL_DEFAULT).trim()
@@ -737,9 +654,26 @@ async function web_search({ query, maxResults, bus }) {
       if (newsSkip) note('google-news-rss', newsSkip)
       else {
         try {
-          var newsResults = await newsRssSearch(q, max, traceBus)
+          var newsResults = await newsRung.newsRssSearch(q, max, traceBus,
+            { timeoutMs: PROVIDER_TIMEOUT, userAgent: BROWSER_UA })
           if (newsResults && newsResults.length) {
-            return succeed(q, newsResults.slice(0, max), 'google-news-rss')
+            // BUG-315: this rung LEADS but no longer silences the chain. It is a
+            // general-news index, so on "global AI news past week" it answered
+            // with China/Indonesia, Guterres/India and India/APAC adoption — all
+            // genuinely AI news, none of it the model releases the operator
+            // asked for — and because it returned here, nothing else was ever
+            // consulted. The same session's specific query fell through to
+            // DuckDuckGo and got the real answer.
+            //
+            // One free general provider now runs alongside it and the two are
+            // merged, RSS first so the dated answer still wins (BUG-294). It is
+            // additive: if the second provider has nothing, this rung answers
+            // alone exactly as before, and the source label says which happened.
+            var corroborating = []
+            try { corroborating = await ddgHtml(q, max, traceBus) || [] } catch (_) { corroborating = [] }
+            var merged = newsRung.mergeSearchResults(newsResults, corroborating, max)
+            return succeed(q, merged,
+              corroborating.length ? 'google-news-rss+duckduckgo-html' : 'google-news-rss')
           }
         } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'google-news-rss', error: err.message }); }
         note('google-news-rss', outcome('google-news-rss'))
