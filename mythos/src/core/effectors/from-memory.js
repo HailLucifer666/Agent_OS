@@ -5,6 +5,17 @@ var { dayKey } = require('../util/day-key');
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
+// BUG-320 — "[[Note Name]]" -> "Note Name". Applied to note titles only: the
+// vault's markdown uses wiki links, so a model that has just read a note hands
+// the link back as the lookup key. Empty after stripping ("[[]]") returns '',
+// which the caller already treats as "no title given" — the list-my-notes
+// branch — rather than searching for an empty string.
+function stripWikiLink(s){
+  var t=String(s==null?'':s).trim();
+  var m=/^\[\[([\s\S]*)\]\]$/.exec(t);
+  return (m?m[1]:t).trim();
+}
+
 function buildTools(ctx){
   var semantic=ctx&&ctx.semantic, fs=ctx&&ctx.fs, identity=ctx&&ctx.identity, memory=ctx&&ctx.memory;
   // Notes store (memory/notes.js) — plain Obsidian-compatible markdown, the
@@ -345,7 +356,13 @@ function buildTools(ctx){
 
   async function note_read(args){
     if(!notes||typeof notes.read!=='function') return notesUnavailable();
-    var title=(args&&(args.title||args.name||args.query)||'').trim();
+    // BUG-320: strip wiki-link brackets. The model asked for
+    // note_read({title:"[[ai-news-digest-v2]]"}) three times across two sessions
+    // — the vault's own notes are written with [[...]] links, so it reads a link
+    // and passes it back verbatim. The brackets never matched, the error listed
+    // the real notes beside a bracketed name, and the healer recorded the same
+    // lesson twice. Nothing was broken except the argument.
+    var title=stripWikiLink((args&&(args.title||args.name||args.query)||''));
     if(!title){
       // No title given = "what notes do I have". A list is a real answer here,
       // and it is what lets the model name a note back instead of guessing one.
