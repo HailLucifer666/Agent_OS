@@ -10,6 +10,7 @@
 var path = require('path');
 var designSystemPrompt = require('./design-system-prompt');
 var reviewStatusLib = require('./review-status');
+var groundingCheck = require('./grounding-check');
 var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
 var { reasonText } = require('../util/reason-text');
@@ -593,6 +594,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // P22: Full review gate — visual verify + reviewer + reality check
         // P23: skip for tiny-fix (build only) and quick-win (verify-only, no full review)
         var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
+        review = groundingCheck.reviewWithGrounding(review, raw, { spec: card.text, brief: researchBrief, researchStatus: researchStatus }); // BUG-314
 
         // If rejected, retry once with the issues fed back to the builder
         if (review.verdict === 'reject' && !j._reviewRetried) {
@@ -607,7 +609,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
             if (retryResult && !retryResult.offline && retryResult.content) {
               // Overwrite the artifact with the retry
               artifact = saveDeliverable(retryResult.content, card.text, 'pipeline');
-              review = await fullReview(card, artifact, brain);
+              review = groundingCheck.reviewWithGrounding(await fullReview(card, artifact, brain), retryResult.content, { spec: card.text, brief: researchBrief, researchStatus: researchStatus }); // BUG-314: the retry must clear grounding too, not just re-review
             }
           } catch (_) { /* retry failed — ship original with issues flagged */ }
         }
@@ -783,6 +785,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
 
         // P22: Full review gate (P23: skip for tiny-fix)
         var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
+        review = groundingCheck.reviewWithGrounding(review, raw, { spec: card.title + ' ' + (card.detail || ''), brief: researchBrief, researchStatus: researchStatus }); // BUG-314
 
         // If rejected, retry once with the issues fed back
         if (review.verdict === 'reject' && !j._reviewRetried) {
@@ -797,7 +800,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
             );
             if (retryResult && !retryResult.offline && retryResult.content) {
               artifact = saveDeliverable(retryResult.content, slug + '-' + j.id + '-r', 'kanban');
-              review = await fullReview(card, artifact, brain);
+              review = groundingCheck.reviewWithGrounding(await fullReview(card, artifact, brain), retryResult.content, { spec: card.title + " " + (card.detail || ""), brief: researchBrief, researchStatus: researchStatus }); // BUG-314
             }
           } catch (_) { /* retry failed — ship original with issues flagged */ }
         }
