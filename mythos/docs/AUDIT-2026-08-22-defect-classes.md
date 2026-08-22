@@ -9,6 +9,11 @@ than quietly dropped, so the same ground does not get re-hunted next time.
 
 Suite state at audit time: `tests=5822 pass=5822 fail=0 skipped=0`, docs-sync OK.
 
+**This document is the diagnosis. The treatment is
+`AUDIT-2026-08-22-FIX-PLAN.md`, beside it** — a phased handoff plan covering all
+fifteen findings, with the test each fix must ship. Read that one if you are
+here to fix something rather than to understand what was found.
+
 ---
 
 ## QUICK WIN
