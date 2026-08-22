@@ -703,8 +703,11 @@ with a weak safety net.
 
 ### The recommended remainder, in order of value
 
-1. **Voice Nodes → `server/ws/voice-nodes.js`** (175 lines, 5 dependencies, no
-   mutable shared state). The one genuinely clean extraction. Real, small, safe.
+1. ~~**Voice Nodes → `server/ws/voice-nodes.js`** (175 lines, 5 dependencies, no
+   mutable shared state). The one genuinely clean extraction.~~ **WITHDRAWN the
+   same day — see the correction below. The 5 was an inbound-only count; the
+   region also has an outbound surface of 11, one of which is a mutable variable
+   assigned from outside and therefore not movable at all.**
 2. **Leave the three routes where they are** unless their 35-name surface is
    reduced first. Moving them would mean exporting the auth helpers, which
    spreads the token-handling logic across more files rather than fewer — worse
@@ -715,6 +718,47 @@ with a weak safety net.
 4. **The ratchet holds the line meanwhile.** `server/index.js` is recorded at
    4,680 and cannot grow. That is what stops this getting worse while the real
    work is scheduled.
+
+### Correction, same day: Voice Nodes is NOT a clean extraction either
+
+Recommendation 1 above was written from **half a measurement** and is withdrawn.
+The coupling table counts what each region *reads* — its inbound dependencies.
+An extracted module also has to hand back everything the rest of the file reads
+*from* it, and that side was never counted. Measured properly, the Voice Nodes
+region declares 15 names and **11 of them are read from outside it**:
+
+| name | reads from outside |
+| --- | --- |
+| `voiceNodes` | 10 |
+| `activeSpeech` | 7 |
+| `nodeSpeechTarget()` | 6 |
+| `sendSpeechChunk()` | 5 |
+| `liveAdaptersByConnection` | 3 |
+| `voiceNodeDupAnomalyLast`, `serializeSpeech()`, `aetherOwner` | 2 each |
+| `VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS`, `noteTtsChainDown()`, `moveActiveSpeechToCurrentOwner()` | 1 each |
+
+Most of those are objects and functions, which pass by reference and would
+survive a move. **`aetherOwner` does not.** It is a plain `let` that is
+*reassigned from outside the region* — the Aether sensor writes the current
+election owner into it. A moved module cannot expose a variable someone else
+assigns; the call site has to change to a setter first.
+
+So the "clean move" needs a behaviour-preserving edit to the voice path before
+any code can move, which under this phase's own rule ("if a group needs changing
+to move, that is a separate commit") makes it two commits and a test, in the
+code area with the worst regression history in `BUGS.md` and the weakest
+automated coverage — to remove **175 lines from 4,680, about 3.7%**.
+
+**That is not worth doing, and the honest conclusion for Phase 6 is that there
+is no cheap win left in this file.** What was delivered is the ratchet and the
+`electron/main.js` decision; the remainder is a scheduled rewrite of the
+WebSocket/voice runtime behind an explicit session-state object, not a file
+split, and it should be planned as its own piece of work rather than smuggled in
+under a size target.
+
+The general lesson, which cost nothing here because the second measurement
+happened before the code moved: **coupling has two directions, and measuring one
+of them reads as encouraging.**
 
 ### Item 13 — two files are far over the size limit
 
