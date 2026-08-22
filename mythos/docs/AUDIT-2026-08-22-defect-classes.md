@@ -16,6 +16,59 @@ here to fix something rather than to understand what was found.
 
 ---
 
+## Standing decision — the errors this codebase throws away (audit item 14, 2026-08-22)
+
+**Reviewed as a group, deliberately not swept.** A3 below counts the places that
+catch an error and do nothing with it. Every one was looked at on 2026-08-22 and
+exactly one was load-bearing: the session-history write, now fixed as BUG-306.
+Nothing else is being changed. This paragraph exists so that is a decision on the
+record rather than an oversight the next auditor re-discovers and re-argues.
+
+**A3's number is wrong, and the real one is three times larger.** A3 says 94,
+sampled. The population is countable. Measured at the audit's own commit
+(`138ac46`), over the audit's own scope — every tracked `.js` file under
+`mythos/src`, `mythos/server`, `mythos/adapters` and `electron/`, excluding
+`node_modules` and `test/`:
+
+| shape | count |
+| --- | --- |
+| `catch (e) {}` — nothing at all | 89 |
+| `catch (e) { /* a reason, no action */ }` | 204 |
+| **total that take no action** | **293** |
+
+The second row is the half the sample missed, and it is the larger half. **A
+comment is not a handler.** It explains the silence; it does not end it. A reader
+grepping for the bare shape will conclude the surface is a third of what it is.
+
+Counting needs brace matching, not grep: a catch body can span lines and contain
+nested braces, and the comment-only shape is invisible to any single-line pattern.
+Re-measure rather than trusting the table — it moves with every commit.
+
+**What makes one load-bearing.** Three questions, and it takes all three pointing
+the wrong way:
+
+1. **Does anything downstream depend on this having happened?** Session history is
+   read back at the next start. A `ws.close()` that fails changes nothing anyone
+   reads.
+2. **If it silently did not happen, does the absence read as a failure or as
+   normal?** Missing history reads as a fresh start — indistinguishable from
+   correct behaviour, which is what makes it dangerous.
+3. **Is this the only place the failure could ever be seen?** A leaked handle
+   eventually shows up as a leaked handle. A swallowed write shows up nowhere.
+
+The overwhelming majority fail question 1 immediately. They are teardown that
+cannot fail usefully (`ws.close()`, `browser.close()`, `page.title()`), or a rung
+of a parse ladder that tries the next shape — and in a ladder the failure *is* the
+control flow, with the last rung reporting for all of them.
+
+**When to revisit.** Not as a sweep; a 293-line diff of log statements is a large
+change with no verification behind it and real risk of turning a harmless silence
+into a noisy one. Add the line at the moment you are already editing that code for
+another reason, and only when it passes the three questions above.
+
+
+---
+
 ## QUICK WIN
 
 ### Q1 — the SSRF guard resolves DNS at check time and lets `fetch` resolve it again at dial time
@@ -221,6 +274,11 @@ concurrent-session hazard in root `CLAUDE.md` makes the timing worse than the
 debt. Recorded so it is a decision rather than an oversight.
 
 ### A3 — 94 empty catch blocks
+
+**Corrected 2026-08-22 (audit item 14): 94 was a sample, not a count. The real
+figure is 89 bare plus 204 whose body is only a comment — 293 in total. See the
+standing decision at the top of this document, which also records why none of
+them is being swept.**
 
 Sampled across `src`, `server`, `adapters` and `electron`. The overwhelming
 majority wrap teardown that genuinely cannot fail usefully (`ws.close()`,
