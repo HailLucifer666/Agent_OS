@@ -1,0 +1,16 @@
+# Shell scripts must reach the working tree with LF endings, always.
+#
+# Found 2026-08-22 while fixing the commit gate (audit item 15). This repo is
+# Windows-first and `core.autocrlf` is true on the operator's machine, so git
+# rewrites LF to CRLF on checkout for anything it considers text. That is
+# harmless for source and fatal for a shell script: the shebang becomes
+# `#!/bin/sh<CR>`, and the loader looks for an interpreter whose name ends in a
+# carriage return. The hook then fails to start rather than failing a commit —
+# which means a FRESH CLONE gets a commit gate that silently does not run, while
+# `git config core.hooksPath .githooks` reports success.
+#
+# It survived this long only because the file predates autocrlf being set here:
+# the copy in this working tree is still LF and has never been re-checked-out.
+# Anybody cloning fresh would have got the broken form.
+.githooks/** text eol=lf
+*.sh text eol=lf
