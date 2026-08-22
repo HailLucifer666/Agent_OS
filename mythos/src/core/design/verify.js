@@ -89,6 +89,42 @@ var DESIGN_ELEMENT_PATTERNS = {
 // artifact is broken". Structural elements deliberately stay out of this set.
 var SOFT_ELEMENTS = new Set(['animation', 'fade-in', 'scroll-reveal', 'particle']);
 
+// BUG-313 — WHAT THE LLM JUDGE IS ALLOWED TO SEE.
+//
+// The judge is asked "does the deliverable match the spec topic? is the content
+// about the right topic? is the title derived from the spec?" and used to be
+// handed content.slice(0, 2000). DELIVERABLE_PREAMBLE instructs the build model
+// to inline all CSS and JS, so on a real single-file page the first 2000
+// characters are entirely a <style> block. The judge was asked about content it
+// had never been shown.
+//
+// Measured on the artifact shipped 2026-08-22:
+//   total chars: 5436 | <body> at: 3329 | first 2000 chars contain <body>? false
+// It answered honestly — "Hero section content not visible in snippet—cannot
+// confirm 'UN Secretary-General lab' topic match" — and the build shipped anyway.
+//
+// So: elide <style> and <script> BODIES (they are not content, and they are what
+// crowds the window), then keep the head — the judge is asked about the <title>,
+// so dropping it would break the other half of the same question — and spend the
+// remaining budget on the body. Bounded, because this runs on every build.
+var HEAD_SHARE = 0.3;
+
+function judgeSample(content, max) {
+  var text = String(content == null ? '' : content);
+  if (!text) return '';
+  var cap = typeof max === 'number' && max > 0 ? max : 2000;
+  var stripped = text
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '<style>/* elided */</style>')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '<script>/* elided */</script>');
+  if (stripped.length <= cap) return stripped;
+  var bodyAt = stripped.search(/<body\b/i);
+  if (bodyAt === -1) return stripped.slice(0, cap);
+  // Keep enough head to carry <title>, then as much body as fits.
+  var headBudget = Math.min(bodyAt, Math.floor(cap * HEAD_SHARE));
+  var bodyBudget = cap - headBudget;
+  return stripped.slice(0, headBudget) + '\n<!-- ... -->\n' + stripped.slice(bodyAt, bodyAt + bodyBudget);
+}
+
 function createVerifier({ brain }) {
   if (!brain || typeof brain.think !== 'function') {
     return { verify: function() { return Promise.resolve({ pass: true, issues: [], warnings: [] }); } };
@@ -233,7 +269,7 @@ function createVerifier({ brain }) {
           '". Does the deliverable match the spec topic? Is the title derived from the spec (not an invented brand name)? ' +
           'Is the content about the right topic (not a generic template about a different product)? ' +
           'Respond as JSON: {"pass": true/false, "issues": ["issue1", "issue2"]}\n\n' +
-          'Deliverable (first 2000 chars): ' + content.slice(0, 2000)
+          'Deliverable (CSS/JS elided, head + body sample): ' + judgeSample(content, 2000)
         }],
         schemaHint: '{ pass: boolean, issues: string[] }',
         source: 'build-verifier',
@@ -251,4 +287,8 @@ function createVerifier({ brain }) {
   return { verify: verify };
 }
 
-module.exports = { createVerifier: createVerifier, _PLACEHOLDER_PATTERNS: PLACEHOLDER_PATTERNS };
+module.exports = {
+  createVerifier: createVerifier,
+  _PLACEHOLDER_PATTERNS: PLACEHOLDER_PATTERNS,
+  _judgeSample: judgeSample,
+};
